@@ -23,8 +23,6 @@ pub(super) struct CoreStatusRow {
     pub(super) sys: CoreSysStatus,
     /// Endpoint decoded by the feed without exposing the exported key.
     pub(super) endpoint: Option<CoreEndpoint>,
-    /// Exchange name reported by this core, when available.
-    pub(super) exchange: Option<String>,
 }
 
 /// Stable grouping identity for a known host or one isolated unknown core.
@@ -81,6 +79,13 @@ pub(super) enum ServerConnectivity {
 pub(super) struct ServerStatusGroup {
     /// Stable identity used by visibility and expansion state.
     pub(super) key: ServerKey,
+    /// Display name: the custom name or the default `Server N` ordinal, filled by the panel after
+    /// aggregation because naming needs config and cross-group ordinal ranking.
+    pub(super) display_name: String,
+    /// Sustained-CPU warning (machine held high), filled by the panel from cross-tick history.
+    pub(super) cpu_warn: bool,
+    /// Memory-growth warning (a core's used memory rising), filled by the panel from history.
+    pub(super) mem_warn: bool,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
@@ -97,8 +102,6 @@ pub(super) struct ServerStatusGroup {
     pub(super) free_physical_memory_mb: Option<u16>,
     /// Freshest available logical-CPU count.
     pub(super) logical_cpu_count: Option<u8>,
-    /// Exchange names and process counts in first-seen order.
-    pub(super) exchanges: Vec<(String, usize)>,
 }
 
 /// Group canonically ordered core rows into attention-first address-only server snapshots.
@@ -122,6 +125,9 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
             let position = groups.len();
             groups.push(ServerStatusGroup {
                 key,
+                display_name: String::new(),
+                cpu_warn: false,
+                mem_warn: false,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,
@@ -133,7 +139,6 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 process_memory_mb: None,
                 free_physical_memory_mb: None,
                 logical_cpu_count: None,
-                exchanges: Vec::new(),
             });
             position
         });
@@ -142,70 +147,25 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
 
     for group in &mut groups {
         finish_group(group);
-        group
-            .cores
-            .sort_by_key(|row| row.status == ConnStatus::Ready);
+        group.cores.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    groups.sort_by_key(|group| group.connectivity == ServerConnectivity::Online);
+    // Order servers by name: address servers by IP (which matches the `Server N` ordinal), then
+    // unknown-endpoint servers last.
+    groups.sort_by_key(|group| (group.address.is_none(), group.address));
     groups
 }
 
-/// Clone only cores whose server is not locally hidden.
+/// Order flat-mode rows attention-first.
 ///
 /// Args:
 ///     rows: Current filtered core snapshots.
-///     hidden: Server identities suppressed by the panel's eye control.
 ///
 /// Returns:
-///     Visible attention rows before Ready rows, retaining canonical order inside each partition.
-pub(super) fn visible_flat_rows(
-    rows: &[CoreStatusRow],
-    hidden: &std::collections::HashSet<ServerKey>,
-) -> Vec<CoreStatusRow> {
-    let mut visible = rows
-        .iter()
-        .filter(|row| !hidden.contains(&ServerKey::for_row(row)))
-        .cloned()
-        .collect::<Vec<_>>();
+///     Attention rows before Ready rows, retaining canonical order inside each partition.
+pub(super) fn ordered_flat_rows(rows: &[CoreStatusRow]) -> Vec<CoreStatusRow> {
+    let mut visible = rows.to_vec();
     visible.sort_by_key(|row| row.status == ConnStatus::Ready);
     visible
-}
-
-/// Locate the mixed-list transition from attention cores to Ready cores.
-///
-/// Args:
-///     rows: Attention-first core rows currently visible in one presentation section.
-///
-/// Returns:
-///     The first Ready index only when attention and Ready rows are both present.
-pub(super) fn normal_core_boundary(rows: &[CoreStatusRow]) -> Option<usize> {
-    mixed_normal_boundary(rows, |row| row.status == ConnStatus::Ready)
-}
-
-/// Locate the mixed-list transition from attention servers to Online servers.
-///
-/// Args:
-///     groups: Attention-first server groups currently visible in the tree.
-///
-/// Returns:
-///     The first Online index only when attention and Online groups are both present.
-pub(super) fn normal_server_boundary(groups: &[ServerStatusGroup]) -> Option<usize> {
-    mixed_normal_boundary(groups, |group| {
-        group.connectivity == ServerConnectivity::Online
-    })
-}
-
-/// Return the first normal index only when both attention and normal items are present.
-///
-/// Args:
-///     items: Stable attention-first items.
-///     is_normal: Predicate that identifies the normal partition.
-///
-/// Returns:
-///     A non-zero boundary index, or `None` for empty and single-section inputs.
-fn mixed_normal_boundary<T>(items: &[T], is_normal: impl Fn(&T) -> bool) -> Option<usize> {
-    let first_normal = items.iter().position(is_normal)?;
-    (first_normal > 0).then_some(first_normal)
 }
 
 /// Derive summary fields after all ordered children have entered one group.
@@ -236,18 +196,6 @@ fn finish_group(group: &mut ServerStatusGroup) {
         process_memory_mb += u64::from(value);
     }
     group.process_memory_mb = has_process_memory.then_some(process_memory_mb);
-
-    for exchange in group.cores.iter().filter_map(|row| row.exchange.as_ref()) {
-        if let Some((_, count)) = group
-            .exchanges
-            .iter_mut()
-            .find(|(name, _)| name == exchange)
-        {
-            *count += 1;
-        } else {
-            group.exchanges.push((exchange.clone(), 1));
-        }
-    }
 }
 
 /// Select the newest available value for one machine-wide metric.

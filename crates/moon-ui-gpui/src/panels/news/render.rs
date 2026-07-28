@@ -11,11 +11,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonButtonVariant,
-    MoonPalette, h_flex, v_flex,
+    MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
+use std::time::Instant;
 
-use super::{NewsView, tag_color};
+use super::{FLASH, FLASH_HOLD, FLASH_PEAK, NewsView, tag_color};
 use crate::design;
 use moon_core::config::{Language, NewsTagSettings};
 use moon_core::feed::NewsItem;
@@ -88,6 +89,7 @@ pub(super) fn news_card(
     colors: &NewsTagSettings,
     now_ms: i64,
     expanded: bool,
+    arrived: Option<Instant>,
     p: MoonPalette,
     cx: &mut Context<NewsView>,
 ) -> AnyElement {
@@ -99,6 +101,28 @@ pub(super) fn news_card(
         .iter()
         .filter_map(|t| tag_color(t, colors, p))
         .collect();
+    // Arrival tint: a just-arrived card lights up in the table-selection colour and fades to
+    // nothing, so a new item is obvious without anything moving. It is a full-bleed layer declared
+    // BEFORE the content, so it sits under the text and under the tag rail. GPUI drives the frames
+    // and stops on its own once the animation completes (`Animation` is one-shot), so the panel goes
+    // back to repainting only when the feed changes.
+    let flash = arrived.filter(|at| at.elapsed() < FLASH).map(|_| {
+        div()
+            .absolute()
+            .inset_0()
+            .bg(rgba_from(p.table_selected, FLASH_PEAK))
+            .with_animation(
+                SharedString::from(format!("news-flash-{}", item.id)),
+                Animation::new(FLASH),
+                |el, delta| {
+                    // Hold, then ease out (quadratic): the tail is what reads as "fading", while a
+                    // linear ramp just switches off.
+                    let t = ((delta - FLASH_HOLD) / (1.0 - FLASH_HOLD)).clamp(0.0, 1.0);
+                    el.opacity((1.0 - t) * (1.0 - t))
+                },
+            )
+    });
+
     let rail = (!rail_colors.is_empty()).then(|| {
         div()
             .absolute()
@@ -224,6 +248,8 @@ pub(super) fn news_card(
         .py(design::ui_px(cx, 9.0))
         .border_b_1()
         .border_color(rgb(p.border))
+        .overflow_hidden()
+        .when_some(flash, |this, f| this.child(f))
         .when_some(rail, |this, r| this.child(r))
         .child(meta)
         .when_some(latency, |this, l| this.child(l))

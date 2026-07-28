@@ -22,8 +22,9 @@ mod unread;
 // The chart's news-mark hover card reuses this panel's badge so a source reads the same on both.
 pub(crate) use render::badge as news_badge;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -48,6 +49,21 @@ use moon_core::session::CoreId;
 /// Ceiling on logical items shown after the cross-core merge. The per-core ring is 50, so this is a
 /// generous cap across a multi-core group.
 const MAX_NEWS_DISPLAY: usize = 200;
+
+/// How long a just-arrived card carries its arrival tint, from full to fully gone.
+pub(super) const FLASH: Duration = Duration::from_millis(2000);
+/// Share of [`FLASH`] the tint holds at full strength before it starts easing out. The card appears
+/// at the same moment and pushes the feed down, so without a short hold the peak is never seen.
+pub(super) const FLASH_HOLD: f32 = 0.12;
+/// Peak opacity of the tint. A tint, not a fill: the text sits ON this plate and has to stay
+/// readable, so the colour reads as "this row just lit up" rather than covering it.
+pub(super) const FLASH_PEAK: f32 = 0.24;
+/// Most items that may flash from ONE feed update.
+///
+/// A bigger jump is the core's news ring arriving at once (first connect, or ids rotating back in),
+/// not news happening: the terminal learns 50 items in one go and lighting the whole feed would say
+/// nothing. Cost of the guard: a genuine burst of more than this many items lands without a tint.
+const FLASH_BATCH_MAX: usize = 3;
 
 /// Stable panel identity: the dock persistence key, and the key this panel's tab-badge state
 /// (counter switches, read watermark) is stored under.
@@ -123,6 +139,12 @@ pub struct NewsView {
     tags_open: bool,
     cache_sig: Option<u64>,
     cached: Rc<Vec<NewsItem>>,
+    /// When each recently arrived item showed up, keyed by `meta.id` — what drives the arrival tint.
+    ///
+    /// Filled by comparing consecutive feeds rather than from `recv_terminal_ms`: that stamp is set
+    /// for the WHOLE ring when a core first connects, so it would light every card at startup.
+    /// Pruned to items still in the feed and still within [`FLASH`], so it cannot grow.
+    flash: HashMap<String, Instant>,
     /// What the counters were last computed from: `(watermark, counters_on, merged)`. Cached so the
     /// per-frame badge path tests fields instead of hashing panel names in the settings maps, and
     /// so the observe hook can tell a badge-only change from a feed change.
@@ -194,6 +216,7 @@ impl NewsView {
             tags_open: false,
             cache_sig: None,
             cached: Rc::new(Vec::new()),
+            flash: HashMap::new(),
             badge: (0, true, false),
             unread: unread::Counts::default(),
             unread_total: 0,
@@ -308,8 +331,28 @@ impl NewsView {
     }
 
     fn rebuild(&mut self, b: &Backend) {
+        // The FIRST build is the feed the panel opened with — it is history, not arrivals, so it
+        // seeds the known set silently.
+        let first_build = self.cache_sig.is_none();
         self.cache_sig = Some(self.news_sig(b));
-        self.cached = Rc::new(self.collect(b));
+        let next = self.collect(b);
+        if !first_build {
+            let known: HashSet<&str> = self.cached.iter().map(|i| i.id.as_str()).collect();
+            let fresh: Vec<String> = next
+                .iter()
+                .filter(|i| !known.contains(i.id.as_str()))
+                .map(|i| i.id.clone())
+                .collect();
+            if !fresh.is_empty() && fresh.len() <= FLASH_BATCH_MAX {
+                let at = Instant::now();
+                self.flash.extend(fresh.into_iter().map(|id| (id, at)));
+            }
+        }
+        self.cached = Rc::new(next);
+        // Keep only tints that can still be drawn: an item still in the feed, still inside FLASH.
+        let live: HashSet<&str> = self.cached.iter().map(|i| i.id.as_str()).collect();
+        self.flash
+            .retain(|id, at| at.elapsed() < FLASH && live.contains(id.as_str()));
         self.catalog = self.collect_catalog(b);
         self.recount(b);
     }
@@ -1019,6 +1062,7 @@ impl Panel for NewsView {
 
 impl Render for NewsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::NEWS_RENDER);
         // Drawing the feed IS reading it, and this is the one place that means the same thing on
         // every surface: the front dock tab, a detached window, a tile. The window-active guard is
         // what stops the pile from being consumed unseen — an unfocused window still repaints on
@@ -1032,6 +1076,9 @@ impl Render for NewsView {
         let translate = self.translate;
         let settings = self.backend.read(cx).news_tag_settings.clone();
         let expanded = self.expanded.clone();
+        // Small by construction (at most FLASH_BATCH_MAX live entries), so this clone keeps the card
+        // loop free of borrowing self while `cx` is used mutably.
+        let flash = self.flash.clone();
         let q = self.query.read(cx).value().trim().to_lowercase();
         // Apply the coin / tag / search filters (small N, cheap to materialize).
         let visible: Vec<NewsItem> = self
@@ -1099,7 +1146,8 @@ impl Render for NewsView {
                 .overflow_y_scroll()
                 .children(visible.iter().map(|it| {
                     let exp = expanded.contains(&it.id);
-                    render::news_card(it, translate, &settings, now, exp, p, cx)
+                    let arrived = flash.get(&it.id).copied();
+                    render::news_card(it, translate, &settings, now, exp, arrived, p, cx)
                 }))
                 .into_any_element()
         };

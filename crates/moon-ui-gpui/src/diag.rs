@@ -28,6 +28,9 @@ macro_rules! diag_counters {
 
 diag_counters!(
     ORDERS_RENDER     => "orders_render",
+    // The News feed repaints on a news revision change — plus, for two seconds, on every frame
+    // while a just-arrived card's arrival tint fades. This counter is what tells the two apart.
+    NEWS_RENDER       => "news_render",
     SHELL_RENDER      => "shell_render",
     CHART_RENDER      => "chart_render",
     DETACHED_RENDER   => "detached_render",

@@ -28,11 +28,35 @@ core_status.mode.flat:
   en: "Flat"
   es: "Plano"
 core_status.footer:
-  ru: "Серверы: %{servers}  Ядра: %{cores}  Онлайн: %{online}  Скрыто: %{hidden}"
-  en: "Servers: %{servers}  Cores: %{cores}  Online: %{online}  Hidden: %{hidden}"
-  es: "Servidores: %{servers}  Núcleos: %{cores}  En línea: %{online}  Ocultos: %{hidden}"
+  ru: "Серверы: %{servers}  Ядра: %{cores}  Онлайн: %{online}"
+  en: "Servers: %{servers}  Cores: %{cores}  Online: %{online}"
+  es: "Servidores: %{servers}  Núcleos: %{cores}  En línea: %{online}"
 
 # --- Server tree ---
+core_status.server_n:
+  ru: "Server %{n}"
+  en: "Server %{n}"
+  es: "Server %{n}"
+core_status.rename:
+  ru: "Переименовать сервер"
+  en: "Rename server"
+  es: "Renombrar servidor"
+core_status.show_ip:
+  ru: "Показать IP"
+  en: "Show IP"
+  es: "Mostrar IP"
+core_status.hide_ip:
+  ru: "Скрыть IP"
+  en: "Hide IP"
+  es: "Ocultar IP"
+core_status.cpu_load:
+  ru: "%{value} (%{n} яд.)"
+  en: "%{value} (%{n} core)"
+  es: "%{value} (%{n} núcl.)"
+core_status.mem_free:
+  ru: "%{pct}% своб (%{gb} ГБ)"
+  en: "%{pct}% free (%{gb} GB)"
+  es: "%{pct}% libre (%{gb} GB)"
 core_status.unknown_server:
   ru: "IP неизвестен: %{core}"
   en: "Unknown IP: %{core}"
@@ -87,6 +111,10 @@ core_status.logical_cpus:
   es: "CPU lógicos %{value}"
 
 # --- Table columns ---
+core_status.col.server:
+  ru: "Сервер"
+  en: "Server"
+  es: "Servidor"
 core_status.col.core:
   ru: "Ядро"
   en: "Core"
@@ -119,6 +147,24 @@ core_status.col.updated:
   ru: "Обновлено"
   en: "Updated"
   es: "Actualizado"
+
+# --- Detached-window chart legend ---
+core_status.chart_cpu:
+  ru: "CPU"
+  en: "CPU"
+  es: "CPU"
+core_status.chart_mem:
+  ru: "ОЗУ"
+  en: "RAM"
+  es: "RAM"
+core_status.chart_5m:
+  ru: "5 мин"
+  en: "5 min"
+  es: "5 min"
+core_status.chart_1h:
+  ru: "1 ч"
+  en: "1 h"
+  es: "1 h"
 
 # --- Units and relative time ---
 core_status.mb:

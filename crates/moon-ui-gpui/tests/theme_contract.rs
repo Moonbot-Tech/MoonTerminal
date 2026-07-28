@@ -1668,18 +1668,19 @@ fn moon_tree_closures_hold_weak_view_handles() {
     );
 }
 
-/// `core_status/table.rs:core_status_row` and `server_view.rs:server_metrics` must keep each
-/// protocol-v4 field bound to its independently named UI metric. Swapping process/system CPU or
+/// `core_status/table.rs:core_status_row`, `server_view.rs:server_row` and `core_row` must keep
+/// each protocol-v4 field bound to its correctly scoped UI metric. Swapping process/system CPU or
 /// process/free memory compiles but gives the operator a believable number with the wrong scope.
 #[test]
 fn core_status_table_binds_scoped_telemetry_columns() {
     let text = read_src("panels/core_status/table.rs");
     let flat_row = braced_body(&text, "fn core_status_row(");
     let server = read_src("panels/core_status/server_view.rs");
-    let server_metrics = braced_body(&server, "fn server_metrics(");
+    let server_row = braced_body(&server, "fn server_row(");
     let process_row = braced_body(&server, "fn core_row(");
 
     for key in [
+        "core_status.col.server",
         "core_status.col.cpu_proc",
         "core_status.col.cpu_sys",
         "core_status.col.cpus",
@@ -1706,7 +1707,7 @@ fn core_status_table_binds_scoped_telemetry_columns() {
         "percent(sys.system_cpu_percent)",
         "memory_u16(sys.used_memory_mb)",
         "memory_u16(sys.free_physical_memory_mb)",
-        "optional_u8(sys.logical_cpu_count)",
+        "count(sys.logical_cpu_count)",
     ] {
         assert!(
             flat_row.contains(binding),
@@ -1714,13 +1715,11 @@ fn core_status_table_binds_scoped_telemetry_columns() {
         );
     }
     for binding in [
-        "percent(group.system_cpu_percent)",
-        "memory_u64(group.process_memory_mb)",
-        "memory_u16(group.free_physical_memory_mb)",
-        "optional_u8(group.logical_cpu_count)",
+        "cpu_load(group.system_cpu_percent, group.logical_cpu_count)",
+        "memory_free(group.process_memory_mb, group.free_physical_memory_mb)",
     ] {
         assert!(
-            server_metrics.contains(binding),
+            server_row.contains(binding),
             "the By IP server row lost the scoped telemetry binding `{binding}`"
         );
     }
@@ -1753,62 +1752,20 @@ fn core_status_tree_renderer_holds_a_weak_owner() {
     );
 }
 
-/// `core_status/mod.rs:CoreStatusView::collect` must record each scoped endpoint before applying
-/// the visible-core filter; moving the insertion below the filter loses hidden/expanded state when
-/// an unselected core discovers its IP.
+/// `core_status/mod.rs` must keep telemetry repaints throttled to at most once per second and show
+/// CPU AVERAGED over the window, not the last flickering sample. Removing the throttle floods the
+/// panel with repaints; dropping the average makes the number unreadable.
 #[test]
-fn core_status_tracks_server_keys_outside_the_visible_filter() {
+fn core_status_throttles_repaints_and_averages_cpu() {
     let text = read_src("panels/core_status/mod.rs");
-    let collect = braced_body(&text, "fn collect(");
-    let key_position = collect
-        .find("server_keys.insert(")
-        .expect("Core Status must retain unfiltered endpoint keys");
-    let filter_position = collect
-        .find("if !self.sel_cores.is_empty()")
-        .expect("Core Status must retain its visible-core filter");
 
     assert!(
-        key_position < filter_position,
-        "Core Status must capture endpoint identity before an unselected core is skipped"
+        text.contains("now - this.last_repaint_ms < 1000") && text.contains("return;"),
+        "Core Status must gate ALL telemetry work to at most once per second (early-return on \
+         faster drains), not just the repaint"
     );
-}
-
-/// Removing any `normal_section_rule` attachment must fail here; otherwise Flat rows, server roots,
-/// or mixed-server children lose the requested attention-to-normal separator while model tests
-/// remain green.
-#[test]
-fn core_status_attention_boundaries_are_wired_layout_neutrally() {
-    let table = read_src("panels/core_status/table.rs");
-    let server_view = read_src("panels/core_status/server_view.rs");
-    let presentation = read_src("panels/core_status/presentation.rs");
-    let flat_row = braced_body(&table, "fn core_status_row(");
-    let server_row = braced_body(&server_view, "fn server_row(");
-    let core_row = braced_body(&server_view, "fn core_row(");
-
-    for (name, row) in [
-        ("Flat row", flat_row),
-        ("server root", server_row),
-        ("server child", core_row),
-    ] {
-        assert!(
-            row.contains(".relative()")
-                && row.contains(".children(normal_section_start.then(|| normal_section_rule(p)))"),
-            "{name} must attach the attention boundary as an overlay inside its row"
-        );
-    }
-
-    let rule = braced_body(&presentation, "pub(super) fn normal_section_rule(");
-    for style in [
-        ".absolute()",
-        ".top_0()",
-        ".left_0()",
-        ".right_0()",
-        ".h(px(2.0))",
-        ".bg(rgb(palette.amber))",
-    ] {
-        assert!(
-            rule.contains(style),
-            "Core Status attention boundary lost layout-neutral style `{style}`"
-        );
-    }
+    assert!(
+        text.contains("fn averaged_sys(") && text.contains("track.averaged(now_sec)"),
+        "Core Status must display CPU averaged over the window, not the raw last sample"
+    );
 }

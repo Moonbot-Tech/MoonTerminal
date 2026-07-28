@@ -334,6 +334,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             panic_armed: HashSet::new(),
             backend_dirty_since_notify: false,
             last_backend_notify: None,
+            core_chart_hist: Default::default(),
             reconnect_request: Vec::new(),
             show_group_request: Vec::new(),
             group_windows: HashMap::new(),
