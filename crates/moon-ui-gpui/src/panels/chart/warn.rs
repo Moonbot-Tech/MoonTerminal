@@ -50,6 +50,8 @@ pub(super) struct WarnState {
     sig: Option<u64>,
     /// Server IP the marks belong to, so a slot reused for another coin/core rebuilds them.
     ip: Option<IpAddr>,
+    /// Badge colour the gems were built with, so a theme switch (which changes amber) rebuilds them.
+    amber: Option<u32>,
     /// Badges under the cursor: the nearest one grows and its episode fills the card.
     hover: Option<MarkHit>,
     /// Last hit-test point, carrying the Delphi movement threshold the order-line hover uses.
@@ -63,6 +65,7 @@ impl ChartPanel {
         let Some((core, _market)) = self.chart.active_target() else {
             return self.clear_warn(cx);
         };
+        let amber = MoonPalette::active(cx).amber;
         let (ip, rev) = {
             let b = self.backend.read(cx);
             let ip = b
@@ -76,14 +79,14 @@ impl ChartPanel {
         let Some(ip) = ip else {
             return self.clear_warn(cx);
         };
-        if self.warn.sig == Some(rev) && self.warn.ip == Some(ip) {
+        if self.warn.sig == Some(rev) && self.warn.ip == Some(ip) && self.warn.amber == Some(amber) {
             return false;
         }
         self.warn.sig = Some(rev);
         self.warn.ip = Some(ip);
+        self.warn.amber = Some(amber);
 
         let now_ms = now_unix_ms_i64();
-        let amber = MoonPalette::active(cx).amber;
         let items: Vec<(WarnEpisode, NewsMark)> = {
             let b = self.backend.read(cx);
             b.warn_episodes_for_server(ip, now_ms - WARN_SPAN_MS, now_ms)
@@ -215,7 +218,7 @@ impl ChartPanel {
         let max_h = (slot_h - bottom - CARD_TOP_INSET).max(CARD_MIN_H);
 
         let now_ms = now_unix_ms_i64();
-        let spark = self.warn.ip.and_then(|ip| self.spark_points(ip, cx));
+        let spark = self.episode_spark(episode, now_ms, cx);
         let header = warn_header(episode, mark, now_ms, self.backend.read(cx), palette, cx);
         let extra = hover.stack.len().saturating_sub(1);
 
@@ -255,10 +258,26 @@ impl ChartPanel {
         )
     }
 
-    /// Recent `(cpu %, occupied mem %)` points for the server, most recent last, or `None` when there
-    /// is no history. Positional slice of the shared ring (1 Hz), the last `SPARK_SECS` seconds.
-    fn spark_points(&self, ip: IpAddr, cx: &App) -> Option<Vec<(u8, u8)>> {
-        let ring = self.backend.read(cx).core_chart_hist.ring(ip)?;
+    /// Recent `(cpu %, mem %)` points for a card's episode, most recent last, or `None` when a live
+    /// sparkline would be misleading (the episode ended longer ago than the window) or there is no
+    /// history.
+    ///
+    /// A per-core (memory-growth) episode uses that core's PROCESS ring; a server episode uses the
+    /// MACHINE ring, matching the subject the header names. This is the recent live history, shown
+    /// only while it still covers the episode; the precise per-episode ±1 min slice is a follow-up
+    /// (the `core_warning_series` table).
+    fn episode_spark(&self, episode: &WarnEpisode, now_ms: i64, cx: &App) -> Option<Vec<(u8, u8)>> {
+        let covered = episode
+            .end_ms
+            .is_none_or(|end| now_ms - end < SPARK_SECS as i64 * 1000);
+        if !covered {
+            return None;
+        }
+        let b = self.backend.read(cx);
+        let ring = match episode.core_id {
+            Some(core) => b.core_line_hist.ring(core),
+            None => self.warn.ip.and_then(|ip| b.core_chart_hist.ring(ip)),
+        }?;
         if ring.len() < 2 {
             return None;
         }
