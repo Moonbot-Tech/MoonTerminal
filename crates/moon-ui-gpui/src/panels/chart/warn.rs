@@ -46,6 +46,8 @@ const GRAPH_H: f32 = 44.0;
 
 /// One warning event: a run of nearby episodes on one server, merged across axes.
 struct WarnCluster {
+    /// The earliest (persisted) episode's id, used to fetch its stored ±1 min slice for the graph.
+    id: u64,
     /// Earliest episode start in the cluster (where the gem sits).
     start_ms: i64,
     /// Latest episode end, or `None` while any member is still open.
@@ -221,24 +223,10 @@ impl ChartPanel {
     /// centred on `at_ms`, sliced positionally from the 1 Hz ring. `None` when there is too little.
     ///
     /// Right after the warning only `[at-60, now]` exists; a minute later the full `[at-60, at+60]`
-    /// window has filled in, so the card's graph "grows" to the full ±1 min.
+    /// window has filled in, so the card's graph "grows" to the full ±1 min. The backend owns the
+    /// slicing so the same read backs the capture that persists it for old episodes.
     fn server_slice(&self, ip: IpAddr, at_ms: i64, now_ms: i64, cx: &App) -> Option<Vec<(u8, u8)>> {
-        let ring = self.backend.read(cx).core_chart_hist.ring(ip)?;
-        let len = ring.len();
-        if len < 2 {
-            return None;
-        }
-        let now_sec = now_ms / 1000;
-        let at_sec = at_ms / 1000;
-        // Seconds back from now to each window edge; the newer edge (at+60) may be the future.
-        let k_lo = (now_sec - (at_sec - 60)).max(0) as usize;
-        let k_hi = (now_sec - (at_sec + 60)).max(0) as usize;
-        let lo = len.saturating_sub(1 + k_lo);
-        let hi = len.saturating_sub(1 + k_hi);
-        if hi.saturating_sub(lo) < 1 {
-            return None;
-        }
-        Some(ring.iter().skip(lo).take(hi - lo + 1).copied().collect())
+        self.backend.read(cx).warn_server_slice(ip, at_ms, now_ms)
     }
 
     /// Hit-test the badges' row at `pos` (panel-local device pixels). Mirror of `news_hit`.
@@ -323,7 +311,14 @@ impl ChartPanel {
         let graph = self
             .warn
             .ip
-            .and_then(|ip| self.server_slice(ip, cluster.start_ms, now_ms, cx));
+            .and_then(|ip| self.server_slice(ip, cluster.start_ms, now_ms, cx))
+            .or_else(|| {
+                // Older than the live ring: fall back to the slice persisted at capture. Only a
+                // closed cluster has one (an open episode carries an engine id, not a stored row id).
+                (!cluster.open)
+                    .then(|| self.backend.read(cx).warn_series_slice(cluster.id))
+                    .flatten()
+            });
         let body = cluster_card_body(
             cluster,
             mark,
@@ -378,6 +373,7 @@ fn cluster_episodes(mut episodes: Vec<WarnEpisode>) -> Vec<WarnCluster> {
             }
             _ => {
                 let mut cluster = WarnCluster {
+                    id: episode.id,
                     start_ms: episode.start_ms,
                     end_ms: episode.end_ms,
                     reach,
