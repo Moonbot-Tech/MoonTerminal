@@ -123,6 +123,7 @@ fn axis_str(axis: WarnAxis) -> &'static str {
     match axis {
         WarnAxis::SysCpu => "sys_cpu",
         WarnAxis::MemGrowth => "mem_growth",
+        WarnAxis::Unreachable => "connectivity",
     }
 }
 
@@ -131,6 +132,7 @@ fn axis_str(axis: WarnAxis) -> &'static str {
 fn axis_from(name: &str) -> WarnAxis {
     match name {
         "mem_growth" => WarnAxis::MemGrowth,
+        "connectivity" => WarnAxis::Unreachable,
         _ => WarnAxis::SysCpu,
     }
 }

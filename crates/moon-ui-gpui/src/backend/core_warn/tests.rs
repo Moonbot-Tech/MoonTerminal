@@ -4,19 +4,34 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 
 use super::{CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, RingSubject, WarnAxis};
 
-/// Build one core sample; `process` and `system` CPU are set equal, memory optional.
+/// Build one Ready core sample; `process` and `system` CPU are set equal, memory optional.
 fn sample(id: CoreId, ip: [u8; 4], cpu: Option<u8>, used: Option<u16>) -> CoreSample {
     CoreSample {
         id,
         ip: Some(IpAddr::V4(Ipv4Addr::from(ip))),
+        status: ConnStatus::Ready,
         sys: CoreSysStatus {
             system_cpu_percent: cpu,
             process_cpu_percent: cpu,
             used_memory_mb: used,
+            updated_ms: 1,
+            ..CoreSysStatus::default()
+        },
+    }
+}
+
+/// Build one core sample carrying a specific connection status (telemetry irrelevant).
+fn sample_conn(id: CoreId, ip: [u8; 4], status: ConnStatus) -> CoreSample {
+    CoreSample {
+        id,
+        ip: Some(IpAddr::V4(Ipv4Addr::from(ip))),
+        status,
+        sys: CoreSysStatus {
             updated_ms: 1,
             ..CoreSysStatus::default()
         },
@@ -171,6 +186,7 @@ fn tick_emits_server_and_core_ring_samples() {
     let mk = |id: u64, proc_cpu: u8, used: u16, updated: i64| CoreSample {
         id,
         ip: Some(IpAddr::V4(Ipv4Addr::from(IP))),
+        status: ConnStatus::Ready,
         sys: CoreSysStatus {
             system_cpu_percent: Some(40),
             process_cpu_percent: Some(proc_cpu),
@@ -198,6 +214,71 @@ fn tick_emits_server_and_core_ring_samples() {
         .expect("core 1 sample");
     assert_eq!(core1.cpu, 30, "process CPU");
     assert_eq!(core1.mem, 33, "share = 500/1500");
+}
+
+/// A dropped core with a surviving ready core opens a connectivity episode; recovery closes it.
+#[test]
+fn dropped_core_opens_then_recovery_closes_connectivity_episode() {
+    let mut engine = CoreWarnEngine::default();
+    let ip = IpAddr::V4(Ipv4Addr::from(IP));
+
+    engine.tick(
+        &[
+            sample_conn(1, IP, ConnStatus::Ready),
+            sample_conn(2, IP, ConnStatus::Disconnected),
+        ],
+        1_000,
+    );
+    assert!(engine.server_conn_warn(ip), "a drop with a survivor must warn");
+    let open_conn = engine
+        .open_episodes()
+        .into_iter()
+        .filter(|e| e.axis == WarnAxis::Unreachable)
+        .count();
+    assert_eq!(open_conn, 1);
+
+    // The dropped core recovers.
+    engine.tick(
+        &[
+            sample_conn(1, IP, ConnStatus::Ready),
+            sample_conn(2, IP, ConnStatus::Ready),
+        ],
+        2_000,
+    );
+    assert!(!engine.server_conn_warn(ip), "recovery must clear the warning");
+    let closed: Vec<_> = engine
+        .episodes()
+        .filter(|e| e.axis == WarnAxis::Unreachable)
+        .collect();
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0].server_ip, Some(ip));
+    assert!(closed[0].end_ms.is_some());
+}
+
+/// Connectivity must NOT warn when the whole server is down (no survivor) or a core is merely
+/// connecting (not a drop).
+#[test]
+fn fully_offline_or_connecting_does_not_warn_connectivity() {
+    let mut engine = CoreWarnEngine::default();
+    let ip = IpAddr::V4(Ipv4Addr::from(IP));
+
+    engine.tick(
+        &[
+            sample_conn(1, IP, ConnStatus::Disconnected),
+            sample_conn(2, IP, ConnStatus::Failed("down".into())),
+        ],
+        1_000,
+    );
+    assert!(!engine.server_conn_warn(ip), "no ready survivor must not warn");
+
+    engine.tick(
+        &[
+            sample_conn(1, IP, ConnStatus::Ready),
+            sample_conn(2, IP, ConnStatus::Connecting),
+        ],
+        2_000,
+    );
+    assert!(!engine.server_conn_warn(ip), "connecting is not a drop");
 }
 
 /// A core absent from a later tick is evicted from the rolling history (no stale accumulation).

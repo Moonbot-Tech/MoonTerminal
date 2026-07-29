@@ -5,9 +5,15 @@
 //! second, keeps the rolling CPU/memory history the warnings need, and turns the SUSTAINED/trend
 //! signals into WARNING EPISODES with a start and an end time.
 //!
-//! Two axes today, ported verbatim from the panel so the displayed warnings do not change:
+//! Three axes:
 //! - `SysCpu` — a machine's system CPU held at/above the threshold (per server IP).
 //! - `MemGrowth` — a core's used memory rising above its window minimum (per core).
+//! - `Unreachable` — a core dropped (Disconnected/Failed) while the server still runs a Ready core
+//!   (per server IP).
+//!
+//! `SysCpu` and `MemGrowth` are ported verbatim from the panel so their displayed warnings do not
+//! change; `Unreachable` uses the same connectivity rule the panel showed, now sourced here (so it
+//! also becomes an episode). All three drive both the panel display and the episode log.
 //!
 //! The panel reads the current warning state and the smoothed CPU from here; the closed/open episode
 //! log is produced now and consumed by the upcoming chart-badge phase.
@@ -15,6 +21,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 
+use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 
 /// CPU is averaged over this many recent one-second buckets before display and threshold checks.
@@ -38,6 +45,8 @@ pub(crate) struct CoreSample {
     pub(crate) id: CoreId,
     /// Decoded endpoint address, or `None` until the store learns it.
     pub(crate) ip: Option<IpAddr>,
+    /// Latest connection state, for the connectivity (dropped-core) warning.
+    pub(crate) status: ConnStatus,
     /// Latest process/machine telemetry.
     pub(crate) sys: CoreSysStatus,
 }
@@ -49,6 +58,8 @@ pub(crate) enum WarnAxis {
     SysCpu,
     /// A core's used memory rising (per core).
     MemGrowth,
+    /// A core dropped while the server still runs others (per server).
+    Unreachable,
 }
 
 /// The subject a chart-history ring sample belongs to.
@@ -164,6 +175,8 @@ enum WarnKey {
     SysCpu(IpAddr),
     /// One core's memory.
     Mem(CoreId),
+    /// Server-wide connectivity (a dropped core with survivors).
+    Conn(IpAddr),
 }
 
 /// Backend warning engine: rolling per-core history, current warning state, and the episode log.
@@ -187,6 +200,8 @@ pub(crate) struct CoreWarnEngine {
     mem_growing: HashSet<CoreId>,
     /// Servers whose system CPU is currently sustained-high.
     sys_warn: HashSet<IpAddr>,
+    /// Servers with a dropped core while others stay ready (the connectivity warning).
+    conn_warn: HashSet<IpAddr>,
 }
 
 impl CoreWarnEngine {
@@ -290,6 +305,28 @@ impl CoreWarnEngine {
                 self.sys_warn.insert(*ip);
             }
         }
+
+        // Connectivity: a server with a dropped core (Disconnected/Failed) while another core is
+        // still Ready — "one fell off while the rest works". A fully offline server (no ready core)
+        // does not warn, and a still-connecting core is not a drop.
+        self.conn_warn.clear();
+        let mut ready_down: HashMap<IpAddr, (bool, bool)> = HashMap::new();
+        for sample in samples {
+            let Some(ip) = sample.ip else {
+                continue;
+            };
+            let entry = ready_down.entry(ip).or_insert((false, false));
+            match sample.status {
+                ConnStatus::Ready => entry.0 = true,
+                ConnStatus::Disconnected | ConnStatus::Failed(_) => entry.1 = true,
+                _ => {}
+            }
+        }
+        for (ip, (ready, down)) in ready_down {
+            if ready && down {
+                self.conn_warn.insert(ip);
+            }
+        }
     }
 
     /// Open new episodes, extend open ones, and close those whose warning cleared or subject left.
@@ -329,6 +366,10 @@ impl CoreWarnEngine {
                 (ip_of.get(id).copied(), Some(*id), peak),
             );
         }
+        // Connectivity is a server-wide boolean state; it carries no numeric peak.
+        for ip in &self.conn_warn {
+            active.insert(WarnKey::Conn(*ip), (Some(*ip), None, 0));
+        }
 
         // Open or extend.
         for (key, (server_ip, core_id, peak)) in &active {
@@ -364,6 +405,7 @@ impl CoreWarnEngine {
             let axis = match key {
                 WarnKey::SysCpu(_) => WarnAxis::SysCpu,
                 WarnKey::Mem(_) => WarnAxis::MemGrowth,
+                WarnKey::Conn(_) => WarnAxis::Unreachable,
             };
             let episode = WarnEpisode {
                 id: open.id,
@@ -403,6 +445,11 @@ impl CoreWarnEngine {
         self.sys_warn.contains(&ip)
     }
 
+    /// Whether one server currently has a dropped core with survivors (the connectivity warning).
+    pub(crate) fn server_conn_warn(&self, ip: IpAddr) -> bool {
+        self.conn_warn.contains(&ip)
+    }
+
     /// Closed episodes, oldest first. Consumed by the upcoming chart-badge/persistence phase.
     #[allow(dead_code)]
     pub(crate) fn episodes(&self) -> impl Iterator<Item = &WarnEpisode> {
@@ -419,6 +466,7 @@ impl CoreWarnEngine {
                 axis: match key {
                     WarnKey::SysCpu(_) => WarnAxis::SysCpu,
                     WarnKey::Mem(_) => WarnAxis::MemGrowth,
+                    WarnKey::Conn(_) => WarnAxis::Unreachable,
                 },
                 server_ip: open.server_ip,
                 core_id: open.core_id,

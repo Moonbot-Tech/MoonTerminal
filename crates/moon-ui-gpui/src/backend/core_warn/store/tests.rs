@@ -52,8 +52,11 @@ fn roundtrip_filters_by_server_and_time() {
     store
         .insert_episode(&episode(WarnAxis::SysCpu, b, None, 1_500, 1_800, 75))
         .unwrap();
+    store
+        .insert_episode(&episode(WarnAxis::Unreachable, a, None, 8_000, 9_000, 0))
+        .unwrap();
 
-    // Server A, start within [0, 4000] → only the first episode (B is filtered out, the second is
+    // Server A, start within [0, 4000] → only the first episode (B is filtered out, the others are
     // outside the window).
     let narrow = store.episodes_for_server(ip_a, 0, 4_000).unwrap();
     assert_eq!(narrow.len(), 1);
@@ -63,10 +66,13 @@ fn roundtrip_filters_by_server_and_time() {
     assert_eq!(narrow[0].end_ms, Some(2_000));
     assert_eq!(narrow[0].core_id, None);
 
-    // A wide window returns both server-A episodes, oldest first, reconstructing the per-core axis.
+    // A wide window returns all server-A episodes, oldest first, reconstructing each axis (including
+    // the connectivity axis string round-trip).
     let wide = store.episodes_for_server(ip_a, 0, 100_000).unwrap();
-    assert_eq!(wide.len(), 2);
+    assert_eq!(wide.len(), 3);
     assert_eq!(wide[1].axis, WarnAxis::MemGrowth);
     assert_eq!(wide[1].core_id, Some(7));
     assert_eq!(wide[1].peak, 512);
+    assert_eq!(wide[2].axis, WarnAxis::Unreachable);
+    assert_eq!(wide[2].end_ms, Some(9_000));
 }

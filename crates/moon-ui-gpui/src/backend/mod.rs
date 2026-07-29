@@ -826,6 +826,7 @@ impl Backend {
                     Some(crate::backend::core_warn::CoreSample {
                         id: session.id,
                         ip: core.endpoint.map(|endpoint| endpoint.address),
+                        status: core.status.clone(),
                         sys: core.sys,
                     })
                 })

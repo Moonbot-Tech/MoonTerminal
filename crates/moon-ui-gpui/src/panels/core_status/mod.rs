@@ -342,11 +342,11 @@ impl CoreStatusView {
             let names = b.layout.core_server_names.clone();
             let mut groups = aggregate_servers(&rows);
             assign_server_names(&mut groups, &names);
-            // CPU (sustained system) and memory-growth warnings come from the backend engine's
-            // current state; connectivity is already set in aggregate_servers.
+            // All three warning axes come from the backend engine's current state.
             for group in &mut groups {
                 group.cpu_warn = group.address.is_some_and(|ip| b.warn.server_cpu_warn(ip));
                 group.mem_warn = group.cores.iter().any(|core| b.warn.core_mem_warn(core.id));
+                group.conn_warn = group.address.is_some_and(|ip| b.warn.server_conn_warn(ip));
             }
             (groups, rows)
         };

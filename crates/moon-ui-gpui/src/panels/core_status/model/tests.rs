@@ -251,43 +251,5 @@ fn partial_readiness_is_degraded() {
 
     assert_eq!(server.ready_count, 1);
     assert_eq!(server.connectivity, ServerConnectivity::Degraded);
-    // A dropped core with a surviving ready core is the connectivity warning.
-    assert!(server.conn_warn);
-}
-
-/// `model.rs:conn_dropped` must NOT warn when every core is ready: nothing fell off.
-#[test]
-fn all_ready_has_no_connectivity_warning() {
-    let rows = [
-        row(51, Some([203, 0, 113, 6]), 3000, ConnStatus::Ready, CoreSysStatus::default()),
-        row(52, Some([203, 0, 113, 6]), 3001, ConnStatus::Ready, CoreSysStatus::default()),
-    ];
-
-    assert!(!aggregate_servers(&rows)[0].conn_warn);
-}
-
-/// `model.rs:conn_dropped` must NOT warn when the whole server is down (no ready core): that is the
-/// louder Offline state, not the "one fell off while the rest works" partial-drop warning.
-#[test]
-fn fully_offline_server_has_no_connectivity_warning() {
-    let rows = [
-        row(61, Some([203, 0, 113, 7]), 3000, ConnStatus::Disconnected, CoreSysStatus::default()),
-        row(62, Some([203, 0, 113, 7]), 3001, ConnStatus::Failed("down".to_string()), CoreSysStatus::default()),
-    ];
-
-    let server = &aggregate_servers(&rows)[0];
-    assert_eq!(server.ready_count, 0);
-    assert!(!server.conn_warn);
-}
-
-/// `model.rs:conn_dropped` must treat a still-connecting core as NOT a drop: startup churn is not a
-/// server falling off.
-#[test]
-fn connecting_core_is_not_a_drop() {
-    let rows = [
-        row(71, Some([203, 0, 113, 8]), 3000, ConnStatus::Ready, CoreSysStatus::default()),
-        row(72, Some([203, 0, 113, 8]), 3001, ConnStatus::Connecting, CoreSysStatus::default()),
-    ];
-
-    assert!(!aggregate_servers(&rows)[0].conn_warn);
+    // The connectivity WARNING (conn_warn) now comes from the backend engine, tested beside it.
 }
