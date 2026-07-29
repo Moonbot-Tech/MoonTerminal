@@ -336,6 +336,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             last_backend_notify: None,
             core_chart_hist: Default::default(),
             core_line_hist: Default::default(),
+            warn: Default::default(),
             reconnect_request: Vec::new(),
             show_group_request: Vec::new(),
             group_windows: HashMap::new(),
@@ -573,6 +574,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         b.sync_open_markets_if_due();
                         b.sync_group_manual_settings();
                         b.snap = b.metrics.sample(Instant::now());
+                        b.tick_core_warnings(moon_chart::paint::now_unix_ms() as i64);
                         crate::firetest::tick_backend(b, cx);
 
                         let recon: Vec<CoreId> = b.reconnect_request.drain(..).collect();

@@ -35,23 +35,9 @@ use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 use rust_i18n::t;
 
-use std::collections::VecDeque;
 
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers};
 
-/// CPU is averaged over this many recent one-second buckets before display.
-const CPU_WINDOW_SECS: i64 = 3;
-/// Memory-growth is judged against the minimum used within this many recent seconds.
-const MEM_WINDOW_SECS: i64 = 30;
-/// A memory rise of at least this many MB above the window minimum flags growth.
-const MEM_GROWTH_MB: u16 = 64;
-/// ...or a rise of at least this percent above the window minimum.
-const MEM_GROWTH_PCT: u32 = 12;
-/// Machine CPU at or above this percent (averaged) counts toward the sustained-CPU warning.
-const WARN_CPU_PCT: u32 = 70;
-/// The CPU warning fires only after the machine has stayed high this many consecutive seconds.
-/// This is what separates a warning (SUSTAINED) from the number color (an instantaneous threshold).
-const CPU_SUSTAIN_SECS: u32 = 5;
 /// Chart X-axis span selectable in the detached window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChartWindow {
@@ -85,95 +71,6 @@ impl Default for ChartWindow {
     }
 }
 
-/// One second of CPU samples, tagged with its second so a reused ring slot resets cleanly.
-#[derive(Default, Clone, Copy)]
-struct CpuBucket {
-    /// Unix second this bucket accumulates.
-    sec: i64,
-    /// Summed process CPU percentages this second.
-    proc_sum: u32,
-    /// Summed whole-machine CPU percentages this second.
-    sys_sum: u32,
-    /// Number of samples in the sums.
-    samples: u32,
-}
-
-/// Per-core rolling telemetry for CPU averaging, memory-growth detection, and sustained CPU.
-#[derive(Default, Clone)]
-struct CoreTrack {
-    /// Three one-second CPU buckets, indexed by `second % 3`.
-    cpu: [CpuBucket; 3],
-    /// One `(second, used MB)` sample per second over the memory-growth window.
-    mem: VecDeque<(i64, u16)>,
-    /// Consecutive seconds the averaged machine CPU has stayed at/above `WARN_CPU_PCT`.
-    cpu_high_secs: u32,
-}
-
-impl CoreTrack {
-    /// Average `(process, system)` CPU over the last `CPU_WINDOW_SECS` seconds.
-    ///
-    /// Args:
-    ///     now_sec: Current Unix second, bounding which buckets count.
-    ///
-    /// Returns:
-    ///     Averaged process and system CPU, each `None` when no bucket has samples.
-    fn averaged(&self, now_sec: i64) -> (Option<u8>, Option<u8>) {
-        let (mut proc, mut system, mut n) = (0u32, 0u32, 0u32);
-        for bucket in &self.cpu {
-            if bucket.samples > 0 && now_sec - bucket.sec < CPU_WINDOW_SECS {
-                proc += bucket.proc_sum;
-                system += bucket.sys_sum;
-                n += bucket.samples;
-            }
-        }
-        if n == 0 {
-            (None, None)
-        } else {
-            (
-                Some((proc / n).min(255) as u8),
-                Some((system / n).min(255) as u8),
-            )
-        }
-    }
-}
-
-/// Whether a memory window shows sustained growth: the latest sample sits notably above the
-/// window minimum.
-///
-/// A flat footprint keeps the minimum near the current value (no warning); a leak lifts the
-/// current well above the window low; a spike that returns leaves the minimum low, so it does not
-/// flag. Needs a few samples before it will fire.
-///
-/// Args:
-///     mem: `(second, used MB)` samples over the growth window, oldest first.
-///
-/// Returns:
-///     True when the rise above the window minimum clears both the absolute-MB and percent floors.
-fn mem_grew(mem: &VecDeque<(i64, u16)>) -> bool {
-    if mem.len() < 5 {
-        return false;
-    }
-    let current = mem.back().map(|(_, used)| *used).unwrap_or(0);
-    let min = mem.iter().map(|(_, used)| *used).min().unwrap_or(current);
-    let growth = u32::from(current.saturating_sub(min));
-    growth >= u32::from(MEM_GROWTH_MB).max(u32::from(min) * MEM_GROWTH_PCT / 100)
-}
-
-/// Advance the consecutive-high-seconds counter for the sustained-CPU warning.
-///
-/// Args:
-///     prev: Prior consecutive-high seconds.
-///     system_cpu: Averaged machine CPU for the just-elapsed second, if known.
-///
-/// Returns:
-///     One more than `prev` while CPU stays at/above the threshold, else zero.
-fn next_high_secs(prev: u32, system_cpu: Option<u8>) -> u32 {
-    match system_cpu {
-        Some(value) if u32::from(value) >= WARN_CPU_PCT => prev.saturating_add(1),
-        _ => 0,
-    }
-}
-
 /// Available Core Status presentations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CoreStatusMode {
@@ -197,8 +94,6 @@ pub struct CoreStatusView {
     group: String,
     /// Multi-select core filter; an empty set means every core in the group.
     pub(super) sel_cores: HashSet<CoreId>,
-    /// Per-core rolling CPU and memory history for averaging and growth detection.
-    track: HashMap<CoreId, CoreTrack>,
     /// Unix ms of the last repaint; telemetry repaints at most once per second.
     last_repaint_ms: i64,
     /// Whether any server currently has a warning; drives the dock-tab badge.
@@ -251,16 +146,14 @@ impl CoreStatusView {
         cx: &mut Context<Self>,
     ) -> Self {
         // This fires on every backend notify (event-driven, ≤4 Hz — not a timer/poll), but ALL work
-        // is gated to once per second: sample, average, warn-tick, rebuild, record, repaint. Faster
-        // drains do nothing but a timestamp check, so the panel never adds ~4 Hz churn.
-        cx.observe(&backend, |this, backend, cx| {
+        // is gated to once per second: rebuild the display from the backend warning engine, record
+        // the chart history, repaint. Detection itself runs in the engine (backend-always), not here.
+        cx.observe(&backend, |this, _backend, cx| {
             let now = moon_chart::paint::now_unix_ms() as i64;
             if now - this.last_repaint_ms < 1000 {
                 return;
             }
             this.last_repaint_ms = now;
-            this.accumulate_track(backend.read(cx), now / 1000);
-            this.tick_warn_counters(now / 1000);
             this.rebuild_cache(cx);
             this.record_chart_history(cx);
             cx.notify();
@@ -295,7 +188,6 @@ impl CoreStatusView {
             backend,
             group,
             sel_cores: HashSet::new(),
-            track: HashMap::new(),
             last_repaint_ms: 0,
             has_warn: false,
             detached,
@@ -346,101 +238,6 @@ impl CoreStatusView {
     /// Return this panel group's cores in canonical order.
     pub(super) fn scope_cores(&self, b: &Backend) -> OrderedCores {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
-    }
-
-    /// Sample every scoped core's current CPU and memory into its rolling window.
-    ///
-    /// Runs on every backend drain (faster than the repaint). CPU lands in the current one-second
-    /// bucket; memory keeps one sample per second over the growth window.
-    ///
-    /// Args:
-    ///     b: Backend snapshot whose scoped cores are sampled.
-    ///     now_sec: Current Unix second.
-    ///
-    /// Returns:
-    ///     Nothing; per-core history grows in place and self-prunes to its windows.
-    fn accumulate_track(&mut self, b: &Backend, now_sec: i64) {
-        let cores = self.scope_cores(b);
-        let store = b.session.store();
-        for (id, _) in cores {
-            let Some(core) = store.core(id) else {
-                continue;
-            };
-            let sys = core.sys;
-            if sys.updated_ms == 0 {
-                continue;
-            }
-            let track = self.track.entry(id).or_default();
-            let slot = &mut track.cpu[now_sec.rem_euclid(3) as usize];
-            if slot.sec != now_sec {
-                *slot = CpuBucket {
-                    sec: now_sec,
-                    ..Default::default()
-                };
-            }
-            if let Some(value) = sys.process_cpu_percent {
-                slot.proc_sum += u32::from(value);
-            }
-            if let Some(value) = sys.system_cpu_percent {
-                slot.sys_sum += u32::from(value);
-            }
-            slot.samples += 1;
-
-            if let Some(used) = sys.used_memory_mb {
-                if track.mem.back().map(|(sec, _)| *sec) == Some(now_sec) {
-                    track.mem.back_mut().unwrap().1 = used;
-                } else {
-                    track.mem.push_back((now_sec, used));
-                    while track
-                        .mem
-                        .front()
-                        .is_some_and(|(sec, _)| now_sec - sec > MEM_WINDOW_SECS)
-                    {
-                        track.mem.pop_front();
-                    }
-                }
-            }
-        }
-    }
-
-    /// Replace a core's CPU fields with the average over the last few seconds.
-    ///
-    /// Args:
-    ///     id: Core whose window to apply.
-    ///     sys: Latest store telemetry to base other fields on.
-    ///     now_sec: Current Unix second, bounding which buckets count.
-    ///
-    /// Returns:
-    ///     Telemetry with CPU averaged over the window, or the input unchanged when no sample exists.
-    fn averaged_sys(&self, id: CoreId, mut sys: CoreSysStatus, now_sec: i64) -> CoreSysStatus {
-        if let Some(track) = self.track.get(&id) {
-            let (proc, system) = track.averaged(now_sec);
-            if let Some(proc) = proc {
-                sys.process_cpu_percent = Some(proc);
-            }
-            if let Some(system) = system {
-                sys.system_cpu_percent = Some(system);
-            }
-        }
-        sys
-    }
-
-    /// Advance every core's sustained-high-CPU counter for the just-elapsed second.
-    ///
-    /// Runs once per second (unlike the faster sampling), so a counter of N means N real seconds
-    /// held high. This is the SUSTAINED signal behind the CPU warning, separate from the number
-    /// color which is an instantaneous threshold.
-    ///
-    /// Args:
-    ///     now_sec: Current Unix second, bounding the averaging window.
-    ///
-    /// Returns:
-    ///     Nothing; each track's `cpu_high_secs` is updated in place.
-    fn tick_warn_counters(&mut self, now_sec: i64) {
-        for track in self.track.values_mut() {
-            let system = track.averaged(now_sec).1;
-            track.cpu_high_secs = next_high_secs(track.cpu_high_secs, system);
-        }
     }
 
     /// Record this second's RAW telemetry into the SHARED backend history, so it survives this
@@ -566,41 +363,14 @@ impl CoreStatusView {
         cx.notify();
     }
 
-    /// Compute a server's `(cpu_warn, mem_warn)` from sustained CPU and per-core memory growth.
-    ///
-    /// These are the SUSTAINED/TREND signals shown as a ⚠ next to the metric and on the tab, and
-    /// are deliberately distinct from the threshold-based number colors.
-    ///
-    /// Args:
-    ///     group: Aggregated server whose cores' tracked history is inspected.
-    ///
-    /// Returns:
-    ///     Whether the machine CPU has held high, and whether any core's memory is growing.
-    fn compute_warns(&self, group: &ServerStatusGroup) -> (bool, bool) {
-        let mut cpu_warn = false;
-        let mut mem_warn = false;
-        for core in &group.cores {
-            if let Some(track) = self.track.get(&core.id) {
-                if track.cpu_high_secs >= CPU_SUSTAIN_SECS {
-                    cpu_warn = true;
-                }
-                if mem_grew(&track.mem) {
-                    mem_warn = true;
-                }
-            }
-        }
-        (cpu_warn, mem_warn)
-    }
-
     /// Collect filtered core rows for the group scope in canonical order.
     ///
     /// Args:
-    ///     b: Backend snapshot containing config, sessions, and market identity.
-    ///     now_sec: Current Unix second, bounding the CPU average window.
+    ///     b: Backend snapshot containing config, sessions, market identity, and the warning engine.
     ///
     /// Returns:
-    ///     Canonically ordered visible rows with CPU averaged over the window.
-    fn collect(&self, b: &Backend, now_sec: i64) -> Vec<CoreStatusRow> {
+    ///     Canonically ordered visible rows with CPU smoothed by the backend warning engine.
+    fn collect(&self, b: &Backend) -> Vec<CoreStatusRow> {
         let store = b.session.store();
         let mut out = Vec::new();
         for (id, name) in self.scope_cores(b) {
@@ -608,15 +378,23 @@ impl CoreStatusView {
                 continue;
             }
             let endpoint = store.core(id).and_then(|core| core.endpoint);
-            let (status, sys) = store
+            let (status, mut sys) = store
                 .core(id)
                 .map(|c| (c.status.clone(), c.sys))
                 .unwrap_or((ConnStatus::Disconnected, CoreSysStatus::default()));
+            // Smooth the displayed CPU with the engine's rolling average (computed backend-side).
+            let (proc, system) = b.warn.avg_cpu(id);
+            if let Some(proc) = proc {
+                sys.process_cpu_percent = Some(proc);
+            }
+            if let Some(system) = system {
+                sys.system_cpu_percent = Some(system);
+            }
             out.push(CoreStatusRow {
                 id,
                 name,
                 status,
-                sys: self.averaged_sys(id, sys, now_sec),
+                sys,
                 endpoint,
             });
         }
@@ -631,19 +409,21 @@ impl CoreStatusView {
     /// Returns:
     ///     Nothing; all render caches are replaced atomically.
     fn rebuild_cache(&mut self, cx: &mut Context<Self>) {
-        let now_sec = moon_chart::paint::now_unix_ms() as i64 / 1000;
         let backend = self.backend.clone();
-        let (rows, names) = {
+        let (mut groups, rows) = {
             let b = backend.read(cx);
-            (self.collect(b, now_sec), b.layout.core_server_names.clone())
+            let rows = self.collect(b);
+            let names = b.layout.core_server_names.clone();
+            let mut groups = aggregate_servers(&rows);
+            assign_server_names(&mut groups, &names);
+            // CPU (sustained system) and memory-growth warnings come from the backend engine's
+            // current state; connectivity is already set in aggregate_servers.
+            for group in &mut groups {
+                group.cpu_warn = group.address.is_some_and(|ip| b.warn.server_cpu_warn(ip));
+                group.mem_warn = group.cores.iter().any(|core| b.warn.core_mem_warn(core.id));
+            }
+            (groups, rows)
         };
-        let mut groups = aggregate_servers(&rows);
-        assign_server_names(&mut groups, &names);
-        for group in &mut groups {
-            let (cpu_warn, mem_warn) = self.compute_warns(group);
-            group.cpu_warn = cpu_warn;
-            group.mem_warn = mem_warn;
-        }
         // Warned servers first, then by server NAME (natural order, so `Server 2` < `Server 10`
         // and custom names like `F1` sort alphabetically). No user-selectable sort.
         groups.sort_by(|a, b| {

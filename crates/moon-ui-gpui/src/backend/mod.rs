@@ -2,6 +2,7 @@
 //! `main.rs`, the crate root, so its private fields are visible to descendant modules. Methods in
 //! this sibling module use `pub(crate)` because private items here would not be crate-wide.
 
+pub(crate) mod core_warn;
 mod detect_sound;
 mod figures;
 pub(crate) mod server_chart;
@@ -802,6 +803,35 @@ impl Backend {
             self.session
                 .set_open(&self.desired, &self.desired_orderbook);
         }
+    }
+
+    /// Advance the backend warning engine one tick from the current core telemetry.
+    ///
+    /// Runs from the coordination loop (backend-always, ~10 Hz); the engine throttles itself to
+    /// 1 Hz. Samples every live core's endpoint, status, and telemetry once.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix milliseconds.
+    ///
+    /// Returns:
+    ///     Nothing; the engine's tracking, warning state, and episode log advance in place.
+    pub(crate) fn tick_core_warnings(&mut self, now_ms: i64) {
+        let samples: Vec<crate::backend::core_warn::CoreSample> = {
+            let store = self.session.store();
+            self.session
+                .sessions()
+                .iter()
+                .filter_map(|session| {
+                    let core = store.core(session.id)?;
+                    Some(crate::backend::core_warn::CoreSample {
+                        id: session.id,
+                        ip: core.endpoint.map(|endpoint| endpoint.address),
+                        sys: core.sys,
+                    })
+                })
+                .collect()
+        };
+        self.warn.tick(&samples, now_ms);
     }
 
     pub(crate) fn mark_backend_dirty(&mut self, cx: &mut Context<Self>) {
