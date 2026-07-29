@@ -51,6 +51,33 @@ pub(crate) enum WarnAxis {
     MemGrowth,
 }
 
+/// The subject a chart-history ring sample belongs to.
+pub(crate) enum RingSubject {
+    /// A whole machine, keyed by endpoint IP: `(system CPU %, occupied memory %)`.
+    Server(IpAddr),
+    /// One core, keyed by id: `(process CPU %, process memory share %)`.
+    Core(CoreId),
+}
+
+/// One second of raw chart-history data for a subject, to be recorded into the shared rings.
+pub(crate) struct RingSample {
+    /// Whether this is a whole-machine or a per-core sample.
+    pub(crate) subject: RingSubject,
+    /// CPU percent (system for a server, process for a core).
+    pub(crate) cpu: u8,
+    /// Memory percent (occupied for a server, process share for a core).
+    pub(crate) mem: u8,
+}
+
+/// What one engine tick produces for the backend to act on.
+#[derive(Default)]
+pub(crate) struct TickResult {
+    /// Episodes that closed this tick, to persist. Empty on a within-second no-op.
+    pub(crate) closed: Vec<WarnEpisode>,
+    /// Raw per-subject chart-history samples for this second. Empty on a within-second no-op.
+    pub(crate) rings: Vec<RingSample>,
+}
+
 /// A warning period with a start and, once cleared, an end.
 #[allow(dead_code)] // Fields read by the upcoming chart-badge/persistence phase and the tests.
 #[derive(Clone, Debug)]
@@ -170,12 +197,12 @@ impl CoreWarnEngine {
     ///     now_ms: Current Unix milliseconds.
     ///
     /// Returns:
-    ///     The episodes that CLOSED this tick, for the caller to persist. Empty within the same
-    ///     second or when nothing cleared.
-    pub(crate) fn tick(&mut self, samples: &[CoreSample], now_ms: i64) -> Vec<WarnEpisode> {
+    ///     Closed episodes to persist and the raw ring samples for this second. Both empty within
+    ///     the same second (a no-op).
+    pub(crate) fn tick(&mut self, samples: &[CoreSample], now_ms: i64) -> TickResult {
         let now_sec = now_ms / 1000;
         if now_sec <= self.last_sec {
-            return Vec::new();
+            return TickResult::default();
         }
         self.last_sec = now_sec;
 
@@ -190,7 +217,11 @@ impl CoreWarnEngine {
         }
 
         self.recompute_state(samples, now_sec);
-        self.reconcile_episodes(samples, now_ms)
+        let closed = self.reconcile_episodes(samples, now_ms);
+        TickResult {
+            closed,
+            rings: build_ring_samples(samples),
+        }
     }
 
     /// Fold one core's current sample into its rolling CPU and memory windows.
@@ -423,6 +454,76 @@ fn next_high_secs(prev: u32, system_cpu: Option<u8>) -> u32 {
         Some(value) if u32::from(value) >= WARN_CPU_PCT => prev.saturating_add(1),
         _ => 0,
     }
+}
+
+/// Build this second's raw chart-history samples for every addressed server and its cores.
+///
+/// Per server: the freshest raw system CPU and occupied memory (process-RAM sum over free+sum). Per
+/// core: raw process CPU and this process's share of the reconstructed machine total. All clamped to
+/// 0..100. Cores without an endpoint are skipped, as they cannot key a server ring. Ported from the
+/// panel's former `record_chart_history` so the chart data is unchanged.
+///
+/// Args:
+///     samples: This tick's per-core telemetry.
+///
+/// Returns:
+///     One server sample plus one sample per core, for every server with a known address.
+fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
+    let mut by_ip: HashMap<IpAddr, Vec<&CoreSample>> = HashMap::new();
+    for sample in samples {
+        if let Some(ip) = sample.ip {
+            by_ip.entry(ip).or_default().push(sample);
+        }
+    }
+    let mut out = Vec::new();
+    for (ip, cores) in &by_ip {
+        let freshest = |read: &dyn Fn(&CoreSysStatus) -> Option<u16>| -> Option<u16> {
+            cores
+                .iter()
+                .filter_map(|s| read(&s.sys).map(|value| (s.sys.updated_ms, value)))
+                .max_by_key(|(updated_ms, _)| *updated_ms)
+                .map(|(_, value)| value)
+        };
+        let sys_cpu = cores
+            .iter()
+            .filter_map(|s| s.sys.system_cpu_percent.map(|c| (s.sys.updated_ms, c)))
+            .max_by_key(|(updated_ms, _)| *updated_ms)
+            .map(|(_, c)| c)
+            .unwrap_or(0)
+            .min(100);
+        let used_sum: u64 = cores
+            .iter()
+            .filter_map(|s| s.sys.used_memory_mb)
+            .map(u64::from)
+            .sum();
+        // Occupied memory needs a free-physical reading; without it the server line reads 0, and the
+        // per-core lines stay consistent with it (total unavailable → 0).
+        let free = freshest(&|sys| sys.free_physical_memory_mb).map(u64::from);
+        let total = free.map(|free| used_sum + free).unwrap_or(0);
+        let occ = if total > 0 {
+            (used_sum * 100 / total).min(100) as u8
+        } else {
+            0
+        };
+        out.push(RingSample {
+            subject: RingSubject::Server(*ip),
+            cpu: sys_cpu,
+            mem: occ,
+        });
+        for sample in cores {
+            let proc_cpu = sample.sys.process_cpu_percent.unwrap_or(0).min(100);
+            let proc_mem = match sample.sys.used_memory_mb {
+                Some(used) if total > 0 => (u64::from(used) * 100 / total).min(100) as u8,
+                _ => 0,
+            };
+            out.push(RingSample {
+                subject: RingSubject::Core(sample.id),
+                cpu: proc_cpu,
+                mem: proc_mem,
+            });
+        }
+    }
+    out
 }
 
 pub(crate) mod store;

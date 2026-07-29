@@ -145,9 +145,9 @@ impl CoreStatusView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // This fires on every backend notify (event-driven, ≤4 Hz — not a timer/poll), but ALL work
-        // is gated to once per second: rebuild the display from the backend warning engine, record
-        // the chart history, repaint. Detection itself runs in the engine (backend-always), not here.
+        // This fires on every backend notify (event-driven, ≤4 Hz — not a timer/poll), but the
+        // rebuild is gated to once per second. Detection AND chart-history recording run in the
+        // backend engine (backend-always), so the panel only rebuilds its display from that state.
         cx.observe(&backend, |this, _backend, cx| {
             let now = moon_chart::paint::now_unix_ms() as i64;
             if now - this.last_repaint_ms < 1000 {
@@ -155,7 +155,6 @@ impl CoreStatusView {
             }
             this.last_repaint_ms = now;
             this.rebuild_cache(cx);
-            this.record_chart_history(cx);
             cx.notify();
         })
         .detach();
@@ -238,79 +237,6 @@ impl CoreStatusView {
     /// Return this panel group's cores in canonical order.
     pub(super) fn scope_cores(&self, b: &Backend) -> OrderedCores {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
-    }
-
-    /// Record this second's RAW telemetry into the SHARED backend history, so it survives this
-    /// panel and any window open/close.
-    ///
-    /// Two subjects are recorded per server: the whole machine (`system CPU %`, `occupied memory %`)
-    /// into `core_chart_hist`, and each core (`process CPU %`, `process memory share %`) into
-    /// `core_line_hist`. Runs once per second in every Core Status panel; the backend deduplicates
-    /// per subject per second, so multiple panels never double-count. CPU is read raw from the store
-    /// (not the table's smoothed value) so the chart shows real fluctuation.
-    ///
-    /// Args:
-    ///     cx: View context used to read the store and update the backend.
-    ///
-    /// Returns:
-    ///     Nothing; each subject's history grows by at most one point.
-    fn record_chart_history(&mut self, cx: &mut Context<Self>) {
-        let sec = self.last_repaint_ms / 1000;
-        let mut server_samples: Vec<(IpAddr, u8, u8)> = Vec::new();
-        let mut core_samples: Vec<(CoreId, u8, u8)> = Vec::new();
-        {
-            let b = self.backend.read(cx);
-            let store = b.session.store();
-            for group in self.cached_groups.iter() {
-                let Some(ip) = group.address else {
-                    continue;
-                };
-                // Whole-machine CPU: the FRESHEST core's raw system value. Not the smoothed table
-                // value (the chart shows real fluctuation), and not the alphabetically-first core,
-                // which may be stale/disconnected and record a false 0. Clamped to the 0..100 axis.
-                let cpu = group
-                    .cores
-                    .iter()
-                    .filter_map(|core| store.core(core.id).map(|data| data.sys))
-                    .filter_map(|sys| sys.system_cpu_percent.map(|cpu| (sys.updated_ms, cpu)))
-                    .max_by_key(|(updated_ms, _)| *updated_ms)
-                    .map(|(_, cpu)| cpu)
-                    .unwrap_or(0)
-                    .min(100);
-                let mem = occupied_pct(group.process_memory_mb, group.free_physical_memory_mb);
-                server_samples.push((ip, cpu, mem));
-
-                // Per core: raw process CPU and this process's share of the reconstructed machine
-                // total (process RAM sum + free), keeping every line on the same 0..100 % axis. When
-                // free memory is unknown the server mem line reads 0 (occupied_pct), so leave the
-                // total unavailable here too so the core mem lines stay consistent with it instead of
-                // dividing by the process sum alone and towering to ~100 %.
-                let total = match group.free_physical_memory_mb {
-                    Some(free) => group.process_memory_mb.unwrap_or(0) + u64::from(free),
-                    None => 0,
-                };
-                for core in &group.cores {
-                    let sys = store.core(core.id).map(|c| c.sys);
-                    let proc_cpu = sys.and_then(|s| s.process_cpu_percent).unwrap_or(0).min(100);
-                    let proc_mem = match sys.and_then(|s| s.used_memory_mb) {
-                        Some(used) if total > 0 => (u64::from(used) * 100 / total).min(100) as u8,
-                        _ => 0,
-                    };
-                    core_samples.push((core.id, proc_cpu, proc_mem));
-                }
-            }
-        }
-        if server_samples.is_empty() && core_samples.is_empty() {
-            return;
-        }
-        self.backend.update(cx, |b, _| {
-            for (ip, cpu, mem) in server_samples {
-                b.core_chart_hist.record(ip, sec, cpu, mem);
-            }
-            for (id, cpu, mem) in core_samples {
-                b.core_line_hist.record(id, sec, cpu, mem);
-            }
-        });
     }
 
     /// Switch the detached-window chart span and repaint.
@@ -748,26 +674,6 @@ fn status_ord(s: &ConnStatus) -> u64 {
         ConnStatus::Connecting | ConnStatus::Stage(_) => 1,
         ConnStatus::Disconnected => 2,
         ConnStatus::Failed(_) => 3,
-    }
-}
-
-/// Occupied memory as a whole-percent share of the reconstructed machine total (process sum + free).
-///
-/// Args:
-///     process_mem_mb: Sum of per-process resident memory, decimal MB.
-///     free_mb: Free physical memory, decimal MB.
-///
-/// Returns:
-///     Occupied percent (0..100), or 0 until both fields have arrived.
-fn occupied_pct(process_mem_mb: Option<u64>, free_mb: Option<u16>) -> u8 {
-    let (Some(process), Some(free)) = (process_mem_mb, free_mb) else {
-        return 0;
-    };
-    let total = process + u64::from(free);
-    if total == 0 {
-        0
-    } else {
-        (process * 100 / total).min(100) as u8
     }
 }
 

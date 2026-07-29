@@ -831,9 +831,22 @@ impl Backend {
                 })
                 .collect()
         };
-        let closed = self.warn.tick(&samples, now_ms);
+        let result = self.warn.tick(&samples, now_ms);
+        // Record this second's raw chart history into the shared rings (backend-always, so the
+        // Core Status chart and the upcoming badge slices have data regardless of any open panel).
+        let sec = now_ms / 1000;
+        for ring in &result.rings {
+            match ring.subject {
+                crate::backend::core_warn::RingSubject::Server(ip) => {
+                    self.core_chart_hist.record(ip, sec, ring.cpu, ring.mem)
+                }
+                crate::backend::core_warn::RingSubject::Core(id) => {
+                    self.core_line_hist.record(id, sec, ring.cpu, ring.mem)
+                }
+            }
+        }
         if let Some(store) = &self.warn_store {
-            for episode in &closed {
+            for episode in &result.closed {
                 if let Err(err) = store.insert_episode(episode) {
                     log::warn!("core warning persist failed: {err}");
                 }

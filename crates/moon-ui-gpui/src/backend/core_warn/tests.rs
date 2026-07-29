@@ -6,7 +6,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use moon_core::session::{CoreId, CoreSysStatus};
 
-use super::{CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, WarnAxis};
+use super::{CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, RingSubject, WarnAxis};
 
 /// Build one core sample; `process` and `system` CPU are set equal, memory optional.
 fn sample(id: CoreId, ip: [u8; 4], cpu: Option<u8>, used: Option<u16>) -> CoreSample {
@@ -161,6 +161,43 @@ fn distinct_servers_open_independent_cpu_episodes() {
     ips.sort();
     ips.dedup();
     assert_eq!(ips.len(), 2, "each episode must carry its own server IP");
+}
+
+/// `tick` must emit one server ring sample plus one per core, with the freshest system CPU, the
+/// occupied-memory share, and each core's process-memory share of the reconstructed machine total.
+#[test]
+fn tick_emits_server_and_core_ring_samples() {
+    let mut engine = CoreWarnEngine::default();
+    let mk = |id: u64, proc_cpu: u8, used: u16, updated: i64| CoreSample {
+        id,
+        ip: Some(IpAddr::V4(Ipv4Addr::from(IP))),
+        sys: CoreSysStatus {
+            system_cpu_percent: Some(40),
+            process_cpu_percent: Some(proc_cpu),
+            used_memory_mb: Some(used),
+            free_physical_memory_mb: Some(500),
+            updated_ms: updated,
+            ..CoreSysStatus::default()
+        },
+    };
+    // Two cores, 500 MB each → used_sum 1000, free 500, total 1500.
+    let result = engine.tick(&[mk(1, 30, 500, 10), mk(2, 20, 500, 20)], 1_000);
+
+    assert_eq!(result.rings.len(), 3, "one server + two cores");
+    let server = result
+        .rings
+        .iter()
+        .find(|r| matches!(r.subject, RingSubject::Server(_)))
+        .expect("server sample");
+    assert_eq!(server.cpu, 40, "freshest system CPU");
+    assert_eq!(server.mem, 66, "occupied = 1000/1500");
+    let core1 = result
+        .rings
+        .iter()
+        .find(|r| matches!(r.subject, RingSubject::Core(1)))
+        .expect("core 1 sample");
+    assert_eq!(core1.cpu, 30, "process CPU");
+    assert_eq!(core1.mem, 33, "share = 500/1500");
 }
 
 /// A core absent from a later tick is evicted from the rolling history (no stale accumulation).
