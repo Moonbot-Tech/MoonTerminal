@@ -27,6 +27,7 @@ mod data_state;
 mod engine;
 mod figures_sync;
 mod news_sync;
+mod warn_sync;
 pub use engine::ChartGhostCursor;
 pub(crate) use figures_sync::FigureVisual;
 #[cfg(windows)]
@@ -320,6 +321,8 @@ struct PaneRender {
     last_figures_sig: u64,
     /// News-mark signature encoded into userdata; `u64::MAX` means dirty.
     last_news_sig: u64,
+    /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
+    last_warn_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
     /// `prepare_text` draws them and maps Y through `view` each frame.
     order_labels: Vec<OrderLabel>,
@@ -432,6 +435,7 @@ impl PaneRender {
             last_order_drag_preview: None,
             last_figures_sig: u64::MAX,
             last_news_sig: u64::MAX,
+            last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             order_label_order: Vec::new(),
             orderbook_labels: Vec::new(),
@@ -714,6 +718,11 @@ struct ChartDataState {
     news_marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,
     /// Index of the mark under the cursor, drawn grown from the axis.
     news_hovered: Option<usize>,
+    /// This panel's warning badges (amber gems on the plot's bottom edge); see `warn_sync`. Shared
+    /// with the panel, which hit-tests the same list.
+    warn_marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,
+    /// Index of the warning badge under the cursor.
+    warn_hovered: Option<usize>,
     market_source: Option<MarketDataSource>,
     last_frame_tick_at: Option<Instant>,
     present_rate_candidate_hz: f32,

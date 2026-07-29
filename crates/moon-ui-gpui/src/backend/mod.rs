@@ -2,6 +2,7 @@
 //! `main.rs`, the crate root, so its private fields are visible to descendant modules. Methods in
 //! this sibling module use `pub(crate)` because private items here would not be crate-wide.
 
+pub(crate) mod core_warn;
 mod detect_sound;
 mod figures;
 pub(crate) mod server_chart;
@@ -9,6 +10,7 @@ pub(crate) mod server_chart;
 mod tests;
 
 use std::collections::HashSet;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
@@ -802,6 +804,112 @@ impl Backend {
             self.session
                 .set_open(&self.desired, &self.desired_orderbook);
         }
+    }
+
+    /// Advance the backend warning engine one tick from the current core telemetry.
+    ///
+    /// Runs from the coordination loop (backend-always, ~10 Hz); the engine throttles itself to
+    /// 1 Hz. Samples every live core's endpoint, status, and telemetry once.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix milliseconds.
+    ///
+    /// Returns:
+    ///     Nothing; the engine's tracking, warning state, and episode log advance in place.
+    pub(crate) fn tick_core_warnings(&mut self, now_ms: i64) {
+        let samples: Vec<crate::backend::core_warn::CoreSample> = {
+            let store = self.session.store();
+            self.session
+                .sessions()
+                .iter()
+                .filter_map(|session| {
+                    let core = store.core(session.id)?;
+                    Some(crate::backend::core_warn::CoreSample {
+                        id: session.id,
+                        ip: core.endpoint.map(|endpoint| endpoint.address),
+                        status: core.status.clone(),
+                        sys: core.sys,
+                    })
+                })
+                .collect()
+        };
+        let result = self.warn.tick(&samples, now_ms);
+        // Record this second's raw chart history into the shared rings (backend-always, so the
+        // Core Status chart and the upcoming badge slices have data regardless of any open panel).
+        let sec = now_ms / 1000;
+        for ring in &result.rings {
+            match ring.subject {
+                crate::backend::core_warn::RingSubject::Server(ip) => {
+                    self.core_chart_hist.record(ip, sec, ring.cpu, ring.mem)
+                }
+                crate::backend::core_warn::RingSubject::Core(id) => {
+                    self.core_line_hist.record(id, sec, ring.cpu, ring.mem)
+                }
+            }
+        }
+        if let Some(store) = &self.warn_store {
+            for episode in &result.closed {
+                if let Err(err) = store.insert_episode(episode) {
+                    log::warn!("core warning persist failed: {err}");
+                }
+            }
+        }
+    }
+
+    /// Warning episodes for one server within `[from_ms, to_ms]`: persisted (closed) plus still-open.
+    ///
+    /// The chart draws a badge per episode. Merges the SQLite log with the engine's live open
+    /// episodes, so an in-progress warning already shows a badge.
+    ///
+    /// Args:
+    ///     ip: Server endpoint address.
+    ///     from_ms: Inclusive lower bound on `start_ms`.
+    ///     to_ms: Inclusive upper bound on `start_ms`.
+    ///
+    /// Returns:
+    ///     Matching episodes; empty if persistence is off and nothing is open.
+    pub(crate) fn warn_episodes_for_server(
+        &self,
+        ip: IpAddr,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Vec<crate::backend::core_warn::WarnEpisode> {
+        let mut out = self
+            .warn_store
+            .as_ref()
+            .and_then(|store| store.episodes_for_server(ip, from_ms, to_ms).ok())
+            .unwrap_or_default();
+        for open in self.warn.open_episodes() {
+            if open.server_ip == Some(ip) && open.start_ms >= from_ms && open.start_ms <= to_ms {
+                out.push(open);
+            }
+        }
+        out
+    }
+
+    /// The most recent warning episodes across all servers, newest first, for the Warnings list.
+    ///
+    /// Merges still-open episodes (not yet persisted) with the persisted log, so an in-progress
+    /// warning appears at the top.
+    ///
+    /// Args:
+    ///     limit: Maximum rows to return.
+    ///
+    /// Returns:
+    ///     Episodes ordered newest first, capped to `limit`.
+    pub(crate) fn warn_episodes_recent(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::backend::core_warn::WarnEpisode> {
+        let mut all = self.warn.open_episodes();
+        if let Some(store) = &self.warn_store {
+            if let Ok(closed) = store.recent_episodes(limit) {
+                all.extend(closed);
+            }
+        }
+        all.sort_by(|a, b| b.start_ms.cmp(&a.start_ms));
+        all.truncate(limit);
+        all
     }
 
     pub(crate) fn mark_backend_dirty(&mut self, cx: &mut Context<Self>) {

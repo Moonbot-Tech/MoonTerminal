@@ -587,6 +587,18 @@ fragment float4 marker_fragment(MOut in [[stage_in]]) {
         if (length(in.local) > in.sz) discard_fragment();
         return in.color;
     }
+    if (in.shape > 2.5) {
+        // Warning badge: an upward triangle (apex at top, base on the axis) with a dark
+        // exclamation mark cut into it. local.y is +down, so the base sits at +sz.
+        float tw = max(in.thick, 1.0);
+        float nx = in.local.x / tw;
+        float ny = in.local.y / max(in.sz, 1.0);
+        if (ny < 2.0 * abs(nx) - 1.0) discard_fragment();
+        bool bar = abs(nx) < 0.13 && ny > -0.30 && ny < 0.34;
+        bool dot = abs(nx) < 0.15 && ny > 0.50 && ny < 0.74;
+        if (bar || dot) return float4(in.color.rgb * 0.14, in.color.a);
+        return in.color;
+    }
     // News gem: a vertically elongated diamond, optionally cut into wedges by tag colour.
     float hw = max(in.thick, 1.0);
     if (abs(in.local.x) / hw + abs(in.local.y) / max(in.sz, 1.0) > 1.0) discard_fragment();

@@ -85,6 +85,7 @@ impl ChartDataState {
             // chrome, never a literal.
             self.theme.label_neutral,
             self.last_ppp,
+            moon_chart::news_marks::SHAPE_GEM,
             markers,
         );
     }

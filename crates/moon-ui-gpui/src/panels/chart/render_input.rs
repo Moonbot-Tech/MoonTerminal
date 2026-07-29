@@ -369,7 +369,11 @@ pub(super) fn mouse_move(
         // News marks: one Y comparison unless the pointer is in the marks' row along the bottom
         // edge. Repaints only while the Ctrl card is on screen.
         this.note_news_modifiers(e.modifiers, cx);
+        this.note_warn_modifiers(e.modifiers, cx);
         if this.sync_news_hover(pos, within, cx) {
+            cx.notify();
+        }
+        if this.sync_warn_hover(pos, within, cx) {
             cx.notify();
         }
         let order_hover_changed = if within {
@@ -466,6 +470,9 @@ pub(super) fn hover(
         // Leaving the slot must also drop a news card: the pointer can exit without a final
         // mouse-move inside the chart.
         if this.clear_news_hover(_cx) {
+            _cx.notify();
+        }
+        if this.clear_warn_hover(_cx) {
             _cx.notify();
         }
         let changed =

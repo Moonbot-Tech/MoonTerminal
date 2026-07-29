@@ -210,6 +210,13 @@ pub fn strategies_db_path() -> PathBuf {
     db_dir().join("strategies.sqlite")
 }
 
+/// SQLite database for core warning episodes (sustained CPU / memory growth / connectivity), kept
+/// forever. DELIBERATELY separate from `reports.sqlite`: warning history is the only copy and must
+/// survive a report-replica reset, like the strategy database.
+pub fn core_warnings_db_path() -> PathBuf {
+    db_dir().join("core_warnings.sqlite")
+}
+
 /// Local storage settings for report/strategy databases. The Settings tab writes UI-managed
 /// values, while system values such as the version ignore list are edited manually.
 pub fn storage_path() -> PathBuf {

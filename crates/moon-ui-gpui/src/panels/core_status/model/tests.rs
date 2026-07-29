@@ -251,4 +251,5 @@ fn partial_readiness_is_degraded() {
 
     assert_eq!(server.ready_count, 1);
     assert_eq!(server.connectivity, ServerConnectivity::Degraded);
+    // The connectivity WARNING (conn_warn) now comes from the backend engine, tested beside it.
 }

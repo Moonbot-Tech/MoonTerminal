@@ -1764,9 +1764,16 @@ fn core_status_throttles_repaints_and_averages_cpu() {
         "Core Status must gate ALL telemetry work to at most once per second (early-return on \
          faster drains), not just the repaint"
     );
+    // Detection and CPU averaging moved to the backend engine; the panel must read the smoothed
+    // value from it rather than the raw last sample.
     assert!(
-        text.contains("fn averaged_sys(") && text.contains("track.averaged(now_sec)"),
-        "Core Status must display CPU averaged over the window, not the raw last sample"
+        text.contains("b.warn.avg_cpu("),
+        "Core Status must display CPU smoothed by the backend warning engine, not the raw last sample"
+    );
+    let engine = read_src("backend/core_warn.rs");
+    assert!(
+        engine.contains("fn averaged(") && engine.contains("CPU_WINDOW_SECS"),
+        "the warning engine must average CPU over the window"
     );
 }
 

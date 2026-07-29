@@ -86,6 +86,9 @@ pub(super) struct ServerStatusGroup {
     pub(super) cpu_warn: bool,
     /// Memory-growth warning (a core's used memory rising), filled by the panel from history.
     pub(super) mem_warn: bool,
+    /// Connectivity warning: a core dropped (Disconnected/Failed) while the server still has a ready
+    /// core — "one fell off while the rest works". Filled by the panel from the backend engine.
+    pub(super) conn_warn: bool,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
@@ -128,6 +131,7 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 display_name: String::new(),
                 cpu_warn: false,
                 mem_warn: false,
+                conn_warn: false,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,

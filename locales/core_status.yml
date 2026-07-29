@@ -27,6 +27,31 @@ core_status.mode.flat:
   ru: "Плоско"
   en: "Flat"
   es: "Plano"
+core_status.mode.warnings:
+  ru: "Ворнинги"
+  en: "Warnings"
+  es: "Avisos"
+core_status.warn_empty:
+  ru: "Нет записанных ворнингов"
+  en: "No recorded warnings"
+  es: "Sin avisos registrados"
+# Warnings-list columns.
+core_status.col.time:
+  ru: "Время"
+  en: "Time"
+  es: "Hora"
+core_status.col.dur:
+  ru: "Длит."
+  en: "Dur."
+  es: "Dur."
+core_status.col.type:
+  ru: "Тип"
+  en: "Type"
+  es: "Tipo"
+core_status.col.peak:
+  ru: "Пик"
+  en: "Peak"
+  es: "Pico"
 core_status.footer:
   ru: "Серверы: %{servers}  Ядра: %{cores}  Онлайн: %{online}"
   en: "Servers: %{servers}  Cores: %{cores}  Online: %{online}"
@@ -157,6 +182,25 @@ core_status.chart_mem:
   ru: "ОЗУ"
   en: "RAM"
   es: "RAM"
+# Connectivity axis label on a chart warning badge's hover card.
+core_status.warn_conn:
+  ru: "Связь"
+  en: "Link"
+  es: "Enlace"
+# Shown as a warning cluster's duration while it is still active.
+core_status.warn_ongoing:
+  ru: "идёт"
+  en: "ongoing"
+  es: "en curso"
+# Warning-badge card: heading above the server/core state captured when the warning fired.
+core_status.warn_at_detect:
+  ru: "На момент детекта:"
+  en: "At detection:"
+  es: "En la detección:"
+core_status.warn_server:
+  ru: "Сервер"
+  en: "Server"
+  es: "Servidor"
 core_status.chart_5m:
   ru: "5 мин"
   en: "5 min"
