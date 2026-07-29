@@ -369,6 +369,7 @@ pub(super) fn mouse_move(
         // News marks: one Y comparison unless the pointer is in the marks' row along the bottom
         // edge. Repaints only while the Ctrl card is on screen.
         this.note_news_modifiers(e.modifiers, cx);
+        this.note_warn_modifiers(e.modifiers, cx);
         if this.sync_news_hover(pos, within, cx) {
             cx.notify();
         }

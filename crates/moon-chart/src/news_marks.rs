@@ -40,6 +40,11 @@ const MARK_ALPHA: f32 = 0.88;
 pub const SHAPE_GEM: f32 = 2.0;
 /// Shader shape id for a warning badge (an upward triangle with an exclamation mark).
 pub const SHAPE_WARN: f32 = 3.0;
+/// Warning-triangle half width. Unlike the tall gem, the triangle is roughly equilateral: with the
+/// half height below, base (2·9) ≈ height (2·7.8·√3⁻¹-ish), so it reads as a warning sign.
+const WARN_HALF_W: f32 = 9.0;
+/// Warning-triangle half height (≈ `WARN_HALF_W` · √3/2, giving an equilateral look).
+const WARN_HALF_H: f32 = 7.8;
 /// Extra pixels around a mark that still count as a hit, so a small gem stays comfortable to hit.
 const HIT_SLACK: f32 = 3.0;
 
@@ -116,10 +121,16 @@ pub fn build_news_geometry(
     let fallback = ((fallback[0] as u32) << 16) | ((fallback[1] as u32) << 8) | fallback[2] as u32;
     // One instance PER WEDGE, so a multi-colour set must not realloc mid-loop.
     markers.reserve(marks.iter().map(|m| m.colors().len().max(1)).sum());
+    // The warning triangle is roughly equilateral; the news gem is tall and narrow.
+    let (base_h, base_w) = if shape == SHAPE_WARN {
+        (WARN_HALF_H, WARN_HALF_W)
+    } else {
+        (MARK_HALF_H, MARK_HALF_W)
+    };
     for (i, mark) in marks.iter().enumerate() {
         let hot = hovered == Some(i);
         let grow = if hot { MARK_HOVER_SCALE } else { 1.0 };
-        let half_h = MARK_HALF_H * grow * scale;
+        let half_h = base_h * grow * scale;
         let colors = mark.colors();
         let count = colors.len().max(1);
         for sector in 0..count {
@@ -131,7 +142,7 @@ pub fn build_news_geometry(
                 price: half_h,
                 size: half_h,
                 // The gem reads `thickness` as its half WIDTH, which is what makes it vertical.
-                thickness: MARK_HALF_W * grow * scale,
+                thickness: base_w * grow * scale,
                 shape,
                 anchor: MARKER_ANCHOR_BOTTOM,
                 sector: sector as f32,

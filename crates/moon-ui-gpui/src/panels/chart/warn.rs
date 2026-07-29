@@ -41,6 +41,8 @@ const CARD_GAP: f32 = 8.0;
 const CARD_TOP_INSET: f32 = 8.0;
 /// Floor for the card's height.
 const CARD_MIN_H: f32 = 48.0;
+/// Height of the card's ±1 min graph in logical pixels.
+const GRAPH_H: f32 = 44.0;
 
 /// One warning event: a run of nearby episodes on one server, merged across axes.
 struct WarnCluster {
@@ -81,6 +83,9 @@ pub(super) struct WarnState {
     hover: Option<MarkHit>,
     /// Last hit-test point, carrying the Delphi movement threshold the order-line hover uses.
     probe: Option<(f32, f32)>,
+    /// Whether the secondary modifier (Ctrl, Command on macOS) was held at the last pointer event.
+    /// The card only shows while it is held, matching the news card.
+    ctrl: bool,
 }
 
 impl ChartPanel {
@@ -209,6 +214,30 @@ impl ChartPanel {
         Some((cpu, mem, name))
     }
 
+    /// The server's `(system CPU %, occupied memory %)` history around a moment: the ±60 s window
+    /// centred on `at_ms`, sliced positionally from the 1 Hz ring. `None` when there is too little.
+    ///
+    /// Right after the warning only `[at-60, now]` exists; a minute later the full `[at-60, at+60]`
+    /// window has filled in, so the card's graph "grows" to the full ±1 min.
+    fn server_slice(&self, ip: IpAddr, at_ms: i64, now_ms: i64, cx: &App) -> Option<Vec<(u8, u8)>> {
+        let ring = self.backend.read(cx).core_chart_hist.ring(ip)?;
+        let len = ring.len();
+        if len < 2 {
+            return None;
+        }
+        let now_sec = now_ms / 1000;
+        let at_sec = at_ms / 1000;
+        // Seconds back from now to each window edge; the newer edge (at+60) may be the future.
+        let k_lo = (now_sec - (at_sec - 60)).max(0) as usize;
+        let k_hi = (now_sec - (at_sec + 60)).max(0) as usize;
+        let lo = len.saturating_sub(1 + k_lo);
+        let hi = len.saturating_sub(1 + k_hi);
+        if hi.saturating_sub(lo) < 1 {
+            return None;
+        }
+        Some(ring.iter().skip(lo).take(hi - lo + 1).copied().collect())
+    }
+
     /// Hit-test the badges' row at `pos` (panel-local device pixels). Mirror of `news_hit`.
     fn warn_hit(&self, pos: (f32, f32)) -> Option<MarkHit> {
         if self.warn.marks.is_empty() || self.orderbook_only {
@@ -229,18 +258,41 @@ impl ChartPanel {
         )
     }
 
-    /// Apply a hit result and republish the grown badge. Returns whether the tree must repaint.
+    /// Apply a hit result and republish the grown badge. The gem grows own-pass regardless, so a
+    /// GPUI repaint is needed only while the Ctrl card is on screen.
     fn apply_warn_hover(&mut self, hit: Option<MarkHit>, cx: &mut Context<Self>) -> bool {
         if self.warn.hover == hit {
             return false;
         }
         self.warn.hover = hit;
         self.publish_warn_marks(cx);
-        true
+        self.warn.ctrl
     }
 
-    /// The hover card, or `None` when no badge is hovered. Anchored at the cursor.
-    pub(super) fn warn_card(&self, ppp: f32, palette: MoonPalette, cx: &App) -> Option<AnyElement> {
+    /// Track the secondary modifier and repaint when it changes what the card shows.
+    pub(super) fn note_warn_modifiers(&mut self, modifiers: Modifiers, cx: &mut Context<Self>) {
+        let ctrl = modifiers.secondary();
+        if self.warn.ctrl == ctrl {
+            return;
+        }
+        self.warn.ctrl = ctrl;
+        // Only a badge under the cursor can produce a card; a bare Ctrl press must not repaint.
+        if self.warn.hover.is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The hover card, or `None` unless a badge is hovered AND Ctrl (Command on macOS) is held.
+    pub(super) fn warn_card(
+        &self,
+        ppp: f32,
+        ctrl: bool,
+        palette: MoonPalette,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        if !ctrl {
+            return None;
+        }
         let hover = self.warn.hover.as_ref()?;
         let (cursor_x, _) = self.input.cursor?;
         let (cluster, mark) = self.warn.items.get(hover.nearest)?;
@@ -262,11 +314,16 @@ impl ChartPanel {
 
         let now_ms = now_unix_ms_i64();
         let core_reading = self.core_reading_at(cluster.start_ms, now_ms, cx);
+        let graph = self
+            .warn
+            .ip
+            .and_then(|ip| self.server_slice(ip, cluster.start_ms, now_ms, cx));
         let body = cluster_card_body(
             cluster,
             mark,
             now_ms,
             core_reading,
+            graph,
             self.backend.read(cx),
             palette,
             cx,
@@ -354,11 +411,13 @@ fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
 
 /// The card contents for one warning cluster: time and duration, the worst value per axis that
 /// fired, and the full server + current-core state captured at detection.
+#[allow(clippy::too_many_arguments)]
 fn cluster_card_body(
     cluster: &WarnCluster,
     mark: &NewsMark,
     now_ms: i64,
     core_reading: Option<(u8, u8, String)>,
+    graph: Option<Vec<(u8, u8)>>,
     backend: &crate::Backend,
     p: MoonPalette,
     cx: &App,
@@ -422,7 +481,14 @@ fn cluster_card_body(
         t!("core_status.logical_cpus", value = snap.logical_cpus)
     );
     let core_line = core_reading.map(|(cpu, mem, name)| {
-        reading(name, format!("{cpu_lbl} {cpu}% · {mem_lbl} {mem}%"), p, cx)
+        // (0, 0) at detection means the core process had not reported telemetry yet (e.g. it was
+        // still starting up) — show a dash rather than a misleading 0 %.
+        let value = if cpu == 0 && mem == 0 {
+            "—".to_string()
+        } else {
+            format!("{cpu_lbl} {cpu}% · {mem_lbl} {mem}%")
+        };
+        reading(name, value, p, cx)
     });
     // Cores named by per-core members, never the raw IP.
     let cores: Vec<String> = cluster
@@ -443,7 +509,68 @@ fn cluster_card_body(
         .child(muted_line(server_extra, p, cx))
         .children(core_line)
         .when(!cores.is_empty(), |this| this.child(muted_line(cores.join(", "), p, cx)))
+        // The ±1 min graph around the warning (system CPU / occupied memory), once the ring covers it.
+        .children(graph.map(|points| warn_graph(points, p)))
         .into_any_element()
+}
+
+/// A compact system-CPU (blue) / occupied-memory (green) graph on a fixed 0..100 % axis.
+fn warn_graph(points: Vec<(u8, u8)>, p: MoonPalette) -> impl IntoElement {
+    let cpu = design::moon(p.blue);
+    let mem = design::moon(p.green);
+    let n = points.len().max(2);
+    let series = |pick: fn(&(u8, u8)) -> u8| -> Vec<(f32, f32)> {
+        points
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as f32 / (n - 1) as f32, pick(s) as f32))
+            .collect()
+    };
+    let cpu_pts = series(|s| s.0);
+    let mem_pts = series(|s| s.1);
+    div().w_full().h(px(GRAPH_H)).child(
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let w = f32::from(bounds.size.width);
+                let h = f32::from(bounds.size.height);
+                if w < 2.0 || h < 2.0 {
+                    return;
+                }
+                stroke_line(window, bounds.origin, w, h, &mem_pts, mem);
+                stroke_line(window, bounds.origin, w, h, &cpu_pts, cpu);
+            },
+        )
+        .size_full(),
+    )
+}
+
+/// Stroke one series of `(x fraction, 0..100 value)` points onto a 0..100 % plot.
+fn stroke_line(
+    window: &mut Window,
+    origin: Point<Pixels>,
+    w: f32,
+    h: f32,
+    series: &[(f32, f32)],
+    color: Hsla,
+) {
+    if series.len() < 2 {
+        return;
+    }
+    let x = |frac: f32| origin.x + px(frac * w);
+    let y = |value: f32| origin.y + px((100.0 - value) / 100.0 * (h - 2.0) + 1.0);
+    let mut line = PathBuilder::stroke(px(1.25));
+    for (i, &(frac, value)) in series.iter().enumerate() {
+        let pt = gpui::point(x(frac), y(value));
+        if i == 0 {
+            line.move_to(pt);
+        } else {
+            line.line_to(pt);
+        }
+    }
+    if let Ok(path) = line.build() {
+        window.paint_path(path, color);
+    }
 }
 
 /// A muted, single-line caption in the card.
