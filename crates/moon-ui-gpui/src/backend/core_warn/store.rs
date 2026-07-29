@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS core_warnings (
     occ_mem      INTEGER NOT NULL DEFAULT 0,
     free_mb      INTEGER NOT NULL DEFAULT 0,
     used_mb      INTEGER NOT NULL DEFAULT 0,
-    logical_cpus INTEGER NOT NULL DEFAULT 0
+    logical_cpus INTEGER NOT NULL DEFAULT 0,
+    rtt_ms       INTEGER NOT NULL DEFAULT 0,
+    order_ms     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_warn_server_time ON core_warnings(server_ip, start_ms);
 CREATE TABLE IF NOT EXISTS core_warning_series (
@@ -70,7 +72,15 @@ impl WarnStore {
         conn.execute_batch(SCHEMA)?;
         // Add the detection-snapshot columns to a pre-existing database; a fresh one already has
         // them from the schema, so a "duplicate column" error here is expected and ignored.
-        for column in ["sys_cpu", "occ_mem", "free_mb", "used_mb", "logical_cpus"] {
+        for column in [
+            "sys_cpu",
+            "occ_mem",
+            "free_mb",
+            "used_mb",
+            "logical_cpus",
+            "rtt_ms",
+            "order_ms",
+        ] {
             let _ = conn.execute(
                 &format!(
                     "ALTER TABLE core_warnings ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
@@ -94,8 +104,8 @@ impl WarnStore {
     pub(crate) fn insert_episode(&self, episode: &WarnEpisode) -> rusqlite::Result<i64> {
         self.conn.execute(
             "INSERT INTO core_warnings \
-             (axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, used_mb, logical_cpus) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             (axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, used_mb, logical_cpus, rtt_ms, order_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 axis_str(episode.axis),
                 episode.server_ip.map(|ip| ip.to_string()),
@@ -108,6 +118,8 @@ impl WarnStore {
                 i64::from(episode.snap.free_mb),
                 i64::from(episode.snap.used_mb),
                 i64::from(episode.snap.logical_cpus),
+                i64::from(episode.snap.round_trip_ms),
+                i64::from(episode.snap.order_api_latency_ms),
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -130,7 +142,7 @@ impl WarnStore {
     ) -> rusqlite::Result<Vec<WarnEpisode>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
-             used_mb, logical_cpus FROM core_warnings \
+             used_mb, logical_cpus, rtt_ms, order_ms FROM core_warnings \
              WHERE server_ip = ?1 AND start_ms BETWEEN ?2 AND ?3 ORDER BY start_ms",
         )?;
         let rows = stmt.query_map(params![ip.to_string(), from_ms, to_ms], row_to_episode)?;
@@ -147,7 +159,7 @@ impl WarnStore {
     pub(crate) fn recent_episodes(&self, limit: usize) -> rusqlite::Result<Vec<WarnEpisode>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
-             used_mb, logical_cpus FROM core_warnings \
+             used_mb, logical_cpus, rtt_ms, order_ms FROM core_warnings \
              ORDER BY start_ms DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], row_to_episode)?;
@@ -210,6 +222,86 @@ impl WarnStore {
             None => Ok(None),
         }
     }
+
+    /// Persist one episode's ±1 min ping slice under the `ping` subject (a `u16`-per-sample blob, as
+    /// a round-trip exceeds a `u8`). Idempotent via the same `(episode_id, subject)` unique index.
+    ///
+    /// Args:
+    ///     episode_id: The `core_warnings` row id.
+    ///     base_ms: Unix ms of the window's first sample.
+    ///     samples: 1 Hz round-trip samples (ms) across the window.
+    ///
+    /// Returns:
+    ///     Unit, or the SQLite error if the insert failed.
+    pub(crate) fn insert_ping_series(
+        &self,
+        episode_id: i64,
+        subject: &str,
+        base_ms: i64,
+        samples: &[u16],
+    ) -> rusqlite::Result<()> {
+        let blob = encode_u16_series(base_ms, samples);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO core_warning_series (episode_id, badge, subject, blob) \
+             VALUES (?1, 0, ?2, ?3)",
+            params![episode_id, subject, blob],
+        )?;
+        Ok(())
+    }
+
+    /// Read back one episode's persisted ping slice under `subject`, if captured.
+    ///
+    /// Args:
+    ///     episode_id: The `core_warnings` row id.
+    ///     subject: Which ping series to read (`"ping"` = client↔core, `"exch"` = core→exchange).
+    ///
+    /// Returns:
+    ///     The stored round-trip samples (ms), `None` if none was captured, or a SQLite error.
+    pub(crate) fn ping_series_for_episode(
+        &self,
+        episode_id: i64,
+        subject: &str,
+    ) -> rusqlite::Result<Option<Vec<u16>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT blob FROM core_warning_series WHERE episode_id = ?1 AND subject = ?2 LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![episode_id, subject])?;
+        match rows.next()? {
+            Some(row) => {
+                let blob: Vec<u8> = row.get(0)?;
+                Ok(decode_u16_series(&blob))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+/// Encode a scalar `u16` history slice as `[base_ms: i64 LE][n: u16 LE][n×(value u16 LE)]`.
+fn encode_u16_series(base_ms: i64, samples: &[u16]) -> Vec<u8> {
+    let n = samples.len().min(u16::MAX as usize);
+    let mut out = Vec::with_capacity(10 + n * 2);
+    out.extend_from_slice(&base_ms.to_le_bytes());
+    out.extend_from_slice(&(n as u16).to_le_bytes());
+    for &value in samples.iter().take(n) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+/// Decode a slice written by [`encode_u16_series`]; `None` if the blob is truncated or malformed.
+fn decode_u16_series(blob: &[u8]) -> Option<Vec<u16>> {
+    if blob.len() < 10 {
+        return None;
+    }
+    let n = u16::from_le_bytes([blob[8], blob[9]]) as usize;
+    if blob.len() < 10 + n * 2 {
+        return None;
+    }
+    Some(
+        (0..n)
+            .map(|i| u16::from_le_bytes([blob[10 + i * 2], blob[11 + i * 2]]))
+            .collect(),
+    )
 }
 
 /// Encode a history slice as `[base_ms: i64 LE][n: u16 LE][n×(cpu u8, mem u8)]`.
@@ -280,6 +372,8 @@ fn row_to_episode(row: &Row) -> rusqlite::Result<WarnEpisode> {
             free_mb: row.get::<_, i64>(9)? as u16,
             used_mb: row.get::<_, i64>(10)? as u32,
             logical_cpus: row.get::<_, i64>(11)? as u8,
+            round_trip_ms: row.get::<_, i64>(12)? as u16,
+            order_api_latency_ms: row.get::<_, i64>(13)? as u16,
         },
     })
 }

@@ -948,6 +948,10 @@ pub struct CoreSysStatus {
     /// the core (NOT the core→exchange path). `None` until the core has measured one Ping response.
     /// This is moonproto's `core_round_trip_ms`; MoonBot's displayed one-way ping is half of it.
     pub round_trip_ms: Option<u32>,
+    /// Smoothed core→exchange order-API latency, ms — how long the core's real order requests take
+    /// to the exchange (NOT a standalone REST ping, and NOT the transport ping above). `None` until
+    /// the core has an order sample. This is moonproto's `order_api_latency_ms`.
+    pub order_api_latency_ms: Option<u16>,
     /// Receipt time of the last `KernelHealth`, unix ms (`0` — none yet).
     pub updated_ms: i64,
 }
@@ -964,5 +968,6 @@ impl CoreSysStatus {
             && self.free_physical_memory_mb == other.free_physical_memory_mb
             && self.logical_cpu_count == other.logical_cpu_count
             && self.round_trip_ms == other.round_trip_ms
+            && self.order_api_latency_ms == other.order_api_latency_ms
     }
 }

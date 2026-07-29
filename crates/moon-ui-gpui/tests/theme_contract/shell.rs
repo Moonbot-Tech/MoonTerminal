@@ -299,7 +299,7 @@ fn shared_core_selectors_batch_exchange_changes_once() {
         ),
         (
             "Core Status",
-            "panels/core_status/mod.rs",
+            "panels/core_status/interactions.rs",
             "pub(super) fn toggle_exchange_cores(",
             &["self.rebuild_cache(", "cx.notify()"],
         ),
@@ -581,9 +581,10 @@ fn core_status_throttles_repaints_and_averages_cpu() {
          faster drains), not just the repaint"
     );
     // Detection and CPU averaging moved to the backend engine; the panel must read the smoothed
-    // value from it rather than the raw last sample.
+    // value from it rather than the raw last sample. `collect` lives in the cache-pipeline module.
+    let cache = read_src("panels/core_status/cache.rs");
     assert!(
-        text.contains("b.warn.avg_cpu("),
+        cache.contains("b.warn.avg_cpu("),
         "Core Status must display CPU smoothed by the backend warning engine, not the raw last sample"
     );
     let engine = read_src("backend/core_warn.rs");

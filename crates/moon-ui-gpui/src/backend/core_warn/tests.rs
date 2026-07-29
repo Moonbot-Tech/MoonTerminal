@@ -257,22 +257,33 @@ fn tick_emits_server_and_core_ring_samples() {
     assert_eq!(core1.mem, 33, "share = 500/1500");
 }
 
-/// A dropped core with a surviving ready core opens a connectivity episode; recovery closes it.
+/// A core that had come up and then dropped opens a connectivity episode; recovery closes it.
 #[test]
 fn dropped_core_opens_then_recovery_closes_connectivity_episode() {
     let mut engine = CoreWarnEngine::default();
     let ip = IpAddr::V4(Ipv4Addr::from(IP));
 
+    // Both cores come up first, so a later drop reads as a real disconnect (not never-connected).
+    engine.tick(
+        &[
+            sample_conn(1, IP, ConnStatus::Ready),
+            sample_conn(2, IP, ConnStatus::Ready),
+        ],
+        1_000,
+    );
+    assert!(!engine.server_conn_warn(ip), "both up must not warn");
+
+    // core 2 drops.
     engine.tick(
         &[
             sample_conn(1, IP, ConnStatus::Ready),
             sample_conn(2, IP, ConnStatus::Disconnected),
         ],
-        1_000,
+        2_000,
     );
     assert!(
         engine.server_conn_warn(ip),
-        "a drop with a survivor must warn"
+        "a core that was up and dropped must warn"
     );
     let open_conn = engine
         .open_episodes()
@@ -287,7 +298,7 @@ fn dropped_core_opens_then_recovery_closes_connectivity_episode() {
             sample_conn(1, IP, ConnStatus::Ready),
             sample_conn(2, IP, ConnStatus::Ready),
         ],
-        2_000,
+        3_000,
     );
     assert!(
         !engine.server_conn_warn(ip),
@@ -302,10 +313,33 @@ fn dropped_core_opens_then_recovery_closes_connectivity_episode() {
     assert!(closed[0].end_ms.is_some());
 }
 
-/// Connectivity must NOT warn when the whole server is down (no survivor) or a core is merely
-/// connecting (not a drop).
+/// A SINGLE-core server whose only core drops (was Ready, now down) must warn — the full-outage case
+/// the old "needs a surviving ready core" rule missed.
 #[test]
-fn fully_offline_or_connecting_does_not_warn_connectivity() {
+fn solo_core_drop_warns_connectivity() {
+    let mut engine = CoreWarnEngine::default();
+    let ip = IpAddr::V4(Ipv4Addr::from(IP));
+
+    engine.tick(&[sample_conn(1, IP, ConnStatus::Ready)], 1_000);
+    assert!(
+        !engine.server_conn_warn(ip),
+        "a lone ready core must not warn"
+    );
+
+    engine.tick(
+        &[sample_conn(1, IP, ConnStatus::Failed("lost".into()))],
+        2_000,
+    );
+    assert!(
+        engine.server_conn_warn(ip),
+        "the server's only core dropping must warn"
+    );
+}
+
+/// Connectivity must NOT warn for a NEVER-connected core (Disconnected but never Ready, e.g. at
+/// startup or intentionally off) or a core that is merely connecting.
+#[test]
+fn never_connected_or_connecting_does_not_warn_connectivity() {
     let mut engine = CoreWarnEngine::default();
     let ip = IpAddr::V4(Ipv4Addr::from(IP));
 
@@ -318,7 +352,7 @@ fn fully_offline_or_connecting_does_not_warn_connectivity() {
     );
     assert!(
         !engine.server_conn_warn(ip),
-        "no ready survivor must not warn"
+        "a core that was never Ready is not a drop"
     );
 
     engine.tick(

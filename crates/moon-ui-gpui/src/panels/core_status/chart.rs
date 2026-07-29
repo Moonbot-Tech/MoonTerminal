@@ -49,7 +49,8 @@ pub(super) struct CoreLine {
 }
 
 /// Fallback per-core series hue, cycled from the palette and deliberately skipping the server's
-/// blue/green so a core line never reads as a server line.
+/// blue/green AND both ping lines (accent = client↔core, orange = core→exchange) so a core line
+/// never reads as a server or ping line.
 ///
 /// Args:
 ///     p: Active Moon palette.
@@ -58,7 +59,14 @@ pub(super) struct CoreLine {
 /// Returns:
 ///     A palette color for the core's line pair.
 pub(super) fn core_line_color(p: MoonPalette, i: usize) -> u32 {
-    [p.orange, p.amber, p.red, p.yellow, p.accent, p.text_soft][i % 6]
+    [
+        p.amber,
+        p.red,
+        p.yellow,
+        p.text_muted,
+        p.text_soft,
+        p.text_dim,
+    ][i % 6]
 }
 
 /// One core's prepared draw data: both metric series in plot-fraction space plus its two line hues.
@@ -77,13 +85,13 @@ struct CoreDraw {
 /// right edge so shorter rings grow in from the right and stay time-aligned with longer ones.
 ///
 /// Args:
-///     points: `(cpu, mem)` samples, oldest first.
+///     points: History samples, oldest first (a `(cpu, mem)` pair or a scalar ping `u16`).
 ///     span: Number of seconds the window covers.
 ///     pick: Selector turning one sample into the plotted value.
 ///
 /// Returns:
 ///     Up to `span` points with x in `0.0..=1.0`.
-fn to_series(points: &VecDeque<(u8, u8)>, span: usize, pick: impl Fn(&(u8, u8)) -> f32) -> Vec<(f32, f32)> {
+fn to_series<T>(points: &VecDeque<T>, span: usize, pick: impl Fn(&T) -> f32) -> Vec<(f32, f32)> {
     let len = points.len();
     let show = len.min(span);
     let start = len - show;
@@ -115,6 +123,8 @@ fn to_series(points: &VecDeque<(u8, u8)>, span: usize, pick: impl Fn(&(u8, u8)) 
 pub(super) fn server_chart(
     server_points: &VecDeque<(u8, u8)>,
     core_series: &[CoreLine],
+    ping_points: &VecDeque<u16>,
+    exch_points: &VecDeque<u16>,
     title: String,
     window: ChartWindow,
     now_sec: i64,
@@ -126,6 +136,8 @@ pub(super) fn server_chart(
     let cpu_fill = design::moon_alpha(p.blue, 0.14);
     let mem_line = design::moon(p.green);
     let mem_fill = design::moon_alpha(p.green, 0.14);
+    let ping_line = design::moon(p.accent);
+    let exch_line = design::moon(p.orange);
     let grid = design::moon_alpha(p.text_muted, 0.16);
 
     let span = window.secs();
@@ -133,6 +145,21 @@ pub(super) fn server_chart(
     let mem = to_series(server_points, span, |s| s.1 as f32);
     let cur_cpu = server_points.back().map(|(cpu, _)| *cpu);
     let cur_mem = server_points.back().map(|(_, mem)| *mem);
+
+    // Each ping rides its own auto-scaled ms axis (round-trip is not a percentage), mapped into the
+    // 0..100 plot height and rounded up to a tidy 50 ms step so the line does not hug the ceiling.
+    let ms_scale = |ring: &VecDeque<u16>| {
+        (ring.iter().copied().max().unwrap_or(0) as f32 / 50.0)
+            .ceil()
+            .max(1.0)
+            * 50.0
+    };
+    let cur_ping = ping_points.back().copied();
+    let ping_scale = ms_scale(ping_points);
+    let ping = to_series(ping_points, span, |ms| *ms as f32 / ping_scale * 100.0);
+    let cur_exch = exch_points.back().copied();
+    let exch_scale = ms_scale(exch_points);
+    let exch = to_series(exch_points, span, |ms| *ms as f32 / exch_scale * 100.0);
 
     let core_draws: Vec<CoreDraw> = core_series
         .iter()
@@ -172,11 +199,68 @@ pub(super) fn server_chart(
             }
             // Cores underneath (memory fainter than CPU), then the server pair on top.
             for core in &core_draws {
-                paint_series(window, bounds.origin, w, h, &core.mem, None, core.faint, CORE_STROKE);
-                paint_series(window, bounds.origin, w, h, &core.cpu, None, core.line, CORE_STROKE);
+                paint_series(
+                    window,
+                    bounds.origin,
+                    w,
+                    h,
+                    &core.mem,
+                    None,
+                    core.faint,
+                    CORE_STROKE,
+                );
+                paint_series(
+                    window,
+                    bounds.origin,
+                    w,
+                    h,
+                    &core.cpu,
+                    None,
+                    core.line,
+                    CORE_STROKE,
+                );
             }
-            paint_series(window, bounds.origin, w, h, &mem, Some(mem_fill), mem_line, SERVER_STROKE);
-            paint_series(window, bounds.origin, w, h, &cpu, Some(cpu_fill), cpu_line, SERVER_STROKE);
+            paint_series(
+                window,
+                bounds.origin,
+                w,
+                h,
+                &mem,
+                Some(mem_fill),
+                mem_line,
+                SERVER_STROKE,
+            );
+            paint_series(
+                window,
+                bounds.origin,
+                w,
+                h,
+                &cpu,
+                Some(cpu_fill),
+                cpu_line,
+                SERVER_STROKE,
+            );
+            // Both pings on top, unfilled (each its own ms scale), so their trend reads over the %.
+            paint_series(
+                window,
+                bounds.origin,
+                w,
+                h,
+                &exch,
+                None,
+                exch_line,
+                SERVER_STROKE,
+            );
+            paint_series(
+                window,
+                bounds.origin,
+                w,
+                h,
+                &ping,
+                None,
+                ping_line,
+                SERVER_STROKE,
+            );
         },
     )
     .size_full();
@@ -197,7 +281,9 @@ pub(super) fn server_chart(
         )
         .children(GRID.iter().rev().map(|&v| axis_label(v, p, cx)))
         .children(cur_cpu.map(|v| value_label(v, cpu_line, cx)))
-        .children(cur_mem.map(|v| value_label(v, mem_line, cx)));
+        .children(cur_mem.map(|v| value_label(v, mem_line, cx)))
+        .children(cur_ping.map(|ms| ping_value_label(ms, ping_scale, ping_line, cx)))
+        .children(cur_exch.map(|ms| ping_value_label(ms, exch_scale, exch_line, cx)));
 
     v_flex()
         .flex_none()
@@ -206,7 +292,9 @@ pub(super) fn server_chart(
         .py_1()
         .gap_1()
         .text_size(design::t_caption(cx))
-        .child(legend_row(title, window, &view, cpu_line, mem_line, p))
+        .child(legend_row(
+            title, window, &view, cpu_line, mem_line, ping_line, exch_line, p,
+        ))
         .children((!core_series.is_empty()).then(|| core_legend_row(core_series, p)))
         .child(plot_area)
         .child(x_axis_row(now_sec, window, p, cx))
@@ -287,13 +375,31 @@ fn value_label(value: u8, color: Hsla, cx: &App) -> impl IntoElement {
         .child(format!("{value}%"))
 }
 
+/// Right-gutter current-ping label, placed on the ping line's own ms scale (`ping_scale` = 100 %).
+fn ping_value_label(ms: u16, ping_scale: f32, color: Hsla, cx: &App) -> impl IntoElement {
+    let pct = (f32::from(ms) / ping_scale * 100.0).clamp(0.0, 100.0);
+    let top = (100.0 - pct) / 100.0 * PLOT_H;
+    div()
+        .absolute()
+        .right_0()
+        .top(px(top - 6.0))
+        .w(px(VAL_W))
+        .pl_1()
+        .text_size(design::t_caption(cx))
+        .text_color(color)
+        .child(format!("{} {}", ms, t!("core_status.ms")))
+}
+
 /// Legend row: server title, window buttons, and the two server series color chips.
+#[allow(clippy::too_many_arguments)]
 fn legend_row(
     title: String,
     window: ChartWindow,
     view: &WeakEntity<CoreStatusView>,
     cpu_line: Hsla,
     mem_line: Hsla,
+    ping_line: Hsla,
+    exch_line: Hsla,
     p: MoonPalette,
 ) -> impl IntoElement {
     h_flex()
@@ -320,20 +426,25 @@ fn legend_row(
             mem_line,
             p,
         ))
+        .child(legend_chip(
+            t!("core_status.chart_ping").to_string(),
+            ping_line,
+            p,
+        ))
+        .child(legend_chip(
+            t!("core_status.chart_exch").to_string(),
+            exch_line,
+            p,
+        ))
 }
 
 /// Second legend row: one wrapped chip per core, in the same hue as its line pair.
 fn core_legend_row(core_series: &[CoreLine], p: MoonPalette) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .flex_wrap()
-        .gap_x_2()
-        .gap_y_1()
-        .children(
-            core_series
-                .iter()
-                .map(|core| legend_chip(core.name.clone(), design::moon(core.color), p)),
-        )
+    h_flex().w_full().flex_wrap().gap_x_2().gap_y_1().children(
+        core_series
+            .iter()
+            .map(|core| legend_chip(core.name.clone(), design::moon(core.color), p)),
+    )
 }
 
 /// One window-selector pill; the active window is accent-tinted.

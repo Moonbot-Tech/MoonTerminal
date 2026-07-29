@@ -168,6 +168,14 @@ core_status.col.cpus:
   ru: "Логич. CPU"
   en: "Logical CPUs"
   es: "CPU lógicos"
+core_status.col.ping:
+  ru: "Пинг ядра"
+  en: "Core ping"
+  es: "Ping núcleo"
+core_status.col.ping_exch:
+  ru: "Пинг биржи"
+  en: "Exch. ping"
+  es: "Ping bolsa"
 core_status.col.updated:
   ru: "Обновлено"
   en: "Updated"
@@ -182,11 +190,16 @@ core_status.chart_mem:
   ru: "ОЗУ"
   en: "RAM"
   es: "RAM"
-# Ping/RTT axis label on the warning badge card and the Warnings list.
+# Ping/RTT axis label on the warning badge card and the Warnings list (client↔core ping).
 core_status.chart_ping:
   ru: "Пинг"
   en: "Ping"
   es: "Ping"
+# Core→exchange order-latency label (the exchange ping) on the chart legend and the card.
+core_status.chart_exch:
+  ru: "Биржа"
+  en: "Exchange"
+  es: "Bolsa"
 # Connectivity axis label on a chart warning badge's hover card.
 core_status.warn_conn:
   ru: "Связь"
