@@ -16,6 +16,7 @@
 mod figures;
 mod geom;
 mod news;
+mod warn;
 mod refs;
 mod render;
 mod render_input;
@@ -191,6 +192,7 @@ pub struct ChartPanel {
     order_hover_probe: Option<(f32, f32)>,
     /// News marks for this chart's coin plus their hover state; see [`news`].
     news: news::NewsState,
+    warn: warn::WarnState,
     /// Figure-drawing state for this panel: pencil draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
     /// Screen point where the latest draft node was placed. Releasing sufficiently far away
@@ -227,6 +229,7 @@ impl ChartPanel {
         // gems are own-pass and present themselves, so a news item never wakes the GPUI scene — an
         // open hover card catches up on the next repaint.
         self.sync_news_marks(cx);
+        self.sync_warn_marks(cx);
         self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx)
     }
 
@@ -366,6 +369,7 @@ impl ChartPanel {
             order_hover: None,
             order_hover_probe: None,
             news: news::NewsState::default(),
+            warn: warn::WarnState::default(),
             fig_draft: None,
             fig_draw_down: None,
             fig_hover: None,
@@ -485,6 +489,7 @@ impl ChartPanel {
             order_hover: None,
             order_hover_probe: None,
             news: news::NewsState::default(),
+            warn: warn::WarnState::default(),
             fig_draft: None,
             fig_draw_down: None,
             fig_hover: None,

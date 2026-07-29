@@ -10,6 +10,7 @@ pub(crate) mod server_chart;
 mod tests;
 
 use std::collections::HashSet;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
@@ -853,6 +854,37 @@ impl Backend {
                 }
             }
         }
+    }
+
+    /// Warning episodes for one server within `[from_ms, to_ms]`: persisted (closed) plus still-open.
+    ///
+    /// The chart draws a badge per episode. Merges the SQLite log with the engine's live open
+    /// episodes, so an in-progress warning already shows a badge.
+    ///
+    /// Args:
+    ///     ip: Server endpoint address.
+    ///     from_ms: Inclusive lower bound on `start_ms`.
+    ///     to_ms: Inclusive upper bound on `start_ms`.
+    ///
+    /// Returns:
+    ///     Matching episodes; empty if persistence is off and nothing is open.
+    pub(crate) fn warn_episodes_for_server(
+        &self,
+        ip: IpAddr,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Vec<crate::backend::core_warn::WarnEpisode> {
+        let mut out = self
+            .warn_store
+            .as_ref()
+            .and_then(|store| store.episodes_for_server(ip, from_ms, to_ms).ok())
+            .unwrap_or_default();
+        for open in self.warn.open_episodes() {
+            if open.server_ip == Some(ip) && open.start_ms >= from_ms && open.start_ms <= to_ms {
+                out.push(open);
+            }
+        }
+        out
     }
 
     pub(crate) fn mark_backend_dirty(&mut self, cx: &mut Context<Self>) {

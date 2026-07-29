@@ -404,6 +404,16 @@ impl ChartEngine {
         self.data.borrow_mut().set_news_marks(marks, hovered)
     }
 
+    /// Sets this panel's warning badges and the one under the cursor. Returns whether anything
+    /// changed, so the caller can skip the userdata resync.
+    pub(crate) fn set_warn_marks(
+        &mut self,
+        marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,
+        hovered: Option<usize>,
+    ) -> bool {
+        self.data.borrow_mut().set_warn_marks(marks, hovered)
+    }
+
     /// Applies a price-axis scale to every pane and stores it in the container. None selects Auto.
     pub fn set_scale(&mut self, pct: Option<f32>) -> bool {
         if self.scale == pct {

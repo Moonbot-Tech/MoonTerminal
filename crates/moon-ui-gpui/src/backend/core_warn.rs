@@ -192,6 +192,8 @@ pub(crate) struct CoreWarnEngine {
     episodes: VecDeque<WarnEpisode>,
     /// Next episode id.
     next_id: u64,
+    /// Bumped whenever an episode opens or closes, so chart mark caches know to rebuild.
+    episode_rev: u64,
     /// Last processed Unix second, so a faster caller is throttled to 1 Hz.
     last_sec: i64,
     /// Cached averaged `(process, system)` CPU per core, for the panel's smoothed display.
@@ -378,6 +380,7 @@ impl CoreWarnEngine {
                 None => {
                     let id = self.next_id;
                     self.next_id += 1;
+                    self.episode_rev += 1;
                     self.open.insert(
                         *key,
                         OpenWarn {
@@ -418,6 +421,7 @@ impl CoreWarnEngine {
             };
             closed.push(episode.clone());
             self.push_episode(episode);
+            self.episode_rev += 1;
         }
         closed
     }
@@ -450,14 +454,18 @@ impl CoreWarnEngine {
         self.conn_warn.contains(&ip)
     }
 
+    /// Revision bumped on every episode open/close, so chart mark caches rebuild only on a change.
+    pub(crate) fn episode_rev(&self) -> u64 {
+        self.episode_rev
+    }
+
     /// Closed episodes, oldest first. Consumed by the upcoming chart-badge/persistence phase.
     #[allow(dead_code)]
     pub(crate) fn episodes(&self) -> impl Iterator<Item = &WarnEpisode> {
         self.episodes.iter()
     }
 
-    /// Currently-open warnings materialized as episodes with no end yet. Consumed by the badge phase.
-    #[allow(dead_code)]
+    /// Currently-open warnings materialized as episodes with no end yet (for a live badge).
     pub(crate) fn open_episodes(&self) -> Vec<WarnEpisode> {
         self.open
             .iter()

@@ -93,8 +93,6 @@ impl WarnStore {
 
     /// Return a server's episodes that started within `[from_ms, to_ms]`, oldest first.
     ///
-    /// Consumed by the chart-badge phase; unused for now.
-    ///
     /// Args:
     ///     ip: Server endpoint address to filter by.
     ///     from_ms: Inclusive lower bound on `start_ms`.
@@ -102,7 +100,6 @@ impl WarnStore {
     ///
     /// Returns:
     ///     Matching episodes, or a SQLite error.
-    #[allow(dead_code)]
     pub(crate) fn episodes_for_server(
         &self,
         ip: IpAddr,
@@ -128,7 +125,6 @@ fn axis_str(axis: WarnAxis) -> &'static str {
 }
 
 /// Parse a stored axis name, defaulting unknown values to `SysCpu` rather than failing a whole row.
-#[allow(dead_code)] // read path, reached only through `episodes_for_server` (badge phase)
 fn axis_from(name: &str) -> WarnAxis {
     match name {
         "mem_growth" => WarnAxis::MemGrowth,
@@ -138,7 +134,6 @@ fn axis_from(name: &str) -> WarnAxis {
 }
 
 /// Reconstruct an episode from one `core_warnings` row (column order matches the SELECT).
-#[allow(dead_code)] // read path, reached only through `episodes_for_server` (badge phase)
 fn row_to_episode(row: &Row) -> rusqlite::Result<WarnEpisode> {
     let axis: String = row.get(1)?;
     let server_ip: Option<String> = row.get(2)?;

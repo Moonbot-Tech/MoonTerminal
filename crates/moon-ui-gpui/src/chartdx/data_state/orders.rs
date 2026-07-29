@@ -87,6 +87,7 @@ impl ChartDataState {
             }
 
             let news_sig = self.news_sig();
+            let warn_sig = self.warn_sig();
             if let Some(core_st) = session.store().core(pane.core) {
                 let highlight_uid = self
                     .order_highlight
@@ -105,6 +106,7 @@ impl ChartDataState {
                     || pr.last_order_drag_preview != drag_preview_sig
                     || pr.last_figures_sig != figures_sig
                     || pr.last_news_sig != news_sig
+                    || pr.last_warn_sig != warn_sig
                 {
                     let mut hlines = Vec::new();
                     let mut segs = Vec::new();
@@ -139,6 +141,8 @@ impl ChartDataState {
                     // News marks ride the same layer, last, so a mark is never hidden under an
                     // order line's cross.
                     self.append_news_geometry(pane.view.epoch_ms, &mut markers);
+                    // Warning badges ride the same layer, after news.
+                    self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
                     let zone_sig = hash_order_zones(&zones);
                     if pr.last_order_zone_sig != zone_sig {
                         pr.last_order_zone_sig = zone_sig;
@@ -170,6 +174,7 @@ impl ChartDataState {
                     pr.last_order_drag_preview = drag_preview_sig;
                     pr.last_figures_sig = figures_sig;
                     pr.last_news_sig = news_sig;
+                    pr.last_warn_sig = warn_sig;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
@@ -177,13 +182,18 @@ impl ChartDataState {
                 // The pane's own core carries no data (removed or not yet connected). Orders and
                 // figures go away with it, but news marks come from OTHER cores and stay, so this
                 // branch still rebuilds them instead of clearing the layer outright.
-                if force || pr.last_order_lines_rev != u64::MAX || pr.last_news_sig != news_sig {
+                if force
+                    || pr.last_order_lines_rev != u64::MAX
+                    || pr.last_news_sig != news_sig
+                    || pr.last_warn_sig != warn_sig
+                {
                     if pr.last_order_zone_sig != 0 {
                         pr.last_order_zone_sig = 0;
                         base_changed = true;
                     }
                     let mut markers = Vec::new();
                     self.append_news_geometry(pane.view.epoch_ms, &mut markers);
+                    self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
                     pr.layers.set_userdata(&[], &[], &[], &markers);
                     pr.order_labels.clear();
                     pr.order_label_order.clear();
@@ -194,6 +204,7 @@ impl ChartDataState {
                     pr.last_order_highlight_uid = None;
                     pr.last_order_drag_preview = None;
                     pr.last_news_sig = news_sig;
+                    pr.last_warn_sig = warn_sig;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }

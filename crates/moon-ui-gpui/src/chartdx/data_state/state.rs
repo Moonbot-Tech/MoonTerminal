@@ -34,6 +34,8 @@ impl ChartDataState {
             figure_visual_rev: 0,
             news_marks: std::rc::Rc::new(Vec::new()),
             news_hovered: None,
+            warn_marks: std::rc::Rc::new(Vec::new()),
+            warn_hovered: None,
             market_source: None,
             last_frame_tick_at: None,
             present_rate_candidate_hz: 0.0,
