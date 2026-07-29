@@ -10,18 +10,42 @@ use super::super::super::LoadState;
 use super::super::shared::{N_VAR, SaveDialog};
 use moon_core::db::ReadFail;
 use moon_core::db::metrics::Tally;
-use moon_core::db::tuner::threshold_search::{RESTARTS_MAX, RESTARTS_MIN, SearchHandle};
+use moon_core::db::tuner::threshold_search::{
+    ComposeSkip, ComposedSet, RESTARTS_MIN, SearchHandle, edges_max, heavy_search_supported,
+    restarts_max,
+};
 use moon_core::db::tuner::{
     Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant,
 };
 
-/// Selectable quantile depths, restricted to values the search accepts.
-pub(in crate::analytics::tuner) const EDGE_OPTIONS: [usize; 7] = [4, 8, 16, 32, 64, 128, 256];
+/// Every quantile depth the search accepts, coarsest first. What is OFFERED is a prefix of this
+/// — see [`edge_options`].
+const EDGE_OPTIONS_ALL: [usize; 7] = [4, 8, 16, 32, 64, 128, 256];
+
+/// Selectable quantile depths on THIS machine.
+///
+/// The finest depth doubles the edges the descent walks on every pass of every restart, so it
+/// rides the same machine bar as automatic composition: below `HEAVY_SEARCH_MIN_CORES` it is not
+/// offered at all, and a value carried over in `layout.toml` from a larger machine falls back
+/// through [`edges_of`] to the default rather than opening a run nobody wants to sit through.
+pub(in crate::analytics::tuner) fn edge_options() -> &'static [usize] {
+    edge_options_upto(edges_max())
+}
+
+/// [`edge_options`] with the ceiling supplied, so both machine classes can be checked in one test
+/// run — a given machine only ever exercises one of them.
+///
+/// Derived from the SEARCH's own ceiling rather than from a list of its own. The dropdown then
+/// cannot offer a depth the search would clamp away, whatever either side is retuned to.
+fn edge_options_upto(max: usize) -> &'static [usize] {
+    let n = EDGE_OPTIONS_ALL.iter().take_while(|d| **d <= max).count();
+    &EDGE_OPTIONS_ALL[..n]
+}
 
 /// Depth used when nothing is chosen or a stored value is not on offer.
 ///
-/// Must be one of [`EDGE_OPTIONS`], or the dropdown would open showing a value none of its items
-/// is marked as.
+/// Must be one of [`edge_options`] on every machine, or the dropdown would open showing a value
+/// none of its items is marked as.
 pub(super) const DEFAULT_EDGES: usize = 32;
 
 /// Restarts used when the box is empty or unparseable.
@@ -30,34 +54,37 @@ pub(in crate::analytics::tuner) const DEFAULT_ITERS: usize = 100;
 /// Convert raw "restarts" text to the count used by both the search and persistence.
 ///
 /// Read through [`parse_num`], so the same `k` suffix the box DISPLAYS is one it accepts back:
-/// the ceiling is five digits and the box is narrow enough that `20000` shows only its tail.
-/// Bounds come from the search module so the displayed and executed counts cannot drift.
+/// the ceiling is five digits and the box is narrow enough that `25000` shows only its tail.
+/// Bounds come from the search module — including the machine-dependent ceiling, so the box
+/// cannot accept a count this machine's search would then quietly cut down.
 pub(in crate::analytics::tuner) fn iters_of(text: &str) -> usize {
+    let max = restarts_max();
     parse_num(text)
         .filter(|v| *v >= 0.0)
-        .map(|v| v.min(RESTARTS_MAX as f64) as usize)
+        .map(|v| v.min(max as f64) as usize)
         .unwrap_or(DEFAULT_ITERS)
-        .clamp(RESTARTS_MIN, RESTARTS_MAX)
+        .clamp(RESTARTS_MIN, max)
 }
 
 /// Box text to open the tuner with for a persisted restart count.
 ///
-/// Compact where that is EXACT — 20000 opens as `20k`, which fits the box, while 1234 stays
+/// Compact where that is EXACT — 25000 opens as `25k`, which fits the box, while 1234 stays
 /// `1234` because `1.23k` is a different number. [`fmt_bound`] owns that distinction, and
 /// [`iters_of`] reads either form back, so the box can never display a count the search would
 /// not run.
 ///
-/// Missing values use the default; out-of-range values are clamped to the search bounds.
+/// Missing values use the default; anything above what THIS machine allows is clamped to it — a
+/// count saved on a bigger one opens at the local ceiling rather than promising a longer run.
 pub(super) fn restore_iters(saved: Option<u32>) -> String {
     let count = saved.map_or(DEFAULT_ITERS, |v| {
-        (v as usize).clamp(RESTARTS_MIN, RESTARTS_MAX)
+        (v as usize).clamp(RESTARTS_MIN, restarts_max())
     });
     fmt_bound(count as f64)
 }
 
 /// Return `v` when the dropdown offers it, otherwise the default depth.
 pub(super) fn edges_of(v: usize) -> usize {
-    if EDGE_OPTIONS.contains(&v) {
+    if edge_options().contains(&v) {
         v
     } else {
         DEFAULT_EDGES
@@ -158,11 +185,18 @@ pub(in crate::analytics::tuner) enum SuggestState {
     Idle,
     /// A search is in flight.
     Running(SuggestJob),
-    /// The last joint search finished.
+    /// The last stoppable search finished.
     Done {
-        /// Restarts that actually completed, not the number requested.
-        rounds: usize,
-        /// Whether cancellation abandoned any requested restart.
+        /// Restarts that actually completed, not the number requested — and `None` when the run
+        /// composed the field set.
+        ///
+        /// A composition's counter spans every candidate ranking, every fold and the final
+        /// refit, so it is an internal work total rather than the restart count behind the
+        /// applied thresholds. Reporting it under the same word as the plain search's would
+        /// overstate that count by orders of magnitude, against a restart box the user set
+        /// themselves; there is no honest single number here, so none is shown.
+        rounds: Option<usize>,
+        /// Whether cancellation abandoned any unit of the requested work.
         stopped: bool,
         /// Fitted and held-back scores, or `None` when the search had no answer.
         ///
@@ -186,9 +220,13 @@ pub(in crate::analytics::tuner) struct SearchSplit {
     pub(in crate::analytics::tuner) train: Tally,
     /// Over the trades held back from the search; `None` when the whole period was fitted on.
     pub(in crate::analytics::tuner) holdout: Option<Tally>,
+    /// The field set composition chose, when it ran.
+    pub(in crate::analytics::tuner) composed: Option<ComposedSet>,
+    /// Why composition did not run, when it was asked for.
+    pub(in crate::analytics::tuner) compose_skipped: Option<ComposeSkip>,
 }
 
-/// The two searches this axis can run, which differ in what the user can do while they run.
+/// The searches this axis can run, which differ in what the user can do while they run.
 pub(in crate::analytics::tuner) enum SuggestJob {
     /// One field over one scan — it finishes before a stop button would be reachable, so it runs
     /// under the window's blocking overlay instead.
@@ -200,20 +238,34 @@ pub(in crate::analytics::tuner) enum SuggestJob {
         /// Restarts requested for the run.
         total: usize,
     },
+    /// Composition: many searches behind one handle, choosing the field set before refitting it.
+    ///
+    /// Deliberately carries NO total. The forward pass stops when no field is worth adding, so
+    /// how much work the run will do is not known when it starts; a denominator invented here
+    /// would be a number the progress caption could only contradict.
+    Compose {
+        /// Cancellation and progress for this run.
+        handle: SearchHandle,
+    },
 }
 
 impl SuggestState {
-    /// Whether a search is in flight; both kinds block starting another.
+    /// Whether a search is in flight; every kind blocks starting another.
     pub(in crate::analytics::tuner) fn is_running(&self) -> bool {
         matches!(self, SuggestState::Running(_))
     }
 
-    /// The running joint search's handle and requested restart count, if that is what is running.
-    pub(in crate::analytics::tuner) fn joint_run(&self) -> Option<(&SearchHandle, usize)> {
+    /// The running stoppable search's handle, and the restart count it was asked for where that
+    /// number exists.
+    ///
+    /// `None` for the total under composition, which is not one search with one denominator but
+    /// a sequence of them whose length depends on what it finds.
+    pub(in crate::analytics::tuner) fn joint_run(&self) -> Option<(&SearchHandle, Option<usize>)> {
         match self {
             SuggestState::Running(SuggestJob::AllFields { handle, total }) => {
-                Some((handle, *total))
+                Some((handle, Some(*total)))
             }
+            SuggestState::Running(SuggestJob::Compose { handle }) => Some((handle, None)),
             _ => None,
         }
     }
@@ -257,7 +309,7 @@ pub(in crate::analytics) struct TunerState {
     pub(in crate::analytics::tuner) sugg_cfg_open: bool,
     /// Minimum trade count as raw input text; empty selects one tenth of the fitted train window.
     pub(in crate::analytics::tuner) min_trades: String,
-    /// Quantile depth, always one of `EDGE_OPTIONS` and persisted across window opens.
+    /// Quantile depth, always one of [`edge_options`] and persisted across window opens.
     pub(in crate::analytics::tuner) edges: usize,
     /// Percentage of the period the search may fit on, always one of `TRAIN_OPTIONS`; the rest is
     /// held back to be measured against. 100 means no split.
@@ -265,6 +317,9 @@ pub(in crate::analytics) struct TunerState {
     /// Whether the field takes part in the auto search (checkboxes); one that is
     /// off but has bounds acts as a fixed filter.
     pub(in crate::analytics::tuner) enabled: Vec<bool>,
+    /// Whether the search also chooses WHICH of the admitted fields to filter on, out of sample,
+    /// instead of searching them all. Persisted.
+    pub(in crate::analytics::tuner) compose: bool,
     /// "Round the result": bounds coming out of the suggestion are rounded to 3
     /// significant digits OUTWARDS (from down, to up) — so the range does not
     /// lose the trades it found.
@@ -294,6 +349,8 @@ impl TunerState {
     ///     saved_seed: Persisted random seed text.
     ///     saved_train: Persisted training share.
     ///     saved_fields: Persisted report-column ids admitted into the automatic search.
+    ///     saved_compose: Whether the search also composes the field set. Ignored on a machine
+    ///         that does not clear the heavy-search bar, where the switch is not shown either.
     ///
     /// Returns:
     ///     Normalized state for a newly opened tuner.
@@ -303,6 +360,7 @@ impl TunerState {
         saved_seed: Option<String>,
         saved_train: Option<u32>,
         saved_fields: Option<Vec<String>>,
+        saved_compose: bool,
     ) -> Self {
         let bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
         let enabled = restore_enabled(saved_fields.as_deref());
@@ -326,6 +384,9 @@ impl TunerState {
             min_trades: String::new(),
             edges: restore_edges(saved_edges),
             train_pct: restore_train(saved_train),
+            // A setting saved on a bigger machine must not switch on a feature this one never
+            // shows a control for: the run button would silently change what it does.
+            compose: saved_compose && heavy_search_supported(),
             round_results: true,
             copy_name: String::new(),
             enabled,
@@ -386,9 +447,46 @@ impl TunerState {
         self.sugg = SuggestState::Idle;
     }
 
-    /// Ask the running joint search to stop, leaving the state for the caller to set.
+    /// Folds that backed `fi` under the last composed set, out of the folds it was composed on.
     ///
-    /// Returns whether a joint search was actually running, so a Stop click can tell an
+    /// Derived from the suggestion itself rather than mirrored into a field of its own. The badge
+    /// then cannot outlive what it describes: every path that replaces or clears `sugg` — a new
+    /// search, a failed read, a single-field suggestion, a manual edit — retires the badge with
+    /// it, which a parallel vector only did on the paths that remembered to reset it.
+    ///
+    /// `Some((0, k))` is a real answer and NOT the same as `None`: a chosen field no fold could
+    /// place is exactly what the support figure exists to expose.
+    pub(in crate::analytics::tuner) fn compose_support(&self, fi: usize) -> Option<(u8, u8)> {
+        let SuggestState::Done {
+            split: Some(split), ..
+        } = &self.sugg
+        else {
+            return None;
+        };
+        let set = split.composed.as_ref()?;
+        let col = FIELDS[fi].col;
+        set.fields
+            .iter()
+            .find(|(c, _)| *c == col)
+            .map(|(_, support)| (*support, set.folds))
+    }
+
+    /// Whether every MAPPED field takes part in the automatic search.
+    ///
+    /// Unmapped fields have no strategy parameter to write, so "all enabled" has never meant all
+    /// of them. One definition, because the master checkbox's tick and its caption's click both
+    /// ask this question and must not answer it differently.
+    pub(in crate::analytics::tuner) fn all_mapped_enabled(&self) -> bool {
+        FIELDS
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.mapped())
+            .all(|(fi, _)| self.enabled[fi])
+    }
+
+    /// Ask the running stoppable search to stop, leaving the state for the caller to set.
+    ///
+    /// Returns whether a stoppable search was actually running, so a Stop click can tell an
     /// interrupted run from a click that arrived after it had already finished.
     pub(in crate::analytics::tuner) fn stop_suggest(&mut self) -> bool {
         match self.sugg.joint_run() {

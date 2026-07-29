@@ -204,7 +204,7 @@ UnderScene/z-order и для одинакового поведения на Wind
 FireTest не читает исходники и не проверяет архитектуру статически. Встроенный
 `--debug-script chart-smoke` проверяет живое поведение: открытие графика, реальные bounds,
 native input, counters/CPU/GPU/RAM. Статические запреты вида "не рендерить меню как child
-панели" живут в `tests/theme_contract.rs`, а не внутри runtime-сценария.
+панели" живут в `tests/theme_contract/`, а не внутри runtime-сценария.
 
 ## Окна
 

@@ -19,13 +19,13 @@ use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 /// How often the suggestion row repaints while a search runs.
 ///
-/// The search publishes its progress into an atomic instead of sending an event per restart, so
-/// this is what turns that counter into a moving number. Fast enough to read as live, slow enough
-/// that a 20 000-restart run costs a few dozen repaints rather than 20 000.
+/// The search publishes its progress into atomics instead of sending an event per restart or
+/// composition step, so this is what turns those signals into moving captions. Fast enough to
+/// read as live without repainting the whole Analytics window for every completed unit.
 const SUGGEST_POLL: std::time::Duration = std::time::Duration::from_millis(200);
 
 impl AnalyticsView {
-    /// Suggest all v1 ranges jointly with coordinate descent.
+    /// Suggest v1 ranges with joint coordinate descent, optionally composing the field set first.
     ///
     /// Deliberately WITHOUT the window's blocking overlay: this search can run for tens of
     /// seconds, and the overlay would cover the Stop button it depends on. Its outcome and its
@@ -59,10 +59,19 @@ impl AnalyticsView {
                 }
             })
             .collect();
+        let compose = self.tuner.compose;
         let handle = SearchHandle::new();
-        self.tuner.sugg = SuggestState::Running(SuggestJob::AllFields {
-            handle: handle.clone(),
-            total: restarts,
+        // Composition is many searches behind one handle and stops when it runs out of fields
+        // worth adding, so there is no restart total to count against — see `SuggestJob`.
+        self.tuner.sugg = SuggestState::Running(if compose {
+            SuggestJob::Compose {
+                handle: handle.clone(),
+            }
+        } else {
+            SuggestJob::AllFields {
+                handle: handle.clone(),
+                total: restarts,
+            }
         });
         self.poll_suggest_progress(handle.clone(), cx);
         let worker = handle.clone();
@@ -80,6 +89,7 @@ impl AnalyticsView {
                         round,
                         seed,
                         train_frac,
+                        compose,
                     },
                     &worker,
                 )
@@ -90,11 +100,13 @@ impl AnalyticsView {
                 }
                 // Read from the handle, not from the request: after a stop this is what the
                 // search actually got through.
-                let rounds = handle.completed();
-                // A stop that arrived after the last restart finished — while the result was on
-                // its way to this closure — abandoned nothing, so it is not a stop. Reporting it
-                // as one would tell the user their search was cut short when it was complete.
-                let stopped = handle.is_cancelled() && rounds < restarts;
+                let completed = handle.completed();
+                // Asked of the search rather than inferred from the counter. A stop that arrived
+                // after the last restart finished abandoned nothing and is not a stop; and under
+                // composition the counter spans candidate rankings, folds and the final refit, so
+                // comparing it against ONE run's restart count would call almost every completed
+                // composition a stop and refuse to offer its seed.
+                let stopped = handle.abandoned();
                 let found = match sugg {
                     Ok(found) => found,
                     // A failed read must not look like "found nothing": the button would just
@@ -106,12 +118,26 @@ impl AnalyticsView {
                         return;
                     }
                 };
+                // Caption the run as composition unless the core explicitly skipped it. A skipped
+                // run (no strategy scope or too few folds) fell back to the plain search, so it
+                // has an honest restart count and must not be captioned as composition while the
+                // summary beside it explains why none happened. With no answer there is no result
+                // metadata to distinguish an early small-sample exit, so the requested mode wins.
+                let composed = compose
+                    && found
+                        .as_ref()
+                        .is_none_or(|res| res.compose_skipped.is_none());
+                // The raw counter still goes to the LOG, where an internal work total is what a
+                // developer wants; only the caption withholds it. See `SuggestState::Done`.
+                let rounds = (!composed).then_some(completed);
                 this.tuner.sugg = SuggestState::Done {
                     rounds,
                     stopped,
                     split: found.as_ref().map(|res| SearchSplit {
                         train: res.train.clone(),
                         holdout: res.holdout.clone(),
+                        composed: res.composed.clone(),
+                        compose_skipped: res.compose_skipped,
                     }),
                 };
                 // Offer the seed for pinning only after a COMPLETE run. A stopped search finishes
@@ -129,9 +155,26 @@ impl AnalyticsView {
                         || "not split".to_string(),
                         |h| format!("{:+.2} over {}", h.profit, h.n),
                     );
+                    // The composed set is logged beside the two figures for the same reason they
+                    // are logged together: "four fields chosen" and "what they earned on trades
+                    // nobody fitted" are only a verdict as a pair.
+                    let set = res.composed.as_ref().map_or_else(
+                        || {
+                            res.compose_skipped
+                                .map_or_else(String::new, |why| format!(", composition {why:?}"))
+                        },
+                        |c| {
+                            let fields: Vec<String> = c
+                                .fields
+                                .iter()
+                                .map(|(col, n)| format!("{col} {n}/{}", c.folds))
+                                .collect();
+                            format!(", composed [{}]", fields.join(" "))
+                        },
+                    );
                     log::info!(
                         "analytics: smart suggestion — in sample {:+.2} over {}, \
-                         out of sample {holdout}, restarts {rounds}, seed {}{}",
+                         out of sample {holdout}, restarts {completed}, seed {}{set}{}",
                         res.train.profit,
                         res.train.n,
                         res.seed,
@@ -159,7 +202,7 @@ impl AnalyticsView {
         );
     }
 
-    /// Stop the running joint search from the row's Stop button.
+    /// Stop the running joint search or composition from the row's Stop button.
     ///
     /// The state stays `Running` until the search returns, which is the truth: it is still
     /// unwinding, and the restarts it already finished are what it will answer with.
@@ -183,7 +226,10 @@ impl AnalyticsView {
     fn poll_suggest_progress(&self, handle: SearchHandle, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let mut shown = usize::MAX;
+            // Both halves of what the row can show: the restart counter for a plain run, and the
+            // stage for a composition, whose caption moves while the counter is still climbing
+            // through one candidate.
+            let mut shown: Option<(Option<usize>, Option<(usize, usize, usize)>)> = None;
             loop {
                 executor.timer(SUGGEST_POLL).await;
                 let mut mine = false;
@@ -198,7 +244,17 @@ impl AnalyticsView {
                         // KPI matrix, the strategy list — to move one integer. Only ask for one
                         // when that integer actually moved, so a search finishing inside a single
                         // tick costs no repaint at all.
-                        let done = handle.completed();
+                        // Under composition the caption reads the STAGE only — keying on the
+                        // restart counter as well would repaint the whole panel on essentially
+                        // every tick of a run that can last minutes, to move a number nothing
+                        // renders.
+                        let done = match &this.tuner.sugg {
+                            SuggestState::Running(SuggestJob::Compose { .. }) => {
+                                (None, handle.stage())
+                            }
+                            _ => (Some(handle.completed()), handle.stage()),
+                        };
+                        let done = Some(done);
                         if mine && done != shown {
                             shown = done;
                             cx.notify();

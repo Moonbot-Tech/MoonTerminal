@@ -186,6 +186,53 @@ fn a_config_without_the_new_analytics_keys_keeps_todays_behaviour() {
         !decoded.analytics_hist_collapsed,
         "the distribution card must open expanded for every existing config"
     );
+    assert!(
+        !decoded.analytics_tuner_compose,
+        "automatic composition must stay OFF for every existing config: it is a different, \
+         slower search, and no update should silently change what a familiar button does"
+    );
+}
+
+/// The composition switch must survive a round trip and a hand-edited value.
+///
+/// `layout.toml` is one schema-less document holding every window's geometry, so the hazard is
+/// not this key reading wrong — it is this key rejecting the DOCUMENT. The oracle is the
+/// neighbouring `analytics_period`, whose survival proves the salvage rather than restating it.
+///
+/// Breakage this pins: declaring `layout.rs:analytics_tuner_compose` as a plain `bool` instead of
+/// going through `de_lenient_bool`. A single quoted `analytics_tuner_compose = "true"` — the
+/// intuitive way to hand-edit it — would then reject the whole file, and the next save would
+/// write default geometry over every window position and column width the user had arranged.
+#[test]
+fn a_hand_edited_composition_switch_never_costs_the_layout() {
+    let saved = WindowLayout {
+        analytics_tuner_compose: true,
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load back");
+    assert!(
+        decoded.analytics_tuner_compose,
+        "an enabled composition switch must survive its own round trip"
+    );
+
+    for written in ["\"true\"", "\"TRUE\"", "\"yes\"", "17", "[1, 2]"] {
+        let doc =
+            format!("analytics_period = \"p-cur-month\"\nanalytics_tuner_compose = {written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|e| panic!("{written} must not reject the document: {e}"));
+        assert_eq!(
+            decoded.analytics_period.as_deref(),
+            Some("p-cur-month"),
+            "{written}: the rest of the layout must survive an unexpected value"
+        );
+    }
+    let quoted: WindowLayout =
+        toml::from_str("analytics_tuner_compose = \"true\"\n").expect("a quoted bool must load");
+    assert!(
+        quoted.analytics_tuner_compose,
+        "a quoted true must still mean true, not fall back to the default"
+    );
 }
 
 /// A hand-written field list must never cost the user the rest of their layout.

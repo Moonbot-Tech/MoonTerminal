@@ -1,14 +1,15 @@
 //! Unit tests for persisted filter-tuner controls.
 
 use super::{
-    DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, EDGE_OPTIONS, SuggestJob, SuggestState,
-    TRAIN_OPTIONS, TunerState, fmt_bound, iters_of, parse_num, persist_seed, restore_edges,
-    restore_enabled, restore_iters, restore_seed, restore_train, seed_of, staged_dirty, train_frac,
+    DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, SuggestJob, SuggestState, TRAIN_OPTIONS,
+    TunerState, edge_options, edge_options_upto, fmt_bound, iters_of, parse_num, persist_seed,
+    restore_edges, restore_enabled, restore_iters, restore_seed, restore_train, seed_of,
+    staged_dirty, train_frac,
 };
 use moon_core::db::tuner::FIELDS;
 use moon_core::db::tuner::StratFilters;
 use moon_core::db::tuner::threshold_search::{
-    EDGES_MAX, EDGES_MIN, RESTARTS_MAX, RESTARTS_MIN, SearchHandle,
+    EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
 };
 
 /// `filter/state.rs:TunerState::mark_report_stale` must not add the draft resets or request
@@ -16,7 +17,7 @@ use moon_core::db::tuner::threshold_search::{
 /// filter scan while new trades keep arriving.
 #[test]
 fn report_staleness_preserves_filter_drafts() {
-    let mut state = TunerState::load(None, None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None, false);
     state.bounds[0][0] = ("1".into(), "2".into());
     state.staged_ignore.insert("IgnoreFilters", true);
     let (seq, hist_seq, sugg_seq, dialog_seq) =
@@ -46,7 +47,7 @@ fn report_staleness_preserves_filter_drafts() {
 /// report-only staleness lets old KPI, histogram, or suggestion completions publish in a new scope.
 #[test]
 fn scope_change_retires_all_filter_requests() {
-    let mut state = TunerState::load(None, None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None, false);
     let (seq, hist_seq, sugg_seq) = (state.seq, state.hist_seq, state.sugg_seq);
 
     state.invalidate();
@@ -65,7 +66,7 @@ fn scope_change_retires_all_filter_requests() {
 /// the user's next Search click would start a second one alongside it.
 #[test]
 fn retiring_a_suggestion_stops_the_search_behind_it() {
-    let mut state = TunerState::load(None, None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None, false);
     let handle = SearchHandle::new();
     state.sugg = SuggestState::Running(SuggestJob::AllFields {
         handle: handle.clone(),
@@ -88,7 +89,7 @@ fn retiring_a_suggestion_stops_the_search_behind_it() {
 /// leaves an old histogram pinned when an automatic KPI finishes after the user leaves Filters.
 #[test]
 fn stale_histogram_keeps_the_filter_axis_reloadable() {
-    let mut state = TunerState::load(None, None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None, false);
     state.stats.apply(Ok(Vec::new()));
     state.dirty = false;
     state.hist_dirty = true;
@@ -101,7 +102,7 @@ fn stale_histogram_keeps_the_filter_axis_reloadable() {
 /// assignment turns the next Save preview into a diff against invented defaults.
 #[test]
 fn automatic_missing_strategy_read_preserves_the_save_baseline() {
-    let mut state = TunerState::load(None, None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None, false);
     state.apply_strategy_read(
         StratFilters {
             found: true,
@@ -121,7 +122,7 @@ fn automatic_missing_strategy_read_preserves_the_save_baseline() {
 /// that update lets an async Save preview open for the draft that existed before the user's edit.
 #[test]
 fn draft_change_retires_pending_save_preview() {
-    let mut state = TunerState::load(None, None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None, false);
     let pending_preview = state.dialog_seq;
 
     state.mark_dialog_draft_changed();
@@ -134,22 +135,61 @@ fn draft_change_retires_pending_save_preview() {
 
 /// Every depth the dropdown offers must be one the search will actually honour.
 ///
-/// The oracle is the search's own accepted range, read from `moon-core` — source against
-/// source, not a literal restated here. Breakage this pins: someone extends `EDGE_OPTIONS`
-/// with a finer or coarser step (256 is the tempting next one) without touching
-/// `smart_suggest`'s bounds. The dropdown would then offer a depth that `clamp` silently
-/// rewrites, so the tuner would persist and display 256 while every run used 128.
+/// The oracle is the search's own accepted ceilings, read from `moon-core` — source against
+/// source, not a literal restated here, and BOTH machine classes in one run. Breakage this pins:
+/// someone extends `EDGE_OPTIONS_ALL` with a finer step without touching the search's own bounds.
+/// The dropdown would then offer a depth that `clamp` silently rewrites, so the tuner would
+/// persist and display a depth every run ignored.
 #[test]
 fn every_offered_depth_is_one_the_search_accepts() {
-    for offered in EDGE_OPTIONS {
+    for max in [EDGES_MAX_LIGHT, EDGES_MAX] {
+        for offered in edge_options_upto(max) {
+            assert!(
+                (EDGES_MIN..=max).contains(offered),
+                "depth {offered} is offered by the dropdown but past the ceiling {max}"
+            );
+        }
         assert!(
-            (EDGES_MIN..=EDGES_MAX).contains(&offered),
-            "depth {offered} is offered by the dropdown but outside what smart_suggest accepts"
+            edge_options_upto(max).contains(&DEFAULT_EDGES),
+            "ceiling {max}: the fallback depth must be one the dropdown offers there too"
         );
     }
     assert!(
         (EDGES_MIN..=EDGES_MAX).contains(&DEFAULT_EDGES),
         "the fallback depth must itself be acceptable to the search"
+    );
+}
+
+/// A machine below the heavy-search bar is offered a strictly smaller choice, and every depth it
+/// IS offered is one a bigger machine offers too.
+///
+/// The oracle is the relation between the two branches, derived from what the bar is for — not
+/// the option list restated. Both branches run in one test run, which a machine never does.
+///
+/// Breakage this pins: `state.rs:edge_options_upto` selecting by anything other than the ceiling
+/// — a hand-kept index, a filter over the whole list — which can gate a depth from the MIDDLE.
+/// A stored 256 would stay selectable while 128 was not, so [`edges_of`] silently rewrites a value
+/// the dropdown still shows as chosen. Raising the light ceiling to the heavy one is caught here
+/// too: it puts the heaviest depth back on the machines this bar exists to protect.
+#[test]
+fn a_small_machine_is_offered_a_prefix_of_what_a_big_one_is() {
+    let light = edge_options_upto(EDGES_MAX_LIGHT);
+    let heavy = edge_options_upto(EDGES_MAX);
+    assert!(
+        light.len() < heavy.len(),
+        "the bar must actually withhold something"
+    );
+    assert_eq!(
+        light,
+        &heavy[..light.len()],
+        "the withheld depths must be the heaviest ones, not a hole in the middle"
+    );
+    // Whatever this machine is, what it offers is a prefix of the whole list — so a retuned
+    // ceiling can shorten the dropdown but can never put a hole in it.
+    assert_eq!(
+        edge_options(),
+        &heavy[..edge_options().len()],
+        "the offered set must stay a prefix on this machine too"
     );
 }
 
@@ -166,7 +206,7 @@ fn every_offered_depth_is_one_the_search_accepts() {
 #[test]
 fn every_default_is_a_value_its_control_can_show() {
     assert!(
-        EDGE_OPTIONS.contains(&DEFAULT_EDGES),
+        edge_options().contains(&DEFAULT_EDGES),
         "the default depth {DEFAULT_EDGES} is not one the dropdown offers"
     );
     assert!(
@@ -178,7 +218,7 @@ fn every_default_is_a_value_its_control_can_show() {
         DEFAULT_ITERS,
         "the restart box must open on the default the search would actually run"
     );
-    assert!((RESTARTS_MIN..=RESTARTS_MAX).contains(&DEFAULT_ITERS));
+    assert!((RESTARTS_MIN..=restarts_max()).contains(&DEFAULT_ITERS));
 }
 
 /// The depth restored from `layout.toml` has to be one the dropdown can select again.
@@ -188,10 +228,10 @@ fn every_default_is_a_value_its_control_can_show() {
 /// item, leaving the user in a state the UI cannot produce.
 #[test]
 fn depth_restores_only_values_the_dropdown_offers() {
-    for offered in EDGE_OPTIONS {
+    for offered in edge_options() {
         assert_eq!(
-            restore_edges(Some(offered as u32)),
-            offered,
+            restore_edges(Some(*offered as u32)),
+            *offered,
             "a depth the dropdown offers must survive a restart unchanged"
         );
     }
@@ -234,18 +274,20 @@ fn restarts_reopen_as_the_count_the_search_runs() {
             effective,
             "storing what the search read from {typed:?} must reopen as that same count"
         );
-        assert!((RESTARTS_MIN..=RESTARTS_MAX).contains(&effective));
+        assert!((RESTARTS_MIN..=restarts_max()).contains(&effective));
     }
     // The compact form is only used where it is EXACT: a count that would lose digits stays long.
-    assert_eq!(restore_iters(Some(20_000)), "20k");
+    assert_eq!(restore_iters(Some(2_000)), "2k");
     assert_eq!(restore_iters(Some(1_234)), "1234");
-    // Boundary pair: the last accepted count passes through, one past it is pulled back.
-    assert_eq!(iters_of(&RESTARTS_MAX.to_string()), RESTARTS_MAX);
-    assert_eq!(iters_of(&(RESTARTS_MAX + 1).to_string()), RESTARTS_MAX);
+    // Boundary pair against THIS machine's ceiling — the search's own, so the box cannot promise
+    // a count the run would silently cut down.
+    let max = restarts_max();
+    assert_eq!(iters_of(&max.to_string()), max);
+    assert_eq!(iters_of(&(max + 1).to_string()), max);
     assert_eq!(iters_of(&RESTARTS_MIN.to_string()), RESTARTS_MIN);
     assert_eq!(iters_of("0"), RESTARTS_MIN);
     // The suffix the box displays has to be one it reads back.
-    assert_eq!(iters_of("20k"), 20_000);
+    assert_eq!(iters_of("2k"), 2_000);
     assert_eq!(iters_of("1.5k"), 1_500);
     // An absent value opens on the default rather than on an empty box.
     assert_eq!(restore_iters(None), DEFAULT_ITERS.to_string());
@@ -387,7 +429,7 @@ fn saved_fields_are_stored_as_column_ids_not_positions() {
         "nothing but the saved column may be checked"
     );
 
-    let mut state = TunerState::load(None, None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None, false);
     state.enabled = mask;
     assert_eq!(
         state.enabled_cols(),

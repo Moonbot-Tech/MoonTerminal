@@ -263,6 +263,16 @@ pub struct WindowLayout {
     /// answers "not collapsed".
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub analytics_hist_collapsed: bool,
+    /// Analytics "By filter" automatic composition: `true` lets the search choose WHICH fields to
+    /// filter on, out of sample, instead of searching every field the checkboxes admit.
+    ///
+    /// `false` (the default, and every existing config) keeps the plain joint search, which is
+    /// still the right tool once the user has decided on a field set themselves. Read leniently
+    /// for the same reason as [`Self::analytics_hist_collapsed`]: it lands in the hand-edited
+    /// analytics block, and a quoted `"true"` must not cost the user every window position in the
+    /// file.
+    #[serde(default, deserialize_with = "de_lenient_bool")]
+    pub analytics_tuner_compose: bool,
     /// Visible screener columns (keys in canonical order). None = all.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

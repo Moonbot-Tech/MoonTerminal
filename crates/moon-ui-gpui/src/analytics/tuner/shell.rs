@@ -1,12 +1,12 @@
 //! The tuner shell: the toolbar (rounding / Make a copy / Save), shared by every axis and
 //! dispatched by `TunerKind`, plus the suggestion row, which is NOT.
 //!
-//! The row is written per axis on purpose. "By filter" runs a stoppable joint search with live
-//! progress, a seed and a depth; "By time" runs one fixed sweep with a single setting. Rendering
-//! both from one parametrized row is how the time sweep would acquire a Stop button that stops
-//! nothing. On the filter row only the restart count stays inline, because the card is laid out
-//! at a fixed narrow width and a row that cannot wrap has to spend its space on the controls used
-//! every run — the rest sit behind the ⚙ settings popover.
+//! The row is written per axis on purpose. "By filter" runs either a stoppable joint search or
+//! field-set composition with live progress, a seed and a depth; "By time" runs one fixed sweep
+//! with a single setting. Rendering both from one parametrized row is how the time sweep would
+//! acquire a Stop button that stops nothing. On the filter row only the restart count stays
+//! inline, because the card is laid out at a fixed narrow width and a row that cannot wrap has to
+//! spend its space on the controls used every run — the rest sit behind the ⚙ settings popover.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -20,7 +20,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::filter::state::{
-    EDGE_OPTIONS, SuggestJob, SuggestState, TRAIN_OPTIONS, iters_of, persist_seed,
+    SuggestJob, SuggestState, TRAIN_OPTIONS, edge_options, iters_of, persist_seed,
 };
 use super::shared::TunerKind;
 use crate::design;
@@ -342,7 +342,15 @@ impl AnalyticsView {
                 MoonButton::new(SharedString::from("tun-suggest-run-f"))
                     .variant(MoonButtonVariant::Blue)
                     .size(MoonButtonSize::Micro)
-                    .label(t!("analytics.tuner.suggest_run").to_string())
+                    // The label carries the mode, because the two searches answer different
+                    // questions and take very different amounts of time. One button whose
+                    // meaning is silently switched by a checkbox two clicks away is how a user
+                    // ends up waiting minutes for what usually took half a second.
+                    .label(if self.tuner.compose {
+                        t!("analytics.tuner.compose_run").to_string()
+                    } else {
+                        t!("analytics.tuner.suggest_run").to_string()
+                    })
                     .disabled(running)
                     .on_click(cx.listener(|this, _, _, cx| {
                         if !this.tuner.sugg.is_running() {
@@ -372,12 +380,31 @@ impl AnalyticsView {
                 .to_string(),
                 p.text_soft,
             ),
+            // Composition reports where it is, not how far along: how many candidates it will
+            // weigh is decided by what it finds, so there is no honest denominator to show. Until
+            // the first step publishes one, it says only that it is working.
+            SuggestState::Running(SuggestJob::Compose { handle }) => (
+                match handle.stage() {
+                    Some((step, done, total)) => t!(
+                        "analytics.tuner.compose_progress",
+                        step = step,
+                        done = done + 1,
+                        total = total
+                    )
+                    .to_string(),
+                    None => t!("analytics.tuner.compose_started").to_string(),
+                },
+                p.text_soft,
+            ),
             SuggestState::Done {
                 rounds,
                 stopped: true,
                 ..
             } => (
-                t!("analytics.tuner.sugg_stopped", rounds = rounds).to_string(),
+                match rounds {
+                    Some(n) => t!("analytics.tuner.sugg_stopped", rounds = n).to_string(),
+                    None => t!("analytics.tuner.compose_stopped").to_string(),
+                },
                 p.orange,
             ),
             // A search that ran to the end with nothing to give did not fail: the scope simply
@@ -387,7 +414,10 @@ impl AnalyticsView {
                 (t!("analytics.tuner.sugg_small").to_string(), p.text_soft)
             }
             SuggestState::Done { rounds, .. } => (
-                t!("analytics.tuner.sugg_done", rounds = rounds).to_string(),
+                match rounds {
+                    Some(n) => t!("analytics.tuner.sugg_done", rounds = n).to_string(),
+                    None => t!("analytics.tuner.compose_done").to_string(),
+                },
                 p.text_muted,
             ),
             // A failed read must not read as "found nothing", so it is said in the danger colour
@@ -502,9 +532,9 @@ impl AnalyticsView {
         let edges = self.tuner.edges;
         let ed_view = cx.entity();
         let ed_items = crate::panels::radio_items(
-            EDGE_OPTIONS.map(|n| {
+            edge_options().iter().map(|n| {
                 (
-                    n,
+                    *n,
                     SharedString::from(format!("tun-ed-{n}")),
                     SharedString::from(n.to_string()),
                 )
@@ -591,6 +621,76 @@ impl AnalyticsView {
                 t!("analytics.tuner.train_share").to_string(),
                 div().flex_none().child(tr_combo).into_any_element(),
             ))
+            // The composition switch lives here rather than as a second button in the run row:
+            // the row is fixed-narrow and spends its width on per-run controls, and two adjacent
+            // blue buttons would leave the user guessing which one they want. The mode shows
+            // itself on the run button's LABEL instead.
+            //
+            // No budget means the machine is below the heavy-search bar, and the row is not
+            // rendered at all — the feature does not exist there, so there is nothing to explain
+            // and nothing greyed out to wonder about.
+            .when_some(
+                moon_core::db::tuner::threshold_search::composition_budget(),
+                |el, budget| {
+                    let help = SharedString::from(t!("analytics.tuner.compose_help").to_string());
+                    el.child(
+                        // The switch and its caption share ONE hover target carrying the whole
+                        // explanation. What this mode does is not guessable from a one-word
+                        // label, and a user who has to ask elsewhere has already told someone
+                        // else how the strategy is being tuned.
+                        v_flex()
+                            .id("tun-cfg-compose-help")
+                            .w_full()
+                            .gap(gap)
+                            .tooltip(move |_w, cx| {
+                                cx.new(|_| MoonTooltipView::new(help.clone())).into()
+                            })
+                            .child(row(
+                                t!("analytics.tuner.compose").to_string(),
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .items_center()
+                                    .gap(gap)
+                                    .child(
+                                        MoonCheckbox::new(SharedString::from("tun-cfg-compose-f"))
+                                            .checked(self.tuner.compose)
+                                            .size(MoonCheckboxSize::Compact)
+                                            // `on_change` hands the callback an `&mut App`, not a
+                                            // `Context`, so this is one of the call sites where a
+                                            // `cx.listener` does not fit.
+                                            .on_change({
+                                                let view = cx.entity();
+                                                move |checked: &bool, _w, app| {
+                                                    let on = *checked;
+                                                    view.update(app, |this, cx| {
+                                                        this.tuner.compose = on;
+                                                        // The two searches answer different
+                                                        // questions, so a suggestion made by one
+                                                        // is not a suggestion by the other.
+                                                        this.tuner.invalidate_suggest();
+                                                        this.persist_tuner_compose(cx);
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .into_any_element(),
+                            ))
+                            // What the run will actually do, stated up front — including the core
+                            // count that cleared the hard bar, since that is the one input the
+                            // user cannot change from this popover. On its OWN line: beside the
+                            // checkbox it would have about half the width the sentence needs, and
+                            // fixed limits that have to be read cannot be truncated.
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_color(moon(p.text_muted))
+                                    .child(compose_budget_caption(&budget)),
+                            ),
+                    )
+                },
+            )
             .child(row(
                 t!("analytics.tuner.seed").to_string(),
                 div()
@@ -837,4 +937,24 @@ impl AnalyticsView {
         let value = Some(self.tuner.enabled_cols());
         self.persist_setting(cx, |l| &mut l.analytics_tuner_fields, value);
     }
+
+    /// Persist whether the search composes the field set as well as the thresholds.
+    fn persist_tuner_compose(&self, cx: &mut Context<Self>) {
+        let value = self.tuner.compose;
+        self.persist_setting(cx, |l| &mut l.analytics_tuner_compose, value);
+    }
+}
+
+/// What composition will actually be allowed to do on this machine.
+///
+/// Takes the budget rather than resolving one, so the caption can only ever describe the same
+/// budget that decided the switch is shown at all.
+fn compose_budget_caption(b: &moon_core::db::tuner::threshold_search::ComposeBudget) -> String {
+    t!(
+        "analytics.tuner.compose_budget",
+        cores = b.cores,
+        fields = b.max_fields,
+        folds = b.folds
+    )
+    .to_string()
 }

@@ -24,7 +24,7 @@
 //! knowledge of the future the holdout is supposed to test.
 
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use rayon::prelude::*;
 
@@ -48,6 +48,54 @@ const BELOW: u16 = u16::MAX;
 /// Passes one restart may take before it is cut off, converged or not.
 const MAX_PASSES: usize = 16;
 
+/// Logical CPUs this process may run on.
+///
+/// The one place the machine's size is read. Both the worker pool and the hard availability bar
+/// use this value, so neither can classify the machine differently from the other.
+///
+/// It can UNDER-report: on Windows `available_parallelism` honours job-object and affinity
+/// limits, so a capable machine may answer with less than it has. Everything reading this must
+/// therefore degrade gracefully rather than refuse to work.
+///
+/// Answered ONCE per process, deliberately. The OS figure can move at runtime when a quota or an
+/// affinity mask changes, and this number decides two things that are themselves fixed on first
+/// use: the worker pool's thread count, and which settings the UI offers. Re-reading it would let
+/// a mid-session change put those out of step — a switch disappearing while the run button still
+/// carries its label, or heavy settings appearing in front of a pool sized for a smaller machine.
+/// It is also read from render, where an OS query per frame is not free.
+pub(super) fn logical_cores() -> usize {
+    static CORES: OnceLock<usize> = OnceLock::new();
+    *CORES.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    })
+}
+
+/// Threads the search may use: every logical CPU but one, and never fewer than one.
+pub(super) fn worker_cores() -> usize {
+    logical_cores().saturating_sub(1).max(1)
+}
+
+/// Logical cores a machine must have before the tuner offers its most expensive settings.
+pub const HEAVY_SEARCH_MIN_CORES: usize = 16;
+
+/// Whether this machine is offered the tuner's expensive settings at all: automatic field-set
+/// composition, the finest quantile depth, and the higher restart ceiling.
+///
+/// These settings either multiply the work behind one click or admit substantially more of it.
+/// Below this hard bar they are not merely scaled to the reported core count: composition is not
+/// run, depth 256 is not offered, and the restart count uses its fixed lower ceiling.
+///
+/// The single availability predicate, so the controls and the search can never disagree about
+/// what a click does. [`logical_cores`] can UNDER-report — on Windows it honours job-object and
+/// affinity limits — so a capable machine confined to a few cores is not offered them. That is
+/// the accepted cost of a hard bar: the process genuinely may not use more than it is told it
+/// has, so a machine reporting half the bar would run these at half the bar's speed.
+pub fn heavy_search_supported() -> bool {
+    logical_cores() >= HEAVY_SEARCH_MIN_CORES
+}
+
 /// Worker pool for the restart fan-out, or `None` when one could not be built.
 ///
 /// A pool of its own rather than rayon's global one, sized to leave a core free: the search is
@@ -61,11 +109,8 @@ const MAX_PASSES: usize = 16;
 fn pool() -> Option<&'static rayon::ThreadPool> {
     static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get().saturating_sub(1).max(1))
-            .unwrap_or(1);
         rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
+            .num_threads(worker_cores())
             .thread_name(|i| format!("moon-tuner-{i}"))
             .build()
             .inspect_err(|e| {
@@ -84,7 +129,7 @@ fn pool() -> Option<&'static rayon::ThreadPool> {
 ///
 /// The low bit is forced on because xorshift64* is degenerate on a zero state and the mix can
 /// legitimately produce zero.
-fn restart_seed(base: u64, restart: usize) -> u64 {
+pub(super) fn restart_seed(base: u64, restart: usize) -> u64 {
     // splitmix64, the standard companion mixer for seeding a weaker generator.
     let mut z = (base ^ restart as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -178,18 +223,31 @@ impl Workspace {
     }
 }
 
-/// Prepared sample: per-trade profits, per-field effective values, and the quantile bins derived
-/// from them. Built once per search and shared by every restart.
+/// The scanned sample itself, owned once and shared by every search built over it.
+///
+/// Separate from [`Search`] because a search is defined by the WINDOW it fits on, and several
+/// windows over one scan are a normal thing to want: each derives its own quantile edges and
+/// bins from its own leading rows while reading these same columns. Copying the columns per
+/// window would be megabytes apiece and would give the sample more than one owner — the shape
+/// in which a window ends up scored against the wrong column.
+pub(super) struct Columns {
+    /// Per-trade profit, COALESCEd to zero, in chronological order.
+    pub(super) profits: Vec<f64>,
+    /// Per-field effective values, NULL already folded to `0.0`, same order. Retained so a final
+    /// bound set can be scored on rows no descent saw — bins answer "which quantile", not "does
+    /// this trade pass this range".
+    pub(super) vals: Vec<Vec<f64>>,
+}
+
+/// Prepared sample: the shared columns plus the quantile bins derived from them. Built once per
+/// search and shared by every restart.
 ///
 /// Every column runs the FULL chronologically ordered sample, while the descent addresses only
 /// its first `n` rows. That is the whole split: one prepared sample, a train window the search
 /// may fit on, and a tail it may only be measured against afterwards.
 pub(super) struct Search {
-    /// Per-trade profit.
-    profits: Vec<f64>,
-    /// Per-field effective values, retained so a final bound set can be scored on the rows the
-    /// search never saw — bins answer "which quantile", not "does this trade pass this range".
-    vals: Vec<Vec<f64>>,
+    /// The scanned sample, shared with every other search built over the same scan.
+    cols: Arc<Columns>,
     /// Per-field quantile edges, `ne + 1` per field, derived from the TRAIN rows only.
     edges: Vec<Vec<f64>>,
     /// Per-field quantile bin index (or `BELOW`) for each TRAIN trade — the descent's own view,
@@ -215,8 +273,7 @@ impl Search {
     /// Prepare a sample for searching.
     ///
     /// Args:
-    ///     profits: Per-trade profit, already COALESCEd to zero, in chronological order.
-    ///     vals: Per-field effective values, NULL already folded to `0.0`, same order.
+    ///     cols: The scanned sample, shared with every other window built over the same scan.
     ///     locked: Per field: `None` to search it, `Some(range)` to hold it fixed, where
     ///         `(None, None)` means the field is excluded entirely.
     ///     is_slot: Per field, whether it occupies a Delta2/Delta3 strategy slot.
@@ -229,16 +286,15 @@ impl Search {
     ///     A prepared search, or `None` when the TRAIN part holds fewer than `min_n` trades —
     ///     the holdout cannot make up for a train window too small to fit anything on.
     pub(super) fn new(
-        profits: Vec<f64>,
-        vals: Vec<Vec<f64>>,
+        cols: Arc<Columns>,
         locked: &[Option<(Option<f64>, Option<f64>)>],
         is_slot: Vec<bool>,
         min_n: usize,
         ne: usize,
         train_n: usize,
     ) -> Option<Self> {
-        let total = profits.len();
-        let nf = vals.len();
+        let total = cols.profits.len();
+        let nf = cols.vals.len();
         let min_n = min_n.max(1);
         let n = train_n.min(total);
         if n < min_n {
@@ -250,7 +306,7 @@ impl Search {
         // reads them: a bound set is scored against the raw values in `tally`, not against bins.
         let mut edges: Vec<Vec<f64>> = Vec::with_capacity(nf);
         let mut bins: Vec<Vec<u16>> = Vec::with_capacity(nf);
-        for col in &vals {
+        for col in &cols.vals {
             let mut sorted = col[..n].to_vec();
             sorted.sort_by(|a, b| a.total_cmp(b));
             let e: Vec<f64> = (0..=ne).map(|k| sorted[k * (n - 1) / ne]).collect();
@@ -285,7 +341,7 @@ impl Search {
         // Held-back rows carry these counts too: the fixed filters apply to the whole period,
         // and scoring a bound set on the tail has to honour them exactly as the descent did.
         let mut base_fail: Vec<u16> = vec![0; total];
-        for (fi, col) in vals.iter().enumerate() {
+        for (fi, col) in cols.vals.iter().enumerate() {
             let Some(Some((lo, hi))) = locked.get(fi) else {
                 continue;
             };
@@ -316,8 +372,7 @@ impl Search {
             })
             .count();
         Some(Self {
-            profits,
-            vals,
+            cols,
             edges,
             bins,
             base_fail,
@@ -398,8 +453,8 @@ impl Search {
         for t in 0..self.n {
             let b = self.bins[fi][t];
             if b != BELOW && (i..j).contains(&(b as usize)) {
-                lo = lo.min(self.vals[fi][t]);
-                hi = hi.max(self.vals[fi][t]);
+                lo = lo.min(self.cols.vals[fi][t]);
+                hi = hi.max(self.cols.vals[fi][t]);
             }
         }
         if lo > hi {
@@ -430,11 +485,11 @@ impl Search {
         for t in rows {
             let passes = self.base_fail[t] == 0
                 && applied.iter().all(|(fi, from, to)| {
-                    let v = self.vals[*fi][t];
+                    let v = self.cols.vals[*fi][t];
                     v >= *from && v <= *to
                 });
             if passes {
-                out.push(self.profits[t]);
+                out.push(self.cols.profits[t]);
             }
         }
         out
@@ -445,25 +500,73 @@ impl Search {
         self.bins.len()
     }
 
-    /// Run `restarts` restarts across the worker pool and return the best outcome found.
+    /// Fields this search is allowed to optimize at all, i.e. the ones the caller left unfixed.
+    ///
+    /// The candidate universe for anything choosing a SUBSET of the fields: a field the caller
+    /// pinned or excluded is not a candidate, and asking for it cannot make it one.
+    pub(super) fn free_mask(&self) -> &[bool] {
+        &self.free
+    }
+
+    /// Per field, whether it occupies a Delta2/Delta3 strategy slot.
+    ///
+    /// Borrowed rather than copied by anything that needs it: a second vector would have to agree
+    /// with this one for a caller's slot arithmetic to match the descent's own.
+    pub(super) fn slot_flags(&self) -> &[bool] {
+        &self.is_slot
+    }
+
+    /// Delta2/Delta3 slots already consumed by caller-fixed fields, which is how many of the two
+    /// the search itself may still hand out.
+    pub(super) fn locked_slots(&self) -> usize {
+        self.locked_slots
+    }
+
+    /// Run `restarts` restarts over every searchable field. See [`Self::run_masked`].
+    pub(super) fn run(&self, restarts: usize, seed: u64, handle: &SearchHandle) -> Option<Outcome> {
+        self.run_masked(&self.free, restarts, seed, handle)
+    }
+
+    /// Run `restarts` restarts across the worker pool, over the fields `allow` admits, and return
+    /// the best outcome found.
+    ///
+    /// `allow` is INTERSECTED with the searchable fields rather than replacing them: a caller
+    /// admitting a field it also pinned would otherwise have that field optimized on top of its
+    /// own fixed filter, which is neither what it asked for nor a state the rest of the search
+    /// accounts for.
     ///
     /// Restart 0 is greedy from an empty state and therefore deterministic; every other restart
     /// draws its random initialization and per-pass field order from its OWN stream, derived by
-    /// [`restart_seed`] from `seed` and the restart index.
+    /// [`restart_seed`] from `seed` and the restart index. That stream depends on the SEARCHABLE
+    /// fields, never on `allow` — see [`Self::one_restart`] — so two masks over the same search
+    /// give their shared fields the same random starts and are therefore comparable, and a mask
+    /// admitting everything reproduces a plain run bit for bit.
     ///
     /// Cancellation through `handle` is honoured between restarts and between fields inside one.
     /// An abandoned restart contributes nothing, so the answer is the best of those that
-    /// COMPLETED — a stopped search still returns what it had found, and `handle.completed()`
-    /// reports how many restarts stand behind it.
+    /// COMPLETED — a stopped search still returns what it had found. `handle.completed()` is
+    /// cumulative across every call sharing that handle, while `handle.abandoned()` says whether
+    /// any requested unit was cut short.
     ///
-    /// Each worker keeps a [`Workspace`] of its own; the buffers are per-restart scratch and
-    /// sharing one across threads is exactly what makes the fan-out unsound.
-    pub(super) fn run(&self, restarts: usize, seed: u64, handle: &SearchHandle) -> Option<Outcome> {
+    /// Every parallel job builds a [`Workspace`] of its own — a worker may run several jobs, and
+    /// so hold several over a run. The buffers are per-restart scratch, and sharing one across
+    /// threads is exactly what makes the fan-out unsound.
+    pub(super) fn run_masked(
+        &self,
+        allow: &[bool],
+        restarts: usize,
+        seed: u64,
+        handle: &SearchHandle,
+    ) -> Option<Outcome> {
         let (nf, n, ne) = (self.field_count(), self.n, self.ne);
-        // A workspace is allocated per CHUNK, not per thread, and over a large report it is close
-        // to a megabyte. Floor the chunk size so a long run cannot pay for thousands of them,
-        // while a short one still splits down to a single restart and uses every core.
-        let chunk = (restarts / 64).max(1);
+        let allow: Vec<bool> = (0..nf).map(|fi| self.free[fi] && allow[fi]).collect();
+        // A workspace is allocated per rayon JOB, not per thread, and over a large report it is
+        // close to a megabyte. Floor the job size at the pool's share of the restarts: rayon may
+        // still split further, so this bounds the count near the worker count rather than capping
+        // it exactly, but it keeps a SHORT run from splitting down to one restart per job.
+        // Composition turns one long call into hundreds of short ones, so a floor tied to the
+        // restart count alone stops protecting exactly where it is needed most.
+        let chunk = (restarts / worker_cores()).max(1);
         let search = || {
             (0..restarts)
                 .into_par_iter()
@@ -472,10 +575,15 @@ impl Search {
                     || Workspace::new(nf, n, ne),
                     |w, restart| {
                         if handle.is_cancelled() {
+                            handle.note_abandoned();
                             return None;
                         }
                         let mut rng = Rng(restart_seed(seed, restart));
-                        let outcome = self.one_restart(restart, &mut rng, w, handle)?;
+                        let Some(outcome) = self.one_restart(&allow, restart, &mut rng, w, handle)
+                        else {
+                            handle.note_abandoned();
+                            return None;
+                        };
                         handle.record_restart();
                         Some((restart, outcome))
                     },
@@ -489,12 +597,22 @@ impl Search {
         }
     }
 
-    /// Run one restart of coordinate descent to convergence or the pass cap.
+    /// Run one restart of coordinate descent to convergence or the pass cap, over the fields
+    /// `allow` admits.
+    ///
+    /// `allow` is expected to be already intersected with [`Self::free_mask`] by the caller.
+    ///
+    /// Every random draw is taken for every SEARCHABLE field, admitted or not, and only the
+    /// ASSIGNMENT is withheld. That is what makes the stream a property of the search rather than
+    /// of the mask: two masks over the same search hand their shared fields identical starts, so
+    /// the outcomes are comparable, and a mask admitting everything reproduces a plain run bit for
+    /// bit — which is what keeps a seed the user pinned earlier replaying to the same answer.
     ///
     /// Returns `None` when cancellation cut the restart short: its state is mid-descent and not
     /// comparable with a converged one, so it is dropped rather than scored.
     fn one_restart(
         &self,
+        allow: &[bool],
         restart: usize,
         rng: &mut Rng,
         w: &mut Workspace,
@@ -519,7 +637,9 @@ impl Search {
                     }
                     let i = rng.below(ne);
                     let j = i + 1 + rng.below(ne - i);
-                    *s = Some((i, j));
+                    if allow[fi] {
+                        *s = Some((i, j));
+                    }
                 }
             }
         }
@@ -540,6 +660,12 @@ impl Search {
                 }
             }
         }
+        // Ordered over every FREE field, not just the allowed ones, for the same reason the
+        // initialization above draws for all of them: the shuffle below consumes one draw per
+        // element, so a shorter vector would spend a mask-dependent number of draws and shift
+        // every later value. Two runs of one seed differing by a single candidate field would
+        // then visit the SHARED fields in different orders and descend to different local optima
+        // — and composition would be reading that difference as the candidate's contribution.
         w.order.clear();
         w.order.extend((0..nf).filter(|fi| self.free[*fi]));
         for _pass_no in 0..MAX_PASSES {
@@ -557,6 +683,10 @@ impl Search {
                     return None;
                 }
                 let fi = w.order[oi];
+                // Its draws were spent above; only the VISIT is withheld.
+                if !allow[fi] {
+                    continue;
+                }
                 let best = self.best_for_field(fi, &sel, w);
                 if best != sel[fi] {
                     self.apply_field(fi, best, w);
@@ -568,12 +698,12 @@ impl Search {
                 break;
             }
         }
-        self.drop_redundant(&mut sel, w);
+        self.drop_redundant(allow, &mut sel, w);
         // Score this restart's result over the train window it was fitted on.
         let mut profit = 0.0f64;
         for t in 0..n {
             if w.fail[t] == 0 {
-                profit += self.profits[t];
+                profit += self.cols.profits[t];
             }
         }
         Some(Outcome { sel, profit })
@@ -638,11 +768,11 @@ impl Search {
             if !others_ok {
                 continue;
             }
-            tot_p += self.profits[t];
+            tot_p += self.cols.profits[t];
             tot_c += 1;
             let b = self.bins[fi][t];
             let idx = if b == BELOW { ne } else { b as usize };
-            w.bin_profit[idx] += self.profits[t];
+            w.bin_profit[idx] += self.cols.profits[t];
             w.bin_count[idx] += 1;
         }
         // Prefix sums over the real bins; the BELOW bucket at index `ne` is deliberately left
@@ -671,11 +801,16 @@ impl Search {
     /// Descent may hit the pass limit before removing a field whose rejected trades are already
     /// rejected by OTHER filters. A field uniquely rejects row `t` only when `!pass && fail == 1`.
     /// Such a range is a no-op: removing it changes neither profit nor count. Repeat until stable.
-    fn drop_redundant(&self, sel: &mut [Option<(usize, usize)>], w: &mut Workspace) {
+    fn drop_redundant(
+        &self,
+        allow: &[bool],
+        sel: &mut [Option<(usize, usize)>],
+        w: &mut Workspace,
+    ) {
         loop {
             let mut removed = false;
             for (fi, chosen) in sel.iter_mut().enumerate() {
-                if !self.free[fi] || chosen.is_none() {
+                if !allow[fi] || chosen.is_none() {
                     continue;
                 }
                 let base = fi * self.n;

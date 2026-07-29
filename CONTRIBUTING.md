@@ -38,9 +38,14 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   resolves to a shared `src/tests.rs`, one file compiled into two crates. Keep roots thin and put
   logic in modules.
 - **`moon-ui-gpui` is a binary crate** — it has no `[lib]`. An integration test cannot import
-  anything from it and can only execute the built binary. That is why `tests/theme_contract.rs`
+  anything from it and can only execute the built binary. That is why `tests/theme_contract/`
   checks its invariants by grepping the sources: a workaround for that limitation, not a style
   choice.
+- **An integration test that outgrows one file becomes a directory, not several targets.** Cargo
+  takes `tests/<name>/main.rs` as ONE test target called `<name>`, with its submodules beside it;
+  loose `tests/*.rs` files would each become a target of their own and could not share helpers.
+  `tests/theme_contract/` is the worked example — a thin `main.rs` of `mod` declarations, one
+  module per subject, and shared helpers in `support.rs`.
 - Test files **are committed** — both `src/**/tests.rs` and `crates/*/tests/*.rs`.
 
 ### What makes a test worth keeping
