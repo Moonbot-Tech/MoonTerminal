@@ -12,6 +12,7 @@ fn center_y(bottom: f32, scale: f32) -> f32 {
         None,
         [255, 255, 255],
         scale,
+        SHAPE_GEM,
         &mut out,
     );
     bottom - out[0].price
@@ -70,7 +71,7 @@ fn hit_reach_follows_the_device_scale() {
 fn geometry_is_bottom_anchored_and_scales_with_dpi() {
     let mut out = Vec::new();
     let marks = [NewsMark::new(0, []), NewsMark::new(60_000, [])];
-    build_news_geometry(&marks, 0.0, None, [0, 255, 0], 2.0, &mut out);
+    build_news_geometry(&marks, 0.0, None, [0, 255, 0], 2.0, SHAPE_GEM, &mut out);
     assert_eq!(out.len(), 2, "one instance per uncoloured mark");
     for m in &out {
         assert_eq!(m.anchor, MARKER_ANCHOR_BOTTOM);
@@ -95,7 +96,7 @@ fn one_wedge_per_distinct_tag_colour() {
     // Two tags share a colour and a third adds one: two wedges, not three.
     let mark = NewsMark::new(0, [0xFF0000, 0x00FF00, 0xFF0000]);
     assert_eq!(mark.colors(), [0xFF0000, 0x00FF00]);
-    build_news_geometry(&[mark], 0.0, None, [255, 255, 255], 1.0, &mut out);
+    build_news_geometry(&[mark], 0.0, None, [255, 255, 255], 1.0, SHAPE_GEM, &mut out);
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].sector, 0.0);
     assert_eq!(out[1].sector, 1.0);
@@ -116,8 +117,8 @@ fn a_hovered_mark_grows_upward_from_the_axis() {
     let mut rest = Vec::new();
     let mut hot = Vec::new();
     let marks = [NewsMark::new(0, [])];
-    build_news_geometry(&marks, 0.0, None, [255, 255, 255], 1.0, &mut rest);
-    build_news_geometry(&marks, 0.0, Some(0), [255, 255, 255], 1.0, &mut hot);
+    build_news_geometry(&marks, 0.0, None, [255, 255, 255], 1.0, SHAPE_GEM, &mut rest);
+    build_news_geometry(&marks, 0.0, Some(0), [255, 255, 255], 1.0, SHAPE_GEM, &mut hot);
     assert!(hot[0].size > rest[0].size, "the hovered gem is bigger");
     assert!(hot[0].thickness > rest[0].thickness);
     // The instance's `price` is its center's distance above the plot bottom, and the gem's lower tip

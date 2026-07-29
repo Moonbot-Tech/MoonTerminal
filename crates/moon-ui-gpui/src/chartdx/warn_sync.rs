@@ -64,10 +64,11 @@ impl ChartDataState {
             &self.warn_marks,
             epoch_ms,
             self.warn_hovered,
-            // Every warning gem carries its own amber colour, so this neutral fallback is unused;
-            // passed for signature parity with the news layer.
+            // Every warning badge carries its own amber colour, so this neutral fallback is unused.
             self.theme.label_neutral,
             self.last_ppp,
+            // Draw warnings as the triangle shape, not the news gem.
+            moon_chart::news_marks::SHAPE_WARN,
             markers,
         );
     }

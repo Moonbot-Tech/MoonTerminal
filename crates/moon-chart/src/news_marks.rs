@@ -36,8 +36,10 @@ pub fn mark_center_offset(hovered: bool) -> f32 {
 pub const MAX_MARK_COLORS: usize = 4;
 /// Opacity of a mark. Slightly translucent so a mark never hides the volume bars underneath.
 const MARK_ALPHA: f32 = 0.88;
-/// Shader shape id for the news gem.
-const SHAPE_GEM: f32 = 2.0;
+/// Shader shape id for the news gem (a vertically elongated diamond).
+pub const SHAPE_GEM: f32 = 2.0;
+/// Shader shape id for a warning badge (an upward triangle with an exclamation mark).
+pub const SHAPE_WARN: f32 = 3.0;
 /// Extra pixels around a mark that still count as a hit, so a small gem stays comfortable to hit.
 const HIT_SLACK: f32 = 3.0;
 
@@ -107,6 +109,7 @@ pub fn build_news_geometry(
     hovered: Option<usize>,
     fallback: [u8; 3],
     scale: f32,
+    shape: f32,
     markers: &mut Vec<MarkerInstance>,
 ) {
     let scale = scale.max(0.1);
@@ -129,7 +132,7 @@ pub fn build_news_geometry(
                 size: half_h,
                 // The gem reads `thickness` as its half WIDTH, which is what makes it vertical.
                 thickness: MARK_HALF_W * grow * scale,
-                shape: SHAPE_GEM,
+                shape,
                 anchor: MARKER_ANCHOR_BOTTOM,
                 sector: sector as f32,
                 sectors: count as f32,

@@ -153,6 +153,18 @@ float4 marker_fragment(MOut i) : SV_Target {
         if (length(i.local) > i.sz) discard;
         return float4(i.color.rgb, i.color.a);
     }
+    if (i.shape > 2.5) {
+        // Warning badge: an upward triangle (apex at top, base on the axis) with a dark
+        // exclamation mark cut into it. local.y is +down, so the base sits at +sz.
+        float tw = max(i.thick, 1.0);
+        float nx = i.local.x / tw;
+        float ny = i.local.y / max(i.sz, 1.0);
+        if (ny < 2.0 * abs(nx) - 1.0) discard;
+        bool bar = abs(nx) < 0.13 && ny > -0.30 && ny < 0.34;
+        bool dot = abs(nx) < 0.15 && ny > 0.50 && ny < 0.74;
+        if (bar || dot) return float4(i.color.rgb * 0.14, i.color.a);
+        return float4(i.color.rgb, i.color.a);
+    }
     // News gem: a vertically elongated diamond, optionally cut into wedges by tag colour.
     float hw = max(i.thick, 1.0);
     if (abs(i.local.x) / hw + abs(i.local.y) / max(i.sz, 1.0) > 1.0) discard;
