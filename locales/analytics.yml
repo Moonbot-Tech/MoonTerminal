@@ -400,6 +400,14 @@ analytics.tuner.hist_sub:
   ru: "вёдра квантильные — в каждом ≈ поровну сделок; подписи: нетто · сделок · от значения"
   en: "quantile buckets — each holds ≈ the same number of trades; labels: net · trades · from value"
   es: "cubos cuantílicos — cada uno con ≈ el mismo nº de operaciones; etiquetas: neto · operaciones · desde"
+analytics.tuner.hist_collapse:
+  ru: "Свернуть распределение"
+  en: "Collapse the distribution"
+  es: "Contraer la distribución"
+analytics.tuner.hist_expand:
+  ru: "Развернуть распределение"
+  en: "Expand the distribution"
+  es: "Expandir la distribución"
 
 analytics.period.today:
   ru: "Сегодня"

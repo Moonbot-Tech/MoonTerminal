@@ -3,8 +3,9 @@
 use super::{
     DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, EDGE_OPTIONS, SuggestJob, SuggestState,
     TRAIN_OPTIONS, TunerState, fmt_bound, iters_of, parse_num, persist_seed, restore_edges,
-    restore_iters, restore_seed, restore_train, seed_of, staged_dirty, train_frac,
+    restore_enabled, restore_iters, restore_seed, restore_train, seed_of, staged_dirty, train_frac,
 };
+use moon_core::db::tuner::FIELDS;
 use moon_core::db::tuner::StratFilters;
 use moon_core::db::tuner::threshold_search::{
     EDGES_MAX, EDGES_MIN, RESTARTS_MAX, RESTARTS_MIN, SearchHandle,
@@ -15,7 +16,7 @@ use moon_core::db::tuner::threshold_search::{
 /// filter scan while new trades keep arriving.
 #[test]
 fn report_staleness_preserves_filter_drafts() {
-    let mut state = TunerState::load(None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None);
     state.bounds[0][0] = ("1".into(), "2".into());
     state.staged_ignore.insert("IgnoreFilters", true);
     let (seq, hist_seq, sugg_seq, dialog_seq) =
@@ -45,7 +46,7 @@ fn report_staleness_preserves_filter_drafts() {
 /// report-only staleness lets old KPI, histogram, or suggestion completions publish in a new scope.
 #[test]
 fn scope_change_retires_all_filter_requests() {
-    let mut state = TunerState::load(None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None);
     let (seq, hist_seq, sugg_seq) = (state.seq, state.hist_seq, state.sugg_seq);
 
     state.invalidate();
@@ -64,7 +65,7 @@ fn scope_change_retires_all_filter_requests() {
 /// the user's next Search click would start a second one alongside it.
 #[test]
 fn retiring_a_suggestion_stops_the_search_behind_it() {
-    let mut state = TunerState::load(None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None);
     let handle = SearchHandle::new();
     state.sugg = SuggestState::Running(SuggestJob::AllFields {
         handle: handle.clone(),
@@ -87,7 +88,7 @@ fn retiring_a_suggestion_stops_the_search_behind_it() {
 /// leaves an old histogram pinned when an automatic KPI finishes after the user leaves Filters.
 #[test]
 fn stale_histogram_keeps_the_filter_axis_reloadable() {
-    let mut state = TunerState::load(None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None);
     state.stats.apply(Ok(Vec::new()));
     state.dirty = false;
     state.hist_dirty = true;
@@ -100,7 +101,7 @@ fn stale_histogram_keeps_the_filter_axis_reloadable() {
 /// assignment turns the next Save preview into a diff against invented defaults.
 #[test]
 fn automatic_missing_strategy_read_preserves_the_save_baseline() {
-    let mut state = TunerState::load(None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None);
     state.apply_strategy_read(
         StratFilters {
             found: true,
@@ -120,7 +121,7 @@ fn automatic_missing_strategy_read_preserves_the_save_baseline() {
 /// that update lets an async Save preview open for the draft that existed before the user's edit.
 #[test]
 fn draft_change_retires_pending_save_preview() {
-    let mut state = TunerState::load(None, None, None, None);
+    let mut state = TunerState::load(None, None, None, None, None);
     let pending_preview = state.dialog_seq;
 
     state.mark_dialog_draft_changed();
@@ -363,4 +364,115 @@ fn a_stored_train_share_reopens_as_one_the_dropdown_offers() {
     // The default holds nothing back, so an untouched tuner behaves exactly as it did before the
     // split existed.
     assert_eq!(train_frac(DEFAULT_TRAIN), 1.0);
+}
+
+/// The checkbox selection must survive a reorder of the field table, not just a restart.
+///
+/// Breakage this pins: persisting positions (`Vec<usize>` or a bool mask) instead of column ids.
+/// `FIELDS` is documented as presentation order — Base → Ping → Volume → Delta — so inserting one
+/// row would shift every position after it, and the tuner would reopen with different boxes ticked
+/// than the user left. The oracle is the column id looked up independently of the code under test.
+#[test]
+fn saved_fields_are_stored_as_column_ids_not_positions() {
+    let target = FIELDS
+        .iter()
+        .position(|s| s.col == "dmark")
+        .expect("dmark is a report column of the tuner");
+
+    let mask = restore_enabled(Some(&["dmark".to_string()]));
+    assert!(mask[target], "the saved column must reopen checked");
+    assert_eq!(
+        mask.iter().filter(|on| **on).count(),
+        1,
+        "nothing but the saved column may be checked"
+    );
+
+    let mut state = TunerState::load(None, None, None, None, None);
+    state.enabled = mask;
+    assert_eq!(
+        state.enabled_cols(),
+        vec!["dmark".to_string()],
+        "persistence must write the column id back, not its position"
+    );
+}
+
+/// A config that has never saved the selection opens on the tuner's own default.
+///
+/// Breakage this pins: reading the key with `saved.unwrap_or_default()`. Every field would then
+/// come up unchecked on a fresh install, and the first automatic search would sweep nothing and
+/// report "no suggestion" — with no visible cause.
+#[test]
+fn an_absent_saved_list_falls_back_to_the_mapped_default() {
+    let expected: Vec<bool> = FIELDS.iter().map(|s| s.mapped()).collect();
+    assert_eq!(restore_enabled(None), expected);
+    assert!(
+        expected.iter().any(|on| *on),
+        "the default must actually enable something, or the fallback is meaningless"
+    );
+}
+
+/// Unchecking every box is a statement, not a missing value.
+///
+/// Breakage this pins: treating an empty list as "nothing saved" (`if list.is_empty() { default }`).
+/// A user who deliberately disarmed the search would find it fully re-armed after a restart.
+#[test]
+fn an_empty_saved_list_is_not_the_same_as_no_saved_list() {
+    let empty = restore_enabled(Some(&[]));
+    assert!(
+        empty.iter().all(|on| !on),
+        "an empty saved list must leave every field unchecked"
+    );
+    assert_ne!(
+        empty,
+        restore_enabled(None),
+        "an empty list and an absent key must not restore the same selection"
+    );
+}
+
+/// The mask always spans the field table, whatever the saved list holds.
+///
+/// Breakage this pins: building the mask from the saved list's own length or order. Three grid and
+/// search call sites index `enabled` by field position, so a short mask panics out of bounds on the
+/// first render — and an id from an older build is exactly how a short one would arrive.
+#[test]
+fn an_unknown_column_is_ignored_and_the_mask_always_spans_every_field() {
+    let saved = vec!["dmark".to_string(), "col_that_no_longer_exists".to_string()];
+    let mask = restore_enabled(Some(&saved));
+
+    assert_eq!(
+        mask.len(),
+        FIELDS.len(),
+        "the mask must cover every field the grid will index"
+    );
+    assert_eq!(
+        mask.iter().filter(|on| **on).count(),
+        1,
+        "an id with no field behind it must be ignored, not counted"
+    );
+}
+
+/// A field added after the last save opens unchecked rather than joining the search unannounced.
+///
+/// Breakage this pins: defaulting an unlisted field to `spec.mapped()` — i.e. merging the saved
+/// list with the default instead of replacing it. A new tuner field would then silently widen a
+/// saved search, changing both its result and its runtime for a user who changed nothing.
+#[test]
+fn a_field_missing_from_the_saved_list_opens_unchecked() {
+    // Stands in for "the list was written before this field existed": one real id saved, and every
+    // OTHER mapped field therefore absent from it.
+    let mask = restore_enabled(Some(&["dmark".to_string()]));
+    let unlisted_mapped = FIELDS
+        .iter()
+        .zip(mask.iter())
+        .filter(|(s, _)| s.mapped() && s.col != "dmark")
+        .collect::<Vec<_>>();
+
+    assert!(
+        !unlisted_mapped.is_empty(),
+        "the table must hold another mapped field, or this proves nothing"
+    );
+    assert!(
+        unlisted_mapped.iter().all(|(_, on)| !**on),
+        "a mapped field absent from the saved list must stay unchecked"
+    );
 }

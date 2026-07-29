@@ -6,12 +6,12 @@
 //! - "Coins" — the coin table UNDER the list, with the "Fact vs picked coins" KPI and the
 //!   coin picker on the right.
 //!
-//! The whole "Strategy tuning" page. This root module keeps the selection state (anchor +
-//! Ctrl multi-select) and the mode dispatcher; everything else lives in submodules. Shared by
+//! The whole "Strategy tuning" page. This root module keeps the selection state (anchor plus
+//! Ctrl/Shift multi-selection) and the mode dispatcher; everything else lives in submodules. Shared by
 //! every axis: `list` (the strategy list — filter bar, sort, column selector, table),
 //! `columns` + `strat_columns` (the comparison-table descriptors and cells), `kpi` (the
 //! "Fact vs variants" matrix), `save` (the write-confirmation dialog), `shared` (`TunerKind`,
-//! the write targets, the two common widgets), `shell` (the toolbar and suggestion row). One
+//! the write targets and common UI helpers), `shell` (the toolbar and suggestion row). One
 //! folder per axis: `filter/` — "By filter", `time/` — "By time", `coins/` — "By coin".
 
 // The page splits three ways: what EVERY axis uses sits here at the root, and each axis owns a
@@ -27,7 +27,7 @@ mod kpi;
 mod list;
 /// The write-confirmation dialog (assemble → render → execute).
 mod save;
-/// The axis tag, the write targets, and the two widgets all three axes draw with.
+/// The axis tag, write targets, and UI helpers shared by all three axes.
 mod shared;
 /// The common toolbar and suggestion row, dispatched by `TunerKind`.
 mod shell;
@@ -144,7 +144,8 @@ impl AnalyticsView {
     }
 
     /// All currently selected strategies as write targets: the anchor first, then the
-    /// Ctrl-selected extras. Each key `strategyid@core_uid` → `(sid, core, name)`.
+    /// Additional Ctrl- or Shift-selected targets. Each key `strategyid@core_uid` maps to
+    /// `(sid, core, name)`.
     fn selected_targets(&self) -> Vec<shared::SaveTarget> {
         let mut out = Vec::new();
         let mut push = |key: &str, name: &str| {
@@ -219,7 +220,7 @@ impl AnalyticsView {
         }
     }
 
-    /// Multi-select active — Ctrl added extra strategies beyond the anchor.
+    /// Whether any Ctrl- or Shift-selected strategies extend the anchor selection.
     pub(super) fn is_multi(&self) -> bool {
         !self.sel_extra.is_empty()
     }
@@ -247,9 +248,9 @@ impl AnalyticsView {
         (!self.is_multi()).then_some(value)
     }
 
-    /// The SET of selected strategies changed while the anchor stayed put (Ctrl added or
-    /// removed a row). Every number on the page — the KPI matrix, the histogram, the time
-    /// profile — is computed over that set by `tuner_query`, so all of it is now stale.
+    /// The SET of selected strategies changed while the anchor stayed put. Every number on the
+    /// page — the KPI matrix, histogram, and time profile — is computed over that set by
+    /// `tuner_query`, so Ctrl toggles and Shift range replacements make all of it stale.
     ///
     /// Deliberately NOT `set_sel_strategy`: that resets the schedule grid, and multi-select
     /// exists precisely to tune values once and write them to many strategies. The anchor's
@@ -322,6 +323,49 @@ impl AnalyticsView {
         // The selected SET just changed — recompute over it, or the page would keep showing
         // the previous set's numbers under the new highlight.
         self.selection_scope_changed(cx);
+    }
+
+    /// Shift click: hold every drawn row between the anchor and this one.
+    ///
+    /// The anchor is `sel_strategy` itself, and Shift deliberately does NOT move it — the same
+    /// rule Ctrl-click follows. The tuner has exactly one visible anchor (the amber row) and it
+    /// drives scope/suggest/detail/KPI; a second, invisible range anchor would let the range
+    /// origin and the highlighted row disagree with nothing on screen to explain it.
+    ///
+    /// The range REPLACES the extras rather than adding to them, and a click that resolves to the
+    /// extras already held returns without touching anything: `selection_scope_changed` retires
+    /// every axis and starts fresh reads, which is far too expensive to run for no change.
+    ///
+    /// With no anchor, or a row the drawn order does not hold, this falls back to a plain
+    /// single-select — the row the user actually clicked is never lost to a modifier that had
+    /// nothing to span. A drawn order that is momentarily EMPTY is the one case that does
+    /// nothing at all, because there the fallback would be destructive; see `range_extras`.
+    ///
+    /// Args:
+    ///     key: Row key that was shift-clicked.
+    ///     name: Its display name, already through `strat_display`.
+    ///     cx: GPUI context used to start replacement axis reads and repaint.
+    fn select_range(&mut self, key: String, name: String, cx: &mut Context<Self>) {
+        // The drawn order is read out in full before the mutation below, so no borrow into
+        // `strategy_data` is alive while `self` is mutated.
+        let order = self
+            .strategy_data
+            .data()
+            .map(|d| list::drawn_order(&d.strategies, self.visible_indices()))
+            .unwrap_or_default();
+        let anchor = self.sel_strategy.as_ref().map(|(k, _)| k.as_str());
+        let outcome = list::range_extras(anchor, &key, &order);
+        match outcome {
+            list::RangeOutcome::Extras(extras) if extras != self.sel_extra => {
+                self.sel_extra = extras;
+                self.selection_scope_changed(cx);
+            }
+            // Already holding exactly this span, or the order is momentarily unknown — see
+            // `range_extras`. Doing nothing beats collapsing the selection the user was
+            // extending, and beats re-running every axis read for an unchanged set.
+            list::RangeOutcome::Extras(_) | list::RangeOutcome::Ignore => {}
+            list::RangeOutcome::SingleSelect => self.select_single(key, name, cx),
+        }
     }
 
     /// Change strategy mode and refresh the entered axis' data when it is stale.

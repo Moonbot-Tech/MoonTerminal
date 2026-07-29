@@ -224,6 +224,20 @@ pub struct WindowLayout {
     /// [`de_lenient_seed`] because it must not be able to break anything else — see there.
     #[serde(default, deserialize_with = "de_lenient_seed")]
     pub analytics_tuner_seed: Option<String>,
+    /// Fields taking part in the "By filter" tuner's automatic search — the grid checkboxes —
+    /// stored as report-column ids (`db::tuner::FieldSpec::col`).
+    ///
+    /// Column ids rather than a positional mask because the field table's order is PRESENTATION
+    /// order (Base → Ping → Volume → Delta) and free to change; a saved mask would then tick
+    /// different boxes than the ones the user ticked.
+    ///
+    /// `None` = no usable saved list, so the tuner applies its own default (every field whose
+    /// threshold a strategy can actually store). An EMPTY list is a different statement — the
+    /// user unchecked everything — and must stay empty, or the next open would silently re-arm a
+    /// search they deliberately disarmed. An id no longer in the table is ignored; a field not yet
+    /// in the list opens unchecked, so a newly added one cannot join a search unannounced.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_tuner_fields: Option<Vec<String>>,
     /// Visible columns of the Tuning strategy list, per axis. None = the UI's own defaults.
     #[serde(default)]
     pub analytics_strat_cols_modes: Option<StratColsByMode>,
@@ -238,6 +252,17 @@ pub struct WindowLayout {
     /// session. `false` (default, every existing config) shows the full matrix.
     #[serde(default)]
     pub analytics_kpi_collapsed: bool,
+    /// Analytics "By filter" distribution card: `true` folds its chart away, keeping the title and
+    /// subtitle, so the fields grid and the strategy list above it get the vertical room back.
+    /// A display lens like [`Self::analytics_kpi_collapsed`], so it persists rather than resetting
+    /// each session. `false` (the default) shows the chart.
+    ///
+    /// Read leniently because it lands in the hand-edited analytics block: written as `"true"`,
+    /// a plain `bool` would reject the whole document and cost the user every window position in
+    /// the file. A quoted `"true"`/`"false"` is honoured case-insensitively; anything else at all
+    /// answers "not collapsed".
+    #[serde(default, deserialize_with = "de_lenient_bool")]
+    pub analytics_hist_collapsed: bool,
     /// Visible screener columns (keys in canonical order). None = all.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,
@@ -390,6 +415,67 @@ where
         Some(Num::Number(v)) => Some(v),
         Some(Num::Text(s)) => s.trim().parse().ok(),
         Some(Num::Other(_)) | None => None,
+    })
+}
+
+/// Read any optional field the same forgiving way as [`de_lenient_u32`], with no coercion.
+///
+/// The three helpers around this one exist to ACCEPT a neighbouring shape (a bare seed integer, a
+/// quoted number, a quoted bool). This one only salvages the document: a value of the wrong type
+/// reads as "unset" instead of taking every window position and column width down with it. Reach
+/// for it whenever a new `Option<T>` field lands in this hand-edited file and needs no coercion
+/// of its own — `analytics_tuner_fields` written as a bare `"lev"` instead of `["lev"]` is the
+/// shape it is there for.
+///
+/// Note that it runs only when the key is PRESENT: `#[serde(default)]` answers an absent key with
+/// `None` without deserializing, which is what keeps "absent" and "present but empty" distinct.
+fn de_lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    /// The declared shape, or anything else at all.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Or<T> {
+        /// The shape the key is written in.
+        Val(T),
+        /// Anything else. Accepted and discarded.
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Option::<Or<T>>::deserialize(d)? {
+        Some(Or::Val(v)) => Some(v),
+        Some(Or::Other(_)) | None => None,
+    })
+}
+
+/// Read a hand-editable flag the same forgiving way as [`de_lenient_u32`].
+///
+/// A quoted `"true"` is the natural typo for someone flipping a display lens by hand, and a plain
+/// `bool` field would answer it by discarding every window position and column width in the
+/// document. So a quoted boolean is READ as that boolean, case-insensitively, and every other
+/// shape reads as `false`, matching the field's default when the key is absent.
+fn de_lenient_bool<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Every shape the flag might be found in.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Flag {
+        /// A bare boolean, which is the shape this key is written in.
+        Bool(bool),
+        /// A quoted boolean, which is how one gets typed by hand.
+        Text(String),
+        /// Anything else — a number, a list, a table. Accepted and discarded.
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Option::<Flag>::deserialize(d)? {
+        Some(Flag::Bool(v)) => v,
+        Some(Flag::Text(s)) => s.trim().eq_ignore_ascii_case("true"),
+        Some(Flag::Other(_)) | None => false,
     })
 }
 

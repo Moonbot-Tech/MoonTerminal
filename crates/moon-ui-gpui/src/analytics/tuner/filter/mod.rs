@@ -1,10 +1,10 @@
-//! Threshold tuner over the report's market fields (carried over from 'Analytics V3') —
-//! the 'Filters' mode of the 'Strategies' tab: a 'Fact vs variants' KPI matrix, a
+//! Threshold tuner over the report's market fields — the 'Filters' mode of the 'Strategies' tab:
+//! a 'Fact vs variants' KPI matrix, a
 //! from/to range builder per field and a profit histogram over the quantile buckets of
 //! the selected field. The scope is the strategy selected in the list (or all). Bounds retain
 //! the raw strings the user typed and start empty on every open because they describe one
-//! strategy's search. Only the search SETTINGS persist — restart count, quantile depth, seed and
-//! train share.
+//! strategy's search. Only the search SETTINGS persist — restart count, quantile depth, seed,
+//! train share, and which fields the checkboxes admit into the search.
 
 // Files of this axis.
 /// Its auto-suggestion and the write it produces.
@@ -36,11 +36,44 @@ pub(in crate::analytics::tuner) use state::{flag_of, fmt_bound, parse_num, stage
 const HIST_BUCKETS: usize = 14;
 
 impl AnalyticsView {
+    /// Admit or drop ONE field from the automatic search — the single writer of the checkbox mask.
+    ///
+    /// A funnel rather than three inline handlers, mirroring `toggle_time_field` on the By-time
+    /// axis: the mask is now persisted, so every writer also has to retire the suggestion and
+    /// save. With one door that is structural instead of a rule each future handler must recall.
+    ///
+    /// Args:
+    ///     field: Index into `FIELDS`.
+    ///     on: Whether the field takes part in the search.
+    ///     cx: GPUI context used to persist and repaint.
+    fn set_field_enabled(&mut self, field: usize, on: bool, cx: &mut Context<Self>) {
+        self.tuner.enabled[field] = on;
+        self.tuner.invalidate_suggest();
+        self.persist_tuner_fields(cx);
+        cx.notify();
+    }
+
+    /// The grid header's master checkbox: admit or drop every field at once.
+    ///
+    /// Unmapped fields stay out even when switching everything on — "all enabled" means all
+    /// MAPPED, because a field with no strategy parameter has nowhere to write its threshold.
+    ///
+    /// Args:
+    ///     on: Whether every mapped field takes part in the search.
+    ///     cx: GPUI context used to persist and repaint.
+    fn set_all_fields_enabled(&mut self, on: bool, cx: &mut Context<Self>) {
+        for (fi, spec) in FIELDS.iter().enumerate() {
+            self.tuner.enabled[fi] = on && spec.mapped();
+        }
+        self.tuner.invalidate_suggest();
+        self.persist_tuner_fields(cx);
+        cx.notify();
+    }
+
     /// Tuner query: the shared filters plus the scope of EVERY selected strategy.
     ///
-    /// The whole selection, not just the clicked row — with Ctrl multi-select the KPI
-    /// matrix, the histogram and the sweep have to describe the same set the user sees
-    /// highlighted, and the same set Save writes to.
+    /// The whole selection, not just the anchor row: the KPI matrix, histogram, and sweep must
+    /// describe the same Ctrl- or Shift-built set the user sees highlighted and Save writes to.
     pub(in crate::analytics::tuner) fn tuner_query(&self) -> moon_core::db::analytics::Query {
         let mut q = self.query();
         // Row keys are `strategyid@core_uid`, so the scope is per strategy AND per core.
@@ -386,13 +419,7 @@ impl AnalyticsView {
                             let view = cx.entity();
                             move |ch: &bool, _w, app| {
                                 let on = *ch;
-                                view.update(app, |this, cx| {
-                                    for (fi, spec) in FIELDS.iter().enumerate() {
-                                        this.tuner.enabled[fi] = on && spec.mapped();
-                                    }
-                                    this.tuner.invalidate_suggest();
-                                    cx.notify();
-                                });
+                                view.update(app, |this, cx| this.set_all_fields_enabled(on, cx));
                             }
                         }),
                 ),
@@ -505,11 +532,7 @@ impl AnalyticsView {
                                 let view = cx.entity();
                                 move |ch: &bool, _w, app| {
                                     let on = *ch;
-                                    view.update(app, |this, cx| {
-                                        this.tuner.enabled[fi] = on;
-                                        this.tuner.invalidate_suggest();
-                                        cx.notify();
-                                    });
+                                    view.update(app, |this, cx| this.set_field_enabled(fi, on, cx));
                                 }
                             }),
                     ),
@@ -596,8 +619,7 @@ impl AnalyticsView {
                         .hover(move |st| st.text_color(moon(p.text)))
                         .child(text)
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.tuner.enabled[fi] = false;
-                            this.tuner.invalidate_suggest();
+                            this.set_field_enabled(fi, false, cx);
                             this.apply_bounds(0, fi, from_s.clone(), to_s.clone(), cx);
                             cx.notify();
                         }))

@@ -1,6 +1,5 @@
-//! What every tuning axis shares: the axis tag the common shell dispatches on, the write
-//! targets and the save-dialog model, and the two widgets ("card", the glyph button) that all
-//! three axes draw with.
+//! What every tuning axis shares: the axis tag the common shell dispatches on, the write targets
+//! and save-dialog model, and the card, glyph-button, and collapse-caret UI helpers.
 //!
 //! Anything used by exactly ONE axis belongs to that axis' folder — this file is the contract
 //! between them, and a helper that drifts in here stops being reviewable as shared.
@@ -39,7 +38,7 @@ pub(super) struct SaveTarget {
 }
 
 /// A prepared save: target(s) + the list of changes. Single selection = 1 target;
-/// multi-select (Ctrl) = N targets (the same changes into each one's core). Copy = always 1.
+/// Ctrl- or Shift-built multi-selection = N targets (the same changes for each). Copy = always 1.
 pub(super) struct SaveDialog {
     pub(super) targets: Vec<SaveTarget>,
     pub(super) changes: Vec<(String, String)>,
@@ -71,7 +70,6 @@ pub(super) struct SaveDialog {
     pub(super) notes: Vec<Option<String>>,
 }
 
-/// Tuner state inside `AnalyticsView`.
 /// A card with a title and a subtitle (the shared look of the Analytics cards). `accessory`
 /// is an optional element pinned to the RIGHT of the title bar (e.g. the KPI collapse caret);
 /// `None` leaves the header exactly as the plain cards have it.
@@ -144,4 +142,38 @@ pub(super) fn glyph_btn(
         .hover(move |s| s.text_color(moon(hover)))
         .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
         .child(glyph)
+}
+
+/// A card's collapse caret, for the title-bar `accessory` slot; the caller adds its own
+/// `.on_click`.
+///
+/// ▲ (expanded) folds the card away, ▼ (collapsed) unfolds it — the up/down convention of the
+/// strategy tree. Glyph and tooltip are chosen together here so they cannot drift apart, and
+/// callers build it BEFORE their data match so it does not blink out while the card is loading
+/// or after a read failure.
+///
+/// Args:
+///     id: Stable element id of this card's caret.
+///     collapsed: Whether the card is folded right now.
+///     collapse_tip: Tooltip shown while expanded (what the click will do).
+///     expand_tip: Tooltip shown while collapsed.
+///     p: Active palette.
+///     cx: Analytics context.
+///
+/// Returns:
+///     The caret as a stateful div, awaiting its click handler.
+pub(super) fn collapse_caret(
+    id: impl Into<ElementId>,
+    collapsed: bool,
+    collapse_tip: String,
+    expand_tip: String,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> Stateful<Div> {
+    let (glyph, tip) = if collapsed {
+        ("▼", expand_tip)
+    } else {
+        ("▲", collapse_tip)
+    };
+    glyph_btn(id, glyph, tip, p.text, p, cx)
 }

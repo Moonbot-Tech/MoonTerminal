@@ -1769,3 +1769,149 @@ fn core_status_throttles_repaints_and_averages_cpu() {
         "Core Status must display CPU averaged over the window, not the raw last sample"
     );
 }
+
+/// Every checkbox that changes the tuner's field selection must also persist it.
+///
+/// `moon-ui-gpui` is a binary crate, so the click handlers live in GPUI closures no integration
+/// test can call — the wiring can only be pinned at the source level. The pure encode/restore
+/// tests in `filter/state/tests.rs` stay green whether or not a handler ever writes to the layout.
+///
+/// The plausible edit is adding or reworking a checkbox path and mutating `tuner.enabled` without
+/// the persist call, which reads as working until the window is reopened and the change is gone.
+#[test]
+fn tuner_field_checkboxes_persist_every_change() {
+    let filter = read_src("analytics/tuner/filter/mod.rs");
+
+    // The invariant is STRUCTURAL, not arithmetic: the mask has exactly two writers, and both
+    // persist. Counting writes against persist calls would have been coincidental — the master
+    // checkbox writes inside a `for` loop, so one persist correctly answers N writes, and a new
+    // write added inside an already-persisting handler would pass unnoticed.
+    for (writer, body) in [
+        (
+            "fn set_field_enabled(",
+            braced_body(&filter, "fn set_field_enabled("),
+        ),
+        (
+            "fn set_all_fields_enabled(",
+            braced_body(&filter, "fn set_all_fields_enabled("),
+        ),
+    ] {
+        assert!(
+            body.contains("persist_tuner_fields(cx)"),
+            "{writer} writes the checkbox mask, so it must persist it"
+        );
+    }
+    // Nothing outside those two funnels may WRITE the mask — that is what makes the persist
+    // structural instead of a rule each future handler has to remember. Reads (`.checked(...)`)
+    // are unrestricted, hence the assignment test rather than a bare substring count.
+    let in_funnels = enabled_mask_writes(braced_body(&filter, "fn set_field_enabled("))
+        + enabled_mask_writes(braced_body(&filter, "fn set_all_fields_enabled("));
+    assert_eq!(
+        in_funnels, 2,
+        "each funnel must write the mask exactly once"
+    );
+    assert_eq!(
+        enabled_mask_writes(&filter),
+        in_funnels,
+        "the checkbox mask must be written only through `set_field_enabled` / \
+         `set_all_fields_enabled`, never inline in a click handler"
+    );
+
+    // The stored value must be the column ids, never a positional mask: `FIELDS` is presentation
+    // order, so a saved position would tick different boxes after any reorder.
+    let shell = read_src("analytics/tuner/shell.rs");
+    assert!(
+        shell.contains("fn persist_tuner_fields(") && shell.contains("self.tuner.enabled_cols()"),
+        "persistence must store the enabled COLUMN IDS, not indices into FIELDS"
+    );
+}
+
+/// Assignments to the tuner's checkbox mask in `src` — `tuner.enabled[..] = ..`, reads excluded.
+fn enabled_mask_writes(src: &str) -> usize {
+    src.match_indices("tuner.enabled[")
+        .filter(|(at, _)| {
+            let tail = &src[*at..];
+            tail.find(']')
+                .and_then(|close| tail.get(close + 1..))
+                .is_some_and(|after| after.starts_with(" = "))
+        })
+        .count()
+}
+
+/// The distribution card's collapse is a display lens: it persists and repaints, and it must not
+/// gate the read behind it.
+///
+/// `TunerState::needs_reload` counts `hist_dirty`, so suppressing the histogram read while
+/// collapsed would leave that flag permanently set — the reload gate would re-fire every frame,
+/// and expanding the card would show a spinner where the user left a chart.
+///
+/// The plausible edit is "why compute a histogram nobody is looking at?" — skipping
+/// `request_hist` on the flag while chasing a performance number.
+#[test]
+fn the_distribution_card_collapse_is_a_display_lens_only() {
+    let hist = read_src("analytics/tuner/filter/hist.rs");
+    let analytics = read_src("analytics/mod.rs");
+
+    assert!(
+        hist.contains("an-tuner-hist-collapse") && hist.contains("toggle_hist_collapsed(cx)"),
+        "the distribution card must carry a caret wired to the toggle"
+    );
+    // Round-trip, asserted on the two IDENTIFIERS rather than on exact statements: a rustfmt
+    // reflow or a renamed local must not redden a guard whose subject is the data flow.
+    let toggle = braced_body(&analytics, "fn toggle_hist_collapsed(");
+    assert!(
+        toggle.contains("analytics_hist_collapsed") && toggle.contains("layout_dirty = true"),
+        "toggling must write the layout field and mark it dirty, or the choice dies with the process"
+    );
+    assert!(
+        analytics.contains("saved_hist_collapsed"),
+        "the window must seed itself from the persisted flag rather than starting fresh"
+    );
+    // The read must stay outside the flag. The request and the staleness rule live in
+    // `filter/mod.rs` and `filter/state.rs`; neither may learn that the card can be collapsed.
+    for (rel, src) in [
+        (
+            "analytics/tuner/filter/mod.rs",
+            read_src("analytics/tuner/filter/mod.rs"),
+        ),
+        (
+            "analytics/tuner/filter/state.rs",
+            read_src("analytics/tuner/filter/state.rs"),
+        ),
+    ] {
+        assert!(
+            !src.contains("hist_collapsed"),
+            "{rel} must not gate the histogram read on the collapse — `needs_reload` counts \
+             `hist_dirty`, so a suppressed read leaves the reload gate firing every frame"
+        );
+    }
+}
+
+/// A strategy-row click resolves its gesture through the pure `row_click_intent`, so the
+/// Shift-over-Ctrl precedence is decided somewhere a test can reach.
+///
+/// The plausible edit is inlining the branches back into the closure while adding a fourth
+/// gesture; the precedence rule then lives only inside a `'static` GPUI callback, and reversing
+/// it — so a Ctrl-built selection cannot be extended with Shift — leaves every test green.
+#[test]
+fn strategy_row_clicks_route_through_the_pure_gesture_decision() {
+    let table = read_src("analytics/tuner/list/table.rs");
+
+    // Asserted on the call and the three arms, not on the local variable names the call reads
+    // from: the subject is "the precedence decision lives somewhere a test can reach", and the
+    // `shift_takes_precedence_over_the_multi_select_modifier` unit test proves the rule itself.
+    assert!(
+        table.contains("row_click_intent(") && table.contains(".shift"),
+        "the row click must read the Shift modifier and delegate the precedence decision"
+    );
+    for arm in [
+        "RowClick::Range => this.select_range(",
+        "RowClick::Multi => this.toggle_multi(",
+        "RowClick::Single => this.select_single(",
+    ] {
+        assert!(
+            table.contains(arm),
+            "every gesture must reach its transition — missing `{arm}`"
+        );
+    }
+}

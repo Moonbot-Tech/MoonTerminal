@@ -161,3 +161,70 @@ fn a_stale_key_from_an_older_build_still_loads() {
         "the keys that DO still exist must survive beside the ignored ones"
     );
 }
+
+/// A config written before these keys existed must keep behaving exactly as it did.
+///
+/// Every existing `layout.toml` is "a document without them", so this is the upgrade path itself,
+/// and the oracle is an empty document rather than a restated literal.
+///
+/// Breakage this pins, twice over. Declaring `analytics_tuner_fields` as a bare `Vec<String>`
+/// instead of `Option<Vec<String>>` makes an existing config deserialize to an EMPTY selection,
+/// which the tuner reads as "the user unchecked everything" — every field comes up unchecked on
+/// the first launch after the update. Flipping `analytics_hist_collapsed` to mean "expanded"
+/// makes its `false` default fold the distribution card shut for every existing user, with
+/// nothing on screen to explain why.
+#[test]
+fn a_config_without_the_new_analytics_keys_keeps_todays_behaviour() {
+    let decoded: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
+        .expect("a document without the new keys must still load");
+
+    assert_eq!(
+        decoded.analytics_tuner_fields, None,
+        "an absent key must read as 'never saved', not as an empty selection"
+    );
+    assert!(
+        !decoded.analytics_hist_collapsed,
+        "the distribution card must open expanded for every existing config"
+    );
+}
+
+/// A hand-written field list must never cost the user the rest of their layout.
+///
+/// Same hazard as the seed above: `layout.toml` is one schema-less document, and this key sits in
+/// the same hand-edited tuner block. The intuitive typo is a bare string.
+///
+/// Breakage this pins: dropping `deserialize_with = "de_lenient"` from
+/// `layout.rs:analytics_tuner_fields`. A single `analytics_tuner_fields = "lev"` would then reject
+/// the whole document, and the next save would write default geometry over every window position
+/// and column width in the file — the `analytics_period` asserted alongside is the visible proof.
+#[test]
+fn a_hand_written_field_list_cannot_discard_the_saved_layout() {
+    for (written, expected) in [
+        (
+            "analytics_tuner_fields = [\"lev\", \"dmark\"]",
+            Some(vec!["lev".to_string(), "dmark".to_string()]),
+        ),
+        // Unchecking everything is a real state and must round-trip as itself.
+        ("analytics_tuner_fields = []", Some(Vec::new())),
+        // Shapes with no reading as a list of ids — accepted, then ignored.
+        ("analytics_tuner_fields = \"lev\"", None),
+        ("analytics_tuner_fields = 5", None),
+        ("analytics_tuner_fields = true", None),
+        ("analytics_tuner_fields = [1, 2]", None),
+        ("", None),
+    ] {
+        let doc = format!("analytics_period = \"p-cur-month\"\n{written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|e| panic!("{written:?} must not fail the whole document: {e}"));
+
+        assert_eq!(
+            decoded.analytics_tuner_fields, expected,
+            "{written:?} must read as {expected:?}"
+        );
+        assert_eq!(
+            decoded.analytics_period.as_deref(),
+            Some("p-cur-month"),
+            "{written:?} must not take the rest of the layout down with it"
+        );
+    }
+}

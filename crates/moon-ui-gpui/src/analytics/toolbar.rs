@@ -2,6 +2,8 @@
 //! trade kind), the "from"–"to" date fields, the replica integrity note and the
 //! period bar with presets. Controls only — the state lives in `mod.rs`.
 
+use std::collections::HashSet;
+
 use gpui::*;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
@@ -35,6 +37,40 @@ pub(super) enum UndatedBanner {
     Collapsed(String),
     /// The undated-close query failed, so absence cannot be claimed.
     Failed(String, String),
+}
+
+/// The single selected core's display name, or `None` when the tab bar must not name one.
+///
+/// Answers with a name in exactly the case the core trigger shows the count `1` — i.e. exactly
+/// when the name is otherwise unreachable without opening the dropdown. Everything the trigger
+/// calls "all cores" answers `None`, including a lone available core (whether ticked or left on
+/// the implicit All): naming a core beside a trigger reading "All cores" would assert a filter the
+/// query does not apply, and would keep naming it once a second core connects.
+///
+/// "Exactly one" is counted over the cores that still EXIST, not over the raw selection, because
+/// that is what the trigger counts: a selection deliberately keeps the id of a deleted core so it
+/// cannot silently broaden the query, and `{live, deleted}` shows as `1` while other live cores
+/// remain available. Counting raw ids would leave that case reading "1" with no name beside it.
+///
+/// A selection of nothing but stale ids resolves to no core and answers `None` — a deleted core
+/// must not hand its name to whichever row happens to sit first.
+///
+/// Args:
+///     cores: Available core ids and names, as the analytics read returned them.
+///     selected: Currently selected core ids.
+///
+/// Returns:
+///     The sole selected core's name, or `None`.
+pub(super) fn sole_core_name<'a>(
+    cores: &'a [(u64, String)],
+    selected: &HashSet<u64>,
+) -> Option<&'a str> {
+    if crate::controls::core_selection_is_all(cores.iter().map(|(id, _)| *id), selected) {
+        return None;
+    }
+    let mut live = cores.iter().filter(|(id, _)| selected.contains(id));
+    let (_, name) = live.next()?;
+    live.next().is_none().then_some(name.as_str())
 }
 
 /// Decide what the strip shows, given only the read outcome and whether the user opened it.
@@ -162,12 +198,28 @@ impl AnalyticsView {
                     .render(),
             );
         }
+        // The row's only slack, doubling as the sole-core caption. `flex_1 + min_w_0 + truncate`
+        // means the name can only ever eat that slack — it cannot push the fixed-width combos off
+        // the right edge — and `flatten_lines` folds a core name carrying a hard break, which this
+        // fixed-height single-line row would otherwise clip through the tab buttons.
+        row.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .pl(design::ui_px(cx, 4.0))
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text_muted))
+                .children(
+                    sole_core_name(&self.cores, &self.sel_cores)
+                        .map(crate::display_text::flatten_lines),
+                ),
+        )
         // Filters — pinned to the right (same controls as in Orders/Report).
-        row.child(div().flex_1())
-            .child(self.core_combo(cx))
-            .child(self.side_combo(cx))
-            .child(self.kind_combo(cx))
-            .child(self.metric_combo(cx))
+        .child(self.core_combo(cx))
+        .child(self.side_combo(cx))
+        .child(self.kind_combo(cx))
+        .child(self.metric_combo(cx))
     }
 
     /// Profit metric combo (USDT / Profit %): switches every figure and the tuner sweep
