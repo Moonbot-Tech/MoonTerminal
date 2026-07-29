@@ -320,6 +320,44 @@ pub struct WindowLayout {
     /// the panel's inline pencil editor; an empty edit removes the entry and restores the default.
     #[serde(default)]
     pub core_server_names: HashMap<String, String>,
+    /// Which core-warning axes are actively detected and drawn. A disabled axis stops the engine
+    /// opening new episodes for it AND hides its already-recorded episodes from charts and the
+    /// Warnings list — "off" means neither written nor shown. Default: every axis on.
+    #[serde(default)]
+    pub warn_axes: WarnAxesCfg,
+}
+
+/// Per-axis enable switches for the core-warning engine, set from the Core Status gear popup.
+///
+/// Each field gates one warning axis end to end: while `false`, the backend engine opens no
+/// episodes for that axis (so nothing is persisted and no tab/badge lights up) and the read paths
+/// filter its persisted history out of the charts and the Warnings list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarnAxesCfg {
+    /// Sustained machine system-CPU warning (per server).
+    #[serde(default = "def_true")]
+    pub cpu: bool,
+    /// Rising process-memory warning (per core).
+    #[serde(default = "def_true")]
+    pub mem: bool,
+    /// Dropped-core connectivity warning (per server).
+    #[serde(default = "def_true")]
+    pub conn: bool,
+    /// Sustained high client↔core ping/RTT warning (per core).
+    #[serde(default = "def_true")]
+    pub ping: bool,
+}
+
+impl Default for WarnAxesCfg {
+    /// Every axis on — the behaviour before the toggles existed, and for every config without the key.
+    fn default() -> Self {
+        Self {
+            cpu: true,
+            mem: true,
+            conn: true,
+            ping: true,
+        }
+    }
 }
 
 /// Remembered split placement for a panel: which split (by anchor neighbors), which index, which

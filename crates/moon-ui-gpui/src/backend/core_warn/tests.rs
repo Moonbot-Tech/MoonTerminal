@@ -7,7 +7,10 @@ use std::net::{IpAddr, Ipv4Addr};
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 
-use super::{CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, RingSubject, WarnAxis};
+use super::{
+    CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, PING_SUSTAIN_SECS, RingSubject, WarnAxis,
+    WarnEnabled,
+};
 
 /// Build one Ready core sample; `process` and `system` CPU are set equal, memory optional.
 fn sample(id: CoreId, ip: [u8; 4], cpu: Option<u8>, used: Option<u16>) -> CoreSample {
@@ -19,6 +22,20 @@ fn sample(id: CoreId, ip: [u8; 4], cpu: Option<u8>, used: Option<u16>) -> CoreSa
             system_cpu_percent: cpu,
             process_cpu_percent: cpu,
             used_memory_mb: used,
+            updated_ms: 1,
+            ..CoreSysStatus::default()
+        },
+    }
+}
+
+/// Build one Ready sample carrying a specific client↔core round-trip (ms); CPU/memory idle.
+fn sample_rtt(id: CoreId, ip: [u8; 4], rtt: Option<u32>) -> CoreSample {
+    CoreSample {
+        id,
+        ip: Some(IpAddr::V4(Ipv4Addr::from(ip))),
+        status: ConnStatus::Ready,
+        sys: CoreSysStatus {
+            round_trip_ms: rtt,
             updated_ms: 1,
             ..CoreSysStatus::default()
         },
@@ -39,7 +56,14 @@ fn sample_conn(id: CoreId, ip: [u8; 4], status: ConnStatus) -> CoreSample {
 }
 
 /// Feed one core's `(cpu, used)` reading at second `sec`.
-fn tick_one(engine: &mut CoreWarnEngine, sec: i64, id: CoreId, ip: [u8; 4], cpu: Option<u8>, used: Option<u16>) {
+fn tick_one(
+    engine: &mut CoreWarnEngine,
+    sec: i64,
+    id: CoreId,
+    ip: [u8; 4],
+    cpu: Option<u8>,
+    used: Option<u16>,
+) {
     engine.tick(&[sample(id, ip, cpu, used)], sec * 1000);
 }
 
@@ -70,7 +94,10 @@ fn sustained_cpu_opens_then_closes_one_episode() {
         tick_one(&mut engine, sec, 1, IP, Some(5), Some(500));
         sec += 1;
     }
-    assert!(!engine.server_cpu_warn(ip), "CPU dropped, warning must clear");
+    assert!(
+        !engine.server_cpu_warn(ip),
+        "CPU dropped, warning must clear"
+    );
     let closed: Vec<_> = engine.episodes().collect();
     assert_eq!(closed.len(), 1);
     assert_eq!(closed[0].axis, WarnAxis::SysCpu);
@@ -100,7 +127,10 @@ fn memory_growth_opens_then_closes_per_core_episode() {
         tick_one(&mut engine, sec, 7, IP, Some(10), Some(400));
         sec += 1;
     }
-    assert!(!engine.core_mem_warn(7), "footprint returned, warning must clear");
+    assert!(
+        !engine.core_mem_warn(7),
+        "footprint returned, warning must clear"
+    );
     let closed: Vec<_> = engine.episodes().collect();
     assert_eq!(closed.len(), 1);
     assert_eq!(closed[0].axis, WarnAxis::MemGrowth);
@@ -137,7 +167,11 @@ fn open_episode_closes_when_its_core_vanishes() {
     for (i, used) in rise.iter().enumerate() {
         tick_one(&mut engine, i as i64 + 1, 7, IP, Some(10), Some(*used));
     }
-    assert_eq!(engine.open_episodes().len(), 1, "memory warning must be open first");
+    assert_eq!(
+        engine.open_episodes().len(),
+        1,
+        "memory warning must be open first"
+    );
 
     // The core disappears from the live set while its warning is still active.
     engine.tick(&[], (rise.len() as i64 + 1) * 1000);
@@ -171,8 +205,15 @@ fn distinct_servers_open_independent_cpu_episodes() {
     assert!(engine.server_cpu_warn(IpAddr::V4(Ipv4Addr::from(ip_b))));
 
     let open = engine.open_episodes();
-    assert_eq!(open.len(), 2, "two servers must open two independent episodes");
-    let mut ips: Vec<_> = open.iter().filter_map(|episode| episode.server_ip).collect();
+    assert_eq!(
+        open.len(),
+        2,
+        "two servers must open two independent episodes"
+    );
+    let mut ips: Vec<_> = open
+        .iter()
+        .filter_map(|episode| episode.server_ip)
+        .collect();
     ips.sort();
     ips.dedup();
     assert_eq!(ips.len(), 2, "each episode must carry its own server IP");
@@ -229,7 +270,10 @@ fn dropped_core_opens_then_recovery_closes_connectivity_episode() {
         ],
         1_000,
     );
-    assert!(engine.server_conn_warn(ip), "a drop with a survivor must warn");
+    assert!(
+        engine.server_conn_warn(ip),
+        "a drop with a survivor must warn"
+    );
     let open_conn = engine
         .open_episodes()
         .into_iter()
@@ -245,7 +289,10 @@ fn dropped_core_opens_then_recovery_closes_connectivity_episode() {
         ],
         2_000,
     );
-    assert!(!engine.server_conn_warn(ip), "recovery must clear the warning");
+    assert!(
+        !engine.server_conn_warn(ip),
+        "recovery must clear the warning"
+    );
     let closed: Vec<_> = engine
         .episodes()
         .filter(|e| e.axis == WarnAxis::Unreachable)
@@ -269,7 +316,10 @@ fn fully_offline_or_connecting_does_not_warn_connectivity() {
         ],
         1_000,
     );
-    assert!(!engine.server_conn_warn(ip), "no ready survivor must not warn");
+    assert!(
+        !engine.server_conn_warn(ip),
+        "no ready survivor must not warn"
+    );
 
     engine.tick(
         &[
@@ -279,6 +329,89 @@ fn fully_offline_or_connecting_does_not_warn_connectivity() {
         2_000,
     );
     assert!(!engine.server_conn_warn(ip), "connecting is not a drop");
+}
+
+/// Sustained high round-trip must open exactly one per-core ping episode only after the sustain
+/// window, and a recovered ping must close it with a real interval and its peak retained.
+#[test]
+fn sustained_high_ping_opens_then_closes_per_core_episode() {
+    let mut engine = CoreWarnEngine::default();
+
+    // One high sample is not yet a warning.
+    engine.tick(&[sample_rtt(4, IP, Some(800))], 1_000);
+    assert!(!engine.core_ping_warn(4), "one high ping must not warn");
+
+    // Stay high past the sustain threshold.
+    for sec in 2..=(PING_SUSTAIN_SECS as i64 + 2) {
+        engine.tick(&[sample_rtt(4, IP, Some(800))], sec * 1000);
+    }
+    assert!(engine.core_ping_warn(4), "sustained high ping must warn");
+    let open = engine.open_episodes();
+    let ping_open: Vec<_> = open.iter().filter(|e| e.axis == WarnAxis::Ping).collect();
+    assert_eq!(ping_open.len(), 1, "one ping episode open");
+    assert_eq!(ping_open[0].core_id, Some(4), "keyed by its core");
+
+    // Ping recovers to normal.
+    engine.tick(
+        &[sample_rtt(4, IP, Some(40))],
+        (PING_SUSTAIN_SECS as i64 + 3) * 1000,
+    );
+    assert!(
+        !engine.core_ping_warn(4),
+        "recovered ping must clear the warning"
+    );
+    let closed: Vec<_> = engine
+        .episodes()
+        .filter(|e| e.axis == WarnAxis::Ping)
+        .collect();
+    assert_eq!(closed.len(), 1);
+    assert!(closed[0].end_ms.unwrap() > closed[0].start_ms);
+    assert!(closed[0].peak >= 500, "peak retains the high RTT in ms");
+}
+
+/// A core that drops offline but keeps its last (stale) high RTT reading must NOT keep raising a
+/// ping warning — the detector only counts a Ready core's live round-trip.
+#[test]
+fn offline_core_does_not_ping_warn_on_stale_rtt() {
+    let mut engine = CoreWarnEngine::default();
+    for sec in 1..=(PING_SUSTAIN_SECS as i64 + 2) {
+        engine.tick(&[sample_rtt(4, IP, Some(800))], sec * 1000);
+    }
+    assert!(
+        engine.core_ping_warn(4),
+        "sustained high ping while Ready must warn first"
+    );
+
+    // The core disconnects but its last sample still carries the high RTT.
+    let mut stale = sample_rtt(4, IP, Some(800));
+    stale.status = ConnStatus::Disconnected;
+    engine.tick(&[stale], (PING_SUSTAIN_SECS as i64 + 3) * 1000);
+    assert!(
+        !engine.core_ping_warn(4),
+        "an offline core must not ping-warn on a stale round-trip"
+    );
+}
+
+/// A disabled axis must record no episode and light no warning state, even under a sustained signal
+/// that would otherwise fire — "off" means the engine ignores it entirely.
+#[test]
+fn disabled_axis_records_no_episode() {
+    let mut engine = CoreWarnEngine::default();
+    engine.set_enabled(WarnEnabled {
+        cpu: false,
+        mem: true,
+        conn: true,
+        ping: true,
+    });
+    let ip = IpAddr::V4(Ipv4Addr::from(IP));
+    for sec in 1..=(CPU_SUSTAIN_SECS as i64 + 4) {
+        tick_one(&mut engine, sec, 1, IP, Some(95), Some(500));
+    }
+    assert!(!engine.server_cpu_warn(ip), "a disabled axis must not warn");
+    assert!(
+        engine.open_episodes().is_empty(),
+        "a disabled axis must open no episode"
+    );
 }
 
 /// A core absent from a later tick is evicted from the rolling history (no stale accumulation).

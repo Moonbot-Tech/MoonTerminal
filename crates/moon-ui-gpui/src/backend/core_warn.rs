@@ -5,11 +5,12 @@
 //! second, keeps the rolling CPU/memory history the warnings need, and turns the SUSTAINED/trend
 //! signals into WARNING EPISODES with a start and an end time.
 //!
-//! Three axes:
+//! Four axes:
 //! - `SysCpu` — a machine's system CPU held at/above the threshold (per server IP).
 //! - `MemGrowth` — a core's used memory rising above its window minimum (per core).
 //! - `Unreachable` — a core dropped (Disconnected/Failed) while the server still runs a Ready core
 //!   (per server IP).
+//! - `Ping` — the client↔core UDP round-trip time held at/above the threshold (per core).
 //!
 //! `SysCpu` and `MemGrowth` are ported verbatim from the panel so their displayed warnings do not
 //! change; `Unreachable` uses the same connectivity rule the panel showed, now sourced here (so it
@@ -36,8 +37,56 @@ const MEM_GROWTH_PCT: u32 = 12;
 const WARN_CPU_PCT: u32 = 70;
 /// The CPU warning fires only after the machine has stayed high this many consecutive seconds.
 const CPU_SUSTAIN_SECS: u32 = 5;
+/// A client↔core UDP round-trip at or above this many ms (as reported by the core) counts toward the
+/// ping warning. A healthy transport link stays well under it, so ordinary latency does not trip it.
+const PING_WARN_MS: u32 = 500;
+/// The ping warning fires only after the RTT has stayed high this many consecutive seconds, so a
+/// single slow sample does not flag.
+const PING_SUSTAIN_SECS: u32 = 5;
 /// Closed episodes kept in memory before the oldest is dropped (the disk store arrives with badges).
 const EPISODE_CAP: usize = 2048;
+
+/// Per-axis master switches, mirrored from the persisted layout each tick.
+///
+/// A `false` axis is inert end to end: the engine opens no episode for it (nothing persisted, no
+/// warning state, no tab badge), and the read paths drop its already-recorded history. The counters
+/// keep advancing regardless, so re-enabling an axis reacts on the next second rather than needing to
+/// re-accumulate its whole sustain window.
+#[derive(Clone, Copy)]
+pub(crate) struct WarnEnabled {
+    /// Sustained system-CPU axis on.
+    pub(crate) cpu: bool,
+    /// Memory-growth axis on.
+    pub(crate) mem: bool,
+    /// Connectivity axis on.
+    pub(crate) conn: bool,
+    /// Ping/RTT axis on.
+    pub(crate) ping: bool,
+}
+
+impl Default for WarnEnabled {
+    /// Every axis on, matching the behaviour before the toggles existed.
+    fn default() -> Self {
+        Self {
+            cpu: true,
+            mem: true,
+            conn: true,
+            ping: true,
+        }
+    }
+}
+
+impl WarnEnabled {
+    /// Whether one axis is currently enabled, used to filter persisted episodes on the read paths.
+    pub(crate) fn allows(&self, axis: WarnAxis) -> bool {
+        match axis {
+            WarnAxis::SysCpu => self.cpu,
+            WarnAxis::MemGrowth => self.mem,
+            WarnAxis::Unreachable => self.conn,
+            WarnAxis::Ping => self.ping,
+        }
+    }
+}
 
 /// One core's telemetry handed to the engine each tick.
 pub(crate) struct CoreSample {
@@ -60,6 +109,8 @@ pub(crate) enum WarnAxis {
     MemGrowth,
     /// A core dropped while the server still runs others (per server).
     Unreachable,
+    /// The client↔core UDP round-trip time held high (per core).
+    Ping,
 }
 
 /// The subject a chart-history ring sample belongs to.
@@ -198,6 +249,8 @@ enum WarnKey {
     Mem(CoreId),
     /// Server-wide connectivity (a dropped core with survivors).
     Conn(IpAddr),
+    /// One core's client↔core round-trip time.
+    Ping(CoreId),
 }
 
 /// Backend warning engine: rolling per-core history, current warning state, and the episode log.
@@ -207,6 +260,10 @@ pub(crate) struct CoreWarnEngine {
     track: HashMap<CoreId, CoreTrack>,
     /// Per-server consecutive high-CPU seconds.
     sys_high: HashMap<IpAddr, u32>,
+    /// Per-core consecutive high-ping seconds.
+    ping_high: HashMap<CoreId, u32>,
+    /// Axis master switches, refreshed from the layout each tick.
+    enabled: WarnEnabled,
     /// Currently-open warnings, keyed by subject.
     open: HashMap<WarnKey, OpenWarn>,
     /// Closed episodes, oldest first, capped.
@@ -225,6 +282,8 @@ pub(crate) struct CoreWarnEngine {
     sys_warn: HashSet<IpAddr>,
     /// Servers with a dropped core while others stay ready (the connectivity warning).
     conn_warn: HashSet<IpAddr>,
+    /// Cores whose client↔core round-trip is currently sustained-high (the ping warning).
+    ping_warn: HashSet<CoreId>,
 }
 
 impl CoreWarnEngine {
@@ -302,7 +361,7 @@ impl CoreWarnEngine {
         self.mem_growing.clear();
         for (id, track) in &self.track {
             self.avg.insert(*id, track.averaged(now_sec));
-            if mem_grew(&track.mem) {
+            if self.enabled.mem && mem_grew(&track.mem) {
                 self.mem_growing.insert(*id);
             }
         }
@@ -324,7 +383,7 @@ impl CoreWarnEngine {
                 .max();
             let next = next_high_secs(self.sys_high.get(ip).copied().unwrap_or(0), sys);
             self.sys_high.insert(*ip, next);
-            if next >= CPU_SUSTAIN_SECS {
+            if self.enabled.cpu && next >= CPU_SUSTAIN_SECS {
                 self.sys_warn.insert(*ip);
             }
         }
@@ -346,8 +405,33 @@ impl CoreWarnEngine {
             }
         }
         for (ip, (ready, down)) in ready_down {
-            if ready && down {
+            if self.enabled.conn && ready && down {
                 self.conn_warn.insert(ip);
+            }
+        }
+
+        // Ping: a core whose client↔core round-trip stays at/above the threshold for the sustain
+        // window. Per core, like memory. The counter advances regardless of the enable switch so
+        // re-enabling reacts on the next second, but the warning set only fills while enabled.
+        let present: HashSet<CoreId> = samples.iter().map(|sample| sample.id).collect();
+        self.ping_high.retain(|id, _| present.contains(id));
+        self.ping_warn.clear();
+        for sample in samples {
+            // Only a Ready core has a live RTT; a Disconnected/Failed core keeps its last `sys`
+            // reading, so without this gate its stale round-trip would keep the counter climbing and
+            // raise a phantom ping warning for an offline core.
+            let next = match sample.sys.round_trip_ms {
+                Some(ms) if ms >= PING_WARN_MS && sample.status == ConnStatus::Ready => self
+                    .ping_high
+                    .get(&sample.id)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(1),
+                _ => 0,
+            };
+            self.ping_high.insert(sample.id, next);
+            if self.enabled.ping && next >= PING_SUSTAIN_SECS {
+                self.ping_warn.insert(sample.id);
             }
         }
     }
@@ -384,14 +468,24 @@ impl CoreWarnEngine {
                 .get(id)
                 .and_then(|t| t.mem.back().map(|(_, used)| *used))
                 .unwrap_or(0);
-            active.insert(
-                WarnKey::Mem(*id),
-                (ip_of.get(id).copied(), Some(*id), peak),
-            );
+            active.insert(WarnKey::Mem(*id), (ip_of.get(id).copied(), Some(*id), peak));
         }
         // Connectivity is a server-wide boolean state; it carries no numeric peak.
         for ip in &self.conn_warn {
             active.insert(WarnKey::Conn(*ip), (Some(*ip), None, 0));
+        }
+        // Ping peak is the current round-trip in ms (clamped to the peak field's width).
+        for id in &self.ping_warn {
+            let peak = samples
+                .iter()
+                .find(|sample| sample.id == *id)
+                .and_then(|sample| sample.sys.round_trip_ms)
+                .unwrap_or(0)
+                .min(u32::from(u16::MAX)) as u16;
+            active.insert(
+                WarnKey::Ping(*id),
+                (ip_of.get(id).copied(), Some(*id), peak),
+            );
         }
 
         // Open or extend.
@@ -433,6 +527,7 @@ impl CoreWarnEngine {
                 WarnKey::SysCpu(_) => WarnAxis::SysCpu,
                 WarnKey::Mem(_) => WarnAxis::MemGrowth,
                 WarnKey::Conn(_) => WarnAxis::Unreachable,
+                WarnKey::Ping(_) => WarnAxis::Ping,
             };
             let episode = WarnEpisode {
                 id: open.id,
@@ -479,9 +574,27 @@ impl CoreWarnEngine {
         self.conn_warn.contains(&ip)
     }
 
+    /// Whether one core's client↔core round-trip is currently sustained-high (the ping warning).
+    pub(crate) fn core_ping_warn(&self, id: CoreId) -> bool {
+        self.ping_warn.contains(&id)
+    }
+
+    /// Refresh the axis master switches from the layout (called each tick before sampling).
+    pub(crate) fn set_enabled(&mut self, enabled: WarnEnabled) {
+        self.enabled = enabled;
+    }
+
     /// Revision bumped on every episode open/close, so chart mark caches rebuild only on a change.
     pub(crate) fn episode_rev(&self) -> u64 {
         self.episode_rev
+    }
+
+    /// Force the revision forward so chart mark caches rebuild even without an episode change.
+    ///
+    /// Used when the axis toggles change: the set of episodes a chart should draw shifts, but no
+    /// episode opened or closed, so nothing else would invalidate the cached marks.
+    pub(crate) fn bump_rev(&mut self) {
+        self.episode_rev += 1;
     }
 
     /// Closed episodes, oldest first. Consumed by the upcoming chart-badge/persistence phase.
@@ -500,6 +613,7 @@ impl CoreWarnEngine {
                     WarnKey::SysCpu(_) => WarnAxis::SysCpu,
                     WarnKey::Mem(_) => WarnAxis::MemGrowth,
                     WarnKey::Conn(_) => WarnAxis::Unreachable,
+                    WarnKey::Ping(_) => WarnAxis::Ping,
                 },
                 server_ip: open.server_ip,
                 core_id: open.core_id,
@@ -538,10 +652,15 @@ fn server_snapshot(samples: &[CoreSample], ip: IpAddr) -> WarnSnapshot {
             .map(|(_, value)| value)
     };
     let free = freshest_u16(|sys| sys.free_physical_memory_mb);
-    let used_sum: u64 = cores().filter_map(|s| s.sys.used_memory_mb).map(u64::from).sum();
+    let used_sum: u64 = cores()
+        .filter_map(|s| s.sys.used_memory_mb)
+        .map(u64::from)
+        .sum();
     let total = free.map(|free| used_sum + u64::from(free)).unwrap_or(0);
     WarnSnapshot {
-        sys_cpu: freshest_u8(|sys| sys.system_cpu_percent).unwrap_or(0).min(100),
+        sys_cpu: freshest_u8(|sys| sys.system_cpu_percent)
+            .unwrap_or(0)
+            .min(100),
         occ_mem: if total > 0 {
             (used_sum * 100 / total).min(100) as u8
         } else {

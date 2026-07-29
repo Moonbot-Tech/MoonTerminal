@@ -318,6 +318,14 @@ fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElemen
             false,
             p,
         ))
+        // A sustained-high client↔core ping on THIS core — the per-core cause behind the server badge.
+        .children(core.ping_warn.then(|| {
+            svg()
+                .path("icons/triangle-alert.svg")
+                .size(px(12.0))
+                .flex_none()
+                .text_color(rgb(p.amber))
+        }))
 }
 
 /// Render the server name as an inline rename field or a name plus a pencil edit action.

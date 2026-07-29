@@ -14,9 +14,9 @@ mod model;
 mod presentation;
 mod server_view;
 mod table;
-mod warnings;
 #[cfg(test)]
 mod tests;
+mod warnings;
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -25,17 +25,22 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonDataTableState, MoonInputEvent, MoonInputState, MoonPalette, MoonSegmentItem,
-    MoonSegmentedControl, MoonTreeState, Panel, PanelEvent, PanelState, h_flex, v_flex,
+    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonDataTableState, MoonInputEvent, MoonInputState, MoonPalette, MoonPopover,
+    MoonPopoverPlacement, MoonSegmentItem, MoonSegmentedControl, MoonTreeState, Panel, PanelEvent,
+    PanelState, h_flex, v_flex,
 };
 
 use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
+use moon_core::config::layout::WarnAxesCfg;
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 use rust_i18n::t;
 
+/// Popover width (UI px) of the alert-axis toggle list.
+const WARN_CFG_W: f32 = 168.0;
 
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers};
 
@@ -128,6 +133,8 @@ pub struct CoreStatusView {
     table_state: Entity<MoonDataTableState>,
     /// Column state for the Warnings list table (separate widths from the flat telemetry table).
     warn_table_state: Entity<MoonDataTableState>,
+    /// Whether the alert-axis toggle popover (the gear beside the mode control) is open.
+    warn_cfg_open: bool,
     /// Context-qualified column-width persistence ID (`core-status-table:dock` or `:win`).
     widths_id: String,
     dock: Option<WeakEntity<DockArea>>,
@@ -211,6 +218,7 @@ impl CoreStatusView {
             tree_state,
             table_state,
             warn_table_state,
+            warn_cfg_open: false,
             widths_id,
             dock: None,
             focus,
@@ -332,6 +340,7 @@ impl CoreStatusView {
                 status,
                 sys,
                 endpoint,
+                ping_warn: b.warn.core_ping_warn(id),
             });
         }
         out
@@ -357,20 +366,24 @@ impl CoreStatusView {
                 group.cpu_warn = group.address.is_some_and(|ip| b.warn.server_cpu_warn(ip));
                 group.mem_warn = group.cores.iter().any(|core| b.warn.core_mem_warn(core.id));
                 group.conn_warn = group.address.is_some_and(|ip| b.warn.server_conn_warn(ip));
+                group.ping_warn = group
+                    .cores
+                    .iter()
+                    .any(|core| b.warn.core_ping_warn(core.id));
             }
             (groups, rows)
         };
         // Warned servers first, then by server NAME (natural order, so `Server 2` < `Server 10`
         // and custom names like `F1` sort alphabetically). No user-selectable sort.
         groups.sort_by(|a, b| {
-            let aw = a.cpu_warn || a.mem_warn || a.conn_warn;
-            let bw = b.cpu_warn || b.mem_warn || b.conn_warn;
+            let aw = a.cpu_warn || a.mem_warn || a.conn_warn || a.ping_warn;
+            let bw = b.cpu_warn || b.mem_warn || b.conn_warn || b.ping_warn;
             bw.cmp(&aw)
                 .then_with(|| natural_cmp(&a.display_name, &b.display_name))
         });
         self.has_warn = groups
             .iter()
-            .any(|group| group.cpu_warn || group.mem_warn || group.conn_warn);
+            .any(|group| group.cpu_warn || group.mem_warn || group.conn_warn || group.ping_warn);
         self.cached_groups = Rc::new(groups);
         self.cached_rows = Rc::new(rows);
         self.rebuild_tree(cx);
@@ -627,6 +640,44 @@ impl CoreStatusView {
             cx.notify();
         }
     }
+}
+
+/// One alert-axis checkbox: reflects the stored flag and writes the flipped set back to the backend.
+///
+/// `set` mutates one field of the toggle set; the whole set is then persisted and the engine
+/// invalidated. `mark_backend_dirty` fires a notify so the panel repaints and every chart rebuilds
+/// its badges against the new filter.
+///
+/// Args:
+///     id: Stable checkbox element identity.
+///     label: Localized axis label.
+///     checked: Current stored state of this axis.
+///     backend: Shared backend the toggle writes through.
+///     set: Field mutator applied to a copy of the current toggle set.
+///
+/// Returns:
+///     A compact labeled checkbox element.
+fn warn_axis_check(
+    id: &'static str,
+    label: String,
+    checked: bool,
+    backend: &Entity<Backend>,
+    set: fn(&mut WarnAxesCfg, bool),
+) -> impl IntoElement {
+    let backend = backend.clone();
+    MoonCheckbox::new(SharedString::from(id))
+        .label(label)
+        .checked(checked)
+        .size(MoonCheckboxSize::Compact)
+        .on_change(move |ch: &bool, _w, app| {
+            let on = *ch;
+            backend.update(app, |b, cx| {
+                let mut axes = b.warn_axes();
+                set(&mut axes, on);
+                b.set_warn_axes(axes);
+                b.mark_backend_dirty(cx);
+            });
+        })
 }
 
 /// Fill each group's display name from a custom name or a stable `Server N` ordinal.
@@ -1059,6 +1110,76 @@ impl CoreStatusView {
             .py_1()
             .child(div().flex_1().min_w_0().overflow_hidden().child(combo))
             .child(modes)
+            .child(self.warn_gear(cx))
+    }
+
+    /// The alert-axis toggle popover: a gear beside the mode control with one checkbox per warning
+    /// axis. Unchecking an axis stops the backend recording it AND hides its history from the charts
+    /// and the Alerts list (the read paths filter it out), so "off" means neither written nor shown.
+    ///
+    /// Args:
+    ///     cx: View context, for the palette, the current toggles, and the open-state callback.
+    ///
+    /// Returns:
+    ///     The gear trigger wrapped in its popover.
+    fn warn_gear(&self, cx: &Context<Self>) -> impl IntoElement {
+        let axes = self.backend.read(cx).warn_axes();
+        let view = cx.entity();
+        let gear = MoonButton::new("core-status-warn-gear")
+            .label("⚙")
+            .size(MoonButtonSize::Micro)
+            .variant(MoonButtonVariant::Ghost)
+            .tooltip(t!("core_status.warn_cfg.title").to_string())
+            .render();
+        // Order mirrors the badge card: CPU, memory, ping, then connectivity.
+        let content = v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 4.0))
+            .px(design::ui_px(cx, 6.0))
+            .py(design::ui_px(cx, 6.0))
+            .child(warn_axis_check(
+                "cs-warn-cpu",
+                t!("core_status.warn_cfg.cpu").to_string(),
+                axes.cpu,
+                &self.backend,
+                |axes, on| axes.cpu = on,
+            ))
+            .child(warn_axis_check(
+                "cs-warn-mem",
+                t!("core_status.warn_cfg.mem").to_string(),
+                axes.mem,
+                &self.backend,
+                |axes, on| axes.mem = on,
+            ))
+            .child(warn_axis_check(
+                "cs-warn-ping",
+                t!("core_status.warn_cfg.ping").to_string(),
+                axes.ping,
+                &self.backend,
+                |axes, on| axes.ping = on,
+            ))
+            .child(warn_axis_check(
+                "cs-warn-conn",
+                t!("core_status.warn_cfg.conn").to_string(),
+                axes.conn,
+                &self.backend,
+                |axes, on| axes.conn = on,
+            ))
+            .into_any_element();
+        MoonPopover::new("core-status-warn-popover")
+            // The gear sits at the row's right edge, so anchor the panel's right edge to it.
+            .placement(MoonPopoverPlacement::BottomEnd)
+            .content_width_ui(WARN_CFG_W)
+            .close_on_content_click(false)
+            .open(self.warn_cfg_open)
+            .on_open_change(move |open, _window, app| {
+                view.update(app, |this, cx| {
+                    this.warn_cfg_open = open;
+                    cx.notify();
+                });
+            })
+            .trigger(gear)
+            .content(content)
     }
 
     /// Render server, core, and readiness counters.

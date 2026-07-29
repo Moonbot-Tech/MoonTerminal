@@ -118,6 +118,7 @@ fn a_replacement_feed_clears_endpoint_scoped_health() {
         used_memory_mb: Some(512),
         free_physical_memory_mb: Some(4096),
         logical_cpu_count: Some(16),
+        round_trip_ms: Some(180),
         updated_ms: 123,
     };
     let mut core = CoreData::new();

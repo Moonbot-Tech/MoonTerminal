@@ -16,6 +16,7 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         status: ConnStatus::Ready,
         sys: CoreSysStatus::default(),
         endpoint: Some(CoreEndpoint { address, port }),
+        ping_warn: false,
     }
 }
 

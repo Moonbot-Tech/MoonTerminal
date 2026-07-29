@@ -717,6 +717,25 @@ impl Backend {
         }
     }
 
+    /// The core-warning axis toggles (CPU / memory / connectivity / ping).
+    pub(crate) fn warn_axes(&self) -> moon_core::config::layout::WarnAxesCfg {
+        self.layout.warn_axes
+    }
+
+    /// Store the core-warning axis toggles from the Core Status gear popup and mark layout dirty.
+    ///
+    /// The engine reads these at the next tick, so a disabled axis stops opening episodes at once;
+    /// the read paths also filter its persisted history out, so it also disappears from the charts.
+    pub(crate) fn set_warn_axes(&mut self, axes: moon_core::config::layout::WarnAxesCfg) {
+        if self.layout.warn_axes != axes {
+            self.layout.warn_axes = axes;
+            self.layout_dirty = true;
+            // A toggle shifts which episodes charts should draw without opening/closing one, so push
+            // the revision forward to invalidate the cached marks on every chart.
+            self.warn.bump_rev();
+        }
+    }
+
     /// Return the group's cores in canonical order for the header selector.
     pub(crate) fn group_cores(&self, group: &str) -> OrderedCores {
         CoreOrder::new(&self.config).from_sessions(self.session.sessions(), |s| s.group == group)
@@ -833,6 +852,8 @@ impl Backend {
                 })
                 .collect()
         };
+        let enabled = self.warn_enabled();
+        self.warn.set_enabled(enabled);
         let result = self.warn.tick(&samples, now_ms);
         // Record this second's raw chart history into the shared rings (backend-always, so the
         // Core Status chart and the upcoming badge slices have data regardless of any open panel).
@@ -849,10 +870,26 @@ impl Backend {
         }
         if let Some(store) = &self.warn_store {
             for episode in &result.closed {
+                // An axis turned off mid-episode closes its open warning on this tick; honor
+                // "off = not persisted" by dropping it rather than writing it to the log.
+                if !enabled.allows(episode.axis) {
+                    continue;
+                }
                 if let Err(err) = store.insert_episode(episode) {
                     log::warn!("core warning persist failed: {err}");
                 }
             }
+        }
+    }
+
+    /// The engine's axis master switches, projected from the persisted layout toggles.
+    fn warn_enabled(&self) -> crate::backend::core_warn::WarnEnabled {
+        let axes = self.layout.warn_axes;
+        crate::backend::core_warn::WarnEnabled {
+            cpu: axes.cpu,
+            mem: axes.mem,
+            conn: axes.conn,
+            ping: axes.ping,
         }
     }
 
@@ -884,6 +921,9 @@ impl Backend {
                 out.push(open);
             }
         }
+        // A disabled axis hides its already-recorded history from the chart too, not just new episodes.
+        let enabled = self.warn_enabled();
+        out.retain(|episode| enabled.allows(episode.axis));
         out
     }
 
@@ -907,6 +947,9 @@ impl Backend {
                 all.extend(closed);
             }
         }
+        // A disabled axis is also dropped from the Warnings list, matching the charts.
+        let enabled = self.warn_enabled();
+        all.retain(|episode| enabled.allows(episode.axis));
         all.sort_by(|a, b| b.start_ms.cmp(&a.start_ms));
         all.truncate(limit);
         all
