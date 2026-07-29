@@ -270,6 +270,14 @@ fn server_row(
                         .text_color(rgb(p.text_soft))
                         .child(format!("{}/{}", group.ready_count, group.cores.len())),
                 )
+                // A dropped core while others still run — the connectivity warning, next to the dot.
+                .children(group.conn_warn.then(|| {
+                    svg()
+                        .path("icons/triangle-alert.svg")
+                        .size(px(12.0))
+                        .flex_none()
+                        .text_color(rgb(p.amber))
+                }))
                 .child(crate::design::status_dot(dot_color, app)),
         )
 }

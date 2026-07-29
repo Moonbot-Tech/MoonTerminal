@@ -86,6 +86,9 @@ pub(super) struct ServerStatusGroup {
     pub(super) cpu_warn: bool,
     /// Memory-growth warning (a core's used memory rising), filled by the panel from history.
     pub(super) mem_warn: bool,
+    /// Connectivity warning: a core dropped (Disconnected/Failed) while the server still has a ready
+    /// core — "one fell off while the rest works". Computed from current statuses in `finish_group`.
+    pub(super) conn_warn: bool,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
@@ -128,6 +131,7 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 display_name: String::new(),
                 cpu_warn: false,
                 mem_warn: false,
+                conn_warn: false,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,
@@ -182,6 +186,7 @@ fn finish_group(group: &mut ServerStatusGroup) {
         .filter(|row| row.status == ConnStatus::Ready)
         .count();
     group.connectivity = connectivity(&group.cores, group.ready_count);
+    group.conn_warn = conn_dropped(&group.cores, group.ready_count);
     group.system_cpu_percent =
         freshest_metric(&group.cores, |sys| sys.system_cpu_percent).map(|(_, value)| value);
     group.free_physical_memory_mb =
@@ -214,6 +219,25 @@ fn freshest_metric<T: Copy>(
         .iter()
         .filter_map(|row| read(&row.sys).map(|value| (row.sys.updated_ms, value)))
         .max_by_key(|(updated_ms, _)| *updated_ms)
+}
+
+/// Whether a server shows a dropped core while others still work.
+///
+/// True when at least one core is Disconnected or Failed AND at least one core is Ready — "one fell
+/// off while the rest works". A fully offline server (no ready core) does not qualify: that is the
+/// louder Offline state, not this partial-drop warning; a still-connecting core is not a drop.
+///
+/// Args:
+///     cores: All core snapshots in the group.
+///     ready_count: Precomputed count of ready cores.
+///
+/// Returns:
+///     True only for a partial drop with a surviving ready core.
+fn conn_dropped(cores: &[CoreStatusRow], ready_count: usize) -> bool {
+    ready_count > 0
+        && cores
+            .iter()
+            .any(|row| matches!(row.status, ConnStatus::Disconnected | ConnStatus::Failed(_)))
 }
 
 /// Reduce per-core connection states into the server badge state.

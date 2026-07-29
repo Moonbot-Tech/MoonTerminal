@@ -647,11 +647,14 @@ impl CoreStatusView {
         // Warned servers first, then by server NAME (natural order, so `Server 2` < `Server 10`
         // and custom names like `F1` sort alphabetically). No user-selectable sort.
         groups.sort_by(|a, b| {
-            let (aw, bw) = (a.cpu_warn || a.mem_warn, b.cpu_warn || b.mem_warn);
+            let aw = a.cpu_warn || a.mem_warn || a.conn_warn;
+            let bw = b.cpu_warn || b.mem_warn || b.conn_warn;
             bw.cmp(&aw)
                 .then_with(|| natural_cmp(&a.display_name, &b.display_name))
         });
-        self.has_warn = groups.iter().any(|group| group.cpu_warn || group.mem_warn);
+        self.has_warn = groups
+            .iter()
+            .any(|group| group.cpu_warn || group.mem_warn || group.conn_warn);
         self.cached_groups = Rc::new(groups);
         self.cached_rows = Rc::new(rows);
         self.rebuild_tree(cx);
