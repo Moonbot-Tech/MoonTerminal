@@ -443,45 +443,75 @@ impl CoreStatusView {
         }
     }
 
-    /// Record this second's RAW `(cpu %, occupied memory %)` per server into the SHARED backend
-    /// history, so it survives this panel and any window open/close.
+    /// Record this second's RAW telemetry into the SHARED backend history, so it survives this
+    /// panel and any window open/close.
     ///
-    /// Runs once per second in every Core Status panel; the backend deduplicates per server per
-    /// second, so multiple panels never double-count. CPU is read raw from the store (not the
-    /// table's smoothed value) so the chart shows real fluctuation.
+    /// Two subjects are recorded per server: the whole machine (`system CPU %`, `occupied memory %`)
+    /// into `core_chart_hist`, and each core (`process CPU %`, `process memory share %`) into
+    /// `core_line_hist`. Runs once per second in every Core Status panel; the backend deduplicates
+    /// per subject per second, so multiple panels never double-count. CPU is read raw from the store
+    /// (not the table's smoothed value) so the chart shows real fluctuation.
     ///
     /// Args:
     ///     cx: View context used to read the store and update the backend.
     ///
     /// Returns:
-    ///     Nothing; the shared history grows by at most one point per server.
+    ///     Nothing; each subject's history grows by at most one point.
     fn record_chart_history(&mut self, cx: &mut Context<Self>) {
         let sec = self.last_repaint_ms / 1000;
-        let samples: Vec<(IpAddr, u8, u8)> = {
+        let mut server_samples: Vec<(IpAddr, u8, u8)> = Vec::new();
+        let mut core_samples: Vec<(CoreId, u8, u8)> = Vec::new();
+        {
             let b = self.backend.read(cx);
             let store = b.session.store();
-            self.cached_groups
-                .iter()
-                .filter_map(|group| {
-                    let ip = group.address?;
-                    // Machine CPU is identical across a server's cores; take the first core's raw value.
-                    let cpu = group
-                        .cores
-                        .first()
-                        .and_then(|core| store.core(core.id))
-                        .and_then(|core| core.sys.system_cpu_percent)
-                        .unwrap_or(0);
-                    let mem = occupied_pct(group.process_memory_mb, group.free_physical_memory_mb);
-                    Some((ip, cpu, mem))
-                })
-                .collect()
-        };
-        if samples.is_empty() {
+            for group in self.cached_groups.iter() {
+                let Some(ip) = group.address else {
+                    continue;
+                };
+                // Whole-machine CPU: the FRESHEST core's raw system value. Not the smoothed table
+                // value (the chart shows real fluctuation), and not the alphabetically-first core,
+                // which may be stale/disconnected and record a false 0. Clamped to the 0..100 axis.
+                let cpu = group
+                    .cores
+                    .iter()
+                    .filter_map(|core| store.core(core.id).map(|data| data.sys))
+                    .filter_map(|sys| sys.system_cpu_percent.map(|cpu| (sys.updated_ms, cpu)))
+                    .max_by_key(|(updated_ms, _)| *updated_ms)
+                    .map(|(_, cpu)| cpu)
+                    .unwrap_or(0)
+                    .min(100);
+                let mem = occupied_pct(group.process_memory_mb, group.free_physical_memory_mb);
+                server_samples.push((ip, cpu, mem));
+
+                // Per core: raw process CPU and this process's share of the reconstructed machine
+                // total (process RAM sum + free), keeping every line on the same 0..100 % axis. When
+                // free memory is unknown the server mem line reads 0 (occupied_pct), so leave the
+                // total unavailable here too so the core mem lines stay consistent with it instead of
+                // dividing by the process sum alone and towering to ~100 %.
+                let total = match group.free_physical_memory_mb {
+                    Some(free) => group.process_memory_mb.unwrap_or(0) + u64::from(free),
+                    None => 0,
+                };
+                for core in &group.cores {
+                    let sys = store.core(core.id).map(|c| c.sys);
+                    let proc_cpu = sys.and_then(|s| s.process_cpu_percent).unwrap_or(0).min(100);
+                    let proc_mem = match sys.and_then(|s| s.used_memory_mb) {
+                        Some(used) if total > 0 => (u64::from(used) * 100 / total).min(100) as u8,
+                        _ => 0,
+                    };
+                    core_samples.push((core.id, proc_cpu, proc_mem));
+                }
+            }
+        }
+        if server_samples.is_empty() && core_samples.is_empty() {
             return;
         }
         self.backend.update(cx, |b, _| {
-            for (ip, cpu, mem) in samples {
+            for (ip, cpu, mem) in server_samples {
                 b.core_chart_hist.record(ip, sec, cpu, mem);
+            }
+            for (id, cpu, mem) in core_samples {
+                b.core_line_hist.record(id, sec, cpu, mem);
             }
         });
     }
@@ -1155,16 +1185,31 @@ impl Render for CoreStatusView {
                     .and_then(|key| groups.iter().find(|group| group.key == key))
                     .or_else(|| groups.first())?;
                 let ip = target.address?;
-                let points = self
-                    .backend
-                    .read(cx)
-                    .core_chart_hist
-                    .ring(ip)
-                    .cloned()
-                    .unwrap_or_default();
+                let b = self.backend.read(cx);
+                let points = b.core_chart_hist.ring(ip).cloned().unwrap_or_default();
+                // Per-core line pairs only when the server runs more than one core (a single core's
+                // pair would just shadow the server pair). Cores with no history yet are skipped.
+                let core_series: Vec<chart::CoreLine> = if target.cores.len() > 1 {
+                    target
+                        .cores
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, core)| {
+                            let points = b.core_line_hist.ring(core.id)?.clone();
+                            Some(chart::CoreLine {
+                                name: core.name.clone(),
+                                points,
+                                color: chart::core_line_color(p, i),
+                            })
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let now_sec = moon_chart::paint::now_unix_ms() as i64 / 1000;
                 Some(chart::server_chart(
                     &points,
+                    &core_series,
                     target.display_name.clone(),
                     self.chart_window,
                     now_sec,

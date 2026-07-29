@@ -240,6 +240,9 @@ struct Backend {
     /// Shared per-server CPU/memory history for the Core Status detached-window chart. Kept here so
     /// it accumulates continuously and survives a window opening and closing.
     core_chart_hist: crate::backend::server_chart::ServerChartHistory,
+    /// Shared per-core process CPU/memory history, overlaid on the Core Status chart as a line pair
+    /// per core. Same lifetime rationale as `core_chart_hist`.
+    core_line_hist: crate::backend::server_chart::CoreChartHistory,
     /// Core reconnect requests from the Connections button, drained into `session.reconnect`.
     /// Ported from egui's `SettingsActions.reconnect`.
     reconnect_request: Vec<CoreId>,
