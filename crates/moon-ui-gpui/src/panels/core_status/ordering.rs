@@ -149,6 +149,7 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
             .free_physical_memory_mb
             .cmp(&b.sys.free_physical_memory_mb),
         "ping" => a.sys.round_trip_ms.cmp(&b.sys.round_trip_ms),
+        "ping_exch" => a.sys.order_api_latency_ms.cmp(&b.sys.order_api_latency_ms),
         "cpus" => a.sys.logical_cpu_count.cmp(&b.sys.logical_cpu_count),
         // "core" and any unknown key sort by name.
         _ => a.name.cmp(&b.name),

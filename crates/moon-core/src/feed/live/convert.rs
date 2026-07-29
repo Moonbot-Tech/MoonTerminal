@@ -179,6 +179,7 @@ pub(super) fn sys_status_from_proto(
         free_physical_memory_mb: h.free_physical_memory_mb,
         logical_cpu_count: h.logical_cpu_count,
         round_trip_ms: h.core_round_trip_ms,
+        order_api_latency_ms: h.order_api_latency_ms,
         updated_ms,
     }
 }

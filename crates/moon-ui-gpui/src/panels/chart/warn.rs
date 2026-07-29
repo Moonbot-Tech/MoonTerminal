@@ -319,7 +319,7 @@ impl ChartPanel {
                     .then(|| self.backend.read(cx).warn_series_slice(cluster.id))
                     .flatten()
             });
-        // The ping line rides the same window on its own ms scale (live ring, then persisted slice).
+        // Each ping line rides the same window on its own ms scale (live ring, then persisted slice).
         let ping_graph = self
             .warn
             .ip
@@ -333,6 +333,19 @@ impl ChartPanel {
                     .then(|| self.backend.read(cx).warn_ping_series_slice(cluster.id))
                     .flatten()
             });
+        let exch_graph = self
+            .warn
+            .ip
+            .and_then(|ip| {
+                self.backend
+                    .read(cx)
+                    .warn_server_exch_slice(ip, cluster.start_ms, now_ms)
+            })
+            .or_else(|| {
+                (!cluster.open)
+                    .then(|| self.backend.read(cx).warn_exch_series_slice(cluster.id))
+                    .flatten()
+            });
         let body = cluster_card_body(
             cluster,
             mark,
@@ -340,6 +353,7 @@ impl ChartPanel {
             core_reading,
             graph,
             ping_graph,
+            exch_graph,
             self.backend.read(cx),
             palette,
             cx,
@@ -452,6 +466,7 @@ fn cluster_card_body(
     core_reading: Option<(u8, u8, String)>,
     graph: Option<Vec<(u8, u8)>>,
     ping_graph: Option<Vec<u16>>,
+    exch_graph: Option<Vec<u16>>,
     backend: &crate::Backend,
     p: MoonPalette,
     cx: &App,
@@ -532,6 +547,14 @@ fn cluster_card_body(
             t!("core_status.ms")
         ));
     }
+    if snap.order_api_latency_ms > 0 {
+        server_val.push_str(&format!(
+            " · {} {} {}",
+            t!("core_status.chart_exch"),
+            snap.order_api_latency_ms,
+            t!("core_status.ms")
+        ));
+    }
     let server_extra = format!(
         "{} · {}",
         t!(
@@ -585,19 +608,32 @@ fn cluster_card_body(
         .children({
             let has_cpu_mem = graph.as_ref().is_some_and(|g| g.len() >= 2);
             let has_ping = ping_graph.as_ref().is_some_and(|g| g.len() >= 2);
-            (has_cpu_mem || has_ping)
-                .then(|| warn_graph(graph.unwrap_or_default(), ping_graph.unwrap_or_default(), p))
+            let has_exch = exch_graph.as_ref().is_some_and(|g| g.len() >= 2);
+            (has_cpu_mem || has_ping || has_exch).then(|| {
+                warn_graph(
+                    graph.unwrap_or_default(),
+                    ping_graph.unwrap_or_default(),
+                    exch_graph.unwrap_or_default(),
+                    p,
+                )
+            })
         })
         .into_any_element()
 }
 
 /// A compact system-CPU (blue) / occupied-memory (green) graph on a fixed 0..100 % axis, with the
-/// ping (accent) drawn on its own auto-scaled ms axis mapped into the same height. Either series may
-/// be empty.
-fn warn_graph(points: Vec<(u8, u8)>, ping: Vec<u16>, p: MoonPalette) -> impl IntoElement {
+/// client↔core ping (accent) and core→exchange ping (orange) each drawn on its own auto-scaled ms
+/// axis mapped into the same height. Any series may be empty.
+fn warn_graph(
+    points: Vec<(u8, u8)>,
+    ping: Vec<u16>,
+    exch: Vec<u16>,
+    p: MoonPalette,
+) -> impl IntoElement {
     let cpu = design::moon(p.blue);
     let mem = design::moon(p.green);
     let ping_col = design::moon(p.accent);
+    let exch_col = design::moon(p.orange);
     // Map an index in a series of `len` to its x fraction across the plot.
     let frac = |len: usize, i: usize| i as f32 / (len.max(2) - 1) as f32;
     let cpu_pts: Vec<(f32, f32)> = points
@@ -610,15 +646,24 @@ fn warn_graph(points: Vec<(u8, u8)>, ping: Vec<u16>, p: MoonPalette) -> impl Int
         .enumerate()
         .map(|(i, s)| (frac(points.len(), i), s.1 as f32))
         .collect();
-    // Ping rides its own ms scale (round-trip is not a percentage), rounded up to a 50 ms step.
-    let ping_scale = (ping.iter().copied().max().unwrap_or(0) as f32 / 50.0)
-        .ceil()
-        .max(1.0)
-        * 50.0;
+    // Each ping rides its own ms scale (round-trip is not a percentage), rounded up to a 50 ms step.
+    let ms_scale = |series: &[u16]| {
+        (series.iter().copied().max().unwrap_or(0) as f32 / 50.0)
+            .ceil()
+            .max(1.0)
+            * 50.0
+    };
+    let ping_scale = ms_scale(&ping);
     let ping_pts: Vec<(f32, f32)> = ping
         .iter()
         .enumerate()
         .map(|(i, &ms)| (frac(ping.len(), i), ms as f32 / ping_scale * 100.0))
+        .collect();
+    let exch_scale = ms_scale(&exch);
+    let exch_pts: Vec<(f32, f32)> = exch
+        .iter()
+        .enumerate()
+        .map(|(i, &ms)| (frac(exch.len(), i), ms as f32 / exch_scale * 100.0))
         .collect();
     // A fixed-height, non-shrinking row with the canvas absolutely filling it, so the graph reserves
     // its own space and never paints over the text above it (the same pattern the Core Status chart
@@ -641,6 +686,7 @@ fn warn_graph(points: Vec<(u8, u8)>, ping: Vec<u16>, p: MoonPalette) -> impl Int
                         }
                         stroke_line(window, bounds.origin, w, h, &mem_pts, mem);
                         stroke_line(window, bounds.origin, w, h, &cpu_pts, cpu);
+                        stroke_line(window, bounds.origin, w, h, &exch_pts, exch_col);
                         stroke_line(window, bounds.origin, w, h, &ping_pts, ping_col);
                     },
                 )

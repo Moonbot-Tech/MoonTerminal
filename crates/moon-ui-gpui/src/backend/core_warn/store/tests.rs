@@ -38,6 +38,7 @@ fn episode(
             used_mb: 4096,
             logical_cpus: 8,
             round_trip_ms: 180,
+            order_api_latency_ms: 95,
         },
     }
 }
@@ -87,6 +88,7 @@ fn roundtrip_filters_by_server_and_time() {
     assert_eq!(wide[1].snap.used_mb, 4096);
     assert_eq!(wide[1].snap.logical_cpus, 8);
     assert_eq!(wide[1].snap.round_trip_ms, 180);
+    assert_eq!(wide[1].snap.order_api_latency_ms, 95);
     assert_eq!(wide[2].axis, WarnAxis::Unreachable);
     assert_eq!(wide[2].end_ms, Some(9_000));
 }
@@ -168,19 +170,39 @@ fn ping_series_round_trips() {
 
     // Boundary values catch a u16 encode/decode off-by-one.
     let pings = [0u16, 65535, 250, 1000];
-    store.insert_ping_series(rowid, 60_000, &pings).unwrap();
+    store
+        .insert_ping_series(rowid, "ping", 60_000, &pings)
+        .unwrap();
     assert_eq!(
-        store.ping_series_for_episode(rowid).unwrap().as_deref(),
+        store
+            .ping_series_for_episode(rowid, "ping")
+            .unwrap()
+            .as_deref(),
         Some(&pings[..])
     );
 
-    // A server slice on the same episode is a different subject and does not collide.
+    // The exchange ping is a distinct subject on the same episode and does not collide, nor does the
+    // (u8,u8) server slice.
+    let exch = [10u16, 200, 65535];
+    store
+        .insert_ping_series(rowid, "exch", 60_000, &exch)
+        .unwrap();
     store
         .insert_series(rowid, "server", 60_000, &[(1, 2), (3, 4)])
         .unwrap();
     assert_eq!(
-        store.ping_series_for_episode(rowid).unwrap().as_deref(),
+        store
+            .ping_series_for_episode(rowid, "ping")
+            .unwrap()
+            .as_deref(),
         Some(&pings[..])
+    );
+    assert_eq!(
+        store
+            .ping_series_for_episode(rowid, "exch")
+            .unwrap()
+            .as_deref(),
+        Some(&exch[..])
     );
 
     // An episode with no ping slice reads absent.
@@ -194,5 +216,5 @@ fn ping_series_round_trips() {
             90,
         ))
         .unwrap();
-    assert_eq!(store.ping_series_for_episode(other).unwrap(), None);
+    assert_eq!(store.ping_series_for_episode(other, "ping").unwrap(), None);
 }

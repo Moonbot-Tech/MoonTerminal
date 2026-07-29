@@ -8,8 +8,8 @@
 //! Four axes:
 //! - `SysCpu` — a machine's system CPU held at/above the threshold (per server IP).
 //! - `MemGrowth` — a core's used memory rising above its window minimum (per core).
-//! - `Unreachable` — a core dropped (Disconnected/Failed) while the server still runs a Ready core
-//!   (per server IP).
+//! - `Unreachable` — a core that had reached Ready is now Disconnected/Failed — a real drop, on any
+//!   server (per server IP), including a single-core server going fully down.
 //! - `Ping` — the client↔core UDP round-trip time held at/above the threshold (per core).
 //!
 //! `SysCpu` and `MemGrowth` are ported verbatim from the panel so their displayed warnings do not
@@ -107,7 +107,7 @@ pub(crate) enum WarnAxis {
     SysCpu,
     /// A core's used memory rising (per core).
     MemGrowth,
-    /// A core dropped while the server still runs others (per server).
+    /// A core that was up has dropped (Disconnected/Failed), per server.
     Unreachable,
     /// The client↔core UDP round-trip time held high (per core).
     Ping,
@@ -138,9 +138,10 @@ pub(crate) struct TickResult {
     pub(crate) closed: Vec<WarnEpisode>,
     /// Raw per-subject chart-history samples for this second. Empty on a within-second no-op.
     pub(crate) rings: Vec<RingSample>,
-    /// Per-server round-trip samples (ms) for this second — the worst core round-trip per server —
-    /// recorded into the ping history ring like the CPU/memory rings. Empty on a within-second no-op.
-    pub(crate) pings: Vec<(IpAddr, u16)>,
+    /// Per-server ping samples for this second: `(ip, worst client↔core round-trip ms, worst
+    /// core→exchange order-API latency ms)` over the server's Ready cores, recorded into the two ping
+    /// history rings like the CPU/memory rings. Empty on a within-second no-op.
+    pub(crate) pings: Vec<(IpAddr, u16, u16)>,
 }
 
 /// The server's telemetry captured at the moment a warning fired, so the card can show the full
@@ -158,8 +159,10 @@ pub(crate) struct WarnSnapshot {
     pub(crate) used_mb: u32,
     /// Logical CPU count.
     pub(crate) logical_cpus: u8,
-    /// Worst core round-trip on the server, ms (0 = no ping reading yet).
+    /// Worst client↔core round-trip on the server, ms (0 = no ping reading yet).
     pub(crate) round_trip_ms: u16,
+    /// Worst core→exchange order-API latency on the server, ms (0 = no reading yet).
+    pub(crate) order_api_latency_ms: u16,
 }
 
 /// A warning period with a start and, once cleared, an end.
@@ -252,7 +255,7 @@ enum WarnKey {
     SysCpu(IpAddr),
     /// One core's memory.
     Mem(CoreId),
-    /// Server-wide connectivity (a dropped core with survivors).
+    /// Server-wide connectivity (a core that was up has dropped).
     Conn(IpAddr),
     /// One core's client↔core round-trip time.
     Ping(CoreId),
@@ -285,8 +288,11 @@ pub(crate) struct CoreWarnEngine {
     mem_growing: HashSet<CoreId>,
     /// Servers whose system CPU is currently sustained-high.
     sys_warn: HashSet<IpAddr>,
-    /// Servers with a dropped core while others stay ready (the connectivity warning).
+    /// Servers with a core that was up and has now dropped (the connectivity warning).
     conn_warn: HashSet<IpAddr>,
+    /// Cores that have reached `Ready` at least once, so a later drop is a real disconnect rather
+    /// than a never-connected core (which must not warn).
+    ever_ready: HashSet<CoreId>,
     /// Cores whose client↔core round-trip is currently sustained-high (the ping warning).
     ping_warn: HashSet<CoreId>,
 }
@@ -394,24 +400,28 @@ impl CoreWarnEngine {
             }
         }
 
-        // Connectivity: a server with a dropped core (Disconnected/Failed) while another core is
-        // still Ready — "one fell off while the rest works". A fully offline server (no ready core)
-        // does not warn, and a still-connecting core is not a drop.
+        // Connectivity: a core that had reached Ready is now Disconnected/Failed — a real drop, on
+        // ANY server (a single-core server going fully down warns too). A never-connected core
+        // (Disconnected but never Ready, e.g. at startup or intentionally off) is NOT a drop, and a
+        // still-connecting core is not a drop.
+        let present: HashSet<CoreId> = samples.iter().map(|sample| sample.id).collect();
+        for sample in samples {
+            if sample.status == ConnStatus::Ready {
+                self.ever_ready.insert(sample.id);
+            }
+        }
+        self.ever_ready.retain(|id| present.contains(id));
         self.conn_warn.clear();
-        let mut ready_down: HashMap<IpAddr, (bool, bool)> = HashMap::new();
         for sample in samples {
             let Some(ip) = sample.ip else {
                 continue;
             };
-            let entry = ready_down.entry(ip).or_insert((false, false));
-            match sample.status {
-                ConnStatus::Ready => entry.0 = true,
-                ConnStatus::Disconnected | ConnStatus::Failed(_) => entry.1 = true,
-                _ => {}
-            }
-        }
-        for (ip, (ready, down)) in ready_down {
-            if self.enabled.conn && ready && down {
+            let dropped = self.ever_ready.contains(&sample.id)
+                && matches!(
+                    sample.status,
+                    ConnStatus::Disconnected | ConnStatus::Failed(_)
+                );
+            if self.enabled.conn && dropped {
                 self.conn_warn.insert(ip);
             }
         }
@@ -419,7 +429,6 @@ impl CoreWarnEngine {
         // Ping: a core whose client↔core round-trip stays at/above the threshold for the sustain
         // window. Per core, like memory. The counter advances regardless of the enable switch so
         // re-enabling reacts on the next second, but the warning set only fills while enabled.
-        let present: HashSet<CoreId> = samples.iter().map(|sample| sample.id).collect();
         self.ping_high.retain(|id, _| present.contains(id));
         self.ping_warn.clear();
         for sample in samples {
@@ -675,14 +684,19 @@ fn server_snapshot(samples: &[CoreSample], ip: IpAddr) -> WarnSnapshot {
         free_mb: free.unwrap_or(0),
         used_mb: used_sum.min(u64::from(u32::MAX)) as u32,
         logical_cpus: freshest_u8(|sys| sys.logical_cpu_count).unwrap_or(0),
-        // Worst READY-core round-trip, matching the per-server ping ring (a dropped core's stale
-        // round-trip must not dominate the snapshot).
+        // Worst READY-core pings, matching the per-server ping rings (a dropped core's stale reading
+        // must not dominate the snapshot).
         round_trip_ms: cores()
             .filter(|s| s.status == ConnStatus::Ready)
             .filter_map(|s| s.sys.round_trip_ms)
             .max()
             .unwrap_or(0)
             .min(u32::from(u16::MAX)) as u16,
+        order_api_latency_ms: cores()
+            .filter(|s| s.status == ConnStatus::Ready)
+            .filter_map(|s| s.sys.order_api_latency_ms)
+            .max()
+            .unwrap_or(0),
     }
 }
 
@@ -782,36 +796,42 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
     out
 }
 
-/// Build this second's per-SERVER round-trip samples (ms): the worst round-trip among a server's
-/// READY cores.
+/// Build this second's per-SERVER ping samples: the worst client↔core round-trip AND the worst
+/// core→exchange order latency among a server's READY cores.
 ///
-/// Recorded into the ping history ring exactly like the CPU/memory rings — telemetry, so it is NOT
-/// gated by the ping-warning toggle. A value is emitted for EVERY server with a live core (0 when
-/// none of its ready cores has measured a ping yet), so the ping ring advances in lockstep with the
+/// Recorded into the two ping history rings exactly like the CPU/memory rings — telemetry, so it is
+/// NOT gated by the ping-warning toggle. A value is emitted for EVERY server with a live core (0
+/// when none of its ready cores has a reading yet), so the rings advance in lockstep with the
 /// CPU/memory ring — a skipped second would mis-time the positional 1 Hz slice. Only Ready cores
-/// count, so a dropped core's stale (possibly timed-out) round-trip cannot dominate the server ping
-/// the way `max` over all cores would (unlike machine CPU, cores have DIFFERENT round-trips).
+/// count, so a dropped core's stale (possibly timed-out) reading cannot dominate the server ping the
+/// way `max` over all cores would (unlike machine CPU, cores have DIFFERENT round-trips).
 ///
 /// Args:
 ///     samples: This tick's per-core telemetry.
 ///
 /// Returns:
-///     One `(server ip, worst ready round-trip ms)` per server with a known endpoint.
-fn build_ping_samples(samples: &[CoreSample]) -> Vec<(IpAddr, u16)> {
-    let mut by_ip: HashMap<IpAddr, u16> = HashMap::new();
+///     One `(server ip, worst round-trip ms, worst order-API latency ms)` per server with an endpoint.
+fn build_ping_samples(samples: &[CoreSample]) -> Vec<(IpAddr, u16, u16)> {
+    let mut by_ip: HashMap<IpAddr, (u16, u16)> = HashMap::new();
     for sample in samples {
         let Some(ip) = sample.ip else {
             continue;
         };
-        // Seed every server so its ring never skips a second, matching the CPU/memory ring.
-        let entry = by_ip.entry(ip).or_insert(0);
+        // Seed every server so its rings never skip a second, matching the CPU/memory ring.
+        let entry = by_ip.entry(ip).or_insert((0, 0));
         if sample.status == ConnStatus::Ready {
             if let Some(ms) = sample.sys.round_trip_ms {
-                *entry = (*entry).max(ms.min(u32::from(u16::MAX)) as u16);
+                entry.0 = entry.0.max(ms.min(u32::from(u16::MAX)) as u16);
+            }
+            if let Some(ms) = sample.sys.order_api_latency_ms {
+                entry.1 = entry.1.max(ms);
             }
         }
     }
-    by_ip.into_iter().collect()
+    by_ip
+        .into_iter()
+        .map(|(ip, (link, exch))| (ip, link, exch))
+        .collect()
 }
 
 pub(crate) mod store;

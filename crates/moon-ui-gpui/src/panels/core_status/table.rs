@@ -39,7 +39,12 @@ fn columns() -> Vec<MoonDataTableColumn> {
             t!("core_status.col.free_phys").to_string(),
             110.0,
         ),
-        numeric("ping", t!("core_status.col.ping").to_string(), 80.0),
+        numeric("ping", t!("core_status.col.ping").to_string(), 84.0),
+        numeric(
+            "ping_exch",
+            t!("core_status.col.ping_exch").to_string(),
+            96.0,
+        ),
         numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0),
     ]
 }
@@ -95,7 +100,8 @@ pub(super) fn core_status_table(
 ///     server_names: Server display name per server key.
 ///
 /// Returns:
-///     One row with server, core, connection, and five numeric metric cells.
+///     One row with server, core, connection, and the numeric metric cells (CPU, memory, both
+///     pings, logical CPUs).
 fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>) -> MoonDataRow {
     let sys = &r.sys;
     let server = server_names
@@ -111,6 +117,7 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(memory_u16(sys.used_memory_mb)),
         MoonDataCell::text(memory_u16(sys.free_physical_memory_mb)),
         MoonDataCell::text(ping(sys.round_trip_ms)),
+        MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
         MoonDataCell::text(count(sys.logical_cpu_count)),
     ])
 }

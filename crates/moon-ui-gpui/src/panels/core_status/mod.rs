@@ -424,11 +424,13 @@ impl Render for CoreStatusView {
                     Vec::new()
                 };
                 let ping_points = b.server_ping_hist.ring(ip).cloned().unwrap_or_default();
+                let exch_points = b.server_exch_hist.ring(ip).cloned().unwrap_or_default();
                 let now_sec = moon_chart::paint::now_unix_ms() as i64 / 1000;
                 Some(chart::server_chart(
                     &points,
                     &core_series,
                     &ping_points,
+                    &exch_points,
                     target.display_name.clone(),
                     self.chart_window,
                     now_sec,

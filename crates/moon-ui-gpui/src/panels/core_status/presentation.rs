@@ -2,45 +2,38 @@
 
 use gpui::*;
 use moon_core::feed::ConnStatus;
-use moon_ui::{MoonPalette, MoonTone};
+use moon_ui::MoonPalette;
 use rust_i18n::t;
 
 /// Visual metadata shared by Flat and By IP connection rows.
 pub(super) struct ConnectionPresentation {
     /// Localized lifecycle label, including stage or failure details.
     pub(super) label: String,
-    /// Badge tone paired with the lifecycle state.
-    pub(super) tone: MoonTone,
 }
 
-/// Resolve one connection state into a shared label and badge tone.
+/// Resolve one connection state into its shared lifecycle label.
 ///
 /// Args:
 ///     status: Latest core connection state.
 ///
 /// Returns:
-///     Consistent label and tone for either Core Status presentation.
+///     A consistent label for either Core Status presentation.
 pub(super) fn connection_presentation(status: &ConnStatus) -> ConnectionPresentation {
     match status {
         ConnStatus::Ready => ConnectionPresentation {
             label: t!("conn.status.ready").to_string(),
-            tone: MoonTone::Positive,
         },
         ConnStatus::Connecting => ConnectionPresentation {
             label: t!("conn.status.connecting").to_string(),
-            tone: MoonTone::Warning,
         },
         ConnStatus::Stage(stage) => ConnectionPresentation {
             label: t!("conn.status.stage", stage = stage.as_str()).to_string(),
-            tone: MoonTone::Warning,
         },
         ConnStatus::Failed(error) => ConnectionPresentation {
             label: t!("conn.status.failed", err = error.as_str()).to_string(),
-            tone: MoonTone::Danger,
         },
         ConnStatus::Disconnected => ConnectionPresentation {
             label: t!("conn.status.disconnected").to_string(),
-            tone: MoonTone::Muted,
         },
     }
 }
@@ -84,7 +77,7 @@ pub(super) fn ping(value: Option<u32>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-/// Classify round-trip latency, where a higher time is worse.
+/// Classify client↔core round-trip latency, where a higher time is worse.
 ///
 /// `Critical` at the same threshold the ping WARNING fires (`PING_WARN_MS` = 500 ms), so the colour
 /// and the badge agree; `Warning` at half that.
@@ -98,6 +91,24 @@ pub(super) fn ping_level(value: Option<u32>) -> LoadLevel {
     match value {
         Some(ms) if ms >= 500 => LoadLevel::Critical,
         Some(ms) if ms >= 250 => LoadLevel::Warning,
+        _ => LoadLevel::Normal,
+    }
+}
+
+/// Classify core→exchange order-API latency, where a higher time is worse.
+///
+/// Higher thresholds than [`ping_level`]: order round-trips to an exchange are naturally slower than
+/// the local transport ping, so a value that would flag the transport link is normal here.
+///
+/// Args:
+///     value: Order-API latency in milliseconds.
+///
+/// Returns:
+///     `Warning` from 500 ms, `Critical` from 1000 ms, else `Normal` (including unknown).
+pub(super) fn order_level(value: Option<u16>) -> LoadLevel {
+    match value {
+        Some(ms) if ms >= 1000 => LoadLevel::Critical,
+        Some(ms) if ms >= 500 => LoadLevel::Warning,
         _ => LoadLevel::Normal,
     }
 }

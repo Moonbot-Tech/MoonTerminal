@@ -337,6 +337,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             core_chart_hist: Default::default(),
             core_line_hist: Default::default(),
             server_ping_hist: Default::default(),
+            server_exch_hist: Default::default(),
             warn: Default::default(),
             warn_store: crate::backend::core_warn::store::WarnStore::open(
                 &moon_core::config::paths::core_warnings_db_path(),

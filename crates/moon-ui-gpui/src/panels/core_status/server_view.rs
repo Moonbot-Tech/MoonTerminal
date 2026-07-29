@@ -9,8 +9,8 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonButton, MoonInput, MoonInputState, MoonListItem, MoonPalette, MoonTree,
-    MoonTreeItem, MoonTreeState, h_flex,
+    MoonButton, MoonInput, MoonInputState, MoonListItem, MoonPalette, MoonTree, MoonTreeItem,
+    MoonTreeState, h_flex,
 };
 use rust_i18n::t;
 
@@ -19,8 +19,8 @@ use moon_core::feed::ConnStatus;
 use super::CoreStatusView;
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::presentation::{
-    connection_presentation, cpu_level, cpu_load, free_mem_level, level_color, memory_free,
-    memory_u16, metric_icon, percent, ping, ping_level,
+    cpu_level, cpu_load, free_mem_level, level_color, memory_free, memory_u16, metric_icon,
+    order_level, percent, ping, ping_level,
 };
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
@@ -269,7 +269,7 @@ fn server_row(
                 ))
                 // Ping is per core; the server row shows the WORST (highest) round-trip among the
                 // server's READY cores, matching the ping ring (a dropped core's stale reading is
-                // excluded rather than dominating the row).
+                // excluded rather than dominating the row). Two cells: client↔core, then core→exchange.
                 .child({
                     let worst = group
                         .cores
@@ -283,6 +283,22 @@ fn server_row(
                         PING_W,
                         level_color(ping_level(worst), p),
                         group.ping_warn,
+                        p,
+                    )
+                })
+                .child({
+                    let worst = group
+                        .cores
+                        .iter()
+                        .filter(|c| c.status == ConnStatus::Ready)
+                        .filter_map(|c| c.sys.order_api_latency_ms)
+                        .max();
+                    metric_cell(
+                        "icons/external-link.svg",
+                        ping(worst.map(u32::from)),
+                        PING_W,
+                        level_color(order_level(worst), p),
+                        false,
                         p,
                     )
                 })
@@ -314,7 +330,14 @@ fn server_row(
 /// Returns:
 ///     An indented core row whose metrics align under the server metrics.
 fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElement {
-    let status = connection_presentation(&core.status);
+    // The core name reads as plain text (not a badge pill); its colour still conveys the connection
+    // state, so an offline or failed core is legible at a glance.
+    let name_color = match core.status {
+        ConnStatus::Ready => p.text,
+        ConnStatus::Connecting | ConnStatus::Stage(_) => p.yellow,
+        ConnStatus::Failed(_) => p.red,
+        ConnStatus::Disconnected => p.text_muted,
+    };
     h_flex()
         .w_full()
         .min_w_0()
@@ -322,7 +345,13 @@ fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElemen
         .gap_2()
         .overflow_hidden()
         .pl(px(20.0))
-        .child(MoonBadge::new(core.name.clone()).tone(status.tone))
+        .child(
+            div()
+                .flex_none()
+                .truncate()
+                .text_color(rgb(name_color))
+                .child(core.name.clone()),
+        )
         .child(div().flex_1())
         .child(metric_cell(
             "icons/cpu.svg",
@@ -340,14 +369,23 @@ fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElemen
             false,
             p,
         ))
-        // This core's client↔core round-trip; the cell's own warn triangle marks a sustained-high
-        // ping (the per-core cause behind the server badge), consistent with the CPU/memory cells.
+        // This core's client↔core round-trip (globe); the cell's own warn triangle marks a
+        // sustained-high ping, consistent with the CPU/memory cells.
         .child(metric_cell(
             "icons/globe.svg",
             ping(core.sys.round_trip_ms),
             PING_W,
             level_color(ping_level(core.sys.round_trip_ms), p),
             core.ping_warn,
+            p,
+        ))
+        // This core's core→exchange order latency (external-link).
+        .child(metric_cell(
+            "icons/external-link.svg",
+            ping(core.sys.order_api_latency_ms.map(u32::from)),
+            PING_W,
+            level_color(order_level(core.sys.order_api_latency_ms), p),
+            false,
             p,
         ))
 }

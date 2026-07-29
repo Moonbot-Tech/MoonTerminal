@@ -49,7 +49,8 @@ pub(super) struct CoreLine {
 }
 
 /// Fallback per-core series hue, cycled from the palette and deliberately skipping the server's
-/// blue/green AND the ping line's accent so a core line never reads as a server or ping line.
+/// blue/green AND both ping lines (accent = client↔core, orange = core→exchange) so a core line
+/// never reads as a server or ping line.
 ///
 /// Args:
 ///     p: Active Moon palette.
@@ -59,12 +60,12 @@ pub(super) struct CoreLine {
 ///     A palette color for the core's line pair.
 pub(super) fn core_line_color(p: MoonPalette, i: usize) -> u32 {
     [
-        p.orange,
         p.amber,
         p.red,
         p.yellow,
         p.text_muted,
         p.text_soft,
+        p.text_dim,
     ][i % 6]
 }
 
@@ -123,6 +124,7 @@ pub(super) fn server_chart(
     server_points: &VecDeque<(u8, u8)>,
     core_series: &[CoreLine],
     ping_points: &VecDeque<u16>,
+    exch_points: &VecDeque<u16>,
     title: String,
     window: ChartWindow,
     now_sec: i64,
@@ -135,6 +137,7 @@ pub(super) fn server_chart(
     let mem_line = design::moon(p.green);
     let mem_fill = design::moon_alpha(p.green, 0.14);
     let ping_line = design::moon(p.accent);
+    let exch_line = design::moon(p.orange);
     let grid = design::moon_alpha(p.text_muted, 0.16);
 
     let span = window.secs();
@@ -143,14 +146,20 @@ pub(super) fn server_chart(
     let cur_cpu = server_points.back().map(|(cpu, _)| *cpu);
     let cur_mem = server_points.back().map(|(_, mem)| *mem);
 
-    // Ping rides its own auto-scaled ms axis (round-trip is not a percentage), mapped into the same
+    // Each ping rides its own auto-scaled ms axis (round-trip is not a percentage), mapped into the
     // 0..100 plot height and rounded up to a tidy 50 ms step so the line does not hug the ceiling.
+    let ms_scale = |ring: &VecDeque<u16>| {
+        (ring.iter().copied().max().unwrap_or(0) as f32 / 50.0)
+            .ceil()
+            .max(1.0)
+            * 50.0
+    };
     let cur_ping = ping_points.back().copied();
-    let ping_scale = (ping_points.iter().copied().max().unwrap_or(0) as f32 / 50.0)
-        .ceil()
-        .max(1.0)
-        * 50.0;
+    let ping_scale = ms_scale(ping_points);
     let ping = to_series(ping_points, span, |ms| *ms as f32 / ping_scale * 100.0);
+    let cur_exch = exch_points.back().copied();
+    let exch_scale = ms_scale(exch_points);
+    let exch = to_series(exch_points, span, |ms| *ms as f32 / exch_scale * 100.0);
 
     let core_draws: Vec<CoreDraw> = core_series
         .iter()
@@ -231,7 +240,17 @@ pub(super) fn server_chart(
                 cpu_line,
                 SERVER_STROKE,
             );
-            // Ping on top, unfilled (its own ms scale), so its trend reads over the % series.
+            // Both pings on top, unfilled (each its own ms scale), so their trend reads over the %.
+            paint_series(
+                window,
+                bounds.origin,
+                w,
+                h,
+                &exch,
+                None,
+                exch_line,
+                SERVER_STROKE,
+            );
             paint_series(
                 window,
                 bounds.origin,
@@ -263,7 +282,8 @@ pub(super) fn server_chart(
         .children(GRID.iter().rev().map(|&v| axis_label(v, p, cx)))
         .children(cur_cpu.map(|v| value_label(v, cpu_line, cx)))
         .children(cur_mem.map(|v| value_label(v, mem_line, cx)))
-        .children(cur_ping.map(|ms| ping_value_label(ms, ping_scale, ping_line, cx)));
+        .children(cur_ping.map(|ms| ping_value_label(ms, ping_scale, ping_line, cx)))
+        .children(cur_exch.map(|ms| ping_value_label(ms, exch_scale, exch_line, cx)));
 
     v_flex()
         .flex_none()
@@ -273,7 +293,7 @@ pub(super) fn server_chart(
         .gap_1()
         .text_size(design::t_caption(cx))
         .child(legend_row(
-            title, window, &view, cpu_line, mem_line, ping_line, p,
+            title, window, &view, cpu_line, mem_line, ping_line, exch_line, p,
         ))
         .children((!core_series.is_empty()).then(|| core_legend_row(core_series, p)))
         .child(plot_area)
@@ -371,6 +391,7 @@ fn ping_value_label(ms: u16, ping_scale: f32, color: Hsla, cx: &App) -> impl Int
 }
 
 /// Legend row: server title, window buttons, and the two server series color chips.
+#[allow(clippy::too_many_arguments)]
 fn legend_row(
     title: String,
     window: ChartWindow,
@@ -378,6 +399,7 @@ fn legend_row(
     cpu_line: Hsla,
     mem_line: Hsla,
     ping_line: Hsla,
+    exch_line: Hsla,
     p: MoonPalette,
 ) -> impl IntoElement {
     h_flex()
@@ -407,6 +429,11 @@ fn legend_row(
         .child(legend_chip(
             t!("core_status.chart_ping").to_string(),
             ping_line,
+            p,
+        ))
+        .child(legend_chip(
+            t!("core_status.chart_exch").to_string(),
+            exch_line,
             p,
         ))
 }
