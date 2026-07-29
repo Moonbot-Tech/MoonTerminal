@@ -14,6 +14,7 @@ mod model;
 mod presentation;
 mod server_view;
 mod table;
+mod warnings;
 #[cfg(test)]
 mod tests;
 
@@ -78,7 +79,12 @@ enum CoreStatusMode {
     ByIp,
     /// Existing one-row-per-core telemetry table.
     Flat,
+    /// Recorded warning episodes from the database, newest first.
+    Warnings,
 }
+
+/// How many recent warning episodes the Warnings list shows.
+const WARN_LIST_LIMIT: usize = 500;
 
 impl Default for CoreStatusMode {
     /// Return the server-by-IP presentation used on every new panel instance.
@@ -120,6 +126,8 @@ pub struct CoreStatusView {
     mode: CoreStatusMode,
     tree_state: Entity<MoonTreeState>,
     table_state: Entity<MoonDataTableState>,
+    /// Column state for the Warnings list table (separate widths from the flat telemetry table).
+    warn_table_state: Entity<MoonDataTableState>,
     /// Context-qualified column-width persistence ID (`core-status-table:dock` or `:win`).
     widths_id: String,
     dock: Option<WeakEntity<DockArea>>,
@@ -170,6 +178,7 @@ impl CoreStatusView {
             crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
         })
         .detach();
+        let warn_table_state = cx.new(|_| MoonDataTableState::new());
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         let focus = cx.focus_handle();
 
@@ -201,6 +210,7 @@ impl CoreStatusView {
             mode: CoreStatusMode::default(),
             tree_state,
             table_state,
+            warn_table_state,
             widths_id,
             dock: None,
             focus,
@@ -861,6 +871,40 @@ impl Render for CoreStatusView {
                 )
                 .into_any_element()
             }
+            CoreStatusMode::Warnings => {
+                let b = self.backend.read(cx);
+                let episodes = b.warn_episodes_recent(WARN_LIST_LIMIT);
+                // Resolve each server IP to its display name (connected group, then a saved custom
+                // name), never the raw IP — matching how the panel masks addresses.
+                let server_names: HashMap<IpAddr, String> = episodes
+                    .iter()
+                    .filter_map(|episode| episode.server_ip)
+                    .map(|ip| {
+                        let name = groups
+                            .iter()
+                            .find(|group| group.address == Some(ip))
+                            .map(|group| group.display_name.clone())
+                            .or_else(|| b.layout.core_server_names.get(&ip.to_string()).cloned())
+                            .unwrap_or_else(|| "—".to_string());
+                        (ip, name)
+                    })
+                    .collect();
+                let core_names: HashMap<CoreId, String> = b
+                    .config
+                    .servers
+                    .iter()
+                    .map(|server| (server.id, server.name.clone()))
+                    .collect();
+                warnings::warnings_table(
+                    "core-status-warnings",
+                    Rc::new(episodes),
+                    Rc::new(server_names),
+                    Rc::new(core_names),
+                    &self.warn_table_state,
+                    cx,
+                )
+                .into_any_element()
+            }
         };
 
         // A detached window gets a live CPU/memory chart for the expanded (or first) server. The
@@ -987,15 +1031,18 @@ impl CoreStatusView {
                 MoonSegmentItem::new("", t!("core_status.mode.flat").to_string())
                     .fit_width(cx, 54.0, 88.0)
                     .selected(self.mode == CoreStatusMode::Flat),
+                MoonSegmentItem::new("", t!("core_status.mode.warnings").to_string())
+                    .fit_width(cx, 54.0, 88.0)
+                    .selected(self.mode == CoreStatusMode::Warnings),
             ])
             .on_click(move |index, _, _, app| {
                 let Some(view) = weak_view.upgrade() else {
                     return;
                 };
-                let mode = if index == 0 {
-                    CoreStatusMode::ByIp
-                } else {
-                    CoreStatusMode::Flat
+                let mode = match index {
+                    0 => CoreStatusMode::ByIp,
+                    1 => CoreStatusMode::Flat,
+                    _ => CoreStatusMode::Warnings,
                 };
                 view.update(app, |this, cx| this.set_mode(mode, cx));
             });

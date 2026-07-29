@@ -887,6 +887,31 @@ impl Backend {
         out
     }
 
+    /// The most recent warning episodes across all servers, newest first, for the Warnings list.
+    ///
+    /// Merges still-open episodes (not yet persisted) with the persisted log, so an in-progress
+    /// warning appears at the top.
+    ///
+    /// Args:
+    ///     limit: Maximum rows to return.
+    ///
+    /// Returns:
+    ///     Episodes ordered newest first, capped to `limit`.
+    pub(crate) fn warn_episodes_recent(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::backend::core_warn::WarnEpisode> {
+        let mut all = self.warn.open_episodes();
+        if let Some(store) = &self.warn_store {
+            if let Ok(closed) = store.recent_episodes(limit) {
+                all.extend(closed);
+            }
+        }
+        all.sort_by(|a, b| b.start_ms.cmp(&a.start_ms));
+        all.truncate(limit);
+        all
+    }
+
     pub(crate) fn mark_backend_dirty(&mut self, cx: &mut Context<Self>) {
         self.backend_dirty_since_notify = true;
         self.flush_backend_notify(cx);

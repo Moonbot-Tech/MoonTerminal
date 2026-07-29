@@ -113,6 +113,22 @@ impl WarnStore {
         let rows = stmt.query_map(params![ip.to_string(), from_ms, to_ms], row_to_episode)?;
         rows.collect()
     }
+
+    /// Return the most recent episodes across all servers, newest first, for the Warnings list.
+    ///
+    /// Args:
+    ///     limit: Maximum rows to return.
+    ///
+    /// Returns:
+    ///     Episodes ordered by `start_ms` descending, or a SQLite error.
+    pub(crate) fn recent_episodes(&self, limit: usize) -> rusqlite::Result<Vec<WarnEpisode>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak FROM core_warnings \
+             ORDER BY start_ms DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], row_to_episode)?;
+        rows.collect()
+    }
 }
 
 /// Stable wire name for a warning axis.

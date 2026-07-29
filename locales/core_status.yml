@@ -27,6 +27,31 @@ core_status.mode.flat:
   ru: "Плоско"
   en: "Flat"
   es: "Plano"
+core_status.mode.warnings:
+  ru: "Ворнинги"
+  en: "Warnings"
+  es: "Avisos"
+core_status.warn_empty:
+  ru: "Нет записанных ворнингов"
+  en: "No recorded warnings"
+  es: "Sin avisos registrados"
+# Warnings-list columns.
+core_status.col.time:
+  ru: "Время"
+  en: "Time"
+  es: "Hora"
+core_status.col.dur:
+  ru: "Длит."
+  en: "Dur."
+  es: "Dur."
+core_status.col.type:
+  ru: "Тип"
+  en: "Type"
+  es: "Tipo"
+core_status.col.peak:
+  ru: "Пик"
+  en: "Peak"
+  es: "Pico"
 core_status.footer:
   ru: "Серверы: %{servers}  Ядра: %{cores}  Онлайн: %{online}"
   en: "Servers: %{servers}  Cores: %{cores}  Online: %{online}"
