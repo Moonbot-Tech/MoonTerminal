@@ -28,13 +28,13 @@ core_status.mode.flat:
   en: "Flat"
   es: "Plano"
 core_status.mode.warnings:
-  ru: "Ворнинги"
-  en: "Warnings"
-  es: "Avisos"
+  ru: "Тревоги"
+  en: "Alerts"
+  es: "Alertas"
 core_status.warn_empty:
-  ru: "Нет записанных ворнингов"
-  en: "No recorded warnings"
-  es: "Sin avisos registrados"
+  ru: "Нет записанных тревог"
+  en: "No recorded alerts"
+  es: "Sin alertas registradas"
 # Warnings-list columns.
 core_status.col.time:
   ru: "Время"
@@ -182,6 +182,11 @@ core_status.chart_mem:
   ru: "ОЗУ"
   en: "RAM"
   es: "RAM"
+# Ping/RTT axis label on the warning badge card and the Warnings list.
+core_status.chart_ping:
+  ru: "Пинг"
+  en: "Ping"
+  es: "Ping"
 # Connectivity axis label on a chart warning badge's hover card.
 core_status.warn_conn:
   ru: "Связь"
@@ -210,11 +215,38 @@ core_status.chart_1h:
   en: "1 h"
   es: "1 h"
 
+# --- Alert-axis toggles (Core Status gear popup) ---
+# Popup heading and one label per warning axis the engine can catch.
+core_status.warn_cfg.title:
+  ru: "Тревоги: что ловить"
+  en: "Alerts: what to catch"
+  es: "Alertas: qué detectar"
+core_status.warn_cfg.cpu:
+  ru: "CPU сервера"
+  en: "Server CPU"
+  es: "CPU del servidor"
+core_status.warn_cfg.mem:
+  ru: "Рост памяти"
+  en: "Memory growth"
+  es: "Crecimiento de memoria"
+core_status.warn_cfg.conn:
+  ru: "Обрыв ядра"
+  en: "Core dropout"
+  es: "Caída de núcleo"
+core_status.warn_cfg.ping:
+  ru: "Высокий пинг"
+  en: "High ping"
+  es: "Ping alto"
+
 # --- Units and relative time ---
 core_status.mb:
   ru: "МБ"
   en: "MB"
   es: "MB"
+core_status.ms:
+  ru: "мс"
+  en: "ms"
+  es: "ms"
 core_status.ago_s:
   ru: "%{n}с"
   en: "%{n}s"

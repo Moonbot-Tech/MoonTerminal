@@ -56,6 +56,8 @@ struct WarnCluster {
     cpu_peak: Option<u16>,
     /// Worst memory-growth peak (used MB) among members, if any memory episode.
     mem_peak: Option<u16>,
+    /// Worst ping peak (RTT ms) among members, if any ping episode.
+    ping_peak: Option<u16>,
     /// Whether any member is a connectivity (dropped-core) warning.
     conn: bool,
     /// Whether any member is still open.
@@ -109,7 +111,8 @@ impl ChartPanel {
         let Some(ip) = ip else {
             return self.clear_warn(cx);
         };
-        if self.warn.sig == Some(rev) && self.warn.ip == Some(ip) && self.warn.amber == Some(amber) {
+        if self.warn.sig == Some(rev) && self.warn.ip == Some(ip) && self.warn.amber == Some(amber)
+        {
             return false;
         }
         self.warn.sig = Some(rev);
@@ -252,7 +255,10 @@ impl ChartPanel {
             return None;
         }
         moon_chart::news_marks::hit_marks(
-            self.warn.marks.iter().map(|m| map.x_of_time(m.time_ms as f64)),
+            self.warn
+                .marks
+                .iter()
+                .map(|m| map.x_of_time(m.time_ms as f64)),
             pos.0,
             self.last_ppp,
         )
@@ -377,6 +383,7 @@ fn cluster_episodes(mut episodes: Vec<WarnEpisode>) -> Vec<WarnCluster> {
                     reach,
                     cpu_peak: None,
                     mem_peak: None,
+                    ping_peak: None,
                     conn: false,
                     open: episode.end_ms.is_none(),
                     cores: Vec::new(),
@@ -395,10 +402,25 @@ fn cluster_episodes(mut episodes: Vec<WarnEpisode>) -> Vec<WarnCluster> {
 fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
     match episode.axis {
         WarnAxis::SysCpu => {
-            cluster.cpu_peak = Some(cluster.cpu_peak.map_or(episode.peak, |p| p.max(episode.peak)))
+            cluster.cpu_peak = Some(
+                cluster
+                    .cpu_peak
+                    .map_or(episode.peak, |p| p.max(episode.peak)),
+            )
         }
         WarnAxis::MemGrowth => {
-            cluster.mem_peak = Some(cluster.mem_peak.map_or(episode.peak, |p| p.max(episode.peak)))
+            cluster.mem_peak = Some(
+                cluster
+                    .mem_peak
+                    .map_or(episode.peak, |p| p.max(episode.peak)),
+            )
+        }
+        WarnAxis::Ping => {
+            cluster.ping_peak = Some(
+                cluster
+                    .ping_peak
+                    .map_or(episode.peak, |p| p.max(episode.peak)),
+            )
         }
         WarnAxis::Unreachable => cluster.conn = true,
     }
@@ -453,7 +475,12 @@ fn cluster_card_body(
     // Worst value per axis that fired (mirrors the tab's CPU / RAM / Link).
     let mut lines: Vec<AnyElement> = Vec::new();
     if let Some(cpu) = cluster.cpu_peak {
-        lines.push(reading(t!("core_status.chart_cpu").to_string(), format!("{cpu}%"), p, cx));
+        lines.push(reading(
+            t!("core_status.chart_cpu").to_string(),
+            format!("{cpu}%"),
+            p,
+            cx,
+        ));
     }
     if let Some(mem) = cluster.mem_peak {
         lines.push(reading(
@@ -463,8 +490,21 @@ fn cluster_card_body(
             cx,
         ));
     }
+    if let Some(ping) = cluster.ping_peak {
+        lines.push(reading(
+            t!("core_status.chart_ping").to_string(),
+            format!("{} {}", ping, t!("core_status.ms")),
+            p,
+            cx,
+        ));
+    }
     if cluster.conn {
-        lines.push(reading(t!("core_status.warn_conn").to_string(), String::new(), p, cx));
+        lines.push(reading(
+            t!("core_status.warn_conn").to_string(),
+            String::new(),
+            p,
+            cx,
+        ));
     }
 
     // Full state at detection: the server, then the chart's current core.
@@ -504,11 +544,22 @@ fn cluster_card_body(
         .p(design::ui_px(cx, 8.0))
         .child(head)
         .children(lines)
-        .child(muted_line(t!("core_status.warn_at_detect").to_string(), p, cx))
-        .child(reading(t!("core_status.warn_server").to_string(), server_val, p, cx))
+        .child(muted_line(
+            t!("core_status.warn_at_detect").to_string(),
+            p,
+            cx,
+        ))
+        .child(reading(
+            t!("core_status.warn_server").to_string(),
+            server_val,
+            p,
+            cx,
+        ))
         .child(muted_line(server_extra, p, cx))
         .children(core_line)
-        .when(!cores.is_empty(), |this| this.child(muted_line(cores.join(", "), p, cx)))
+        .when(!cores.is_empty(), |this| {
+            this.child(muted_line(cores.join(", "), p, cx))
+        })
         // The ±1 min graph around the warning (system CPU / occupied memory), once the ring covers it.
         .children(graph.map(|points| warn_graph(points, p)))
         .into_any_element()
@@ -531,13 +582,14 @@ fn warn_graph(points: Vec<(u8, u8)>, p: MoonPalette) -> impl IntoElement {
     // A fixed-height, non-shrinking row with the canvas absolutely filling it, so the graph reserves
     // its own space and never paints over the text above it (the same pattern the Core Status chart
     // uses; a plain in-flow canvas can collapse and overlap).
-    div()
-        .relative()
-        .w_full()
-        .h(px(GRAPH_H))
-        .flex_none()
-        .child(
-            div().absolute().top_0().bottom_0().left_0().right_0().child(
+    div().relative().w_full().h(px(GRAPH_H)).flex_none().child(
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .child(
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
@@ -552,7 +604,7 @@ fn warn_graph(points: Vec<(u8, u8)>, p: MoonPalette) -> impl IntoElement {
                 )
                 .size_full(),
             ),
-        )
+    )
 }
 
 /// Stroke one series of `(x fraction, 0..100 value)` points onto a 0..100 % plot.

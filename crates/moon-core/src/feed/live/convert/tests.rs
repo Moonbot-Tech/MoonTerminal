@@ -18,6 +18,7 @@ fn kernel_health_maps_each_field_by_scope() {
         used_memory_mb: Some(345),
         free_physical_memory_mb: Some(678),
         logical_cpu_count: Some(16),
+        core_round_trip_ms: Some(250),
         ..Default::default()
     };
     let sys = sys_status_from_proto(h, 1_780_000_000_000);
@@ -26,6 +27,7 @@ fn kernel_health_maps_each_field_by_scope() {
     assert_eq!(sys.used_memory_mb, Some(345));
     assert_eq!(sys.free_physical_memory_mb, Some(678));
     assert_eq!(sys.logical_cpu_count, Some(16));
+    assert_eq!(sys.round_trip_ms, Some(250));
     assert_eq!(sys.updated_ms, 1_780_000_000_000);
 }
 

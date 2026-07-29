@@ -178,6 +178,7 @@ pub(super) fn sys_status_from_proto(
         used_memory_mb: h.used_memory_mb,
         free_physical_memory_mb: h.free_physical_memory_mb,
         logical_cpu_count: h.logical_cpu_count,
+        round_trip_ms: h.core_round_trip_ms,
         updated_ms,
     }
 }

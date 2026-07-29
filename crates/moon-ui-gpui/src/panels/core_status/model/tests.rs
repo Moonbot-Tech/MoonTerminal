@@ -24,6 +24,7 @@ fn row(
             address: IpAddr::V4(Ipv4Addr::from(octets)),
             port,
         }),
+        ping_warn: false,
     }
 }
 

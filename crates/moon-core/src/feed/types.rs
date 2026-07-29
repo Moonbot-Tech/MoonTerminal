@@ -944,6 +944,10 @@ pub struct CoreSysStatus {
     pub free_physical_memory_mb: Option<u16>,
     /// Logical CPU count of the machine.
     pub logical_cpu_count: Option<u8>,
+    /// Smoothed client↔core UDP round-trip time, ms — the transport ping between this terminal and
+    /// the core (NOT the core→exchange path). `None` until the core has measured one Ping response.
+    /// This is moonproto's `core_round_trip_ms`; MoonBot's displayed one-way ping is half of it.
+    pub round_trip_ms: Option<u32>,
     /// Receipt time of the last `KernelHealth`, unix ms (`0` — none yet).
     pub updated_ms: i64,
 }
@@ -959,5 +963,6 @@ impl CoreSysStatus {
             && self.used_memory_mb == other.used_memory_mb
             && self.free_physical_memory_mb == other.free_physical_memory_mb
             && self.logical_cpu_count == other.logical_cpu_count
+            && self.round_trip_ms == other.round_trip_ms
     }
 }

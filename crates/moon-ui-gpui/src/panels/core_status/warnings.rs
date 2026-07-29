@@ -1,6 +1,6 @@
 //! Warnings-mode table: recorded warning episodes from the database, newest first.
 //!
-//! A read-only log — one row per episode (CPU / memory / connectivity), with the server and core
+//! A read-only log — one row per episode (CPU / memory / ping / connectivity), with the server and core
 //! resolved to their display names (never the raw IP). Ordering comes from the query (newest first),
 //! so the columns are not sortable.
 
@@ -95,6 +95,7 @@ fn axis_label(axis: WarnAxis) -> String {
     match axis {
         WarnAxis::SysCpu => t!("core_status.chart_cpu"),
         WarnAxis::MemGrowth => t!("core_status.chart_mem"),
+        WarnAxis::Ping => t!("core_status.chart_ping"),
         WarnAxis::Unreachable => t!("core_status.warn_conn"),
     }
     .to_string()
@@ -105,6 +106,7 @@ fn peak(episode: &WarnEpisode) -> String {
     match episode.axis {
         WarnAxis::SysCpu => format!("{}%", episode.peak),
         WarnAxis::MemGrowth => format!("{} {}", episode.peak, t!("core_status.mb")),
+        WarnAxis::Ping => format!("{} {}", episode.peak, t!("core_status.ms")),
         WarnAxis::Unreachable => "—".to_string(),
     }
 }

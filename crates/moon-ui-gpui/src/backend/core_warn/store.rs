@@ -69,15 +69,11 @@ impl WarnStore {
         conn.execute_batch(SCHEMA)?;
         // Add the detection-snapshot columns to a pre-existing database; a fresh one already has
         // them from the schema, so a "duplicate column" error here is expected and ignored.
-        for column in [
-            "sys_cpu",
-            "occ_mem",
-            "free_mb",
-            "used_mb",
-            "logical_cpus",
-        ] {
+        for column in ["sys_cpu", "occ_mem", "free_mb", "used_mb", "logical_cpus"] {
             let _ = conn.execute(
-                &format!("ALTER TABLE core_warnings ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"),
+                &format!(
+                    "ALTER TABLE core_warnings ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+                ),
                 [],
             );
         }
@@ -164,6 +160,7 @@ fn axis_str(axis: WarnAxis) -> &'static str {
         WarnAxis::SysCpu => "sys_cpu",
         WarnAxis::MemGrowth => "mem_growth",
         WarnAxis::Unreachable => "connectivity",
+        WarnAxis::Ping => "ping",
     }
 }
 
@@ -172,6 +169,7 @@ fn axis_from(name: &str) -> WarnAxis {
     match name {
         "mem_growth" => WarnAxis::MemGrowth,
         "connectivity" => WarnAxis::Unreachable,
+        "ping" => WarnAxis::Ping,
         _ => WarnAxis::SysCpu,
     }
 }
