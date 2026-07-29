@@ -248,6 +248,11 @@ struct Backend {
     warn: crate::backend::core_warn::CoreWarnEngine,
     /// Forever-persistence for closed warning episodes, or `None` if the database could not open.
     warn_store: Option<crate::backend::core_warn::store::WarnStore>,
+    /// Closed episodes awaiting the COMPLETE ±1 min history slice, re-captured once the forward tail
+    /// has accumulated (~60 s after the episode start). A durable partial is already written at close,
+    /// so this queue being in-memory only means a restart drops the forward-tail completion, never the
+    /// whole graph.
+    warn_pending_slices: Vec<crate::backend::PendingWarnSlice>,
     /// Core reconnect requests from the Connections button, drained into `session.reconnect`.
     /// Ported from egui's `SettingsActions.reconnect`.
     reconnect_request: Vec<CoreId>,

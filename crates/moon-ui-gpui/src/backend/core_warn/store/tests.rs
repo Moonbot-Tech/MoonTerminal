@@ -88,3 +88,62 @@ fn roundtrip_filters_by_server_and_time() {
     assert_eq!(wide[2].axis, WarnAxis::Unreachable);
     assert_eq!(wide[2].end_ms, Some(9_000));
 }
+
+/// A persisted ±1 min history slice must round-trip by episode id and subject; an absent subject or
+/// unknown episode reads `None`.
+#[test]
+fn series_slice_round_trips_by_episode() {
+    let store = store();
+    let rowid = store
+        .insert_episode(&episode(
+            WarnAxis::SysCpu,
+            [10, 0, 0, 1],
+            None,
+            1_000,
+            2_000,
+            88,
+        ))
+        .unwrap();
+
+    // Includes the byte-boundary values (0 and 255) to catch an encode/decode off-by-one.
+    let samples = [(10u8, 20u8), (30, 40), (255, 0), (0, 255)];
+    store
+        .insert_series(rowid, "server", 60_000, &samples)
+        .unwrap();
+
+    let read = store.series_for_episode(rowid, "server").unwrap();
+    assert_eq!(read.as_deref(), Some(&samples[..]));
+
+    // A subject never written and an unknown episode both read as absent, not an error.
+    assert_eq!(store.series_for_episode(rowid, "core").unwrap(), None);
+    assert_eq!(
+        store.series_for_episode(rowid + 999, "server").unwrap(),
+        None
+    );
+
+    // Re-capturing (partial at close, then the complete window) overwrites, never duplicates: the
+    // second write wins and the unique index keeps a single row.
+    let complete = [(1u8, 2u8), (3, 4), (5, 6)];
+    store
+        .insert_series(rowid, "server", 60_000, &complete)
+        .unwrap();
+    assert_eq!(
+        store
+            .series_for_episode(rowid, "server")
+            .unwrap()
+            .as_deref(),
+        Some(&complete[..])
+    );
+    let rows: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM core_warning_series WHERE episode_id = ?1 AND subject = 'server'",
+            [rowid],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        rows, 1,
+        "OR REPLACE must keep exactly one row per (episode, subject)"
+    );
+}

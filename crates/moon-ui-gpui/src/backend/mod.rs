@@ -24,6 +24,80 @@ use moon_core::config::{
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
+/// Seconds of history kept on each side of a warning start for its card graph.
+const WARN_SLICE_BACK_MS: i64 = 60_000;
+const WARN_SLICE_FWD_MS: i64 = 60_000;
+/// Cap on episodes queued for slice capture, so a burst of warnings cannot grow the queue without
+/// bound; the oldest pending capture is dropped past it.
+const WARN_PENDING_CAP: usize = 1024;
+
+/// A closed, persisted episode whose ±1 min history slice is captured later — once its forward tail
+/// (`start_ms + WARN_SLICE_FWD_MS`) has accumulated in the live ring — and written to `warn_store`.
+pub(crate) struct PendingWarnSlice {
+    /// The `core_warnings` row id the slice is keyed to.
+    pub(crate) episode_id: i64,
+    /// Server whose history ring the slice is read from.
+    pub(crate) ip: IpAddr,
+    /// The episode start; the window is `[start - BACK, start + FWD]`.
+    pub(crate) start_ms: i64,
+    /// Unix ms at which the forward tail is expected to be present.
+    pub(crate) capture_at_ms: i64,
+}
+
+/// Slice a history ring to the ±1 min window around `at_ms`, positionally at 1 Hz (the same read the
+/// live card uses). `None` when the ring is absent, too short, or does not reach the window.
+fn ring_slice(
+    ring: Option<&std::collections::VecDeque<(u8, u8)>>,
+    at_ms: i64,
+    now_ms: i64,
+) -> Option<Vec<(u8, u8)>> {
+    let ring = ring?;
+    let len = ring.len();
+    if len < 2 {
+        return None;
+    }
+    let now_sec = now_ms / 1000;
+    let at_sec = at_ms / 1000;
+    // Window edges in seconds, derived from the same constants that set `base_ms`/`capture_at_ms`.
+    let back = WARN_SLICE_BACK_MS / 1000;
+    let fwd = WARN_SLICE_FWD_MS / 1000;
+    // Seconds back from now to each window edge; the newer edge (at+fwd) may still be the future.
+    let k_lo = (now_sec - (at_sec - back)).max(0) as usize;
+    let k_hi = (now_sec - (at_sec + fwd)).max(0) as usize;
+    let lo = len.saturating_sub(1 + k_lo);
+    let hi = len.saturating_sub(1 + k_hi);
+    if hi.saturating_sub(lo) < 1 {
+        return None;
+    }
+    Some(ring.iter().skip(lo).take(hi - lo + 1).copied().collect())
+}
+
+/// Capture and persist one episode's ±1 min server slice from the current ring, overwriting any
+/// earlier partial capture for it (the store uses `INSERT OR REPLACE`). A ring with no data in the
+/// window writes nothing, so the card simply shows no graph.
+fn capture_series(
+    store: &crate::backend::core_warn::store::WarnStore,
+    ring: Option<&std::collections::VecDeque<(u8, u8)>>,
+    episode_id: i64,
+    start_ms: i64,
+    now_ms: i64,
+) {
+    if let Some(samples) = ring_slice(ring, start_ms, now_ms) {
+        let base_ms = start_ms - WARN_SLICE_BACK_MS;
+        if let Err(err) = store.insert_series(episode_id, "server", base_ms, &samples) {
+            log::warn!("core warning slice persist failed: {err}");
+        }
+    }
+}
+
+/// Push a pending capture, evicting the oldest if the queue is at its cap.
+fn push_pending_slice(queue: &mut Vec<PendingWarnSlice>, item: PendingWarnSlice) {
+    if queue.len() >= WARN_PENDING_CAP {
+        queue.remove(0);
+    }
+    queue.push(item);
+}
+
 /// Apply one visible toolbar edit with the same wire quantization used by MoonProto.
 fn apply_group_exit_edit(exit: &mut GroupExitSettings, edit: ClientSettingsEdit) -> bool {
     match edit {
@@ -875,11 +949,92 @@ impl Backend {
                 if !enabled.allows(episode.axis) {
                     continue;
                 }
-                if let Err(err) = store.insert_episode(episode) {
-                    log::warn!("core warning persist failed: {err}");
+                match store.insert_episode(episode) {
+                    Ok(rowid) => {
+                        if let Some(ip) = episode.server_ip {
+                            // Capture immediately with whatever window exists now, so a shutdown
+                            // before the forward tail fills still leaves a (partial) graph on disk.
+                            capture_series(
+                                store,
+                                self.core_chart_hist.ring(ip),
+                                rowid,
+                                episode.start_ms,
+                                now_ms,
+                            );
+                            // If the forward tail has not accrued yet, re-capture the full window
+                            // later; OR REPLACE overwrites the partial with the complete slice.
+                            let capture_at_ms = episode.start_ms + WARN_SLICE_FWD_MS;
+                            if capture_at_ms > now_ms {
+                                push_pending_slice(
+                                    &mut self.warn_pending_slices,
+                                    PendingWarnSlice {
+                                        episode_id: rowid,
+                                        ip,
+                                        start_ms: episode.start_ms,
+                                        capture_at_ms,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => log::warn!("core warning persist failed: {err}"),
                 }
             }
         }
+        self.drain_pending_slices(now_ms);
+    }
+
+    /// Capture and persist the ±1 min history slice of any pending episode whose forward window has
+    /// now accumulated in the live ring. A pending capture with no ring data is dropped (its card
+    /// simply shows no graph), so the queue never stalls.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix milliseconds.
+    ///
+    /// Returns:
+    ///     Nothing; ready slices are written to `warn_store` and removed from the queue.
+    fn drain_pending_slices(&mut self, now_ms: i64) {
+        let Some(store) = &self.warn_store else {
+            self.warn_pending_slices.clear();
+            return;
+        };
+        let mut i = 0;
+        while i < self.warn_pending_slices.len() {
+            if self.warn_pending_slices[i].capture_at_ms > now_ms {
+                i += 1;
+                continue;
+            }
+            // `remove` (not `swap_remove`) keeps the queue in insertion order, so the cap's
+            // oldest-first eviction stays meaningful; the queue is tiny, so the shift is cheap.
+            let pending = self.warn_pending_slices.remove(i);
+            capture_series(
+                store,
+                self.core_chart_hist.ring(pending.ip),
+                pending.episode_id,
+                pending.start_ms,
+                now_ms,
+            );
+        }
+    }
+
+    /// The server history slice around a moment, from the live ring: the card's live-path graph.
+    pub(crate) fn warn_server_slice(
+        &self,
+        ip: IpAddr,
+        at_ms: i64,
+        now_ms: i64,
+    ) -> Option<Vec<(u8, u8)>> {
+        ring_slice(self.core_chart_hist.ring(ip), at_ms, now_ms)
+    }
+
+    /// The persisted server history slice for a closed episode, for a card whose warning has already
+    /// rolled out of the live ring. `None` if it was never captured or persistence is off.
+    pub(crate) fn warn_series_slice(&self, episode_id: u64) -> Option<Vec<(u8, u8)>> {
+        self.warn_store
+            .as_ref()?
+            .series_for_episode(episode_id as i64, "server")
+            .ok()
+            .flatten()
     }
 
     /// The engine's axis master switches, projected from the persisted layout toggles.

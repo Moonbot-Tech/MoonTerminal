@@ -342,6 +342,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             )
             .map_err(|e| log::warn!("core warnings db open failed: {e}"))
             .ok(),
+            warn_pending_slices: Vec::new(),
             reconnect_request: Vec::new(),
             show_group_request: Vec::new(),
             group_windows: HashMap::new(),

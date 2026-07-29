@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS core_warning_series (
     blob       BLOB    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_warn_series_ep ON core_warning_series(episode_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_warn_series_unique ON core_warning_series(episode_id, subject);
 ";
 
 /// SQLite-backed episode log.
@@ -82,8 +83,8 @@ impl WarnStore {
 
     /// Append one closed episode and return its database row id.
     ///
-    /// The row id is what the upcoming per-badge series slices reference (`core_warning_series
-    /// .episode_id`), so it is returned even though the current caller ignores it.
+    /// The row id keys this episode's persisted history slice (`core_warning_series.episode_id`), so
+    /// the caller keeps it to capture that slice.
     ///
     /// Args:
     ///     episode: A resolved episode (its `end_ms` is normally set).
@@ -152,6 +153,92 @@ impl WarnStore {
         let rows = stmt.query_map(params![limit as i64], row_to_episode)?;
         rows.collect()
     }
+
+    /// Persist one episode's ±1 min history slice so its card can draw a graph long after the live
+    /// ring has rolled past it.
+    ///
+    /// `INSERT OR REPLACE` keyed by the `(episode_id, subject)` unique index: capturing the same
+    /// episode twice (a durable partial at close, then the complete window once the forward tail has
+    /// filled) overwrites rather than duplicating.
+    ///
+    /// Args:
+    ///     episode_id: The `core_warnings` row id this slice belongs to.
+    ///     subject: Which series the samples are (`"server"` today; `"core"` reserved).
+    ///     base_ms: Unix ms of the window's first sample, stored for future timestamp alignment.
+    ///     samples: 1 Hz `(cpu %, mem %)` pairs across the window.
+    ///
+    /// Returns:
+    ///     Unit, or the SQLite error if the insert failed.
+    pub(crate) fn insert_series(
+        &self,
+        episode_id: i64,
+        subject: &str,
+        base_ms: i64,
+        samples: &[(u8, u8)],
+    ) -> rusqlite::Result<()> {
+        let blob = encode_series(base_ms, samples);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO core_warning_series (episode_id, badge, subject, blob) \
+             VALUES (?1, 0, ?2, ?3)",
+            params![episode_id, subject, blob],
+        )?;
+        Ok(())
+    }
+
+    /// Read back one episode's persisted history slice, if it was captured.
+    ///
+    /// Args:
+    ///     episode_id: The `core_warnings` row id.
+    ///     subject: Which series to read (`"server"`).
+    ///
+    /// Returns:
+    ///     The stored `(cpu %, mem %)` pairs, `None` if no slice was captured, or a SQLite error.
+    pub(crate) fn series_for_episode(
+        &self,
+        episode_id: i64,
+        subject: &str,
+    ) -> rusqlite::Result<Option<Vec<(u8, u8)>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT blob FROM core_warning_series WHERE episode_id = ?1 AND subject = ?2 LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![episode_id, subject])?;
+        match rows.next()? {
+            Some(row) => {
+                let blob: Vec<u8> = row.get(0)?;
+                Ok(decode_series(&blob))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+/// Encode a history slice as `[base_ms: i64 LE][n: u16 LE][n×(cpu u8, mem u8)]`.
+fn encode_series(base_ms: i64, samples: &[(u8, u8)]) -> Vec<u8> {
+    let n = samples.len().min(u16::MAX as usize);
+    let mut out = Vec::with_capacity(10 + n * 2);
+    out.extend_from_slice(&base_ms.to_le_bytes());
+    out.extend_from_slice(&(n as u16).to_le_bytes());
+    for &(cpu, mem) in samples.iter().take(n) {
+        out.push(cpu);
+        out.push(mem);
+    }
+    out
+}
+
+/// Decode a slice written by [`encode_series`]; `None` if the blob is truncated or malformed.
+fn decode_series(blob: &[u8]) -> Option<Vec<(u8, u8)>> {
+    if blob.len() < 10 {
+        return None;
+    }
+    let n = u16::from_le_bytes([blob[8], blob[9]]) as usize;
+    if blob.len() < 10 + n * 2 {
+        return None;
+    }
+    Some(
+        (0..n)
+            .map(|i| (blob[10 + i * 2], blob[11 + i * 2]))
+            .collect(),
+    )
 }
 
 /// Stable wire name for a warning axis.
