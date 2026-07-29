@@ -13,7 +13,7 @@ use std::path::Path;
 use moon_core::session::CoreId;
 use rusqlite::{Connection, Row, params};
 
-use super::{WarnAxis, WarnEpisode};
+use super::{WarnAxis, WarnEpisode, WarnSnapshot};
 
 /// Schema: closed episodes, plus the (initially empty) per-badge series-slice table.
 ///
@@ -23,13 +23,18 @@ use super::{WarnAxis, WarnEpisode};
 const SCHEMA: &str = "
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS core_warnings (
-    id         INTEGER PRIMARY KEY,
-    axis       TEXT    NOT NULL,
-    server_ip  TEXT,
-    core_id    INTEGER,
-    start_ms   INTEGER NOT NULL,
-    end_ms     INTEGER,
-    peak       INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY,
+    axis         TEXT    NOT NULL,
+    server_ip    TEXT,
+    core_id      INTEGER,
+    start_ms     INTEGER NOT NULL,
+    end_ms       INTEGER,
+    peak         INTEGER NOT NULL,
+    sys_cpu      INTEGER NOT NULL DEFAULT 0,
+    occ_mem      INTEGER NOT NULL DEFAULT 0,
+    free_mb      INTEGER NOT NULL DEFAULT 0,
+    used_mb      INTEGER NOT NULL DEFAULT 0,
+    logical_cpus INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_warn_server_time ON core_warnings(server_ip, start_ms);
 CREATE TABLE IF NOT EXISTS core_warning_series (
@@ -62,6 +67,20 @@ impl WarnStore {
     /// Wrap a connection and apply the schema.
     fn from_connection(conn: Connection) -> rusqlite::Result<Self> {
         conn.execute_batch(SCHEMA)?;
+        // Add the detection-snapshot columns to a pre-existing database; a fresh one already has
+        // them from the schema, so a "duplicate column" error here is expected and ignored.
+        for column in [
+            "sys_cpu",
+            "occ_mem",
+            "free_mb",
+            "used_mb",
+            "logical_cpus",
+        ] {
+            let _ = conn.execute(
+                &format!("ALTER TABLE core_warnings ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"),
+                [],
+            );
+        }
         Ok(Self { conn })
     }
 
@@ -77,8 +96,9 @@ impl WarnStore {
     ///     The inserted row id, or the SQLite error if the insert failed.
     pub(crate) fn insert_episode(&self, episode: &WarnEpisode) -> rusqlite::Result<i64> {
         self.conn.execute(
-            "INSERT INTO core_warnings (axis, server_ip, core_id, start_ms, end_ms, peak) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO core_warnings \
+             (axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, used_mb, logical_cpus) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 axis_str(episode.axis),
                 episode.server_ip.map(|ip| ip.to_string()),
@@ -86,6 +106,11 @@ impl WarnStore {
                 episode.start_ms,
                 episode.end_ms,
                 i64::from(episode.peak),
+                i64::from(episode.snap.sys_cpu),
+                i64::from(episode.snap.occ_mem),
+                i64::from(episode.snap.free_mb),
+                i64::from(episode.snap.used_mb),
+                i64::from(episode.snap.logical_cpus),
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -107,7 +132,8 @@ impl WarnStore {
         to_ms: i64,
     ) -> rusqlite::Result<Vec<WarnEpisode>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak FROM core_warnings \
+            "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
+             used_mb, logical_cpus FROM core_warnings \
              WHERE server_ip = ?1 AND start_ms BETWEEN ?2 AND ?3 ORDER BY start_ms",
         )?;
         let rows = stmt.query_map(params![ip.to_string(), from_ms, to_ms], row_to_episode)?;
@@ -123,7 +149,8 @@ impl WarnStore {
     ///     Episodes ordered by `start_ms` descending, or a SQLite error.
     pub(crate) fn recent_episodes(&self, limit: usize) -> rusqlite::Result<Vec<WarnEpisode>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak FROM core_warnings \
+            "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
+             used_mb, logical_cpus FROM core_warnings \
              ORDER BY start_ms DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], row_to_episode)?;
@@ -162,6 +189,13 @@ fn row_to_episode(row: &Row) -> rusqlite::Result<WarnEpisode> {
         start_ms: row.get(4)?,
         end_ms: row.get(5)?,
         peak: row.get::<_, i64>(6)? as u16,
+        snap: WarnSnapshot {
+            sys_cpu: row.get::<_, i64>(7)? as u8,
+            occ_mem: row.get::<_, i64>(8)? as u8,
+            free_mb: row.get::<_, i64>(9)? as u16,
+            used_mb: row.get::<_, i64>(10)? as u32,
+            logical_cpus: row.get::<_, i64>(11)? as u8,
+        },
     })
 }
 

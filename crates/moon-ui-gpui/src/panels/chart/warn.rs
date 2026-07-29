@@ -26,7 +26,7 @@ use moon_core::session::CoreId;
 use moon_core::util::now_unix_ms_i64;
 
 use super::ChartPanel;
-use crate::backend::core_warn::{WarnAxis, WarnEpisode};
+use crate::backend::core_warn::{WarnAxis, WarnEpisode, WarnSnapshot};
 use crate::design;
 
 /// How far back warning episodes are collected for a chart; the shader clips whatever is off-plot.
@@ -60,6 +60,8 @@ struct WarnCluster {
     open: bool,
     /// Distinct cores named by per-core members.
     cores: Vec<CoreId>,
+    /// Server telemetry captured when the event first fired.
+    snap: WarnSnapshot,
 }
 
 /// This chart's warning badges (one per cluster), the card payload, and the hover that drives them.
@@ -186,6 +188,27 @@ impl ChartPanel {
         self.warn_hit(self.input.cursor?)
     }
 
+    /// This chart's current core at a past moment: `(process CPU %, process memory %, core name)` from
+    /// its history ring. `None` when there is no current core or the ring no longer reaches that far.
+    fn core_reading_at(&self, at_ms: i64, now_ms: i64, cx: &App) -> Option<(u8, u8, String)> {
+        let (core, _market) = self.chart.active_target()?;
+        let b = self.backend.read(cx);
+        let ring = b.core_line_hist.ring(core)?;
+        let back = ((now_ms - at_ms).max(0) / 1000) as usize;
+        if back >= ring.len() {
+            return None;
+        }
+        let (cpu, mem) = ring[ring.len() - 1 - back];
+        let name = b
+            .config
+            .servers
+            .iter()
+            .find(|server| server.id == core)
+            .map(|server| server.name.clone())
+            .filter(|name| !name.is_empty())?;
+        Some((cpu, mem, name))
+    }
+
     /// Hit-test the badges' row at `pos` (panel-local device pixels). Mirror of `news_hit`.
     fn warn_hit(&self, pos: (f32, f32)) -> Option<MarkHit> {
         if self.warn.marks.is_empty() || self.orderbook_only {
@@ -238,7 +261,16 @@ impl ChartPanel {
         let max_h = (slot_h - bottom - CARD_TOP_INSET).max(CARD_MIN_H);
 
         let now_ms = now_unix_ms_i64();
-        let body = cluster_card_body(cluster, mark, now_ms, self.backend.read(cx), palette, cx);
+        let core_reading = self.core_reading_at(cluster.start_ms, now_ms, cx);
+        let body = cluster_card_body(
+            cluster,
+            mark,
+            now_ms,
+            core_reading,
+            self.backend.read(cx),
+            palette,
+            cx,
+        );
 
         Some(
             div()
@@ -291,6 +323,8 @@ fn cluster_episodes(mut episodes: Vec<WarnEpisode>) -> Vec<WarnCluster> {
                     conn: false,
                     open: episode.end_ms.is_none(),
                     cores: Vec::new(),
+                    // The first (earliest) episode's snapshot is the event's detection state.
+                    snap: episode.snap,
                 };
                 merge_axis(&mut cluster, &episode);
                 out.push(cluster);
@@ -318,11 +352,13 @@ fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
     }
 }
 
-/// The card contents for one warning cluster: time, duration, per-axis readings, and cores.
+/// The card contents for one warning cluster: time and duration, the worst value per axis that
+/// fired, and the full server + current-core state captured at detection.
 fn cluster_card_body(
     cluster: &WarnCluster,
     mark: &NewsMark,
     now_ms: i64,
+    core_reading: Option<(u8, u8, String)>,
     backend: &crate::Backend,
     p: MoonPalette,
     cx: &App,
@@ -355,7 +391,7 @@ fn cluster_card_body(
                 .child(duration_text(cluster)),
         );
 
-    // One reading line per axis present, worst value shown (mirrors the tab's CPU / RAM / Link).
+    // Worst value per axis that fired (mirrors the tab's CPU / RAM / Link).
     let mut lines: Vec<AnyElement> = Vec::new();
     if let Some(cpu) = cluster.cpu_peak {
         lines.push(reading(t!("core_status.chart_cpu").to_string(), format!("{cpu}%"), p, cx));
@@ -369,15 +405,26 @@ fn cluster_card_body(
         ));
     }
     if cluster.conn {
-        lines.push(reading(
-            t!("core_status.warn_conn").to_string(),
-            String::new(),
-            p,
-            cx,
-        ));
+        lines.push(reading(t!("core_status.warn_conn").to_string(), String::new(), p, cx));
     }
 
-    // Cores named by per-core (memory) members, never the raw IP.
+    // Full state at detection: the server, then the chart's current core.
+    let snap = &cluster.snap;
+    let cpu_lbl = t!("core_status.chart_cpu").to_string();
+    let mem_lbl = t!("core_status.chart_mem").to_string();
+    let server_val = format!("{cpu_lbl} {}% · {mem_lbl} {}%", snap.sys_cpu, snap.occ_mem);
+    let server_extra = format!(
+        "{} · {}",
+        t!(
+            "core_status.free_memory",
+            value = format!("{} {}", snap.free_mb, t!("core_status.mb"))
+        ),
+        t!("core_status.logical_cpus", value = snap.logical_cpus)
+    );
+    let core_line = core_reading.map(|(cpu, mem, name)| {
+        reading(name, format!("{cpu_lbl} {cpu}% · {mem_lbl} {mem}%"), p, cx)
+    });
+    // Cores named by per-core members, never the raw IP.
     let cores: Vec<String> = cluster
         .cores
         .iter()
@@ -391,16 +438,22 @@ fn cluster_card_body(
         .p(design::ui_px(cx, 8.0))
         .child(head)
         .children(lines)
-        .when(!cores.is_empty(), |this| {
-            this.child(
-                div()
-                    .w_full()
-                    .truncate()
-                    .text_size(design::t_caption(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(cores.join(", ")),
-            )
-        })
+        .child(muted_line(t!("core_status.warn_at_detect").to_string(), p, cx))
+        .child(reading(t!("core_status.warn_server").to_string(), server_val, p, cx))
+        .child(muted_line(server_extra, p, cx))
+        .children(core_line)
+        .when(!cores.is_empty(), |this| this.child(muted_line(cores.join(", "), p, cx)))
+        .into_any_element()
+}
+
+/// A muted, single-line caption in the card.
+fn muted_line(text: String, p: MoonPalette, cx: &App) -> AnyElement {
+    div()
+        .w_full()
+        .truncate()
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        .child(text)
         .into_any_element()
 }
 

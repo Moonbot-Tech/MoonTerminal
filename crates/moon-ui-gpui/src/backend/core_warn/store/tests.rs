@@ -7,7 +7,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use rusqlite::Connection;
 
 use super::WarnStore;
-use crate::backend::core_warn::{WarnAxis, WarnEpisode};
+use crate::backend::core_warn::{WarnAxis, WarnEpisode, WarnSnapshot};
 
 /// A store backed by a throwaway in-memory database.
 fn store() -> WarnStore {
@@ -31,6 +31,13 @@ fn episode(
         start_ms,
         end_ms: Some(end_ms),
         peak,
+        snap: WarnSnapshot {
+            sys_cpu: 77,
+            occ_mem: 55,
+            free_mb: 2048,
+            used_mb: 4096,
+            logical_cpus: 8,
+        },
     }
 }
 
@@ -73,6 +80,11 @@ fn roundtrip_filters_by_server_and_time() {
     assert_eq!(wide[1].axis, WarnAxis::MemGrowth);
     assert_eq!(wide[1].core_id, Some(7));
     assert_eq!(wide[1].peak, 512);
+    // The detection snapshot round-trips.
+    assert_eq!(wide[1].snap.sys_cpu, 77);
+    assert_eq!(wide[1].snap.free_mb, 2048);
+    assert_eq!(wide[1].snap.used_mb, 4096);
+    assert_eq!(wide[1].snap.logical_cpus, 8);
     assert_eq!(wide[2].axis, WarnAxis::Unreachable);
     assert_eq!(wide[2].end_ms, Some(9_000));
 }

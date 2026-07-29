@@ -192,6 +192,15 @@ core_status.warn_ongoing:
   ru: "идёт"
   en: "ongoing"
   es: "en curso"
+# Warning-badge card: heading above the server/core state captured when the warning fired.
+core_status.warn_at_detect:
+  ru: "На момент детекта:"
+  en: "At detection:"
+  es: "En la detección:"
+core_status.warn_server:
+  ru: "Сервер"
+  en: "Server"
+  es: "Servidor"
 core_status.chart_5m:
   ru: "5 мин"
   en: "5 min"

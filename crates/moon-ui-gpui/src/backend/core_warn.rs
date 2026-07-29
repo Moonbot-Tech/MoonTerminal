@@ -89,8 +89,25 @@ pub(crate) struct TickResult {
     pub(crate) rings: Vec<RingSample>,
 }
 
+/// The server's telemetry captured at the moment a warning fired, so the card can show the full
+/// state at detection instead of only the peak.
+#[allow(dead_code)] // Fields read by the chart card and persistence.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct WarnSnapshot {
+    /// System CPU percent.
+    pub(crate) sys_cpu: u8,
+    /// Occupied memory percent (process sum over the reconstructed machine total).
+    pub(crate) occ_mem: u8,
+    /// Free physical memory, MB.
+    pub(crate) free_mb: u16,
+    /// Total process memory across the server's cores, MB.
+    pub(crate) used_mb: u32,
+    /// Logical CPU count.
+    pub(crate) logical_cpus: u8,
+}
+
 /// A warning period with a start and, once cleared, an end.
-#[allow(dead_code)] // Fields read by the upcoming chart-badge/persistence phase and the tests.
+#[allow(dead_code)] // Fields read by the chart-badge/persistence phase and the tests.
 #[derive(Clone, Debug)]
 pub(crate) struct WarnEpisode {
     /// Monotonic id, stable across this process run.
@@ -107,6 +124,8 @@ pub(crate) struct WarnEpisode {
     pub(crate) end_ms: Option<i64>,
     /// Worst value seen during the episode (CPU % or used MB, by axis).
     pub(crate) peak: u16,
+    /// Server telemetry at detection.
+    pub(crate) snap: WarnSnapshot,
 }
 
 /// One second of CPU samples, tagged with its second so a reused ring slot resets cleanly.
@@ -166,6 +185,8 @@ struct OpenWarn {
     core_id: Option<CoreId>,
     /// Worst value seen so far.
     peak: u16,
+    /// Server telemetry captured when the warning fired.
+    snap: WarnSnapshot,
 }
 
 /// Subject a warning is keyed by while open.
@@ -389,6 +410,9 @@ impl CoreWarnEngine {
                             server_ip: *server_ip,
                             core_id: *core_id,
                             peak: *peak,
+                            snap: (*server_ip)
+                                .map(|ip| server_snapshot(samples, ip))
+                                .unwrap_or_default(),
                         },
                     );
                 }
@@ -418,6 +442,7 @@ impl CoreWarnEngine {
                 start_ms: open.start_ms,
                 end_ms: Some(now_ms),
                 peak: open.peak,
+                snap: open.snap,
             };
             closed.push(episode.clone());
             self.push_episode(episode);
@@ -481,8 +506,50 @@ impl CoreWarnEngine {
                 start_ms: open.start_ms,
                 end_ms: None,
                 peak: open.peak,
+                snap: open.snap,
             })
             .collect()
+    }
+}
+
+/// Capture a server's telemetry snapshot from this tick's samples, for the detection card.
+///
+/// Freshest system CPU / free memory / logical CPUs across the server's cores, and the summed
+/// process memory with its occupied percent — the same reconstruction the rings use.
+///
+/// Args:
+///     samples: This tick's per-core telemetry.
+///     ip: Server endpoint address.
+///
+/// Returns:
+///     The server's state at this moment; zeroes for fields no core has reported.
+fn server_snapshot(samples: &[CoreSample], ip: IpAddr) -> WarnSnapshot {
+    let cores = || samples.iter().filter(|s| s.ip == Some(ip));
+    let freshest_u16 = |read: fn(&CoreSysStatus) -> Option<u16>| {
+        cores()
+            .filter_map(|s| read(&s.sys).map(|value| (s.sys.updated_ms, value)))
+            .max_by_key(|(updated_ms, _)| *updated_ms)
+            .map(|(_, value)| value)
+    };
+    let freshest_u8 = |read: fn(&CoreSysStatus) -> Option<u8>| {
+        cores()
+            .filter_map(|s| read(&s.sys).map(|value| (s.sys.updated_ms, value)))
+            .max_by_key(|(updated_ms, _)| *updated_ms)
+            .map(|(_, value)| value)
+    };
+    let free = freshest_u16(|sys| sys.free_physical_memory_mb);
+    let used_sum: u64 = cores().filter_map(|s| s.sys.used_memory_mb).map(u64::from).sum();
+    let total = free.map(|free| used_sum + u64::from(free)).unwrap_or(0);
+    WarnSnapshot {
+        sys_cpu: freshest_u8(|sys| sys.system_cpu_percent).unwrap_or(0).min(100),
+        occ_mem: if total > 0 {
+            (used_sum * 100 / total).min(100) as u8
+        } else {
+            0
+        },
+        free_mb: free.unwrap_or(0),
+        used_mb: used_sum.min(u64::from(u32::MAX)) as u32,
+        logical_cpus: freshest_u8(|sys| sys.logical_cpu_count).unwrap_or(0),
     }
 }
 
