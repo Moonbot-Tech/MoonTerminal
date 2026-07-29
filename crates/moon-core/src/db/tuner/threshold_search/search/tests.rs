@@ -91,11 +91,11 @@ fn best_pair_reference(
 /// restart, from the same per-restart seed — so a difference in the result is a difference in the
 /// ALGORITHM or in the merge, not in the random stream. Keeping the best only on a STRICT
 /// improvement is the sequential tie-break the parallel merge has to reproduce.
-fn run_reference(s: &Search, restarts: usize, seed: u64) -> Option<Outcome> {
+fn run_reference(s: &Search, allow: &[bool], restarts: usize, seed: u64) -> Option<Outcome> {
     let mut best_global: Option<Outcome> = None;
     for restart in 0..restarts {
         let mut rng = Rng(restart_seed(seed, restart));
-        let outcome = one_restart_reference(s, restart, &mut rng);
+        let outcome = one_restart_reference(s, allow, restart, &mut rng);
         if best_global
             .as_ref()
             .is_none_or(|best| outcome.profit > best.profit)
@@ -106,8 +106,12 @@ fn run_reference(s: &Search, restarts: usize, seed: u64) -> Option<Outcome> {
     best_global
 }
 
-/// One restart, computed the original way.
-fn one_restart_reference(s: &Search, restart: usize, rng: &mut Rng) -> Outcome {
+/// One restart, computed the original way, over the fields `allow` admits.
+///
+/// The draws are taken for every SEARCHABLE field — both at initialization and in the per-pass
+/// shuffle — and only the assignment and the visit are withheld, mirroring the production rule
+/// that keeps the random stream a property of the search rather than of the mask.
+fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut Rng) -> Outcome {
     let nf = s.bins.len();
     let (n, ne) = (s.n, s.ne);
     let mut sel: Vec<Option<(usize, usize)>> = vec![None; nf];
@@ -126,7 +130,9 @@ fn one_restart_reference(s: &Search, restart: usize, rng: &mut Rng) -> Outcome {
                 }
                 let i = rng.below(ne);
                 let j = i + 1 + rng.below(ne - i);
-                *sl = Some((i, j));
+                if allow[fi] {
+                    *sl = Some((i, j));
+                }
             }
         }
     }
@@ -145,6 +151,9 @@ fn one_restart_reference(s: &Search, restart: usize, rng: &mut Rng) -> Outcome {
             }
         }
     }
+    // Over every SEARCHABLE field, like the initialization above and for the same reason: the
+    // shuffle spends one draw per element, so ordering only the allowed ones would make the
+    // random stream a property of the mask.
     let mut order: Vec<usize> = (0..nf).filter(|fi| s.free[*fi]).collect();
     for _pass_no in 0..MAX_PASSES {
         if restart > 0 {
@@ -154,6 +163,9 @@ fn one_restart_reference(s: &Search, restart: usize, rng: &mut Rng) -> Outcome {
         }
         let mut changed = false;
         for &fi in &order {
+            if !allow[fi] {
+                continue;
+            }
             let best = best_for_field_reference(s, fi, &sel, &pass[fi], &fail);
             if best != sel[fi] {
                 sel[fi] = best;
@@ -184,7 +196,7 @@ fn one_restart_reference(s: &Search, restart: usize, rng: &mut Rng) -> Outcome {
     loop {
         let mut removed = false;
         for fi in 0..nf {
-            if !s.free[fi] || sel[fi].is_none() {
+            if !allow[fi] || sel[fi].is_none() {
                 continue;
             }
             let redundant = (0..n).all(|t| pass[fi][t] || fail[t] > 1);
@@ -206,7 +218,7 @@ fn one_restart_reference(s: &Search, restart: usize, rng: &mut Rng) -> Outcome {
     let mut profit = 0.0f64;
     for t in 0..n {
         if fail[t] == 0 {
-            profit += s.profits[t];
+            profit += s.cols.profits[t];
         }
     }
     Outcome { sel, profit }
@@ -229,11 +241,11 @@ fn best_for_field_reference(
         if !others_ok {
             continue;
         }
-        tot_p += s.profits[t];
+        tot_p += s.cols.profits[t];
         tot_c += 1;
         let b = s.bins[fi][t];
         let idx = if b == BELOW { ne } else { b as usize };
-        bp[idx] += s.profits[t];
+        bp[idx] += s.cols.profits[t];
         bc[idx] += 1;
     }
     let mut pre_p = vec![0.0f64; ne + 1];
@@ -384,16 +396,29 @@ fn build_split(
     ne: usize,
     train_n: usize,
 ) -> Search {
+    try_build(profits, vals, locked, min_n, ne, train_n).expect("fixture is larger than its min_n")
+}
+
+/// Build a search that may legitimately be REFUSED, for the cases where refusal is the assertion.
+fn try_build(
+    profits: Vec<f64>,
+    vals: &[Vec<f64>],
+    locked: &[Option<(Option<f64>, Option<f64>)>],
+    min_n: usize,
+    ne: usize,
+    train_n: usize,
+) -> Option<Search> {
     Search::new(
-        profits,
-        vals.to_vec(),
+        Arc::new(Columns {
+            profits,
+            vals: vals.to_vec(),
+        }),
         locked,
         slot_flags(),
         min_n,
         ne,
         train_n,
     )
-    .expect("fixture is larger than its min_n")
 }
 
 /// The bounds a result finally applies, through the production rule itself.
@@ -415,7 +440,7 @@ fn fast_search_matches_the_reference_on_random_samples() {
         let (profits, vals) = synthetic(n, seed);
         let search = build(profits, &vals, &all_free(), n / 5, ne);
         let fast = search.run(restarts, seed, &uncancelled());
-        let slow = run_reference(&search, restarts, seed);
+        let slow = run_reference(&search, search.free_mask(), restarts, seed);
         assert_outcomes_match(fast, slow, &format!("synthetic n={n} ne={ne}"));
     }
 }
@@ -431,7 +456,7 @@ fn fast_search_matches_the_reference_when_profits_tie() {
         let (profits, vals) = tie_heavy(n, seed);
         let search = build(profits, &vals, &all_free(), 3, ne);
         let fast = search.run(restarts, seed, &uncancelled());
-        let slow = run_reference(&search, restarts, seed);
+        let slow = run_reference(&search, search.free_mask(), restarts, seed);
         assert_outcomes_match(fast, slow, &format!("tie-heavy n={n} ne={ne}"));
     }
 }
@@ -452,7 +477,7 @@ fn fast_search_matches_the_reference_with_fixed_and_excluded_fields() {
     locked[slot_index] = Some((Some(-5.0), None));
     let search = build(profits, &vals, &locked, 20, 16);
     let fast = search.run(6, 0xBEEF, &uncancelled());
-    let slow = run_reference(&search, 6, 0xBEEF);
+    let slow = run_reference(&search, search.free_mask(), 6, 0xBEEF);
     assert_outcomes_match(fast, slow, "locked fields");
 }
 
@@ -465,7 +490,7 @@ fn fast_search_matches_the_reference_at_the_min_trades_boundary() {
     for &min_n in &[1usize, 2, 60, 118, 119, 120] {
         let search = build(profits.clone(), &vals, &all_free(), min_n, 16);
         let fast = search.run(4, 0xABCD, &uncancelled());
-        let slow = run_reference(&search, 4, 0xABCD);
+        let slow = run_reference(&search, search.free_mask(), 4, 0xABCD);
         assert_outcomes_match(fast, slow, &format!("min_n={min_n}"));
     }
 }
@@ -482,7 +507,7 @@ fn fast_search_matches_the_reference_on_a_constant_column() {
     }
     let search = build(profits, &vals, &all_free(), 10, 16);
     let fast = search.run(5, 0x1234, &uncancelled());
-    let slow = run_reference(&search, 5, 0x1234);
+    let slow = run_reference(&search, search.free_mask(), 5, 0x1234);
     assert_outcomes_match(fast, slow, "constant columns");
 }
 
@@ -499,7 +524,7 @@ fn fast_search_matches_the_reference_on_the_real_snapshot() {
     let n = profits.len();
     let search = build(profits, &vals, &all_free(), n / 5, 64);
     let fast = search.run(3, 0x5EED, &uncancelled());
-    let slow = run_reference(&search, 3, 0x5EED);
+    let slow = run_reference(&search, search.free_mask(), 3, 0x5EED);
     assert_outcomes_match(fast, slow, "real snapshot");
 }
 
@@ -683,21 +708,127 @@ fn fixed_filters_that_starve_the_sample_yield_no_suggestion() {
     );
 
     assert!(
-        Search::new(
-            profits.clone(),
-            vals.clone(),
-            &locked,
-            slot_flags(),
-            kept,
-            16,
-            200
-        )
-        .is_some(),
+        try_build(profits.clone(), &vals, &locked, kept, 16, 200).is_some(),
         "asking for exactly what the fixed filters leave must be accepted"
     );
     assert!(
-        Search::new(profits, vals, &locked, slot_flags(), kept + 1, 16, 200).is_none(),
+        try_build(profits, &vals, &locked, kept + 1, 16, 200).is_none(),
         "asking for one more than they leave must be refused"
+    );
+}
+
+/// A masked run must agree with the reference over the SAME mask, and must leave every field
+/// outside the mask unfiltered.
+///
+/// The reference is an independent implementation of the descent, so agreement across randomized
+/// masks is an oracle the fast path cannot satisfy by being self-consistent.
+///
+/// Breakage this pins: `search.rs:Search::one_restart` reading `self.free` instead of `allow` for
+/// its visiting order or its redundancy sweep, or `run_masked` dropping the intersection that
+/// keeps a caller-fixed field out. An excluded field would then acquire a range of its own, and
+/// the composition built on top — which asks "is this field worth having" precisely by excluding
+/// it — would be answering about a set it never proposed.
+#[test]
+fn a_masked_run_ignores_every_field_outside_its_mask() {
+    let (profits, vals) = synthetic(400, 4242);
+    let search = build(profits, &vals, &all_free(), 40, 16);
+    let mut lcg = Lcg(0xC0FFEE);
+    for round in 0..6u64 {
+        let allow: Vec<bool> = (0..FIELDS.len()).map(|_| lcg.below(2) == 0).collect();
+        let seed = 0x51DE + round;
+        let fast = search.run_masked(&allow, 5, seed, &uncancelled());
+        if let Some(out) = fast.as_ref() {
+            for (fi, chosen) in out.sel.iter().enumerate() {
+                assert!(
+                    allow[fi] || chosen.is_none(),
+                    "round {round}: field {fi} is outside the mask and still got a range"
+                );
+            }
+        }
+        let slow = run_reference(&search, &allow, 5, seed);
+        assert_outcomes_match(fast, slow, &format!("masked run round {round}"));
+    }
+}
+
+/// Two masked runs of ONE seed must consume the same random stream, so their difference is the
+/// field and not the search path.
+///
+/// The fixture adds a CONSTANT column: it discriminates nothing, so no range over it can beat the
+/// unfiltered baseline, and admitting it cannot change which trades pass. Any difference between
+/// the two runs is therefore the random stream itself — which is precisely the property
+/// composition rests on, since it ranks candidates by scoring the incumbent against the incumbent
+/// plus one field at the same seed.
+///
+/// Breakage this pins: `search.rs:Search::one_restart` building `w.order` from `allow` instead of
+/// `self.free`. The Fisher-Yates shuffle below it consumes one draw per element, so a shorter
+/// vector spends a mask-dependent number of draws and shifts every later value; the two runs then
+/// visit the SHARED fields in different orders and descend to different local optima. Nothing
+/// crashes, every number stays plausible, and composition silently starts reading descent noise as
+/// a field's contribution.
+#[test]
+fn one_seed_gives_two_masks_the_same_random_stream() {
+    let (profits, mut vals) = synthetic(400, 31337);
+    // The last field carries no information at all, so it can never earn a range.
+    let inert = FIELDS.len() - 1;
+    vals[inert].iter_mut().for_each(|v| *v = 7.0);
+    let search = build(profits, &vals, &all_free(), 40, 16);
+
+    let mut without = vec![true; FIELDS.len()];
+    without[inert] = false;
+    let with = vec![true; FIELDS.len()];
+
+    for seed in [0u64, 0xBEEF, 0x5EED_1234] {
+        let a = search
+            .run_masked(&without, 6, seed, &uncancelled())
+            .expect("an uncancelled search over a sufficient fixture always answers");
+        let b = search
+            .run_masked(&with, 6, seed, &uncancelled())
+            .expect("an uncancelled search over a sufficient fixture always answers");
+        assert_eq!(
+            b.sel[inert], None,
+            "seed {seed}: the inert column must not have earned a range, or this proves nothing"
+        );
+        assert_eq!(
+            a.sel, b.sel,
+            "seed {seed}: admitting a field that cannot matter changed the chosen ranges"
+        );
+        assert_eq!(
+            a.profit.to_bits(),
+            b.profit.to_bits(),
+            "seed {seed}: and changed the score with them"
+        );
+    }
+}
+
+/// What the excluded columns CONTAIN must not reach the answer.
+///
+/// The mask-versus-reference test above shares the descent's own structure with the code under
+/// test; this one does not. Rewriting the excluded columns onto a scale the fixture never held
+/// changes their quantile edges and every bin derived from them, so any path that still reads
+/// them shifts the result. The oracle is that rewrite, which owes nothing to the search.
+///
+/// Breakage this pins: an optimization that skips rebuilding a field's mask, or reuses a cached
+/// one, on the assumption that an excluded field is unread. (The visiting-order slip is the
+/// sibling test's above — this one's fixture cannot see it, because both runs here share one
+/// mask and therefore one random stream.)
+#[test]
+fn excluded_columns_cannot_influence_a_masked_run() {
+    let (profits, vals) = synthetic(300, 8080);
+    // Every other field admitted, so the excluded ones are interleaved with the searched ones
+    // rather than sitting in a block the loops could skip wholesale.
+    let allow: Vec<bool> = (0..FIELDS.len()).map(|fi| fi % 2 == 0).collect();
+    let mut rewritten = vals.clone();
+    for (fi, col) in rewritten.iter_mut().enumerate() {
+        if !allow[fi] {
+            col.iter_mut().for_each(|v| *v = *v * 3.0 + 1000.0);
+        }
+    }
+    let plain = build(profits.clone(), &vals, &all_free(), 30, 16);
+    let altered = build(profits, &rewritten, &all_free(), 30, 16);
+    assert_outcomes_match(
+        plain.run_masked(&allow, 5, 0xA11CE, &uncancelled()),
+        altered.run_masked(&allow, 5, 0xA11CE, &uncancelled()),
+        "rewritten excluded columns",
     );
 }
 
@@ -753,7 +884,7 @@ fn compare(label: &str, profits: &[f64], vals: &[Vec<f64>], ne: usize, restarts:
         outcome = got;
 
         let started = std::time::Instant::now();
-        let reference = run_reference(&search, restarts, seed);
+        let reference = run_reference(&search, search.free_mask(), restarts, seed);
         slow_best = slow_best.min(started.elapsed().as_secs_f64() * 1000.0);
         // The benchmark doubles as an equivalence check: a "speedup" that changed the answer is
         // not a speedup.

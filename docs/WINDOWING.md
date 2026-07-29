@@ -124,7 +124,7 @@ MoonTerminal использует три визуальных класса ок�
 - `WindowOptions { ... }` вне `windowing.rs`.
 
 Запрет закреплен тестом `terminal_windows_use_closed_window_frame_api` в
-`crates/moon-ui-gpui/tests/theme_contract.rs`.
+`crates/moon-ui-gpui/tests/theme_contract/`.
 
 Если понадобится новый вид окна, например нестандартный круглый titlebar или
 controls в центре, добавлять новый `MoonWindowFrameKind`/layout в MoonUI и
@@ -198,7 +198,7 @@ chartdx/raw GPU path. Поэтому GPUI оболочка должна выде
 работать по логам и counters, но визуально быть пустым: GPUI background
 закрывает own-pass.
 
-Контракт закреплен тестом `crates/moon-ui-gpui/tests/theme_contract.rs`.
+Контракт закреплен тестом `crates/moon-ui-gpui/tests/theme_contract/`.
 
 ## Debug artifacts
 

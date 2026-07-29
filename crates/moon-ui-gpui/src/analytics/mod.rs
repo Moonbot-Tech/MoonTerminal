@@ -391,6 +391,7 @@ impl AnalyticsView {
         let saved_tuner_seed = backend.read(cx).layout.analytics_tuner_seed.clone();
         let saved_tuner_train = backend.read(cx).layout.analytics_tuner_train;
         let saved_tuner_fields = backend.read(cx).layout.analytics_tuner_fields.clone();
+        let saved_tuner_compose = backend.read(cx).layout.analytics_tuner_compose;
         // Profit metric from the previous run (default USDT).
         let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
             ProfitMetric::Percent
@@ -522,6 +523,7 @@ impl AnalyticsView {
                 saved_tuner_seed,
                 saved_tuner_train,
                 saved_tuner_fields,
+                saved_tuner_compose,
             ),
             coins: tuner::CoinsState::default(),
             coin_lists: tuner::CoinListsState::default(),

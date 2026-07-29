@@ -1,0 +1,526 @@
+//! The Analytics tuner: mode buttons, virtualized tables, the field-checkbox mask, automatic
+//! set composition and the machine bar, the distribution card, and row-click gestures.
+
+use super::support::*;
+
+/// The Tuning card header: mode-button order and a title that shares the buttons' box.
+///
+/// The plausible edits are alphabetizing the three labels, or dropping the explicit height
+/// while simplifying the title to a bare `div`, making a 16px glyph sit low against an 18px pill.
+#[test]
+fn tuning_mode_buttons_keep_their_order_and_baseline() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let header = braced_body(&table, "fn strat_list_card(");
+    let at = |needle: &str| {
+        header
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} must be rendered in the card header"))
+    };
+    let (filters, time, coins) = (at("\"sm-filters\""), at("\"sm-time\""), at("\"sm-coins\""));
+    assert!(
+        filters < time && time < coins,
+        "the axis buttons must read filter, time, coin"
+    );
+    assert!(
+        at("design::micro_control_h(cx)") < filters,
+        "the matched height must sit on the TITLE, which precedes the first button — not on \
+         some other element of the header"
+    );
+    assert_eq!(
+        header.matches("mode_btn(").count(),
+        3,
+        "exactly three axis buttons — a fourth needs this test updated deliberately, not a \
+         copy-pasted line the ordering assertion above would happily accept"
+    );
+}
+
+/// The Tuning strategy list stays virtualized and reads its rows from the memo.
+///
+/// The plausible edit is rebuilding the list eagerly (`for g in rows`) while chasing a layout
+/// bug, or recomputing the filter inline instead of through `ensure_visible`; either makes mouse
+/// movement sort thousands of groups repeatedly.
+#[test]
+fn the_tuning_strategy_list_stays_virtualized() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    // Scope every assertion to the list card's own body, so an unrelated scrollable sub-surface
+    // elsewhere in this file cannot redden the test for a reason that has nothing to do with
+    // the list — and so inserting a helper below it cannot silently widen the window.
+    let card = braced_body(&table, "fn strat_list_card(");
+    // Two substrings rather than one: rustfmt breaks the call across lines once its arguments
+    // grow, and a test that reddens on a reflow is a test people learn to ignore.
+    assert!(
+        card.contains("MoonVirtualList::new(") && card.contains("\"an-strat-rows\""),
+        "the strategy list must render through MoonVirtualList"
+    );
+    assert!(
+        !card.contains(".overflow_y_scroll()"),
+        "an eager scroll container would defeat the virtual list"
+    );
+    assert!(
+        card.contains("ensure_visible(") && card.contains("visible_indices()"),
+        "rows must come from the memoized index list, not a fresh filter+sort per render"
+    );
+    // The factory outlives the render, so a strong handle would leak the whole window — the
+    // same cycle `moon_tree_closures_hold_weak_view_handles` guards for MoonTree. Asserting on
+    // `weak.upgrade()` INSIDE the factory, not merely that a weak handle exists in the file:
+    // `cx.listener` cannot appear in a `'static` factory at all, so banning it proves nothing.
+    let factory = card
+        .find("MoonVirtualList::new(")
+        .map(|i| &card[i..])
+        .expect("the virtual list must be built here");
+    assert!(
+        factory.contains("weak.upgrade()"),
+        "the virtual row factory must reach the view through a WEAK handle"
+    );
+    assert!(
+        table.contains("weak: &WeakEntity<AnalyticsView>"),
+        "the row builder must take the weak handle rather than capturing the view"
+    );
+}
+
+/// The Tuning coin table stays virtualized and reaches the view weakly.
+///
+/// Replacing `MoonVirtualList` with eager `v_flex().children(rows)`, or wrapping the card in
+/// `overflow_y_scroll`, makes each shared-view repaint build up to `MAX_ROWS` coin rows. Capturing
+/// a strong view handle in the retained factory additionally leaks the Analytics window.
+#[test]
+fn the_tuning_coin_table_stays_virtualized() {
+    let coins = read_src("analytics/tuner/coins/mod.rs");
+    // Scoped to the card's own body: another scrollable sub-surface in this file (the picker)
+    // must not redden the test for a reason that has nothing to do with the table.
+    let card = braced_body(&coins, "fn coins_card(");
+    assert!(
+        card.contains("MoonVirtualList::new(") && card.contains("\"an-coin-rows\""),
+        "the coin table must render through MoonVirtualList"
+    );
+    assert!(
+        !card.contains(".overflow_y_scroll()"),
+        "an eager scroll container would defeat the virtual list"
+    );
+    assert!(
+        card.contains("rows::rows_for("),
+        "rows must come from the memoized cache, not a fresh filter+sort per render"
+    );
+    // The factory outlives the render, so a strong handle would leak the whole window. Asserted
+    // INSIDE the factory: `cx.listener` cannot appear in a `'static` factory at all, so banning
+    // it proves nothing.
+    let factory = card
+        .find("MoonVirtualList::new(")
+        .map(|i| &card[i..])
+        .expect("the virtual list must be built here");
+    assert!(
+        factory.contains("weak.upgrade()"),
+        "the virtual row factory must reach the view through a WEAK handle"
+    );
+    // Scoped to the row builder rather than banned file-wide: a short-lived `cx.entity()` in some
+    // other method here is legitimate, and only the row's own handlers outlive the frame.
+    let row = braced_body(&coins, "fn coin_row(");
+    assert!(
+        !row.contains("cx.entity()"),
+        "a coin row's handlers outlive the render; they must capture the weak handle only"
+    );
+    assert!(
+        coins.contains("weak: &WeakEntity<AnalyticsView>"),
+        "the row builder must take the weak handle rather than capturing the view"
+    );
+}
+
+/// The joint threshold search must leave its own window usable while it runs.
+///
+/// The busy overlay appears 150 ms into a batch and SWALLOWS CLICKS, so a search that raised it
+/// would bury the Stop button it depends on — and this search runs for as long as the user asks
+/// it to. The plausible edit is "make the long search look busy like everything else": passing
+/// `true` to `spawn_db`, or calling `op_started` directly.
+#[test]
+fn the_joint_threshold_search_leaves_its_window_usable() {
+    let actions = read_src("analytics/tuner/filter/actions.rs");
+    let body = actions
+        .split_once("fn suggest_into_v1(")
+        .expect("filter/actions.rs must contain suggest_into_v1")
+        .1
+        .split("\n    }\n")
+        .next()
+        .unwrap();
+    let spawn_args = body
+        .split_once("self.spawn_db(")
+        .expect("suggest_into_v1 must run its search through spawn_db")
+        .1
+        .trim_start();
+    assert!(
+        spawn_args.starts_with("false,"),
+        "the joint search must not raise the blocking overlay over its own Stop button"
+    );
+    assert!(
+        !body.contains("op_started("),
+        "the joint search must not enter the blocking-overlay accounting by hand either"
+    );
+}
+
+/// Manual v1 edits must retire a suggestion started from an older draft. Removing
+/// either call lets a late Filter/Time sweep silently overwrite the user's input.
+#[test]
+fn manual_v1_edits_retire_filter_and_time_suggestions() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("analytics")
+        .join("tuner");
+    let filter = fs::read_to_string(root.join("filter").join("mod.rs")).unwrap();
+    let filter_actions = fs::read_to_string(root.join("filter").join("actions.rs")).unwrap();
+    let time = fs::read_to_string(root.join("time").join("grid.rs")).unwrap();
+    fn method<'a>(source: &'a str, signature: &str) -> &'a str {
+        source
+            .split_once(signature)
+            .unwrap_or_else(|| panic!("expected method `{signature}`"))
+            .1
+            .split("\n    }\n")
+            .next()
+            .unwrap()
+    }
+
+    for (source, signature, invalidation) in [
+        (
+            &filter,
+            "fn commit_bound(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &filter,
+            "fn apply_bounds(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &filter_actions,
+            "fn copy_v2_to_v1(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &filter_actions,
+            "fn clear_variant(",
+            "self.tuner.invalidate_suggest();",
+        ),
+        (
+            &time,
+            "fn commit_time(",
+            "self.time_tuner.invalidate_suggest();",
+        ),
+        (
+            &time,
+            "fn clear_field(",
+            "self.time_tuner.invalidate_suggest();",
+        ),
+        (
+            &time,
+            "fn set_v1_cell(",
+            "self.time_tuner.invalidate_suggest();",
+        ),
+    ] {
+        assert!(
+            method(source, signature).contains(invalidation),
+            "{signature} must retire the in-flight suggestion before changing v1"
+        );
+    }
+}
+
+/// Every checkbox that changes the tuner's field selection must also persist it.
+///
+/// `moon-ui-gpui` is a binary crate, so the click handlers live in GPUI closures no integration
+/// test can call — the wiring can only be pinned at the source level. The pure encode/restore
+/// tests in `filter/state/tests.rs` stay green whether or not a handler ever writes to the layout.
+///
+/// The plausible edit is adding or reworking a checkbox path and mutating `tuner.enabled` without
+/// the persist call, which reads as working until the window is reopened and the change is gone.
+#[test]
+fn tuner_field_checkboxes_persist_every_change() {
+    let filter = read_src("analytics/tuner/filter/mod.rs");
+
+    // The invariant is STRUCTURAL, not arithmetic: the mask has exactly two writers, and both
+    // persist. Counting writes against persist calls would have been coincidental — the master
+    // checkbox writes inside a `for` loop, so one persist correctly answers N writes, and a new
+    // write added inside an already-persisting handler would pass unnoticed.
+    for (writer, body) in [
+        (
+            "fn set_field_enabled(",
+            braced_body(&filter, "fn set_field_enabled("),
+        ),
+        (
+            "fn set_all_fields_enabled(",
+            braced_body(&filter, "fn set_all_fields_enabled("),
+        ),
+    ] {
+        assert!(
+            body.contains("persist_tuner_fields(cx)"),
+            "{writer} writes the checkbox mask, so it must persist it"
+        );
+    }
+    // Nothing outside those two funnels may WRITE the mask — that is what makes the persist
+    // structural instead of a rule each future handler has to remember. Reads (`.checked(...)`)
+    // are unrestricted, hence the assignment test rather than a bare substring count.
+    let in_funnels = enabled_mask_writes(braced_body(&filter, "fn set_field_enabled("))
+        + enabled_mask_writes(braced_body(&filter, "fn set_all_fields_enabled("));
+    assert_eq!(
+        in_funnels, 2,
+        "each funnel must write the mask exactly once"
+    );
+    assert_eq!(
+        enabled_mask_writes(&filter),
+        in_funnels,
+        "the checkbox mask must be written only through `set_field_enabled` / \
+         `set_all_fields_enabled`, never inline in a click handler"
+    );
+
+    // The stored value must be the column ids, never a positional mask: `FIELDS` is presentation
+    // order, so a saved position would tick different boxes after any reorder.
+    let shell = read_src("analytics/tuner/shell.rs");
+    assert!(
+        shell.contains("fn persist_tuner_fields(") && shell.contains("self.tuner.enabled_cols()"),
+        "persistence must store the enabled COLUMN IDS, not indices into FIELDS"
+    );
+}
+
+/// Mutations of the tuner's checkbox mask in `src`; reads (`.checked(..)`, `.iter()`) excluded.
+///
+/// Counts every shape a write can take, not just the indexed one. An indexed assignment is what
+/// the two funnels happen to use TODAY, and a checker that recognized only that would wave
+/// through `tuner.enabled = chosen` or `tuner.enabled.fill(false)` — precisely the forms an
+/// automatic composition would reach for if it ever decided to tick the boxes itself.
+fn enabled_mask_writes(src: &str) -> usize {
+    /// Methods that mutate the vector in place.
+    const MUTATORS: [&str; 9] = [
+        ".fill(",
+        ".clear(",
+        ".push(",
+        ".iter_mut(",
+        ".resize(",
+        ".truncate(",
+        ".retain(",
+        ".extend(",
+        ".copy_from_slice(",
+    ];
+    src.match_indices("tuner.enabled")
+        .filter(|(at, _)| {
+            let after = &src[at + "tuner.enabled".len()..];
+            // Whole-vector assignment, or a mutating method on it.
+            if after.starts_with(" = ") || MUTATORS.iter().any(|m| after.starts_with(m)) {
+                return true;
+            }
+            // Indexed assignment: `tuner.enabled[..] = ..`.
+            after.starts_with('[')
+                && after
+                    .find(']')
+                    .and_then(|close| after.get(close + 1..))
+                    .is_some_and(|tail| tail.starts_with(" = "))
+        })
+        .count()
+}
+
+/// Automatic composition reports which fields it chose; it never ticks the user's checkboxes.
+///
+/// The checkboxes mean "this field MAY take part", which is the user's statement about their
+/// strategy. A composition that wrote them back would silently replace that statement with its
+/// own every run, and the next plain search — a different question — would then be scoped by a
+/// set the user never chose. What the composition picked is visible where it belongs: in which
+/// fields came back carrying thresholds.
+///
+/// The wiring can only be pinned at the source level, since the mask lives on a GPUI view no
+/// integration test in this binary crate can construct.
+///
+/// The plausible edit is "the result would be clearer if the boxes reflected the chosen set" —
+/// which reads as an improvement, costs the user their own selection, and no runtime test in
+/// this crate would notice.
+#[test]
+fn auto_composition_never_writes_the_field_checkboxes() {
+    for file in [
+        "analytics/tuner/filter/actions.rs",
+        "analytics/tuner/shell.rs",
+    ] {
+        assert_eq!(
+            enabled_mask_writes(&read_src(file)),
+            0,
+            "{file} must not write the checkbox mask: the composition reports its set through \
+             the thresholds it fills in, never by re-ticking the user's boxes"
+        );
+    }
+}
+
+/// The composed set is reported in the same pinned block as the held-back figure, and reaching
+/// it must not depend on there being a holdout.
+///
+/// Two failures this pins, both of which leave a plausible-looking window:
+///
+/// The first is `split_summary` going back to `let holdout = split.holdout.as_ref()?;`. With the
+/// train share at 100% there is no holdout, so that early return would drop the composed set as
+/// well — the user asks the tuner to choose the fields, it does, and the window says nothing
+/// about what it chose.
+///
+/// The second is moving the composed line out of this block, into the scrolling grid above.
+/// "Four fields chosen" reads as a result on its own; separated from the number that says
+/// whether those fields survived a period nobody fitted them on, it is the confident-looking
+/// half of a verdict.
+#[test]
+fn the_composed_set_is_reported_beside_the_holdout() {
+    let filter = read_src("analytics/tuner/filter/mod.rs");
+    let body = braced_body(&filter, "fn split_summary(");
+    assert!(
+        !body.contains("split.holdout.as_ref()?"),
+        "the composed set must survive a period with nothing held back, so the summary may not \
+         return early on a missing holdout"
+    );
+    for needle in ["split.composed", "split_holdout", "compose_set"] {
+        assert!(
+            body.contains(needle),
+            "`split_summary` must render {needle}: the set and the held-back figure are one \
+             verdict and belong in one block"
+        );
+    }
+}
+
+/// The composition switch persists on every change, like every other search setting.
+///
+/// Same hazard as the field checkboxes: the window is reopened often, and a mode that silently
+/// resets to the cheaper search would have the user believe they composed a set when they ran
+/// the plain search. Pinned at the source level for the same reason — the handler lives on a
+/// GPUI view this crate cannot construct in a test.
+#[test]
+fn the_compose_switch_persists_every_change() {
+    let shell = read_src("analytics/tuner/shell.rs");
+    assert!(
+        shell.contains("fn persist_tuner_compose("),
+        "the composition switch needs a persist wrapper of its own"
+    );
+    let writes = shell.matches("tuner.compose = ").count();
+    assert!(writes > 0, "the switch must be written somewhere");
+    assert_eq!(
+        shell.matches("persist_tuner_compose(cx)").count(),
+        writes,
+        "every write of the composition switch must persist it"
+    );
+}
+
+/// The tuner's expensive settings are hidden, not merely narrowed, on a machine below the bar.
+///
+/// One predicate — `moon_core`'s `heavy_search_supported` — decides all three: whether the
+/// composition switch is rendered, whether a saved composition setting is honoured, and how many
+/// depths the dropdown offers. They must not drift apart, because each half of a disagreement is
+/// a lie: a switch rendered where the search ignores it silently runs the plain search under the
+/// composed label, and a setting honoured where no switch exists changes what the run button does
+/// with nothing on screen to explain it.
+///
+/// Pinned at the source level because the switch lives on a GPUI view this crate cannot build,
+/// and because a test machine only ever exercises ONE side of the bar.
+///
+/// The plausible edit: rendering the composition row unconditionally and greying it out instead
+/// — a reasonable-looking accessibility instinct that puts the feature back in front of exactly
+/// the users it was gated away from.
+#[test]
+fn the_heavy_search_settings_are_hidden_below_the_core_bar() {
+    let shell = read_src("analytics/tuner/shell.rs");
+    let state = read_src("analytics/tuner/filter/state.rs");
+
+    let gate = shell
+        .find("composition_budget(")
+        .expect("the composition row must be gated on a budget this machine actually has");
+    let switch = shell
+        .find("tun-cfg-compose-f")
+        .expect("the composition switch must exist");
+    assert!(
+        gate < switch,
+        "the composition switch must be rendered INSIDE the budget check, not beside it"
+    );
+    assert!(
+        shell.matches("tun-cfg-compose-f").count() == 1,
+        "one composition switch only, or a second one could escape the gate"
+    );
+
+    assert!(
+        state.contains("saved_compose && heavy_search_supported()"),
+        "a composition setting saved on a bigger machine must not switch the feature on here"
+    );
+    // Scoped to the accessor itself: the two names appearing SOMEWHERE in the file would also
+    // be satisfied by an `edge_options` that ignored the machine entirely.
+    assert!(
+        braced_body(&state, "fn edge_options()").contains("edges_max()"),
+        "the offered quantile depths must be derived from the search's own ceiling"
+    );
+    assert!(
+        braced_body(&shell, "fn filter_settings_content(").contains("edge_options()"),
+        "the depth dropdown must build its items from the machine's own option set"
+    );
+}
+
+/// The distribution card's collapse is a display lens: it persists and repaints, and it must not
+/// gate the read behind it.
+///
+/// `TunerState::needs_reload` counts `hist_dirty`, so suppressing the histogram read while
+/// collapsed would leave that flag permanently set — the reload gate would re-fire every frame,
+/// and expanding the card would show a spinner where the user left a chart.
+///
+/// The plausible edit is "why compute a histogram nobody is looking at?" — skipping
+/// `request_hist` on the flag while chasing a performance number.
+#[test]
+fn the_distribution_card_collapse_is_a_display_lens_only() {
+    let hist = read_src("analytics/tuner/filter/hist.rs");
+    let analytics = read_src("analytics/mod.rs");
+
+    assert!(
+        hist.contains("an-tuner-hist-collapse") && hist.contains("toggle_hist_collapsed(cx)"),
+        "the distribution card must carry a caret wired to the toggle"
+    );
+    // Round-trip, asserted on the two IDENTIFIERS rather than on exact statements: a rustfmt
+    // reflow or a renamed local must not redden a guard whose subject is the data flow.
+    let toggle = braced_body(&analytics, "fn toggle_hist_collapsed(");
+    assert!(
+        toggle.contains("analytics_hist_collapsed") && toggle.contains("layout_dirty = true"),
+        "toggling must write the layout field and mark it dirty, or the choice dies with the process"
+    );
+    assert!(
+        analytics.contains("saved_hist_collapsed"),
+        "the window must seed itself from the persisted flag rather than starting fresh"
+    );
+    // The read must stay outside the flag. The request and the staleness rule live in
+    // `filter/mod.rs` and `filter/state.rs`; neither may learn that the card can be collapsed.
+    for (rel, src) in [
+        (
+            "analytics/tuner/filter/mod.rs",
+            read_src("analytics/tuner/filter/mod.rs"),
+        ),
+        (
+            "analytics/tuner/filter/state.rs",
+            read_src("analytics/tuner/filter/state.rs"),
+        ),
+    ] {
+        assert!(
+            !src.contains("hist_collapsed"),
+            "{rel} must not gate the histogram read on the collapse — `needs_reload` counts \
+             `hist_dirty`, so a suppressed read leaves the reload gate firing every frame"
+        );
+    }
+}
+
+/// A strategy-row click resolves its gesture through the pure `row_click_intent`, so the
+/// Shift-over-Ctrl precedence is decided somewhere a test can reach.
+///
+/// The plausible edit is inlining the branches back into the closure while adding a fourth
+/// gesture; the precedence rule then lives only inside a `'static` GPUI callback, and reversing
+/// it — so a Ctrl-built selection cannot be extended with Shift — leaves every test green.
+#[test]
+fn strategy_row_clicks_route_through_the_pure_gesture_decision() {
+    let table = read_src("analytics/tuner/list/table.rs");
+
+    // Asserted on the call and the three arms, not on the local variable names the call reads
+    // from: the subject is "the precedence decision lives somewhere a test can reach", and the
+    // `shift_takes_precedence_over_the_multi_select_modifier` unit test proves the rule itself.
+    assert!(
+        table.contains("row_click_intent(") && table.contains(".shift"),
+        "the row click must read the Shift modifier and delegate the precedence decision"
+    );
+    for arm in [
+        "RowClick::Range => this.select_range(",
+        "RowClick::Multi => this.toggle_multi(",
+        "RowClick::Single => this.select_single(",
+    ] {
+        assert!(
+            table.contains(arm),
+            "every gesture must reach its transition — missing `{arm}`"
+        );
+    }
+}

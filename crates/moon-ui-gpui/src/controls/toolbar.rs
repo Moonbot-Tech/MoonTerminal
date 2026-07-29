@@ -144,7 +144,7 @@ fn row_fit(
         + ICON_BTN_W * 4.0;
     // Five 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
     // against the row itself by `toolbar_row_budget_counts_every_rule_it_draws` in
-    // `tests/theme_contract.rs`: adding a section here without updating this count is invisible
+    // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
     // until the trailing cluster clips off the edge of some narrow window.
     let rules = 5.0;
     // Row gaps: 11 between the 12 root children (both sides of the zero-width spacer included)

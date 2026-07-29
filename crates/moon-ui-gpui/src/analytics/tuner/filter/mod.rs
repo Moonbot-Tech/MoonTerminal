@@ -4,7 +4,7 @@
 //! the selected field. The scope is the strategy selected in the list (or all). Bounds retain
 //! the raw strings the user typed and start empty on every open because they describe one
 //! strategy's search. Only the search SETTINGS persist — restart count, quantile depth, seed,
-//! train share, and which fields the checkboxes admit into the search.
+//! train share, which fields the checkboxes admit, and whether the search composes their set.
 
 // Files of this axis.
 /// Its auto-suggestion and the write it produces.
@@ -29,6 +29,7 @@ use super::super::{AnalyticsView, LoadState};
 pub(in crate::analytics::tuner) use super::shared::{N_VAR, TunerKind, card, glyph_btn};
 use crate::design;
 use crate::design::{moon, moon_alpha};
+use moon_core::db::tuner::threshold_search::ComposeSkip;
 use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
 pub(in crate::analytics::tuner) use state::{flag_of, fmt_bound, parse_num, staged_dirty};
 
@@ -407,13 +408,7 @@ impl AnalyticsView {
                     MoonCheckbox::new("tun-en-all")
                         // The master checkbox ignores unmapped fields (no matching
                         // strategy parameter): 'all enabled' = all MAPPED ones.
-                        .checked(
-                            FIELDS
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, s)| s.mapped())
-                                .all(|(fi, _)| self.tuner.enabled[fi]),
-                        )
+                        .checked(self.tuner.all_mapped_enabled())
                         .size(MoonCheckboxSize::Compact)
                         .on_change({
                             let view = cx.entity();
@@ -424,11 +419,25 @@ impl AnalyticsView {
                         }),
                 ),
             )
+            // The column caption doubles as the master checkbox's label, by being a click target
+            // rather than by becoming one. `MoonCheckbox::label` renders at CONTENT width, so
+            // moving the text onto the checkbox would widen it by however long the word is in the
+            // active language and shift every heading after it out of line with its own column —
+            // worst in ru/es, where this header is already the widest. Clicking here routes
+            // through `set_all_fields_enabled` like the checkbox itself, so the mask keeps its two
+            // writers.
             .child(
                 div()
+                    .id("tun-en-all-lbl")
                     .w(design::font_w_px(cx, 58.0))
                     .flex_none()
-                    .child(t!("analytics.tuner.field").to_string()),
+                    .truncate()
+                    .cursor_pointer()
+                    .child(t!("analytics.tuner.field").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let all_on = this.tuner.all_mapped_enabled();
+                        this.set_all_fields_enabled(!all_on, cx);
+                    })),
             )
             // Chip column: the selected strategy's thresholds (click sends them to v1).
             .child(
@@ -553,6 +562,24 @@ impl AnalyticsView {
                         })
                         .child(FIELDS[fi].label.to_string()),
                 )
+                // How many walk-forward folds also gave this field a range, when the last search
+                // composed the set. It is the only per-field figure here that was not chosen for,
+                // so it says something the thresholds beside it cannot: "3/3" is a field that
+                // earned its place in every stretch of the period, "1/3" one that earned it in a
+                // single one and may well be an artefact of that stretch.
+                .when_some(self.tuner.compose_support(fi), |el, (support, folds)| {
+                    el.child(
+                        div()
+                            .flex_none()
+                            .truncate()
+                            .text_color(if support == folds {
+                                moon(design::positive_color(p))
+                            } else {
+                                moon(p.text_muted)
+                            })
+                            .child(format!("{support}/{folds}")),
+                    )
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.tuner.sel_field != fi {
                         this.tuner.sel_field = fi;
@@ -711,7 +738,7 @@ impl AnalyticsView {
     /// Pinned BELOW the scrolling rows rather than placed inside them: the fitted profit is the
     /// number the search maximized and always looks good, so the held-back one has to be visible
     /// at the same moment, not somewhere the user has to scroll to. Nothing is drawn until a
-    /// search has produced ranges — an untouched grid has nothing to report — and editing any
+    /// search has produced an answer — an untouched grid has nothing to report — and editing any
     /// bound retires the suggestion, taking this with it.
     fn split_summary(&self, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
         let state::SuggestState::Done {
@@ -721,8 +748,13 @@ impl AnalyticsView {
             return None;
         };
         // Nothing was held back, so there is no second opinion to show and the KPI matrix above
-        // already carries the fitted figures.
-        let holdout = split.holdout.as_ref()?;
+        // already carries the fitted figures. A COMPOSED set still has to be reported in that
+        // case — it is a claim about which fields matter, and silence about it would be the one
+        // reading it must not get: that no set was chosen.
+        let holdout = split.holdout.as_ref();
+        if holdout.is_none() && split.composed.is_none() && split.compose_skipped.is_none() {
+            return None;
+        }
         let line = |caption: String, tally: &moon_core::db::metrics::Tally, color: u32| {
             h_flex()
                 .w_full()
@@ -769,6 +801,76 @@ impl AnalyticsView {
                 .border_t_1()
                 .border_color(moon(p.border))
                 .text_size(design::t_caption(cx))
+                // The composed set sits in the SAME pinned block as the held-back figure, and
+                // above it, deliberately. "Four fields chosen" reads as an achievement on its
+                // own; the number that says whether those four survived the period nobody fitted
+                // has to be in the same glance, not somewhere the user could scroll away from.
+                .when_some(split.composed.as_ref(), |el, set| {
+                    let fields: Vec<String> = set
+                        .fields
+                        .iter()
+                        .map(|(col, support)| {
+                            let label = FIELDS
+                                .iter()
+                                .find(|s| s.col == *col)
+                                .map_or(*col, |s| s.label);
+                            format!("{label} {support}/{}", set.folds)
+                        })
+                        .collect();
+                    // Three different answers, and only the first is "composition found
+                    // nothing". A set whose fields were all left unfiltered by the full-budget
+                    // refit is composition having found something the refit then disagreed
+                    // with — reporting that as "no field held up" states the opposite.
+                    let text = if !fields.is_empty() {
+                        fields.join(" · ")
+                    } else if set.dropped_at_refit > 0 {
+                        t!(
+                            "analytics.tuner.compose_refit_dropped",
+                            n = set.dropped_at_refit
+                        )
+                        .to_string()
+                    } else {
+                        t!("analytics.tuner.compose_empty").to_string()
+                    };
+                    el.child(
+                        h_flex()
+                            .w_full()
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(
+                                div()
+                                    .w(design::font_w_px(cx, 74.0))
+                                    .flex_none()
+                                    .truncate()
+                                    .text_color(moon(p.text_muted))
+                                    .child(t!("analytics.tuner.compose_set").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(moon(p.text_soft))
+                                    .child(text),
+                            ),
+                    )
+                })
+                // Composition was asked for and could not run. Saying so beats letting the user
+                // read a plain joint search as a composed one.
+                .when_some(split.compose_skipped, |el, why| {
+                    // Each reason asks for a different action — widen the period, or pick a
+                    // strategy — so they cannot share one line.
+                    let text = match why {
+                        ComposeSkip::TooFewFolds => t!("analytics.tuner.compose_small"),
+                        ComposeSkip::NoStrategyScope => t!("analytics.tuner.compose_no_scope"),
+                    };
+                    el.child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_color(moon(p.orange))
+                            .child(text.to_string()),
+                    )
+                })
                 .child(line(
                     t!("analytics.tuner.split_train").to_string(),
                     &split.train,
@@ -777,15 +879,29 @@ impl AnalyticsView {
                 // A losing holdout is the whole point of the exercise: the ranges fitted the past
                 // and did not survive contact with the rest of it. It is coloured as the failure
                 // it is rather than left to be read off a sign.
-                .child(line(
-                    t!("analytics.tuner.split_holdout").to_string(),
-                    holdout,
-                    if holdout.profit > 0.0 {
-                        design::positive_color(p)
-                    } else {
-                        design::danger_color(p)
-                    },
-                ))
+                .when_some(holdout, |el, holdout| {
+                    el.child(line(
+                        t!("analytics.tuner.split_holdout").to_string(),
+                        holdout,
+                        if holdout.profit > 0.0 {
+                            design::positive_color(p)
+                        } else {
+                            design::danger_color(p)
+                        },
+                    ))
+                })
+                // A composed set with nothing held back is a set chosen with no way to check it.
+                // The warning belongs beside the set, where it is read, not only in the popover
+                // where the share was chosen.
+                .when(holdout.is_none() && split.composed.is_some(), |el| {
+                    el.child(
+                        div()
+                            .w_full()
+                            .truncate()
+                            .text_color(moon(p.orange))
+                            .child(t!("analytics.tuner.compose_no_split").to_string()),
+                    )
+                })
                 .into_any_element(),
         )
     }

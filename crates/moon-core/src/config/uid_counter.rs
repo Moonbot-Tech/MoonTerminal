@@ -20,7 +20,7 @@
 //! - `Copy` — a silent stale copy could be written back over a raised counter.
 //!
 //! `tests.rs` next to this file enforces those four and the field's privacy by reading this
-//! source, the way `theme_contract.rs` enforces the UI bans. A comment alone would not survive
+//! source, the way `theme_contract` enforces the UI bans. A comment alone would not survive
 //! a refactor.
 
 /// Next uid to issue, raised clear of any representable floor supplied to its constructor.

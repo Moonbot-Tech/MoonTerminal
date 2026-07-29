@@ -1,23 +1,28 @@
-//! Automatic threshold tuning for the "By filter" axis: which range on which report field
-//! maximizes period profit, searched over all fields jointly.
+//! Automatic threshold tuning for the "By filter" axis: which report fields to use and which
+//! ranges on them maximize period profit.
 //!
 //! This module owns the database side — one scan of the tuner source into column-oriented
-//! memory — and hands the result to the DB-free optimizer in [`search`]. Semantics match tuner
-//! variants: NULL fields equal 0 (COALESCE), and bounds are inclusive. The database is scanned
-//! once and all later work stays in memory, so call this ONLY from a background executor.
+//! memory — and hands the result to the DB-free threshold optimizer in [`search`] and field-set
+//! selector in [`compose`]. Semantics match tuner variants: NULL fields equal 0 (COALESCE), and
+//! bounds are inclusive. The database is scanned once and all later work stays in memory, so call
+//! this ONLY from a background executor.
 //!
 //! The sample is ordered chronologically here, which is what makes a train/holdout split and a
 //! drawdown figure mean anything at all: both read the sequence, not the set.
 
+mod compose;
 mod handle;
 mod search;
 
 #[cfg(test)]
 mod tests;
 
+pub use compose::{composition_budget, ComposeBudget};
 pub use handle::SearchHandle;
+pub use search::{heavy_search_supported, HEAVY_SEARCH_MIN_CORES};
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use super::{FieldClass, FIELDS};
 use crate::db::analytics::Query;
@@ -28,26 +33,78 @@ use crate::db::ReadResult;
 /// Minimum accepted restart count. Shared with the UI so displayed and executed counts agree.
 pub const RESTARTS_MIN: usize = 1;
 
-/// Maximum accepted restart count.
+/// Maximum accepted restart count on a machine that clears [`HEAVY_SEARCH_MIN_CORES`].
 ///
 /// Restarts run across a worker pool, report their progress, and stop on request, so the ceiling
 /// is no longer "what a user can be asked to wait through blind" — it is a guard against a typo
 /// becoming an unbounded run. Work is strictly linear in the count: one restart is `FIELDS.len()`
 /// fields × up to 16 passes × (`n` trades + the edge search), measured at ~5 ms of single-core
-/// time per restart over a 26k-trade report at depth 64. The ceiling is therefore on the order of
-/// ten seconds spread across the pool — long, visibly progressing, and interruptible.
-pub const RESTARTS_MAX: usize = 20_000;
+/// time per restart over a 26k-trade report at depth 64. Spread across the pool of a machine at
+/// or above the bar that is on the order of a few seconds — visibly progressing and interruptible,
+/// which is what the ceiling is for: it guards against a typo, not against the wait.
+pub const RESTARTS_MAX: usize = 50_000;
+
+/// Maximum accepted restart count below that bar.
+///
+/// This is the fixed lower tier of the same hard machine bar that gates composition and the
+/// finest quantile depth, not a budget scaled continuously with the detected core count.
+/// Restarts have sharply diminishing returns — they explore starts, and the best of many is
+/// quickly the best of most — so the number that changes here is the worst case, not the answer.
+pub const RESTARTS_MAX_LIGHT: usize = 10_000;
+
+/// The restart ceiling on THIS machine.
+///
+/// Read this, never [`RESTARTS_MAX`] directly, anywhere a count is clamped or a limit is shown:
+/// the box would otherwise accept and display a number the search then quietly rewrote.
+pub fn restarts_max() -> usize {
+    restarts_max_for(heavy_search_supported())
+}
+
+/// [`restarts_max`] with the machine class supplied, so both branches can be checked in one test
+/// run — a given machine only ever exercises one of them.
+fn restarts_max_for(heavy: bool) -> usize {
+    if heavy {
+        RESTARTS_MAX
+    } else {
+        RESTARTS_MAX_LIGHT
+    }
+}
 
 /// Minimum quantile-edge count accepted by the search and exposed to the UI.
 pub const EDGES_MIN: usize = 4;
 
-/// Maximum quantile-edge count; keeps bin indices clear of the search's `BELOW` sentinel.
+/// Maximum quantile-edge count on a machine that clears [`HEAVY_SEARCH_MIN_CORES`]; keeps bin
+/// indices clear of the search's `BELOW` sentinel.
 ///
 /// The bin index is a `u16` and the sentinel is its maximum, so a depth up to 65 535 stays
 /// distinguishable. The ceiling is set far below that by cost, not by the encoding: the edge
 /// search is linear in the depth while the per-trade scan is not, so finer slicing buys
 /// increasingly little and slices the sample into groups too small to mean anything.
 pub const EDGES_MAX: usize = 256;
+
+/// Maximum quantile-edge count below that bar — one step coarser, since the finest depth doubles
+/// the edges every pass of every restart walks.
+pub const EDGES_MAX_LIGHT: usize = 128;
+
+/// The quantile-depth ceiling on THIS machine.
+///
+/// Enforced here and not only in the dropdown, for the same reason as [`restarts_max`]: a depth
+/// saved on a bigger machine reaches this function through `layout.toml` whatever the UI offers,
+/// and the bar is meant to be a property of the search, not of one control.
+pub fn edges_max() -> usize {
+    edges_max_for(heavy_search_supported())
+}
+
+/// [`edges_max`] with the machine class supplied, so both branches can be checked in one test run
+/// — a given machine only ever exercises one of them. The same shape as [`restarts_max_for`], on
+/// purpose: one question, one idiom.
+fn edges_max_for(heavy: bool) -> usize {
+    if heavy {
+        EDGES_MAX
+    } else {
+        EDGES_MAX_LIGHT
+    }
+}
 
 /// Final range for one field.
 #[derive(Clone, Debug)]
@@ -58,6 +115,37 @@ pub struct FieldRange {
     pub from: f64,
     /// Inclusive upper bound.
     pub to: f64,
+}
+
+/// The field set composition chose, reported through the ranges that were actually applied.
+///
+/// Keyed to the applied ranges rather than to composition's own mask on purpose: those are two
+/// definitions of "selected" that a reduced-budget ranking followed by a full-budget refit can
+/// legitimately disagree on, and a field badged as chosen beside an empty threshold box is the
+/// shape of that disagreement reaching the user.
+#[derive(Clone, Debug)]
+pub struct ComposedSet {
+    /// Chosen fields that the final refit gave a range, each with the number of folds that also
+    /// gave it one — how reproducible its contribution is across the period.
+    pub fields: Vec<(&'static str, u8)>,
+    /// Folds those counts are out of.
+    pub folds: u8,
+    /// Fields composition chose that the final refit then left unfiltered. Normally zero; a
+    /// standing non-zero count means the ranking budget is too small to agree with the refit.
+    pub dropped_at_refit: usize,
+}
+
+/// Why a requested composition did not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposeSkip {
+    /// The fitting region could not be cut into at least two walk-forward folds — too few
+    /// trades, or too few distinct close timestamps to cut between. One fold is not a second
+    /// opinion, so composing on it would produce a set with nothing behind it.
+    TooFewFolds,
+    /// No strategy was selected, so the sample is the whole replica rather than one strategy on
+    /// the cores it runs on. Thresholds are never fitted across that mixture, and a set composed
+    /// from it would describe the pooling instead of a strategy.
+    NoStrategyScope,
 }
 
 /// Search result: the ranges plus what they achieve, split by whether the search was allowed to
@@ -75,15 +163,22 @@ pub struct SearchResult {
     pub holdout: Option<Tally>,
     /// Base seed the restarts were derived from, so a result can be reproduced exactly.
     ///
-    /// How many restarts stand behind the result is deliberately NOT here: the caller supplies
-    /// the [`SearchHandle`] and can read `completed()` off it, and carrying a second copy in the
-    /// result gave one number two owners that a late stop could put out of step.
+    /// For a plain search, the caller-owned [`SearchHandle`] carries the completed-restart count
+    /// instead of duplicating it here. Under composition that counter spans all ranking runs and
+    /// folds, so it remains progress rather than metadata about the final refit.
     pub seed: u64,
+    /// The field set composition chose, or `None` when composition was not asked for or could
+    /// not run.
+    pub composed: Option<ComposedSet>,
+    /// Why composition did not run, when it WAS asked for. The ranges above then come from the
+    /// plain joint search, so the caller has an answer and a reason rather than a silence.
+    pub compose_skipped: Option<ComposeSkip>,
 }
 
 /// Inputs of one threshold search, beyond the report scope itself.
 pub struct SearchParams<'a> {
-    /// Restart count, clamped to `RESTARTS_MIN..=RESTARTS_MAX`.
+    /// Restart count, clamped to `RESTARTS_MIN..=`[`restarts_max`] — the ceiling is lower on a
+    /// machine below the heavy-search bar.
     pub restarts: usize,
     /// Minimum trades a suggested combination must retain, or `None` for one tenth of the trades
     /// the search actually fits on.
@@ -96,7 +191,7 @@ pub struct SearchParams<'a> {
     pub min_n: Option<i64>,
     /// Per field: `None` to search it, a fixed range to hold it, `(None, None)` to exclude it.
     pub locked: &'a [Option<(Option<f64>, Option<f64>)>],
-    /// Quantile resolution per field, clamped to `EDGES_MIN..=EDGES_MAX`.
+    /// Quantile resolution per field, clamped to `EDGES_MIN..=`[`edges_max`] for this machine.
     pub edges: usize,
     /// Whether to round the resulting bounds outwards.
     pub round: bool,
@@ -106,6 +201,16 @@ pub struct SearchParams<'a> {
     /// everything; anything lower holds the remaining tail back as a holdout. Clamped so a
     /// split always leaves at least one trade on each side.
     pub train_frac: f64,
+    /// Whether the FIELD SET is chosen automatically as well as the thresholds.
+    ///
+    /// With this off, every field `locked` leaves free is searched and the descent keeps
+    /// whichever ones improve the fit — the right tool when the user has already decided which
+    /// fields belong. With it on, the set is composed out-of-sample first (see [`compose`]) and
+    /// only the composed fields are refitted.
+    ///
+    /// Honoured only on a machine that clears [`HEAVY_SEARCH_MIN_CORES`]; below that it is
+    /// ignored and the plain search runs, because the feature is not offered there at all.
+    pub compose: bool,
 }
 
 /// Maximize combined profit with random-restart coordinate descent while retaining at least
@@ -115,8 +220,9 @@ pub struct SearchParams<'a> {
 /// the strategy format cannot store more.
 ///
 /// `handle` stops the search and carries its progress; build a fresh one per call. A stopped
-/// search returns the best of the restarts that completed, and the same `handle` reports how many
-/// those were through `completed()`.
+/// search returns the best complete answer it reached. For a plain search, `completed()` is the
+/// number of completed restarts behind that answer; during composition it is an internal work
+/// counter spanning candidate rankings, folds, and the final refit.
 ///
 /// With `params.train_frac` below 1 the search only ever sees the oldest share of the period and
 /// the rest becomes the result's holdout, which is what separates a range that found something
@@ -130,7 +236,7 @@ pub fn suggest(
     params: SearchParams<'_>,
     handle: &SearchHandle,
 ) -> ReadResult<Option<SearchResult>> {
-    let ne = params.edges.clamp(EDGES_MIN, EDGES_MAX);
+    let ne = params.edges.clamp(EDGES_MIN, edges_max());
     // Stopped mid-scan: nothing was searched, so there is nothing to report.
     let Some((profits, vals, closes)) = scan(q, handle)? else {
         return Ok(None);
@@ -144,19 +250,21 @@ pub fn suggest(
     // One tenth of what the descent will actually see, which is why this waits for the snapped
     // split rather than being handed down from the period length.
     let min_n = params.min_n.unwrap_or((requested_train / 10) as i64).max(1) as usize;
+    // One owner for the scan, so a search is defined by the window it fits on rather than by a
+    // copy of the sample.
+    let cols = Arc::new(search::Columns { profits, vals });
     // Not enough sample — a legitimate "no suggestion", not a failure.
     let Some(search) = search::Search::new(
-        profits,
-        vals,
+        cols.clone(),
         params.locked,
-        is_slot,
+        is_slot.clone(),
         min_n,
         ne,
         requested_train,
     ) else {
         return Ok(None);
     };
-    let restarts = params.restarts.clamp(RESTARTS_MIN, RESTARTS_MAX);
+    let restarts = params.restarts.clamp(RESTARTS_MIN, restarts_max());
     // Without a chosen seed, take one from the clock so repeated searches explore different
     // starts. Restart 0 is greedy from empty and stays deterministic either way.
     let seed = params.seed.unwrap_or_else(|| {
@@ -165,8 +273,52 @@ pub fn suggest(
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0)
     });
+    // Read back from the search rather than reusing `requested_train`: everything below must
+    // describe the window it actually fitted on, not the one it was asked for.
+    let train_n = search.train_n();
+    // Compose the field set first, when asked. It runs entirely inside `0..train_n`, so the
+    // holdout tallied at the end stays a period nothing here optimized against.
+    //
+    // A machine below the bar has no budget, and composition simply does not happen — no skip
+    // reason either. The switch does not exist there, so a request can only arrive from a
+    // settings file carried over from a larger machine, and a note explaining a feature this
+    // build never shows would be a worse answer than the plain search it silently falls back to.
+    let composed = params
+        .compose
+        .then(composition_budget)
+        .flatten()
+        .map(|budget| {
+            // The scope rule, enforced where composition lives rather than trusted to the UI.
+            // An empty strategy list means the whole replica — dozens of cores and many
+            // strategies trading different situations — and across that mixture no report field
+            // relates to profit at all. A search over it still returns a confident-looking set,
+            // chosen from correlations that belong to the pooling rather than to any strategy.
+            if q.strategies.is_empty() {
+                return Err(ComposeSkip::NoStrategyScope);
+            }
+            compose_set(
+                &cols, &params, &is_slot, &closes, min_n, ne, train_n, seed, budget, handle,
+            )
+        });
+    let (allow, skipped) = match &composed {
+        // Stopped before it had a set. Refitting on whatever it had reached would answer with a
+        // set nobody finished choosing, so this is a stop like any other.
+        Some(Ok(None)) => return Ok(None),
+        Some(Ok(Some(out))) => (Some(out.chosen.clone()), None),
+        Some(Err(why)) => (None, Some(*why)),
+        None => (None, None),
+    };
+    // Composition's per-step progress belongs to composition. Leaving the last stage published
+    // through the refit would freeze the caption on a field the search is no longer weighing.
+    handle.clear_stage();
+    // The final refit always runs at the FULL restart count the user asked for: composition's
+    // reduced budget exists to ORDER candidates, never to decide the thresholds that get applied.
+    let run = match &allow {
+        Some(mask) => search.run_masked(mask, restarts, seed, handle),
+        None => search.run(restarts, seed, handle),
+    };
     // No restart completed: too small a sample was already handled above, so this is a stop.
-    let Some(outcome) = search.run(restarts, seed, handle) else {
+    let Some(outcome) = run else {
         return Ok(None);
     };
     // The ranges in the form the scorer needs them, derived by the search itself so the figures
@@ -180,15 +332,124 @@ pub fn suggest(
             to: *to,
         })
         .collect();
-    // Read back from the search rather than reusing `requested_train`: the tallies below must
-    // describe the window it actually fitted on, not the one it was asked for.
-    let train_n = search.train_n();
     Ok(Some(SearchResult {
         fields,
         train: search.tally(&applied, 0..train_n),
         holdout: (train_n < total).then(|| search.tally(&applied, train_n..total)),
         seed,
+        composed: match composed {
+            Some(Ok(Some(out))) => Some(composed_set(&out, &applied)),
+            _ => None,
+        },
+        compose_skipped: skipped,
     }))
+}
+
+/// Report a composition through the ranges the final refit actually applied.
+///
+/// A chosen field the refit left unfiltered is counted, not listed: the user is shown the set
+/// their thresholds came from, and a badge beside an empty threshold box would describe a
+/// different set than the grid does.
+fn composed_set(out: &compose::ComposeOutcome, applied: &[(usize, f64, f64)]) -> ComposedSet {
+    let fields: Vec<(&'static str, u8)> = applied
+        .iter()
+        .filter(|(fi, _, _)| out.chosen[*fi])
+        .map(|(fi, _, _)| (FIELDS[*fi].col, out.support[*fi]))
+        .collect();
+    ComposedSet {
+        dropped_at_refit: out.chosen.iter().filter(|c| **c).count() - fields.len(),
+        fields,
+        folds: out.folds,
+    }
+}
+
+/// Cut the fitting region into walk-forward folds and compose the field set on them.
+///
+/// Every fold is a search over the SAME scanned columns with its own shorter fit prefix, so each
+/// derives its own quantile edges from its own rows — edges taken from the whole fitting region
+/// would place a fold's thresholds using the very stretch that fold exists to be measured on.
+///
+/// `Err` means composition was asked for and could not honestly run; the caller then falls back
+/// to the plain joint search and reports the reason. `Ok(None)` means it was stopped.
+#[allow(clippy::too_many_arguments)]
+fn compose_set(
+    cols: &Arc<search::Columns>,
+    params: &SearchParams<'_>,
+    is_slot: &[bool],
+    closes: &[i64],
+    min_n: usize,
+    ne: usize,
+    train_n: usize,
+    seed: u64,
+    budget: ComposeBudget,
+    handle: &SearchHandle,
+) -> Result<Option<compose::ComposeOutcome>, ComposeSkip> {
+    let folds = build_folds(
+        cols,
+        params.locked,
+        is_slot,
+        closes,
+        min_n,
+        ne,
+        train_n,
+        budget.folds,
+    );
+    // One fold is not a second opinion: a set chosen on a single stretch has nothing behind it
+    // but that stretch, which is the state composition exists to improve on.
+    if folds.len() < 2 {
+        return Err(ComposeSkip::TooFewFolds);
+    }
+    let p = compose::ComposeParams {
+        restarts: budget.ranking_restarts(params.restarts.clamp(RESTARTS_MIN, restarts_max())),
+        seed,
+        round: params.round,
+        max_fields: budget.max_fields,
+    };
+    Ok(compose::compose(&folds, &p, handle))
+}
+
+/// Build the walk-forward folds composition is scored on.
+///
+/// Separated from [`compose_set`] so the fold's OWN `fit_end` — the argument that decides whether
+/// a fold's thresholds were placed knowing the rows that fold exists to be measured on — sits on a
+/// path a test can drive without rebuilding it. A test that assembles its own folds proves only
+/// that [`search::Search`] honours the window it was handed, which was never in doubt.
+///
+/// Folds that cannot be built are dropped, so the caller counts what survived rather than what
+/// was asked for.
+#[allow(clippy::too_many_arguments)]
+fn build_folds(
+    cols: &Arc<search::Columns>,
+    locked: &[Option<(Option<f64>, Option<f64>)>],
+    is_slot: &[bool],
+    closes: &[i64],
+    min_n: usize,
+    ne: usize,
+    train_n: usize,
+    k: usize,
+) -> Vec<compose::Fold> {
+    fold_cuts(closes, train_n, k)
+        .into_iter()
+        .filter_map(|(fit_end, validate_end)| {
+            // `min_n` counts trades a suggestion must RETAIN, so on a fold fitting on part of the
+            // region it scales with that part — held at its absolute value it would ask a half-
+            // sized fold for the selectivity of a full one and refuse to build at all.
+            let fold_min_n = (min_n * fit_end / train_n.max(1)).max(1);
+            // `fit_end`, never `train_n`: the fold's quantile edges must come from its own rows.
+            let search = search::Search::new(
+                cols.clone(),
+                locked,
+                is_slot.to_vec(),
+                fold_min_n,
+                ne,
+                fit_end,
+            )?;
+            Some(compose::Fold {
+                search,
+                validate: fit_end..validate_end,
+            })
+        })
+        .collect()
 }
 
 /// Leading trades the search may fit on for a requested train share.
@@ -212,11 +473,64 @@ fn train_split(closes: &[i64], frac: f64) -> usize {
         return n;
     }
     let target = ((n as f64 * frac.max(0.0)).round() as usize).clamp(1, n - 1);
+    // No boundary anywhere means every trade closed at the same instant: nothing to hold back,
+    // so the sample is not split at all.
+    snap_to_close_change(closes, target, n - 1).unwrap_or(n)
+}
+
+/// The nearest index to `target`, within `1..=limit`, where `closedate` changes — i.e. a cut that
+/// falls BETWEEN two groups of equally-timed trades rather than through one.
+///
+/// Searches forward first, then backward, so a cut lands as close to what was asked for as the
+/// data allows. Returns `None` when the whole span up to `limit` shares one timestamp and there
+/// is no such boundary at all.
+///
+/// The `None` is the point of this signature. Its two callers want opposite things from that
+/// case — [`train_split`] declines to split, while [`fold_cuts`] drops the fold — and an
+/// unsplittable span answered with a silent fallback would give one of them a cut it explicitly
+/// must not make.
+fn snap_to_close_change(closes: &[i64], target: usize, limit: usize) -> Option<usize> {
+    debug_assert!(target >= 1, "callers clamp; index `k - 1` below needs it");
     let changes = |k: &usize| closes[*k] != closes[*k - 1];
-    (target..n)
+    (target..=limit)
         .find(changes)
-        .or_else(|| (1..=target).rev().find(changes))
-        .unwrap_or(n)
+        .or_else(|| (1..target).rev().find(changes))
+}
+
+/// Chronological fold boundaries inside the fitting region, as `(fit_end, validate_end)` pairs:
+/// a fold fits on `0..fit_end` and is measured on `fit_end..validate_end`.
+///
+/// The boundaries are ANCHORED walk-forward — every fold fits from the very first trade, on a
+/// growing prefix — cut at `train_n * (k + j) / (2k)`. So the first fold fits on the leading half
+/// and the validation windows tile the trailing half without overlapping: every fold is measured
+/// on trades strictly later than the ones it saw, which is the only arrangement under which a
+/// score means "would have held up", and no trade is measured twice.
+///
+/// `train_n` itself is the LAST endpoint and is never snapped: it is the boundary the caller
+/// already chose, and moving it would either drop the final group of trades or reach past the
+/// fitting region into the held-back tail — the one thing composition may never see.
+///
+/// Folds whose window would be empty are dropped rather than returned degenerate, which happens
+/// when two boundaries snap onto the same index or a span shares a single timestamp. The result
+/// can therefore be SHORTER than `k`, or empty.
+fn fold_cuts(closes: &[i64], train_n: usize, k: usize) -> Vec<(usize, usize)> {
+    if k == 0 || train_n < 2 {
+        return Vec::new();
+    }
+    let limit = train_n - 1;
+    // Endpoint `j == k` is `train_n` exactly; the interior ones snap to a timestamp change.
+    let mut cuts: Vec<usize> = (0..k)
+        .filter_map(|j| {
+            let target = (train_n as u128 * (k + j) as u128 / (2 * k) as u128) as usize;
+            snap_to_close_change(closes, target.clamp(1, limit), limit)
+        })
+        .collect();
+    cuts.push(train_n);
+    cuts.dedup();
+    cuts.windows(2)
+        .map(|w| (w[0], w[1]))
+        .filter(|(fit_end, validate_end)| *fit_end > 0 && validate_end > fit_end)
+        .collect()
 }
 
 /// The column-oriented sample the optimizer runs on: per-trade profits, one value column per
@@ -265,6 +579,10 @@ fn scan(q: &Query, handle: &SearchHandle) -> ReadResult<Option<Sample>> {
         .map_err(|e| read_fail(CTX, e))?;
     while let Some(r) = rows.next().map_err(|e| read_fail(CTX, e))? {
         if profits.len().is_multiple_of(SCAN_CANCEL_EVERY) && handle.is_cancelled() {
+            // The scan is a unit of work like any other, and dropping it mid-way is exactly what
+            // `abandoned` exists to report — otherwise a stop during the scan reads as "the
+            // period simply has no suggestion".
+            handle.note_abandoned();
             return Ok(None);
         }
         profits.push(r.get(nf).map_err(|e| read_fail(CTX, e))?);

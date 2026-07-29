@@ -239,6 +239,62 @@ analytics.tuner.train_share:
   ru: "обучение"
   en: "train on"
   es: "entrenar"
+analytics.tuner.compose:
+  ru: "состав"
+  en: "field set"
+  es: "conjunto"
+analytics.tuner.compose_run:
+  ru: "Подобрать состав"
+  en: "Compose set"
+  es: "Componer conjunto"
+analytics.tuner.compose_help:
+  ru: "Подбирает не только пороги, но и сам состав полей. Кандидаты проверяются на отрезках периода, которых поиск не видел: поле входит, только если помогает на большинстве отрезков, и выбрасывается, если без него не хуже. Галочки полей остаются границей — состав берётся только из разрешённых. Нужна выбранная стратегия."
+  en: "Chooses the field set as well as the thresholds. Candidates are scored on stretches of the period the search never saw: a field joins only if it helps in most of them, and is dropped when the set does no worse without it. The field checkboxes stay the boundary — the set is drawn only from what they admit. A strategy must be selected."
+  es: "Elige el conjunto de campos además de los umbrales. Los candidatos se evalúan en tramos del periodo que la búsqueda no vio: un campo entra solo si ayuda en la mayoría de ellos, y se descarta si el conjunto no empeora sin él. Las casillas de campos siguen siendo el límite: el conjunto se toma solo de las admitidas. Debe haber una estrategia seleccionada."
+analytics.tuner.compose_budget:
+  ru: "ядер %{cores} · до %{fields} полей · %{folds} среза"
+  en: "%{cores} cores · up to %{fields} fields · %{folds} folds"
+  es: "%{cores} núcleos · hasta %{fields} campos · %{folds} cortes"
+analytics.tuner.compose_started:
+  ru: "подбираю состав…"
+  en: "composing the set…"
+  es: "componiendo el conjunto…"
+analytics.tuner.compose_progress:
+  ru: "шаг %{step} · поле %{done} из %{total}"
+  en: "step %{step} · field %{done} of %{total}"
+  es: "paso %{step} · campo %{done} de %{total}"
+analytics.tuner.compose_set:
+  ru: "состав"
+  en: "set"
+  es: "conjunto"
+analytics.tuner.compose_empty:
+  ru: "ни одно поле не оправдало себя вне выборки"
+  en: "no field held up out of sample"
+  es: "ningún campo se sostuvo fuera de muestra"
+analytics.tuner.compose_small:
+  ru: "период не делится на срезы — состав не подбирался"
+  en: "the period cannot be cut into folds — the set was not composed"
+  es: "el periodo no se puede dividir en cortes — el conjunto no se compuso"
+analytics.tuner.compose_no_scope:
+  ru: "выберите стратегию — состав не подбирают по всей базе"
+  en: "pick a strategy — a set is never composed across the whole report"
+  es: "elige una estrategia — un conjunto nunca se compone sobre todo el informe"
+analytics.tuner.compose_refit_dropped:
+  ru: "состав подобран (%{n}), но на полном прогоне ни одно поле не получило порогов"
+  en: "%{n} field(s) composed, but the full run gave none of them a range"
+  es: "%{n} campo(s) compuestos, pero la pasada completa no dio rango a ninguno"
+analytics.tuner.compose_done:
+  ru: "состав подобран"
+  en: "set composed"
+  es: "conjunto compuesto"
+analytics.tuner.compose_stopped:
+  ru: "подбор состава остановлен"
+  en: "composition stopped"
+  es: "composición detenida"
+analytics.tuner.compose_no_split:
+  ru: "состав подобран, но проверять его не на чем: обучение 100%"
+  en: "the set was composed, but nothing is held back to check it: training 100%"
+  es: "el conjunto se compuso, pero no hay nada reservado para comprobarlo: entrenamiento 100%"
 analytics.tuner.train_off:
   ru: "весь период"
   en: "whole period"

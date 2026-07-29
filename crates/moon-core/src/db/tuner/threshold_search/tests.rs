@@ -1,10 +1,13 @@
-//! Tests for the scan side of the threshold search: how the sample is cut in two, and how it is
-//! ordered before it is cut.
+//! Tests for the scan side of the threshold search: chronological ordering, the train/holdout
+//! split, and the walk-forward folds cut inside the fitting region.
 //!
 //! Both are pure functions over the scanned columns, so they are checked here directly rather
 //! than through a database — the SQL they sit next to is exercised by the tuner's own DB tests.
 
-use super::{chronological_order, train_split};
+use super::{
+    chronological_order, fold_cuts, restarts_max_for, train_split, RESTARTS_MAX,
+    RESTARTS_MAX_LIGHT, RESTARTS_MIN,
+};
 
 /// Trades with distinct timestamps, so a split can land anywhere.
 fn distinct(n: usize) -> Vec<i64> {
@@ -80,6 +83,108 @@ fn a_split_never_cuts_a_group_of_equally_timed_trades() {
             "pct={pct}: split at {train} cuts through one timestamp"
         );
     }
+}
+
+/// The walk-forward folds must be ANCHORED: every fold fits from the first trade, the windows
+/// tile the trailing half in order without overlapping, and the last one ends exactly at the
+/// fitting boundary.
+///
+/// The expected boundaries are derived by hand from the stated geometry — with 12 trades and 3
+/// folds, `12 * (3 + j) / 6` gives 6, 8, 10 and the final endpoint is 12 — rather than read back
+/// from the function. That is what makes this more than a shape check: a plausible wrong formula
+/// such as `train_n * j / k` yields 0, 4, 8 and would satisfy every "inside the region, ordered,
+/// no timestamp split" predicate while measuring folds on stretches they had already fitted.
+///
+/// Breakage this pins: `threshold_search/mod.rs:fold_cuts` changing its cut formula, letting a
+/// window overlap its neighbour, or snapping the final endpoint — which would either drop the
+/// last group of trades or reach past the fitting region into the held-back tail.
+#[test]
+fn folds_are_anchored_and_tile_the_second_half_in_order() {
+    let closes = distinct(12);
+    let cuts = fold_cuts(&closes, 12, 3);
+    assert_eq!(
+        cuts,
+        vec![(6, 8), (8, 10), (10, 12)],
+        "the anchored geometry must place the fits at half the region and tile the rest"
+    );
+    // Every fold is measured strictly after what it fitted on, and nothing reaches past the
+    // fitting boundary into the tail the user is shown as out-of-sample.
+    let wide = fold_cuts(&distinct(100), 60, 3);
+    assert_eq!(
+        wide.len(),
+        3,
+        "a region this wide must yield every fold asked for"
+    );
+    for (fit_end, validate_end) in wide {
+        assert!(
+            0 < fit_end && fit_end < validate_end && validate_end <= 60,
+            "fold ({fit_end}, {validate_end}) escapes the fitting region"
+        );
+    }
+}
+
+/// Folds that cannot be cut must be dropped, not returned degenerate.
+///
+/// Breakage this pins: `fold_cuts` returning windows it could not honestly place — an empty
+/// validation window scores every candidate set at exactly zero, so composition would compare
+/// zeroes and accept whichever field it happened to reach first.
+#[test]
+fn folds_that_cannot_be_cut_are_dropped() {
+    // One timestamp for the whole region: there is no boundary to cut between.
+    assert!(
+        fold_cuts(&vec![7i64; 40], 40, 3).is_empty(),
+        "a region closed within one timestamp cannot be cut into folds"
+    );
+    // Too few trades for the requested folds: whatever survives must still be well formed.
+    // The counts are derived by hand from the same geometry — with `n` trades and `k` folds the
+    // cuts are `n * (k + j) / 2k`, deduplicated — so a silently empty result cannot pass as one
+    // that was merely well formed.
+    for (n, k, kept) in [(2usize, 3usize, 1usize), (3, 3, 2), (4, 3, 2), (5, 2, 2)] {
+        let cuts = fold_cuts(&distinct(n), n, k);
+        assert_eq!(
+            cuts.len(),
+            kept,
+            "n={n} k={k}: wrong number of folds survived"
+        );
+        for (fit_end, validate_end) in cuts {
+            assert!(
+                0 < fit_end && fit_end < validate_end && validate_end <= n,
+                "n={n} k={k}: degenerate fold ({fit_end}, {validate_end})"
+            );
+        }
+    }
+    assert!(
+        fold_cuts(&distinct(10), 10, 0).is_empty(),
+        "no folds asked for"
+    );
+}
+
+/// A machine below the heavy-search bar accepts strictly fewer restarts, and both ceilings stay
+/// inside what the search will run.
+///
+/// Both branches are exercised in one run through [`restarts_max_for`]; a real machine only ever
+/// takes one of them, so without that the light ceiling would be unchecked on a development
+/// machine and the heavy one unchecked in CI.
+///
+/// Breakage this pins: `mod.rs:restarts_max_for` returning the same ceiling for both classes, or
+/// swapping them. A small machine would then accept the big count, and one click on a knob the
+/// user reads as a quality dial would spend minutes of a machine that has no cores to spare —
+/// which is the whole reason the two ceilings exist.
+#[test]
+fn a_small_machine_accepts_fewer_restarts_than_a_big_one() {
+    // Read through the accessor, not off the constants: what must hold is a property of the
+    // POLICY, and two literals compared with each other is a statement about neither branch.
+    let (light, heavy) = (restarts_max_for(false), restarts_max_for(true));
+    assert!(
+        light < heavy,
+        "the bar must actually withhold restarts: {light} against {heavy}"
+    );
+    assert!(
+        light >= RESTARTS_MIN,
+        "the light ceiling must still leave a usable range: {light}"
+    );
+    assert_eq!(heavy, RESTARTS_MAX);
+    assert_eq!(light, RESTARTS_MAX_LIGHT);
 }
 
 /// A sample that closed entirely within one timestamp has no later period to hold back.
