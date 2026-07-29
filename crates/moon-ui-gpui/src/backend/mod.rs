@@ -46,11 +46,11 @@ pub(crate) struct PendingWarnSlice {
 
 /// Slice a history ring to the ±1 min window around `at_ms`, positionally at 1 Hz (the same read the
 /// live card uses). `None` when the ring is absent, too short, or does not reach the window.
-fn ring_slice(
-    ring: Option<&std::collections::VecDeque<(u8, u8)>>,
+fn ring_slice<T: Copy>(
+    ring: Option<&std::collections::VecDeque<T>>,
     at_ms: i64,
     now_ms: i64,
-) -> Option<Vec<(u8, u8)>> {
+) -> Option<Vec<T>> {
     let ring = ring?;
     let len = ring.len();
     if len < 2 {
@@ -78,14 +78,21 @@ fn ring_slice(
 fn capture_series(
     store: &crate::backend::core_warn::store::WarnStore,
     ring: Option<&std::collections::VecDeque<(u8, u8)>>,
+    ping_ring: Option<&std::collections::VecDeque<u16>>,
     episode_id: i64,
     start_ms: i64,
     now_ms: i64,
 ) {
+    let base_ms = start_ms - WARN_SLICE_BACK_MS;
     if let Some(samples) = ring_slice(ring, start_ms, now_ms) {
-        let base_ms = start_ms - WARN_SLICE_BACK_MS;
         if let Err(err) = store.insert_series(episode_id, "server", base_ms, &samples) {
             log::warn!("core warning slice persist failed: {err}");
+        }
+    }
+    // The ping slice rides the same window under the `ping` subject (its own u16 blob).
+    if let Some(pings) = ring_slice(ping_ring, start_ms, now_ms) {
+        if let Err(err) = store.insert_ping_series(episode_id, base_ms, &pings) {
+            log::warn!("core warning ping slice persist failed: {err}");
         }
     }
 }
@@ -942,6 +949,10 @@ impl Backend {
                 }
             }
         }
+        // Per-server round-trip history, recorded backend-always like the CPU/memory rings.
+        for (ip, ms) in &result.pings {
+            self.server_ping_hist.record(*ip, sec, *ms);
+        }
         if let Some(store) = &self.warn_store {
             for episode in &result.closed {
                 // An axis turned off mid-episode closes its open warning on this tick; honor
@@ -957,6 +968,7 @@ impl Backend {
                             capture_series(
                                 store,
                                 self.core_chart_hist.ring(ip),
+                                self.server_ping_hist.ring(ip),
                                 rowid,
                                 episode.start_ms,
                                 now_ms,
@@ -1010,6 +1022,7 @@ impl Backend {
             capture_series(
                 store,
                 self.core_chart_hist.ring(pending.ip),
+                self.server_ping_hist.ring(pending.ip),
                 pending.episode_id,
                 pending.start_ms,
                 now_ms,
@@ -1027,12 +1040,32 @@ impl Backend {
         ring_slice(self.core_chart_hist.ring(ip), at_ms, now_ms)
     }
 
+    /// The server ping slice around a moment, from the live ring: the card's live-path ping line.
+    pub(crate) fn warn_server_ping_slice(
+        &self,
+        ip: IpAddr,
+        at_ms: i64,
+        now_ms: i64,
+    ) -> Option<Vec<u16>> {
+        ring_slice(self.server_ping_hist.ring(ip), at_ms, now_ms)
+    }
+
     /// The persisted server history slice for a closed episode, for a card whose warning has already
     /// rolled out of the live ring. `None` if it was never captured or persistence is off.
     pub(crate) fn warn_series_slice(&self, episode_id: u64) -> Option<Vec<(u8, u8)>> {
         self.warn_store
             .as_ref()?
             .series_for_episode(episode_id as i64, "server")
+            .ok()
+            .flatten()
+    }
+
+    /// The persisted ping slice for a closed episode, for a card past the live ring. `None` if it was
+    /// never captured or persistence is off.
+    pub(crate) fn warn_ping_series_slice(&self, episode_id: u64) -> Option<Vec<u16>> {
+        self.warn_store
+            .as_ref()?
+            .ping_series_for_episode(episode_id as i64)
             .ok()
             .flatten()
     }

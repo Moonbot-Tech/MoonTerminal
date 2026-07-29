@@ -168,6 +168,10 @@ core_status.col.cpus:
   ru: "Логич. CPU"
   en: "Logical CPUs"
   es: "CPU lógicos"
+core_status.col.ping:
+  ru: "Пинг"
+  en: "Ping"
+  es: "Ping"
 core_status.col.updated:
   ru: "Обновлено"
   en: "Updated"

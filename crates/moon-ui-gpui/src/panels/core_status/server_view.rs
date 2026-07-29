@@ -14,11 +14,13 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use moon_core::feed::ConnStatus;
+
 use super::CoreStatusView;
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::presentation::{
     connection_presentation, cpu_level, cpu_load, free_mem_level, level_color, memory_free,
-    memory_u16, metric_icon, percent,
+    memory_u16, metric_icon, percent, ping, ping_level,
 };
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
@@ -26,6 +28,7 @@ const IP_MASK: &str = "************";
 /// Fixed value-box widths so a changing number never reflows the row.
 const CPU_W: f32 = 100.0;
 const MEM_W: f32 = 116.0;
+const PING_W: f32 = 64.0;
 
 /// Build server roots, each with one collapsed folder of core children.
 ///
@@ -264,6 +267,25 @@ fn server_row(
                     group.mem_warn,
                     p,
                 ))
+                // Ping is per core; the server row shows the WORST (highest) round-trip among the
+                // server's READY cores, matching the ping ring (a dropped core's stale reading is
+                // excluded rather than dominating the row).
+                .child({
+                    let worst = group
+                        .cores
+                        .iter()
+                        .filter(|c| c.status == ConnStatus::Ready)
+                        .filter_map(|c| c.sys.round_trip_ms)
+                        .max();
+                    metric_cell(
+                        "icons/globe.svg",
+                        ping(worst),
+                        PING_W,
+                        level_color(ping_level(worst), p),
+                        group.ping_warn,
+                        p,
+                    )
+                })
                 .child(
                     div()
                         .flex_none()
@@ -318,14 +340,16 @@ fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElemen
             false,
             p,
         ))
-        // A sustained-high client↔core ping on THIS core — the per-core cause behind the server badge.
-        .children(core.ping_warn.then(|| {
-            svg()
-                .path("icons/triangle-alert.svg")
-                .size(px(12.0))
-                .flex_none()
-                .text_color(rgb(p.amber))
-        }))
+        // This core's client↔core round-trip; the cell's own warn triangle marks a sustained-high
+        // ping (the per-core cause behind the server badge), consistent with the CPU/memory cells.
+        .child(metric_cell(
+            "icons/globe.svg",
+            ping(core.sys.round_trip_ms),
+            PING_W,
+            level_color(ping_level(core.sys.round_trip_ms), p),
+            core.ping_warn,
+            p,
+        ))
 }
 
 /// Render the server name as an inline rename field or a name plus a pencil edit action.

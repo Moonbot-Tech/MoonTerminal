@@ -37,6 +37,7 @@ fn episode(
             free_mb: 2048,
             used_mb: 4096,
             logical_cpus: 8,
+            round_trip_ms: 180,
         },
     }
 }
@@ -85,6 +86,7 @@ fn roundtrip_filters_by_server_and_time() {
     assert_eq!(wide[1].snap.free_mb, 2048);
     assert_eq!(wide[1].snap.used_mb, 4096);
     assert_eq!(wide[1].snap.logical_cpus, 8);
+    assert_eq!(wide[1].snap.round_trip_ms, 180);
     assert_eq!(wide[2].axis, WarnAxis::Unreachable);
     assert_eq!(wide[2].end_ms, Some(9_000));
 }
@@ -146,4 +148,51 @@ fn series_slice_round_trips_by_episode() {
         rows, 1,
         "OR REPLACE must keep exactly one row per (episode, subject)"
     );
+}
+
+/// The per-episode ping slice (a `u16`-per-sample blob under the `ping` subject) must round-trip,
+/// coexist with the `server` slice, and read `None` when absent.
+#[test]
+fn ping_series_round_trips() {
+    let store = store();
+    let rowid = store
+        .insert_episode(&episode(
+            WarnAxis::Ping,
+            [10, 0, 0, 1],
+            Some(3),
+            1_000,
+            2_000,
+            640,
+        ))
+        .unwrap();
+
+    // Boundary values catch a u16 encode/decode off-by-one.
+    let pings = [0u16, 65535, 250, 1000];
+    store.insert_ping_series(rowid, 60_000, &pings).unwrap();
+    assert_eq!(
+        store.ping_series_for_episode(rowid).unwrap().as_deref(),
+        Some(&pings[..])
+    );
+
+    // A server slice on the same episode is a different subject and does not collide.
+    store
+        .insert_series(rowid, "server", 60_000, &[(1, 2), (3, 4)])
+        .unwrap();
+    assert_eq!(
+        store.ping_series_for_episode(rowid).unwrap().as_deref(),
+        Some(&pings[..])
+    );
+
+    // An episode with no ping slice reads absent.
+    let other = store
+        .insert_episode(&episode(
+            WarnAxis::SysCpu,
+            [10, 0, 0, 2],
+            None,
+            3_000,
+            4_000,
+            90,
+        ))
+        .unwrap();
+    assert_eq!(store.ping_series_for_episode(other).unwrap(), None);
 }

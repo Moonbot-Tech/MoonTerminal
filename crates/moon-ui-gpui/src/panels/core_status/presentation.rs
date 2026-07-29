@@ -71,6 +71,37 @@ pub(super) fn memory_u16(value: Option<u16>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// Format an optional client↔core round-trip time in milliseconds, e.g. `142 ms`.
+///
+/// Args:
+///     value: Round-trip time from `Event::KernelHealth`.
+///
+/// Returns:
+///     Localized latency text or an ASCII unavailable marker.
+pub(super) fn ping(value: Option<u32>) -> String {
+    value
+        .map(|value| format!("{} {}", value, t!("core_status.ms")))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Classify round-trip latency, where a higher time is worse.
+///
+/// `Critical` at the same threshold the ping WARNING fires (`PING_WARN_MS` = 500 ms), so the colour
+/// and the badge agree; `Warning` at half that.
+///
+/// Args:
+///     value: Round-trip time in milliseconds.
+///
+/// Returns:
+///     `Warning` from 250 ms, `Critical` from 500 ms, else `Normal` (including unknown).
+pub(super) fn ping_level(value: Option<u32>) -> LoadLevel {
+    match value {
+        Some(ms) if ms >= 500 => LoadLevel::Critical,
+        Some(ms) if ms >= 250 => LoadLevel::Warning,
+        _ => LoadLevel::Normal,
+    }
+}
+
 /// Format machine CPU load with the machine's logical-core count, e.g. `34% (16 core)`.
 ///
 /// Args:

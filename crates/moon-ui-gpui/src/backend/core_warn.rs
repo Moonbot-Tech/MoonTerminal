@@ -138,6 +138,9 @@ pub(crate) struct TickResult {
     pub(crate) closed: Vec<WarnEpisode>,
     /// Raw per-subject chart-history samples for this second. Empty on a within-second no-op.
     pub(crate) rings: Vec<RingSample>,
+    /// Per-server round-trip samples (ms) for this second — the worst core round-trip per server —
+    /// recorded into the ping history ring like the CPU/memory rings. Empty on a within-second no-op.
+    pub(crate) pings: Vec<(IpAddr, u16)>,
 }
 
 /// The server's telemetry captured at the moment a warning fired, so the card can show the full
@@ -155,6 +158,8 @@ pub(crate) struct WarnSnapshot {
     pub(crate) used_mb: u32,
     /// Logical CPU count.
     pub(crate) logical_cpus: u8,
+    /// Worst core round-trip on the server, ms (0 = no ping reading yet).
+    pub(crate) round_trip_ms: u16,
 }
 
 /// A warning period with a start and, once cleared, an end.
@@ -318,6 +323,7 @@ impl CoreWarnEngine {
         TickResult {
             closed,
             rings: build_ring_samples(samples),
+            pings: build_ping_samples(samples),
         }
     }
 
@@ -669,6 +675,14 @@ fn server_snapshot(samples: &[CoreSample], ip: IpAddr) -> WarnSnapshot {
         free_mb: free.unwrap_or(0),
         used_mb: used_sum.min(u64::from(u32::MAX)) as u32,
         logical_cpus: freshest_u8(|sys| sys.logical_cpu_count).unwrap_or(0),
+        // Worst READY-core round-trip, matching the per-server ping ring (a dropped core's stale
+        // round-trip must not dominate the snapshot).
+        round_trip_ms: cores()
+            .filter(|s| s.status == ConnStatus::Ready)
+            .filter_map(|s| s.sys.round_trip_ms)
+            .max()
+            .unwrap_or(0)
+            .min(u32::from(u16::MAX)) as u16,
     }
 }
 
@@ -766,6 +780,38 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
         }
     }
     out
+}
+
+/// Build this second's per-SERVER round-trip samples (ms): the worst round-trip among a server's
+/// READY cores.
+///
+/// Recorded into the ping history ring exactly like the CPU/memory rings — telemetry, so it is NOT
+/// gated by the ping-warning toggle. A value is emitted for EVERY server with a live core (0 when
+/// none of its ready cores has measured a ping yet), so the ping ring advances in lockstep with the
+/// CPU/memory ring — a skipped second would mis-time the positional 1 Hz slice. Only Ready cores
+/// count, so a dropped core's stale (possibly timed-out) round-trip cannot dominate the server ping
+/// the way `max` over all cores would (unlike machine CPU, cores have DIFFERENT round-trips).
+///
+/// Args:
+///     samples: This tick's per-core telemetry.
+///
+/// Returns:
+///     One `(server ip, worst ready round-trip ms)` per server with a known endpoint.
+fn build_ping_samples(samples: &[CoreSample]) -> Vec<(IpAddr, u16)> {
+    let mut by_ip: HashMap<IpAddr, u16> = HashMap::new();
+    for sample in samples {
+        let Some(ip) = sample.ip else {
+            continue;
+        };
+        // Seed every server so its ring never skips a second, matching the CPU/memory ring.
+        let entry = by_ip.entry(ip).or_insert(0);
+        if sample.status == ConnStatus::Ready {
+            if let Some(ms) = sample.sys.round_trip_ms {
+                *entry = (*entry).max(ms.min(u32::from(u16::MAX)) as u16);
+            }
+        }
+    }
+    by_ip.into_iter().collect()
 }
 
 pub(crate) mod store;
