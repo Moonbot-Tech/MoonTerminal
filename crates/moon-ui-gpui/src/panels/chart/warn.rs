@@ -528,21 +528,31 @@ fn warn_graph(points: Vec<(u8, u8)>, p: MoonPalette) -> impl IntoElement {
     };
     let cpu_pts = series(|s| s.0);
     let mem_pts = series(|s| s.1);
-    div().w_full().h(px(GRAPH_H)).child(
-        canvas(
-            |_, _, _| (),
-            move |bounds, _, window, _| {
-                let w = f32::from(bounds.size.width);
-                let h = f32::from(bounds.size.height);
-                if w < 2.0 || h < 2.0 {
-                    return;
-                }
-                stroke_line(window, bounds.origin, w, h, &mem_pts, mem);
-                stroke_line(window, bounds.origin, w, h, &cpu_pts, cpu);
-            },
+    // A fixed-height, non-shrinking row with the canvas absolutely filling it, so the graph reserves
+    // its own space and never paints over the text above it (the same pattern the Core Status chart
+    // uses; a plain in-flow canvas can collapse and overlap).
+    div()
+        .relative()
+        .w_full()
+        .h(px(GRAPH_H))
+        .flex_none()
+        .child(
+            div().absolute().top_0().bottom_0().left_0().right_0().child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        let w = f32::from(bounds.size.width);
+                        let h = f32::from(bounds.size.height);
+                        if w < 2.0 || h < 2.0 {
+                            return;
+                        }
+                        stroke_line(window, bounds.origin, w, h, &mem_pts, mem);
+                        stroke_line(window, bounds.origin, w, h, &cpu_pts, cpu);
+                    },
+                )
+                .size_full(),
+            ),
         )
-        .size_full(),
-    )
 }
 
 /// Stroke one series of `(x fraction, 0..100 value)` points onto a 0..100 % plot.
