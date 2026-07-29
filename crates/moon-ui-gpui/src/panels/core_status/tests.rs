@@ -5,7 +5,9 @@
 
 use std::collections::VecDeque;
 
-use super::{CPU_SUSTAIN_SECS, CoreStatusMode, WARN_CPU_PCT, mem_grew, natural_cmp, next_high_secs};
+use super::{
+    CPU_SUSTAIN_SECS, CoreStatusMode, WARN_CPU_PCT, mem_grew, natural_cmp, next_high_secs,
+};
 
 /// Build a memory window from a sequence of used-MB samples, one per second.
 fn ring(values: &[u16]) -> VecDeque<(i64, u16)> {
@@ -27,11 +29,25 @@ fn new_core_status_panels_default_to_by_ip() {
 /// precedes `Server 10`, not the lexical reverse) and custom names alphabetically.
 #[test]
 fn server_names_sort_naturally() {
-    let mut names = ["Server 10", "Server 2", "QQ", "F1", "Server 1", "HLFutures2"];
+    let mut names = [
+        "Server 10",
+        "Server 2",
+        "QQ",
+        "F1",
+        "Server 1",
+        "HLFutures2",
+    ];
     names.sort_by(|a, b| natural_cmp(a, b));
     assert_eq!(
         names,
-        ["F1", "HLFutures2", "QQ", "Server 1", "Server 2", "Server 10"]
+        [
+            "F1",
+            "HLFutures2",
+            "QQ",
+            "Server 1",
+            "Server 2",
+            "Server 10"
+        ]
     );
 }
 

@@ -232,8 +232,16 @@ fn legend_row(
         )
         .child(window_button(ChartWindow::Min5, window, view, p))
         .child(window_button(ChartWindow::Hour1, window, view, p))
-        .child(legend_chip(t!("core_status.chart_cpu").to_string(), cpu_line, p))
-        .child(legend_chip(t!("core_status.chart_mem").to_string(), mem_line, p))
+        .child(legend_chip(
+            t!("core_status.chart_cpu").to_string(),
+            cpu_line,
+            p,
+        ))
+        .child(legend_chip(
+            t!("core_status.chart_mem").to_string(),
+            mem_line,
+            p,
+        ))
 }
 
 /// One window-selector pill; the active window is accent-tinted.
@@ -277,37 +285,33 @@ fn legend_chip(label: String, color: Hsla, p: MoonPalette) -> impl IntoElement {
 fn x_axis_row(now_sec: i64, window: ChartWindow, p: MoonPalette, cx: &App) -> impl IntoElement {
     let span = window.secs() as i64;
     // Reserve the gutters so labels line up with the plot, then place them by fraction inside.
-    h_flex()
-        .w_full()
-        .pl(px(AXIS_W))
-        .pr(px(VAL_W))
-        .child(
-            div()
-                .relative()
-                .w_full()
-                .h(px(14.0))
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_muted))
-                .children((0..=GRID_DIVISIONS).step_by(LABEL_EVERY).map(|k| {
-                    let frac = k as f32 / GRID_DIVISIONS as f32;
-                    // Right edge (frac 1) is "now"; the left edge is one window back.
-                    let secs_ago = ((1.0 - frac) * span as f32).round() as i64;
-                    // Nudge end labels inward so neither hangs past the plot.
-                    let shift = if k == 0 {
-                        px(0.0)
-                    } else if k == GRID_DIVISIONS {
-                        px(-48.0)
-                    } else {
-                        px(-24.0)
-                    };
-                    div()
-                        .absolute()
-                        .left(relative(frac))
-                        .ml(shift)
-                        .whitespace_nowrap()
-                        .child(hms(now_sec - secs_ago))
-                })),
-        )
+    h_flex().w_full().pl(px(AXIS_W)).pr(px(VAL_W)).child(
+        div()
+            .relative()
+            .w_full()
+            .h(px(14.0))
+            .text_size(design::t_caption(cx))
+            .text_color(rgb(p.text_muted))
+            .children((0..=GRID_DIVISIONS).step_by(LABEL_EVERY).map(|k| {
+                let frac = k as f32 / GRID_DIVISIONS as f32;
+                // Right edge (frac 1) is "now"; the left edge is one window back.
+                let secs_ago = ((1.0 - frac) * span as f32).round() as i64;
+                // Nudge end labels inward so neither hangs past the plot.
+                let shift = if k == 0 {
+                    px(0.0)
+                } else if k == GRID_DIVISIONS {
+                    px(-48.0)
+                } else {
+                    px(-24.0)
+                };
+                div()
+                    .absolute()
+                    .left(relative(frac))
+                    .ml(shift)
+                    .whitespace_nowrap()
+                    .child(hms(now_sec - secs_ago))
+            })),
+    )
 }
 
 /// Format a Unix second as `HH:MM:SS` (UTC), matching the header clock's day-of arithmetic.

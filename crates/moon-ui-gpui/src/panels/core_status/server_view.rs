@@ -100,12 +100,16 @@ pub(super) fn grouped_server_view(
             .iter()
             .enumerate()
             .flat_map(|(server_index, group)| {
-                group.cores.iter().enumerate().map(move |(core_index, core)| {
-                    (
-                        SharedString::from(format!("core:{}", core.id)),
-                        (server_index, core_index),
-                    )
-                })
+                group
+                    .cores
+                    .iter()
+                    .enumerate()
+                    .map(move |(core_index, core)| {
+                        (
+                            SharedString::from(format!("core:{}", core.id)),
+                            (server_index, core_index),
+                        )
+                    })
             })
             .collect::<HashMap<_, _>>(),
     );
@@ -123,19 +127,17 @@ pub(super) fn grouped_server_view(
                     return MoonListItem::new(meta.index)
                         .selected(chart_selected == Some(group.key))
                         .child(server_row(
-                        group,
-                        revealed.contains(&group.key),
-                        entry.is_expanded(),
-                        editing_input,
-                        &weak_view,
-                        p,
-                        app,
-                    ));
+                            group,
+                            revealed.contains(&group.key),
+                            entry.is_expanded(),
+                            editing_input,
+                            &weak_view,
+                            p,
+                            app,
+                        ));
                 }
             }
-        } else if let Some(&(server_index, core_index)) =
-            core_positions.get(entry.item().id())
-        {
+        } else if let Some(&(server_index, core_index)) = core_positions.get(entry.item().id()) {
             if let Some(core) = groups
                 .get(server_index)
                 .and_then(|group| group.cores.get(core_index))
@@ -400,25 +402,28 @@ fn eye_action(
     div()
         .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
         .child(
-            MoonButton::new(SharedString::from(format!("core-status-eye-{}", key.tree_id())))
-                .xsmall()
-                .ghost()
-                .icon(if revealed {
-                    "icons/eye.svg"
-                } else {
-                    "icons/eye-off.svg"
-                })
-                .tooltip(if revealed {
-                    t!("core_status.hide_ip").to_string()
-                } else {
-                    t!("core_status.show_ip").to_string()
-                })
-                .on_click(move |_, window, app| {
-                    let Some(view) = weak_view.upgrade() else {
-                        return;
-                    };
-                    view.update(app, |this, cx| this.toggle_reveal(key, window, cx));
-                }),
+            MoonButton::new(SharedString::from(format!(
+                "core-status-eye-{}",
+                key.tree_id()
+            )))
+            .xsmall()
+            .ghost()
+            .icon(if revealed {
+                "icons/eye.svg"
+            } else {
+                "icons/eye-off.svg"
+            })
+            .tooltip(if revealed {
+                t!("core_status.hide_ip").to_string()
+            } else {
+                t!("core_status.show_ip").to_string()
+            })
+            .on_click(move |_, window, app| {
+                let Some(view) = weak_view.upgrade() else {
+                    return;
+                };
+                view.update(app, |this, cx| this.toggle_reveal(key, window, cx));
+            }),
         )
 }
 

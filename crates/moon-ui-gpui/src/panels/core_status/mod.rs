@@ -677,12 +677,20 @@ impl CoreStatusView {
                 };
                 out.sort_by(|a, b| {
                     let ordering = natural_cmp(&name_of(a), &name_of(b));
-                    if *ascending { ordering } else { ordering.reverse() }
+                    if *ascending {
+                        ordering
+                    } else {
+                        ordering.reverse()
+                    }
                 });
             } else {
                 out.sort_by(|a, b| {
                     let ordering = compare_flat_rows(a, b, key);
-                    if *ascending { ordering } else { ordering.reverse() }
+                    if *ascending {
+                        ordering
+                    } else {
+                        ordering.reverse()
+                    }
                 });
             }
         }
@@ -870,7 +878,6 @@ impl CoreStatusView {
             cx.notify();
         }
     }
-
 }
 
 /// Fill each group's display name from a custom name or a stable `Server N` ordinal.
@@ -980,15 +987,13 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
                     ord => return ord,
                 }
             }
-            (Some(ca), Some(cb)) => {
-                match ca.to_ascii_lowercase().cmp(&cb.to_ascii_lowercase()) {
-                    Ordering::Equal => {
-                        a.next();
-                        b.next();
-                    }
-                    ord => return ord,
+            (Some(ca), Some(cb)) => match ca.to_ascii_lowercase().cmp(&cb.to_ascii_lowercase()) {
+                Ordering::Equal => {
+                    a.next();
+                    b.next();
                 }
-            }
+                ord => return ord,
+            },
         }
     }
 }
@@ -1025,7 +1030,10 @@ fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str) -> Orderin
         "cpu_proc" => a.sys.process_cpu_percent.cmp(&b.sys.process_cpu_percent),
         "cpu_sys" => a.sys.system_cpu_percent.cmp(&b.sys.system_cpu_percent),
         "mem_used" => a.sys.used_memory_mb.cmp(&b.sys.used_memory_mb),
-        "free_phys" => a.sys.free_physical_memory_mb.cmp(&b.sys.free_physical_memory_mb),
+        "free_phys" => a
+            .sys
+            .free_physical_memory_mb
+            .cmp(&b.sys.free_physical_memory_mb),
         "cpus" => a.sys.logical_cpu_count.cmp(&b.sys.logical_cpu_count),
         // "core" and any unknown key sort by name.
         _ => a.name.cmp(&b.name),
