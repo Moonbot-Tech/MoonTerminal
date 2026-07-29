@@ -157,6 +157,11 @@ core_status.chart_mem:
   ru: "ОЗУ"
   en: "RAM"
   es: "RAM"
+# Connectivity axis label on a chart warning badge's hover card.
+core_status.warn_conn:
+  ru: "Связь"
+  en: "Link"
+  es: "Enlace"
 core_status.chart_5m:
   ru: "5 мин"
   en: "5 min"

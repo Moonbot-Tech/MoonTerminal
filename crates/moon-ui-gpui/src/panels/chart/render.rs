@@ -477,6 +477,9 @@ impl Render for ChartPanel {
         let news_ctrl = window.modifiers().secondary();
         self.revalidate_news_hover(cx);
         let news_card = self.news_card(ppp, news_ctrl, palette, cx);
+        // Warning badges: same re-validate (the chart scrolls between events), shown on plain hover.
+        self.revalidate_warn_hover(cx);
+        let warn_card = self.warn_card(ppp, palette, cx);
 
         let show_empty_logo = axis_panes.is_empty();
         let (slot_w, _) = self.chart.slot_dev_size();
@@ -594,6 +597,7 @@ impl Render for ChartPanel {
             // News-mark card: above the chart, below every chart control (close/pin/lock/broom and
             // the action buttons), so it can never swallow a trading click's target.
             .children(news_card)
+            .children(warn_card)
             .children(close_btns.into_iter().map(|(idx, right, top)| {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-close-{idx}")))
