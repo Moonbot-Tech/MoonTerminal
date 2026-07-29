@@ -170,11 +170,12 @@ impl CoreWarnEngine {
     ///     now_ms: Current Unix milliseconds.
     ///
     /// Returns:
-    ///     Nothing; tracking, current warning state, and the episode log are updated in place.
-    pub(crate) fn tick(&mut self, samples: &[CoreSample], now_ms: i64) {
+    ///     The episodes that CLOSED this tick, for the caller to persist. Empty within the same
+    ///     second or when nothing cleared.
+    pub(crate) fn tick(&mut self, samples: &[CoreSample], now_ms: i64) -> Vec<WarnEpisode> {
         let now_sec = now_ms / 1000;
         if now_sec <= self.last_sec {
-            return;
+            return Vec::new();
         }
         self.last_sec = now_sec;
 
@@ -189,7 +190,7 @@ impl CoreWarnEngine {
         }
 
         self.recompute_state(samples, now_sec);
-        self.reconcile_episodes(samples, now_ms);
+        self.reconcile_episodes(samples, now_ms)
     }
 
     /// Fold one core's current sample into its rolling CPU and memory windows.
@@ -261,7 +262,9 @@ impl CoreWarnEngine {
     }
 
     /// Open new episodes, extend open ones, and close those whose warning cleared or subject left.
-    fn reconcile_episodes(&mut self, samples: &[CoreSample], now_ms: i64) {
+    ///
+    /// Returns the episodes closed on this tick so the caller can persist them.
+    fn reconcile_episodes(&mut self, samples: &[CoreSample], now_ms: i64) -> Vec<WarnEpisode> {
         let ip_of: HashMap<CoreId, IpAddr> = samples
             .iter()
             .filter_map(|s| s.ip.map(|ip| (s.id, ip)))
@@ -324,13 +327,14 @@ impl CoreWarnEngine {
             .filter(|key| !active.contains_key(key))
             .copied()
             .collect();
+        let mut closed = Vec::new();
         for key in to_close {
             let open = self.open.remove(&key).expect("key came from open");
             let axis = match key {
                 WarnKey::SysCpu(_) => WarnAxis::SysCpu,
                 WarnKey::Mem(_) => WarnAxis::MemGrowth,
             };
-            self.push_episode(WarnEpisode {
+            let episode = WarnEpisode {
                 id: open.id,
                 axis,
                 server_ip: open.server_ip,
@@ -338,8 +342,11 @@ impl CoreWarnEngine {
                 start_ms: open.start_ms,
                 end_ms: Some(now_ms),
                 peak: open.peak,
-            });
+            };
+            closed.push(episode.clone());
+            self.push_episode(episode);
         }
+        closed
     }
 
     /// Append a closed episode, dropping the oldest past the cap.
@@ -417,6 +424,8 @@ fn next_high_secs(prev: u32, system_cpu: Option<u8>) -> u32 {
         _ => 0,
     }
 }
+
+pub(crate) mod store;
 
 #[cfg(test)]
 mod tests;

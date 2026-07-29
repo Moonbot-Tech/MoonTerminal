@@ -831,7 +831,14 @@ impl Backend {
                 })
                 .collect()
         };
-        self.warn.tick(&samples, now_ms);
+        let closed = self.warn.tick(&samples, now_ms);
+        if let Some(store) = &self.warn_store {
+            for episode in &closed {
+                if let Err(err) = store.insert_episode(episode) {
+                    log::warn!("core warning persist failed: {err}");
+                }
+            }
+        }
     }
 
     pub(crate) fn mark_backend_dirty(&mut self, cx: &mut Context<Self>) {

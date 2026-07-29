@@ -246,6 +246,8 @@ struct Backend {
     /// Backend-always core warning engine: detects sustained CPU / memory growth and produces
     /// warning episodes. The Core Status panel reads its current state instead of tracking locally.
     warn: crate::backend::core_warn::CoreWarnEngine,
+    /// Forever-persistence for closed warning episodes, or `None` if the database could not open.
+    warn_store: Option<crate::backend::core_warn::store::WarnStore>,
     /// Core reconnect requests from the Connections button, drained into `session.reconnect`.
     /// Ported from egui's `SettingsActions.reconnect`.
     reconnect_request: Vec<CoreId>,
