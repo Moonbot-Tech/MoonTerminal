@@ -122,6 +122,32 @@ pub(super) fn restore_seed(saved: Option<String>) -> String {
         .unwrap_or_default()
 }
 
+/// Checkbox mask to open the tuner with for a persisted list of column ids.
+///
+/// Always iterates [`FIELDS`] and asks whether each field's column was saved — never the other way
+/// round — so the mask spans the table whatever the saved list holds: an id that no longer exists
+/// is ignored, and a field added since the save opens unchecked rather than joining the search
+/// unannounced. Three grid and search call sites index this by field position, so a mask shorter
+/// than the table would panic on the first render.
+///
+/// `None` (no usable saved list) restores the default: every field whose threshold a strategy can
+/// store. An empty list is NOT that — it is the user having unchecked everything, and stays empty.
+///
+/// Args:
+///     saved: Persisted report-column ids, or `None` when no usable preference was loaded.
+///
+/// Returns:
+///     One enabled flag per entry in [`FIELDS`], in the same order.
+pub(super) fn restore_enabled(saved: Option<&[String]>) -> Vec<bool> {
+    match saved {
+        Some(cols) => FIELDS
+            .iter()
+            .map(|s| cols.iter().any(|c| c == s.col))
+            .collect(),
+        None => FIELDS.iter().map(|s| s.mapped()).collect(),
+    }
+}
+
 /// What the "By filter" threshold search is doing, as one exhaustive state.
 ///
 /// One enum rather than a busy flag plus a borrowed error channel: the flag could not say whether
@@ -258,17 +284,28 @@ pub(in crate::analytics) struct TunerState {
 impl TunerState {
     /// Build state for a newly opened window.
     ///
-    /// Bounds reset and only mapped fields participate because both belong to a
-    /// strategy-specific search. Restart count, depth, seed and train share are normalized from
-    /// saved preferences.
+    /// Bounds reset because they belong to a strategy-specific search. Restart count, depth,
+    /// seed, train share and the field checkboxes are normalized from saved preferences; with
+    /// nothing saved the checkboxes fall back to "only mapped fields participate".
+    ///
+    /// Args:
+    ///     saved_iters: Persisted random-restart count.
+    ///     saved_edges: Persisted quantile depth.
+    ///     saved_seed: Persisted random seed text.
+    ///     saved_train: Persisted training share.
+    ///     saved_fields: Persisted report-column ids admitted into the automatic search.
+    ///
+    /// Returns:
+    ///     Normalized state for a newly opened tuner.
     pub(in crate::analytics) fn load(
         saved_iters: Option<u32>,
         saved_edges: Option<u32>,
         saved_seed: Option<String>,
         saved_train: Option<u32>,
+        saved_fields: Option<Vec<String>>,
     ) -> Self {
         let bounds = vec![vec![(String::new(), String::new()); FIELDS.len()]; N_VAR];
-        let enabled = FIELDS.iter().map(|s| s.mapped()).collect();
+        let enabled = restore_enabled(saved_fields.as_deref());
         Self {
             bounds,
             inputs: HashMap::new(),
@@ -297,6 +334,22 @@ impl TunerState {
             sugg_seq: 0,
             dialog_seq: 0,
         }
+    }
+
+    /// The checked fields as report-column ids, in [`FIELDS`] order — what persistence stores.
+    ///
+    /// The inverse of [`restore_enabled`]. Ids rather than positions for the same reason: the
+    /// table's order is presentation order and must stay free to change.
+    ///
+    /// Returns:
+    ///     Enabled report-column ids in [`FIELDS`] order.
+    pub(in crate::analytics::tuner) fn enabled_cols(&self) -> Vec<String> {
+        FIELDS
+            .iter()
+            .zip(self.enabled.iter())
+            .filter(|(_, on)| **on)
+            .map(|(s, _)| s.col.to_string())
+            .collect()
     }
 
     /// Mark tuner calculations dirty after a scope, filter, or period change.

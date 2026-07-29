@@ -244,9 +244,10 @@ pub struct AnalyticsView {
     /// Strategies tab: selected per-core row key (`strategyid@core_uid`), plus its name and
     /// details. Legacy bare strategy IDs remain parseable.
     pub(super) sel_strategy: Option<(String, String)>,
-    /// Multi-select (Ctrl): the EXTRA selected rows beyond the anchor (`sel_strategy`).
-    /// The anchor drives scope/suggest/detail; these are bulk-write addressees only,
-    /// stored as `(key, name)`. Empty = single selection.
+    /// Multi-select: the EXTRA selected rows beyond the anchor (`sel_strategy`), added one at a
+    /// time with Ctrl or a whole display-order block at a time with Shift. The anchor drives
+    /// scope/suggest/detail; these are bulk-write addressees only, stored as `(key, name)`.
+    /// Empty = single selection. Order matters — removing the anchor promotes the first entry.
     pub(super) sel_extra: Vec<(String, String)>,
     /// Strategy-list filter bar (see tuner::list): name search text, kind filter (None = all),
     /// and "active only" (default on — hides strategies no longer present in any core).
@@ -300,6 +301,11 @@ pub struct AnalyticsView {
     /// choice is consistent across Filters/Coins/Time. Persisted in
     /// `layout.analytics_kpi_collapsed`; a display lens, so toggling only repaints.
     kpi_collapsed: bool,
+    /// Collapse the "By filter" distribution card to its title and subtitle, giving the fields
+    /// grid and strategy list above it the vertical room back. Persisted in
+    /// `layout.analytics_hist_collapsed`; like `kpi_collapsed` a display lens, so toggling only
+    /// repaints — the histogram keeps loading underneath.
+    hist_collapsed: bool,
     /// Threshold tuner (Filters mode), with its state defined in its own module.
     tuner: tuner::TunerState,
     /// The "By coin" mode: the table's view controls, the picked coins that define
@@ -384,6 +390,7 @@ impl AnalyticsView {
         let saved_tuner_edges = backend.read(cx).layout.analytics_tuner_edges;
         let saved_tuner_seed = backend.read(cx).layout.analytics_tuner_seed.clone();
         let saved_tuner_train = backend.read(cx).layout.analytics_tuner_train;
+        let saved_tuner_fields = backend.read(cx).layout.analytics_tuner_fields.clone();
         // Profit metric from the previous run (default USDT).
         let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
             ProfitMetric::Percent
@@ -392,6 +399,8 @@ impl AnalyticsView {
         };
         // KPI matrix collapse state from the previous run (default expanded).
         let saved_kpi_collapsed = backend.read(cx).layout.analytics_kpi_collapsed;
+        // Distribution card collapse state from the previous run (default expanded).
+        let saved_hist_collapsed = backend.read(cx).layout.analytics_hist_collapsed;
         // Visible strategy-list columns from the previous run, one mask per axis. An older
         // config holding the single-mask key seeds all three, so a choice already made is
         // carried over instead of reset; absent entirely, each axis takes its own default.
@@ -506,11 +515,13 @@ impl AnalyticsView {
                 session.strat_mode
             },
             kpi_collapsed: saved_kpi_collapsed,
+            hist_collapsed: saved_hist_collapsed,
             tuner: tuner::TunerState::load(
                 saved_tuner_iters,
                 saved_tuner_edges,
                 saved_tuner_seed,
                 saved_tuner_train,
+                saved_tuner_fields,
             ),
             coins: tuner::CoinsState::default(),
             coin_lists: tuner::CoinListsState::default(),
@@ -1228,6 +1239,22 @@ impl AnalyticsView {
         self.kpi_collapsed = !self.kpi_collapsed;
         self.backend.update(cx, |b, _| {
             b.layout.analytics_kpi_collapsed = self.kpi_collapsed;
+            b.layout_dirty = true;
+        });
+        cx.notify();
+    }
+
+    /// Collapse/expand the "By filter" distribution card. Collapsed keeps its title and subtitle
+    /// and folds the chart away, so the fields grid above it fits on short screens.
+    ///
+    /// A pure display lens, like `toggle_kpi_collapsed`: it persists and repaints, and it must NOT
+    /// gate the histogram read. `TunerState::needs_reload` counts `hist_dirty`, so a read suppressed
+    /// while collapsed would leave that flag permanently set — the reload gate would re-fire every
+    /// frame, and expanding would show a spinner where the user left a chart.
+    fn toggle_hist_collapsed(&mut self, cx: &mut Context<Self>) {
+        self.hist_collapsed = !self.hist_collapsed;
+        self.backend.update(cx, |b, _| {
+            b.layout.analytics_hist_collapsed = self.hist_collapsed;
             b.layout_dirty = true;
         });
         cx.notify();

@@ -4,6 +4,8 @@
 //! filters/sort/columns never change what is written, only what the list shows.
 //! The table itself (card, rows, sortable header) renders in `table`.
 
+/// Pure selection arithmetic: the drawn row order and the Shift-click range over it.
+mod select;
 /// The list card, its rows and the sortable header row.
 mod table;
 
@@ -18,6 +20,10 @@ use moon_ui::{
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
+
+pub(in crate::analytics::tuner) use select::{
+    RangeOutcome, RowClick, drawn_order, range_extras, row_click_intent,
+};
 
 use super::super::AnalyticsView;
 use super::{

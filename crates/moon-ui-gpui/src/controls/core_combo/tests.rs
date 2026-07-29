@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    core_menu_sections, normalized_core_filter_ids, section_core_ids, selection_summary,
-    toggle_all_core_selection, toggle_exchange_cores,
+    core_menu_sections, core_selection_is_all, normalized_core_filter_ids, section_core_ids,
+    selection_summary, toggle_all_core_selection, toggle_exchange_cores,
 };
 
 /// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections,
@@ -163,4 +163,32 @@ fn query_filter_keeps_stale_equal_cardinality_selection_explicit() {
 
     let full_with_stale = HashSet::from([1, 2, 99]);
     assert!(normalized_core_filter_ids([1, 2], &full_with_stale).is_empty());
+}
+
+/// `core_combo.rs:core_selection_is_all` must weigh EVERY available core, first one included.
+///
+/// It is the one definition behind the query filter, the dropdown trigger and the Analytics
+/// tab-bar caption, so an off-by-one here does not just mislabel a control — it silently widens
+/// a real report query to every core.
+///
+/// Breakage this pins: consuming the availability iterator to test emptiness and then scanning
+/// only what is left (the shape a `next()`-then-`all()` pair produces, where `Peekable` is what
+/// makes the current form correct). The first available core would drop out of the comparison, so
+/// selecting every core EXCEPT the first would read as "all cores" and query all of them.
+#[test]
+fn the_all_cores_predicate_weighs_the_first_available_core() {
+    // Everything but the first: a partial selection that must NOT read as All.
+    assert!(!core_selection_is_all([1, 2, 3], &HashSet::from([2, 3])));
+    // Only the first: likewise partial.
+    assert!(!core_selection_is_all([1, 2, 3], &HashSet::from([1])));
+    // Genuinely every one, and the implicit form.
+    assert!(core_selection_is_all([1, 2, 3], &HashSet::from([1, 2, 3])));
+    assert!(core_selection_is_all([1, 2, 3], &HashSet::new()));
+    // A stale id cannot stand in for a missing available one.
+    assert!(!core_selection_is_all(
+        [1, 2, 3],
+        &HashSet::from([1, 2, 99])
+    ));
+    // No scope at all is not "all": there is nothing for the selection to cover.
+    assert!(!core_selection_is_all([], &HashSet::from([7])));
 }

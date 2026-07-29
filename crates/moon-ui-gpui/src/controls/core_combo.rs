@@ -119,14 +119,37 @@ pub(crate) fn normalized_core_filter_ids(
     available: impl IntoIterator<Item = u64>,
     selected: &HashSet<u64>,
 ) -> Vec<u64> {
-    let available: Vec<u64> = available.into_iter().collect();
-    let all_selected =
-        !available.is_empty() && available.iter().all(|core| selected.contains(core));
-    if selected.is_empty() || all_selected {
+    if core_selection_is_all(available, selected) {
         Vec::new()
     } else {
         selected.iter().copied().collect()
     }
+}
+
+/// Whether a selection reads as "all cores": empty (implicit) or holding every available one.
+///
+/// The ONE definition, shared by the query filter above, the dropdown trigger's summary, and the
+/// Analytics tab-bar caption. Three separate branches would let what a surface SAYS about the
+/// selection drift from what the query actually scopes to — the caption is the case that matters,
+/// since a core name beside a trigger reading "All cores" asserts a filter that is not applied.
+///
+/// Args:
+///     available: Current core ids in the consumer's scope.
+///     selected: Currently selected core ids.
+///
+/// Returns:
+///     Whether the selection represents all cores, implicitly or by containing every available id.
+pub(crate) fn core_selection_is_all(
+    available: impl IntoIterator<Item = u64>,
+    selected: &HashSet<u64>,
+) -> bool {
+    if selected.is_empty() {
+        return true;
+    }
+    // An empty scope is NOT "all": there is nothing for the selection to cover, and a stale id
+    // must keep reading as a partial selection rather than as the complete one.
+    let mut available = available.into_iter().peekable();
+    available.peek().is_some() && available.all(|core| selected.contains(&core))
 }
 
 /// Resolve the trigger summary without exposing a sole core's variable-length name.
@@ -135,6 +158,10 @@ pub(crate) fn normalized_core_filter_ids(
 /// representation. Every partial selection uses the localized count of available selected cores,
 /// including one core, so selection changes cannot replace a compact summary with arbitrary user
 /// text. Stale ids do not make an equal-sized partial selection look complete.
+///
+/// The Analytics tab bar does name a sole selected core, but OUTSIDE this trigger: a muted,
+/// width-bounded, truncating label in the row's flex slack, which cannot push the fixed-width
+/// combos off the row. The trigger itself still never shows the name.
 ///
 /// Args:
 ///     cores: Available core ids and names.
@@ -154,8 +181,7 @@ fn selection_summary(
         .iter()
         .filter(|(core, _)| selected.contains(core))
         .count();
-    let all_selected = !cores.is_empty() && selected_available == cores.len();
-    let all_on = selected.is_empty() || all_selected;
+    let all_on = core_selection_is_all(cores.iter().map(|(core, _)| *core), selected);
     let label = if all_on {
         all_label.to_string()
     } else {

@@ -241,7 +241,7 @@ fn strategy_row(
     core_w: f32,
     cx: &App,
 ) -> AnyElement {
-    // Anchor = amber; Ctrl-selected extras = a lighter amber. The anchor drives the
+    // Anchor = amber; Ctrl- or Shift-selected extras = a lighter amber. The anchor drives the
     // right-hand scope (suggest/KPI/detail); extras are bulk-write addressees.
     let is_anchor = view.sel_strategy.as_ref().is_some_and(|(k, _)| *k == g.key);
     let is_extra = view.sel_extra.iter().any(|(k, _)| *k == g.key);
@@ -346,33 +346,38 @@ fn strategy_row(
             move |ev: &ClickEvent, _window, app| {
                 // secondary() = Ctrl on Windows/Linux, ⌘ on macOS — the standard
                 // multi-select modifier (mirrors the strategies tree in tree_moon.rs).
-                let multi = ev.modifiers().secondary();
+                // Shift takes precedence over it, as it does there. A keyboard-activated
+                // click reports default modifiers, so it lands on the plain single-select —
+                // which is the behaviour keyboard activation should have anyway.
+                let m = ev.modifiers();
+                let intent = super::row_click_intent(m.shift, m.secondary());
                 let (key, name) = (key.clone(), name.clone());
                 // The view may already be gone; a dropped window is not an error here.
-                let _ = weak.update(app, |this, cx| {
-                    if multi {
-                        this.toggle_multi(key, name, cx);
-                    } else {
-                        this.select_single(key, name, cx);
-                    }
+                let _ = weak.update(app, |this, cx| match intent {
+                    super::RowClick::Range => this.select_range(key, name, cx),
+                    super::RowClick::Multi => this.toggle_multi(key, name, cx),
+                    super::RowClick::Single => this.select_single(key, name, cx),
                 });
             }
         });
-    // BLUE marks "this strategy traded the coin you clicked below" — an answer to a
-    // question, not a selection, so it never overrides the amber the user chose.
+    // BLUE marks "this strategy traded the coin you clicked below" — an answer to a question,
+    // not a selection, so it never overrides the amber the user chose. BOTH amber branches
+    // therefore come first: an extra is a bulk-write addressee, and painting it blue would hide
+    // a row that Save is about to write to. A range selection makes the overlap ordinary rather
+    // than rare, since it can hold a whole block at once.
     let traded_picked = view.coins.picked_strats.contains(&g.key);
     if is_anchor {
         row = row
             .bg(moon_alpha(p.amber, 0.12))
             .border_color(moon_alpha(p.amber, 0.5));
-    } else if traded_picked {
-        row = row
-            .bg(moon_alpha(p.blue, 0.16))
-            .border_color(moon_alpha(p.blue, 0.45));
     } else if is_extra {
         row = row
             .bg(moon_alpha(p.amber, 0.06))
             .border_color(moon_alpha(p.amber, 0.3));
+    } else if traded_picked {
+        row = row
+            .bg(moon_alpha(p.blue, 0.16))
+            .border_color(moon_alpha(p.blue, 0.45));
     } else {
         // Hover communicates that the whole line is clickable. Its notification redraws the
         // shared Analytics view, so virtualization and the cached index order bound that redraw

@@ -13,6 +13,7 @@ use rust_i18n::t;
 use super::super::super::AnalyticsView;
 use super::super::super::summary::{fmt_signed, sign_color};
 use super::super::kpi::kpi_matrix_card;
+use super::super::shared::collapse_caret;
 use super::card;
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -50,7 +51,48 @@ impl AnalyticsView {
             FIELDS[self.tuner.sel_field].label,
             scope,
         );
-        let body: AnyElement = match self.tuner.hist.view(|h| h.is_empty()) {
+        // Built before the body so it does not blink out while the histogram is loading or
+        // after a read error — the caret belongs to the title bar in every state.
+        let caret = collapse_caret(
+            "an-tuner-hist-collapse",
+            self.hist_collapsed,
+            t!("analytics.tuner.hist_collapse").to_string(),
+            t!("analytics.tuner.hist_expand").to_string(),
+            p,
+            cx,
+        )
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_hist_collapsed(cx)))
+        .into_any_element();
+        // Collapsed skips the bar geometry entirely, but NOT the read behind it: the histogram
+        // keeps loading, so expanding shows the chart rather than a spinner.
+        let body = if self.hist_collapsed {
+            div().into_any_element()
+        } else {
+            self.hist_body(p, cx)
+        };
+        card(
+            title,
+            t!("analytics.tuner.hist_sub").to_string(),
+            body,
+            Some(caret),
+            p,
+            cx,
+        )
+    }
+
+    /// Render the distribution body from its current load state.
+    ///
+    /// Keeping this separate from [`Self::hist_card`] lets a collapsed card skip all bar geometry
+    /// while the surrounding title, subtitle, caret, and histogram read remain active.
+    ///
+    /// Args:
+    ///     p: Active palette for the chart and read-state notice.
+    ///     cx: Analytics context used for scaled geometry and text.
+    ///
+    /// Returns:
+    ///     The chart body, or the current loading/error notice.
+    fn hist_body(&self, p: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        match self.tuner.hist.view(|h| h.is_empty()) {
             Err(note) => super::super::super::note_el("an-tuner-hist-note", note, 8.0, p, cx),
             Ok(h) => {
                 let max = h.iter().map(|b| b.wsum.max(b.lsum)).fold(1e-9f64, f64::max);
@@ -134,15 +176,7 @@ impl AnalyticsView {
                     .child(row)
                     .into_any_element()
             }
-        };
-        card(
-            title,
-            t!("analytics.tuner.hist_sub").to_string(),
-            body,
-            None,
-            p,
-            cx,
-        )
+        }
     }
 }
 

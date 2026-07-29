@@ -10,7 +10,7 @@ use rust_i18n::t;
 
 use super::super::summary::{fmt_signed, fmt_signed_plain, sign_color};
 use super::super::{AnalyticsView, LoadState};
-use super::shared::{card, glyph_btn};
+use super::shared::{card, collapse_caret};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::VarStats;
@@ -58,21 +58,13 @@ pub(super) fn kpi_matrix_card(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
-    // ▲ (expanded) folds up to the two rows; ▼ (collapsed) unfolds back — the up/down
-    // convention of the strategy tree. Glyph and tooltip are chosen together so they cannot
-    // drift apart.
-    let (caret_glyph, caret_tip) = if collapsed {
-        ("▼", t!("analytics.tuner.kpi_expand").to_string())
-    } else {
-        ("▲", t!("analytics.tuner.kpi_collapse").to_string())
-    };
     // The collapse caret is part of the title bar in EVERY state — built up front so it does
     // not blink out while the matrix is loading or after a read error.
-    let caret = glyph_btn(
+    let caret = collapse_caret(
         "an-tuner-kpi-collapse",
-        caret_glyph,
-        caret_tip,
-        p.text,
+        collapsed,
+        t!("analytics.tuner.kpi_collapse").to_string(),
+        t!("analytics.tuner.kpi_expand").to_string(),
         p,
         cx,
     )

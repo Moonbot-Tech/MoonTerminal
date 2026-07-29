@@ -16,7 +16,9 @@ use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 ///     Left-aligned identity columns followed by right-aligned numeric metric columns.
 fn columns() -> Vec<MoonDataTableColumn> {
     let numeric = |key: &'static str, title: String, w: f32| {
-        MoonDataTableColumn::new(key, title, w).right().sortable(true)
+        MoonDataTableColumn::new(key, title, w)
+            .right()
+            .sortable(true)
     };
     vec![
         MoonDataTableColumn::new("server", t!("core_status.col.server").to_string(), 110.0)
@@ -27,8 +29,16 @@ fn columns() -> Vec<MoonDataTableColumn> {
             .sortable(true),
         numeric("cpu_proc", t!("core_status.col.cpu_proc").to_string(), 90.0),
         numeric("cpu_sys", t!("core_status.col.cpu_sys").to_string(), 90.0),
-        numeric("mem_used", t!("core_status.col.mem_used").to_string(), 100.0),
-        numeric("free_phys", t!("core_status.col.free_phys").to_string(), 110.0),
+        numeric(
+            "mem_used",
+            t!("core_status.col.mem_used").to_string(),
+            100.0,
+        ),
+        numeric(
+            "free_phys",
+            t!("core_status.col.free_phys").to_string(),
+            110.0,
+        ),
         numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0),
     ]
 }

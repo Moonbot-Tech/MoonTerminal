@@ -825,4 +825,16 @@ impl AnalyticsView {
         let value = persist_seed(&self.tuner.seed);
         self.persist_setting(cx, |l| &mut l.analytics_tuner_seed, value);
     }
+
+    /// Persist which fields take part in the automatic search — the grid checkboxes.
+    ///
+    /// Always `Some`, never `None`: an empty selection is the user having unchecked everything,
+    /// and `None` would restore the default as though no usable preference had been loaded.
+    ///
+    /// Reachable from `filter`, which is a sibling module rather than a descendant of this one,
+    /// hence the wider visibility than the four wrappers above.
+    pub(in crate::analytics::tuner) fn persist_tuner_fields(&self, cx: &mut Context<Self>) {
+        let value = Some(self.tuner.enabled_cols());
+        self.persist_setting(cx, |l| &mut l.analytics_tuner_fields, value);
+    }
 }
