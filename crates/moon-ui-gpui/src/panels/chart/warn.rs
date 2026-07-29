@@ -1,11 +1,16 @@
-//! Core-warning badges on the chart: an amber gem on the plot's bottom edge at each warning
-//! episode's start for this chart's server, plus a hover card that reads it out with a small
-//! CPU/memory sparkline (mirroring the news marks, but shown on plain hover rather than Ctrl).
+//! Core-warning badges on the chart: a gem on the plot's bottom edge for each cluster of warning
+//! episodes on this chart's server, plus a hover card that reads it out.
+//!
+//! Episodes that fall within a minute of each other — a CPU spike that flickers, or CPU and memory
+//! warnings from the same moment — are ONE badge, not several: a warning "event" is the cluster.
 //!
 //! Split of responsibilities, like news:
 //! - WHICH episodes belong to this chart comes from the backend (persisted + open, by server IP);
 //! - the GEMS are own-pass geometry (`chartdx::warn_sync`), scrolling with the live edge every frame;
 //! - the CARD is a GPUI overlay, anchored at the cursor, appearing while a badge is hovered.
+//!
+//! The card carries the readings captured at detection (axis peaks, cores). The per-episode ±1 min
+//! graph is deliberately absent until the slice is written to `core_warning_series`.
 
 use std::net::IpAddr;
 use std::rc::Rc;
@@ -26,40 +31,58 @@ use crate::design;
 
 /// How far back warning episodes are collected for a chart; the shader clips whatever is off-plot.
 const WARN_SPAN_MS: i64 = 24 * 3600 * 1000;
+/// Episodes within this gap of each other are the same warning event (one badge).
+const CLUSTER_GAP_MS: i64 = 60_000;
 /// Card width in logical pixels; goes through `design::ui_px` so it follows the UI-scale slider.
-const CARD_W: f32 = 240.0;
+const CARD_W: f32 = 220.0;
 /// Gap between the gem's top tip and the card's bottom edge.
 const CARD_GAP: f32 = 8.0;
 /// Gap kept above the card so it never touches the slot's top edge.
 const CARD_TOP_INSET: f32 = 8.0;
 /// Floor for the card's height.
 const CARD_MIN_H: f32 = 48.0;
-/// Sparkline height in logical pixels.
-const SPARK_H: f32 = 44.0;
-/// Recent seconds of history the sparkline shows (the ring is 1 Hz).
-const SPARK_SECS: usize = 120;
 
-/// This chart's warning badges, the card payload, and the hover that drives them.
+/// One warning event: a run of nearby episodes on one server, merged across axes.
+struct WarnCluster {
+    /// Earliest episode start in the cluster (where the gem sits).
+    start_ms: i64,
+    /// Latest episode end, or `None` while any member is still open.
+    end_ms: Option<i64>,
+    /// Latest activity (end, or start while open), for clustering and duration.
+    reach: i64,
+    /// Worst sustained-CPU peak among members, if any CPU episode.
+    cpu_peak: Option<u16>,
+    /// Worst memory-growth peak (used MB) among members, if any memory episode.
+    mem_peak: Option<u16>,
+    /// Whether any member is a connectivity (dropped-core) warning.
+    conn: bool,
+    /// Whether any member is still open.
+    open: bool,
+    /// Distinct cores named by per-core members.
+    cores: Vec<CoreId>,
+}
+
+/// This chart's warning badges (one per cluster), the card payload, and the hover that drives them.
 #[derive(Default)]
 pub(super) struct WarnState {
-    /// Episode + gem pairs, oldest first: the episode backs the card, the gem carries the time.
-    items: Rc<Vec<(WarnEpisode, NewsMark)>>,
+    /// Cluster + gem pairs, oldest first: the cluster backs the card, the gem carries the time.
+    items: Rc<Vec<(WarnCluster, NewsMark)>>,
     /// The gems alone, shared with the engine's own-pass geometry.
     marks: Rc<Vec<NewsMark>>,
     /// Engine episode revision the marks were built from; `None` means none built yet.
     sig: Option<u64>,
     /// Server IP the marks belong to, so a slot reused for another coin/core rebuilds them.
     ip: Option<IpAddr>,
-    /// Badge colour the gems were built with, so a theme switch (which changes amber) rebuilds them.
+    /// Badge colour the gems were built with, so a theme switch rebuilds them.
     amber: Option<u32>,
-    /// Badges under the cursor: the nearest one grows and its episode fills the card.
+    /// Badges under the cursor: the nearest one grows and its cluster fills the card.
     hover: Option<MarkHit>,
     /// Last hit-test point, carrying the Delphi movement threshold the order-line hover uses.
     probe: Option<(f32, f32)>,
 }
 
 impl ChartPanel {
-    /// Rebuild this chart's warning badges when the episode revision or the chart's server moved, and
+    /// Rebuild this chart's warning badges when the episode revision, server, or theme moved, and
     /// publish them to the engine. Returns whether the engine's geometry changed.
     pub(super) fn sync_warn_marks(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((core, _market)) = self.chart.active_target() else {
@@ -87,19 +110,19 @@ impl ChartPanel {
         self.warn.amber = Some(amber);
 
         let now_ms = now_unix_ms_i64();
-        let items: Vec<(WarnEpisode, NewsMark)> = {
+        let episodes = {
             let b = self.backend.read(cx);
             b.warn_episodes_for_server(ip, now_ms - WARN_SPAN_MS, now_ms)
-                .into_iter()
-                .map(|episode| {
-                    let mark = NewsMark::new(episode.start_ms, std::iter::once(amber));
-                    (episode, mark)
-                })
-                .collect()
         };
+        let items: Vec<(WarnCluster, NewsMark)> = cluster_episodes(episodes)
+            .into_iter()
+            .map(|cluster| {
+                let mark = NewsMark::new(cluster.start_ms, std::iter::once(amber));
+                (cluster, mark)
+            })
+            .collect();
         self.warn.marks = Rc::new(items.iter().map(|(_, mark)| *mark).collect());
         self.warn.items = Rc::new(items);
-        // Indices into the old list mean nothing now; re-derive the hover from the live cursor.
         self.warn.probe = None;
         self.warn.hover = self.warn_hit_at_cursor();
         self.publish_warn_marks(cx)
@@ -149,8 +172,7 @@ impl ChartPanel {
         self.apply_warn_hover(None, cx)
     }
 
-    /// Re-run the hit test from the last cursor position, without the movement threshold (the chart
-    /// scrolls between pointer events, so a badge slides out from under a resting cursor).
+    /// Re-run the hit test from the last cursor position, without the movement threshold.
     pub(super) fn revalidate_warn_hover(&mut self, cx: &mut Context<Self>) {
         if self.warn.hover.is_none() {
             return;
@@ -184,8 +206,7 @@ impl ChartPanel {
         )
     }
 
-    /// Apply a hit result and republish the grown badge. Returns whether the tree must repaint (the
-    /// card appears/vanishes on any hover change, so any change repaints).
+    /// Apply a hit result and republish the grown badge. Returns whether the tree must repaint.
     fn apply_warn_hover(&mut self, hit: Option<MarkHit>, cx: &mut Context<Self>) -> bool {
         if self.warn.hover == hit {
             return false;
@@ -195,12 +216,11 @@ impl ChartPanel {
         true
     }
 
-    /// The hover card, or `None` when no badge is hovered. Anchored at the cursor (the gem moves with
-    /// the live edge every frame while GPUI repaints slower, so a gem-anchored card would lag).
+    /// The hover card, or `None` when no badge is hovered. Anchored at the cursor.
     pub(super) fn warn_card(&self, ppp: f32, palette: MoonPalette, cx: &App) -> Option<AnyElement> {
         let hover = self.warn.hover.as_ref()?;
         let (cursor_x, _) = self.input.cursor?;
-        let (episode, mark) = self.warn.items.get(hover.nearest)?;
+        let (cluster, mark) = self.warn.items.get(hover.nearest)?;
         let ppp = ppp.max(0.1);
         let slot = self.chart.slot_dev_size();
         let slot_w = slot.0 as f32 / ppp;
@@ -218,9 +238,7 @@ impl ChartPanel {
         let max_h = (slot_h - bottom - CARD_TOP_INSET).max(CARD_MIN_H);
 
         let now_ms = now_unix_ms_i64();
-        let spark = self.episode_spark(episode, now_ms, cx);
-        let header = warn_header(episode, mark, now_ms, self.backend.read(cx), palette, cx);
-        let extra = hover.stack.len().saturating_sub(1);
+        let body = cluster_card_body(cluster, mark, now_ms, self.backend.read(cx), palette, cx);
 
         Some(
             div()
@@ -237,58 +255,72 @@ impl ChartPanel {
                         .bg_color(palette.card)
                         .bg_alpha(1.0)
                         .border_color(palette.border_card)
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .gap(design::ui_px(cx, 6.0))
-                                .p(design::ui_px(cx, 8.0))
-                                .child(header)
-                                .children(spark.map(|points| warn_sparkline(points, palette)))
-                                .when(extra > 0, |this| {
-                                    this.child(
-                                        div()
-                                            .text_size(design::t_caption(cx))
-                                            .text_color(rgb(palette.text_muted))
-                                            .child(format!("+{extra}")),
-                                    )
-                                }),
-                        ),
+                        .child(body),
                 )
                 .into_any_element(),
         )
     }
+}
 
-    /// Recent `(cpu %, mem %)` points for a card's episode, most recent last, or `None` when a live
-    /// sparkline would be misleading (the episode ended longer ago than the window) or there is no
-    /// history.
-    ///
-    /// A per-core (memory-growth) episode uses that core's PROCESS ring; a server episode uses the
-    /// MACHINE ring, matching the subject the header names. This is the recent live history, shown
-    /// only while it still covers the episode; the precise per-episode ±1 min slice is a follow-up
-    /// (the `core_warning_series` table).
-    fn episode_spark(&self, episode: &WarnEpisode, now_ms: i64, cx: &App) -> Option<Vec<(u8, u8)>> {
-        let covered = episode
-            .end_ms
-            .is_none_or(|end| now_ms - end < SPARK_SECS as i64 * 1000);
-        if !covered {
-            return None;
+/// Merge episodes into warning events: nearby-in-time episodes (any axis) on the server are one.
+fn cluster_episodes(mut episodes: Vec<WarnEpisode>) -> Vec<WarnCluster> {
+    episodes.sort_by_key(|episode| episode.start_ms);
+    let mut out: Vec<WarnCluster> = Vec::new();
+    for episode in episodes {
+        let reach = episode.end_ms.unwrap_or(episode.start_ms);
+        match out.last_mut() {
+            Some(cluster) if episode.start_ms - cluster.reach <= CLUSTER_GAP_MS => {
+                cluster.reach = cluster.reach.max(reach);
+                if episode.end_ms.is_none() {
+                    cluster.open = true;
+                }
+                if !cluster.open {
+                    cluster.end_ms = Some(cluster.end_ms.map_or(reach, |end| end.max(reach)));
+                } else {
+                    cluster.end_ms = None;
+                }
+                merge_axis(cluster, &episode);
+            }
+            _ => {
+                let mut cluster = WarnCluster {
+                    start_ms: episode.start_ms,
+                    end_ms: episode.end_ms,
+                    reach,
+                    cpu_peak: None,
+                    mem_peak: None,
+                    conn: false,
+                    open: episode.end_ms.is_none(),
+                    cores: Vec::new(),
+                };
+                merge_axis(&mut cluster, &episode);
+                out.push(cluster);
+            }
         }
-        let b = self.backend.read(cx);
-        let ring = match episode.core_id {
-            Some(core) => b.core_line_hist.ring(core),
-            None => self.warn.ip.and_then(|ip| b.core_chart_hist.ring(ip)),
-        }?;
-        if ring.len() < 2 {
-            return None;
+    }
+    out
+}
+
+/// Fold one episode's axis, peak, and core into a cluster.
+fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
+    match episode.axis {
+        WarnAxis::SysCpu => {
+            cluster.cpu_peak = Some(cluster.cpu_peak.map_or(episode.peak, |p| p.max(episode.peak)))
         }
-        let start = ring.len().saturating_sub(SPARK_SECS);
-        Some(ring.iter().skip(start).copied().collect())
+        WarnAxis::MemGrowth => {
+            cluster.mem_peak = Some(cluster.mem_peak.map_or(episode.peak, |p| p.max(episode.peak)))
+        }
+        WarnAxis::Unreachable => cluster.conn = true,
+    }
+    if let Some(core) = episode.core_id {
+        if !cluster.cores.contains(&core) {
+            cluster.cores.push(core);
+        }
     }
 }
 
-/// The card's top line: clock, axis label, peak, and the core name for a per-core episode.
-fn warn_header(
-    episode: &WarnEpisode,
+/// The card contents for one warning cluster: time, duration, per-axis readings, and cores.
+fn cluster_card_body(
+    cluster: &WarnCluster,
     mark: &NewsMark,
     now_ms: i64,
     backend: &crate::Backend,
@@ -301,7 +333,7 @@ fn warn_header(
         true,
         now_ms as f64,
     );
-    let mut head = h_flex()
+    let head = h_flex()
         .w_full()
         .items_center()
         .gap(design::ui_px(cx, 5.0))
@@ -317,54 +349,97 @@ fn warn_header(
         .child(
             div()
                 .flex_none()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .font_family(design::mono())
+                .child(duration_text(cluster)),
+        );
+
+    // One reading line per axis present, worst value shown (mirrors the tab's CPU / RAM / Link).
+    let mut lines: Vec<AnyElement> = Vec::new();
+    if let Some(cpu) = cluster.cpu_peak {
+        lines.push(reading(t!("core_status.chart_cpu").to_string(), format!("{cpu}%"), p, cx));
+    }
+    if let Some(mem) = cluster.mem_peak {
+        lines.push(reading(
+            t!("core_status.chart_mem").to_string(),
+            format!("{} {}", mem, t!("core_status.mb")),
+            p,
+            cx,
+        ));
+    }
+    if cluster.conn {
+        lines.push(reading(
+            t!("core_status.warn_conn").to_string(),
+            String::new(),
+            p,
+            cx,
+        ));
+    }
+
+    // Cores named by per-core (memory) members, never the raw IP.
+    let cores: Vec<String> = cluster
+        .cores
+        .iter()
+        .filter_map(|id| core_name(backend, *id))
+        .filter(|name| !name.is_empty())
+        .collect();
+
+    v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 6.0))
+        .p(design::ui_px(cx, 8.0))
+        .child(head)
+        .children(lines)
+        .when(!cores.is_empty(), |this| {
+            this.child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_soft))
+                    .child(cores.join(", ")),
+            )
+        })
+        .into_any_element()
+}
+
+/// One "label  value" reading line in the card.
+fn reading(label: String, value: String, p: MoonPalette, cx: &App) -> AnyElement {
+    h_flex()
+        .w_full()
+        .items_center()
+        .justify_between()
+        .gap(design::ui_px(cx, 8.0))
+        .child(
+            div()
                 .text_size(design::t_body(cx))
                 .text_color(rgb(p.text))
-                .child(t!(axis_key(episode.axis)).to_string()),
-        );
-    if let Some(peak) = peak_text(episode) {
-        head = head.child(
+                .child(label),
+        )
+        .child(
             div()
                 .flex_none()
-                .text_size(design::t_caption(cx))
+                .text_size(design::t_body(cx))
                 .text_color(rgb(p.amber))
                 .font_family(design::mono())
-                .child(peak),
-        );
-    }
-    // A per-core episode names its core (never the raw IP, which the Core Status panel masks).
-    if let Some(name) = episode
-        .core_id
-        .and_then(|id| core_name(backend, id))
-        .filter(|name| !name.is_empty())
-    {
-        head = head.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_soft))
-                .child(name),
-        );
-    }
-    head.into_any_element()
+                .child(value),
+        )
+        .into_any_element()
 }
 
-/// Localization key for an axis label.
-fn axis_key(axis: WarnAxis) -> &'static str {
-    match axis {
-        WarnAxis::SysCpu => "core_status.chart_cpu",
-        WarnAxis::MemGrowth => "core_status.chart_mem",
-        WarnAxis::Unreachable => "core_status.warn_conn",
-    }
-}
-
-/// Peak reading for a CPU or memory episode; connectivity has no numeric peak.
-fn peak_text(episode: &WarnEpisode) -> Option<String> {
-    match episode.axis {
-        WarnAxis::SysCpu => Some(format!("{}%", episode.peak)),
-        WarnAxis::MemGrowth => Some(format!("{} {}", episode.peak, t!("core_status.mb"))),
-        WarnAxis::Unreachable => None,
+/// Human duration of a cluster: `Nс` / `Nм`, or "идёт" while still open.
+fn duration_text(cluster: &WarnCluster) -> String {
+    match cluster.end_ms {
+        None => t!("core_status.warn_ongoing").to_string(),
+        Some(end) => {
+            let secs = ((end - cluster.start_ms).max(0)) / 1000;
+            if secs < 60 {
+                t!("core_status.ago_s", n = secs).to_string()
+            } else {
+                t!("core_status.ago_m", n = secs / 60).to_string()
+            }
+        }
     }
 }
 
@@ -376,64 +451,4 @@ fn core_name(backend: &crate::Backend, id: CoreId) -> Option<String> {
         .iter()
         .find(|server| server.id == id)
         .map(|server| server.name.clone())
-}
-
-/// A compact CPU (blue) / occupied-memory (green) sparkline on a fixed 0..100 % axis.
-fn warn_sparkline(points: Vec<(u8, u8)>, p: MoonPalette) -> impl IntoElement {
-    let cpu = design::moon(p.blue);
-    let mem = design::moon(p.green);
-    let n = points.len().max(2);
-    let cpu_pts: Vec<(f32, f32)> = points
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (i as f32 / (n - 1) as f32, s.0 as f32))
-        .collect();
-    let mem_pts: Vec<(f32, f32)> = points
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (i as f32 / (n - 1) as f32, s.1 as f32))
-        .collect();
-    div().w_full().h(px(SPARK_H)).child(
-        canvas(
-            |_, _, _| (),
-            move |bounds, _, window, _| {
-                let w = f32::from(bounds.size.width);
-                let h = f32::from(bounds.size.height);
-                if w < 2.0 || h < 2.0 {
-                    return;
-                }
-                stroke_line(window, bounds.origin, w, h, &mem_pts, mem);
-                stroke_line(window, bounds.origin, w, h, &cpu_pts, cpu);
-            },
-        )
-        .size_full(),
-    )
-}
-
-/// Stroke one series of `(x fraction, 0..100 value)` points onto a 0..100 % plot.
-fn stroke_line(
-    window: &mut Window,
-    origin: Point<Pixels>,
-    w: f32,
-    h: f32,
-    series: &[(f32, f32)],
-    color: Hsla,
-) {
-    if series.len() < 2 {
-        return;
-    }
-    let x = |frac: f32| origin.x + px(frac * w);
-    let y = |value: f32| origin.y + px((100.0 - value) / 100.0 * (h - 2.0) + 1.0);
-    let mut line = PathBuilder::stroke(px(1.25));
-    for (i, &(frac, value)) in series.iter().enumerate() {
-        let pt = gpui::point(x(frac), y(value));
-        if i == 0 {
-            line.move_to(pt);
-        } else {
-            line.line_to(pt);
-        }
-    }
-    if let Ok(path) = line.build() {
-        window.paint_path(path, color);
-    }
 }

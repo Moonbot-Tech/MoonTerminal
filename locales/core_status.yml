@@ -162,6 +162,11 @@ core_status.warn_conn:
   ru: "Связь"
   en: "Link"
   es: "Enlace"
+# Shown as a warning cluster's duration while it is still active.
+core_status.warn_ongoing:
+  ru: "идёт"
+  en: "ongoing"
+  es: "en curso"
 core_status.chart_5m:
   ru: "5 мин"
   en: "5 min"
