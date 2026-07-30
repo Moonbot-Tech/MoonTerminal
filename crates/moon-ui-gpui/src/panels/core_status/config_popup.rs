@@ -6,6 +6,7 @@
 //! and thresholds live in `WarnParams`. Both persist through the backend; a change bumps the engine so
 //! charts rebuild their badges.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
@@ -19,18 +20,31 @@ use crate::design;
 use crate::panels::common::{RadioMark, radio_items};
 use moon_core::config::layout::{WarnAxesCfg, WarnParams};
 
-/// Popover width (UI px): wide enough for a warning's controls on one line.
-const WARN_CFG_W: f32 = 566.0;
-/// Fixed value-cell width so a changing number never reshuffles a row.
-const VAL_W: f32 = 52.0;
+// Fixed column widths (UI px) so every control lines up in a table down the rows. The widest row
+// (a latency axis: 4 params) sets the total; shorter rows pad empty param slots so their sound column
+// still lines up. Gap between columns is `COL_GAP`.
+const NAME_W: f32 = 138.0;
+const ON_W: f32 = 28.0;
+const CHART_W: f32 = 34.0;
+const PARAM_W: f32 = 62.0;
+const SOUND_W: f32 = 128.0;
+const COL_GAP: f32 = 6.0;
+/// The most threshold columns any row has (the latency axes: yellow, red, window, hold).
+const MAX_PARAMS: usize = 4;
+/// Popover width: the eight columns (name, on, chart, four params, sound) plus the seven gaps between
+/// them plus the content padding and a small margin, so nothing wraps to a second line.
+const WARN_CFG_W: f32 =
+    NAME_W + ON_W + CHART_W + MAX_PARAMS as f32 * PARAM_W + SOUND_W + 7.0 * COL_GAP + 24.0;
 
 /// Unit a threshold value is shown in.
 #[derive(Clone, Copy)]
 enum Unit {
     /// Percent, e.g. `70%`.
     Pct,
-    /// Percent above a baseline, e.g. `+10%`.
+    /// Percent above a baseline, e.g. `+12%`.
     PctRel,
+    /// A multiple of the baseline, e.g. `×2`.
+    Mult,
     /// Seconds.
     Sec,
 }
@@ -206,7 +220,9 @@ impl CoreStatusView {
             .content(content)
     }
 
-    /// One warning row: name · enable · chart · sound · thresholds, each control captioned above.
+    /// One warning row laid out as fixed table columns: name · Вкл · Чарт · up to four thresholds ·
+    /// sound. Each column is a fixed width, so the controls line up vertically down the rows; a row
+    /// with fewer thresholds pads empty slots so its sound column still aligns.
     #[allow(clippy::too_many_arguments)]
     fn warn_row(
         &self,
@@ -222,25 +238,28 @@ impl CoreStatusView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let n_params = params.len();
         h_flex()
             .w_full()
             .items_end()
-            .flex_wrap()
-            .gap(design::ui_px(cx, 10.0))
+            .gap(design::ui_px(cx, COL_GAP))
             .py(design::ui_px(cx, 5.0))
             .border_t_1()
             .border_color(rgb(p.border))
-            // Name (fills, pushes the controls right).
+            // Name column (fixed width; sits on the value baseline via items_end).
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(96.0))
-                    .pb(px(3.0))
+                    .w(design::ui_px(cx, NAME_W))
+                    .flex_none()
+                    .pb(px(2.0))
+                    .truncate()
                     .text_size(design::t_body(cx))
                     .text_color(rgb(p.text))
                     .child(name),
             )
             .child(self.cell(
+                ON_W,
+                true,
                 t!("core_status.warn_cfg.col.on").to_string(),
                 enable_checkbox(
                     format!("cs-warn-{id}-on"),
@@ -251,6 +270,8 @@ impl CoreStatusView {
                 cx,
             ))
             .child(self.cell(
+                CHART_W,
+                true,
                 t!("core_status.warn_cfg.col.chart").to_string(),
                 chart_checkbox(
                     format!("cs-warn-{id}-chart"),
@@ -262,24 +283,45 @@ impl CoreStatusView {
             ))
             .children(params.into_iter().enumerate().map(|(i, param)| {
                 self.cell(
+                    PARAM_W,
+                    false,
                     param.cap.to_string(),
                     self.stepper(format!("cs-warn-{id}-p{i}"), param, cx),
                     cx,
                 )
             }))
+            // Pad the missing threshold columns so the sound column lines up across every row.
+            .children((n_params..MAX_PARAMS).map(|_| {
+                div()
+                    .w(design::ui_px(cx, PARAM_W))
+                    .flex_none()
+                    .into_any_element()
+            }))
             .child(self.cell(
+                SOUND_W,
+                false,
                 t!("core_status.warn_cfg.col.sound").to_string(),
                 self.sound_cell(id, sound, set_sound, cx),
                 cx,
             ))
     }
 
-    /// A captioned cell: the caption above its control.
-    fn cell(&self, caption: String, control: impl IntoElement, cx: &Context<Self>) -> impl IntoElement {
+    /// A fixed-width captioned column: the caption above its control. `center` centres the caption and
+    /// control (for the checkbox columns); otherwise both align to the column's left edge.
+    fn cell(
+        &self,
+        width: f32,
+        center: bool,
+        caption: String,
+        control: impl IntoElement,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         v_flex()
+            .w(design::ui_px(cx, width))
             .flex_none()
             .gap(design::ui_px(cx, 4.0))
+            .when(center, |el| el.items_center())
             .child(
                 div()
                     .text_size(design::t_caption(cx))
@@ -321,19 +363,19 @@ impl CoreStatusView {
             }
         };
         h_flex()
-            .flex_none()
+            .w_full()
             .items_center()
-            .gap(design::ui_px(cx, 2.0))
+            .justify_between()
             .child(
                 MoonButton::new(SharedString::from(format!("{id}-dec")))
                     .label("−")
                     .size(MoonButtonSize::Micro)
-                    .variant(MoonButtonVariant::Soft)
+                    .variant(MoonButtonVariant::Ghost)
                     .on_click(bump(&self.backend, -1)),
             )
             .child(
                 div()
-                    .w(px(VAL_W))
+                    .flex_1()
                     .flex()
                     .justify_center()
                     .text_size(design::t_body(cx))
@@ -345,7 +387,7 @@ impl CoreStatusView {
                 MoonButton::new(SharedString::from(format!("{id}-inc")))
                     .label("+")
                     .size(MoonButtonSize::Micro)
-                    .variant(MoonButtonVariant::Soft)
+                    .variant(MoonButtonVariant::Ghost)
                     .on_click(bump(&self.backend, 1)),
             )
     }
@@ -390,7 +432,7 @@ impl CoreStatusView {
         });
         let play_name = cur;
         h_flex()
-            .flex_none()
+            .w_full()
             .items_center()
             .gap(design::ui_px(cx, 4.0))
             .child(
@@ -399,8 +441,8 @@ impl CoreStatusView {
                     .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width_scaled(104.0)
-                    .menu_width_scaled(130.0)
+                    .trigger_width_scaled(94.0)
+                    .menu_width_scaled(128.0)
                     .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
@@ -419,7 +461,8 @@ impl CoreStatusView {
     }
 }
 
-/// Build the four latency-axis threshold controls (yellow %, red %, baseline window, sustain).
+/// Build the four latency-axis threshold controls (yellow ×, red × of baseline, baseline window,
+/// sustain).
 #[allow(clippy::too_many_arguments)]
 fn lat_params(
     get_y: fn(&WarnParams) -> u16,
@@ -436,19 +479,19 @@ fn lat_params(
             cap: t!("core_status.warn_cfg.p.yellow").into(),
             get: get_y,
             set: set_y,
-            min: 5,
-            max: 50,
+            min: 2,
+            max: 100,
             step: 1,
-            unit: Unit::PctRel,
+            unit: Unit::Mult,
         },
         Param {
             cap: t!("core_status.warn_cfg.p.red").into(),
             get: get_r,
             set: set_r,
-            min: 10,
+            min: 2,
             max: 100,
-            step: 5,
-            unit: Unit::PctRel,
+            step: 1,
+            unit: Unit::Mult,
         },
         Param {
             cap: t!("core_status.warn_cfg.p.window").into(),
@@ -476,6 +519,7 @@ fn fmt_value(v: u16, unit: Unit) -> String {
     match unit {
         Unit::Pct => format!("{v}%"),
         Unit::PctRel => format!("+{v}%"),
+        Unit::Mult => format!("×{v}"),
         Unit::Sec => format!("{v} {}", t!("core_status.warn_cfg.u.sec")),
     }
 }

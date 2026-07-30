@@ -47,10 +47,11 @@ const LATENCY_BASELINE_SECS: i64 = 60;
 /// (no colour, no warning), so a just-connected core cannot warn on one reading.
 const LATENCY_MIN_SAMPLES: usize = 5;
 /// CRITICAL — the level the ping/exch WARNING fires at — is a latency ≥ baseline × this / 100.
-const LATENCY_WARN_NUM: u32 = 130;
-/// WARNING colour (yellow) is a latency ≥ baseline × this / 100.
-const LATENCY_YELLOW_NUM: u32 = 110;
-/// Percentage denominator for the two ratios above.
+/// Default ×10 → 1000 (the config stores the multiplier; the backend scales it by 100).
+const LATENCY_WARN_NUM: u32 = 1000;
+/// WARNING colour (yellow) is a latency ≥ baseline × this / 100. Default ×2 → 200.
+const LATENCY_YELLOW_NUM: u32 = 200;
+/// Denominator for the two ratios above (the multiplier is stored ×100).
 const LATENCY_PCT_DEN: u32 = 100;
 /// A latency stays CRITICAL this many consecutive seconds before its episode/badge opens, so a
 /// single slow sample does not flag.
@@ -81,8 +82,8 @@ pub(crate) enum LatencySeverity {
 /// Args:
 ///     value: The current smoothed latency in ms.
 ///     baseline: The core's rolling mean latency in ms, or `None` until it is established.
-///     yellow_num: Warning-colour ratio × 100 (e.g. 110 = +10 %), from the axis config.
-///     red_num: Critical-colour AND warning ratio × 100 (e.g. 130 = +30 %), from the axis config.
+///     yellow_num: Warning-colour multiplier × 100 (e.g. 200 = ×2), from the axis config.
+///     red_num: Critical-colour AND warning multiplier × 100 (e.g. 1000 = ×10), from the axis config.
 ///
 /// Returns:
 ///     Where `value` sits relative to `baseline`.
@@ -107,14 +108,16 @@ pub(crate) fn latency_severity(
     }
 }
 
-/// Mean of a latency window in ms over the seconds BEFORE `now_sec`, or `None` until at least the
-/// minimum count of prior samples exists.
+/// Mean of a latency window in ms over the OLDER samples (at least `exclude_secs` seconds before
+/// `now_sec`), or `None` until at least the minimum count of such samples exists.
 ///
-/// The current second's sample is excluded so a spike cannot dampen the very baseline it is judged
-/// against — most visible at the minimum-sample floor, where including it would lift the effective
-/// threshold. Dedup keeps at most one entry per second, so the filter drops exactly the current one.
-fn latency_baseline(window: &VecDeque<(i64, u16)>, now_sec: i64) -> Option<u32> {
-    let prior = window.iter().filter(|(sec, _)| *sec != now_sec);
+/// The most recent `exclude_secs` are dropped so a spike — which the current value is judged against —
+/// does not pollute the very baseline it is measured against while it is being flagged. The retained
+/// older window is the "established normal": a spike is judged against the pre-spike mean and warns,
+/// and only once it has persisted long enough to age INTO the retained window does it become the new
+/// normal and stop warning. Callers pass `window / 2`, so a spike warns for roughly half the window.
+fn latency_baseline(window: &VecDeque<(i64, u16)>, now_sec: i64, exclude_secs: i64) -> Option<u32> {
+    let prior = window.iter().filter(|(sec, _)| now_sec - sec >= exclude_secs);
     let n = prior.clone().count();
     if n < LATENCY_MIN_SAMPLES {
         return None;
@@ -228,8 +231,8 @@ impl WarnEnabled {
 
 /// Numeric detection thresholds, mirrored from the persisted `WarnParams` each tick. Defaults
 /// reproduce the engine's former hard-coded constants, so an un-tuned engine behaves exactly as
-/// before. Latency thresholds are stored as the ratio × 100 (`110` = +10 %) that `latency_severity`
-/// consumes directly.
+/// before. Latency thresholds are stored as the baseline multiplier × 100 (`200` = ×2) that
+/// `latency_severity` consumes directly.
 #[derive(Clone, Copy)]
 pub(crate) struct WarnTuning {
     /// Sustained-CPU percent and its sustain seconds.
@@ -634,10 +637,10 @@ impl CoreWarnEngine {
             if self.enabled.mem && mem_grew(&track.mem, t.mem_pct) {
                 self.mem_growing.insert(*id);
             }
-            if let Some(base) = latency_baseline(&track.link, now_sec) {
+            if let Some(base) = latency_baseline(&track.link, now_sec, (t.ping_window / 2).max(1)) {
                 self.ping_base.insert(*id, base);
             }
-            if let Some(base) = latency_baseline(&track.exch, now_sec) {
+            if let Some(base) = latency_baseline(&track.exch, now_sec, (t.exch_window / 2).max(1)) {
                 self.exch_base.insert(*id, base.min(u32::from(u16::MAX)) as u16);
             }
         }
@@ -691,7 +694,7 @@ impl CoreWarnEngine {
         }
 
         // Ping (client↔core) and exch (core→exchange): a Ready core whose smoothed latency stays
-        // CRITICAL — at/above its own baseline × 1.30 — for the sustain window. Per core, like memory.
+        // CRITICAL — at/above its own baseline × the red multiplier — for the sustain window.
         // Purely relative, so a link that is always slow never warns while a spike above the usual
         // does. The counter advances regardless of the enable switch so re-enabling reacts on the
         // next second, but the warning set only fills while enabled. Only a Ready core is judged: a

@@ -56,11 +56,11 @@ fn sample_exch(id: CoreId, ip: [u8; 4], exch: Option<u16>) -> CoreSample {
     }
 }
 
-/// Feed one core a `rtt` for enough seconds (starting at `from_sec`) to establish its latency
-/// baseline, and return the next free second.
+/// Feed one core a `rtt` for enough seconds (starting at `from_sec`) to FILL its baseline window, so
+/// a following spike does not immediately dominate a short mean. Returns the next free second.
 fn seed_ping_baseline(engine: &mut CoreWarnEngine, from_sec: i64, id: CoreId, rtt: u32) -> i64 {
     let mut sec = from_sec;
-    for _ in 0..12 {
+    for _ in 0..62 {
         engine.tick(&[sample_rtt(id, IP, Some(rtt))], sec * 1000);
         sec += 1;
     }
@@ -390,23 +390,24 @@ fn never_connected_or_connecting_does_not_warn_connectivity() {
     assert!(!engine.server_conn_warn(ip), "connecting is not a drop");
 }
 
-/// `latency_severity` is PURELY relative (no absolute ms floor): no/zero baseline is `Normal`; a
-/// value near the baseline is `Normal`; +10 % is `Warning`; +30 % is `Critical` — the percentage is
-/// the only test, so it fires the same on small and large pings.
+/// `latency_severity` is PURELY relative (a multiple of the baseline): no/zero baseline is `Normal`;
+/// below the yellow multiple is `Normal`; at/above yellow is `Warning`; at/above red is `Critical` —
+/// the multiple is the only test, so it fires the same on small and large pings.
 #[test]
 fn latency_severity_is_purely_relative() {
-    // Default thresholds: yellow +10 % (num 110), red +30 % (num 130).
-    let sev = |v, b| latency_severity(v, b, 110, 130);
-    assert_eq!(sev(500, None), LatencySeverity::Normal);
-    assert_eq!(sev(500, Some(0)), LatencySeverity::Normal);
-    assert_eq!(sev(210, Some(200)), LatencySeverity::Normal);
-    // 200 → 240 is +20 %: yellow, under the +30 % critical ratio.
-    assert_eq!(sev(240, Some(200)), LatencySeverity::Warning);
-    // 200 → 300 is +50 %: critical.
-    assert_eq!(sev(300, Some(200)), LatencySeverity::Critical);
-    // A small ping obeys the same percentages: 20 → 27 (+35 %) is now critical, no ms floor.
-    assert_eq!(sev(27, Some(20)), LatencySeverity::Critical);
-    assert_eq!(sev(22, Some(20)), LatencySeverity::Warning);
+    // Default multipliers: yellow ×2 (num 200), red ×10 (num 1000).
+    let sev = |v, b| latency_severity(v, b, 200, 1000);
+    assert_eq!(sev(5000, None), LatencySeverity::Normal);
+    assert_eq!(sev(5000, Some(0)), LatencySeverity::Normal);
+    // 100 → 150 is ×1.5: below the yellow ×2.
+    assert_eq!(sev(150, Some(100)), LatencySeverity::Normal);
+    // 100 → 220 is ×2.2: yellow, under the ×10 critical.
+    assert_eq!(sev(220, Some(100)), LatencySeverity::Warning);
+    // 100 → 1000 is ×10: critical.
+    assert_eq!(sev(1000, Some(100)), LatencySeverity::Critical);
+    // A small ping obeys the same multiple: 20 → 50 (×2.5) is yellow.
+    assert_eq!(sev(50, Some(20)), LatencySeverity::Warning);
+    assert_eq!(sev(200, Some(20)), LatencySeverity::Critical);
 }
 
 /// A ping that spikes ABOVE the core's established baseline must open exactly one per-core ping
@@ -418,14 +419,14 @@ fn ping_spike_above_baseline_opens_then_closes_per_core_episode() {
     // Establish a low, stable baseline (~40 ms).
     let mut sec = seed_ping_baseline(&mut engine, 1, 4, 40);
 
-    // One high sample is not yet a warning (needs the sustain window).
-    engine.tick(&[sample_rtt(4, IP, Some(400))], sec * 1000);
+    // One high sample is not yet a warning (needs the sustain window). 500 ms is well past ×10 of 40.
+    engine.tick(&[sample_rtt(4, IP, Some(2000))], sec * 1000);
     sec += 1;
     assert!(!engine.core_ping_warn(4), "one spike second must not warn");
 
     // Stay high past the sustain threshold.
     for _ in 0..(LATENCY_SUSTAIN_SECS as i64 + 1) {
-        engine.tick(&[sample_rtt(4, IP, Some(400))], sec * 1000);
+        engine.tick(&[sample_rtt(4, IP, Some(2000))], sec * 1000);
         sec += 1;
     }
     assert!(engine.core_ping_warn(4), "sustained spike must warn");
@@ -476,17 +477,17 @@ fn stable_high_ping_never_warns() {
 fn exch_spike_above_baseline_opens_episode() {
     let mut engine = CoreWarnEngine::default();
 
-    // Establish a stable exchange-latency baseline (~120 ms).
+    // Fill the baseline window with a stable exchange latency (~120 ms).
     let mut sec = 1;
-    for _ in 0..12 {
+    for _ in 0..62 {
         engine.tick(&[sample_exch(4, IP, Some(120))], sec * 1000);
         sec += 1;
     }
     assert!(!engine.core_exch_warn(4), "at baseline must not warn");
 
-    // Spike well above it, sustained.
+    // Spike well past ×10 of 120 (and staying there as it enters the baseline), sustained.
     for _ in 0..(LATENCY_SUSTAIN_SECS as i64 + 1) {
-        engine.tick(&[sample_exch(4, IP, Some(600))], sec * 1000);
+        engine.tick(&[sample_exch(4, IP, Some(4000))], sec * 1000);
         sec += 1;
     }
     assert!(engine.core_exch_warn(4), "sustained exch spike must warn");
@@ -509,7 +510,7 @@ fn offline_core_does_not_ping_warn_on_stale_rtt() {
     // Establish a low baseline, then spike sustained while Ready → warns.
     let mut sec = seed_ping_baseline(&mut engine, 1, 4, 40);
     for _ in 0..(LATENCY_SUSTAIN_SECS as i64 + 1) {
-        engine.tick(&[sample_rtt(4, IP, Some(400))], sec * 1000);
+        engine.tick(&[sample_rtt(4, IP, Some(2000))], sec * 1000);
         sec += 1;
     }
     assert!(
@@ -518,7 +519,7 @@ fn offline_core_does_not_ping_warn_on_stale_rtt() {
     );
 
     // The core disconnects but its last sample still carries the high RTT.
-    let mut stale = sample_rtt(4, IP, Some(400));
+    let mut stale = sample_rtt(4, IP, Some(2000));
     stale.status = ConnStatus::Disconnected;
     engine.tick(&[stale], sec * 1000);
     assert!(

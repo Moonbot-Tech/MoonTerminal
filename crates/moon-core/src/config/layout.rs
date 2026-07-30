@@ -447,17 +447,18 @@ impl Default for ConnWarn {
     }
 }
 
-/// Latency-axis parameters (ping and exch): relative colour/warning percents above the core's own
-/// baseline, the baseline window, and the sustain seconds. Purely relative — no absolute ms floor.
+/// Latency-axis parameters (ping and exch): the baseline MULTIPLIER at which each colour/warning
+/// fires, the baseline window, and the sustain seconds. Purely relative — a latency warns when it
+/// reaches `red ×` its own rolling mean (default yellow ×2, red ×10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LatWarn {
     #[serde(default = "def_true")]
     pub chart: bool,
     pub sound: Option<String>,
-    /// Yellow colour at this percent above baseline (e.g. 10 = +10 %).
+    /// Yellow colour at this multiple of the baseline (e.g. 2 = ×2).
     pub yellow: u8,
-    /// Red colour AND warning at this percent above baseline (e.g. 30 = +30 %).
+    /// Red colour AND warning at this multiple of the baseline (e.g. 10 = ×10).
     pub red: u8,
     /// Baseline (rolling-mean) window in seconds.
     pub window: u16,
@@ -466,7 +467,7 @@ pub struct LatWarn {
 }
 impl Default for LatWarn {
     fn default() -> Self {
-        Self { chart: true, sound: None, yellow: 10, red: 30, window: 60, hold: 3 }
+        Self { chart: true, sound: None, yellow: 2, red: 10, window: 60, hold: 3 }
     }
 }
 
