@@ -7,20 +7,20 @@ use gpui::*;
 use moon_ui::MoonInputState;
 
 use super::super::super::LoadState;
-use super::super::shared::{SaveDialog, N_VAR};
+use super::super::shared::{N_VAR, SaveDialog};
+use moon_core::db::ReadFail;
 use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::threshold_search::{
-    edges_max, heavy_search_supported, restarts_max, ComposeSkip, ComposedSet, SearchHandle,
-    RESTARTS_MIN,
+    ComposeSkip, ComposedSet, RESTARTS_MIN, SearchHandle, edges_max, heavy_search_supported,
+    restarts_max,
 };
 use moon_core::db::tuner::{
-    Bound, FieldClass, HistBucket, StratFilters, VarStats, Variant, FIELDS,
+    Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant,
 };
-use moon_core::db::ReadFail;
 
 /// Every quantile depth the search accepts, coarsest first. What is OFFERED is a prefix of this
 /// — see [`edge_options`].
-const EDGE_OPTIONS_ALL: [usize; 7] = [4, 8, 16, 32, 64, 128, 256];
+const EDGE_OPTIONS_ALL: [usize; 8] = [4, 8, 16, 32, 64, 128, 256, 512];
 
 /// Selectable quantile depths on THIS machine.
 ///
@@ -53,10 +53,10 @@ pub(in crate::analytics::tuner) const DEFAULT_ITERS: usize = 100;
 
 /// Convert raw "restarts" text to the count used by both the search and persistence.
 ///
-/// Read through [`parse_num`], so the same `k` suffix the box DISPLAYS is one it accepts back:
-/// the ceiling is five digits and the box is narrow enough that `25000` shows only its tail.
-/// Bounds come from the search module — including the machine-dependent ceiling, so the box
-/// cannot accept a count this machine's search would then quietly cut down.
+/// Read through [`parse_num`], so the same `k` suffix the box DISPLAYS is one it accepts back.
+/// Compact text keeps large counts legible in the narrow box. Bounds come from the search module
+/// — including the machine-dependent ceiling, so the box cannot accept a count this machine's
+/// search would then quietly cut down.
 pub(in crate::analytics::tuner) fn iters_of(text: &str) -> usize {
     let max = restarts_max();
     parse_num(text)
@@ -64,6 +64,17 @@ pub(in crate::analytics::tuner) fn iters_of(text: &str) -> usize {
         .map(|v| v.min(max as f64) as usize)
         .unwrap_or(DEFAULT_ITERS)
         .clamp(RESTARTS_MIN, max)
+}
+
+/// Canonical text for a restart count after editing finishes.
+///
+/// Args:
+///     text: Raw input text, including optional compact suffixes.
+///
+/// Returns:
+///     Exact compact spelling of the count the search will execute.
+pub(in crate::analytics::tuner) fn canonical_iters(text: &str) -> String {
+    fmt_bound(iters_of(text) as f64)
 }
 
 /// Box text to open the tuner with for a persisted restart count.
@@ -83,8 +94,26 @@ pub(super) fn restore_iters(saved: Option<u32>) -> String {
 }
 
 /// Return `v` when the dropdown offers it, otherwise the default depth.
+///
+/// Args:
+///     v: Candidate quantile depth.
+///
+/// Returns:
+///     Depth selectable on this machine or [`DEFAULT_EDGES`].
 pub(super) fn edges_of(v: usize) -> usize {
-    if edge_options().contains(&v) {
+    edges_of_upto(v, edges_max())
+}
+
+/// Return `v` when the supplied machine ceiling offers it, otherwise the default depth.
+///
+/// Args:
+///     v: Candidate quantile depth.
+///     max: Machine-specific search ceiling.
+///
+/// Returns:
+///     Selectable depth or [`DEFAULT_EDGES`].
+fn edges_of_upto(v: usize, max: usize) -> usize {
+    if edge_options_upto(max).contains(&v) {
         v
     } else {
         DEFAULT_EDGES
@@ -92,8 +121,26 @@ pub(super) fn edges_of(v: usize) -> usize {
 }
 
 /// Depth to open the tuner with for a persisted value.
+///
+/// Args:
+///     saved: Persisted quantile depth.
+///
+/// Returns:
+///     Depth selectable on this machine or [`DEFAULT_EDGES`].
 pub(super) fn restore_edges(saved: Option<u32>) -> usize {
-    saved.map_or(DEFAULT_EDGES, |v| edges_of(v as usize))
+    restore_edges_upto(saved, edges_max())
+}
+
+/// Restore a persisted depth against an explicit machine ceiling.
+///
+/// Args:
+///     saved: Persisted quantile depth.
+///     max: Machine-specific search ceiling.
+///
+/// Returns:
+///     Selectable restored depth or [`DEFAULT_EDGES`].
+fn restore_edges_upto(saved: Option<u32>, max: usize) -> usize {
+    saved.map_or(DEFAULT_EDGES, |v| edges_of_upto(v as usize, max))
 }
 
 /// Selectable train shares, as a PERCENTAGE of the period the search may fit on.

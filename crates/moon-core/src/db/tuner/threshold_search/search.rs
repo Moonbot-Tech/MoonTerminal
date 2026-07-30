@@ -40,9 +40,8 @@ mod tests;
 ///
 /// It has to sit OUTSIDE the range of real bin indices, which is what ties this type to
 /// `EDGES_MAX`: the highest index a depth of `ne` produces is `ne - 1`, so the sentinel is only
-/// distinguishable while `EDGES_MAX` stays below the type's maximum. A `u8` sentinel of 255 and a
-/// depth of 256 would collide, and the top bin's trades would read as "below the range" — silently
-/// excluded from every filter rather than loudly wrong.
+/// distinguishable while `EDGES_MAX` stays below the type's maximum. At depth 512 the highest bin
+/// is 511, well below the `u16` sentinel; the boundary test pins that separation.
 const BELOW: u16 = u16::MAX;
 
 /// Passes one restart may take before it is cut off, converged or not.
@@ -85,7 +84,7 @@ pub const HEAVY_SEARCH_MIN_CORES: usize = 16;
 ///
 /// These settings either multiply the work behind one click or admit substantially more of it.
 /// Below this hard bar they are not merely scaled to the reported core count: composition is not
-/// run, depth 256 is not offered, and the restart count uses its fixed lower ceiling.
+/// run, depths 256 and 512 are not offered, and the restart count uses its fixed lower ceiling.
 ///
 /// The single availability predicate, so the controls and the search can never disagree about
 /// what a click does. [`logical_cores`] can UNDER-report — on Windows it honours job-object and
@@ -153,6 +152,57 @@ fn keep_better(
             Some(if b_wins { b } else { a })
         }
     }
+}
+
+/// One disjoint restart range assigned to an independent composition seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RestartGroup {
+    /// Base seed mixed with every global restart index in this group.
+    seed: u64,
+    /// First global restart index. Only the first group may own index zero's greedy start.
+    start: usize,
+    /// Number of consecutive global restart indices assigned to the group.
+    len: usize,
+}
+
+/// Split one restart budget into non-empty, independently seeded, disjoint ranges.
+///
+/// Group zero preserves the ordinary search stream exactly. Later groups derive a separate base
+/// seed and start above restart zero, so the deterministic greedy start is never repeated and a
+/// three-way composition vote represents three genuinely different searches.
+///
+/// Args:
+///     restarts: Total work budget across every group.
+///     requested_groups: Maximum independent groups requested by the caller.
+///     seed: User-visible base seed.
+///
+/// Returns:
+///     At most `min(requested_groups, restarts)` non-empty contiguous ranges.
+fn restart_groups(restarts: usize, requested_groups: usize, seed: u64) -> Vec<RestartGroup> {
+    let active = requested_groups.min(restarts);
+    if active == 0 {
+        return Vec::new();
+    }
+    let base_len = restarts / active;
+    let remainder = restarts % active;
+    let mut start = 0usize;
+    (0..active)
+        .map(|group| {
+            let len = base_len + usize::from(group < remainder);
+            let grouped_seed = if group == 0 {
+                seed
+            } else {
+                restart_seed(seed, usize::MAX - group)
+            };
+            let out = RestartGroup {
+                seed: grouped_seed,
+                start,
+                len,
+            };
+            start += len;
+            out
+        })
+        .collect()
 }
 
 /// Simple PRNG (xorshift64*) that avoids a rand dependency.
@@ -551,11 +601,76 @@ impl Search {
     /// Every parallel job builds a [`Workspace`] of its own — a worker may run several jobs, and
     /// so hold several over a run. The buffers are per-restart scratch, and sharing one across
     /// threads is exactly what makes the fan-out unsound.
+    ///
+    /// Args:
+    ///     allow: Fields admitted by the caller.
+    ///     restarts: Total restart budget.
+    ///     seed: Base seed for every non-greedy restart stream.
+    ///     handle: Cancellation and completed-work channel.
+    ///
+    /// Returns:
+    ///     Best completed outcome, or `None` when the budget is zero or none completed.
     pub(super) fn run_masked(
         &self,
         allow: &[bool],
         restarts: usize,
         seed: u64,
+        handle: &SearchHandle,
+    ) -> Option<Outcome> {
+        let group = restart_groups(restarts, 1, seed).into_iter().next()?;
+        self.run_masked_range(allow, group, handle)
+    }
+
+    /// Run one masked restart budget as independently seeded result groups.
+    ///
+    /// The groups divide the existing budget rather than multiplying it. Composition uses each
+    /// returned outcome as one seed vote inside a walk-forward fold; ordinary final refits keep
+    /// using [`Self::run_masked`] and therefore retain their exact historical stream.
+    ///
+    /// Args:
+    ///     allow: Fields admitted by the composition candidate.
+    ///     restarts: Total restart budget across every returned group.
+    ///     seed: User-visible base seed.
+    ///     requested_groups: Maximum independent seed groups.
+    ///     handle: Cancellation and completed-work channel.
+    ///
+    /// Returns:
+    ///     One best outcome per active group, or `None` when the budget is zero or cancellation
+    ///     prevents any complete group result.
+    pub(super) fn run_masked_seed_groups(
+        &self,
+        allow: &[bool],
+        restarts: usize,
+        seed: u64,
+        requested_groups: usize,
+        handle: &SearchHandle,
+    ) -> Option<Vec<Outcome>> {
+        let outcomes: Vec<Outcome> = restart_groups(restarts, requested_groups, seed)
+            .into_iter()
+            .map(|group| self.run_masked_range(allow, group, handle))
+            .collect::<Option<_>>()?;
+        if outcomes.is_empty() {
+            return None;
+        }
+        // A single masked search may legitimately return the best work completed before a stop.
+        // Seed voting cannot: one shortened group would carry the same vote as a complete group,
+        // so composition discards the whole evidence set once any restart was abandoned.
+        (!handle.abandoned()).then_some(outcomes)
+    }
+
+    /// Run one contiguous restart range and return its best completed outcome.
+    ///
+    /// Args:
+    ///     allow: Fields admitted by the caller, intersected with the search's free mask here.
+    ///     group: Seed plus global restart-index range to execute.
+    ///     handle: Cancellation and completed-work channel.
+    ///
+    /// Returns:
+    ///     The range's best completed result, or `None` when none completed.
+    fn run_masked_range(
+        &self,
+        allow: &[bool],
+        group: RestartGroup,
         handle: &SearchHandle,
     ) -> Option<Outcome> {
         let (nf, n, ne) = (self.field_count(), self.n, self.ne);
@@ -566,9 +681,9 @@ impl Search {
         // it exactly, but it keeps a SHORT run from splitting down to one restart per job.
         // Composition turns one long call into hundreds of short ones, so a floor tied to the
         // restart count alone stops protecting exactly where it is needed most.
-        let chunk = (restarts / worker_cores()).max(1);
+        let chunk = (group.len / worker_cores()).max(1);
         let search = || {
-            (0..restarts)
+            (group.start..group.start + group.len)
                 .into_par_iter()
                 .with_min_len(chunk)
                 .map_init(
@@ -578,7 +693,7 @@ impl Search {
                             handle.note_abandoned();
                             return None;
                         }
-                        let mut rng = Rng(restart_seed(seed, restart));
+                        let mut rng = Rng(restart_seed(group.seed, restart));
                         let Some(outcome) = self.one_restart(&allow, restart, &mut rng, w, handle)
                         else {
                             handle.note_abandoned();

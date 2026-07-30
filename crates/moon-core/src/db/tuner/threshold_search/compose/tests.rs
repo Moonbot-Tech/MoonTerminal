@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::*;
+use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::Columns;
 use crate::db::tuner::{FieldClass, FIELDS};
 
@@ -71,6 +72,54 @@ fn sample(n: usize, seed: u64) -> (Vec<f64>, Vec<Vec<f64>>, Vec<i64>) {
 
 // ─────────────────────────────── the acceptance rules ───────────────────────────────
 
+/// Build one hand-authored comparison outcome.
+///
+/// Args:
+///     profit: Held-out profit.
+///     profit_factor: Held-out profit factor.
+///     max_dd: Held-out maximum drawdown.
+///     trades: Held-out retained trade count.
+///
+/// Returns:
+///     Quality evidence independent of the production search.
+fn quality(profit: f64, profit_factor: f64, max_dd: f64, trades: f64) -> Quality {
+    Quality {
+        profit,
+        profit_factor,
+        max_dd,
+        trades,
+    }
+}
+
+/// Build one-seed folds from hand-authored profit values.
+///
+/// Args:
+///     profits: One held-out profit per fold.
+///
+/// Returns:
+///     Fold-major evidence with neutral, identical secondary metrics.
+fn profit_scores(profits: &[f64]) -> ScoreSet {
+    profits
+        .iter()
+        .map(|profit| FoldScores {
+            seeds: vec![quality(*profit, 1.0, 10.0, 100.0)],
+        })
+        .collect()
+}
+
+/// Build one fold from an explicit collection of seed outcomes.
+///
+/// Args:
+///     seeds: Independent outcomes belonging to the same time fold.
+///
+/// Returns:
+///     Fold evidence suitable for assembling hierarchy fixtures.
+fn seed_fold(seeds: &[Quality]) -> FoldScores {
+    FoldScores {
+        seeds: seeds.to_vec(),
+    }
+}
+
 /// A candidate must earn its place in MOST folds, not just on average.
 ///
 /// The oracle is a hand-written pair of vectors: one fold improves enormously while two get
@@ -82,11 +131,11 @@ fn sample(n: usize, seed: u64) -> (Vec<f64>, Vec<Vec<f64>>, Vec<i64>) {
 /// stretch, which is precisely the coincidence out-of-sample scoring exists to reject.
 #[test]
 fn a_field_only_joins_when_it_helps_in_most_folds() {
-    let incumbent = [100.0, 100.0, 100.0];
+    let incumbent = profit_scores(&[100.0, 100.0, 100.0]);
     // Mean rises from 100 to 140, yet two folds out of three got worse.
-    let lucky_one_fold = [420.0, 99.0, 99.0];
+    let lucky_one_fold = profit_scores(&[420.0, 99.0, 99.0]);
     assert!(
-        mean(&lucky_one_fold) > mean(&incumbent),
+        summary(&lucky_one_fold).profit > summary(&incumbent).profit,
         "the fixture must be a candidate whose MEAN improves, or it tests nothing"
     );
     assert!(
@@ -95,13 +144,172 @@ fn a_field_only_joins_when_it_helps_in_most_folds() {
     );
     // The same total improvement spread across the folds is a real pattern, and is taken.
     assert!(
-        accepts(&incumbent, &[110.0, 108.0, 112.0]),
+        accepts(&incumbent, &profit_scores(&[110.0, 108.0, 112.0])),
         "a candidate that helps in every fold must be accepted"
     );
     // Better in a majority but worse on average is still not worth taking.
     assert!(
-        !accepts(&incumbent, &[101.0, 101.0, 40.0]),
+        !accepts(&incumbent, &profit_scores(&[101.0, 101.0, 40.0])),
         "a candidate that wrecks one fold must not ride in on a bare majority"
+    );
+}
+
+/// Seed votes are resolved inside folds before chronological folds vote.
+///
+/// The candidate wins five of nine individual seed comparisons, but those wins are concentrated
+/// as 3+1+1 and therefore produce only one fold win. Flattening all nine votes would incorrectly
+/// accept it even though two of three time periods reject it.
+///
+/// Breakage this pins: replacing `compose.rs:seed_consensus` plus the fold majority in `accepts`
+/// with one flat seed-fold win count. A strategy could then pass because one historical stretch
+/// had three lucky restarts while both other stretches disagreed.
+#[test]
+fn seed_votes_cannot_outvote_the_chronological_fold_hierarchy() {
+    let base = quality(100.0, 1.0, 10.0, 100.0);
+    let better = quality(110.0, 1.0, 10.0, 100.0);
+    let worse = quality(90.0, 1.0, 10.0, 100.0);
+    let incumbent = vec![
+        seed_fold(&[base, base, base]),
+        seed_fold(&[base, base, base]),
+        seed_fold(&[base, base, base]),
+    ];
+    let candidate = vec![
+        seed_fold(&[better, better, better]),
+        seed_fold(&[better, worse, worse]),
+        seed_fold(&[better, worse, worse]),
+    ];
+    assert!(
+        quality_order(summary(&candidate), summary(&incumbent)).is_gt(),
+        "the flat aggregate must improve or the hierarchy is not the deciding guard"
+    );
+    assert!(
+        !accepts(&incumbent, &candidate),
+        "five flattened seed wins cannot replace a majority of chronological folds"
+    );
+}
+
+/// Production fold scoring must carry every requested seed group into the vote hierarchy.
+///
+/// The fixture uses exactly three ranking restarts, so each group owns one distinct restart and
+/// the returned evidence shape is observable without relying on a tuned profit answer.
+///
+/// Breakage this pins: replacing `requested_groups` with `1` in `compose.rs:score_set`. The pure
+/// consensus tests would still pass on hand-built evidence, while real composition silently
+/// reverted to a single seed.
+#[test]
+fn score_set_uses_three_seed_groups_in_production_scoring() {
+    let (profits, vals, closes) = sample(600, 20260731);
+    let cols = Arc::new(Columns { profits, vals });
+    let locked = vec![None; FIELDS.len()];
+    let folds = super::super::build_folds(&cols, &locked, &slot_flags(), &closes, 10, 16, 500, 3);
+    let p = ComposeParams {
+        ranking_restarts: 3,
+        gate_restarts: 3,
+        seed: 0x5EED,
+        round: false,
+        max_fields: FIELDS.len(),
+        beam_width_min: 8,
+        beam_width_max: 16,
+        seed_groups: 3,
+    };
+    let mut mask = vec![false; FIELDS.len()];
+    mask[0] = true;
+    let scores = score_set(&folds, &mask, &p, 3, 1, &SearchHandle::new())
+        .expect("an uncancelled three-group score answers");
+    assert!(
+        scores.iter().all(|fold| fold.seeds.len() == 3),
+        "every production fold must preserve all three seed votes"
+    );
+}
+
+/// A support badge counts a fold only after that fold's seed majority agrees.
+///
+/// Fields zero and one appear in two of three seed outcomes and are supported once. Field two
+/// appears in one seed only and must contribute no support, while empty evidence supports none.
+///
+/// Breakage this pins: changing `compose.rs:seed_majority_support` from strict majority to
+/// `count > 0`. One random restart could then add a full fold to a field's confidence badge even
+/// when the other two fitted outcomes never used it.
+#[test]
+fn fold_support_requires_a_seed_majority() {
+    assert_eq!(
+        seed_majority_support(3, &[vec![0, 1], vec![0], vec![1, 2]]),
+        [true, true, false],
+        "each field needs two of three seeds, and a fold contributes at most once"
+    );
+    assert_eq!(
+        seed_majority_support(3, &[]),
+        [false, false, false],
+        "missing seed evidence cannot support a field"
+    );
+}
+
+/// Secondary metrics decide close profit contests, while material profit remains decisive.
+///
+/// Breakage this pins: changing `compose.rs:quality_order` back to profit-only ordering. The first
+/// assertion would then select a noisily higher-profit path with much worse PF, drawdown, and
+/// coverage. Removing the profit band would break the second assertion and let secondary metrics
+/// disguise a material loss.
+#[test]
+fn balanced_quality_decides_only_inside_the_profit_band() {
+    let stable = quality(100.0, 1.40, 20.0, 200.0);
+    let noisy = quality(102.0, 1.05, 45.0, 120.0);
+    assert!(
+        quality_order(stable, noisy).is_gt(),
+        "PF, drawdown, and trades must overturn a two-percent profit difference"
+    );
+    let material_profit = quality(130.0, 1.05, 45.0, 120.0);
+    assert!(
+        quality_order(material_profit, stable).is_gt(),
+        "a profit difference outside the risk-scaled band must remain decisive"
+    );
+}
+
+/// Beam sorting applies secondary metrics without pool-wide profit buckets or loss totals.
+///
+/// A distant third branch must not move the close pair across an arbitrary global boundary. The
+/// second fixture straddled a global bucket edge in the former implementation even though its
+/// pairwise profit gap is below five percent. A strong close-profit third branch also must not
+/// reverse that pair merely because it contributes a different number of robust metric losses to
+/// each side.
+///
+/// Breakage this pins: restoring a pool-wide profit bucket in `compose.rs:ranking_keys`, removing
+/// the head-to-head quality comparison from its topological selection, summing pool-wide
+/// secondary losses, or omitting material-profit dependency edges. Those edits either rank the
+/// noisier close path first or let secondary metrics hide a material loss.
+#[test]
+fn beam_ranking_keeps_close_pairs_stable_when_the_pool_changes() {
+    let stable = vec![seed_fold(&[quality(100.0, 1.40, 20.0, 200.0)])];
+    let noisy = vec![seed_fold(&[quality(102.0, 1.05, 45.0, 120.0)])];
+    let distant = vec![seed_fold(&[quality(0.0, 1.0, 10.0, 100.0)])];
+    let keys = ranking_keys(&[&stable, &noisy, &distant]);
+    assert!(
+        ranking_key_order(&keys[0], &keys[1]).is_gt(),
+        "an unrelated low-profit branch cannot erase the close pair's secondary evidence"
+    );
+
+    let strong = vec![seed_fold(&[quality(101.0, 2.0, 15.0, 300.0)])];
+    let strong_keys = ranking_keys(&[&stable, &noisy, &strong]);
+    assert!(
+        ranking_key_order(&strong_keys[0], &strong_keys[1]).is_gt(),
+        "a strong third branch cannot reverse the unchanged close pair through pooled losses"
+    );
+
+    let boundary_stable = vec![seed_fold(&[quality(4.9, 1.40, 1.0, 200.0)])];
+    let boundary_noisy = vec![seed_fold(&[quality(5.1, 1.05, 1.0, 120.0)])];
+    let high = vec![seed_fold(&[quality(100.0, 1.0, 10.0, 100.0)])];
+    let boundary_keys = ranking_keys(&[&boundary_stable, &boundary_noisy, &high]);
+    assert!(
+        ranking_key_order(&boundary_keys[0], &boundary_keys[1]).is_gt(),
+        "two close profits cannot become profit-first only because they cross a global boundary"
+    );
+
+    let materially_better = vec![seed_fold(&[quality(130.0, 1.01, 45.0, 120.0)])];
+    let materially_stable = vec![seed_fold(&[quality(100.0, 1.40, 20.0, 200.0)])];
+    let material_keys = ranking_keys(&[&materially_better, &materially_stable, &distant]);
+    assert!(
+        ranking_key_order(&material_keys[0], &material_keys[1]).is_gt(),
+        "secondary metrics must never move a material profit loser across its dependency edge"
     );
 }
 
@@ -113,34 +321,31 @@ fn a_field_only_joins_when_it_helps_in_most_folds() {
 /// a cost of 1e-8 must still be free while 1e-6 must not. Both numbers are derived from
 /// `improvement_margin`'s stated definition, not read back from `drops`.
 ///
-/// Breakage this pins: `compose.rs:drops` losing its `noise_floor` term and comparing the means
-/// directly. A field whose removal costs a float rounding error would then be kept forever — and
-/// since every backward pass re-scores, the set would stop shrinking at whatever it first reached
-/// and every strategy the tuner writes would carry filters that only narrow it.
-///
-/// (The `>=` in `drops` is deliberate but NOT what this pins: the two forms differ only when the
-/// two sides are bit-for-bit equal, which no fold sum reaches.)
+/// Breakage this pins: replacing the `improvement_margin(scale)` check in
+/// `compose.rs:quality_order` with an exact nonzero-profit comparison. A field whose removal costs
+/// a float rounding error would then be kept forever, so backward elimination would stop at a
+/// needlessly narrow set.
 #[test]
 fn a_field_that_costs_nothing_is_given_back() {
-    let incumbent = [50.0, 60.0, 70.0];
+    let incumbent = profit_scores(&[50.0, 60.0, 70.0]);
     assert!(
         drops(&incumbent, &incumbent),
         "removing a field that changes nothing must be free, so the smaller set wins"
     );
     assert!(
-        drops(&incumbent, &[51.0, 61.0, 71.0]),
+        drops(&incumbent, &profit_scores(&[51.0, 61.0, 71.0])),
         "removing a field that IMPROVES the score must obviously be taken"
     );
     assert!(
-        drops(&incumbent, &[50.0, 60.0, 70.0 - 1e-8]),
+        drops(&incumbent, &profit_scores(&[50.0, 60.0, 70.0 - 1e-8])),
         "a cost below the precision the sums carry is not a cost"
     );
     assert!(
-        !drops(&incumbent, &[50.0, 60.0, 70.0 - 1e-6]),
+        !drops(&incumbent, &profit_scores(&[50.0, 60.0, 70.0 - 1e-6])),
         "a cost above that floor is real and the field must be kept"
     );
     assert!(
-        !drops(&incumbent, &[50.0, 60.0, 40.0]),
+        !drops(&incumbent, &profit_scores(&[50.0, 60.0, 40.0])),
         "a field the score actually depends on must be kept"
     );
 }
@@ -159,20 +364,20 @@ fn a_weak_singleton_can_survive_to_form_a_strong_pair() {
     let candidate = [true, true, true];
     let is_slot = [false, false, false];
     let scores = |mask: &[bool]| match mask {
-        [true, false, false] => vec![-1.0, -1.0, -1.0],
-        [false, true, false] => vec![-2.0, -2.0, -2.0],
-        [false, false, true] => vec![-3.0, -3.0, -3.0],
-        [true, true, false] => vec![30.0, 30.0, 30.0],
-        [true, false, true] => vec![11.0, 11.0, 11.0],
-        [false, true, true] => vec![12.0, 12.0, 12.0],
+        [true, false, false] => profit_scores(&[-1.0, -1.0, -1.0]),
+        [false, true, false] => profit_scores(&[-2.0, -2.0, -2.0]),
+        [false, false, true] => profit_scores(&[-3.0, -3.0, -3.0]),
+        [true, true, false] => profit_scores(&[30.0, 30.0, 30.0]),
+        [true, false, true] => profit_scores(&[11.0, 11.0, 11.0]),
+        [false, true, true] => profit_scores(&[12.0, 12.0, 12.0]),
         other => panic!("unexpected mask {other:?}"),
     };
-    let masks = beam_candidates(&candidate, &is_slot, 0, 2, 2, |mask, _, _, _| {
+    let masks = beam_candidates(&candidate, &is_slot, 0, 2, 2, 2, |mask, _, _, _| {
         Some(scores(mask))
     })
     .expect("the deterministic scorer never cancels");
     let empty = [false, false, false];
-    let empty_scores = [0.0, 0.0, 0.0];
+    let empty_scores = profit_scores(&[0.0, 0.0, 0.0]);
     assert!(
         masks
             .iter()
@@ -185,12 +390,81 @@ fn a_weak_singleton_can_survive_to_form_a_strong_pair() {
         .map(|mask| ScoredMask {
             scores: scores(&mask),
             mask,
+            key: RankingKey::default(),
         })
         .collect();
     assert_eq!(
         inner_winner(&empty_scores, ranked, &empty),
         [true, true, false],
         "the beam must carry the losing branches into their jointly profitable pair"
+    );
+}
+
+/// The beam expands only when the eighth-place boundary is genuinely ambiguous.
+///
+/// The clear fixture has a material profit gap between candidates eight and nine, while the
+/// ambiguous fixtures are exact ties. These hand-authored ranked layers independently define the
+/// expected widths, including the hard ceiling and the short-layer boundary.
+///
+/// Breakage this pins: making `compose.rs:adaptive_width` always return eight or always return
+/// sixteen. The former loses interacting branches at noisy depths; the latter doubles work even
+/// after a later depth has separated the candidates and should contract.
+#[test]
+fn adaptive_beam_expands_caps_and_contracts_at_each_depth() {
+    let scored = |profits: &[f64]| {
+        profits
+            .iter()
+            .map(|profit| ScoredMask {
+                mask: vec![false],
+                scores: profit_scores(&[*profit, *profit, *profit]),
+                key: RankingKey::default(),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let clear = scored(&[100.0, 99.0, 98.0, 97.0, 96.0, 95.0, 94.0, 93.0, 70.0]);
+    assert_eq!(
+        adaptive_width(&clear, 8, 16),
+        8,
+        "a robust eighth-over-ninth win must contract to the fast beam"
+    );
+    assert_eq!(
+        adaptive_width(&scored(&[100.0; 12]), 8, 16),
+        12,
+        "an ambiguous boundary must retain every available branch below the cap"
+    );
+    assert_eq!(
+        adaptive_width(&scored(&[100.0; 20]), 8, 16),
+        16,
+        "ambiguity must never exceed the hard beam ceiling"
+    );
+    assert_eq!(
+        adaptive_width(&scored(&[100.0; 5]), 8, 16),
+        5,
+        "a short layer cannot manufacture nonexistent branches"
+    );
+}
+
+/// The beam builder must apply the adaptive width rather than only compute it.
+///
+/// Five equal singleton branches have an ambiguous boundary at width two and therefore retain
+/// the configured maximum of four. This drives the production wiring around `adaptive_width`.
+///
+/// Breakage this pins: replacing `scored.truncate(retained_width)` in
+/// `compose.rs:beam_candidates` with `scored.truncate(min_width)`. The pure policy test above
+/// would remain green while the actual beam never widened.
+#[test]
+fn beam_candidates_applies_the_adaptive_width() {
+    let candidates = [true; 5];
+    let slots = [false; 5];
+    let retained = beam_candidates(&candidates, &slots, 0, 1, 2, 4, |_, _, _, _| {
+        Some(profit_scores(&[100.0, 100.0, 100.0]))
+    })
+    .expect("the deterministic scorer never cancels");
+    assert_eq!(
+        retained.len(),
+        4,
+        "an ambiguous production layer must expand from two branches to four"
     );
 }
 
@@ -212,9 +486,9 @@ fn the_outer_gate_reports_each_distinct_decision() {
     let subset = [true, false, true];
 
     let chosen_subset = gate_choice(
-        (&no_filters, &[100.0, 100.0]),
-        (&all_fields, &[110.0, 110.0]),
-        (&subset, &[130.0, 125.0]),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
+        (&all_fields, &profit_scores(&[110.0, 110.0])),
+        (&subset, &profit_scores(&[130.0, 125.0])),
     );
     assert_eq!(
         chosen_subset,
@@ -226,9 +500,9 @@ fn the_outer_gate_reports_each_distinct_decision() {
     );
 
     let chosen_all = gate_choice(
-        (&no_filters, &[100.0, 100.0]),
-        (&all_fields, &[140.0, 135.0]),
-        (&subset, &[130.0, 120.0]),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
+        (&all_fields, &profit_scores(&[140.0, 135.0])),
+        (&subset, &profit_scores(&[130.0, 120.0])),
     );
     assert_eq!(
         chosen_all,
@@ -240,9 +514,9 @@ fn the_outer_gate_reports_each_distinct_decision() {
     );
 
     let chosen_none = gate_choice(
-        (&no_filters, &[100.0, 100.0]),
-        (&all_fields, &[90.0, 90.0]),
-        (&subset, &[95.0, 95.0]),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
+        (&all_fields, &profit_scores(&[90.0, 90.0])),
+        (&subset, &profit_scores(&[95.0, 95.0])),
     );
     assert_eq!(
         chosen_none,
@@ -254,9 +528,9 @@ fn the_outer_gate_reports_each_distinct_decision() {
     );
 
     let chosen_non_transitive = gate_choice(
-        (&no_filters, &[100.0, 100.0]),
-        (&all_fields, &[200.0, 0.0]),
-        (&subset, &[120.0, 120.0]),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
+        (&all_fields, &profit_scores(&[200.0, 0.0])),
+        (&subset, &profit_scores(&[120.0, 120.0])),
     );
     assert_eq!(
         chosen_non_transitive,
@@ -268,9 +542,9 @@ fn the_outer_gate_reports_each_distinct_decision() {
     );
 
     let beam_reached_all = gate_choice(
-        (&no_filters, &[100.0, 100.0]),
-        (&all_fields, &[130.0, 130.0]),
-        (&all_fields, &[130.0, 130.0]),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
+        (&all_fields, &profit_scores(&[130.0, 130.0])),
+        (&all_fields, &profit_scores(&[130.0, 130.0])),
     );
     assert_eq!(
         beam_reached_all.decision,
@@ -279,9 +553,9 @@ fn the_outer_gate_reports_each_distinct_decision() {
     );
 
     let no_admitted = gate_choice(
-        (&no_filters, &[100.0, 100.0]),
-        (&no_filters, &[100.0, 100.0]),
-        (&no_filters, &[100.0, 100.0]),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
+        (&no_filters, &profit_scores(&[100.0, 100.0])),
     );
     assert_eq!(
         no_admitted.decision,
@@ -297,15 +571,17 @@ fn the_outer_gate_reports_each_distinct_decision() {
 /// bar's own constant rather than a number restated here: one core below it there must be no
 /// budget at all, and at it there must be a usable one.
 ///
-/// Breakage this pins five ways. `compose.rs:budget_for` returning a budget below the bar — the
+/// Breakage this pins six ways. `compose.rs:budget_for` returning a budget below the bar — the
 /// feature would run on exactly the machines it was gated off, since a caller decides whether to
 /// compose by whether a budget came back. Reducing `folds` below four would make every production
 /// call skip composition because two inner and two gate folds are mandatory. Restoring a fixed
 /// `max_fields: 6` would silently make larger admitted sets unreachable again. Restoring
-/// `beam_width: 4` would discard half the competing interactions the widened search promises.
-/// And `ranking_restarts` dividing without the `RESTARTS_MIN` floor: with a low restart setting
-/// the ranking runs would request zero restarts, find nothing, and the feature would report "this
-/// period has no answer" rather than a set.
+/// `beam_width_min: 4` would discard half the competing interactions the widened search promises;
+/// losing the 16-branch ceiling would make ambiguity either invisible or unbounded. Reducing
+/// `seed_groups` would restore dependence on one restart stream. Finally, `ranking_restarts`
+/// dividing without the `RESTARTS_MIN` floor would request zero restarts at low settings and
+/// report "this period has no answer" rather than a set; reducing `RANKING_RESTARTS_MAX` back to
+/// 256 would discard half the requested evidence for every Beam candidate.
 #[test]
 fn composition_has_a_budget_exactly_above_the_core_bar() {
     let bar = super::super::search::HEAVY_SEARCH_MIN_CORES;
@@ -329,8 +605,9 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
             "cores {cores}: every admitted field count must be reachable"
         );
         assert_eq!(
-            b.beam_width, 8,
-            "cores {cores}: the widened search must retain eight branches per depth"
+            (b.beam_width_min, b.beam_width_max, b.seed_groups),
+            (8, 16, 3),
+            "cores {cores}: composition must expose its adaptive beam and seed consensus"
         );
         for restarts in [1usize, 2, 7, 100, 20_000] {
             assert!(
@@ -339,6 +616,11 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
                 b.ranking_restarts(restarts)
             );
         }
+        assert_eq!(
+            b.ranking_restarts(super::super::RESTARTS_MAX),
+            512,
+            "a 100k user budget must give every Beam candidate the requested 512 restarts"
+        );
     }
     // Width is set by what makes the answer trustworthy, not by the hardware, so a bigger machine
     // buys speed rather than a wider search.
@@ -348,13 +630,17 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
         (
             at_bar.folds,
             at_bar.max_fields,
-            at_bar.beam_width,
+            at_bar.beam_width_min,
+            at_bar.beam_width_max,
+            at_bar.seed_groups,
             at_bar.ranking_restarts(800)
         ),
         (
             far_above.folds,
             far_above.max_fields,
-            far_above.beam_width,
+            far_above.beam_width_min,
+            far_above.beam_width_max,
+            far_above.seed_groups,
             far_above.ranking_restarts(800)
         ),
         "past the bar the budget must stop growing"
@@ -365,10 +651,53 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
 
 /// One exact strategy+core scope out of a real snapshot, in chronological order.
 struct Scope {
+    /// Stable strategy identifier from the snapshot.
+    strategy_id: i64,
+    /// Stable core identifier from the snapshot.
+    core_uid: i64,
+    /// Human-readable scope description.
     label: String,
+    /// Chronologically ordered trade profits.
     profits: Vec<f64>,
+    /// Chronologically ordered values for every tuner field.
     vals: Vec<Vec<f64>>,
+    /// Chronologically ordered close timestamps.
     closes: Vec<i64>,
+}
+
+/// Measured result returned by one exact real-snapshot scope.
+struct ScopeReport {
+    /// Stable strategy identifier.
+    strategy_id: i64,
+    /// Stable core identifier.
+    core_uid: i64,
+    /// Holdout tally with no additional field ranges.
+    no_filters: Tally,
+    /// Holdout tally after admitting every searchable field.
+    all_fields: Tally,
+    /// Holdout tally of the selected composition.
+    composed: Tally,
+    /// Time spent inside composition alone, excluding controls and reporting.
+    composition_seconds: f64,
+}
+
+/// Sum independent scope tallies for aggregate profit-factor reporting.
+///
+/// Args:
+///     tallies: Scope-level chronological tallies.
+///
+/// Returns:
+///     Summed counts, wins, profits, wins/losses, and honestly additive per-scope drawdowns.
+fn sum_tallies<'a>(tallies: impl Iterator<Item = &'a Tally>) -> Tally {
+    tallies.fold(Tally::default(), |mut total, tally| {
+        total.n += tally.n;
+        total.wins += tally.wins;
+        total.profit += tally.profit;
+        total.wsum += tally.wsum;
+        total.lsum += tally.lsum;
+        total.max_dd += tally.max_dd;
+        total
+    })
 }
 
 /// Positive integer override for the opt-in real-snapshot diagnostic.
@@ -410,7 +739,8 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
     let mut pick = conn
         .prepare(
             "SELECT strategyid, core_uid, COUNT(*) n FROM orders_rep WHERE closedate > 0 \
-             GROUP BY strategyid, core_uid HAVING n >= ?1 ORDER BY n DESC LIMIT ?2",
+             GROUP BY strategyid, core_uid HAVING n >= ?1 \
+             ORDER BY n DESC, strategyid, core_uid LIMIT ?2",
         )
         .expect("the snapshot must carry orders_rep");
     let picked: Vec<(i64, i64, usize)> = pick
@@ -451,6 +781,8 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
             let order = super::super::chronological_order(&closes, &profits, &vals);
             let gather = |c: &[f64]| order.iter().map(|t| c[*t]).collect::<Vec<f64>>();
             Scope {
+                strategy_id: sid,
+                core_uid: core,
                 label: format!("strategy {sid} core {core} ({n} trades)"),
                 profits: gather(&profits),
                 vals: vals.iter().map(|c| gather(c)).collect(),
@@ -485,18 +817,49 @@ fn composition_against_all_fields_on_a_real_snapshot() {
         want,
         "MOON_TUNER_BENCH_DB must hold {want} separate strategy+core scopes worth tuning"
     );
-    for scope in scopes {
-        report_one_scope(scope);
+    let reports: Vec<ScopeReport> = scopes.into_iter().map(report_one_scope).collect();
+    let no_filters = sum_tallies(reports.iter().map(|report| &report.no_filters));
+    let all_fields = sum_tallies(reports.iter().map(|report| &report.all_fields));
+    let composed = sum_tallies(reports.iter().map(|report| &report.composed));
+    let ids: Vec<(i64, i64)> = reports
+        .iter()
+        .map(|report| (report.strategy_id, report.core_uid))
+        .collect();
+    println!("\n[aggregate] scopes {ids:?}");
+    for (label, tally) in [
+        ("no filter", &no_filters),
+        ("all fields", &all_fields),
+        ("composed", &composed),
+    ] {
+        println!(
+            "[aggregate {label}] profit {:+.4}, trades {}, pf {:.4}, sum per-scope dd {:.4}",
+            tally.profit,
+            tally.n,
+            tally.profit_factor(),
+            tally.max_dd
+        );
     }
+    println!(
+        "[aggregate timing] composition {:.2}s",
+        reports
+            .iter()
+            .map(|report| report.composition_seconds)
+            .sum::<f64>()
+    );
 }
 
 /// Run no-filters, all-fields, and composition over one exact tuner scope.
 ///
 /// Args:
 ///     scope: Chronological rows for one exact strategy+core pair.
-fn report_one_scope(scope: Scope) {
+///
+/// Returns:
+///     Holdout control/composition metrics and composition-only runtime for aggregation.
+fn report_one_scope(scope: Scope) -> ScopeReport {
     let started = Instant::now();
     let Scope {
+        strategy_id,
+        core_uid,
         label,
         profits,
         vals,
@@ -520,8 +883,12 @@ fn report_one_scope(scope: Scope) {
         .clamp(super::super::EDGES_MIN, super::super::edges_max());
     let restarts = bench_usize("MOON_TUNER_BENCH_RESTARTS", 2_000)
         .clamp(super::super::RESTARTS_MIN, super::super::restarts_max());
-    let train_pct = bench_usize("MOON_TUNER_BENCH_TRAIN_PCT", 90).clamp(1, 100);
+    let train_pct = bench_usize("MOON_TUNER_BENCH_TRAIN_PCT", 90).clamp(1, 99);
     let train_n = super::super::train_split(&closes, train_pct as f64 / 100.0);
+    assert!(
+        train_n < total,
+        "the real-snapshot diagnostic requires a non-empty holdout"
+    );
     let min_n = (train_n / 10).max(1);
     let handle = SearchHandle::new();
     let full = Search::new(cols.clone(), &locked, slot_flags(), min_n, ne, train_n)
@@ -549,7 +916,7 @@ fn report_one_scope(scope: Scope) {
             ho.profit_factor(),
             ho.max_dd
         );
-        ho.profit
+        ho
     };
 
     println!(
@@ -566,15 +933,21 @@ fn report_one_scope(scope: Scope) {
         "the composition diagnostic needs a machine the feature actually runs on - see \
          HEAVY_SEARCH_MIN_CORES",
     );
-    let beam_width =
-        bench_usize("MOON_TUNER_BENCH_BEAM_WIDTH", budget.beam_width).clamp(1, FIELDS.len());
+    let beam_width_min =
+        bench_usize("MOON_TUNER_BENCH_BEAM_MIN", budget.beam_width_min).clamp(1, FIELDS.len());
+    let beam_width_max = bench_usize("MOON_TUNER_BENCH_BEAM_MAX", budget.beam_width_max)
+        .clamp(beam_width_min, FIELDS.len());
+    let seed_groups =
+        bench_usize("MOON_TUNER_BENCH_SEEDS", budget.seed_groups).min(restarts.max(1));
     println!(
-        "[budget] cores {} -> ranking restarts {}, folds {}, max fields {}, beam {}",
+        "[budget] cores {} -> ranking restarts {}, folds {}, max fields {}, beam {}-{}, seeds {}",
         budget.cores,
         budget.ranking_restarts(restarts),
         budget.folds,
         budget.max_fields,
-        beam_width
+        beam_width_min,
+        beam_width_max,
+        seed_groups
     );
     // Through the production path, not a local rebuild of it: a diagnostic that cuts its own
     // folds can report on a geometry the product no longer builds.
@@ -601,9 +974,13 @@ fn report_one_scope(scope: Scope) {
         seed: 0x5EED,
         round: true,
         max_fields: budget.max_fields,
-        beam_width,
+        beam_width_min,
+        beam_width_max,
+        seed_groups,
     };
+    let composition_started = Instant::now();
     let out = compose(&folds, &p, &handle).expect("an uncancelled composition answers");
+    let composition_seconds = composition_started.elapsed().as_secs_f64();
     let support: Vec<(&str, u8)> = out
         .chosen
         .iter()
@@ -617,12 +994,22 @@ fn report_one_scope(scope: Scope) {
     );
     let composed = report("composed", &out.chosen);
     println!(
-        "[verdict] out of sample vs the no-filter baseline {base:+.4}: \
-         all fields {:+.4}, composed {:+.4}; elapsed {:.2?}",
-        all_fields - base,
-        composed - base,
+        "[verdict] out of sample vs the no-filter baseline {:+.4}: \
+         all fields {:+.4}, composed {:+.4}; composition {:.2}s, elapsed {:.2?}",
+        base.profit,
+        all_fields.profit - base.profit,
+        composed.profit - base.profit,
+        composition_seconds,
         started.elapsed()
     );
+    ScopeReport {
+        strategy_id,
+        core_uid,
+        no_filters: base,
+        all_fields,
+        composed,
+        composition_seconds,
+    }
 }
 
 // ─────────────────────────────── fold isolation ───────────────────────────────

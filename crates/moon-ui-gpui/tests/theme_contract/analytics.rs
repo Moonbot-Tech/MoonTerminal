@@ -3,6 +3,101 @@
 
 use super::support::*;
 
+/// Analytics tabs size from their title while the complete core/filter group wraps together.
+///
+/// This binary crate exposes no importable GPUI view. The source contract pins two plausible
+/// visual regressions: restoring the old fixed 112px button makes a long translation touch its
+/// blue background, while removing the atomic filter group clips a selector at narrow widths or
+/// strands the selected core name on the tabs' line.
+#[test]
+fn analytics_tabs_and_core_caption_follow_their_content() {
+    let toolbar = read_src("analytics/toolbar.rs");
+    let core_combo = read_src("controls/core_combo.rs");
+    let body = braced_body(&toolbar, "pub(super) fn tabs_bar(");
+    for needle in [
+        "let title = t.title();",
+        "design::ui_text_width(cx, &title, 10.5, 400.0, true)",
+        "design::ui_value(cx, 20.0)",
+        ".max(design::ui_value(cx, 72.0))",
+        ".width(tab_width)",
+        ".label(title)",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`tabs_bar` must contain {needle:?} so every localized tab keeps measured padding"
+        );
+    }
+    assert!(
+        !body.contains(".width(112.0)"),
+        "the old fixed width must not override content-driven tab sizing"
+    );
+    for needle in [
+        ".min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))",
+        ".flex_wrap()",
+        ".gap_x(design::ui_px(cx, TOOLBAR_GAP))",
+        ".gap_y(design::ui_px(cx, 4.0))",
+        ".pt(design::ui_px(cx, 5.0))",
+        ".pb(design::ui_px(cx, 4.0))",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`tabs_bar` must contain {needle:?} so a wrapped header retains compact geometry"
+        );
+    }
+    assert!(
+        !body.contains(".h(design::fit_h_px(cx, 34.0, 13.0, 10.5))"),
+        "a fixed row height would clip the wrapped filter group"
+    );
+    assert!(
+        toolbar.contains("crate::controls::CORE_COMBO_TRIGGER_W")
+            && core_combo.contains(".trigger_width_scaled(CORE_COMBO_TRIGGER_W)")
+            && body.contains("let action_trigger_scale = design::font_value(cx, 10.5) / 10.5;")
+            && body.contains("* action_trigger_scale"),
+        "the responsive floor and shared core dropdown must use the same width and Action scaling"
+    );
+
+    let selectors_start = body
+        .find("let selectors = h_flex()")
+        .expect("the four selectors must remain one nested row");
+    let filters_start = body
+        .find("let filters = h_flex()")
+        .expect("the selected-core caption and selectors must remain one wrapping unit");
+    let row_child = body
+        .find("row.child(filters)")
+        .expect("the filter unit must remain a direct wrapping-row child");
+    assert!(
+        selectors_start < filters_start && filters_start < row_child,
+        "selectors must be built before the atomic filter unit is added to the wrapping row"
+    );
+    let selectors = &body[selectors_start..filters_start];
+    for needle in [
+        ".gap(design::ui_px(cx, TOOLBAR_GAP))",
+        ".child(self.core_combo(cx))",
+        ".child(self.side_combo(cx))",
+        ".child(self.kind_combo(cx))",
+        ".child(self.metric_combo(cx))",
+    ] {
+        assert!(
+            selectors.contains(needle),
+            "the atomic selector row must contain {needle:?}"
+        );
+    }
+    let filters = &body[filters_start..row_child];
+    for needle in [
+        ".flex_1()",
+        ".min_w(px(filters_min_w))",
+        ".min_w_0()",
+        ".truncate()",
+        ".text_right()",
+        ".child(selectors)",
+    ] {
+        assert!(
+            filters.contains(needle),
+            "the filter unit must contain {needle:?} so its caption stays beside its selectors"
+        );
+    }
+}
+
 /// Protects the process boundary of Analytics UI memory.
 ///
 /// The plausible edit is rebuilding `AnalyticsView` from hard-coded defaults or moving its

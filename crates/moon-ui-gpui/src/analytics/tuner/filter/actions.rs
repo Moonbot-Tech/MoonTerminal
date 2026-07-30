@@ -11,11 +11,11 @@ use rust_i18n::t;
 use super::super::super::AnalyticsView;
 use super::super::shared::SaveTarget;
 use super::state::{
-    edges_of, iters_of, seed_of, train_frac, SearchSplit, SuggestJob, SuggestState,
+    SearchSplit, SuggestJob, SuggestState, edges_of, iters_of, seed_of, train_frac,
 };
 use super::{fmt_bound, parse_num, staged_dirty};
 use moon_core::db::tuner::threshold_search::{SearchHandle, SearchParams};
-use moon_core::db::tuner::{slot_type_for, FieldClass, FIELDS};
+use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 /// How often the suggestion row repaints while a search runs.
 ///
@@ -404,7 +404,7 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Number of quantile edges for the suggestion (the 4/8/…/128 dropdown).
+    /// Number of quantile edges selected from the machine-filtered depth dropdown.
     fn suggest_edges(&self) -> usize {
         edges_of(self.tuner.edges)
     }
@@ -724,11 +724,7 @@ impl AnalyticsView {
         for (flag, ignore) in flags {
             // UseBV_SV_Filter is an enabler (inverted ignore semantics).
             let value = if flag == "UseBV_SV_Filter" {
-                if ignore {
-                    "NO"
-                } else {
-                    "YES"
-                }
+                if ignore { "NO" } else { "YES" }
             } else if ignore {
                 "YES"
             } else {
