@@ -49,15 +49,12 @@ pub(super) struct DetachedChartHost {
     /// The window remains normally independent so FancyZones can see it. Several attempts cover the
     /// race where the taskbar button has not appeared yet.
     taskbar_hide_ticks: u8,
-    /// In-scene layout settings popup for this tab, opened by ⚙.
+    /// Anchored layout settings popup for this tab, opened by ⚙.
     ///
     /// It is not a separate OS window because chart text now lies below the normal GPUI scene.
     layout_popup_open: bool,
-    /// Whether the cursor has entered the popup; leaving after first entry closes it and commits input.
-    layout_popup_hovered: bool,
-    /// In-scene "Candles and Trades" popup opened by ❚ for this window tab's candle settings.
+    /// Anchored "Candles and Trades" popup opened by ❚ for this window tab's candle settings.
     candle_popup_open: bool,
-    candle_popup_hovered: bool,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in THIS window applies scale to its panel
     /// and persists it in the tab spec exactly once.
     last_x_sync_rev: u64,
@@ -298,9 +295,7 @@ impl DetachedChartHost {
             restore_size,
             taskbar_hide_ticks: 8,
             layout_popup_open: false,
-            layout_popup_hovered: false,
             candle_popup_open: false,
-            candle_popup_hovered: false,
             last_x_sync_rev: initial_x_sync_rev,
             layout_fit_input,
             layout_scroll_input,
@@ -541,12 +536,6 @@ impl super::candle_popup::CandlePopupHost for DetachedChartHost {
     fn set_candle_popup_open(&mut self, open: bool) {
         self.candle_popup_open = open;
     }
-    fn candle_popup_hovered(&self) -> bool {
-        self.candle_popup_hovered
-    }
-    fn set_candle_popup_hovered(&mut self, hovered: bool) {
-        self.candle_popup_hovered = hovered;
-    }
     fn candle_view_override(&self, cx: &App) -> Option<moon_core::market::CandleViewCfg> {
         self.panel.read(cx).candle_view()
     }
@@ -577,12 +566,6 @@ impl LayoutPopupHost for DetachedChartHost {
     }
     fn set_popup_open(&mut self, open: bool) {
         self.layout_popup_open = open;
-    }
-    fn popup_hovered(&self) -> bool {
-        self.layout_popup_hovered
-    }
-    fn set_popup_hovered(&mut self, hovered: bool) {
-        self.layout_popup_hovered = hovered;
     }
     fn fit_input(&self) -> &Entity<MoonInputState> {
         &self.layout_fit_input

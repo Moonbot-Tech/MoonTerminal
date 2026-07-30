@@ -1,4 +1,4 @@
-//! In-scene chart-tab layout popup with mode (Fit or Scroll) and a size field ONLY for the active
+//! Chart-tab layout popup with mode (Fit or Scroll) and a size field ONLY for the active
 //! mode. Settings are per-tab. Rendering is shared by the main-window tab strip and detached-window
 //! header; the caller provides handlers that apply to the correct stack and persist the result.
 //!
@@ -14,6 +14,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::design;
+use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup_title};
 use crate::persistence::chart_persist::{
     ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
 };
@@ -149,16 +150,10 @@ fn axis_selector_row(
 pub(super) const MIN_H: u16 = 20;
 pub(super) const MAX_H: u16 = 4000;
 
-/// Scene-popup width in logical pixels.
-///
-/// Height is content-sized because the root uses `w_full` and the scene has no `.h(...)`, avoiding
-/// empty space below. Width stays fixed around the two 110-pixel FIT/SCROLL segments plus framing.
-pub(super) fn content_width(cx: &App, _with_rename: bool) -> Pixels {
-    let pad = f32::from(design::ui_px(cx, 8.0));
-    let fpx = f32::from(design::ui_px(cx, 6.0)); // horizontal frame padding (x2)
-    let border = 2.0;
-    let fb = 2.0; // frame border
-    px(2.0 * 110.0 + 20.0 + 2.0 * pad + border + 2.0 * fpx + fb)
+/// Popup CONTENT width in rendered pixels: the two 110-unit FIT/SCROLL segments plus the group
+/// frame around them. `MoonPopover` adds its own padding and border outside this.
+pub(super) fn content_width(cx: &App) -> Pixels {
+    px(2.0 * 110.0 + 20.0 + popup_group_inset_px(cx))
 }
 
 fn mode_label(m: StackLayoutMode) -> &'static str {
@@ -168,31 +163,12 @@ fn mode_label(m: StackLayoutMode) -> &'static str {
     }
 }
 
-/// Build a framed group with a thin border, top caption, and inner content.
-fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 4.0))
-        .px(design::ui_px(cx, 6.0))
-        .py(design::ui_px(cx, 4.0))
-        .border_1()
-        .border_color(rgb(p.border))
-        .rounded(design::r_button(cx))
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_muted))
-                .child(title),
-        )
-        .child(body)
-}
-
 /// Render the compact layout settings panel, showing a size field ONLY for the current mode.
 ///
 /// `height_fit_input` and `height_scroll_input` are separate fields whose Blur/Enter subscription
-/// belongs to the caller. `on_pick_mode` runs on mode selection. The caller positions the panel.
+/// belongs to the caller. `on_pick_mode` runs on mode selection. `MoonPopover` positions the panel.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2>(
+pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2, S2>(
     id: &str,
     current: StackLayoutMode,
     orientation: StackOrientation,
@@ -225,8 +201,10 @@ pub(super) fn render_layout_popup<F, G, H, I, J, K, L, M, N, O, P2, Q2, R2>(
     on_toggle_time_axis: O,
     on_toggle_line_labels: P2,
     on_toggle_cursor_labels: Q2,
+    on_close: S2,
 ) -> AnyElement
 where
+    S2: Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     F: Fn(StackLayoutMode, &mut App) + 'static,
     G: Fn(&mut App) + 'static,
     H: Fn(bool, &mut App) + 'static,
@@ -431,63 +409,53 @@ where
             )
     });
 
-    // The caller sets scene width through `content_width`; this content drives height naturally.
-    // That avoids manual height sums and empty space below. The background is opaque, so visible
-    // chart text over it indicates a z-order bug rather than transparency.
+    // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`. The caller
+    // declares the width through `content_width`; height is content-driven, which avoids manual
+    // height sums and empty space below.
     v_flex()
         .id(SharedString::from(format!("{id}-popup")))
         .w_full()
-        .p(design::ui_px(cx, 8.0))
         .gap(design::ui_px(cx, 8.0))
-        .bg(rgb(p.panel_high))
-        .border_1()
-        .border_color(rgb(p.border))
         .child(
-            // Left-aligned title with the "apply to all" icon pinned to the panel's right edge.
+            // Left-aligned title with the actions pinned to the popup's right edge.
             h_flex()
                 .w_full()
                 .items_center()
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgb(p.text_muted))
-                        .child(t!("chart.layout.title").to_string()),
-                )
-                .child(div().flex_1())
+                .child(popup_title(t!("chart.layout.title"), p, cx))
                 .child(orientation_btn)
-                .child(apply_all_btn),
+                .child(apply_all_btn)
+                .child(popup_close_button(
+                    SharedString::from(format!("{id}-close")),
+                    on_close,
+                )),
         )
         .children(rename_row)
         // "View" frame: FIT/SCROLL mode, active-mode size field, and its description.
-        .child(framed(
-            t!("chart.layout.frame_view").to_string(),
-            p,
-            cx,
-            v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(seg)
-                .child(height_line)
-                .child(hint_block)
-                .into_any_element(),
-        ))
+        .child(
+            // Group ids are `&'static str`: they only need to be unique among their siblings, and
+            // the enclosing root already carries the per-host prefix.
+            popup_group("frame-view", t!("chart.layout.frame_view")).child(
+                v_flex()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(seg)
+                    .child(height_line)
+                    .child(hint_block),
+            ),
+        )
         // "Display" frame: order book, liquidations, control zone, time axis, line labels, and
         // crosshair labels.
-        .child(framed(
-            t!("chart.layout.frame_display").to_string(),
-            p,
-            cx,
-            v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(orderbook_cb)
-                .child(liquidations_cb)
-                .child(show_zone_cb)
-                .child(time_axis_cb)
-                .child(line_labels_cb)
-                .child(cursor_labels_cb)
-                .into_any_element(),
-        ))
+        .child(
+            popup_group("frame-display", t!("chart.layout.frame_display")).child(
+                v_flex()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(orderbook_cb)
+                    .child(liquidations_cb)
+                    .child(show_zone_cb)
+                    .child(time_axis_cb)
+                    .child(line_labels_cb)
+                    .child(cursor_labels_cb),
+            ),
+        )
         // Remaining controls: auto-pin, button positions, and price axis.
         .child(auto_pin_cb)
         .child(cancel_pos_row)

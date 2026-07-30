@@ -15,12 +15,14 @@ use moon_core::market::candles::{
 };
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem, MoonSegmentedControl, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
 use super::common::{LayoutPopupHost, StackSetting};
 use crate::design;
+use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup_title};
 
 /// Time-frame labels kept in sync with `CANDLE_TF_CHOICES_MIN`.
 ///
@@ -50,30 +52,13 @@ const ZONES: [u16; 7] = [0, 1, 2, 3, 5, 10, 20];
 
 const OUTLINES: [u8; 3] = [1, 2, 3];
 
-/// Scene-popup width in logical pixels; the widest row is seven 42-pixel zone segments plus framing.
+/// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
+///
+/// The row allowance is 7×42 rather than any row's real width: the widest row is the four 70-unit
+/// mode segments (280), and the zone/hide rows are seven 34-unit segments (238). The extra ~14 is
+/// slack, kept deliberately — the mode labels are localized and ES runs longer than RU/EN.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    let pad = f32::from(design::ui_px(cx, 8.0));
-    let fpx = f32::from(design::ui_px(cx, 6.0));
-    px(7.0 * 42.0 + 2.0 * pad + 2.0 * fpx + 8.0)
-}
-
-/// Build a framed group with a thin border and caption, mirroring `layout_popup::framed`.
-fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 4.0))
-        .px(design::ui_px(cx, 6.0))
-        .py(design::ui_px(cx, 4.0))
-        .border_1()
-        .border_color(rgb(p.border))
-        .rounded(design::r_button(cx))
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_muted))
-                .child(title),
-        )
-        .child(body)
+    px(7.0 * 42.0 + popup_group_inset_px(cx))
 }
 
 /// Build one setting as a caption with a segmented control below it.
@@ -329,57 +314,53 @@ fn render_candle_popup<T: CandlePopupHost>(
             .render()
     };
 
+    // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     v_flex()
         .id(SharedString::from(format!("{id}-popup")))
         .w_full()
-        .p(design::ui_px(cx, 8.0))
         .gap(design::ui_px(cx, 8.0))
-        .bg(rgb(p.panel_high))
-        .border_1()
-        .border_color(rgb(p.border))
         .child(
             h_flex()
                 .w_full()
                 .items_center()
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgb(p.text_muted))
-                        .child(t!("chart.candles.title").to_string()),
-                )
-                .child(div().flex_1())
-                .child(apply_all_btn),
+                .child(popup_title(t!("chart.candles.title"), p, cx))
+                .child(apply_all_btn)
+                .child(popup_close_button(
+                    SharedString::from(format!("{id}-close")),
+                    {
+                        let entity = entity.clone();
+                        move |_, _w, app: &mut App| {
+                            entity.update(app, |this, cx| this.close_candle_popup(cx));
+                        }
+                    },
+                )),
         )
-        .child(framed(
-            t!("chart.candles.frame_candles").to_string(),
-            p,
-            cx,
-            v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(tf_row)
-                .child(mode_row)
-                .child(hint_block("chart.candles.mode_hint", p, cx))
-                .child(outline_row)
-                .into_any_element(),
-        ))
-        .child(framed(
-            t!("chart.candles.frame_trades").to_string(),
-            p,
-            cx,
-            v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(zone_row)
-                .child(hint_block("chart.candles.zone_hint", p, cx))
-                .child(hide_row)
-                .child(hint_block("chart.candles.hide_hint", p, cx))
-                .child(price_lines_cb)
-                .child(wicks_cb)
-                .child(neutral_cb)
-                .child(colors_hint)
-                .into_any_element(),
-        ))
+        .child(
+            // Group ids are `&'static str`: they only need to be unique among their siblings, and
+            // the enclosing root already carries the per-host prefix.
+            popup_group("frame-candles", t!("chart.candles.frame_candles")).child(
+                v_flex()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(tf_row)
+                    .child(mode_row)
+                    .child(hint_block("chart.candles.mode_hint", p, cx))
+                    .child(outline_row),
+            ),
+        )
+        .child(
+            popup_group("frame-trades", t!("chart.candles.frame_trades")).child(
+                v_flex()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(zone_row)
+                    .child(hint_block("chart.candles.zone_hint", p, cx))
+                    .child(hide_row)
+                    .child(hint_block("chart.candles.hide_hint", p, cx))
+                    .child(price_lines_cb)
+                    .child(wicks_cb)
+                    .child(neutral_cb)
+                    .child(colors_hint),
+            ),
+        )
         .into_any_element()
 }
 
@@ -390,8 +371,6 @@ fn render_candle_popup<T: CandlePopupHost>(
 pub(super) trait CandlePopupHost: LayoutPopupHost {
     fn candle_popup_open(&self) -> bool;
     fn set_candle_popup_open(&mut self, open: bool);
-    fn candle_popup_hovered(&self) -> bool;
-    fn set_candle_popup_hovered(&mut self, hovered: bool);
     /// Return the target's per-tab override, or `None` to follow the global default.
     fn candle_view_override(&self, cx: &App) -> Option<CandleViewCfg>;
     /// Apply settings to all non-Main tabs and windows and update the global default. Include Main
@@ -409,81 +388,59 @@ pub(super) trait CandlePopupHost: LayoutPopupHost {
         self.apply_tab_setting(StackSetting::CandleView(cfg), cx);
     }
 
-    fn toggle_candle_popup(&mut self, cx: &mut Context<Self>) {
-        let open = !self.candle_popup_open();
-        self.set_candle_popup_open(open);
-        self.set_candle_popup_hovered(false);
-        cx.notify();
-    }
-
+    /// Close the popup.
+    ///
+    /// The already-closed guard is load-bearing: clicking ❚ while the popup is open makes `Popover`
+    /// fire `on_open_change(false)` twice (outside-click handler, then the trigger re-arming).
     fn close_candle_popup(&mut self, cx: &mut Context<Self>) {
         if !self.candle_popup_open() {
             return;
         }
         self.set_candle_popup_open(false);
-        self.set_candle_popup_hovered(false);
         cx.notify();
     }
 }
 
-/// Build the candle-popup overlay as a positioned scene that closes after hover exit.
+/// Build the ❚ candles-and-trades popup: a `MoonPopover` anchored to the button that opens it.
 ///
-/// Returns `None` while the popup is closed.
-pub(super) fn candle_popup_overlay<T: CandlePopupHost>(
+/// The content is built ONLY while open — `MoonPopover` takes it eagerly, and this sits in a chart
+/// host that repaints constantly.
+///
+/// Args:
+///     this: The popup's host.
+///     id_prefix: Per-host element identity prefix.
+///     trigger: The button the popover anchors to.
+///     cx: Host context.
+///
+/// Returns:
+///     The trigger with its anchored popover.
+pub(super) fn candle_popup_host<T: CandlePopupHost>(
     this: &T,
     id_prefix: &'static str,
-    top: Pixels,
+    trigger: impl IntoElement,
     cx: &mut Context<T>,
-) -> Option<Stateful<Div>> {
+) -> MoonPopover {
+    let open_entity = cx.entity();
+    let mut popover = MoonPopover::new(SharedString::from(format!("{id_prefix}-popover")))
+        // Anchored bottom-right of the ❚ button: growing left keeps the wide popup inside the
+        // window rather than running off its right edge.
+        .placement(MoonPopoverPlacement::BottomEnd)
+        .content_width(f32::from(content_width(cx)))
+        .close_on_content_click(false)
+        .open(this.candle_popup_open())
+        .on_open_change(move |open, _window, app| {
+            open_entity.update(app, |this, cx| {
+                this.set_candle_popup_open(open);
+                cx.notify();
+            });
+        })
+        .trigger(trigger);
     if !this.candle_popup_open() {
-        return None;
+        return popover;
     }
     let p = MoonPalette::active(cx);
     let cfg = this.candle_view_current(cx);
     let entity = cx.entity();
-    let hover_entity = entity.clone();
-    let popup_w = content_width(cx);
-    Some(
-        div()
-            .id(SharedString::from(format!("{id_prefix}-popup-scene")))
-            .absolute()
-            .right(px(6.0))
-            .top(top)
-            .w(popup_w)
-            .on_mouse_down(MouseButton::Left, |_, _window, app| {
-                app.stop_propagation();
-            })
-            .on_hover(move |hovered, _window, app| {
-                hover_entity.update(app, |this, cx| {
-                    if *hovered {
-                        this.set_candle_popup_hovered(true);
-                    } else if this.candle_popup_hovered() {
-                        this.close_candle_popup(cx);
-                    }
-                });
-            })
-            .child(render_candle_popup(id_prefix, entity, cfg, p, cx)),
-    )
-}
-
-/// Build the outside-click dismissal layer for the candle popup, or `None` while it is closed.
-pub(super) fn candle_popup_dismiss<T: CandlePopupHost>(
-    this: &T,
-    id_prefix: &'static str,
-    cx: &mut Context<T>,
-) -> Option<Stateful<Div>> {
-    if !this.candle_popup_open() {
-        return None;
-    }
-    let entity = cx.entity();
-    Some(
-        div()
-            .id(SharedString::from(format!("{id_prefix}-popup-dismiss")))
-            .absolute()
-            .inset_0()
-            .on_mouse_down(MouseButton::Left, move |_, _window, app| {
-                entity.update(app, |this, cx| this.close_candle_popup(cx));
-                app.stop_propagation();
-            }),
-    )
+    popover = popover.content(render_candle_popup(id_prefix, entity, cfg, p, cx));
+    popover
 }

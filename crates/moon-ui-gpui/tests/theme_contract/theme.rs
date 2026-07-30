@@ -131,3 +131,119 @@ fn main_chart_stack_rmb_toggle_uses_full_chart_area_not_plot_only() {
         "Main stack RMB fullscreen/stack toggle must not regress to plot-only hit-test"
     );
 }
+
+/// Settings-popup contents hosted by `MoonPopover` must not paint a second surface inside it.
+///
+/// `MoonPopover` already draws the background, border, radius and outer padding, and its
+/// `content_width_*` builders treat the number they are given as the width of the CONTENT box.
+/// A content root that paints its own chrome therefore both nests a frame inside a frame and
+/// silently narrows the real content below the width its own constant declares — the drift this
+/// pins shipped in two of these popups at once, so prose in the module header did not hold it.
+///
+/// Checked on the root builder chain only (from the root's `.id(..)` to its first `.child(..)`),
+/// because nested cards and banners inside these popups legitimately paint their own fills.
+///
+/// Known blind spots, all deliberate rather than overlooked: chrome chained onto the root AFTER its
+/// first child is outside the slice, and the registry below covers only popovers that declare a
+/// content width — a menu-style popover (`fit_content`, `width`) carries no width constant for a
+/// second frame to invalidate, which is what makes this rule bite.
+#[test]
+fn popover_contents_do_not_paint_a_second_surface() {
+    // (file declaring the popover, file building its content, the anchor that starts the content
+    // root's builder chain). The first two differ where a popup's content lives apart from its
+    // trigger; the anchor is spelled out because the chart popups build their id with `format!`.
+    const ROOTS: &[(&str, &str, &str)] = &[
+        (
+            "chrome/terminal_chrome.rs",
+            "shell/core_settings_popup.rs",
+            r#".id("core-settings-popup")"#,
+        ),
+        (
+            "panels/detects/popup.rs",
+            "panels/detects/popup.rs",
+            r#".id("detects-view-popup")"#,
+        ),
+        (
+            "panels/news/mod.rs",
+            "panels/news/mod.rs",
+            r#".id("news-tags-content")"#,
+        ),
+        (
+            "panels/core_status/config_popup.rs",
+            "panels/core_status/config_popup.rs",
+            r#".id("core-status-warn-content")"#,
+        ),
+        (
+            "analytics/tuner/shell.rs",
+            "analytics/tuner/shell.rs",
+            r#".id("tun-cfg-popup")"#,
+        ),
+        (
+            "controls/metric.rs",
+            "controls/metric.rs",
+            r#".id("metric-popup-content")"#,
+        ),
+        (
+            "chart_tabs/common.rs",
+            "chart_tabs/layout_popup.rs",
+            r#".id(SharedString::from(format!("{id}-popup")))"#,
+        ),
+        (
+            "chart_tabs/candle_popup.rs",
+            "chart_tabs/candle_popup.rs",
+            r#".id(SharedString::from(format!("{id}-popup")))"#,
+        ),
+    ];
+    // Every one of these is chrome `MoonPopover` already paints around the content. The `_`-suffixed
+    // entries are the tailwind-style shorthands, which re-add the same padding by another spelling.
+    const BANNED: &[&str] = &[
+        ".bg(",
+        ".border(",
+        ".border_1(",
+        ".rounded(",
+        ".rounded_",
+        ".p(",
+        ".p_",
+        ".px(",
+        ".px_",
+        ".py(",
+        ".py_",
+    ];
+
+    for (_, rel, anchor) in ROOTS {
+        let source = read_src(rel);
+        let chain = chain_between(&source, anchor, ".child(", rel);
+        for banned in BANNED {
+            assert!(
+                !chain.contains(banned),
+                "{rel}: popup content root `{anchor}` calls `{banned}`, but MoonPopover already \
+                 paints that chrome — drawing it here doubles the frame and narrows the content \
+                 box below the width the popup's own constant declares"
+            );
+        }
+    }
+
+    // The list above is a registry, so it has to grow with the code rather than guard whatever
+    // someone remembered to add. Every source that declares a content-width popover must appear.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+    for path in sources {
+        let text = fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!("failed to read {}: {err}", path.display());
+        });
+        if !text.contains("MoonPopover::new") || !text.contains(".content_width") {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            ROOTS.iter().any(|(declared_in, ..)| *declared_in == rel),
+            "{rel} declares a content-width MoonPopover but is missing from this test's ROOTS — \
+             add its content root so the no-second-chrome rule covers it too"
+        );
+    }
+}

@@ -321,7 +321,9 @@ pub fn metric_popup_content(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
+    // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     let mut content = v_flex()
+        .id("metric-popup-content")
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .child(
             div()

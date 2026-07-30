@@ -137,6 +137,11 @@ impl Shell {
                     .w(px(240.0 + 2.0 * f32::from(design::ui_px(cx, 6.0)) + 2.0))
                     .gap(design::ui_px(cx, 4.0))
                     .p(design::ui_px(cx, 6.0))
+                    // `panel_high`, NOT the `shell_high` a `MoonPopover` paints: this popup opens
+                    // directly over the header and toolbar, and `chrome`/`tabbar` are literally the
+                    // same value as `shell_high`, so that token would leave only a 1px border to
+                    // separate the popup from the strip behind it. The anchored popovers survive it
+                    // because they drop a shadow, which this hand-positioned box has no way to draw.
                     .bg(rgb(p.panel_high))
                     .border_1()
                     .border_color(rgb(p.border))

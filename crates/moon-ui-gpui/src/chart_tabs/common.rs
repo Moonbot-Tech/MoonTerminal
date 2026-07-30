@@ -8,7 +8,7 @@
 //! [`super::detached_host`]).
 
 use gpui::*;
-use moon_ui::{MoonInputState, MoonPalette};
+use moon_ui::{MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement};
 
 use super::{layout_popup, stack};
 use crate::Backend;
@@ -160,8 +160,6 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
     // --- Host popup state and inputs ---
     fn popup_open(&self) -> bool;
     fn set_popup_open(&mut self, open: bool);
-    fn popup_hovered(&self) -> bool;
-    fn set_popup_hovered(&mut self, hovered: bool);
     fn fit_input(&self) -> &Entity<MoonInputState>;
     fn scroll_input(&self) -> &Entity<MoonInputState>;
     fn rename_input(&self) -> &Entity<MoonInputState>;
@@ -228,18 +226,6 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
         self.apply_tab_setting(StackSetting::Orientation(next), cx);
     }
 
-    /// Open or close the target's in-scene layout popup.
-    fn toggle_layout_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.popup_open() {
-            self.close_layout_popup(true, cx);
-        } else {
-            self.seed_layout_popup_inputs(window, cx);
-            self.set_popup_open(true);
-            self.set_popup_hovered(false);
-            cx.notify();
-        }
-    }
-
     /// Seed height fields with EFFECTIVE values (Fit → 0, Scroll → default); otherwise unset
     /// heights would appear as blank fields after a restart.
     fn seed_layout_popup_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -285,6 +271,12 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
         );
     }
 
+    /// Close the popup, optionally committing the size field first.
+    ///
+    /// The already-closed guard is load-bearing, not defensive: clicking the gear while the popup is
+    /// open makes `Popover` fire `on_open_change(false)` TWICE — once from its outside-click handler
+    /// and once from the trigger re-arming — and without the guard the second one would run
+    /// `commit_layout_popup` again.
     fn close_layout_popup(&mut self, commit: bool, cx: &mut Context<Self>) {
         if !self.popup_open() {
             return;
@@ -293,31 +285,65 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
             self.commit_layout_popup(cx);
         }
         self.set_popup_open(false);
-        self.set_popup_hovered(false);
         cx.notify();
     }
 }
 
-/// ⚙ layout-popup overlay shared by both hosts: a positioned scene with hover-close plus
-/// [`layout_popup::render_layout_popup`], with ALL callbacks routed through the trait.
-/// `id_prefix` is "chart-layout" for the strip or "detached-chart-layout" for a window; `top` is
-/// the anchor. Returns `None` while the popup is closed.
-pub(super) fn layout_popup_overlay<T: LayoutPopupHost>(
+/// ⚙ layout popup shared by both hosts: a `MoonPopover` anchored to the gear that opens it, with
+/// ALL callbacks routed through the trait.
+///
+/// `id_prefix` is "chart-layout" for the strip or "detached-chart-layout" for a window. The content
+/// is built ONLY while open — `MoonPopover` takes it eagerly, and this sits in a chart host that
+/// repaints constantly.
+///
+/// Args:
+///     this: The popup's host.
+///     id_prefix: Per-host element identity prefix.
+///     trigger: The gear button the popover anchors to.
+///     apply_all_label: Tooltip for the apply-to-all icon, which differs per host.
+///     cx: Host context.
+///
+/// Returns:
+///     The trigger with its anchored popover.
+pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     this: &T,
     id_prefix: &'static str,
-    top: Pixels,
+    trigger: impl IntoElement,
     apply_all_label: String,
     cx: &mut Context<T>,
-) -> Option<Stateful<Div>> {
+) -> MoonPopover {
+    let open_entity = cx.entity();
+    let mut popover = MoonPopover::new(SharedString::from(format!("{id_prefix}-popover")))
+        // Anchored bottom-right of the gear, which sits at the right edge of the tab strip: growing
+        // left keeps the popup inside the window instead of off its right side.
+        .placement(MoonPopoverPlacement::BottomEnd)
+        .content_width(f32::from(layout_popup::content_width(cx)))
+        .close_on_content_click(false)
+        // Outside-click dismissal stays ON: nothing in here opens a deferred overlay of its own
+        // (the segmented controls render inline), so there is no menu whose click could be mistaken
+        // for an outside click. Dismissal is the ✕, a click outside, Escape, or the gear.
+        .open(this.popup_open())
+        .on_open_change(move |open, window, app| {
+            open_entity.update(app, |this, cx| {
+                if open {
+                    this.seed_layout_popup_inputs(window, cx);
+                    this.set_popup_open(true);
+                } else {
+                    // Closing COMMITS the size field, which is why this cannot just flip the flag.
+                    this.close_layout_popup(true, cx);
+                }
+                cx.notify();
+            });
+        })
+        .trigger(trigger);
     if !this.popup_open() {
-        return None;
+        return popover;
     }
     let p = MoonPalette::active(cx);
     let snap = this.layout_popup_snapshot(cx);
     let is_custom = this.popup_is_custom(cx);
     let entity = cx.entity();
-    let popup_w = layout_popup::content_width(cx, is_custom);
-    let hover_entity = entity.clone();
+    let close_entity = entity.clone();
     let pick_entity = entity.clone();
     let all_entity = entity.clone();
     let ob_entity = entity.clone();
@@ -331,129 +357,90 @@ pub(super) fn layout_popup_overlay<T: LayoutPopupHost>(
     let tav_entity = entity.clone();
     let ll_entity = entity.clone();
     let cl_entity = entity;
-    Some(
-        div()
-            .id(SharedString::from(format!("{id_prefix}-popup-scene")))
-            .absolute()
-            .right(px(6.0))
-            .top(top)
-            .w(popup_w)
-            .on_mouse_down(MouseButton::Left, |_, _window, app| {
-                app.stop_propagation();
-            })
-            .on_hover(move |hovered, _window, app| {
-                hover_entity.update(app, |this, cx| {
-                    if *hovered {
-                        this.set_popup_hovered(true);
-                    } else if this.popup_hovered() {
-                        this.close_layout_popup(true, cx);
-                    }
-                });
-            })
-            .child(layout_popup::render_layout_popup(
-                id_prefix,
-                snap.mode,
-                snap.orientation,
-                is_custom.then_some(this.rename_input()),
-                this.fit_input(),
-                this.scroll_input(),
-                snap.orderbook,
-                snap.liquidations,
-                snap.show_zone,
-                snap.auto_pin,
-                snap.cancel_pos,
-                snap.panic_pos,
-                snap.price_axis_pos,
-                snap.time_axis,
-                snap.line_labels,
-                snap.cursor_labels,
-                p,
-                cx,
-                move |mode, app| {
-                    pick_entity.update(app, |this, cx| {
-                        let hf = this.read_layout_height(StackLayoutMode::Fit, cx);
-                        let hs = this.read_layout_height(StackLayoutMode::Scroll, cx);
-                        this.apply_tab_setting(StackSetting::Layout(Some(mode), hf, hs), cx);
-                    });
-                },
-                apply_all_label,
-                move |app| {
-                    all_entity.update(app, |this, cx| this.apply_all_from_popup(cx));
-                },
-                move |checked, app| {
-                    ob_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::Orderbook(checked), cx)
-                    });
-                },
-                move |checked, app| {
-                    liq_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::Liquidations(checked), cx)
-                    });
-                },
-                move |checked, app| {
-                    sz_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::ShowZone(checked), cx)
-                    });
-                },
-                move |checked, app| {
-                    ap_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::AutoPin(checked), cx)
-                    });
-                },
-                move |app| {
-                    or_entity.update(app, |this, cx| this.toggle_orientation_setting(cx));
-                },
-                move |pos, app| {
-                    cbp_entity.update(app, |this, cx| this.apply_cancel_pos(pos, cx));
-                },
-                move |pos, app| {
-                    psp_entity.update(app, |this, cx| this.apply_panic_pos(pos, cx));
-                },
-                move |pos, app| {
-                    pap_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::PriceAxis(pos), cx)
-                    });
-                },
-                move |checked, app| {
-                    tav_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::TimeAxis(checked), cx)
-                    });
-                },
-                move |checked, app| {
-                    ll_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::LineLabels(checked), cx)
-                    });
-                },
-                move |checked, app| {
-                    cl_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::CursorLabels(checked), cx)
-                    });
-                },
-            )),
-    )
-}
-
-/// Layer intercepting clicks outside the layout popup and closing it with a commit.
-/// Returns `None` while the popup is closed.
-pub(super) fn layout_popup_dismiss<T: LayoutPopupHost>(
-    this: &T,
-    id_prefix: &'static str,
-    cx: &mut Context<T>,
-) -> Option<Stateful<Div>> {
-    if !this.popup_open() {
-        return None;
-    }
-    let entity = cx.entity();
-    Some(
-        div()
-            .id(SharedString::from(format!("{id_prefix}-popup-dismiss")))
-            .absolute()
-            .inset_0()
-            .on_mouse_down(MouseButton::Left, move |_, _window, app| {
-                entity.update(app, |this, cx| this.close_layout_popup(true, cx));
-                app.stop_propagation();
-            }),
-    )
+    popover = popover.content(layout_popup::render_layout_popup(
+        id_prefix,
+        snap.mode,
+        snap.orientation,
+        is_custom.then_some(this.rename_input()),
+        this.fit_input(),
+        this.scroll_input(),
+        snap.orderbook,
+        snap.liquidations,
+        snap.show_zone,
+        snap.auto_pin,
+        snap.cancel_pos,
+        snap.panic_pos,
+        snap.price_axis_pos,
+        snap.time_axis,
+        snap.line_labels,
+        snap.cursor_labels,
+        p,
+        cx,
+        move |mode, app| {
+            pick_entity.update(app, |this, cx| {
+                let hf = this.read_layout_height(StackLayoutMode::Fit, cx);
+                let hs = this.read_layout_height(StackLayoutMode::Scroll, cx);
+                this.apply_tab_setting(StackSetting::Layout(Some(mode), hf, hs), cx);
+            });
+        },
+        apply_all_label,
+        move |app| {
+            all_entity.update(app, |this, cx| this.apply_all_from_popup(cx));
+        },
+        move |checked, app| {
+            ob_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::Orderbook(checked), cx)
+            });
+        },
+        move |checked, app| {
+            liq_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::Liquidations(checked), cx)
+            });
+        },
+        move |checked, app| {
+            sz_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::ShowZone(checked), cx)
+            });
+        },
+        move |checked, app| {
+            ap_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::AutoPin(checked), cx)
+            });
+        },
+        move |app| {
+            or_entity.update(app, |this, cx| this.toggle_orientation_setting(cx));
+        },
+        move |pos, app| {
+            cbp_entity.update(app, |this, cx| this.apply_cancel_pos(pos, cx));
+        },
+        move |pos, app| {
+            psp_entity.update(app, |this, cx| this.apply_panic_pos(pos, cx));
+        },
+        move |pos, app| {
+            pap_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::PriceAxis(pos), cx)
+            });
+        },
+        move |checked, app| {
+            tav_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::TimeAxis(checked), cx)
+            });
+        },
+        move |checked, app| {
+            ll_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::LineLabels(checked), cx)
+            });
+        },
+        move |checked, app| {
+            cl_entity.update(app, |this, cx| {
+                this.apply_tab_setting(StackSetting::CursorLabels(checked), cx)
+            });
+        },
+        move |_, _w, app| {
+            close_entity.update(app, |this, cx| this.close_layout_popup(true, cx));
+        },
+    ));
+    popover
 }
 
 /// Host of a coin-search field (tab strip/detached-window header), defining where to open the

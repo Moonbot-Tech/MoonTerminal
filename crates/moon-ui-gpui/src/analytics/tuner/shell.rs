@@ -462,9 +462,12 @@ impl AnalyticsView {
             .placement(MoonPopoverPlacement::BottomStart)
             .content_width_font(SETTINGS_POPUP_W)
             .close_on_content_click(false)
-            // The depth dropdown opens in its own deferred layer, which may extend past the
-            // popover box; treating a click there as an outside click would close the popover the
-            // moment that menu is used. The ✕, Escape and the gear remain the dismissal paths.
+            // A `MoonDropdown` menu inside this popover paints in its OWN deferred layer, outside
+            // this popover's box, and `on_mouse_down_out` is bounds-based and runs in the CAPTURE
+            // phase — so the click that picks an item reads as "outside" and would shut the popover
+            // before the pick landed. Until MoonUI suppresses that (see the Popover entry in
+            // docs-internal/FORK_BUGS.md), outside-click dismissal has to be off here; the ✕ and the
+            // gear are the dismissal paths.
             .overlay_closable(false)
             .open(open)
             .on_open_change(move |open, _window, app| {
