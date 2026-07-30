@@ -409,29 +409,29 @@ impl Render for CoreStatusView {
             .then(|| {
                 let b = self.backend.read(cx);
                 let now_sec = moon_chart::paint::now_unix_ms() as i64 / 1000;
-                // A selected core, if it is still in scope, charts its own process; the machine's ping
-                // rings stay as context. Falls through to the server aggregate otherwise.
-                if let Some((group, core)) = self.chart_core.and_then(|core_id| {
-                    groups.iter().find_map(|group| {
-                        group
-                            .cores
-                            .iter()
-                            .find(|core| core.id == core_id)
-                            .map(|core| (group, core))
-                    })
+                // A selected core, if it is still in scope, charts ITS OWN samples — CPU/RAM plus its
+                // own client↔core and core→exchange pings, not the server-wide worst. Falls through to
+                // the server aggregate otherwise.
+                if let Some(core) = self.chart_core.and_then(|core_id| {
+                    groups
+                        .iter()
+                        .flat_map(|group| group.cores.iter())
+                        .find(|core| core.id == core_id)
                 }) {
-                    // Map the core's 4-metric samples down to the (cpu, mem) pair the chart draws.
-                    let points: std::collections::VecDeque<(u8, u8)> = b
+                    // Split the core's 4-metric samples into the (cpu, mem) machine lines and its own
+                    // ping/exch series, all from the same per-core ring.
+                    let (points, ping_points, exch_points): (
+                        std::collections::VecDeque<(u8, u8)>,
+                        std::collections::VecDeque<u16>,
+                        std::collections::VecDeque<u16>,
+                    ) = b
                         .core_line_hist
                         .ring(core.id)
-                        .map(|r| r.iter().map(|m| (m.cpu, m.mem)).collect())
-                        .unwrap_or_default();
-                    let (ping_points, exch_points) = group
-                        .address
-                        .map(|ip| {
+                        .map(|r| {
                             (
-                                b.server_ping_hist.ring(ip).cloned().unwrap_or_default(),
-                                b.server_exch_hist.ring(ip).cloned().unwrap_or_default(),
+                                r.iter().map(|m| (m.cpu, m.mem)).collect(),
+                                r.iter().map(|m| m.ping).collect(),
+                                r.iter().map(|m| m.exch).collect(),
                             )
                         })
                         .unwrap_or_default();
