@@ -126,6 +126,9 @@ pub struct CoreStatusView {
     /// Active flat-table sort as `(column key, ascending)`, or `None` for the default
     /// attention-first order.
     flat_sort: Option<(String, bool)>,
+    /// Active By IP column sort as `(field, ascending)`. Default `(Name, ascending)` reproduces the
+    /// former fixed order; warnings always pin to the top regardless of the field or direction.
+    group_sort: (ordering::GroupSortField, bool),
     mode: CoreStatusMode,
     tree_state: Entity<MoonTreeState>,
     table_state: Entity<MoonDataTableState>,
@@ -213,6 +216,7 @@ impl CoreStatusView {
             editing: None,
             edit_input: None,
             flat_sort: None,
+            group_sort: (ordering::GroupSortField::Name, true),
             mode: CoreStatusMode::default(),
             tree_state,
             table_state,
@@ -343,6 +347,7 @@ impl Render for CoreStatusView {
                 self.edit_input.clone(),
                 self.chart_server,
                 self.chart_core,
+                self.group_sort,
                 &self.tree_state,
                 cx,
             ),

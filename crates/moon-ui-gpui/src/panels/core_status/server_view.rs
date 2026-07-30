@@ -19,6 +19,7 @@ use moon_core::session::CoreId;
 
 use super::CoreStatusView;
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
+use super::ordering::GroupSortField;
 use super::presentation::{
     LoadLevel, cpu_level, cpu_load, free_mem_level, lat_level, level_color, memory_free, memory_u16,
     percent, ping_plain,
@@ -91,6 +92,7 @@ pub(super) fn grouped_server_view(
     edit_input: Option<Entity<MoonInputState>>,
     chart_selected: Option<ServerKey>,
     chart_core: Option<CoreId>,
+    sort: (GroupSortField, bool),
     state: &Entity<MoonTreeState>,
     cx: &Context<CoreStatusView>,
 ) -> AnyElement {
@@ -107,6 +109,8 @@ pub(super) fn grouped_server_view(
     }
 
     let weak_view = cx.entity().downgrade();
+    // A second handle for the (sortable) header, since the tree's render closure moves `weak_view`.
+    let header_weak = weak_view.clone();
     let server_positions = Rc::new(
         groups
             .iter()
@@ -179,20 +183,29 @@ pub(super) fn grouped_server_view(
     // chevron gutter, `flex_1` spacer and fixed column widths — so its captions land over the values.
     v_flex()
         .size_full()
-        .child(server_header(header_palette, cx))
+        .child(server_header(header_palette, sort, &header_weak, cx))
         .child(tree.flex_1().min_h_0())
         .into_any_element()
 }
 
-/// Render the fixed By IP caption row: one heading per metric column, aligned to the tree rows.
+/// Render the fixed By IP caption row: one heading per column, aligned to the tree rows. Every
+/// heading except IP is a sort control — clicking it sorts the server list by that column (an arrow
+/// marks the active one). Warnings still pin to the top regardless of the sort.
 ///
 /// Args:
 ///     p: Active Moon palette.
+///     sort: The active `(field, ascending)` sort, to mark the column and drive the toggle.
+///     weak_view: Non-owning panel handle for the sort click.
 ///     cx: Application context, for the font-scaled caption size and dot-column width.
 ///
 /// Returns:
 ///     A single header row with a subtle bottom divider.
-fn server_header(p: MoonPalette, cx: &App) -> impl IntoElement {
+fn server_header(
+    p: MoonPalette,
+    sort: (GroupSortField, bool),
+    weak_view: &WeakEntity<CoreStatusView>,
+    cx: &App,
+) -> impl IntoElement {
     h_flex()
         .w_full()
         .items_center()
@@ -212,12 +225,15 @@ fn server_header(p: MoonPalette, cx: &App) -> impl IntoElement {
                 .min_w_0()
                 .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .w(px(NAME_W))
-                        .flex_none()
-                        .child(t!("core_status.col.server").to_string()),
-                )
+                .child(col_sort_header(
+                    t!("core_status.col.server").to_string(),
+                    GroupSortField::Name,
+                    NAME_W,
+                    sort,
+                    p,
+                    weak_view,
+                ))
+                // IP is masked, so it is not a sort key — a plain caption.
                 .child(
                     div()
                         .w(px(IP_W))
@@ -225,35 +241,140 @@ fn server_header(p: MoonPalette, cx: &App) -> impl IntoElement {
                         .child(t!("core_status.hdr.ip").to_string()),
                 )
                 .child(div().flex_1())
-                .child(header_cell(t!("core_status.hdr.cpu").to_string(), CPU_W))
-                .child(header_cell(t!("core_status.hdr.mem").to_string(), MEM_W))
-                .child(header_cell(t!("core_status.chart_ping").to_string(), PING_W))
-                .child(header_cell(t!("core_status.chart_exch").to_string(), PING_W))
-                .child(
-                    div()
-                        .w(px(CORES_W))
-                        .flex_none()
-                        .child(t!("core_status.cores").to_string()),
-                )
+                .child(metric_sort_header(
+                    t!("core_status.hdr.cpu").to_string(),
+                    GroupSortField::Cpu,
+                    CPU_W,
+                    sort,
+                    p,
+                    weak_view,
+                ))
+                .child(metric_sort_header(
+                    t!("core_status.hdr.mem").to_string(),
+                    GroupSortField::Mem,
+                    MEM_W,
+                    sort,
+                    p,
+                    weak_view,
+                ))
+                .child(metric_sort_header(
+                    t!("core_status.chart_ping").to_string(),
+                    GroupSortField::Ping,
+                    PING_W,
+                    sort,
+                    p,
+                    weak_view,
+                ))
+                .child(metric_sort_header(
+                    t!("core_status.chart_exch").to_string(),
+                    GroupSortField::Exch,
+                    PING_W,
+                    sort,
+                    p,
+                    weak_view,
+                ))
+                .child(col_sort_header(
+                    t!("core_status.cores").to_string(),
+                    GroupSortField::Cores,
+                    CORES_W,
+                    sort,
+                    p,
+                    weak_view,
+                ))
                 // Dot column: matches the `status_dot` width so the "Ядра" caption lands over the ratio.
                 .child(div().w(crate::design::ui_px(cx, 5.0)).flex_none()),
         )
 }
 
-/// One metric caption, offset by the metric icon's lead so it sits over the value box (not the icon).
+/// The sort arrow suffix for a heading: up when ascending on this field, down when descending, empty
+/// when another field is active.
+fn sort_arrow(field: GroupSortField, sort: (GroupSortField, bool)) -> &'static str {
+    if sort.0 == field {
+        if sort.1 { " \u{25B4}" } else { " \u{25BE}" }
+    } else {
+        ""
+    }
+}
+
+/// A clickable metric heading offset by the metric icon's lead so it sits over the value box, with
+/// the sort arrow and an active-column highlight.
 ///
 /// Args:
-///     caption: Localized column heading.
+///     label: Localized column heading.
+///     field: The sort field this heading selects.
 ///     value_w: The matching value-box width from the row's `metric_cell`.
+///     sort: The active sort, for the arrow and highlight.
+///     p: Active Moon palette.
+///     weak_view: Non-owning panel handle for the sort click.
 ///
 /// Returns:
-///     A fixed-width caption cell aligned to its column.
-fn header_cell(caption: String, value_w: f32) -> impl IntoElement {
+///     A fixed-width clickable caption cell aligned to its column.
+fn metric_sort_header(
+    label: String,
+    field: GroupSortField,
+    value_w: f32,
+    sort: (GroupSortField, bool),
+    p: MoonPalette,
+    weak_view: &WeakEntity<CoreStatusView>,
+) -> impl IntoElement {
+    let text = format!("{label}{}", sort_arrow(field, sort));
+    let active = sort.0 == field;
+    let weak_view = weak_view.clone();
     h_flex()
         .flex_none()
         .gap_1()
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, move |_, _, app| {
+            if let Some(view) = weak_view.upgrade() {
+                view.update(app, |this, cx| this.set_group_sort(field, cx));
+            }
+        })
         .child(div().w(px(MET_ICON_W)).flex_none())
-        .child(div().w(px(value_w)).child(caption))
+        .child(
+            div()
+                .w(px(value_w))
+                .when(active, |el| el.text_color(rgb(p.text)))
+                .child(text),
+        )
+}
+
+/// A clickable fixed-width heading for a non-metric column (name, cores), with the sort arrow and an
+/// active-column highlight.
+///
+/// Args:
+///     label: Localized column heading.
+///     field: The sort field this heading selects.
+///     width: The matching column width.
+///     sort: The active sort, for the arrow and highlight.
+///     p: Active Moon palette.
+///     weak_view: Non-owning panel handle for the sort click.
+///
+/// Returns:
+///     A fixed-width clickable caption.
+fn col_sort_header(
+    label: String,
+    field: GroupSortField,
+    width: f32,
+    sort: (GroupSortField, bool),
+    p: MoonPalette,
+    weak_view: &WeakEntity<CoreStatusView>,
+) -> impl IntoElement {
+    let text = format!("{label}{}", sort_arrow(field, sort));
+    let active = sort.0 == field;
+    let weak_view = weak_view.clone();
+    div()
+        .w(px(width))
+        .flex_none()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .when(active, |el| el.text_color(rgb(p.text)))
+        .on_mouse_down(MouseButton::Left, move |_, _, app| {
+            if let Some(view) = weak_view.upgrade() {
+                view.update(app, |this, cx| this.set_group_sort(field, cx));
+            }
+        })
+        .child(text)
 }
 
 /// Render one server summary header (name, masked IP, machine CPU/memory, status).
