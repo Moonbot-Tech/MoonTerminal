@@ -24,9 +24,13 @@ use moon_core::config::{
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
-/// Seconds of history kept on each side of a warning start for its card graph.
-const WARN_SLICE_BACK_MS: i64 = 60_000;
-const WARN_SLICE_FWD_MS: i64 = 60_000;
+/// Milliseconds of history kept on each side of a warning start for its persisted graphs (±30 s, a
+/// 60 s window — enough context for analysis without bloating the per-core slices).
+const WARN_SLICE_BACK_MS: i64 = 30_000;
+const WARN_SLICE_FWD_MS: i64 = 30_000;
+/// Persisted warning-episode SLICES (not the episode rows) are pruned once they are older than this,
+/// so the per-core graph blobs — which scale with the core count — cannot grow the file forever.
+const WARN_SLICE_RETENTION_MS: i64 = 30 * 24 * 3600 * 1000;
 /// Cap on episodes queued for slice capture, so a burst of warnings cannot grow the queue without
 /// bound; the oldest pending capture is dropped past it.
 const WARN_PENDING_CAP: usize = 1024;
@@ -36,8 +40,11 @@ const WARN_PENDING_CAP: usize = 1024;
 pub(crate) struct PendingWarnSlice {
     /// The `core_warnings` row id the slice is keyed to.
     pub(crate) episode_id: i64,
-    /// Server whose history ring the slice is read from.
-    pub(crate) ip: IpAddr,
+    /// Server whose history ring the slice is read from, or `None` for an unknown-endpoint episode.
+    pub(crate) ip: Option<IpAddr>,
+    /// The cores to capture per-core slices for, frozen at close time (the roster on the IP, or the
+    /// episode's own core when there is no IP).
+    pub(crate) roster: Vec<CoreId>,
     /// The episode start; the window is `[start - BACK, start + FWD]`.
     pub(crate) start_ms: i64,
     /// Unix ms at which the forward tail is expected to be present.
@@ -72,34 +79,65 @@ fn ring_slice<T: Copy>(
     Some(ring.iter().skip(lo).take(hi - lo + 1).copied().collect())
 }
 
-/// Capture and persist one episode's ±1 min server slice from the current ring, overwriting any
-/// earlier partial capture for it (the store uses `INSERT OR REPLACE`). A ring with no data in the
-/// window writes nothing, so the card simply shows no graph.
-fn capture_series(
+/// Capture and persist one episode's FULL ±30 s topology from the current rings, overwriting any
+/// earlier partial capture (the store uses `INSERT OR REPLACE`). A ring with no data in the window
+/// writes nothing. So any warning — on a core or a server — leaves a self-contained record for
+/// analysis: the server graph (`badge 0`) plus EVERY core on the server (`badge = core id`), each
+/// with its own CPU/memory and both pings. An unknown-endpoint episode has no server ring, so only
+/// its core's slice is written.
+///
+/// Args:
+///     store: The warnings database.
+///     server: Server `(cpu %, mem %)` ring, or `None` for an unknown endpoint.
+///     ping: Server worst client↔core ping ring.
+///     exch: Server worst core→exchange ping ring.
+///     cores: Each core to record with its per-core metrics ring.
+///     episode_id: The `core_warnings` row id these slices belong to.
+///     start_ms: Episode start; the window is `[start - BACK, start + FWD]`.
+///     now_ms: Current time, bounding the forward edge to what has actually accrued.
+#[allow(clippy::too_many_arguments)]
+fn capture_topology(
     store: &crate::backend::core_warn::store::WarnStore,
-    ring: Option<&std::collections::VecDeque<(u8, u8)>>,
-    ping_ring: Option<&std::collections::VecDeque<u16>>,
-    exch_ring: Option<&std::collections::VecDeque<u16>>,
+    server: Option<&std::collections::VecDeque<(u8, u8)>>,
+    ping: Option<&std::collections::VecDeque<u16>>,
+    exch: Option<&std::collections::VecDeque<u16>>,
+    cores: &[(
+        CoreId,
+        Option<&std::collections::VecDeque<crate::backend::server_chart::CoreMetrics>>,
+    )],
     episode_id: i64,
     start_ms: i64,
     now_ms: i64,
 ) {
     let base_ms = start_ms - WARN_SLICE_BACK_MS;
-    if let Some(samples) = ring_slice(ring, start_ms, now_ms) {
-        if let Err(err) = store.insert_series(episode_id, "server", base_ms, &samples) {
-            log::warn!("core warning slice persist failed: {err}");
+    let warn = |what: &str, r: rusqlite::Result<()>| {
+        if let Err(err) = r {
+            log::warn!("core warning {what} slice persist failed: {err}");
         }
+    };
+    // Server graph (badge 0) + its two worst-ping lines.
+    if let Some(s) = ring_slice(server, start_ms, now_ms) {
+        warn("server", store.insert_series(episode_id, 0, "server", base_ms, &s));
     }
-    // Each ping slice rides the same window under its own subject (a u16 blob).
-    if let Some(pings) = ring_slice(ping_ring, start_ms, now_ms) {
-        if let Err(err) = store.insert_ping_series(episode_id, "ping", base_ms, &pings) {
-            log::warn!("core warning ping slice persist failed: {err}");
-        }
+    if let Some(p) = ring_slice(ping, start_ms, now_ms) {
+        warn("ping", store.insert_ping_series(episode_id, 0, "ping", base_ms, &p));
     }
-    if let Some(exch) = ring_slice(exch_ring, start_ms, now_ms) {
-        if let Err(err) = store.insert_ping_series(episode_id, "exch", base_ms, &exch) {
-            log::warn!("core warning exch slice persist failed: {err}");
-        }
+    if let Some(e) = ring_slice(exch, start_ms, now_ms) {
+        warn("exch", store.insert_ping_series(episode_id, 0, "exch", base_ms, &e));
+    }
+    // Every core (badge = core id): its own CPU/memory pair and its two pings, split out of the
+    // combined per-core sample so each rides its existing blob format.
+    for (id, ring) in cores {
+        let Some(slice) = ring_slice(*ring, start_ms, now_ms) else {
+            continue;
+        };
+        let badge = *id as i64;
+        let cm: Vec<(u8, u8)> = slice.iter().map(|m| (m.cpu, m.mem)).collect();
+        let pings: Vec<u16> = slice.iter().map(|m| m.ping).collect();
+        let exchs: Vec<u16> = slice.iter().map(|m| m.exch).collect();
+        warn("core", store.insert_series(episode_id, badge, "core", base_ms, &cm));
+        warn("core ping", store.insert_ping_series(episode_id, badge, "ping", base_ms, &pings));
+        warn("core exch", store.insert_ping_series(episode_id, badge, "exch", base_ms, &exchs));
     }
 }
 
@@ -957,11 +995,18 @@ impl Backend {
         for ring in &result.rings {
             match ring.subject {
                 crate::backend::core_warn::RingSubject::Server(ip) => {
-                    self.core_chart_hist.record(ip, sec, ring.cpu, ring.mem)
+                    self.core_chart_hist.record(ip, sec, (ring.cpu, ring.mem))
                 }
-                crate::backend::core_warn::RingSubject::Core(id) => {
-                    self.core_line_hist.record(id, sec, ring.cpu, ring.mem)
-                }
+                crate::backend::core_warn::RingSubject::Core(id) => self.core_line_hist.record(
+                    id,
+                    sec,
+                    crate::backend::server_chart::CoreMetrics {
+                        cpu: ring.cpu,
+                        mem: ring.mem,
+                        ping: ring.ping,
+                        exch: ring.exch,
+                    },
+                ),
             }
         }
         // Per-server ping history (client↔core and core→exchange), recorded backend-always like the
@@ -970,48 +1015,106 @@ impl Backend {
             self.server_ping_hist.record(*ip, sec, *link);
             self.server_exch_hist.record(*ip, sec, *exch);
         }
-        if let Some(store) = &self.warn_store {
-            for episode in &result.closed {
-                // An axis turned off mid-episode closes its open warning on this tick; honor
-                // "off = not persisted" by dropping it rather than writing it to the log.
-                if !enabled.allows(episode.axis) {
-                    continue;
-                }
-                match store.insert_episode(episode) {
-                    Ok(rowid) => {
-                        if let Some(ip) = episode.server_ip {
-                            // Capture immediately with whatever window exists now, so a shutdown
-                            // before the forward tail fills still leaves a (partial) graph on disk.
-                            capture_series(
-                                store,
-                                self.core_chart_hist.ring(ip),
-                                self.server_ping_hist.ring(ip),
-                                self.server_exch_hist.ring(ip),
-                                rowid,
-                                episode.start_ms,
-                                now_ms,
-                            );
-                            // If the forward tail has not accrued yet, re-capture the full window
-                            // later; OR REPLACE overwrites the partial with the complete slice.
-                            let capture_at_ms = episode.start_ms + WARN_SLICE_FWD_MS;
-                            if capture_at_ms > now_ms {
-                                push_pending_slice(
-                                    &mut self.warn_pending_slices,
-                                    PendingWarnSlice {
-                                        episode_id: rowid,
-                                        ip,
-                                        start_ms: episode.start_ms,
-                                        capture_at_ms,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    Err(err) => log::warn!("core warning persist failed: {err}"),
+        // One-time retention prune: drop the graph slices of episodes older than 30 days (the episode
+        // rows themselves stay forever), so the per-core blobs cannot grow the file without bound.
+        if !self.warn_pruned {
+            self.warn_pruned = true;
+            if let Some(store) = self.warn_store.as_ref() {
+                if let Err(err) = store.prune_slices(now_ms - WARN_SLICE_RETENTION_MS) {
+                    log::warn!("core warning slice prune failed: {err}");
                 }
             }
         }
+        // Persist each closed episode plus its full topology (collect the follow-up re-captures into a
+        // local first, so the per-episode `&self` capture calls don't clash with the queue push).
+        let mut pending: Vec<PendingWarnSlice> = Vec::new();
+        for episode in &result.closed {
+            // An axis turned off mid-episode closes its open warning on this tick; honor
+            // "off = not persisted" by dropping it rather than writing it to the log.
+            if !enabled.allows(episode.axis) {
+                continue;
+            }
+            let rowid = match self.warn_store.as_ref().map(|s| s.insert_episode(episode)) {
+                Some(Ok(rowid)) => rowid,
+                Some(Err(err)) => {
+                    log::warn!("core warning persist failed: {err}");
+                    continue;
+                }
+                None => continue,
+            };
+            // The roster to record per-core slices for: every core on the server, or the episode's
+            // own core when it has no known endpoint.
+            let ip = episode.server_ip;
+            let roster = match ip {
+                Some(ip) => self.cores_on_ip(ip),
+                None => episode.core_id.into_iter().collect(),
+            };
+            // Capture immediately with whatever window exists now, so a shutdown before the forward
+            // tail fills still leaves a (partial) graph on disk.
+            self.capture_episode_topology(rowid, ip, &roster, episode.start_ms, now_ms);
+            // If the forward tail has not accrued yet, re-capture the full window later; OR REPLACE
+            // overwrites the partial with the complete slice.
+            let capture_at_ms = episode.start_ms + WARN_SLICE_FWD_MS;
+            if capture_at_ms > now_ms {
+                pending.push(PendingWarnSlice {
+                    episode_id: rowid,
+                    ip,
+                    roster,
+                    start_ms: episode.start_ms,
+                    capture_at_ms,
+                });
+            }
+        }
+        for item in pending {
+            push_pending_slice(&mut self.warn_pending_slices, item);
+        }
         self.drain_pending_slices(now_ms);
+    }
+
+    /// Capture one episode's full topology (server graph + every core in `roster`) from the current
+    /// rings into `warn_store`. A no-op when persistence is off.
+    fn capture_episode_topology(
+        &self,
+        episode_id: i64,
+        ip: Option<IpAddr>,
+        roster: &[CoreId],
+        start_ms: i64,
+        now_ms: i64,
+    ) {
+        let Some(store) = self.warn_store.as_ref() else {
+            return;
+        };
+        let cores: Vec<_> = roster
+            .iter()
+            .map(|id| (*id, self.core_line_hist.ring(*id)))
+            .collect();
+        capture_topology(
+            store,
+            ip.and_then(|ip| self.core_chart_hist.ring(ip)),
+            ip.and_then(|ip| self.server_ping_hist.ring(ip)),
+            ip.and_then(|ip| self.server_exch_hist.ring(ip)),
+            &cores,
+            episode_id,
+            start_ms,
+            now_ms,
+        );
+    }
+
+    /// Core ids whose configured endpoint resolves to `ip` (the server's roster this second).
+    fn cores_on_ip(&self, ip: IpAddr) -> Vec<CoreId> {
+        let store = self.session.store();
+        self.session
+            .sessions()
+            .iter()
+            .filter(|session| {
+                store
+                    .core(session.id)
+                    .and_then(|core| core.endpoint)
+                    .map(|endpoint| endpoint.address)
+                    == Some(ip)
+            })
+            .map(|session| session.id)
+            .collect()
     }
 
     /// Capture and persist the ±1 min history slice of any pending episode whose forward window has
@@ -1024,25 +1127,28 @@ impl Backend {
     /// Returns:
     ///     Nothing; ready slices are written to `warn_store` and removed from the queue.
     fn drain_pending_slices(&mut self, now_ms: i64) {
-        let Some(store) = &self.warn_store else {
+        if self.warn_store.is_none() {
             self.warn_pending_slices.clear();
             return;
-        };
+        }
+        // Take the ready captures out of the queue first (in insertion order), THEN capture: the
+        // capture borrows `&self`, so it cannot run while the queue is being mutated.
+        let mut ready: Vec<PendingWarnSlice> = Vec::new();
         let mut i = 0;
         while i < self.warn_pending_slices.len() {
             if self.warn_pending_slices[i].capture_at_ms > now_ms {
                 i += 1;
                 continue;
             }
-            // `remove` (not `swap_remove`) keeps the queue in insertion order, so the cap's
-            // oldest-first eviction stays meaningful; the queue is tiny, so the shift is cheap.
-            let pending = self.warn_pending_slices.remove(i);
-            capture_series(
-                store,
-                self.core_chart_hist.ring(pending.ip),
-                self.server_ping_hist.ring(pending.ip),
-                self.server_exch_hist.ring(pending.ip),
+            // `remove` (not `swap_remove`) keeps insertion order so the cap's oldest-first eviction
+            // stays meaningful; the queue is tiny, so the shift is cheap.
+            ready.push(self.warn_pending_slices.remove(i));
+        }
+        for pending in ready {
+            self.capture_episode_topology(
                 pending.episode_id,
+                pending.ip,
+                &pending.roster,
                 pending.start_ms,
                 now_ms,
             );
@@ -1084,7 +1190,7 @@ impl Backend {
     pub(crate) fn warn_series_slice(&self, episode_id: u64) -> Option<Vec<(u8, u8)>> {
         self.warn_store
             .as_ref()?
-            .series_for_episode(episode_id as i64, "server")
+            .series_for_episode(episode_id as i64, 0, "server")
             .ok()
             .flatten()
     }
@@ -1094,7 +1200,7 @@ impl Backend {
     pub(crate) fn warn_ping_series_slice(&self, episode_id: u64) -> Option<Vec<u16>> {
         self.warn_store
             .as_ref()?
-            .ping_series_for_episode(episode_id as i64, "ping")
+            .ping_series_for_episode(episode_id as i64, 0, "ping")
             .ok()
             .flatten()
     }
@@ -1103,7 +1209,7 @@ impl Backend {
     pub(crate) fn warn_exch_series_slice(&self, episode_id: u64) -> Option<Vec<u16>> {
         self.warn_store
             .as_ref()?
-            .ping_series_for_episode(episode_id as i64, "exch")
+            .ping_series_for_episode(episode_id as i64, 0, "exch")
             .ok()
             .flatten()
     }

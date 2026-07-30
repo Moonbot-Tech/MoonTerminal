@@ -210,7 +210,8 @@ impl ChartPanel {
         if back >= ring.len() {
             return None;
         }
-        let (cpu, mem) = ring[ring.len() - 1 - back];
+        let metrics = ring[ring.len() - 1 - back];
+        let (cpu, mem) = (metrics.cpu, metrics.mem);
         let name = b
             .config
             .servers

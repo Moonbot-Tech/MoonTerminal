@@ -415,7 +415,12 @@ impl Render for CoreStatusView {
                             .map(|core| (group, core))
                     })
                 }) {
-                    let points = b.core_line_hist.ring(core.id).cloned().unwrap_or_default();
+                    // Map the core's 4-metric samples down to the (cpu, mem) pair the chart draws.
+                    let points: std::collections::VecDeque<(u8, u8)> = b
+                        .core_line_hist
+                        .ring(core.id)
+                        .map(|r| r.iter().map(|m| (m.cpu, m.mem)).collect())
+                        .unwrap_or_default();
                     let (ping_points, exch_points) = group
                         .address
                         .map(|ip| {

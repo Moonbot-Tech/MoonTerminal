@@ -315,6 +315,11 @@ pub(crate) struct RingSample {
     pub(crate) cpu: u8,
     /// Memory percent (occupied for a server, process share for a core).
     pub(crate) mem: u8,
+    /// This core's client↔core round-trip ms (per-core samples only; 0 for a server or a non-Ready
+    /// core, so a stale reading does not leak into its persisted per-core graph).
+    pub(crate) ping: u16,
+    /// This core's core→exchange order-API latency ms (per-core only; 0 for a server / non-Ready).
+    pub(crate) exch: u16,
 }
 
 /// What one engine tick produces for the backend to act on.
@@ -1124,6 +1129,8 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
             subject: RingSubject::Server(*ip),
             cpu: sys_cpu,
             mem: occ,
+            ping: 0,
+            exch: 0,
         });
         for sample in cores {
             let proc_cpu = sample.sys.process_cpu_percent.unwrap_or(0).min(100);
@@ -1131,12 +1138,47 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
                 Some(used) if total > 0 => (u64::from(used) * 100 / total).min(100) as u8,
                 _ => 0,
             };
+            // Per-core pings, but only while Ready — a dropped core keeps its last (possibly
+            // timed-out) reading, which must not draw into its persisted graph; 0 marks that gap.
+            let (ping, exch) = if sample.status == ConnStatus::Ready {
+                (
+                    sample.sys.round_trip_ms.unwrap_or(0).min(u32::from(u16::MAX)) as u16,
+                    sample.sys.order_api_latency_ms.unwrap_or(0),
+                )
+            } else {
+                (0, 0)
+            };
             out.push(RingSample {
                 subject: RingSubject::Core(sample.id),
                 cpu: proc_cpu,
                 mem: proc_mem,
+                ping,
+                exch,
             });
         }
+    }
+    // Cores with no decoded endpoint are not part of any server group, but a per-core warning can
+    // still fire for them — record a degraded per-core sample (process CPU + pings; no server total,
+    // so the memory share is left 0) so an unknown-endpoint episode still gets a graph.
+    for sample in samples {
+        if sample.ip.is_some() {
+            continue;
+        }
+        let (ping, exch) = if sample.status == ConnStatus::Ready {
+            (
+                sample.sys.round_trip_ms.unwrap_or(0).min(u32::from(u16::MAX)) as u16,
+                sample.sys.order_api_latency_ms.unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        };
+        out.push(RingSample {
+            subject: RingSubject::Core(sample.id),
+            cpu: sample.sys.process_cpu_percent.unwrap_or(0).min(100),
+            mem: 0,
+            ping,
+            exch,
+        });
     }
     out
 }

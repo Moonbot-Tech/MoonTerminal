@@ -216,8 +216,9 @@ impl CoreStatusView {
             .into_any_element();
 
         MoonPopover::new("core-status-warn-popover")
-            // Open to the LEFT of the gear so the wide panel never covers the trigger button.
-            .placement(MoonPopoverPlacement::LeftStart)
+            // Open ABOVE the gear (right edge aligned to it, growing left), so the wide panel sits
+            // over the content area and the gear stays visible below it.
+            .placement(MoonPopoverPlacement::TopEnd)
             .content_width_ui(WARN_CFG_W)
             .close_on_content_click(false)
             .open(self.warn_cfg_open)
