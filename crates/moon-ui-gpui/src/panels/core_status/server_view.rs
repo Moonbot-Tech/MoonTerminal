@@ -43,6 +43,9 @@ const CORES_W: f32 = 40.0;
 const MET_ICON_W: f32 = 12.0;
 /// Left/right inset matching `MoonListItem`'s `px_3`, so the fixed header aligns with the tree rows.
 const ROW_INSET_W: f32 = 12.0;
+/// Extra left indent of a core (child) name inside its name column, so it reads as a tree child sitting
+/// under — and slightly right of — its server.
+const CORE_INDENT: f32 = 16.0;
 
 /// Build server roots, each with one collapsed folder of core children.
 ///
@@ -212,7 +215,9 @@ fn server_header(
         .gap_2()
         .pl(px(ROW_INSET_W))
         .pr(px(ROW_INSET_W))
-        .py_1()
+        .h(px(crate::design::TABLE_HEAD_H))
+        // Match the MoonDataTable header: filled head background and a bottom separator.
+        .bg(rgb(p.table_head))
         .border_b_1()
         .border_color(rgb(p.border))
         .text_size(crate::design::t_caption(cx))
@@ -286,11 +291,11 @@ fn server_header(
         )
 }
 
-/// The sort arrow suffix for a heading: up when ascending on this field, down when descending, empty
-/// when another field is active.
+/// The sort arrow suffix for a heading, matching the MoonDataTable header (`↑` ascending, `↓`
+/// descending), or empty when another field is active.
 fn sort_arrow(field: GroupSortField, sort: (GroupSortField, bool)) -> &'static str {
     if sort.0 == field {
-        if sort.1 { " \u{25B4}" } else { " \u{25BE}" }
+        if sort.1 { " \u{2191}" } else { " \u{2193}" }
     } else {
         ""
     }
@@ -333,7 +338,7 @@ fn metric_sort_header(
         .child(
             div()
                 .w(px(value_w))
-                .when(active, |el| el.text_color(rgb(p.text)))
+                .when(active, |el| el.text_color(rgb(p.text_soft)))
                 .child(text),
         )
 }
@@ -368,7 +373,7 @@ fn col_sort_header(
         .overflow_hidden()
         .whitespace_nowrap()
         .cursor_pointer()
-        .when(active, |el| el.text_color(rgb(p.text)))
+        .when(active, |el| el.text_color(rgb(p.text_soft)))
         .on_mouse_down(MouseButton::Left, move |_, _, app| {
             if let Some(view) = weak_view.upgrade() {
                 view.update(app, |this, cx| this.set_group_sort(field, cx));
@@ -516,7 +521,9 @@ fn server_row(
         )
 }
 
-/// Render one core row: its name (status-toned plain text), then its process CPU, memory, and pings.
+/// Render one core row: an indented, greyed name, then its process CPU, memory, and pings — laid out
+/// as the SAME columns as the server row (empty chevron/IP/ratio/dot slots) so every value lines up
+/// under its server heading instead of drifting.
 ///
 /// Clicking the row charts this core in the detached window (in place of the server aggregate).
 ///
@@ -524,20 +531,21 @@ fn server_row(
 ///     core: Per-process snapshot.
 ///     weak_view: Non-owning panel handle for the chart-this-core click.
 ///     p: Active Moon palette.
-///     _app: Application context (reserved for symmetry with the server row).
+///     app: Application context, for the font-scaled dot-column width.
 ///
 /// Returns:
-///     An indented core row whose metrics align under the server metrics.
+///     A core row whose metrics align under the server metrics.
 fn core_row(
     core: &CoreStatusRow,
     weak_view: &WeakEntity<CoreStatusView>,
     p: MoonPalette,
-    _app: &App,
+    app: &App,
 ) -> impl IntoElement {
-    // The core name reads as plain text (not a badge pill); its colour still conveys the connection
-    // state, so an offline or failed core is legible at a glance.
+    // The core name reads as plain text (not a badge pill); a READY core is greyed (`text_soft`) so it
+    // reads as subordinate to its bold server name, while a connecting/failed/offline core keeps its
+    // state colour so it stays legible at a glance.
     let name_color = match core.status {
-        ConnStatus::Ready => p.text,
+        ConnStatus::Ready => p.text_soft,
         ConnStatus::Connecting | ConnStatus::Stage(_) => p.yellow,
         ConnStatus::Failed(_) => p.red,
         ConnStatus::Disconnected => p.text_muted,
@@ -553,7 +561,6 @@ fn core_row(
         .items_center()
         .gap_2()
         .overflow_hidden()
-        .pl(px(20.0))
         .cursor_pointer()
         // Clicking a core row charts that core; the detached window reads `chart_core`.
         .on_mouse_down(MouseButton::Left, {
@@ -565,45 +572,64 @@ fn core_row(
                 }
             }
         })
+        // Empty chevron gutter, matching the server row's 12 px expand column so the body aligns.
+        .child(div().w(px(12.0)).flex_none())
         .child(
-            div()
-                .flex_none()
-                .truncate()
-                .text_color(rgb(name_color))
-                .child(core.name.clone()),
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .overflow_hidden()
+                // Name in the server's NAME_W column, indented as a tree child and greyed.
+                .child(
+                    div()
+                        .w(px(NAME_W))
+                        .flex_none()
+                        .pl(px(CORE_INDENT))
+                        .overflow_hidden()
+                        .truncate()
+                        .text_color(rgb(name_color))
+                        .child(core.name.clone()),
+                )
+                // Empty IP column so the metrics start under the server's columns.
+                .child(div().w(px(IP_W)).flex_none())
+                .child(div().flex_1())
+                .child(metric_cell(
+                    percent(core.sys.process_cpu_percent),
+                    CPU_W,
+                    level_color(cpu_level(core.sys.process_cpu_percent), p),
+                    false,
+                    p,
+                ))
+                .child(metric_cell(
+                    memory_u16(core.sys.used_memory_mb),
+                    MEM_W,
+                    p.text_soft,
+                    false,
+                    p,
+                ))
+                // This core's client↔core round-trip, coloured relative to this core's own baseline; the
+                // cell's own warn triangle marks a sustained above-baseline ping, like the CPU cell.
+                .child(metric_cell(
+                    ping_plain(core.sys.round_trip_ms),
+                    PING_W,
+                    level_color(ping_lvl, p),
+                    core.ping_warn,
+                    p,
+                ))
+                // This core's core→exchange order latency, also relative to its own baseline.
+                .child(metric_cell(
+                    ping_plain(core.sys.order_api_latency_ms.map(u32::from)),
+                    PING_W,
+                    level_color(exch_lvl, p),
+                    core.exch_warn,
+                    p,
+                ))
+                // Empty ratio + dot slots, matching the server row's trailing width so `exch` aligns.
+                .child(div().w(px(CORES_W)).flex_none())
+                .child(div().w(crate::design::ui_px(app, 5.0)).flex_none()),
         )
-        .child(div().flex_1())
-        .child(metric_cell(
-            percent(core.sys.process_cpu_percent),
-            CPU_W,
-            level_color(cpu_level(core.sys.process_cpu_percent), p),
-            false,
-            p,
-        ))
-        .child(metric_cell(
-            memory_u16(core.sys.used_memory_mb),
-            MEM_W,
-            p.text_soft,
-            false,
-            p,
-        ))
-        // This core's client↔core round-trip (globe), coloured relative to this core's own baseline;
-        // the cell's own warn triangle marks a sustained above-baseline ping, like the CPU/memory cells.
-        .child(metric_cell(
-            ping_plain(core.sys.round_trip_ms),
-            PING_W,
-            level_color(ping_lvl, p),
-            core.ping_warn,
-            p,
-        ))
-        // This core's core→exchange order latency (external-link), also relative to its own baseline.
-        .child(metric_cell(
-            ping_plain(core.sys.order_api_latency_ms.map(u32::from)),
-            PING_W,
-            level_color(exch_lvl, p),
-            core.exch_warn,
-            p,
-        ))
 }
 
 /// The latency to show on a server row: among the READY cores, the one with the WORST colour level
