@@ -290,7 +290,7 @@ core_status.warn_cfg.sound_none:
   en: "None"
   es: "Ninguno"
 core_status.warn_cfg.u.sec:
-  ru: "с"
+  ru: "сек"
   en: "s"
   es: "s"
 

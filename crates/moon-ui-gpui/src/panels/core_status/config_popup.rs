@@ -24,11 +24,16 @@ use moon_core::config::layout::{WarnAxesCfg, WarnParams};
 // (a latency axis: 4 params) sets the total; shorter rows pad empty param slots so their sound column
 // still lines up. Gap between columns is `COL_GAP`.
 const NAME_W: f32 = 138.0;
-const ON_W: f32 = 28.0;
+const ON_W: f32 = 30.0;
 const CHART_W: f32 = 34.0;
-const PARAM_W: f32 = 62.0;
+const PARAM_W: f32 = 66.0;
 const SOUND_W: f32 = 128.0;
 const COL_GAP: f32 = 6.0;
+/// Fixed caption-row and control-row heights, so every column's caption and control line up on the
+/// same two baselines down the whole table (the checkboxes, steppers and the sound row all centre in
+/// the control band).
+const CAP_H: f32 = 12.0;
+const CTRL_H: f32 = 28.0;
 /// The most threshold columns any row has (the latency axes: yellow, red, window, hold).
 const MAX_PARAMS: usize = 4;
 /// Popover width: the eight columns (name, on, chart, four params, sound) plus the seven gaps between
@@ -89,6 +94,7 @@ impl CoreStatusView {
             .child(self.warn_row(
                 "cpu",
                 t!("core_status.warn_cfg.cpu").to_string(),
+                true,
                 axes.cpu,
                 |a, on| a.cpu = on,
                 params.cpu.chart,
@@ -120,6 +126,7 @@ impl CoreStatusView {
             .child(self.warn_row(
                 "mem",
                 t!("core_status.warn_cfg.mem").to_string(),
+                false,
                 axes.mem,
                 |a, on| a.mem = on,
                 params.mem.chart,
@@ -152,6 +159,7 @@ impl CoreStatusView {
             .child(self.warn_row(
                 "conn",
                 t!("core_status.warn_cfg.conn").to_string(),
+                false,
                 axes.conn,
                 |a, on| a.conn = on,
                 params.conn.chart,
@@ -164,6 +172,7 @@ impl CoreStatusView {
             .child(self.warn_row(
                 "ping",
                 t!("core_status.warn_cfg.ping").to_string(),
+                false,
                 axes.ping,
                 |a, on| a.ping = on,
                 params.ping.chart,
@@ -185,6 +194,7 @@ impl CoreStatusView {
             .child(self.warn_row(
                 "exch",
                 t!("core_status.warn_cfg.exch").to_string(),
+                false,
                 axes.exch,
                 |a, on| a.exch = on,
                 params.exch.chart,
@@ -228,6 +238,7 @@ impl CoreStatusView {
         &self,
         id: &'static str,
         name: String,
+        first: bool,
         enabled: bool,
         set_enabled: fn(&mut WarnAxesCfg, bool),
         chart: bool,
@@ -239,54 +250,55 @@ impl CoreStatusView {
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let n_params = params.len();
+        // Name column: an empty caption spacer keeps its control band level with the others, and the
+        // name centres in that band (so it lines up with the checkboxes and steppers, not above them).
+        let name_col = self.cell(
+            NAME_W,
+            div()
+                .w_full()
+                .truncate()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(p.text))
+                .child(name),
+            String::new(),
+            cx,
+        );
         h_flex()
             .w_full()
-            .items_end()
+            .items_start()
             .gap(design::ui_px(cx, COL_GAP))
             .py(design::ui_px(cx, 5.0))
-            .border_t_1()
-            .border_color(rgb(p.border))
-            // Name column (fixed width; sits on the value baseline via items_end).
-            .child(
-                div()
-                    .w(design::ui_px(cx, NAME_W))
-                    .flex_none()
-                    .pb(px(2.0))
-                    .truncate()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text))
-                    .child(name),
-            )
+            // Only a separator BETWEEN rows — the first row has no line above it.
+            .when(!first, |el| el.border_t_1().border_color(rgb(p.border)))
+            .child(name_col)
             .child(self.cell(
                 ON_W,
-                true,
-                t!("core_status.warn_cfg.col.on").to_string(),
                 enable_checkbox(
                     format!("cs-warn-{id}-on"),
                     enabled,
                     &self.backend,
                     set_enabled,
                 ),
+                t!("core_status.warn_cfg.col.on").to_string(),
                 cx,
             ))
             .child(self.cell(
                 CHART_W,
-                true,
-                t!("core_status.warn_cfg.col.chart").to_string(),
                 chart_checkbox(
                     format!("cs-warn-{id}-chart"),
                     chart,
                     &self.backend,
                     set_chart,
                 ),
+                t!("core_status.warn_cfg.col.chart").to_string(),
                 cx,
             ))
             .children(params.into_iter().enumerate().map(|(i, param)| {
+                let caption = caption_for(&param.cap, param.unit);
                 self.cell(
                     PARAM_W,
-                    false,
-                    param.cap.to_string(),
                     self.stepper(format!("cs-warn-{id}-p{i}"), param, cx),
+                    caption,
                     cx,
                 )
             }))
@@ -299,37 +311,49 @@ impl CoreStatusView {
             }))
             .child(self.cell(
                 SOUND_W,
-                false,
-                t!("core_status.warn_cfg.col.sound").to_string(),
                 self.sound_cell(id, sound, set_sound, cx),
+                t!("core_status.warn_cfg.col.sound").to_string(),
                 cx,
             ))
     }
 
-    /// A fixed-width captioned column: the caption above its control. `center` centres the caption and
-    /// control (for the checkbox columns); otherwise both align to the column's left edge.
+    /// A fixed-width column: a centred caption on a fixed-height row above its control, which centres
+    /// in a fixed-height band. The two fixed heights make every caption and every control share the
+    /// same two baselines down the whole table.
     fn cell(
         &self,
         width: f32,
-        center: bool,
-        caption: String,
         control: impl IntoElement,
+        caption: String,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         v_flex()
             .w(design::ui_px(cx, width))
             .flex_none()
-            .gap(design::ui_px(cx, 4.0))
-            .when(center, |el| el.items_center())
+            .gap(design::ui_px(cx, 3.0))
             .child(
                 div()
+                    .h(design::ui_px(cx, CAP_H))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .text_size(design::t_caption(cx))
                     .text_color(rgb(p.text_muted))
                     .font_family(design::mono())
+                    .whitespace_nowrap()
                     .child(caption),
             )
-            .child(control)
+            .child(
+                div()
+                    .h(design::ui_px(cx, CTRL_H))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(control),
+            )
     }
 
     /// A `− value +` stepper writing one threshold through the backend on each click.
@@ -431,6 +455,8 @@ impl CoreStatusView {
             });
         });
         let play_name = cur;
+        let p = MoonPalette::active(cx);
+        let enabled = play_name.is_some();
         h_flex()
             .w_full()
             .items_center()
@@ -446,17 +472,30 @@ impl CoreStatusView {
                     .menu_size(MoonMenuSize::Compact)
                     .items(items),
             )
+            // Square preview button: a fixed-size bordered box with the ▶ glyph centred.
             .child(
-                MoonButton::new(SharedString::from(format!("cs-warn-{id}-play")))
-                    .label("▶")
-                    .size(MoonButtonSize::Action)
-                    .variant(MoonButtonVariant::Soft)
-                    .disabled(play_name.is_none())
-                    .on_click(move |_, _, _| {
-                        if let Some(name) = play_name {
-                            crate::media::sound::play(name);
-                        }
-                    }),
+                div()
+                    .id(SharedString::from(format!("cs-warn-{id}-play")))
+                    .size(design::ui_px(cx, CTRL_H))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(design::ui_px(cx, 5.0))
+                    .border_1()
+                    .border_color(rgb(p.border))
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(if enabled { p.text_soft } else { p.text_dim }))
+                    .when(enabled, |el| {
+                        el.cursor_pointer()
+                            .hover(|s| s.border_color(rgb(p.accent)).text_color(rgb(p.accent)))
+                            .on_click(move |_, _, _| {
+                                if let Some(name) = play_name {
+                                    crate::media::sound::play(name);
+                                }
+                            })
+                    })
+                    .child("▶"),
             )
     }
 }
@@ -520,7 +559,17 @@ fn fmt_value(v: u16, unit: Unit) -> String {
         Unit::Pct => format!("{v}%"),
         Unit::PctRel => format!("+{v}%"),
         Unit::Mult => format!("×{v}"),
-        Unit::Sec => format!("{v} {}", t!("core_status.warn_cfg.u.sec")),
+        // Seconds move to the caption ("Окно (сек)"), so the value is just the number.
+        Unit::Sec => v.to_string(),
+    }
+}
+
+/// A threshold caption, with the unit appended in parentheses for a seconds value ("Окно (сек)") so
+/// the stepper value stays a bare number.
+fn caption_for(cap: &str, unit: Unit) -> String {
+    match unit {
+        Unit::Sec => format!("{cap} ({})", t!("core_status.warn_cfg.u.sec")),
+        _ => cap.to_string(),
     }
 }
 
