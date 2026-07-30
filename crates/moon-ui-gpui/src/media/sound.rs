@@ -36,8 +36,8 @@ sounds! {
     "yes_mast" => "YES_MAST.wav",
 }
 
-/// Return sound stems for the sound-selection dropdown.
-#[allow(dead_code)] // Used by the Alerts window's sound selector.
+/// Return sound stems for the sound-selection dropdowns (the Alerts window and the Core Status
+/// alert popup).
 pub fn names() -> impl Iterator<Item = &'static str> {
     SOUNDS.iter().map(|(n, _)| *n)
 }

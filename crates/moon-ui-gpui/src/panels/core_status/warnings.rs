@@ -90,12 +90,13 @@ fn warn_row(
     ])
 }
 
-/// Localized axis label (CPU / RAM / Link).
+/// Localized axis label (CPU / RAM / ping / exch ping / Link).
 fn axis_label(axis: WarnAxis) -> String {
     match axis {
         WarnAxis::SysCpu => t!("core_status.chart_cpu"),
         WarnAxis::MemGrowth => t!("core_status.chart_mem"),
         WarnAxis::Ping => t!("core_status.chart_ping"),
+        WarnAxis::ExchPing => t!("core_status.chart_exch"),
         WarnAxis::Unreachable => t!("core_status.warn_conn"),
     }
     .to_string()
@@ -106,7 +107,7 @@ fn peak(episode: &WarnEpisode) -> String {
     match episode.axis {
         WarnAxis::SysCpu => format!("{}%", episode.peak),
         WarnAxis::MemGrowth => format!("{} {}", episode.peak, t!("core_status.mb")),
-        WarnAxis::Ping => format!("{} {}", episode.peak, t!("core_status.ms")),
+        WarnAxis::Ping | WarnAxis::ExchPing => format!("{} {}", episode.peak, t!("core_status.ms")),
         WarnAxis::Unreachable => "—".to_string(),
     }
 }

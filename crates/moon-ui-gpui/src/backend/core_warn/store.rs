@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS core_warning_series (
     blob       BLOB    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_warn_series_ep ON core_warning_series(episode_id);
-CREATE UNIQUE INDEX IF NOT EXISTS ix_warn_series_unique ON core_warning_series(episode_id, subject);
+-- `badge` identifies the slice owner: 0 = the whole server, otherwise the core id. So one episode
+-- keeps the server graph AND one graph per core, each under (episode_id, badge, subject).
+CREATE UNIQUE INDEX IF NOT EXISTS ix_warn_series_unique ON core_warning_series(episode_id, badge, subject);
 ";
 
 /// SQLite-backed episode log.
@@ -69,6 +71,11 @@ impl WarnStore {
 
     /// Wrap a connection and apply the schema.
     fn from_connection(conn: Connection) -> rusqlite::Result<Self> {
+        // Migrate a pre-existing series index from (episode_id, subject) to (episode_id, badge,
+        // subject) — drop it first so the schema below recreates it with the badge column, letting
+        // per-core slices (badge = core id) coexist with the server slice (badge 0). A fresh database
+        // has no old index, so the drop is a harmless no-op.
+        let _ = conn.execute("DROP INDEX IF EXISTS ix_warn_series_unique", []);
         conn.execute_batch(SCHEMA)?;
         // Add the detection-snapshot columns to a pre-existing database; a fresh one already has
         // them from the schema, so a "duplicate column" error here is expected and ignored.
@@ -184,6 +191,7 @@ impl WarnStore {
     pub(crate) fn insert_series(
         &self,
         episode_id: i64,
+        badge: i64,
         subject: &str,
         base_ms: i64,
         samples: &[(u8, u8)],
@@ -191,8 +199,8 @@ impl WarnStore {
         let blob = encode_series(base_ms, samples);
         self.conn.execute(
             "INSERT OR REPLACE INTO core_warning_series (episode_id, badge, subject, blob) \
-             VALUES (?1, 0, ?2, ?3)",
-            params![episode_id, subject, blob],
+             VALUES (?1, ?2, ?3, ?4)",
+            params![episode_id, badge, subject, blob],
         )?;
         Ok(())
     }
@@ -208,12 +216,14 @@ impl WarnStore {
     pub(crate) fn series_for_episode(
         &self,
         episode_id: i64,
+        badge: i64,
         subject: &str,
     ) -> rusqlite::Result<Option<Vec<(u8, u8)>>> {
         let mut stmt = self.conn.prepare(
-            "SELECT blob FROM core_warning_series WHERE episode_id = ?1 AND subject = ?2 LIMIT 1",
+            "SELECT blob FROM core_warning_series \
+             WHERE episode_id = ?1 AND badge = ?2 AND subject = ?3 LIMIT 1",
         )?;
-        let mut rows = stmt.query(params![episode_id, subject])?;
+        let mut rows = stmt.query(params![episode_id, badge, subject])?;
         match rows.next()? {
             Some(row) => {
                 let blob: Vec<u8> = row.get(0)?;
@@ -236,6 +246,7 @@ impl WarnStore {
     pub(crate) fn insert_ping_series(
         &self,
         episode_id: i64,
+        badge: i64,
         subject: &str,
         base_ms: i64,
         samples: &[u16],
@@ -243,8 +254,8 @@ impl WarnStore {
         let blob = encode_u16_series(base_ms, samples);
         self.conn.execute(
             "INSERT OR REPLACE INTO core_warning_series (episode_id, badge, subject, blob) \
-             VALUES (?1, 0, ?2, ?3)",
-            params![episode_id, subject, blob],
+             VALUES (?1, ?2, ?3, ?4)",
+            params![episode_id, badge, subject, blob],
         )?;
         Ok(())
     }
@@ -260,12 +271,14 @@ impl WarnStore {
     pub(crate) fn ping_series_for_episode(
         &self,
         episode_id: i64,
+        badge: i64,
         subject: &str,
     ) -> rusqlite::Result<Option<Vec<u16>>> {
         let mut stmt = self.conn.prepare(
-            "SELECT blob FROM core_warning_series WHERE episode_id = ?1 AND subject = ?2 LIMIT 1",
+            "SELECT blob FROM core_warning_series \
+             WHERE episode_id = ?1 AND badge = ?2 AND subject = ?3 LIMIT 1",
         )?;
-        let mut rows = stmt.query(params![episode_id, subject])?;
+        let mut rows = stmt.query(params![episode_id, badge, subject])?;
         match rows.next()? {
             Some(row) => {
                 let blob: Vec<u8> = row.get(0)?;
@@ -273,6 +286,23 @@ impl WarnStore {
             }
             None => Ok(None),
         }
+    }
+
+    /// Delete the persisted graph SLICES of episodes older than `cutoff_ms` (by `start_ms`), keeping
+    /// the episode rows themselves. The per-core slices scale with the core count, so this bounds the
+    /// file while the episode log stays forever.
+    ///
+    /// Args:
+    ///     cutoff_ms: Episodes with `start_ms` below this lose their slices.
+    ///
+    /// Returns:
+    ///     The number of slice rows deleted, or the SQLite error.
+    pub(crate) fn prune_slices(&self, cutoff_ms: i64) -> rusqlite::Result<usize> {
+        self.conn.execute(
+            "DELETE FROM core_warning_series WHERE episode_id IN \
+             (SELECT id FROM core_warnings WHERE start_ms < ?1)",
+            params![cutoff_ms],
+        )
     }
 }
 
@@ -340,6 +370,7 @@ fn axis_str(axis: WarnAxis) -> &'static str {
         WarnAxis::MemGrowth => "mem_growth",
         WarnAxis::Unreachable => "connectivity",
         WarnAxis::Ping => "ping",
+        WarnAxis::ExchPing => "exch_ping",
     }
 }
 
@@ -349,6 +380,7 @@ fn axis_from(name: &str) -> WarnAxis {
         "mem_growth" => WarnAxis::MemGrowth,
         "connectivity" => WarnAxis::Unreachable,
         "ping" => WarnAxis::Ping,
+        "exch_ping" => WarnAxis::ExchPing,
         _ => WarnAxis::SysCpu,
     }
 }

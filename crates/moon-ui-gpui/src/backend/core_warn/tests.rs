@@ -8,8 +8,8 @@ use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 
 use super::{
-    CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, PING_SUSTAIN_SECS, RingSubject, WarnAxis,
-    WarnEnabled,
+    CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, LATENCY_SUSTAIN_SECS, LatencySeverity, RingSubject,
+    WarnAxis, WarnEnabled, latency_severity,
 };
 
 /// Build one Ready core sample; `process` and `system` CPU are set equal, memory optional.
@@ -40,6 +40,31 @@ fn sample_rtt(id: CoreId, ip: [u8; 4], rtt: Option<u32>) -> CoreSample {
             ..CoreSysStatus::default()
         },
     }
+}
+
+/// Build one Ready sample carrying a specific core→exchange order latency (ms); CPU/memory idle.
+fn sample_exch(id: CoreId, ip: [u8; 4], exch: Option<u16>) -> CoreSample {
+    CoreSample {
+        id,
+        ip: Some(IpAddr::V4(Ipv4Addr::from(ip))),
+        status: ConnStatus::Ready,
+        sys: CoreSysStatus {
+            order_api_latency_ms: exch,
+            updated_ms: 1,
+            ..CoreSysStatus::default()
+        },
+    }
+}
+
+/// Feed one core a `rtt` for enough seconds (starting at `from_sec`) to FILL its baseline window, so
+/// a following spike does not immediately dominate a short mean. Returns the next free second.
+fn seed_ping_baseline(engine: &mut CoreWarnEngine, from_sec: i64, id: CoreId, rtt: u32) -> i64 {
+    let mut sec = from_sec;
+    for _ in 0..62 {
+        engine.tick(&[sample_rtt(id, IP, Some(rtt))], sec * 1000);
+        sec += 1;
+    }
+    sec
 }
 
 /// Build one core sample carrying a specific connection status (telemetry irrelevant).
@@ -365,34 +390,59 @@ fn never_connected_or_connecting_does_not_warn_connectivity() {
     assert!(!engine.server_conn_warn(ip), "connecting is not a drop");
 }
 
-/// Sustained high round-trip must open exactly one per-core ping episode only after the sustain
-/// window, and a recovered ping must close it with a real interval and its peak retained.
+/// `latency_severity` is PURELY relative (a multiple of the baseline): no/zero baseline is `Normal`;
+/// below the yellow multiple is `Normal`; at/above yellow is `Warning`; at/above red is `Critical` —
+/// the multiple is the only test, so it fires the same on small and large pings.
 #[test]
-fn sustained_high_ping_opens_then_closes_per_core_episode() {
+fn latency_severity_is_purely_relative() {
+    // Default multipliers: yellow ×2 (num 200), red ×10 (num 1000).
+    let sev = |v, b| latency_severity(v, b, 200, 1000);
+    assert_eq!(sev(5000, None), LatencySeverity::Normal);
+    assert_eq!(sev(5000, Some(0)), LatencySeverity::Normal);
+    // 100 → 150 is ×1.5: below the yellow ×2.
+    assert_eq!(sev(150, Some(100)), LatencySeverity::Normal);
+    // 100 → 220 is ×2.2: yellow, under the ×10 critical.
+    assert_eq!(sev(220, Some(100)), LatencySeverity::Warning);
+    // 100 → 1000 is ×10: critical.
+    assert_eq!(sev(1000, Some(100)), LatencySeverity::Critical);
+    // A small ping obeys the same multiple: 20 → 50 (×2.5) is yellow.
+    assert_eq!(sev(50, Some(20)), LatencySeverity::Warning);
+    assert_eq!(sev(200, Some(20)), LatencySeverity::Critical);
+}
+
+/// A ping that spikes ABOVE the core's established baseline must open exactly one per-core ping
+/// episode after the sustain window, and a return to baseline must close it with its peak retained.
+#[test]
+fn ping_spike_above_baseline_opens_then_closes_per_core_episode() {
     let mut engine = CoreWarnEngine::default();
 
-    // One high sample is not yet a warning.
-    engine.tick(&[sample_rtt(4, IP, Some(800))], 1_000);
-    assert!(!engine.core_ping_warn(4), "one high ping must not warn");
+    // Establish a low, stable baseline (~40 ms).
+    let mut sec = seed_ping_baseline(&mut engine, 1, 4, 40);
+
+    // One high sample is not yet a warning (needs the sustain window). 500 ms is well past ×10 of 40.
+    engine.tick(&[sample_rtt(4, IP, Some(2000))], sec * 1000);
+    sec += 1;
+    assert!(!engine.core_ping_warn(4), "one spike second must not warn");
 
     // Stay high past the sustain threshold.
-    for sec in 2..=(PING_SUSTAIN_SECS as i64 + 2) {
-        engine.tick(&[sample_rtt(4, IP, Some(800))], sec * 1000);
+    for _ in 0..(LATENCY_SUSTAIN_SECS as i64 + 1) {
+        engine.tick(&[sample_rtt(4, IP, Some(2000))], sec * 1000);
+        sec += 1;
     }
-    assert!(engine.core_ping_warn(4), "sustained high ping must warn");
+    assert!(engine.core_ping_warn(4), "sustained spike must warn");
     let open = engine.open_episodes();
     let ping_open: Vec<_> = open.iter().filter(|e| e.axis == WarnAxis::Ping).collect();
     assert_eq!(ping_open.len(), 1, "one ping episode open");
     assert_eq!(ping_open[0].core_id, Some(4), "keyed by its core");
 
-    // Ping recovers to normal.
-    engine.tick(
-        &[sample_rtt(4, IP, Some(40))],
-        (PING_SUSTAIN_SECS as i64 + 3) * 1000,
-    );
+    // Ping returns to its baseline.
+    for _ in 0..3 {
+        engine.tick(&[sample_rtt(4, IP, Some(40))], sec * 1000);
+        sec += 1;
+    }
     assert!(
         !engine.core_ping_warn(4),
-        "recovered ping must clear the warning"
+        "ping back at baseline must clear the warning"
     );
     let closed: Vec<_> = engine
         .episodes()
@@ -400,7 +450,55 @@ fn sustained_high_ping_opens_then_closes_per_core_episode() {
         .collect();
     assert_eq!(closed.len(), 1);
     assert!(closed[0].end_ms.unwrap() > closed[0].start_ms);
-    assert!(closed[0].peak >= 500, "peak retains the high RTT in ms");
+    assert!(closed[0].peak >= 300, "peak retains the spike RTT in ms");
+}
+
+/// A core whose ping is ALWAYS high (its baseline IS high) must never warn — the 20/60/200 ms case:
+/// a stably-slow link is its own normal, not a spike.
+#[test]
+fn stable_high_ping_never_warns() {
+    let mut engine = CoreWarnEngine::default();
+    for sec in 1..=(LATENCY_SUSTAIN_SECS as i64 + 20) {
+        engine.tick(&[sample_rtt(4, IP, Some(200))], sec * 1000);
+    }
+    assert!(
+        !engine.core_ping_warn(4),
+        "a constantly-high ping is the baseline, not a spike"
+    );
+    assert!(
+        engine.open_episodes().is_empty(),
+        "no ping episode opens for a stable baseline"
+    );
+}
+
+/// A core→exchange latency spike above the core's baseline must open exactly one per-core exch-ping
+/// episode after the sustain window.
+#[test]
+fn exch_spike_above_baseline_opens_episode() {
+    let mut engine = CoreWarnEngine::default();
+
+    // Fill the baseline window with a stable exchange latency (~120 ms).
+    let mut sec = 1;
+    for _ in 0..62 {
+        engine.tick(&[sample_exch(4, IP, Some(120))], sec * 1000);
+        sec += 1;
+    }
+    assert!(!engine.core_exch_warn(4), "at baseline must not warn");
+
+    // Spike well past ×10 of 120 (and staying there as it enters the baseline), sustained.
+    for _ in 0..(LATENCY_SUSTAIN_SECS as i64 + 1) {
+        engine.tick(&[sample_exch(4, IP, Some(4000))], sec * 1000);
+        sec += 1;
+    }
+    assert!(engine.core_exch_warn(4), "sustained exch spike must warn");
+    let open = engine.open_episodes();
+    let exch_open: Vec<_> = open
+        .iter()
+        .filter(|e| e.axis == WarnAxis::ExchPing)
+        .collect();
+    assert_eq!(exch_open.len(), 1, "one exch-ping episode open");
+    assert_eq!(exch_open[0].core_id, Some(4), "keyed by its core");
+    assert!(exch_open[0].peak >= 500, "peak retains the spike latency");
 }
 
 /// A core that drops offline but keeps its last (stale) high RTT reading must NOT keep raising a
@@ -408,18 +506,22 @@ fn sustained_high_ping_opens_then_closes_per_core_episode() {
 #[test]
 fn offline_core_does_not_ping_warn_on_stale_rtt() {
     let mut engine = CoreWarnEngine::default();
-    for sec in 1..=(PING_SUSTAIN_SECS as i64 + 2) {
-        engine.tick(&[sample_rtt(4, IP, Some(800))], sec * 1000);
+
+    // Establish a low baseline, then spike sustained while Ready → warns.
+    let mut sec = seed_ping_baseline(&mut engine, 1, 4, 40);
+    for _ in 0..(LATENCY_SUSTAIN_SECS as i64 + 1) {
+        engine.tick(&[sample_rtt(4, IP, Some(2000))], sec * 1000);
+        sec += 1;
     }
     assert!(
         engine.core_ping_warn(4),
-        "sustained high ping while Ready must warn first"
+        "sustained spike while Ready must warn first"
     );
 
     // The core disconnects but its last sample still carries the high RTT.
-    let mut stale = sample_rtt(4, IP, Some(800));
+    let mut stale = sample_rtt(4, IP, Some(2000));
     stale.status = ConnStatus::Disconnected;
-    engine.tick(&[stale], (PING_SUSTAIN_SECS as i64 + 3) * 1000);
+    engine.tick(&[stale], sec * 1000);
     assert!(
         !engine.core_ping_warn(4),
         "an offline core must not ping-warn on a stale round-trip"
@@ -436,6 +538,7 @@ fn disabled_axis_records_no_episode() {
         mem: true,
         conn: true,
         ping: true,
+        exch: true,
     });
     let ip = IpAddr::V4(Ipv4Addr::from(IP));
     for sec in 1..=(CPU_SUSTAIN_SECS as i64 + 4) {

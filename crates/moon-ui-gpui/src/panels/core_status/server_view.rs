@@ -15,12 +15,13 @@ use moon_ui::{
 use rust_i18n::t;
 
 use moon_core::feed::ConnStatus;
+use moon_core::session::CoreId;
 
 use super::CoreStatusView;
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::presentation::{
-    cpu_level, cpu_load, free_mem_level, level_color, memory_free, memory_u16, metric_icon,
-    order_level, percent, ping, ping_level,
+    LoadLevel, cpu_level, cpu_load, free_mem_level, lat_level, level_color, memory_free, memory_u16,
+    metric_icon, percent, ping,
 };
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
@@ -63,18 +64,21 @@ pub(super) fn tree_items(groups: &[ServerStatusGroup]) -> Vec<MoonTreeItem> {
 ///     revealed: Servers whose IP is momentarily shown by the eye control.
 ///     editing: The server whose name is being renamed inline, if any.
 ///     edit_input: Shared input state backing the inline rename field.
-///     selected: The server highlighted by a body click (the chart target), if any.
+///     chart_selected: The server highlighted by a body click (the chart target), if any.
+///     chart_core: The core highlighted by a core-row click (charts that core), if any.
 ///     state: MoonTree state that owns scrolling and selection.
 ///     cx: Panel context used to create a weak action callback.
 ///
 /// Returns:
 ///     A full-size list element.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn grouped_server_view(
     groups: Rc<Vec<ServerStatusGroup>>,
     revealed: Rc<HashSet<ServerKey>>,
     editing: Option<ServerKey>,
     edit_input: Option<Entity<MoonInputState>>,
     chart_selected: Option<ServerKey>,
+    chart_core: Option<CoreId>,
     state: &Entity<MoonTreeState>,
     cx: &Context<CoreStatusView>,
 ) -> AnyElement {
@@ -145,9 +149,10 @@ pub(super) fn grouped_server_view(
                 .get(server_index)
                 .and_then(|group| group.cores.get(core_index))
             {
+                // A core row highlights when it is the charted core, and clicking it charts that core.
                 return MoonListItem::new(meta.index)
-                    .selected(false)
-                    .child(core_row(core, p, app));
+                    .selected(chart_core == Some(core.id))
+                    .child(core_row(core, &weak_view, p, app));
             }
         }
         MoonListItem::new(meta.index)
@@ -267,38 +272,35 @@ fn server_row(
                     group.mem_warn,
                     p,
                 ))
-                // Ping is per core; the server row shows the WORST (highest) round-trip among the
-                // server's READY cores, matching the ping ring (a dropped core's stale reading is
-                // excluded rather than dominating the row). Two cells: client↔core, then core→exchange.
+                // Ping is per core; the server row shows the core with the WORST level among the
+                // server's READY cores (each judged against its own baseline, so a core whose high
+                // ping is normal does not dominate) and paints that core's value. Two cells:
+                // client↔core, then core→exchange.
                 .child({
-                    let worst = group
-                        .cores
-                        .iter()
-                        .filter(|c| c.status == ConnStatus::Ready)
-                        .filter_map(|c| c.sys.round_trip_ms)
-                        .max();
+                    let (value, level) = worst_by_level(&group.cores, |c| {
+                        c.sys.round_trip_ms.map(|v| (v, lat_level(c.ping_sev)))
+                    });
                     metric_cell(
                         "icons/globe.svg",
-                        ping(worst),
+                        ping(value),
                         PING_W,
-                        level_color(ping_level(worst), p),
+                        level_color(level, p),
                         group.ping_warn,
                         p,
                     )
                 })
                 .child({
-                    let worst = group
-                        .cores
-                        .iter()
-                        .filter(|c| c.status == ConnStatus::Ready)
-                        .filter_map(|c| c.sys.order_api_latency_ms)
-                        .max();
+                    let (value, level) = worst_by_level(&group.cores, |c| {
+                        c.sys
+                            .order_api_latency_ms
+                            .map(|v| (u32::from(v), lat_level(c.exch_sev)))
+                    });
                     metric_cell(
                         "icons/external-link.svg",
-                        ping(worst.map(u32::from)),
+                        ping(value),
                         PING_W,
-                        level_color(order_level(worst), p),
-                        false,
+                        level_color(level, p),
+                        group.exch_warn,
                         p,
                     )
                 })
@@ -320,16 +322,24 @@ fn server_row(
         )
 }
 
-/// Render one core row: its name as a status-toned badge, then its process CPU and memory.
+/// Render one core row: its name (status-toned plain text), then its process CPU, memory, and pings.
+///
+/// Clicking the row charts this core in the detached window (in place of the server aggregate).
 ///
 /// Args:
 ///     core: Per-process snapshot.
+///     weak_view: Non-owning panel handle for the chart-this-core click.
 ///     p: Active Moon palette.
 ///     _app: Application context (reserved for symmetry with the server row).
 ///
 /// Returns:
 ///     An indented core row whose metrics align under the server metrics.
-fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElement {
+fn core_row(
+    core: &CoreStatusRow,
+    weak_view: &WeakEntity<CoreStatusView>,
+    p: MoonPalette,
+    _app: &App,
+) -> impl IntoElement {
     // The core name reads as plain text (not a badge pill); its colour still conveys the connection
     // state, so an offline or failed core is legible at a glance.
     let name_color = match core.status {
@@ -338,6 +348,11 @@ fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElemen
         ConnStatus::Failed(_) => p.red,
         ConnStatus::Disconnected => p.text_muted,
     };
+    // The engine computes each ping's severity against the core's own baseline and leaves a dropped
+    // core at `Normal` (only a Ready core has a live reading), so a stale offline ping shows no alarm
+    // colour without a separate gate here.
+    let ping_lvl = lat_level(core.ping_sev);
+    let exch_lvl = lat_level(core.exch_sev);
     h_flex()
         .w_full()
         .min_w_0()
@@ -345,6 +360,17 @@ fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElemen
         .gap_2()
         .overflow_hidden()
         .pl(px(20.0))
+        .cursor_pointer()
+        // Clicking a core row charts that core; the detached window reads `chart_core`.
+        .on_mouse_down(MouseButton::Left, {
+            let weak_view = weak_view.clone();
+            let id = core.id;
+            move |_, _, app| {
+                if let Some(view) = weak_view.upgrade() {
+                    view.update(app, |this, cx| this.select_chart_core(id, cx));
+                }
+            }
+        })
         .child(
             div()
                 .flex_none()
@@ -369,25 +395,44 @@ fn core_row(core: &CoreStatusRow, p: MoonPalette, _app: &App) -> impl IntoElemen
             false,
             p,
         ))
-        // This core's client↔core round-trip (globe); the cell's own warn triangle marks a
-        // sustained-high ping, consistent with the CPU/memory cells.
+        // This core's client↔core round-trip (globe), coloured relative to this core's own baseline;
+        // the cell's own warn triangle marks a sustained above-baseline ping, like the CPU/memory cells.
         .child(metric_cell(
             "icons/globe.svg",
             ping(core.sys.round_trip_ms),
             PING_W,
-            level_color(ping_level(core.sys.round_trip_ms), p),
+            level_color(ping_lvl, p),
             core.ping_warn,
             p,
         ))
-        // This core's core→exchange order latency (external-link).
+        // This core's core→exchange order latency (external-link), also relative to its own baseline.
         .child(metric_cell(
             "icons/external-link.svg",
             ping(core.sys.order_api_latency_ms.map(u32::from)),
             PING_W,
-            level_color(order_level(core.sys.order_api_latency_ms), p),
-            false,
+            level_color(exch_lvl, p),
+            core.exch_warn,
             p,
         ))
+}
+
+/// The latency to show on a server row: among the READY cores, the one with the WORST colour level
+/// (ties broken by the higher value), and that level. `(None, Normal)` when no ready core has a
+/// reading. `pick` maps a core to its `(value ms, level)` for the axis, or `None` when it has none.
+///
+/// Each core is judged against its OWN baseline (inside `pick`), so a core whose high ping is its
+/// normal does not paint the server row red just for being the numerically highest.
+fn worst_by_level(
+    cores: &[CoreStatusRow],
+    pick: impl Fn(&CoreStatusRow) -> Option<(u32, LoadLevel)>,
+) -> (Option<u32>, LoadLevel) {
+    cores
+        .iter()
+        .filter(|c| c.status == ConnStatus::Ready)
+        .filter_map(pick)
+        .max_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)))
+        .map(|(value, level)| (Some(value), level))
+        .unwrap_or((None, LoadLevel::Normal))
 }
 
 /// Render the server name as an inline rename field or a name plus a pencil edit action.

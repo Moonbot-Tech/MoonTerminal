@@ -17,6 +17,9 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         sys: CoreSysStatus::default(),
         endpoint: Some(CoreEndpoint { address, port }),
         ping_warn: false,
+        exch_warn: false,
+        ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
+        exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
     }
 }
 

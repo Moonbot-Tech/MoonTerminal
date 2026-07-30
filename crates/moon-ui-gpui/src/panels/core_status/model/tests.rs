@@ -25,6 +25,9 @@ fn row(
             port,
         }),
         ping_warn: false,
+        exch_warn: false,
+        ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
+        exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
     }
 }
 

@@ -112,16 +112,16 @@ fn series_slice_round_trips_by_episode() {
     // Includes the byte-boundary values (0 and 255) to catch an encode/decode off-by-one.
     let samples = [(10u8, 20u8), (30, 40), (255, 0), (0, 255)];
     store
-        .insert_series(rowid, "server", 60_000, &samples)
+        .insert_series(rowid, 0, "server", 60_000, &samples)
         .unwrap();
 
-    let read = store.series_for_episode(rowid, "server").unwrap();
+    let read = store.series_for_episode(rowid, 0, "server").unwrap();
     assert_eq!(read.as_deref(), Some(&samples[..]));
 
     // A subject never written and an unknown episode both read as absent, not an error.
-    assert_eq!(store.series_for_episode(rowid, "core").unwrap(), None);
+    assert_eq!(store.series_for_episode(rowid, 0, "core").unwrap(), None);
     assert_eq!(
-        store.series_for_episode(rowid + 999, "server").unwrap(),
+        store.series_for_episode(rowid + 999, 0, "server").unwrap(),
         None
     );
 
@@ -129,11 +129,11 @@ fn series_slice_round_trips_by_episode() {
     // second write wins and the unique index keeps a single row.
     let complete = [(1u8, 2u8), (3, 4), (5, 6)];
     store
-        .insert_series(rowid, "server", 60_000, &complete)
+        .insert_series(rowid, 0, "server", 60_000, &complete)
         .unwrap();
     assert_eq!(
         store
-            .series_for_episode(rowid, "server")
+            .series_for_episode(rowid, 0, "server")
             .unwrap()
             .as_deref(),
         Some(&complete[..])
@@ -141,15 +141,51 @@ fn series_slice_round_trips_by_episode() {
     let rows: i64 = store
         .conn
         .query_row(
-            "SELECT COUNT(*) FROM core_warning_series WHERE episode_id = ?1 AND subject = 'server'",
+            "SELECT COUNT(*) FROM core_warning_series WHERE episode_id = ?1 AND badge = 0 AND subject = 'server'",
             [rowid],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(
         rows, 1,
-        "OR REPLACE must keep exactly one row per (episode, subject)"
+        "OR REPLACE must keep exactly one row per (episode, badge, subject)"
     );
+}
+
+/// Per-core slices (badge = core id) coexist with the server slice (badge 0) on one episode: same
+/// subject on different badges is a distinct row, so a server graph and each core's graph all persist.
+#[test]
+fn per_core_slices_coexist_by_badge() {
+    let store = store();
+    let rowid = store
+        .insert_episode(&episode(
+            WarnAxis::SysCpu,
+            [10, 0, 0, 1],
+            None,
+            1_000,
+            2_000,
+            88,
+        ))
+        .unwrap();
+
+    // Server graph and two cores' graphs, all under the same subjects but different badges.
+    store.insert_series(rowid, 0, "server", 60_000, &[(50, 60)]).unwrap();
+    store.insert_series(rowid, 7, "core", 60_000, &[(30, 40)]).unwrap();
+    store.insert_series(rowid, 9, "core", 60_000, &[(10, 20)]).unwrap();
+    store.insert_ping_series(rowid, 7, "ping", 60_000, &[120]).unwrap();
+    store.insert_ping_series(rowid, 9, "ping", 60_000, &[999]).unwrap();
+
+    assert_eq!(store.series_for_episode(rowid, 0, "server").unwrap().as_deref(), Some(&[(50u8, 60u8)][..]));
+    assert_eq!(store.series_for_episode(rowid, 7, "core").unwrap().as_deref(), Some(&[(30u8, 40u8)][..]));
+    assert_eq!(store.series_for_episode(rowid, 9, "core").unwrap().as_deref(), Some(&[(10u8, 20u8)][..]));
+    assert_eq!(store.ping_series_for_episode(rowid, 7, "ping").unwrap().as_deref(), Some(&[120u16][..]));
+    assert_eq!(store.ping_series_for_episode(rowid, 9, "ping").unwrap().as_deref(), Some(&[999u16][..]));
+
+    // Pruning below the episode start removes its slices but keeps the episode row.
+    let deleted = store.prune_slices(10_000).unwrap();
+    assert_eq!(deleted, 5, "all five slices pruned");
+    assert_eq!(store.series_for_episode(rowid, 0, "server").unwrap(), None);
+    assert_eq!(store.recent_episodes(10).unwrap().len(), 1, "episode row survives the prune");
 }
 
 /// The per-episode ping slice (a `u16`-per-sample blob under the `ping` subject) must round-trip,
@@ -171,11 +207,11 @@ fn ping_series_round_trips() {
     // Boundary values catch a u16 encode/decode off-by-one.
     let pings = [0u16, 65535, 250, 1000];
     store
-        .insert_ping_series(rowid, "ping", 60_000, &pings)
+        .insert_ping_series(rowid, 0, "ping", 60_000, &pings)
         .unwrap();
     assert_eq!(
         store
-            .ping_series_for_episode(rowid, "ping")
+            .ping_series_for_episode(rowid, 0, "ping")
             .unwrap()
             .as_deref(),
         Some(&pings[..])
@@ -185,21 +221,21 @@ fn ping_series_round_trips() {
     // (u8,u8) server slice.
     let exch = [10u16, 200, 65535];
     store
-        .insert_ping_series(rowid, "exch", 60_000, &exch)
+        .insert_ping_series(rowid, 0, "exch", 60_000, &exch)
         .unwrap();
     store
-        .insert_series(rowid, "server", 60_000, &[(1, 2), (3, 4)])
+        .insert_series(rowid, 0, "server", 60_000, &[(1, 2), (3, 4)])
         .unwrap();
     assert_eq!(
         store
-            .ping_series_for_episode(rowid, "ping")
+            .ping_series_for_episode(rowid, 0, "ping")
             .unwrap()
             .as_deref(),
         Some(&pings[..])
     );
     assert_eq!(
         store
-            .ping_series_for_episode(rowid, "exch")
+            .ping_series_for_episode(rowid, 0, "exch")
             .unwrap()
             .as_deref(),
         Some(&exch[..])
@@ -216,5 +252,5 @@ fn ping_series_round_trips() {
             90,
         ))
         .unwrap();
-    assert_eq!(store.ping_series_for_episode(other, "ping").unwrap(), None);
+    assert_eq!(store.ping_series_for_episode(other, 0, "ping").unwrap(), None);
 }

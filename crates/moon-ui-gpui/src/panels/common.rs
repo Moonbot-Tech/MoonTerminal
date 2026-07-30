@@ -20,6 +20,16 @@ pub(crate) fn num(v: f64) -> String {
     moon_core::util::fmt::adaptive(v)
 }
 
+/// Full-scale value (ms) for a latency line drawn into a 0..100 % plot, shared by the Core Status
+/// chart and the warning-badge card so both scale the ping axis identically.
+///
+/// Rounds the series maximum UP to a tidy 50 ms step, with ~15 % headroom so a line sitting at its
+/// own maximum stays visibly below the ceiling instead of hugging (or clipping past) the top edge.
+/// Floors at 50 ms, so it is never zero (no divide-by-zero / NaN when mapping into the plot).
+pub(crate) fn ms_axis_scale(max_ms: u16) -> f32 {
+    (f32::from(max_ms) * 1.15 / 50.0).ceil().max(1.0) * 50.0
+}
+
 /// Selection decoration for a mutually exclusive menu item. `Check` applies the menu item's checked
 /// state, while `Highlight` applies its selected state; callers choose the style explicitly.
 #[derive(Clone, Copy)]

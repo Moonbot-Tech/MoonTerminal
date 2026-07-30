@@ -5,12 +5,12 @@
 //! starting from scratch. One `(cpu %, mem %)` sample per second, one hour retained as a ring,
 //! deduplicated per key so several panels feeding it never double-count a second.
 //!
-//! Two aliases share the same ring, keyed differently:
+//! Two aliases share the same generic ring, keyed and valued differently:
 //! - [`ServerChartHistory`] — per machine IP: `(system CPU %, occupied memory %)`.
-//! - [`CoreChartHistory`] — per core: `(process CPU %, process memory share %)`.
+//! - [`CoreChartHistory`] — per core: [`CoreMetrics`] (process CPU %, memory share %, and both pings).
 //!
-//! The Core Status detached chart overlays the server pair and, when a server runs several cores,
-//! each core's pair on the same 0..100 % axis.
+//! The Core Status detached chart overlays the server pair and, when a core is selected, its pair on
+//! the same 0..100 % axis; the per-core pings feed the persisted warning-episode slices.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
@@ -18,23 +18,39 @@ use std::net::IpAddr;
 
 use moon_core::session::CoreId;
 
-/// Points kept per key: one hour at 1 Hz. At 2 bytes/point that is ~7 KB per key.
+/// Points kept per key: one hour at 1 Hz. ~7 KB/key for a server, ~22 KB/key for a core.
 const CAP: usize = 3600;
 
-/// Whole-machine history keyed by endpoint IP: `(system CPU %, occupied memory %)`.
-pub(crate) type ServerChartHistory = ChartHistory<IpAddr>;
-
-/// Per-core process history keyed by core id: `(process CPU %, process memory share %)`.
-pub(crate) type CoreChartHistory = ChartHistory<CoreId>;
-
-/// Rolling per-key CPU/memory history: `key -> (ring of (cpu %, mem %), last recorded second)`.
-pub(crate) struct ChartHistory<K: Eq + Hash + Copy> {
-    /// One capped ring plus the last recorded second per key, for per-second deduplication.
-    rings: HashMap<K, (VecDeque<(u8, u8)>, i64)>,
+/// One second of a core's own telemetry, kept per core for the detached chart and, crucially, for
+/// the per-core warning-episode slices (so an episode's stored graph is the WARNED core's, not the
+/// server's worst). Pings are `u16` (a round-trip exceeds a `u8`); a `0` ping means "no live reading
+/// this second" (the core was not Ready).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CoreMetrics {
+    /// Process CPU percent.
+    pub(crate) cpu: u8,
+    /// Process memory share of the reconstructed machine total, percent.
+    pub(crate) mem: u8,
+    /// Client↔core round-trip, ms (0 = not Ready this second).
+    pub(crate) ping: u16,
+    /// Core→exchange order-API latency, ms (0 = not Ready this second).
+    pub(crate) exch: u16,
 }
 
-// Manual `Default` so the key type need not be `Default` (an empty map is always valid).
-impl<K: Eq + Hash + Copy> Default for ChartHistory<K> {
+/// Whole-machine history keyed by endpoint IP: `(system CPU %, occupied memory %)`.
+pub(crate) type ServerChartHistory = ChartHistory<IpAddr, (u8, u8)>;
+
+/// Per-core process history keyed by core id: [`CoreMetrics`].
+pub(crate) type CoreChartHistory = ChartHistory<CoreId, CoreMetrics>;
+
+/// Rolling per-key history: `key -> (ring of samples, last recorded second)`, deduplicated per second.
+pub(crate) struct ChartHistory<K: Eq + Hash + Copy, V: Copy> {
+    /// One capped ring plus the last recorded second per key, for per-second deduplication.
+    rings: HashMap<K, (VecDeque<V>, i64)>,
+}
+
+// Manual `Default` so the key/value types need not be `Default` (an empty map is always valid).
+impl<K: Eq + Hash + Copy, V: Copy> Default for ChartHistory<K, V> {
     fn default() -> Self {
         Self {
             rings: HashMap::new(),
@@ -42,18 +58,17 @@ impl<K: Eq + Hash + Copy> Default for ChartHistory<K> {
     }
 }
 
-impl<K: Eq + Hash + Copy> ChartHistory<K> {
+impl<K: Eq + Hash + Copy, V: Copy> ChartHistory<K, V> {
     /// Append one sample for a key, at most once per second.
     ///
     /// Args:
     ///     key: Subject of the sample (a server IP or a core id).
     ///     sec: Current Unix second; a sample for an already-recorded second is ignored.
-    ///     cpu: CPU percent for the subject.
-    ///     mem: Memory percent for the subject.
+    ///     value: The sample to append.
     ///
     /// Returns:
     ///     Nothing; the key's ring grows by at most one and is capped to one hour.
-    pub(crate) fn record(&mut self, key: K, sec: i64, cpu: u8, mem: u8) {
+    pub(crate) fn record(&mut self, key: K, sec: i64, value: V) {
         let entry = self
             .rings
             .entry(key)
@@ -62,7 +77,7 @@ impl<K: Eq + Hash + Copy> ChartHistory<K> {
             return;
         }
         entry.1 = sec;
-        entry.0.push_back((cpu, mem));
+        entry.0.push_back(value);
         while entry.0.len() > CAP {
             entry.0.pop_front();
         }
@@ -74,8 +89,8 @@ impl<K: Eq + Hash + Copy> ChartHistory<K> {
     ///     key: Subject whose ring is requested.
     ///
     /// Returns:
-    ///     The `(cpu %, mem %)` samples oldest-first, or `None` when the key is unseen.
-    pub(crate) fn ring(&self, key: K) -> Option<&VecDeque<(u8, u8)>> {
+    ///     The samples oldest-first, or `None` when the key is unseen.
+    pub(crate) fn ring(&self, key: K) -> Option<&VecDeque<V>> {
         self.rings.get(&key).map(|(ring, _)| ring)
     }
 }

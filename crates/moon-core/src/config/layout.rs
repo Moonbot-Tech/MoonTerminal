@@ -335,6 +335,11 @@ pub struct WindowLayout {
     /// Warnings list — "off" means neither written nor shown. Default: every axis on.
     #[serde(default)]
     pub warn_axes: WarnAxesCfg,
+    /// Per-axis chart visibility, alert sound, and detection thresholds for the core-warning engine,
+    /// set from the Core Status alert popup. Split from `warn_axes` (which keeps only the enable
+    /// bools) so an existing `layout.toml` without this key still loads with engine defaults.
+    #[serde(default)]
+    pub warn_params: WarnParams,
 }
 
 /// Per-axis enable switches for the core-warning engine, set from the Core Status gear popup.
@@ -353,9 +358,12 @@ pub struct WarnAxesCfg {
     /// Dropped-core connectivity warning (per server).
     #[serde(default = "def_true")]
     pub conn: bool,
-    /// Sustained high client↔core ping/RTT warning (per core).
+    /// Sustained above-baseline client↔core ping/RTT warning (per core).
     #[serde(default = "def_true")]
     pub ping: bool,
+    /// Sustained above-baseline core→exchange order-API latency warning (per core).
+    #[serde(default = "def_true")]
+    pub exch: bool,
 }
 
 impl Default for WarnAxesCfg {
@@ -366,7 +374,100 @@ impl Default for WarnAxesCfg {
             mem: true,
             conn: true,
             ping: true,
+            exch: true,
         }
+    }
+}
+
+/// Chart visibility, alert sound, and detection thresholds per warning axis. Defaults reproduce the
+/// engine's previous hard-coded constants, so an unset config behaves exactly as before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WarnParams {
+    /// Sustained system-CPU axis.
+    pub cpu: CpuWarn,
+    /// Rising process-memory axis.
+    pub mem: MemWarn,
+    /// Dropped-core connectivity axis (no thresholds, just chart + sound).
+    pub conn: ConnWarn,
+    /// Client↔core ping axis.
+    pub ping: LatWarn,
+    /// Core→exchange ping axis.
+    pub exch: LatWarn,
+}
+
+/// CPU-warning parameters: drawn-on-chart, sound, sustained-CPU percent, and the sustain seconds.
+/// (The averaging window stays a fixed internal 3 s, not a user knob.)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CpuWarn {
+    #[serde(default = "def_true")]
+    pub chart: bool,
+    pub sound: Option<String>,
+    /// Machine CPU percent (averaged) that counts toward the warning.
+    pub pct: u8,
+    /// Consecutive high seconds before it fires.
+    pub hold: u8,
+}
+impl Default for CpuWarn {
+    fn default() -> Self {
+        Self { chart: true, sound: None, pct: 70, hold: 5 }
+    }
+}
+
+/// Memory-growth parameters: percent rise above the window minimum, and the observation window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MemWarn {
+    #[serde(default = "def_true")]
+    pub chart: bool,
+    pub sound: Option<String>,
+    /// Percent rise above the window minimum that flags growth.
+    pub pct: u8,
+    /// Observation window in seconds.
+    pub window: u16,
+}
+impl Default for MemWarn {
+    fn default() -> Self {
+        Self { chart: true, sound: None, pct: 12, window: 30 }
+    }
+}
+
+/// Connectivity parameters: chart visibility and sound only (the drop rule has no numeric threshold).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConnWarn {
+    #[serde(default = "def_true")]
+    pub chart: bool,
+    pub sound: Option<String>,
+}
+impl Default for ConnWarn {
+    fn default() -> Self {
+        Self { chart: true, sound: None }
+    }
+}
+
+/// Latency-axis parameters (ping and exch): the baseline MULTIPLIER at which each colour/warning
+/// fires, the baseline window, and the sustain seconds. Purely relative — a latency warns when it
+/// reaches `red ×` its own rolling mean (default yellow ×2, red ×10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LatWarn {
+    #[serde(default = "def_true")]
+    pub chart: bool,
+    pub sound: Option<String>,
+    /// Yellow colour at this multiple of the baseline (e.g. 2 = ×2).
+    pub yellow: u8,
+    /// Red colour AND warning at this multiple of the baseline (e.g. 10 = ×10).
+    pub red: u8,
+    /// Baseline (rolling-mean) window in seconds.
+    pub window: u16,
+    /// Consecutive above-red seconds before it fires.
+    pub hold: u8,
+}
+impl Default for LatWarn {
+    fn default() -> Self {
+        Self { chart: true, sound: None, yellow: 2, red: 10, window: 60, hold: 3 }
     }
 }
 
