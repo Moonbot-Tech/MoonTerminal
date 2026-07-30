@@ -176,13 +176,14 @@ impl WarnStore {
     /// Persist one episode's ±1 min history slice so its card can draw a graph long after the live
     /// ring has rolled past it.
     ///
-    /// `INSERT OR REPLACE` keyed by the `(episode_id, subject)` unique index: capturing the same
-    /// episode twice (a durable partial at close, then the complete window once the forward tail has
-    /// filled) overwrites rather than duplicating.
+    /// `INSERT OR REPLACE` keyed by the `(episode_id, badge, subject)` unique index: capturing the
+    /// same episode twice (a durable partial at close, then the complete window once the forward tail
+    /// has filled) overwrites rather than duplicating.
     ///
     /// Args:
     ///     episode_id: The `core_warnings` row id this slice belongs to.
-    ///     subject: Which series the samples are (`"server"` today; `"core"` reserved).
+    ///     badge: Slice owner — `0` for the whole-server graph, otherwise the core id.
+    ///     subject: Which series the samples are (`"server"` for the server graph, `"core"` per core).
     ///     base_ms: Unix ms of the window's first sample, stored for future timestamp alignment.
     ///     samples: 1 Hz `(cpu %, mem %)` pairs across the window.
     ///
@@ -233,11 +234,13 @@ impl WarnStore {
         }
     }
 
-    /// Persist one episode's ±1 min ping slice under the `ping` subject (a `u16`-per-sample blob, as
-    /// a round-trip exceeds a `u8`). Idempotent via the same `(episode_id, subject)` unique index.
+    /// Persist one episode's ±1 min ping slice (a `u16`-per-sample blob, as a round-trip exceeds a
+    /// `u8`). Idempotent via the same `(episode_id, badge, subject)` unique index.
     ///
     /// Args:
     ///     episode_id: The `core_warnings` row id.
+    ///     badge: Slice owner — `0` for the server's worst-ping line, otherwise the core id.
+    ///     subject: `"ping"`/`"exch"` for the server lines, `"core_ping"`/`"core_exch"` per core.
     ///     base_ms: Unix ms of the window's first sample.
     ///     samples: 1 Hz round-trip samples (ms) across the window.
     ///

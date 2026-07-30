@@ -259,8 +259,10 @@ struct Backend {
     /// so this queue being in-memory only means a restart drops the forward-tail completion, never the
     /// whole graph.
     warn_pending_slices: Vec<crate::backend::PendingWarnSlice>,
-    /// Whether the one-time retention prune of old warning-episode slices has run this session.
-    warn_pruned: bool,
+    /// Unix ms of the last retention prune of old warning-episode slices (`0` = not yet this session).
+    /// Re-pruned once per `WARN_PRUNE_INTERVAL_MS` so a session outliving the retention window keeps
+    /// bounding the file instead of pruning only once at startup.
+    warn_last_prune_ms: i64,
     /// Core reconnect requests from the Connections button, drained into `session.reconnect`.
     /// Ported from egui's `SettingsActions.reconnect`.
     reconnect_request: Vec<CoreId>,
