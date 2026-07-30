@@ -91,7 +91,7 @@ pub(super) fn ping(value: Option<u32>) -> String {
 ///     baseline: The core's rolling mean latency in ms, or `None` until it is established.
 ///
 /// Returns:
-///     `Warning` from baseline ×1.10, `Critical` from ×1.30 (each with a small absolute floor), else
+///     `Warning` from baseline ×1.10, `Critical` from ×1.30 (purely relative — no ms floor), else
 ///     `Normal` (including an unknown value or an unestablished baseline).
 fn latency_level(value: Option<u32>, baseline: Option<u32>) -> LoadLevel {
     match value {

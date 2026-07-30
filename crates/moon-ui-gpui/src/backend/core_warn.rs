@@ -33,9 +33,8 @@ use moon_core::session::{CoreId, CoreSysStatus};
 const CPU_WINDOW_SECS: i64 = 3;
 /// Memory-growth is judged against the minimum used within this many recent seconds.
 const MEM_WINDOW_SECS: i64 = 30;
-/// A memory rise of at least this many MB above the window minimum flags growth.
-const MEM_GROWTH_MB: u16 = 64;
-/// ...or a rise of at least this percent above the window minimum.
+/// A memory rise of at least this percent above the window minimum flags growth. Purely relative —
+/// no absolute MB floor — so it scales with each core's footprint.
 const MEM_GROWTH_PCT: u32 = 12;
 /// Machine CPU at or above this percent (averaged) counts toward the sustained-CPU warning.
 const WARN_CPU_PCT: u32 = 70;
@@ -53,11 +52,6 @@ const LATENCY_WARN_NUM: u32 = 130;
 const LATENCY_YELLOW_NUM: u32 = 110;
 /// Percentage denominator for the two ratios above.
 const LATENCY_PCT_DEN: u32 = 100;
-/// ...but also at least this many ms ABOVE the baseline, so a tiny ping (20 → 27 ms is +35 %) does
-/// not trip on the percentage alone. The critical (warning) floor.
-const LATENCY_WARN_FLOOR_MS: u32 = 50;
-/// The yellow-colour floor: smaller than the warning floor so a moderate rise still tints.
-const LATENCY_YELLOW_FLOOR_MS: u32 = 20;
 /// A latency stays CRITICAL this many consecutive seconds before its episode/badge opens, so a
 /// single slow sample does not flag.
 const LATENCY_SUSTAIN_SECS: u32 = 3;
@@ -79,10 +73,10 @@ pub(crate) enum LatencySeverity {
 
 /// Classify a latency (ms) against its per-core rolling `baseline` (ms), higher = worse.
 ///
-/// Purely relative to the baseline, with a small absolute floor so a small ping that is a large
-/// PERCENTAGE jump but a small ABSOLUTE jump does not flag. A `None` baseline (not enough samples yet)
-/// or a zero baseline is always `Normal`. The single source of truth shared by the engine's warning
-/// decision and the panel's metric colouring, so red and "warning" always mean the same thing.
+/// PURELY relative to the baseline (no absolute ms floor): a latency is judged only by how far, in
+/// percent, it sits above the core's own mean. A `None` baseline (not enough samples yet) or a zero
+/// baseline is always `Normal`. The single source of truth shared by the engine's warning decision
+/// and the panel's metric colouring, so red and "warning" always mean the same thing.
 ///
 /// Args:
 ///     value: The current smoothed latency in ms.
@@ -94,12 +88,12 @@ pub(crate) fn latency_severity(value: u32, baseline: Option<u32>) -> LatencySeve
     let Some(base) = baseline.filter(|b| *b > 0) else {
         return LatencySeverity::Normal;
     };
-    let delta = value.saturating_sub(base);
     // Integer ratio test: value >= base * num / 100, without floating point.
-    let over = |num: u32| u64::from(value) * u64::from(LATENCY_PCT_DEN) >= u64::from(base) * u64::from(num);
-    if over(LATENCY_WARN_NUM) && delta >= LATENCY_WARN_FLOOR_MS {
+    let over =
+        |num: u32| u64::from(value) * u64::from(LATENCY_PCT_DEN) >= u64::from(base) * u64::from(num);
+    if over(LATENCY_WARN_NUM) {
         LatencySeverity::Critical
-    } else if over(LATENCY_YELLOW_NUM) && delta >= LATENCY_YELLOW_FLOOR_MS {
+    } else if over(LATENCY_YELLOW_NUM) {
         LatencySeverity::Warning
     } else {
         LatencySeverity::Normal
@@ -928,8 +922,13 @@ fn mem_grew(mem: &VecDeque<(i64, u16)>) -> bool {
     }
     let current = mem.back().map(|(_, used)| *used).unwrap_or(0);
     let min = mem.iter().map(|(_, used)| *used).min().unwrap_or(current);
+    // Purely relative: a rise of at least MEM_GROWTH_PCT above the window minimum. A zero minimum has
+    // no meaningful percentage baseline, so it never flags (avoids "any value > 0" firing).
+    if min == 0 {
+        return false;
+    }
     let growth = u32::from(current.saturating_sub(min));
-    growth >= u32::from(MEM_GROWTH_MB).max(u32::from(min) * MEM_GROWTH_PCT / 100)
+    growth >= u32::from(min) * MEM_GROWTH_PCT / 100
 }
 
 /// Advance the consecutive-high-seconds counter for the sustained-CPU warning.

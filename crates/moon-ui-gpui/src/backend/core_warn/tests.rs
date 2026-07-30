@@ -390,19 +390,21 @@ fn never_connected_or_connecting_does_not_warn_connectivity() {
     assert!(!engine.server_conn_warn(ip), "connecting is not a drop");
 }
 
-/// `latency_severity` is purely relative: no baseline is `Normal`; a value near the baseline is
-/// `Normal`; +10 % (past the yellow floor) is `Warning`; +30 % (past the warn floor) is `Critical`;
-/// and a large PERCENTAGE that is a tiny ABSOLUTE jump (the noise floor) stays `Normal`.
+/// `latency_severity` is PURELY relative (no absolute ms floor): no/zero baseline is `Normal`; a
+/// value near the baseline is `Normal`; +10 % is `Warning`; +30 % is `Critical` — the percentage is
+/// the only test, so it fires the same on small and large pings.
 #[test]
-fn latency_severity_is_relative_with_a_floor() {
+fn latency_severity_is_purely_relative() {
     assert_eq!(latency_severity(500, None), LatencySeverity::Normal);
+    assert_eq!(latency_severity(500, Some(0)), LatencySeverity::Normal);
     assert_eq!(latency_severity(210, Some(200)), LatencySeverity::Normal);
-    // 200 → 240 is +20 % and +40 ms: past the yellow floor (20 ms), under the warn ratio.
+    // 200 → 240 is +20 %: yellow, under the +30 % critical ratio.
     assert_eq!(latency_severity(240, Some(200)), LatencySeverity::Warning);
-    // 200 → 300 is +50 % and +100 ms: critical.
+    // 200 → 300 is +50 %: critical.
     assert_eq!(latency_severity(300, Some(200)), LatencySeverity::Critical);
-    // 20 → 27 is +35 % but only +7 ms: the absolute floor keeps it Normal (the noise case).
-    assert_eq!(latency_severity(27, Some(20)), LatencySeverity::Normal);
+    // A small ping obeys the same percentages: 20 → 27 (+35 %) is now critical, no ms floor.
+    assert_eq!(latency_severity(27, Some(20)), LatencySeverity::Critical);
+    assert_eq!(latency_severity(22, Some(20)), LatencySeverity::Warning);
 }
 
 /// A ping that spikes ABOVE the core's established baseline must open exactly one per-core ping
