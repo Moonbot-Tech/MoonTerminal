@@ -121,24 +121,43 @@ impl Shell {
             Some(down_text)
         };
 
-        let link_label = "moonbot.pro";
         let mut right_items = Vec::new();
         #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
         {
+            let backend = self.backend.clone();
+            let group = self.group.clone();
             right_items.extend([
-                MoonStatusItem::new("debug").color(p.amber).gap_after(8.0),
+                MoonStatusItem::new("debug")
+                    .id("debug-status-open")
+                    .color(p.amber)
+                    .gap_after(8.0)
+                    .tooltip("debug")
+                    .on_click(move |_, window, cx| {
+                        crate::diagnostics::debug_window::open_debug_perf_window(
+                            cx,
+                            backend.clone(),
+                            group.clone(),
+                            Some(window.window_handle()),
+                        )
+                    }),
                 MoonStatusItem::group_separator().gap_after(8.0),
             ]);
         }
-        right_items.push(MoonStatusItem::new(link_label).color(p.blue).gap_after(0.0));
+        right_items.push(
+            MoonStatusItem::new("moonbot.pro")
+                .id("moonbot-link")
+                .color(p.blue)
+                .gap_after(0.0)
+                .tooltip("moonbot.pro")
+                .on_click(|_, _window, cx| cx.open_url("https://moonbot.pro")),
+        );
 
         let mut host = div()
             .id("status-bar-host")
             .w_full()
-            // Mirror MoonStatusBar's default 22/13/4.5 fit triple so the host, its child, and the
-            // transparent action hitboxes grow together when the Font slider increases.
+            // Mirror MoonStatusBar's default 22/13/4.5 fit triple so the aggregate telemetry
+            // tooltip owns the same full-height region as the scaled status row.
             .h(design::fit_h_px(cx, design::STATUS_H, 13.0, 4.5))
-            .relative()
             .child(
                 MoonStatusBar::new("status-bar")
                     .indicator(
@@ -212,55 +231,6 @@ impl Shell {
                     .right_items(right_items)
                     .render(),
             );
-        // MoonStatusItem has no click handler. Measure the rendered monospaced label instead of
-        // keeping the old approximate fixed width, then overlay only its hit area.
-        let action_pad = design::ui_value(cx, 3.0);
-        let right_offset = design::ui_value(cx, 8.0);
-        let link_width = design::ui_text_width(cx, link_label, 10.0, 400.0, true);
-        host = host.child(
-            div()
-                .id("moonbot-link")
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .right(px((right_offset - action_pad).max(0.0)))
-                .w(px(link_width + action_pad * 2.0))
-                .cursor_pointer()
-                .tooltip(|_window, cx| {
-                    cx.new(|_| moon_ui::MoonTooltipView::new("moonbot.pro"))
-                        .into()
-                })
-                .on_click(|_, _window, cx: &mut App| cx.open_url("https://moonbot.pro")),
-        );
-        #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
-        {
-            let backend = self.backend.clone();
-            let debug_width = design::ui_text_width(cx, "debug", 10.0, 400.0, true);
-            let debug_right =
-                right_offset + link_width + design::ui_value(cx, 8.0 + 1.0 + 8.0) - action_pad;
-            host = host.child(
-                div()
-                    .id("debug-status-open")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .right(px(debug_right))
-                    .w(px(debug_width + action_pad * 2.0))
-                    .cursor_pointer()
-                    .tooltip(|_window, cx| cx.new(|_| MoonTooltipView::new("debug")).into())
-                    .on_click({
-                        let group = self.group.clone();
-                        move |_, window, cx| {
-                            crate::diagnostics::debug_window::open_debug_perf_window(
-                                cx,
-                                backend.clone(),
-                                group.clone(),
-                                Some(window.window_handle()),
-                            )
-                        }
-                    }),
-            );
-        }
         if let Some(tooltip_text) = tooltip_text {
             host = host.tooltip(move |_window, cx| {
                 cx.new(|_| MoonTooltipView::new(tooltip_text.clone()).max_width(420.0))
