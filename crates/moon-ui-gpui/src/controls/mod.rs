@@ -40,6 +40,12 @@ pub use metric::{MetricTarget, TradeMetric, metric_popup_content};
 pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};
 pub use toolbar::toolbar;
 
+/// Unscaled width of the shared core-selector trigger.
+///
+/// Consumers that reserve responsive toolbar space use the same value as [`core_combo`], so the
+/// layout cannot drift from the MoonUI dropdown it contains.
+pub(crate) const CORE_COMBO_TRIGGER_W: f32 = 118.0;
+
 /// Trading-metric slider bounds `(min, max, step)` matching core semantics.
 ///
 /// `Shell` also uses these bounds when it creates slider state.

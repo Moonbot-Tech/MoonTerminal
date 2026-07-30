@@ -1,16 +1,16 @@
 //! Unit tests for persisted filter-tuner controls.
 
 use super::{
-    edge_options, edge_options_upto, fmt_bound, iters_of, parse_num, persist_seed, restore_edges,
-    restore_enabled, restore_iters, restore_seed, restore_train, seed_of, staged_dirty, train_frac,
-    SuggestJob, SuggestState, TunerState, DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN,
-    TRAIN_OPTIONS,
+    DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, SuggestJob, SuggestState, TRAIN_OPTIONS,
+    TunerState, canonical_iters, edge_options, edge_options_upto, fmt_bound, iters_of, parse_num,
+    persist_seed, restore_edges, restore_edges_upto, restore_enabled, restore_iters, restore_seed,
+    restore_train, seed_of, staged_dirty, train_frac,
 };
-use moon_core::db::tuner::threshold_search::{
-    restarts_max, SearchHandle, EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN,
-};
-use moon_core::db::tuner::StratFilters;
 use moon_core::db::tuner::FIELDS;
+use moon_core::db::tuner::StratFilters;
+use moon_core::db::tuner::threshold_search::{
+    EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
+};
 
 /// `filter/state.rs:TunerState::mark_report_stale` must not add the draft resets or request
 /// generation bumps from `invalidate`; the former clears edits and the latter starves a long
@@ -168,13 +168,23 @@ fn every_offered_depth_is_one_the_search_accepts() {
 ///
 /// Breakage this pins: `state.rs:edge_options_upto` selecting by anything other than the ceiling
 /// — a hand-kept index, a filter over the whole list — which can gate a depth from the MIDDLE.
-/// A stored 256 would stay selectable while 128 was not, so [`edges_of`] silently rewrites a value
+/// A stored 512 would stay selectable while 128 was not, so [`edges_of`] silently rewrites a value
 /// the dropdown still shows as chosen. Raising the light ceiling to the heavy one is caught here
 /// too: it puts the heaviest depth back on the machines this bar exists to protect.
 #[test]
 fn a_small_machine_is_offered_a_prefix_of_what_a_big_one_is() {
     let light = edge_options_upto(EDGES_MAX_LIGHT);
     let heavy = edge_options_upto(EDGES_MAX);
+    assert_eq!(
+        light.last(),
+        Some(&EDGES_MAX_LIGHT),
+        "the protected dropdown must expose its exact core ceiling"
+    );
+    assert_eq!(
+        heavy.last(),
+        Some(&EDGES_MAX),
+        "the powerful-PC dropdown must expose depth 512 instead of stopping early"
+    );
     assert!(
         light.len() < heavy.len(),
         "the bar must actually withhold something"
@@ -247,6 +257,16 @@ fn depth_restores_only_values_the_dropdown_offers() {
         assert_eq!(restore_edges(Some(outside)), DEFAULT_EDGES);
     }
     assert_eq!(restore_edges(None), DEFAULT_EDGES);
+    assert_eq!(
+        restore_edges_upto(Some(512), EDGES_MAX),
+        512,
+        "a powerful PC must reopen its saved 512 depth"
+    );
+    assert_eq!(
+        restore_edges_upto(Some(512), EDGES_MAX_LIGHT),
+        DEFAULT_EDGES,
+        "a protected PC must not inherit a 512-depth run from another machine"
+    );
 }
 
 /// What gets stored must reopen as the exact count the search will run.
@@ -255,16 +275,16 @@ fn depth_restores_only_values_the_dropdown_offers() {
 /// number `suggest_into_v1` runs) and `restore_iters` (stored number → box text) — not a
 /// literal restated from either.
 ///
-/// Breakage this pins: removing the clamp from `state.rs:iters_of` lets the UI display and store
-/// 99999 while the search executes `RESTARTS_MAX`. Re-hardcoding a bound there instead of
+/// Breakage this pins: removing the clamp from `state.rs:iters_of` lets the UI store a value above
+/// `RESTARTS_MAX` while the search executes the ceiling. Re-hardcoding a bound there instead of
 /// reading the const drifts the same way as soon as the search moves its own. Replacing
 /// `restore_iters` with `saved.unwrap_or_default()` also opens an unset knob on 0 instead of the
 /// default.
 #[test]
 fn restarts_reopen_as_the_count_the_search_runs() {
     for typed in [
-        "", "   ", "abc", "0", "1", "7", "500", "1000", "2000", "2001", "99999", "-5", "20k",
-        "1.5k", " 2К ",
+        "", "   ", "abc", "0", "1", "7", "500", "1000", "2000", "2001", "99999", "100k", "100001",
+        "-5", "20k", "1.5k", " 2К ",
     ] {
         let effective = iters_of(typed);
         // Reopened text may be COMPACT ("20k"), so the agreement to check is the count itself
@@ -284,6 +304,10 @@ fn restarts_reopen_as_the_count_the_search_runs() {
     let max = restarts_max();
     assert_eq!(iters_of(&max.to_string()), max);
     assert_eq!(iters_of(&(max + 1).to_string()), max);
+    assert_eq!(
+        canonical_iters(&(max + 1).to_string()),
+        fmt_bound(max as f64)
+    );
     assert_eq!(iters_of(&RESTARTS_MIN.to_string()), RESTARTS_MIN);
     assert_eq!(iters_of("0"), RESTARTS_MIN);
     // The suffix the box displays has to be one it reads back.

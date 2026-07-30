@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use gpui::*;
 use moon_ui::{
-    h_flex, MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex,
 };
 use rust_i18n::t;
 
@@ -18,6 +18,15 @@ use crate::load_state::LoadState;
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::integrity::Integrity;
 use moon_core::db::{ProfitMetric, ReadFail, SideFilter};
+
+/// Unscaled width of the Analytics side-selector trigger.
+const SIDE_TRIGGER_W: f32 = 69.0;
+/// Unscaled width of the Analytics trade-kind-selector trigger.
+const KIND_TRIGGER_W: f32 = 102.0;
+/// Unscaled width of the Analytics profit-metric-selector trigger.
+const METRIC_TRIGGER_W: f32 = 78.0;
+/// Unscaled horizontal spacing between neighboring toolbar controls.
+const TOOLBAR_GAP: f32 = 6.0;
 
 #[cfg(test)]
 mod tests;
@@ -122,8 +131,12 @@ impl AnalyticsView {
         let mut row = h_flex()
             .flex_none()
             .w_full()
-            .h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
-            .gap(design::ui_px(cx, 6.0))
+            .min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
+            .flex_wrap()
+            .gap_x(design::ui_px(cx, TOOLBAR_GAP))
+            .gap_y(design::ui_px(cx, 4.0))
+            .pt(design::ui_px(cx, 5.0))
+            .pb(design::ui_px(cx, 4.0))
             .px(design::ui_px(cx, 8.0))
             .items_center()
             .bg(moon(p.shell_high))
@@ -131,6 +144,12 @@ impl AnalyticsView {
             .border_color(moon(p.border));
         for t in Tab::ALL {
             let on = self.tab == t;
+            let title = t.title();
+            // MoonButton's custom size has no horizontal padding, so give each localized title
+            // measured breathing room while retaining a useful click target for short labels.
+            let tab_width = (design::ui_text_width(cx, &title, 10.5, 400.0, true)
+                + design::ui_value(cx, 20.0))
+            .max(design::ui_value(cx, 72.0));
             row = row.child(
                 MoonButton::new(t.id())
                     .variant(if on {
@@ -145,9 +164,9 @@ impl AnalyticsView {
                         line_height: 13.0,
                         gap: 5.0,
                     })
-                    .width(112.0)
+                    .width(tab_width)
                     .selected(on)
-                    .label(t.title())
+                    .label(title)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if this.tab != t {
                             this.tab = t;
@@ -198,28 +217,46 @@ impl AnalyticsView {
                     .render(),
             );
         }
-        // The row's only slack, doubling as the sole-core caption. `flex_1 + min_w_0 + truncate`
-        // means the name can only ever eat that slack — it cannot push the fixed-width combos off
-        // the right edge — and `flatten_lines` folds a core name carrying a hard break, which this
-        // fixed-height single-line row would otherwise clip through the tab buttons.
-        row.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .pl(design::ui_px(cx, 4.0))
-                .text_size(design::t_caption(cx))
-                .text_color(moon(p.text_muted))
-                .children(
-                    sole_core_name(&self.cores, &self.sel_cores)
-                        .map(crate::display_text::flatten_lines),
-                ),
-        )
-        // Filters — pinned to the right (same controls as in Orders/Report).
-        .child(self.core_combo(cx))
-        .child(self.side_combo(cx))
-        .child(self.kind_combo(cx))
-        .child(self.metric_combo(cx))
+        // Keep the selector widths and their three internal gaps together. The fourth gap belongs
+        // to the caption, so the whole semantic group moves to the next line before any selector
+        // is clipped. MoonUI scales Action dropdown widths from their 10.5px reference font.
+        let action_trigger_scale = design::font_value(cx, 10.5) / 10.5;
+        let filters_min_w = (crate::controls::CORE_COMBO_TRIGGER_W
+            + SIDE_TRIGGER_W
+            + KIND_TRIGGER_W
+            + METRIC_TRIGGER_W)
+            * action_trigger_scale
+            + design::ui_value(cx, TOOLBAR_GAP * 4.0);
+        let selectors = h_flex()
+            .flex_none()
+            .gap(design::ui_px(cx, TOOLBAR_GAP))
+            .child(self.core_combo(cx))
+            .child(self.side_combo(cx))
+            .child(self.kind_combo(cx))
+            .child(self.metric_combo(cx));
+        // Right alignment keeps the selected core beside its selector. `flex_1 + min_w_0 +
+        // truncate` lets the caption yield all optional width before the atomic selector group
+        // wraps. `flatten_lines` folds a hard break that the one-line caption would otherwise clip.
+        let filters = h_flex()
+            .flex_1()
+            .min_w(px(filters_min_w))
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .pr(design::ui_px(cx, TOOLBAR_GAP))
+                    .text_right()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .children(
+                        sole_core_name(&self.cores, &self.sel_cores)
+                            .map(crate::display_text::flatten_lines),
+                    ),
+            )
+            .child(selectors);
+        row.child(filters)
     }
 
     /// Profit metric combo (USDT / Profit %): switches every figure and the tuner sweep
@@ -254,7 +291,7 @@ impl AnalyticsView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(78.0)
+            .trigger_width_scaled(METRIC_TRIGGER_W)
             .menu_width_scaled(120.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
@@ -335,7 +372,7 @@ impl AnalyticsView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(69.0)
+            .trigger_width_scaled(SIDE_TRIGGER_W)
             .menu_width_scaled(120.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
@@ -378,7 +415,7 @@ impl AnalyticsView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(102.0)
+            .trigger_width_scaled(KIND_TRIGGER_W)
             .menu_width_scaled(138.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)

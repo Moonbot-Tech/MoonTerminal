@@ -20,7 +20,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::filter::state::{
-    edge_options, iters_of, persist_seed, SuggestJob, SuggestState, TRAIN_OPTIONS,
+    canonical_iters, edge_options, iters_of, persist_seed, SuggestJob, SuggestState, TRAIN_OPTIONS,
 };
 use super::shared::TunerKind;
 use crate::design;
@@ -875,39 +875,60 @@ impl AnalyticsView {
                 .default_value(value)
                 .placeholder(ph)
         });
-        cx.subscribe(&state, move |this, state, ev: &MoonInputEvent, cx| {
-            // Change is committed too: the value takes effect right away on a "Search" click.
-            if matches!(
-                ev,
-                MoonInputEvent::Change | MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }
-            ) {
-                let value = state.read(cx).value().to_string();
-                match (kind, which) {
-                    (TunerKind::Filter, CfgInput::MinTrades) => {
-                        this.tuner.min_trades = value;
-                        this.tuner.invalidate_suggest();
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, state, ev: &MoonInputEvent, window, cx| {
+                // Change is committed too: the value takes effect right away on a "Search" click.
+                if matches!(
+                    ev,
+                    MoonInputEvent::Change
+                        | MoonInputEvent::Blur
+                        | MoonInputEvent::PressEnter { .. }
+                ) {
+                    let raw = state.read(cx).value().to_string();
+                    let value = if matches!(
+                        (kind, which, ev),
+                        (
+                            TunerKind::Filter,
+                            CfgInput::Restarts,
+                            MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }
+                        )
+                    ) {
+                        canonical_iters(&raw)
+                    } else {
+                        raw.clone()
+                    };
+                    if value != raw {
+                        state.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
                     }
-                    (TunerKind::Filter, CfgInput::Seed) => {
-                        this.tuner.seed = value;
-                        this.tuner.invalidate_suggest();
-                        this.persist_tuner_seed(cx);
+                    match (kind, which) {
+                        (TunerKind::Filter, CfgInput::MinTrades) => {
+                            this.tuner.min_trades = value;
+                            this.tuner.invalidate_suggest();
+                        }
+                        (TunerKind::Filter, CfgInput::Seed) => {
+                            this.tuner.seed = value;
+                            this.tuner.invalidate_suggest();
+                            this.persist_tuner_seed(cx);
+                        }
+                        (TunerKind::Filter, CfgInput::Restarts) => {
+                            this.tuner.iters = value;
+                            this.tuner.invalidate_suggest();
+                            this.persist_tuner_iters(cx);
+                        }
+                        (TunerKind::Time, CfgInput::MinTrades) => {
+                            this.time_tuner.min_trades = value;
+                            this.time_tuner.invalidate_suggest();
+                        }
+                        (TunerKind::Time, _) | (TunerKind::Coins, _) => {}
                     }
-                    (TunerKind::Filter, CfgInput::Restarts) => {
-                        this.tuner.iters = value;
-                        this.tuner.invalidate_suggest();
-                        this.persist_tuner_iters(cx);
+                    if !matches!(ev, MoonInputEvent::Change) {
+                        cx.notify();
                     }
-                    (TunerKind::Time, CfgInput::MinTrades) => {
-                        this.time_tuner.min_trades = value;
-                        this.time_tuner.invalidate_suggest();
-                    }
-                    (TunerKind::Time, _) | (TunerKind::Coins, _) => {}
                 }
-                if !matches!(ev, MoonInputEvent::Change) {
-                    cx.notify();
-                }
-            }
-        })
+            },
+        )
         .detach();
         match kind {
             TunerKind::Filter => self.tuner.inputs.insert(id.to_string(), state.clone()),
@@ -1011,10 +1032,10 @@ impl AnalyticsView {
 ///     budget: The same machine budget that allowed the composition block to render.
 ///
 /// Returns:
-///     Localized field-count, beam-width, and fold-count labels.
+///     Localized field-count, adaptive-beam, seed-group, and fold-count labels.
 fn compose_budget_labels(
     budget: &moon_core::db::tuner::threshold_search::ComposeBudget,
-) -> [String; 3] {
+) -> [String; 4] {
     [
         t!(
             "analytics.tuner.compose_budget_fields",
@@ -1023,7 +1044,13 @@ fn compose_budget_labels(
         .to_string(),
         t!(
             "analytics.tuner.compose_budget_beam",
-            n = budget.beam_width
+            from = budget.beam_width_min,
+            to = budget.beam_width_max
+        )
+        .to_string(),
+        t!(
+            "analytics.tuner.compose_budget_seeds",
+            n = budget.seed_groups
         )
         .to_string(),
         t!("analytics.tuner.compose_budget_folds", n = budget.folds).to_string(),

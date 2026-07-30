@@ -14,6 +14,7 @@ use std::rc::Rc;
 use gpui::App;
 use rust_i18n::t;
 
+use crate::controls::CORE_COMBO_TRIGGER_W;
 use crate::core_order::OrderedCores;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
 
@@ -248,7 +249,7 @@ where
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::Action)
-        .trigger_width_scaled(118.0)
+        .trigger_width_scaled(CORE_COMBO_TRIGGER_W)
         .fit_menu_width(min_menu_w, 560.0)
         .menu_max_height_ui(360.0)
         .menu_size(MoonMenuSize::Compact)

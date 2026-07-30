@@ -1,36 +1,20 @@
-//! Choosing WHICH fields to filter on, not just where to put their thresholds.
+//! Select which fields to filter, not only where their thresholds belong.
 //!
-//! The descent in [`super::search`] already decides per field whether a range beats leaving it
-//! alone, so a set of sorts falls out of it for free. What it cannot do is judge that set: it
-//! maximizes profit on the very trades it fits, and with two dozen fields and hundreds of
-//! quantile edges the best-fitting set is reliably the one that memorized the sample. Ask it to
-//! consider every field and it will happily use every field.
+//! Composition stays inside the fitting region. Anchored walk-forward folds fit thresholds on a
+//! growing prefix and score them on the unseen stretch that follows, leaving the UI's final
+//! holdout untouched. Each fold divides one fixed restart budget among up to three independent
+//! seed groups. Seeds vote inside their fold before folds vote, so one lucky time stretch cannot
+//! dominate the temporal evidence.
 //!
-//! So the set is chosen HERE, and it is chosen on trades the fitting never saw. The fitting
-//! region is cut into anchored walk-forward folds ([`super::fold_cuts`]): each fold fits on a
-//! growing prefix and is measured on the stretch immediately after it. A candidate set is worth
-//! what it earns on those measured stretches, averaged.
+//! A bounded adaptive beam keeps eight branches when ranks eight and nine are clearly separated
+//! and up to sixteen when that boundary is ambiguous. Weak intermediate branches remain eligible
+//! because two individually weak fields may form a strong interaction. Material risk-scaled
+//! profit gaps are decisive; close candidates also compare profit factor, lower drawdown, and
+//! retained trade count. Backward elimination gives cost-free fields back, making the smaller set
+//! the complexity tie-break.
 //!
-//! Two rules do the real work:
-//!
-//! * a completed reduced set is accepted only if it helps in a strict MAJORITY of folds, not
-//!   merely on average — weak intermediate branches may survive long enough to expose a useful
-//!   interaction, but one fold's lucky streak cannot admit their final set;
-//! * when dropping a field costs nothing, it goes. Ties go to the SMALLER set, and that is the
-//!   whole complexity penalty. Writing it as a penalty term instead would need a coefficient
-//!   trading profit against field count — a number in someone's currency, varying by scope over
-//!   orders of magnitude, that the user would have to tune. Needing to tune it is the complaint
-//!   this feature exists to answer.
-//!
-//! The period the user is SHOWN as out-of-sample is not read here at all. Selection consumes
-//! whatever it is measured on — a few dozen looks at the same stretch and it starts fitting that
-//! too — so composition stays entirely inside the fitting region, and the held-back tail remains
-//! the one number nobody optimized against.
-//!
-//! A bounded beam keeps several alternative paths alive, including temporarily weak singletons
-//! that may form a strong pair. Up to three folds rank those paths; two later folds see only the
-//! one subset and decide which of three paths wins: that strict subset, all admitted fields, or
-//! no additional field filters.
+//! Two final folds see only the selected subset and choose symmetrically among three normal paths:
+//! that reduced set, every admitted field, or no additional field filters.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -44,18 +28,28 @@ use crate::db::metrics::improvement_margin;
 #[cfg(test)]
 mod tests;
 
-/// Parallel branches retained at each composition depth.
+/// Branches retained at an unambiguous composition depth.
 ///
-/// Eight keeps twice as many alternative interactions alive as the initial beam without turning
-/// 24 fields into an exponential search. Growing through all 24 fields produces at most 2,232
-/// scored masks before slot constraints and duplicate children reduce that number.
-const BEAM_WIDTH: usize = 8;
+/// Ambiguous boundaries may expand to [`BEAM_WIDTH_MAX`], but a decisive layer contracts here.
+const BEAM_WIDTH_MIN: usize = 8;
+
+/// Hard ceiling for an ambiguous composition depth.
+const BEAM_WIDTH_MAX: usize = 16;
+
+/// Independent restart groups used for each fold score when the budget can supply them.
+const SEED_GROUPS: usize = 3;
+
+/// Profit differences inside this share of the compared risk scale let secondary metrics decide.
+const PROFIT_BAND_FRAC: f64 = 0.05;
+
+/// Profit-factor difference below which two outcomes are treated as tied.
+const PF_MARGIN: f64 = 0.02;
 
 /// Largest restart count spent fitting one candidate on one ranking fold.
 ///
 /// Candidate selection is a coarse ordering pass. The final refit still receives the user's full
-/// restart count, while this cap gives the beam a hard work bound independent of a 50k setting.
-const RANKING_RESTARTS_MAX: usize = 256;
+/// restart count, while this cap gives the beam a hard work bound independent of a large setting.
+const RANKING_RESTARTS_MAX: usize = 512;
 
 /// User restarts represented by one ranking restart before the hard cap applies.
 const RANKING_RESTART_DIVISOR: usize = 32;
@@ -88,8 +82,12 @@ pub(super) struct ComposeParams {
     pub(super) round: bool,
     /// Deepest set the beam may build.
     pub(super) max_fields: usize,
-    /// Parallel branches retained at each depth.
-    pub(super) beam_width: usize,
+    /// Branches retained when the beam boundary is decisive.
+    pub(super) beam_width_min: usize,
+    /// Hard branch ceiling when the beam boundary is ambiguous.
+    pub(super) beam_width_max: usize,
+    /// Independent restart groups requested for every fold score.
+    pub(super) seed_groups: usize,
 }
 
 /// The composed set.
@@ -98,9 +96,7 @@ pub(super) struct ComposeOutcome {
     pub(super) chosen: Vec<bool>,
     /// Which independently evaluated path produced `chosen`.
     pub(super) decision: ComposeDecision,
-    /// Per field, how many folds gave it a range under the FINAL set — how reproducible its
-    /// contribution is across time, which is the only confidence figure here that was not
-    /// selected for.
+    /// Per field, how many folds had a strict seed majority apply it under the final set.
     pub(super) support: Vec<u8>,
     /// Folds the figures rest on, so a caller can render "2/3" without assuming how many there
     /// were.
@@ -110,15 +106,19 @@ pub(super) struct ComposeOutcome {
 /// How wide a composition may go on this machine.
 ///
 /// Machine-fixed only. The per-run ranking share is [`Self::ranking_restarts`] rather than a
-/// field, so a caller that only wants to know WHETHER this machine composes — and to caption the
-/// three numbers below — does not have to invent a restart count to ask.
+/// field, so a caller that only wants to know whether this machine composes and caption the fixed
+/// policy does not have to invent a restart count.
 pub struct ComposeBudget {
     /// Folds the fitting region is cut into.
     pub folds: usize,
     /// Deepest set the beam may build.
     pub max_fields: usize,
-    /// Parallel branches retained at each depth.
-    pub beam_width: usize,
+    /// Branches retained when the beam boundary is decisive.
+    pub beam_width_min: usize,
+    /// Hard branch ceiling when the beam boundary is ambiguous.
+    pub beam_width_max: usize,
+    /// Maximum independent seed groups used inside each fold.
+    pub seed_groups: usize,
     /// Logical cores this was built for, so the UI can explain the numbers it is showing.
     pub cores: usize,
 }
@@ -127,10 +127,10 @@ impl ComposeBudget {
     /// Restarts one candidate ranking run gets, out of the count the user asked for.
     ///
     /// One thirty-second of it, capped at [`RANKING_RESTARTS_MAX`]: beam search ranks hundreds of
-    /// masks, so the former quarter-budget would multiply a 50k request into millions of ranking
-    /// restarts. Never zero — a run of no restarts finds nothing and would read as "this scope has
-    /// no answer" rather than as a budget too small to say. The outer gate and final refit are not
-    /// scaled here.
+    /// masks, so the former quarter-budget would multiply a large request into millions of
+    /// ranking restarts. Never zero — a run of no restarts finds nothing and would read as "this
+    /// scope has no answer" rather than as a budget too small to say. The outer gate and final
+    /// refit are not scaled here.
     ///
     /// Args:
     ///     user_restarts: Restart count used by the later full-budget gate and refit.
@@ -153,10 +153,10 @@ pub fn composition_budget() -> Option<ComposeBudget> {
 
 /// [`composition_budget`] with the core count supplied, so the policy itself is testable.
 ///
-/// One tier above the bar: a machine with twice the bar's cores composes no wider. The width is
-/// set by what makes the ANSWER trustworthy — three inner folds and two untouched gates. The
-/// beam is bounded by [`BEAM_WIDTH`] rather than an arbitrary set-size ceiling, so every admitted
-/// field count remains reachable while several competing interactions survive each layer.
+/// One tier above the bar: a machine with twice the bar's cores composes no wider. Three inner
+/// folds rank candidates and two untouched folds gate the result. The beam uses
+/// [`BEAM_WIDTH_MIN`] at a robust boundary and at most [`BEAM_WIDTH_MAX`] at an ambiguous one, so
+/// every admitted field count remains reachable while the work stays bounded.
 ///
 /// Args:
 ///     cores: Logical processors available to the search.
@@ -170,66 +170,319 @@ fn budget_for(cores: usize) -> Option<ComposeBudget> {
     Some(ComposeBudget {
         folds: 5,
         max_fields: super::super::FIELDS.len(),
-        beam_width: BEAM_WIDTH,
+        beam_width_min: BEAM_WIDTH_MIN,
+        beam_width_max: BEAM_WIDTH_MAX,
+        seed_groups: SEED_GROUPS,
         cores,
     })
 }
 
-/// Mean of a fold score vector; zero for an empty one.
-fn mean(v: &[f64]) -> f64 {
-    if v.is_empty() {
-        0.0
-    } else {
-        v.iter().sum::<f64>() / v.len() as f64
+/// Metrics produced by one seed group on one fold's unseen stretch.
+#[derive(Clone, Copy, Debug, Default)]
+struct Quality {
+    /// Held-out profit.
+    profit: f64,
+    /// Held-out profit factor.
+    profit_factor: f64,
+    /// Held-out maximum drawdown.
+    max_dd: f64,
+    /// Held-out trades retained by the ranges.
+    trades: f64,
+}
+
+impl From<crate::db::metrics::Tally> for Quality {
+    /// Convert one chronological tally into the comparison metrics composition uses.
+    ///
+    /// Args:
+    ///     tally: Held-out rows scored under one fitted seed outcome.
+    ///
+    /// Returns:
+    ///     Finite metrics used by ranking and robust acceptance.
+    fn from(tally: crate::db::metrics::Tally) -> Self {
+        Self {
+            profit: tally.profit,
+            profit_factor: tally.profit_factor(),
+            max_dd: tally.max_dd,
+            trades: tally.n as f64,
+        }
     }
 }
 
-/// The noise floor two fold-score vectors must clear to count as different.
-///
-/// Scaled to the LARGEST fold profit in play rather than to the mean being compared. The folds
-/// routinely straddle zero, so their mean can cancel down to almost nothing while the numbers it
-/// was built from are in the thousands — and a tolerance derived from that cancelled mean would
-/// be far below the precision the sum actually carries.
-fn noise_floor(a: &[f64], b: &[f64]) -> f64 {
-    let scale = a.iter().chain(b).fold(0.0f64, |acc, v| acc.max(v.abs()));
-    improvement_margin(scale)
+/// Seed-group scores belonging to one chronological walk-forward fold.
+#[derive(Clone, Debug)]
+struct FoldScores {
+    /// Independent restart-group outcomes. Their vote is resolved before folds vote.
+    seeds: Vec<Quality>,
 }
 
-/// Whether a candidate set is worth taking over the incumbent.
+/// Fold-major score hierarchy; folds remain the unit of temporal evidence.
+type ScoreSet = Vec<FoldScores>;
+
+/// Arithmetic mean of a quality collection.
 ///
-/// Two conditions, both required: it must earn more on average, and it must be better in a
-/// strict MAJORITY of folds. The majority clause is the one that matters — an average alone is
-/// carried by a single fold where the field happened to catch a run, which is exactly the
-/// coincidence out-of-sample scoring is supposed to filter out.
+/// Args:
+///     values: Seed or fold summaries to aggregate.
 ///
-/// Pure, so the rule can be tested without a sample, a search, or a database.
-fn accepts(incumbent: &[f64], candidate: &[f64]) -> bool {
+/// Returns:
+///     Mean metrics, or zeroes for an empty collection.
+fn mean_quality(values: impl IntoIterator<Item = Quality>) -> Quality {
+    let mut out = Quality::default();
+    let mut count = 0usize;
+    for value in values {
+        out.profit += value.profit;
+        out.profit_factor += value.profit_factor;
+        out.max_dd += value.max_dd;
+        out.trades += value.trades;
+        count += 1;
+    }
+    if count > 0 {
+        let divisor = count as f64;
+        out.profit /= divisor;
+        out.profit_factor /= divisor;
+        out.max_dd /= divisor;
+        out.trades /= divisor;
+    }
+    out
+}
+
+/// Mean metrics across every seed inside every fold.
+///
+/// Args:
+///     scores: Fold-major seed outcomes.
+///
+/// Returns:
+///     Aggregate quality used as the non-temporal half of an acceptance decision.
+fn summary(scores: &ScoreSet) -> Quality {
+    mean_quality(scores.iter().flat_map(|fold| fold.seeds.iter().copied()))
+}
+
+/// Robust per-metric preferences for one close-profit pair.
+#[derive(Clone, Copy, Debug)]
+struct SecondaryPreference {
+    /// Profit-factor preference; higher is better.
+    profit_factor: Ordering,
+    /// Drawdown preference; lower is better.
+    drawdown: Ordering,
+    /// Retained-trade preference; higher is better.
+    trades: Ordering,
+}
+
+impl SecondaryPreference {
+    /// Combine the three metrics into an equal-weight pairwise vote.
+    ///
+    /// Returns:
+    ///     Positive when the left outcome wins more metrics, negative when the right does.
+    fn balance(self) -> i8 {
+        [self.profit_factor, self.drawdown, self.trades]
+            .into_iter()
+            .map(|ordering| match ordering {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            })
+            .sum()
+    }
+}
+
+/// Compare PF, drawdown, and retained trades under their shared robust margins.
+///
+/// Args:
+///     a: Left outcome.
+///     b: Right outcome.
+///
+/// Returns:
+///     Independent preferences for the three secondary metrics.
+fn secondary_preference(a: Quality, b: Quality) -> SecondaryPreference {
+    let profit_factor = if a.profit_factor > b.profit_factor + PF_MARGIN {
+        Ordering::Greater
+    } else if b.profit_factor > a.profit_factor + PF_MARGIN {
+        Ordering::Less
+    } else {
+        Ordering::Equal
+    };
+    let dd_margin = a.max_dd.max(b.max_dd).max(1.0) * PROFIT_BAND_FRAC;
+    let drawdown = if a.max_dd + dd_margin < b.max_dd {
+        Ordering::Greater
+    } else if b.max_dd + dd_margin < a.max_dd {
+        Ordering::Less
+    } else {
+        Ordering::Equal
+    };
+    let trade_margin = a.trades.max(b.trades).max(1.0) * PROFIT_BAND_FRAC;
+    let trades = if a.trades > b.trades + trade_margin {
+        Ordering::Greater
+    } else if b.trades > a.trades + trade_margin {
+        Ordering::Less
+    } else {
+        Ordering::Equal
+    };
+    SecondaryPreference {
+        profit_factor,
+        drawdown,
+        trades,
+    }
+}
+
+/// Compare profit only when its gap clears the pair's own risk-scaled band.
+///
+/// Args:
+///     a: Left outcome.
+///     b: Right outcome.
+///
+/// Returns:
+///     Profit ordering outside the material band, otherwise `Equal`.
+fn material_profit_order(a: Quality, b: Quality) -> Ordering {
+    let scale = a
+        .profit
+        .abs()
+        .max(b.profit.abs())
+        .max(a.max_dd)
+        .max(b.max_dd)
+        .max(1.0);
+    let delta = a.profit - b.profit;
+    let band = scale * PROFIT_BAND_FRAC;
+    if delta > band {
+        Ordering::Greater
+    } else if delta < -band {
+        Ordering::Less
+    } else {
+        Ordering::Equal
+    }
+}
+
+/// Compare two close-profit outcomes using PF, drawdown, and trade count.
+///
+/// Profit remains decisive outside a five-percent risk-scaled band. Inside the band the three
+/// secondary metrics vote equally; only when they tie does profit above floating-point noise
+/// break the tie. This is a robust PAIRWISE predicate, not a sorting comparator.
+///
+/// Args:
+///     a: Left outcome.
+///     b: Right outcome.
+///
+/// Returns:
+///     Which outcome is better under the balanced comparison.
+fn quality_order(a: Quality, b: Quality) -> Ordering {
+    let scale = a
+        .profit
+        .abs()
+        .max(b.profit.abs())
+        .max(a.max_dd)
+        .max(b.max_dd)
+        .max(1.0);
+    let profit_delta = a.profit - b.profit;
+    let material_profit = material_profit_order(a, b);
+    if !material_profit.is_eq() {
+        return material_profit;
+    }
+
+    let votes = secondary_preference(a, b).balance();
+    match votes.cmp(&0) {
+        Ordering::Equal => {
+            let noise = improvement_margin(scale);
+            if profit_delta > noise {
+                Ordering::Greater
+            } else if profit_delta < -noise {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        }
+        ordering => ordering,
+    }
+}
+
+/// Whether the candidate wins a strict majority of seed groups inside one fold.
+///
+/// Args:
+///     incumbent: Seed outcomes for the current path.
+///     candidate: Matching seed outcomes for the proposed path.
+///
+/// Returns:
+///     `true` only when most independent groups prefer the candidate.
+fn seed_consensus(incumbent: &FoldScores, candidate: &FoldScores) -> bool {
+    if candidate.seeds.len() != incumbent.seeds.len() || incumbent.seeds.is_empty() {
+        return false;
+    }
+    let wins = incumbent
+        .seeds
+        .iter()
+        .zip(&candidate.seeds)
+        .filter(|(before, after)| quality_order(**after, **before).is_gt())
+        .count();
+    2 * wins > incumbent.seeds.len()
+}
+
+/// Resolve which fields a strict majority of one fold's seed outcomes applied.
+///
+/// Args:
+///     field_count: Number of tuner fields.
+///     applied_by_seed: Applied field indices from every active seed outcome.
+///
+/// Returns:
+///     One boolean per field; empty evidence supports nothing.
+fn seed_majority_support(field_count: usize, applied_by_seed: &[Vec<usize>]) -> Vec<bool> {
+    let mut counts = vec![0usize; field_count];
+    for applied in applied_by_seed {
+        for field in applied {
+            counts[*field] += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .map(|count| !applied_by_seed.is_empty() && 2 * count > applied_by_seed.len())
+        .collect()
+}
+
+/// Whether a candidate is robustly better without flattening seed votes across time.
+///
+/// Seeds vote inside each fold first; folds then vote as the independent time periods. An
+/// aggregate quality win is required as well, so a bare fold majority cannot hide one collapse.
+///
+/// Args:
+///     incumbent: Fold-major scores of the current path.
+///     candidate: Matching fold-major scores of the proposed path.
+///
+/// Returns:
+///     Whether the candidate is supported by both aggregate quality and most folds.
+fn accepts(incumbent: &ScoreSet, candidate: &ScoreSet) -> bool {
     if candidate.len() != incumbent.len() || incumbent.is_empty() {
         return false;
     }
-    if mean(candidate) <= mean(incumbent) + noise_floor(incumbent, candidate) {
+    if !quality_order(summary(candidate), summary(incumbent)).is_gt() {
         return false;
     }
     let wins = incumbent
         .iter()
         .zip(candidate)
-        .filter(|(before, after)| after > before)
+        .filter(|(before, after)| seed_consensus(before, after))
         .count();
     2 * wins > incumbent.len()
 }
 
-/// Whether a field can be dropped: doing so must cost nothing beyond noise.
+/// Whether removing a field costs no robust quality.
 ///
-/// `>=`, not `>`. A field that earns its keep exactly is not earning it, and preferring the
-/// smaller set on a tie IS the complexity penalty.
-fn drops(incumbent: &[f64], without: &[f64]) -> bool {
+/// Args:
+///     incumbent: Scores with the field.
+///     without: Scores after removing it.
+///
+/// Returns:
+///     `true` when the smaller set is not worse in aggregate and the incumbent lacks a majority
+///     of fold-level seed consensuses over it.
+fn drops(incumbent: &ScoreSet, without: &ScoreSet) -> bool {
     if without.len() != incumbent.len() || incumbent.is_empty() {
         return false;
     }
-    mean(without) + noise_floor(incumbent, without) >= mean(incumbent)
+    let incumbent_wins = without
+        .iter()
+        .zip(incumbent)
+        .filter(|(smaller, larger)| seed_consensus(smaller, larger))
+        .count();
+    !quality_order(summary(without), summary(incumbent)).is_lt()
+        && 2 * incumbent_wins <= incumbent.len()
 }
 
-/// Score one candidate set: per fold, the profit its ranges earn on that fold's unseen stretch.
+/// Score one candidate set: per fold, independent seed-group tallies on its unseen stretch.
 ///
 /// Returns `None` when the run was stopped — a partial score vector is not comparable with a
 /// complete one, and picking a winner from mixed evidence is worse than not answering.
@@ -237,13 +490,13 @@ fn drops(incumbent: &[f64], without: &[f64]) -> bool {
 /// Args:
 ///     folds: Walk-forward folds to score.
 ///     mask: Fields the fold searches may use.
-///     p: Seed and rounding settings shared by this composition.
+///     p: Seed-group, rounding, and composition-budget settings.
 ///     requested_restarts: Restart budget for each non-empty mask on each fold.
 ///     step: Deterministic restart-stream discriminator.
 ///     handle: Cancellation and progress channel.
 ///
 /// Returns:
-///     Profit on each fold's validation stretch, or `None` when cancelled.
+///     Fold-major quality scores, or `None` when cancelled.
 fn score_set(
     folds: &[Fold],
     mask: &[bool],
@@ -251,22 +504,33 @@ fn score_set(
     requested_restarts: usize,
     step: usize,
     handle: &SearchHandle,
-) -> Option<Vec<f64>> {
+) -> Option<ScoreSet> {
     let seed = super::search::restart_seed(p.seed, step);
-    // An empty set assigns no range whatever the random start, so every restart returns the same
-    // outcome. Ranking the incumbent at step one — the one score always taken over an empty mask
-    // — would otherwise repeat a single answer up to thousands of times per fold.
-    let restarts = if mask.iter().any(|m| *m) {
-        requested_restarts
-    } else {
-        1
-    };
     folds
         .iter()
         .map(|fold| {
-            let outcome = fold.search.run_masked(mask, restarts, seed, handle)?;
-            let applied = fold.search.applied_ranges(&outcome.sel, p.round);
-            Some(fold.search.tally(&applied, fold.validate.clone()).profit)
+            let requested_groups = p.seed_groups.max(1);
+            let active_groups = requested_groups.min(requested_restarts).max(1);
+            // An empty mask is seed-invariant. Score it once and replicate the evidence shape so
+            // comparisons remain aligned without spending the requested restart budget on copies.
+            if !mask.iter().any(|chosen| *chosen) {
+                let outcome = fold.search.run_masked(mask, 1, seed, handle)?;
+                let applied = fold.search.applied_ranges(&outcome.sel, p.round);
+                let score = Quality::from(fold.search.tally(&applied, fold.validate.clone()));
+                return Some(FoldScores {
+                    seeds: vec![score; active_groups],
+                });
+            }
+            let seeds = fold
+                .search
+                .run_masked_seed_groups(mask, requested_restarts, seed, requested_groups, handle)?
+                .into_iter()
+                .map(|outcome| {
+                    let applied = fold.search.applied_ranges(&outcome.sel, p.round);
+                    Quality::from(fold.search.tally(&applied, fold.validate.clone()))
+                })
+                .collect();
+            Some(FoldScores { seeds })
         })
         .collect()
 }
@@ -297,12 +561,21 @@ fn slots_are_full(mask: &[bool], is_slot: &[bool], locked_slots: usize) -> bool 
     locked_slots + used >= 2
 }
 
+/// Deterministic total-order key used only to rank a common candidate pool.
+#[derive(Clone, Copy, Debug, Default)]
+struct RankingKey {
+    /// Unique best-first position assigned by the material-profit dependency order.
+    rank: usize,
+}
+
 /// One field-set mask and its scores on a common set of folds.
 struct ScoredMask {
     /// Fields admitted by this branch.
     mask: Vec<bool>,
-    /// Validation profit on each fold.
-    scores: Vec<f64>,
+    /// Fold-major validation evidence for the branch.
+    scores: ScoreSet,
+    /// Total-order key assigned across the branch's current comparison pool.
+    key: RankingKey,
 }
 
 /// Deterministic mask order, preferring lower field indices.
@@ -324,7 +597,121 @@ fn mask_order(a: &[bool], b: &[bool]) -> Ordering {
         )
 }
 
-/// Rank masks by validation mean, with a stable field-index tie break.
+/// Build transitive ranking keys over one common candidate pool.
+///
+/// Material-profit comparisons form a directed acyclic graph because every edge points from
+/// higher exact profit to lower exact profit. A deterministic topological selection therefore
+/// guarantees that secondary metrics can never move a candidate ahead of another candidate it
+/// materially trails. Currently eligible candidates meet head-to-head under the same balanced
+/// close-profit rule used by acceptance; this avoids a pool-wide loss total that could reverse
+/// an unchanged pair merely because another strong branch was present. Exact metrics and input
+/// order resolve tied or cyclic pairwise preferences deterministically.
+///
+/// Args:
+///     scores: Fold-major score sets belonging to one common restart stream.
+///
+/// Returns:
+///     One ranking key per input score set, in input order.
+fn ranking_keys(scores: &[&ScoreSet]) -> Vec<RankingKey> {
+    let qualities: Vec<Quality> = scores.iter().map(|scores| summary(scores)).collect();
+    let count = qualities.len();
+    let mut outgoing = vec![Vec::new(); count];
+    let mut indegree = vec![0usize; count];
+    for candidate in 0..count {
+        for alternative in 0..count {
+            if candidate == alternative {
+                continue;
+            }
+            let quality = qualities[candidate];
+            let other = qualities[alternative];
+            match material_profit_order(quality, other) {
+                Ordering::Greater => {
+                    outgoing[candidate].push(alternative);
+                    indegree[alternative] += 1;
+                }
+                Ordering::Less | Ordering::Equal => {}
+            }
+        }
+    }
+
+    let preferred = |candidate: usize, incumbent: usize| {
+        quality_order(qualities[candidate], qualities[incumbent])
+            .then_with(|| {
+                qualities[candidate]
+                    .profit
+                    .total_cmp(&qualities[incumbent].profit)
+            })
+            .then_with(|| {
+                qualities[candidate]
+                    .profit_factor
+                    .total_cmp(&qualities[incumbent].profit_factor)
+            })
+            .then_with(|| {
+                qualities[incumbent]
+                    .max_dd
+                    .total_cmp(&qualities[candidate].max_dd)
+            })
+            .then_with(|| {
+                qualities[candidate]
+                    .trades
+                    .total_cmp(&qualities[incumbent].trades)
+            })
+            .then_with(|| incumbent.cmp(&candidate))
+            .is_gt()
+    };
+
+    let mut removed = vec![false; count];
+    let mut keys = vec![RankingKey::default(); count];
+    for rank in 0..count {
+        let best = (0..count)
+            .filter(|candidate| !removed[*candidate] && indegree[*candidate] == 0)
+            .reduce(|incumbent, candidate| {
+                if preferred(candidate, incumbent) {
+                    candidate
+                } else {
+                    incumbent
+                }
+            })
+            .expect("material-profit edges always form an acyclic graph");
+        removed[best] = true;
+        keys[best].rank = rank;
+        for dependent in &outgoing[best] {
+            indegree[*dependent] -= 1;
+        }
+    }
+    keys
+}
+
+/// Compare ranking keys with `Greater` meaning the left candidate is preferred.
+///
+/// Args:
+///     a: Left candidate key.
+///     b: Right candidate key.
+///
+/// Returns:
+///     Deterministic total ordering from balanced rank to exact metrics.
+fn ranking_key_order(a: &RankingKey, b: &RankingKey) -> Ordering {
+    b.rank.cmp(&a.rank)
+}
+
+/// Assign ranking keys across the exact pool that will be sorted.
+///
+/// Args:
+///     candidates: Common-stream candidates to key in place.
+fn assign_ranking(candidates: &mut [ScoredMask]) {
+    let keys = {
+        let scores: Vec<&ScoreSet> = candidates
+            .iter()
+            .map(|candidate| &candidate.scores)
+            .collect();
+        ranking_keys(&scores)
+    };
+    for (candidate, key) in candidates.iter_mut().zip(keys) {
+        candidate.key = key;
+    }
+}
+
+/// Rank masks by balanced quality, with stable complexity and field-index tie breaks.
 ///
 /// Args:
 ///     a: Left scored mask.
@@ -333,12 +720,42 @@ fn mask_order(a: &[bool], b: &[bool]) -> Ordering {
 /// Returns:
 ///     Ordering suitable for best-first sorting.
 fn ranked_order(a: &ScoredMask, b: &ScoredMask) -> Ordering {
-    mean(&b.scores)
-        .total_cmp(&mean(&a.scores))
+    ranking_key_order(&b.key, &a.key)
+        .then_with(|| {
+            a.mask
+                .iter()
+                .filter(|chosen| **chosen)
+                .count()
+                .cmp(&b.mask.iter().filter(|chosen| **chosen).count())
+        })
         .then_with(|| mask_order(&a.mask, &b.mask))
 }
 
-/// Build a bounded beam of alternative field sets, including temporarily weak branches.
+/// Choose the retained width at one already-ranked beam depth.
+///
+/// Eight branches are enough when candidate eight robustly beats candidate nine. An ambiguous
+/// boundary keeps up to sixteen so interacting fields get another depth to separate. The choice
+/// is recomputed at every depth, allowing a widened beam to contract again.
+///
+/// Args:
+///     scored: Best-first candidates on one common stream.
+///     min_width: Decisive-layer width.
+///     max_width: Ambiguous-layer hard ceiling.
+///
+/// Returns:
+///     Number of candidates to retain from this depth.
+fn adaptive_width(scored: &[ScoredMask], min_width: usize, max_width: usize) -> usize {
+    if scored.len() <= min_width {
+        return scored.len();
+    }
+    if accepts(&scored[min_width].scores, &scored[min_width - 1].scores) {
+        min_width
+    } else {
+        scored.len().min(max_width.max(min_width))
+    }
+}
+
+/// Build an adaptive bounded beam of alternative field sets, including weak branches.
 ///
 /// Every mask in one depth is scored with the same `step`, so the production scorer derives the
 /// same restart stream for comparable candidates. Masks are retained by rank even when they do
@@ -349,7 +766,8 @@ fn ranked_order(a: &ScoredMask, b: &ScoredMask) -> Ordering {
 ///     is_slot: Fields that consume one of the two Delta2/Delta3 slots.
 ///     locked_slots: Slots already consumed by fixed filters.
 ///     max_fields: Deepest set the beam may build.
-///     width: Branches retained after each depth.
+///     min_width: Branches retained when the depth boundary is decisive.
+///     max_width: Hard branch ceiling for an ambiguous depth.
 ///     score: Deterministic scorer for a mask and layer progress.
 ///
 /// Returns:
@@ -359,13 +777,14 @@ fn beam_candidates<F>(
     is_slot: &[bool],
     locked_slots: usize,
     max_fields: usize,
-    width: usize,
+    min_width: usize,
+    max_width: usize,
     mut score: F,
 ) -> Option<Vec<Vec<bool>>>
 where
-    F: FnMut(&[bool], usize, usize, usize) -> Option<Vec<f64>>,
+    F: FnMut(&[bool], usize, usize, usize) -> Option<ScoreSet>,
 {
-    if width == 0 || max_fields == 0 {
+    if min_width == 0 || max_fields == 0 {
         return Some(Vec::new());
     }
     let mut frontier = vec![vec![false; candidate.len()]];
@@ -395,10 +814,13 @@ where
             scored.push(ScoredMask {
                 scores: score(&mask, depth, done, total)?,
                 mask,
+                key: RankingKey::default(),
             });
         }
+        assign_ranking(&mut scored);
         scored.sort_by(ranked_order);
-        scored.truncate(width);
+        let retained_width = adaptive_width(&scored, min_width, max_width);
+        scored.truncate(retained_width);
         frontier = scored.into_iter().map(|ranked| ranked.mask).collect();
         retained.extend(frontier.iter().cloned());
     }
@@ -408,30 +830,20 @@ where
 /// Pick the strongest reduced mask that robustly beats the strongest inner control.
 ///
 /// Args:
-///     control_scores: Fold profits of all-fields search or no filters, whichever is stronger.
+///     control_scores: Fold-major quality evidence of the stronger complete control.
 ///     candidates: Beam finalists re-scored on one common restart stream.
 ///     empty: Empty mask returned when no finalist clears the control.
 ///
 /// Returns:
 ///     Best acceptable reduced mask, or `empty`.
 fn inner_winner(
-    control_scores: &[f64],
+    control_scores: &ScoreSet,
     mut candidates: Vec<ScoredMask>,
     empty: &[bool],
 ) -> Vec<bool> {
     candidates.retain(|candidate| accepts(control_scores, &candidate.scores));
-    candidates.sort_by(|a, b| {
-        mean(&b.scores)
-            .total_cmp(&mean(&a.scores))
-            .then_with(|| {
-                a.mask
-                    .iter()
-                    .filter(|chosen| **chosen)
-                    .count()
-                    .cmp(&b.mask.iter().filter(|chosen| **chosen).count())
-            })
-            .then_with(|| mask_order(&a.mask, &b.mask))
-    });
+    assign_ranking(&mut candidates);
+    candidates.sort_by(ranked_order);
     candidates
         .into_iter()
         .next()
@@ -451,9 +863,9 @@ struct GateChoice {
 ///
 /// Only one beam subset reaches this function, so the gate is not reused to rank the frontier.
 /// The three paths are ranked symmetrically: first by how many alternatives they beat on a strict
-/// majority of gate folds, then by mean gate profit when pairwise comparisons are inconclusive.
-/// An exact tie prefers fewer fields. With two reserved folds, a pairwise win must repeat on both
-/// rather than ride one lucky validation stretch.
+/// majority of gate folds, then by the deterministic balanced ranking when pairwise comparisons
+/// are inconclusive. An exact tie prefers fewer fields. With two reserved folds, a pairwise win
+/// must repeat on both rather than ride one lucky validation stretch.
 ///
 /// Args:
 ///     no_filters: Empty mask and its gate scores.
@@ -463,9 +875,9 @@ struct GateChoice {
 /// Returns:
 ///     Decision and mask supported by the reserved gate folds.
 fn gate_choice(
-    no_filters: (&[bool], &[f64]),
-    all_fields: (&[bool], &[f64]),
-    subset: (&[bool], &[f64]),
+    no_filters: (&[bool], &ScoreSet),
+    all_fields: (&[bool], &ScoreSet),
+    subset: (&[bool], &ScoreSet),
 ) -> GateChoice {
     if all_fields.0 == no_filters.0 {
         return GateChoice {
@@ -498,13 +910,15 @@ fn gate_choice(
         }
     }
 
+    let keys = ranking_keys(&choices.iter().map(|choice| choice.2).collect::<Vec<_>>());
     let field_count = |mask: &[bool]| mask.iter().filter(|chosen| **chosen).count();
     let mut best = 0usize;
     for candidate in 1..choices.len() {
         let ordering = wins[candidate]
             .cmp(&wins[best])
-            .then_with(|| mean(choices[candidate].2).total_cmp(&mean(choices[best].2)))
-            .then_with(|| field_count(choices[best].1).cmp(&field_count(choices[candidate].1)));
+            .then_with(|| ranking_key_order(&keys[candidate], &keys[best]))
+            .then_with(|| field_count(choices[best].1).cmp(&field_count(choices[candidate].1)))
+            .then_with(|| mask_order(choices[best].1, choices[candidate].1));
         if ordering.is_gt() {
             best = candidate;
         }
@@ -564,11 +978,11 @@ fn shrink_mask(
     }
 }
 
-/// Compose the field set with a bounded beam, then choose among three equal search paths.
+/// Compose the field set with an adaptive bounded beam, then choose among three equal paths.
 ///
 /// Args:
 ///     folds: Chronological walk-forward folds; the final two are reserved as gates.
-///     p: Restart, seed, rounding, and depth limits.
+///     p: Restart, seed-group, rounding, depth, and adaptive-beam limits.
 ///     handle: Cancellation and progress channel shared with the caller.
 ///
 /// Returns:
@@ -602,7 +1016,8 @@ pub(super) fn compose(
         is_slot,
         locked_slots,
         p.max_fields,
-        p.beam_width,
+        p.beam_width_min,
+        p.beam_width_max,
         |mask, depth, done, total| {
             handle.set_stage(depth, done, total);
             score_set(inner_folds, mask, p, p.ranking_restarts, depth, handle)
@@ -628,7 +1043,11 @@ pub(super) fn compose(
         step,
         handle,
     )?;
-    let inner_control = if accepts(&no_filters_inner, &all_fields_inner) {
+    let control_keys = ranking_keys(&[&no_filters_inner, &all_fields_inner]);
+    let inner_control = if accepts(&no_filters_inner, &all_fields_inner)
+        || (!accepts(&all_fields_inner, &no_filters_inner)
+            && ranking_key_order(&control_keys[1], &control_keys[0]).is_gt())
+    {
         &all_fields_inner
     } else {
         &no_filters_inner
@@ -640,6 +1059,7 @@ pub(super) fn compose(
         ranked.push(ScoredMask {
             scores: score_set(inner_folds, &mask, p, p.ranking_restarts, step, handle)?,
             mask,
+            key: RankingKey::default(),
         });
     }
     let subset = inner_winner(inner_control, ranked, &no_filters);
@@ -671,11 +1091,33 @@ pub(super) fn compose(
     let seed = super::search::restart_seed(p.seed, step);
     for (i, fold) in folds.iter().enumerate() {
         handle.set_stage(step, i, folds.len());
-        let outcome = fold
-            .search
-            .run_masked(&choice.mask, p.ranking_restarts, seed, handle)?;
-        for (fi, _, _) in fold.search.applied_ranges(&outcome.sel, p.round) {
-            support[fi] = support[fi].saturating_add(1);
+        if !choice.mask.iter().any(|chosen| *chosen) {
+            continue;
+        }
+        let outcomes = fold.search.run_masked_seed_groups(
+            &choice.mask,
+            p.ranking_restarts,
+            seed,
+            p.seed_groups.max(1),
+            handle,
+        )?;
+        let applied_by_seed: Vec<Vec<usize>> = outcomes
+            .iter()
+            .map(|outcome| {
+                fold.search
+                    .applied_ranges(&outcome.sel, p.round)
+                    .into_iter()
+                    .map(|(fi, _, _)| fi)
+                    .collect()
+            })
+            .collect();
+        for (fi, backed) in seed_majority_support(nf, &applied_by_seed)
+            .into_iter()
+            .enumerate()
+        {
+            if backed {
+                support[fi] = support[fi].saturating_add(1);
+            }
         }
     }
     Some(ComposeOutcome {

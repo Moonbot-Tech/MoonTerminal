@@ -445,6 +445,26 @@ fn fast_search_matches_the_reference_on_random_samples() {
     }
 }
 
+/// Depth 512 must keep its highest real bin distinct from the defensive `BELOW` sentinel.
+///
+/// Breakage this pins: `search.rs:Search::new` retaining an old 8-bit-era clamp such as
+/// `lo.min(255)` while the public ceiling moves to 512. The upper half of the distribution would
+/// collapse into bin 255, changing every range search without an error.
+#[test]
+fn depth_512_keeps_bin_511_distinct_from_below() {
+    let n = 513usize;
+    let vals = vec![(0..n).map(|value| value as f64).collect::<Vec<_>>()];
+    let search = build(vec![0.0; n], &vals, &[None], 1, 512);
+
+    assert_eq!(search.edges[0].len(), 513);
+    assert_eq!(search.bins[0][0], 0);
+    assert_eq!(search.bins[0][n - 1], 511);
+    assert!(
+        search.bins[0].iter().all(|bin| *bin != BELOW),
+        "all fixture values are at or above the first edge"
+    );
+}
+
 /// Equal-profit candidates must preserve the original search's deterministic tie-breaking.
 #[test]
 fn fast_search_matches_the_reference_when_profits_tie() {
@@ -568,6 +588,100 @@ fn a_completed_search_counts_every_restart() {
 
     assert!(search.run(12, 0xC0FFEE, &handle).is_some());
     assert_eq!(handle.completed(), 12);
+}
+
+/// Seed groups must divide one work budget without repeating deterministic restart zero.
+///
+/// The oracle is the contiguous partition itself: lengths sum to the caller's budget, every
+/// range starts where the previous one ended, and only that first range contains global index
+/// zero. This covers budgets below the requested three groups as boundary cases.
+///
+/// Breakage this pins: resetting every group's `start` to zero in `search.rs:restart_groups`.
+/// Composition would then count the same greedy restart as three independent seed votes, and at
+/// a ranking budget of three every alleged seed would be seed-independent. Removing the empty
+/// outcome guard from `run_masked_seed_groups` would also make a zero budget look like valid
+/// seed evidence.
+#[test]
+fn seed_groups_share_one_budget_and_one_greedy_restart() {
+    for restarts in 1..=7usize {
+        let groups = restart_groups(restarts, 3, 0x5EED);
+        assert_eq!(
+            groups.len(),
+            restarts.min(3),
+            "active groups must be bounded by both the request and available restarts"
+        );
+        assert_eq!(
+            groups.iter().map(|group| group.len).sum::<usize>(),
+            restarts,
+            "seed groups must neither multiply nor lose restart work"
+        );
+        let mut expected_start = 0usize;
+        for (index, group) in groups.iter().enumerate() {
+            assert!(group.len > 0, "an active seed group cannot be empty");
+            assert_eq!(
+                group.start, expected_start,
+                "group {index} must continue the preceding global range"
+            );
+            assert_eq!(
+                group.start == 0,
+                index == 0,
+                "only the first seed group may own deterministic restart zero"
+            );
+            expected_start += group.len;
+        }
+        let unique_seeds = groups
+            .iter()
+            .map(|group| group.seed)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            unique_seeds.len(),
+            groups.len(),
+            "every active group needs an independent base seed"
+        );
+    }
+
+    let (profits, vals) = synthetic(300, 33);
+    let search = build(profits, &vals, &all_free(), 60, 16);
+    let handle = SearchHandle::new();
+    let outcomes = search
+        .run_masked_seed_groups(search.free_mask(), 2, 0x5EED, 3, &handle)
+        .expect("two uncancelled restart groups both answer");
+    assert_eq!(outcomes.len(), 2, "two restarts can support only two seeds");
+    assert_eq!(
+        handle.completed(),
+        2,
+        "multi-seed search must keep the exact caller-owned work budget"
+    );
+    assert!(
+        search
+            .run_masked_seed_groups(search.free_mask(), 0, 0x5EED, 3, &SearchHandle::new())
+            .is_none(),
+        "a zero restart budget cannot produce an empty but apparently valid seed vote"
+    );
+}
+
+/// Seed consensus must reject a group set after any requested restart was abandoned.
+///
+/// The injected abandoned flag models a stop arriving during the final group after another
+/// restart in that group completed. Ordinary masked search may return that completed work, but a
+/// shortened group cannot carry the same vote as two complete groups.
+///
+/// Breakage this pins: removing the final `handle.abandoned()` guard from
+/// `search.rs:run_masked_seed_groups`. Composition could then select a field set from unequal
+/// seed budgets after the user pressed Stop.
+#[test]
+fn seed_groups_reject_abandoned_evidence() {
+    let (profits, vals) = synthetic(300, 34);
+    let search = build(profits, &vals, &all_free(), 60, 16);
+    let handle = SearchHandle::new();
+    handle.note_abandoned();
+
+    assert!(
+        search
+            .run_masked_seed_groups(search.free_mask(), 3, 0x5EED, 3, &handle)
+            .is_none(),
+        "an abandoned restart invalidates the whole seed vote"
+    );
 }
 
 /// Trades held back from the search must not influence a single threshold it picks.
@@ -978,10 +1092,10 @@ fn bench_threshold_search() {
 
     match from_snapshot() {
         Some((profits, vals)) => {
-            // 256 is the ceiling, and the deepest slicing is where a bin index could collide with
+            // 512 is the ceiling, and the deepest slicing is where a bin index could collide with
             // the BELOW sentinel — `compare` asserts the fast path against the reference on every
             // repeat, so this row doubles as the equivalence check at that depth.
-            for &ne in &[16usize, 64, 128, 256] {
+            for &ne in &[16usize, 64, 128, 256, 512] {
                 compare("real snapshot", &profits, &vals, ne, 20);
             }
             compare("real snapshot", &profits, &vals, 64, 100);

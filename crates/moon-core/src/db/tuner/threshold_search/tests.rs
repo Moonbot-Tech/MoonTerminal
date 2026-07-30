@@ -5,8 +5,8 @@
 //! than through a database — the SQL they sit next to is exercised by the tuner's own DB tests.
 
 use super::{
-    chronological_order, fold_cuts, restarts_max_for, train_split, RESTARTS_MAX,
-    RESTARTS_MAX_LIGHT, RESTARTS_MIN,
+    chronological_order, edges_max_for, fold_cuts, restarts_max_for, train_split, EDGES_MAX,
+    EDGES_MAX_LIGHT, RESTARTS_MAX, RESTARTS_MAX_LIGHT, RESTARTS_MIN,
 };
 
 /// Trades with distinct timestamps, so a split can land anywhere.
@@ -49,6 +49,19 @@ fn an_unsplit_search_keeps_the_whole_sample() {
     // Too few trades to divide at all.
     assert_eq!(train_split(&distinct(1), 0.5), 1);
     assert_eq!(train_split(&[], 0.5), 0);
+}
+
+/// Powerful machines accept depth 512 while the protected tier remains capped at 128.
+///
+/// Breakage this pins: reverting `threshold_search/mod.rs:EDGES_MAX` to 256 after exposing 512 in
+/// the UI. The joint search would silently clamp the selected value and display a setting it never
+/// executes.
+#[test]
+fn machine_depth_ceilings_match_the_user_visible_policy() {
+    assert_eq!(edges_max_for(true), 512);
+    assert_eq!(edges_max_for(false), 128);
+    assert_eq!(edges_max_for(true), EDGES_MAX);
+    assert_eq!(edges_max_for(false), EDGES_MAX_LIGHT);
 }
 
 /// The split must never cut through trades that share a close timestamp.
@@ -166,10 +179,10 @@ fn folds_that_cannot_be_cut_are_dropped() {
 /// takes one of them, so without that the light ceiling would be unchecked on a development
 /// machine and the heavy one unchecked in CI.
 ///
-/// Breakage this pins: `mod.rs:restarts_max_for` returning the same ceiling for both classes, or
-/// swapping them. A small machine would then accept the big count, and one click on a knob the
-/// user reads as a quality dial would spend minutes of a machine that has no cores to spare —
-/// which is the whole reason the two ceilings exist.
+/// Breakage this pins: reducing the heavy branch in `mod.rs:RESTARTS_MAX` back to 50,000,
+/// returning the same ceiling for both classes, or swapping them. The first would silently remove
+/// the requested 100k range; the others would let a small machine spend minutes on a knob it has
+/// no cores to spare for — which is the whole reason the two ceilings exist.
 #[test]
 fn a_small_machine_accepts_fewer_restarts_than_a_big_one() {
     // Read through the accessor, not off the constants: what must hold is a property of the
@@ -182,6 +195,14 @@ fn a_small_machine_accepts_fewer_restarts_than_a_big_one() {
     assert!(
         light >= RESTARTS_MIN,
         "the light ceiling must still leave a usable range: {light}"
+    );
+    assert_eq!(
+        heavy, 100_000,
+        "the capable-machine quality dial must reach the requested 100k boundary"
+    );
+    assert_eq!(
+        light, 10_000,
+        "raising the capable-machine ceiling must not enlarge the light tier"
     );
     assert_eq!(heavy, RESTARTS_MAX);
     assert_eq!(light, RESTARTS_MAX_LIGHT);

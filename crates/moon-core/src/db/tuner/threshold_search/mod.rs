@@ -42,7 +42,7 @@ pub const RESTARTS_MIN: usize = 1;
 /// time per restart over a 26k-trade report at depth 64. Spread across the pool of a machine at
 /// or above the bar that is on the order of a few seconds — visibly progressing and interruptible,
 /// which is what the ceiling is for: it guards against a typo, not against the wait.
-pub const RESTARTS_MAX: usize = 50_000;
+pub const RESTARTS_MAX: usize = 100_000;
 
 /// Maximum accepted restart count below that bar.
 ///
@@ -80,10 +80,10 @@ pub const EDGES_MIN: usize = 4;
 /// distinguishable. The ceiling is set far below that by cost, not by the encoding: the edge
 /// search is linear in the depth while the per-trade scan is not, so finer slicing buys
 /// increasingly little and slices the sample into groups too small to mean anything.
-pub const EDGES_MAX: usize = 256;
+pub const EDGES_MAX: usize = 512;
 
-/// Maximum quantile-edge count below that bar — one step coarser, since the finest depth doubles
-/// the edges every pass of every restart walks.
+/// Maximum quantile-edge count below that bar — two choices coarser, since each finer depth
+/// doubles the edges every pass of every restart walks.
 pub const EDGES_MAX_LIGHT: usize = 128;
 
 /// The quantile-depth ceiling on THIS machine.
@@ -399,7 +399,7 @@ fn composed_set(out: &compose::ComposeOutcome, applied: &[(usize, f64, f64)]) ->
 ///     ne: Quantile edge count.
 ///     train_n: Rows available to fitting and composition.
 ///     seed: Base restart seed.
-///     budget: Machine-specific fold, depth, and ranking limits.
+///     budget: Machine-specific fold, depth, adaptive-beam, seed-group, and ranking limits.
 ///     handle: Cancellation and progress channel.
 ///
 /// Returns:
@@ -439,7 +439,9 @@ fn compose_set(
         seed,
         round: params.round,
         max_fields: budget.max_fields,
-        beam_width: budget.beam_width,
+        beam_width_min: budget.beam_width_min,
+        beam_width_max: budget.beam_width_max,
+        seed_groups: budget.seed_groups,
     };
     Ok(compose::compose(&folds, &p, handle))
 }
