@@ -264,6 +264,28 @@ fn param_row(
 /// into numeric inputs. `cancel_confirm` is the Cancel All Orders confirmation stage. The
 /// Shell-provided `on_cancel_all` callback arms confirmation on the first click and sends the command
 /// on the confirmed second click.
+///
+/// Args:
+///     gtp_slider: Retained Global TP slider state.
+///     trailing_slider: Retained Trailing slider state.
+///     vstop_slider: Retained V-Stop slider state.
+///     gtp_input: Retained Global TP numeric input.
+///     trailing_input: Retained Trailing numeric input.
+///     vstop_input: Retained V-Stop numeric input.
+///     blacklist_input: Collapsed single-line blacklist editor.
+///     blacklist_area: Expanded multiline blacklist editor.
+///     def_strategy_input: Default strategy filter input.
+///     blacklist_expanded: Whether to render the multiline blacklist editor.
+///     cancel_confirm: Whether Cancel All Orders is awaiting confirmation.
+///     backend: Shared terminal backend.
+///     group: Active window group whose trade core is edited.
+///     p: Active Moon palette.
+///     cx: Application context used to read state and render controls.
+///     on_cancel_all: Callback for the staged Cancel All Orders action.
+///     on_toggle_blacklist: Callback that toggles the blacklist editor mode.
+///
+/// Returns:
+///     The complete core-settings popover content.
 #[allow(clippy::too_many_arguments)]
 pub fn core_settings_content(
     gtp_slider: &Entity<MoonSliderState>,
@@ -333,13 +355,12 @@ pub fn core_settings_content(
     let restart_btn = {
         let backend = backend.clone();
         let group = group.to_string();
-        // The Action button has zero horizontal padding, leaving its background flush with the text.
-        // Spaces in the label provide a few pixels of margin without modifying the fork, because
-        // MoonButton exposes no pad_x setting.
+        // Keep the localized label clean; MoonButton owns its scaled content inset.
         MoonButton::new("core-restart")
-            .label(format!(" {} ", t!("core_settings.restart")))
+            .label(t!("core_settings.restart").to_string())
             .size(MoonButtonSize::Action)
             .variant(MoonButtonVariant::Blue)
+            .padding_x(7.0)
             .on_click(move |_, _w, app| {
                 let b = backend.read(app);
                 if let Some(core) = b.active_trade_core(&group) {

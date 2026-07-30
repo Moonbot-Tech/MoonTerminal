@@ -338,6 +338,12 @@ impl SettingsView {
     }
 
     /// Render the Connections tab with selectors, pending cores, and the group/exchange tree.
+    ///
+    /// Args:
+    ///     cx: Settings context used to read the draft, live status, and active theme.
+    ///
+    /// Returns:
+    ///     The complete Connections tab.
     pub(in crate::settings) fn connections_tab(
         &mut self,
         cx: &mut Context<Self>,
@@ -521,9 +527,9 @@ impl SettingsView {
                         MoonButton::new("add-srv")
                             .outline()
                             .small()
-                            // Content-driven width keeps localized text inside the outline. The
-                            // spaces compensate for the fork's zero horizontal button padding.
-                            .label(format!("  + {}  ", t!("conn.add_core")))
+                            // Keep the localized label semantic; MoonButton owns the scaled inset.
+                            .label(format!("+ {}", t!("conn.add_core")))
+                            .padding_x(7.0)
                             .on_click(cx.listener(|this, _, w, cx| {
                                 this.add_server("default".into(), w, cx)
                             }))
