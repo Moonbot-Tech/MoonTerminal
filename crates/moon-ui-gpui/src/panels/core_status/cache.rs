@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gpui::*;
 
 use super::model::{self, CoreStatusRow, ServerKey, aggregate_servers};
-use super::ordering::{assign_server_names, compare_flat_rows, natural_cmp};
+use super::ordering::{assign_server_names, compare_flat_rows, compare_groups, natural_cmp};
 use super::{CoreStatusView, server_view};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
@@ -88,13 +88,19 @@ impl CoreStatusView {
             }
             (groups, rows)
         };
-        // Warned servers first, then by server NAME (natural order, so `Server 2` < `Server 10`
-        // and custom names like `F1` sort alphabetically). No user-selectable sort.
+        // Warned servers ALWAYS lead (the attention pin), then the user's chosen column sort within
+        // each partition; the default `(Name, ascending)` reproduces the former fixed order.
+        let (field, ascending) = self.group_sort;
         groups.sort_by(|a, b| {
             let aw = a.cpu_warn || a.mem_warn || a.conn_warn || a.ping_warn || a.exch_warn;
             let bw = b.cpu_warn || b.mem_warn || b.conn_warn || b.ping_warn || b.exch_warn;
-            bw.cmp(&aw)
-                .then_with(|| natural_cmp(&a.display_name, &b.display_name))
+            let field_ord = compare_groups(a, b, field);
+            let field_ord = if ascending {
+                field_ord
+            } else {
+                field_ord.reverse()
+            };
+            bw.cmp(&aw).then(field_ord)
         });
         self.has_warn = groups.iter().any(|group| {
             group.cpu_warn

@@ -7,9 +7,87 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use moon_core::feed::ConnStatus;
+use moon_core::session::CoreSysStatus;
 use rust_i18n::t;
 
 use super::model::{CoreStatusRow, ServerStatusGroup};
+
+/// Which By IP column the server list is sorted on. Warnings always pin to the top regardless of the
+/// field (handled by the caller), so this only orders within the warned and the quiet partitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GroupSortField {
+    /// Server display name — the default, in natural order.
+    Name,
+    /// Whole-machine system CPU percent.
+    Cpu,
+    /// Free-memory share of the reconstructed machine total (the "Память своб." column).
+    Mem,
+    /// Worst client↔core round-trip among the server's ready cores.
+    Ping,
+    /// Worst core→exchange latency among the server's ready cores.
+    Exch,
+    /// Ready core count.
+    Cores,
+}
+
+/// Worst (highest) latency among a group's READY cores for one accessor, matching the value the
+/// server row surfaces. `None` when no ready core has the reading.
+fn worst_latency(
+    group: &ServerStatusGroup,
+    read: impl Fn(&CoreSysStatus) -> Option<u32>,
+) -> Option<u32> {
+    group
+        .cores
+        .iter()
+        .filter(|core| core.status == ConnStatus::Ready)
+        .filter_map(|core| read(&core.sys))
+        .max()
+}
+
+/// Free-memory percentage of the reconstructed machine total (process RAM sum + free physical),
+/// matching the "Память своб." column. `None` until free memory has arrived, so such servers group
+/// together at the ascending end.
+fn free_pct(group: &ServerStatusGroup) -> Option<u64> {
+    let free_mb = u64::from(group.free_physical_memory_mb?);
+    let total_mb = group.process_memory_mb.unwrap_or(0) + free_mb;
+    if total_mb == 0 {
+        return Some(0);
+    }
+    Some(free_mb * 100 / total_mb)
+}
+
+/// Compare two server groups on one sort field, ascending. The caller reverses for descending and
+/// applies the warnings-first pin separately; a name tiebreak keeps the order stable when the field
+/// ties (so equal metrics don't reshuffle each tick).
+///
+/// Args:
+///     a: First group.
+///     b: Second group.
+///     field: The active sort column.
+///
+/// Returns:
+///     The ascending ordering for that field, then by name.
+pub(super) fn compare_groups(
+    a: &ServerStatusGroup,
+    b: &ServerStatusGroup,
+    field: GroupSortField,
+) -> Ordering {
+    match field {
+        GroupSortField::Name => Ordering::Equal,
+        GroupSortField::Cpu => a.system_cpu_percent.cmp(&b.system_cpu_percent),
+        GroupSortField::Mem => free_pct(a).cmp(&free_pct(b)),
+        GroupSortField::Ping => {
+            worst_latency(a, |sys| sys.round_trip_ms).cmp(&worst_latency(b, |sys| sys.round_trip_ms))
+        }
+        GroupSortField::Exch => worst_latency(a, |sys| sys.order_api_latency_ms.map(u32::from))
+            .cmp(&worst_latency(b, |sys| sys.order_api_latency_ms.map(u32::from))),
+        GroupSortField::Cores => a
+            .ready_count
+            .cmp(&b.ready_count)
+            .then_with(|| a.cores.len().cmp(&b.cores.len())),
+    }
+    .then_with(|| natural_cmp(&a.display_name, &b.display_name))
+}
 
 /// Fill each group's display name from a custom name or a stable `Server N` ordinal.
 ///
@@ -155,3 +233,6 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
         _ => a.name.cmp(&b.name),
     }
 }
+
+#[cfg(test)]
+mod tests;

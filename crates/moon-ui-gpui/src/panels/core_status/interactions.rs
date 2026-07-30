@@ -99,6 +99,30 @@ impl CoreStatusView {
         }
     }
 
+    /// Apply a By IP header sort from a column click: flip direction on the active column, else select
+    /// the newly clicked column ascending. Warnings still pin to the top (enforced in `rebuild_cache`).
+    ///
+    /// Args:
+    ///     field: The column the header click chose.
+    ///     cx: View context; the cache is rebuilt so the tree reorders, then a repaint is requested.
+    ///
+    /// Returns:
+    ///     Nothing; the group sort state, group order, and tree change.
+    pub(super) fn set_group_sort(
+        &mut self,
+        field: super::ordering::GroupSortField,
+        cx: &mut Context<Self>,
+    ) {
+        let (current, ascending) = self.group_sort;
+        self.group_sort = if current == field {
+            (field, !ascending)
+        } else {
+            (field, true)
+        };
+        self.rebuild_cache(cx);
+        cx.notify();
+    }
+
     /// Toggle one core in the multi-select filter, or toggle the All item.
     ///
     /// `Some(id)` toggles one core. `None` clears a selection containing every non-empty scoped

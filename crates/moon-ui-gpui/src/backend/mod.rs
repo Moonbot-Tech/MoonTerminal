@@ -31,6 +31,9 @@ const WARN_SLICE_FWD_MS: i64 = 30_000;
 /// Persisted warning-episode SLICES (not the episode rows) are pruned once they are older than this,
 /// so the per-core graph blobs — which scale with the core count — cannot grow the file forever.
 const WARN_SLICE_RETENTION_MS: i64 = 30 * 24 * 3600 * 1000;
+/// How often the retention prune re-runs (once a day), so a session that outlives the 30-day
+/// retention window keeps trimming instead of pruning only at startup.
+const WARN_PRUNE_INTERVAL_MS: i64 = 24 * 3600 * 1000;
 /// Cap on episodes queued for slice capture, so a burst of warnings cannot grow the queue without
 /// bound; the oldest pending capture is dropped past it.
 const WARN_PENDING_CAP: usize = 1024;
@@ -1021,10 +1024,12 @@ impl Backend {
             self.server_ping_hist.record(*ip, sec, *link);
             self.server_exch_hist.record(*ip, sec, *exch);
         }
-        // One-time retention prune: drop the graph slices of episodes older than 30 days (the episode
-        // rows themselves stay forever), so the per-core blobs cannot grow the file without bound.
-        if !self.warn_pruned {
-            self.warn_pruned = true;
+        // Retention prune: drop the graph slices of episodes older than 30 days (the episode rows
+        // themselves stay forever), so the per-core blobs cannot grow the file without bound. Repeated
+        // once a day rather than only at startup, so a session outliving the retention window keeps
+        // trimming — `warn_last_prune_ms == 0` fires it on the first tick.
+        if now_ms - self.warn_last_prune_ms >= WARN_PRUNE_INTERVAL_MS {
+            self.warn_last_prune_ms = now_ms;
             if let Some(store) = self.warn_store.as_ref() {
                 if let Err(err) = store.prune_slices(now_ms - WARN_SLICE_RETENTION_MS) {
                     log::warn!("core warning slice prune failed: {err}");
