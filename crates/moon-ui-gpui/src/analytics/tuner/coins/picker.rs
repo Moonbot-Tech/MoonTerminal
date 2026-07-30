@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::*;
-use moon_ui::{MoonPalette, MoonTooltipView, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonPalette, MoonTooltipView};
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;

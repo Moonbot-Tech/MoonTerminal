@@ -13,13 +13,13 @@
 //! cursor is not lost once it leaves the track.
 
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonPalette};
 use rust_i18n::t;
 
-use super::super::super::AnalyticsView;
 use super::super::super::calendar::split_i18n;
+use super::super::super::AnalyticsView;
 use super::grid::{CHECK_COL, NAME_COL};
-use super::state::{WEEK_MIN, fmt_min, fmt_week_ep, parse_moh, parse_time};
+use super::state::{fmt_min, fmt_week_ep, parse_moh, parse_time, WEEK_MIN};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::SliderProfiles;

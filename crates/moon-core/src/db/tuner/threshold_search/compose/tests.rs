@@ -8,6 +8,7 @@
 //! a property of how a fold is BUILT rather than of how a set is chosen.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::*;
 use crate::db::tuner::threshold_search::search::Columns;
@@ -77,9 +78,8 @@ fn sample(n: usize, seed: u64) -> (Vec<f64>, Vec<Vec<f64>>, Vec<i64>) {
 /// under test.
 ///
 /// Breakage this pins: `compose.rs:accepts` dropping its majority clause and deciding on the
-/// mean alone. The forward pass would then admit any field that caught one lucky stretch, which
-/// is precisely the coincidence out-of-sample scoring exists to reject — and the composed set
-/// would grow with fields that help in no other period.
+/// mean alone. The inner winner or outer gate could then accept a path that caught one lucky
+/// stretch, which is precisely the coincidence out-of-sample scoring exists to reject.
 #[test]
 fn a_field_only_joins_when_it_helps_in_most_folds() {
     let incumbent = [100.0, 100.0, 100.0];
@@ -145,6 +145,151 @@ fn a_field_that_costs_nothing_is_given_back() {
     );
 }
 
+/// A temporarily weak singleton must remain reachable long enough to form a strong pair.
+///
+/// The oracle is a hand-written score table, independent of the threshold search: every singleton
+/// loses money while fields 0+1 together score 30 on every fold. Width two is
+/// enough to retain those two best losing branches and discover their synergy.
+///
+/// Breakage this pins: `compose.rs:beam_candidates` filtering a layer through `accepts` before
+/// retaining its frontier. That one-line shortcut would discard every singleton here, so the
+/// profitable pair could never be generated and the user-visible composition would stay empty.
+#[test]
+fn a_weak_singleton_can_survive_to_form_a_strong_pair() {
+    let candidate = [true, true, true];
+    let is_slot = [false, false, false];
+    let scores = |mask: &[bool]| match mask {
+        [true, false, false] => vec![-1.0, -1.0, -1.0],
+        [false, true, false] => vec![-2.0, -2.0, -2.0],
+        [false, false, true] => vec![-3.0, -3.0, -3.0],
+        [true, true, false] => vec![30.0, 30.0, 30.0],
+        [true, false, true] => vec![11.0, 11.0, 11.0],
+        [false, true, true] => vec![12.0, 12.0, 12.0],
+        other => panic!("unexpected mask {other:?}"),
+    };
+    let masks = beam_candidates(&candidate, &is_slot, 0, 2, 2, |mask, _, _, _| {
+        Some(scores(mask))
+    })
+    .expect("the deterministic scorer never cancels");
+    let empty = [false, false, false];
+    let empty_scores = [0.0, 0.0, 0.0];
+    assert!(
+        masks
+            .iter()
+            .filter(|mask| mask.iter().filter(|chosen| **chosen).count() == 1)
+            .all(|mask| !accepts(&empty_scores, &scores(mask))),
+        "the fixture must make every retained singleton lose on its own"
+    );
+    let ranked = masks
+        .into_iter()
+        .map(|mask| ScoredMask {
+            scores: scores(&mask),
+            mask,
+        })
+        .collect();
+    assert_eq!(
+        inner_winner(&empty_scores, ranked, &empty),
+        [true, true, false],
+        "the beam must carry the losing branches into their jointly profitable pair"
+    );
+}
+
+/// The outer gate must report the exact path whose mask it selected.
+///
+/// Every score is hand-written independent evidence. The cases cover a strict subset, all
+/// admitted fields, no additional filters, a beam mask equal to all fields, and the zero-admitted
+/// boundary where all-fields and no-filters are the same mask.
+///
+/// Breakage this pins: `compose.rs:gate_choice` labelling an all-fields mask as `ReducedSet` after
+/// removing the strict-subset check, or restoring the asymmetric sequence that defaulted to no
+/// filters whenever neither the subset nor all-fields beat both alternatives. The thresholds
+/// would remain numerically plausible while the new user-facing result line described either a
+/// different path or a route another candidate beat on every gate fold.
+#[test]
+fn the_outer_gate_reports_each_distinct_decision() {
+    let no_filters = [false, false, false];
+    let all_fields = [true, true, true];
+    let subset = [true, false, true];
+
+    let chosen_subset = gate_choice(
+        (&no_filters, &[100.0, 100.0]),
+        (&all_fields, &[110.0, 110.0]),
+        (&subset, &[130.0, 125.0]),
+    );
+    assert_eq!(
+        chosen_subset,
+        GateChoice {
+            decision: ComposeDecision::ReducedSet,
+            mask: subset.to_vec(),
+        },
+        "a strict subset that beats both complete alternatives is its own decision"
+    );
+
+    let chosen_all = gate_choice(
+        (&no_filters, &[100.0, 100.0]),
+        (&all_fields, &[140.0, 135.0]),
+        (&subset, &[130.0, 120.0]),
+    );
+    assert_eq!(
+        chosen_all,
+        GateChoice {
+            decision: ComposeDecision::AllAllowedFields,
+            mask: all_fields.to_vec(),
+        },
+        "all admitted fields must be named when their search wins"
+    );
+
+    let chosen_none = gate_choice(
+        (&no_filters, &[100.0, 100.0]),
+        (&all_fields, &[90.0, 90.0]),
+        (&subset, &[95.0, 95.0]),
+    );
+    assert_eq!(
+        chosen_none,
+        GateChoice {
+            decision: ComposeDecision::NoAdditionalFilters,
+            mask: no_filters.to_vec(),
+        },
+        "no additional filters is a normal winning path"
+    );
+
+    let chosen_non_transitive = gate_choice(
+        (&no_filters, &[100.0, 100.0]),
+        (&all_fields, &[200.0, 0.0]),
+        (&subset, &[120.0, 120.0]),
+    );
+    assert_eq!(
+        chosen_non_transitive,
+        GateChoice {
+            decision: ComposeDecision::ReducedSet,
+            mask: subset.to_vec(),
+        },
+        "one inconclusive alternative must not make the gate default to a route the subset beat"
+    );
+
+    let beam_reached_all = gate_choice(
+        (&no_filters, &[100.0, 100.0]),
+        (&all_fields, &[130.0, 130.0]),
+        (&all_fields, &[130.0, 130.0]),
+    );
+    assert_eq!(
+        beam_reached_all.decision,
+        ComposeDecision::AllAllowedFields,
+        "a beam path equal to all fields is not a reduced set"
+    );
+
+    let no_admitted = gate_choice(
+        (&no_filters, &[100.0, 100.0]),
+        (&no_filters, &[100.0, 100.0]),
+        (&no_filters, &[100.0, 100.0]),
+    );
+    assert_eq!(
+        no_admitted.decision,
+        ComposeDecision::NoAdditionalFilters,
+        "with no admitted fields the two identical masks have one unambiguous meaning"
+    );
+}
+
 /// Composition exists exactly on machines at or above the bar, and never asks for a budget of
 /// nothing when it does.
 ///
@@ -152,11 +297,15 @@ fn a_field_that_costs_nothing_is_given_back() {
 /// bar's own constant rather than a number restated here: one core below it there must be no
 /// budget at all, and at it there must be a usable one.
 ///
-/// Breakage this pins two ways. `compose.rs:budget_for` returning a budget below the bar — the
+/// Breakage this pins five ways. `compose.rs:budget_for` returning a budget below the bar — the
 /// feature would run on exactly the machines it was gated off, since a caller decides whether to
-/// compose by whether a budget came back. And `ranking_restarts` dividing without the
-/// `RESTARTS_MIN` floor: with a low restart setting the ranking runs would request zero restarts,
-/// find nothing, and the feature would report "this period has no answer" rather than a set.
+/// compose by whether a budget came back. Reducing `folds` below four would make every production
+/// call skip composition because two inner and two gate folds are mandatory. Restoring a fixed
+/// `max_fields: 6` would silently make larger admitted sets unreachable again. Restoring
+/// `beam_width: 4` would discard half the competing interactions the widened search promises.
+/// And `ranking_restarts` dividing without the `RESTARTS_MIN` floor: with a low restart setting
+/// the ranking runs would request zero restarts, find nothing, and the feature would report "this
+/// period has no answer" rather than a set.
 #[test]
 fn composition_has_a_budget_exactly_above_the_core_bar() {
     let bar = super::super::search::HEAVY_SEARCH_MIN_CORES;
@@ -170,9 +319,18 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
         let b = budget_for(cores)
             .unwrap_or_else(|| panic!("cores {cores}: at or above the bar there is a budget"));
         assert!(
-            b.folds >= 2,
-            "cores {cores}: {} folds is not a split",
+            b.folds >= 4,
+            "cores {cores}: {} folds cannot supply two inner and two gate folds",
             b.folds
+        );
+        assert_eq!(
+            b.max_fields,
+            FIELDS.len(),
+            "cores {cores}: every admitted field count must be reachable"
+        );
+        assert_eq!(
+            b.beam_width, 8,
+            "cores {cores}: the widened search must retain eight branches per depth"
         );
         for restarts in [1usize, 2, 7, 100, 20_000] {
             assert!(
@@ -190,11 +348,13 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
         (
             at_bar.folds,
             at_bar.max_fields,
+            at_bar.beam_width,
             at_bar.ranking_restarts(800)
         ),
         (
             far_above.folds,
             far_above.max_fields,
+            far_above.beam_width,
             far_above.ranking_restarts(800)
         ),
         "past the bar the budget must stop growing"
@@ -203,19 +363,31 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
 
 // ─────────────────────────────── real-snapshot diagnostic ───────────────────────────────
 
-/// One tuner scope out of a real snapshot: the trades of ONE strategy on ONE core, in
-/// chronological order.
-///
-/// Scoped, never pooled, because that is the only way the tuner is ever used: thresholds are
-/// tuned for a strategy on the servers it runs on. A sample stirred together from every strategy
-/// and every core is not a harder version of the same problem, it is a different one — the
-/// strategies react to different fields and trade different situations, so no field can relate to
-/// profit across the pool and any search over it is measuring the mixture rather than the tuning.
+/// One exact strategy+core scope out of a real snapshot, in chronological order.
 struct Scope {
     label: String,
     profits: Vec<f64>,
     vals: Vec<Vec<f64>>,
     closes: Vec<i64>,
+}
+
+/// Positive integer override for the opt-in real-snapshot diagnostic.
+///
+/// Invalid or absent values use `default`, so an accidental shell value cannot turn a local
+/// benchmark into an unbounded run.
+///
+/// Args:
+///     name: Environment variable to read.
+///     default: Value used when the variable is absent or invalid.
+///
+/// Returns:
+///     Positive configured value or `default`.
+fn bench_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }
 
 /// The largest strategy+core scopes in the snapshot, biggest first.
@@ -288,32 +460,42 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
         .collect()
 }
 
-/// Measure composition against the plain joint search on a REAL report, on the only figure that
-/// matters: what each earns on the period neither of them was allowed to fit.
+/// Measure composition against all-fields joint search on raw-USDT rows from a REAL report.
 ///
 /// Opt-in, because it needs a snapshot and takes minutes:
 /// `MOON_TUNER_BENCH_DB=<snapshot> cargo test -p moon-core compose -- --ignored --nocapture`
 ///
-/// This is a DIAGNOSTIC, not an assertion, and deliberately so. The fold count and the cut points
-/// are a judgement call; whether they are the right one is an empirical question about a
-/// particular user's trading, and freezing today's answer into a threshold would turn a tuning
-/// decision into a test that fails when the data changes. It prints, and a human reads it.
+/// This controlled diagnostic evaluates every exact strategy+core pair separately. It
+/// intentionally does not reconstruct the Analytics window's period, side, emulator, deleted,
+/// liquidation, or Percent-metric filters. Its output measures the selector on the snapshot, not
+/// the exact row set of an arbitrary saved UI view.
+///
+/// The selected profits remain a diagnostic: the fold count and cut points are a judgement call,
+/// and freezing today's answer into a threshold would make an evolving snapshot fail spuriously.
+/// The harness still asserts that the requested number of separate scopes exists, so a grouping
+/// regression cannot silently replace the requested comparison with a shorter printed report.
 #[test]
 #[ignore]
-fn composition_against_the_plain_search_on_a_real_snapshot() {
-    let scopes = snapshot_scopes(4, 600);
-    assert!(
-        !scopes.is_empty(),
-        "MOON_TUNER_BENCH_DB must name a report snapshot holding a scope worth tuning"
+fn composition_against_all_fields_on_a_real_snapshot() {
+    let want = bench_usize("MOON_TUNER_BENCH_SCOPES", 4).max(1);
+    let min_trades = bench_usize("MOON_TUNER_BENCH_MIN_TRADES", 600);
+    let scopes = snapshot_scopes(want, min_trades);
+    assert_eq!(
+        scopes.len(),
+        want,
+        "MOON_TUNER_BENCH_DB must hold {want} separate strategy+core scopes worth tuning"
     );
     for scope in scopes {
         report_one_scope(scope);
     }
 }
 
-/// Run the baseline, the plain search and the composition over one tuner scope and print all
-/// three. Split out so the loop above reads as "every scope, the same three numbers".
+/// Run no-filters, all-fields, and composition over one exact tuner scope.
+///
+/// Args:
+///     scope: Chronological rows for one exact strategy+core pair.
 fn report_one_scope(scope: Scope) {
+    let started = Instant::now();
     let Scope {
         label,
         profits,
@@ -322,10 +504,24 @@ fn report_one_scope(scope: Scope) {
     } = scope;
     let total = profits.len();
     let cols = Arc::new(Columns { profits, vals });
-    let locked = vec![None; FIELDS.len()];
-    let (ne, restarts) = (32usize, 2_000usize);
-    // The window's own defaults: fit on the leading 90%, measure on the rest.
-    let train_n = super::super::train_split(&closes, 0.9);
+    // Match the UI's "Search all" boundary: fields with nowhere to save a threshold remain
+    // excluded unless a user explicitly enables them one by one.
+    let locked: Vec<Option<(Option<f64>, Option<f64>)>> = FIELDS
+        .iter()
+        .map(|field| {
+            if field.mapped() {
+                None
+            } else {
+                Some((None, None))
+            }
+        })
+        .collect();
+    let ne = bench_usize("MOON_TUNER_BENCH_EDGES", 32)
+        .clamp(super::super::EDGES_MIN, super::super::edges_max());
+    let restarts = bench_usize("MOON_TUNER_BENCH_RESTARTS", 2_000)
+        .clamp(super::super::RESTARTS_MIN, super::super::restarts_max());
+    let train_pct = bench_usize("MOON_TUNER_BENCH_TRAIN_PCT", 90).clamp(1, 100);
+    let train_n = super::super::train_split(&closes, train_pct as f64 / 100.0);
     let min_n = (train_n / 10).max(1);
     let handle = SearchHandle::new();
     let full = Search::new(cols.clone(), &locked, slot_flags(), min_n, ne, train_n)
@@ -357,25 +553,28 @@ fn report_one_scope(scope: Scope) {
     };
 
     println!(
-        "\n[scope] {label} — train {train_n}, holdout {}",
+        "\n[scope] {label} - train {train_n}, holdout {}",
         total - train_n
     );
     // The base rate: what the period pays with no filter at all. Without it the two searches
     // cannot be read — "out of sample +33" means one thing against a baseline of -200 and the
     // opposite against a baseline of +400.
     let base = report("no filter", &vec![false; FIELDS.len()]);
-    let plain = report("plain", full.free_mask());
+    let all_fields = report("all fields", full.free_mask());
 
     let budget = budget_for(super::super::search::logical_cores()).expect(
-        "the composition diagnostic needs a machine the feature actually runs on — see \
+        "the composition diagnostic needs a machine the feature actually runs on - see \
          HEAVY_SEARCH_MIN_CORES",
     );
+    let beam_width =
+        bench_usize("MOON_TUNER_BENCH_BEAM_WIDTH", budget.beam_width).clamp(1, FIELDS.len());
     println!(
-        "[budget] cores {} -> ranking restarts {}, folds {}, max fields {}",
+        "[budget] cores {} -> ranking restarts {}, folds {}, max fields {}, beam {}",
         budget.cores,
         budget.ranking_restarts(restarts),
         budget.folds,
-        budget.max_fields
+        budget.max_fields,
+        beam_width
     );
     // Through the production path, not a local rebuild of it: a diagnostic that cuts its own
     // folds can report on a geometry the product no longer builds.
@@ -397,10 +596,12 @@ fn report_one_scope(scope: Scope) {
             .collect::<Vec<_>>()
     );
     let p = ComposeParams {
-        restarts: budget.ranking_restarts(restarts),
+        ranking_restarts: budget.ranking_restarts(restarts),
+        gate_restarts: restarts,
         seed: 0x5EED,
         round: true,
         max_fields: budget.max_fields,
+        beam_width,
     };
     let out = compose(&folds, &p, &handle).expect("an uncancelled composition answers");
     let support: Vec<(&str, u8)> = out
@@ -410,13 +611,17 @@ fn report_one_scope(scope: Scope) {
         .filter(|(_, c)| **c)
         .map(|(fi, _)| (FIELDS[fi].col, out.support[fi]))
         .collect();
-    println!("[composed] support out of {} folds: {support:?}", out.folds);
+    println!(
+        "[composition] decision {:?}; support out of {} folds: {support:?}",
+        out.decision, out.folds
+    );
     let composed = report("composed", &out.chosen);
     println!(
         "[verdict] out of sample vs the no-filter baseline {base:+.4}: \
-         plain {:+.4}, composed {:+.4}",
-        plain - base,
-        composed - base
+         all fields {:+.4}, composed {:+.4}; elapsed {:.2?}",
+        all_fields - base,
+        composed - base,
+        started.elapsed()
     );
 }
 

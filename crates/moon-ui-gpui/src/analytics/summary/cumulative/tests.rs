@@ -1,4 +1,4 @@
-use super::{MAX_SWING_LABELS, swing_labels, swing_points};
+use super::{swing_labels, swing_points, MAX_SWING_LABELS};
 
 /// A saw that turns at EVERY bucket: the threshold must be backed off until the labels
 /// fit, or the chart becomes a wall of overlapping numbers.

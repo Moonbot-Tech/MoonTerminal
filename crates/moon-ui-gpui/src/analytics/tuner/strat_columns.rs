@@ -6,8 +6,8 @@
 //! column added to one must not appear in the other by accident.
 
 use super::columns::{
-    COL_AVG, COL_BEST, COL_BL, COL_PF, COL_PROFIT, COL_TRADES, COL_WINRATE, COL_WL, COL_WORST,
-    MetricCol,
+    MetricCol, COL_AVG, COL_BEST, COL_BL, COL_PF, COL_PROFIT, COL_TRADES, COL_WINRATE, COL_WL,
+    COL_WORST,
 };
 
 /// Strategy comparison columns, in reading order: identity, then how many trades back the figure,
@@ -33,6 +33,8 @@ pub(super) const SORT_NAME: &str = "name";
 pub(super) const SORT_KIND: &str = "kind";
 pub(super) const SORT_CORE: &str = "core";
 pub(super) const SORT_LASTEDIT: &str = "lastedit";
+/// Strategy-list sort used when no valid saved choice exists.
+pub(super) const STRAT_SORT_DEFAULT: (&str, bool) = (COL_PROFIT.key, true);
 
 /// Visible-column bit layout: kind at bit 0, core at bit 1, then METRIC_COLS[i] at bit 2+i, and
 /// lastedit just above the metrics. The strategy name column is identity and always shown (no bit).

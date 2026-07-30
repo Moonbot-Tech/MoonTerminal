@@ -241,6 +241,12 @@ pub struct WindowLayout {
     /// Visible columns of the Tuning strategy list, per axis. None = the UI's own defaults.
     #[serde(default)]
     pub analytics_strat_cols_modes: Option<StratColsByMode>,
+    /// Strategy-list sort as `(stable column key, descending)`.
+    ///
+    /// `None` means the UI's profit-descending default. Read leniently because this
+    /// hand-editable field must never make one malformed value discard the complete layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_strat_sort: Option<(String, bool)>,
     /// Analytics profit metric: `false` = absolute USDT (default, and every existing config),
     /// `true` = percent (the report `Profit` column, profit ÷ spent). A per-window display
     /// lens, so it lives here rather than being reset each session.

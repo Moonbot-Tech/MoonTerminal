@@ -1,16 +1,16 @@
 //! Unit tests for persisted filter-tuner controls.
 
 use super::{
-    DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN, SuggestJob, SuggestState, TRAIN_OPTIONS,
-    TunerState, edge_options, edge_options_upto, fmt_bound, iters_of, parse_num, persist_seed,
-    restore_edges, restore_enabled, restore_iters, restore_seed, restore_train, seed_of,
-    staged_dirty, train_frac,
+    edge_options, edge_options_upto, fmt_bound, iters_of, parse_num, persist_seed, restore_edges,
+    restore_enabled, restore_iters, restore_seed, restore_train, seed_of, staged_dirty, train_frac,
+    SuggestJob, SuggestState, TunerState, DEFAULT_EDGES, DEFAULT_ITERS, DEFAULT_TRAIN,
+    TRAIN_OPTIONS,
 };
-use moon_core::db::tuner::FIELDS;
-use moon_core::db::tuner::StratFilters;
 use moon_core::db::tuner::threshold_search::{
-    EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
+    restarts_max, SearchHandle, EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN,
 };
+use moon_core::db::tuner::StratFilters;
+use moon_core::db::tuner::FIELDS;
 
 /// `filter/state.rs:TunerState::mark_report_stale` must not add the draft resets or request
 /// generation bumps from `invalidate`; the former clears edits and the latter starves a long

@@ -317,8 +317,8 @@ fn enabled_mask_writes(src: &str) -> usize {
 ///
 /// The checkboxes mean "this field MAY take part", which is the user's statement about their
 /// strategy. A composition that wrote them back would silently replace that statement with its
-/// own every run, and the next plain search — a different question — would then be scoped by a
-/// set the user never chose. What the composition picked is visible where it belongs: in which
+/// own every run, and the next all-fields search — a different question — would then be scoped by
+/// a set the user never chose. What the composition picked is visible where it belongs: in which
 /// fields came back carrying thresholds.
 ///
 /// The wiring can only be pinned at the source level, since the mask lives on a GPUI view no
@@ -372,13 +372,90 @@ fn the_composed_set_is_reported_beside_the_holdout() {
              verdict and belong in one block"
         );
     }
+    let decision_end = body
+        .find("let fields: Vec<String>")
+        .expect("the decision match must precede composed-field details");
+    let decisions = [
+        ("ComposeDecision::ReducedSet", "compose_decision_reduced"),
+        ("ComposeDecision::AllAllowedFields", "compose_decision_all"),
+        (
+            "ComposeDecision::NoAdditionalFilters",
+            "compose_decision_none",
+        ),
+    ];
+    let positions: Vec<usize> = decisions
+        .iter()
+        .map(|(decision, _)| {
+            body.find(decision)
+                .unwrap_or_else(|| panic!("`split_summary` must handle {decision}"))
+        })
+        .collect();
+    for (index, ((decision, text), start)) in decisions.iter().zip(&positions).enumerate() {
+        let end = positions.get(index + 1).copied().unwrap_or(decision_end);
+        assert!(
+            body[*start..end].contains(text),
+            "`split_summary` must map {decision} to {text}, or the textual result can describe \
+             a different search path than the core selected"
+        );
+    }
+    assert!(
+        body.contains("analytics.tuner.compose_result"),
+        "the selected path needs its own explicit result line"
+    );
+    assert!(
+        body.contains("split.compose_skipped")
+            && body.contains("analytics.tuner.compose_decision_all_direct"),
+        "when comparison cannot run, the summary must still name the all-fields path that did"
+    );
+}
+
+/// Every strategy-list sort click must persist its stable key and direction.
+///
+/// The plausible regression is retaining `toggle_sort_key` and `cx.notify()` while removing the
+/// backend write during a cleanup. Sorting would look correct for the rest of the process, all
+/// pure ordering tests would stay green, and the next restart would silently return to Profit.
+#[test]
+fn strategy_sort_clicks_persist_through_the_layout() {
+    let list = read_src("analytics/tuner/list/mod.rs");
+    let table = read_src("analytics/tuner/list/table.rs");
+    let analytics = read_src("analytics/mod.rs");
+    let layout_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("moon-core")
+        .join("src")
+        .join("config")
+        .join("layout.rs");
+    let layout = fs::read_to_string(&layout_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", layout_path.display()));
+    let toggle = braced_body(&list, "fn toggle_sort(");
+
+    assert!(
+        toggle.contains("toggle_sort_key(")
+            && toggle.contains("analytics_strat_sort")
+            && toggle.contains("layout_dirty = true"),
+        "the one strategy-sort funnel must update view state, save the exact choice, and dirty \
+         the layout"
+    );
+    assert!(
+        table.contains("this.toggle_sort(key, cx)"),
+        "every sortable strategy header must reach the persisted funnel"
+    );
+    assert!(
+        analytics.contains("restore_strat_sort(") && analytics.contains("analytics_strat_sort"),
+        "AnalyticsView must restore the saved sort instead of hard-coding Profit"
+    );
+    assert!(
+        layout.contains("pub analytics_strat_sort: Option<(String, bool)>")
+            && layout.contains("deserialize_with = \"de_lenient\""),
+        "the layout field must preserve key+direction without making malformed TOML fatal"
+    );
 }
 
 /// The composition switch persists on every change, like every other search setting.
 ///
 /// Same hazard as the field checkboxes: the window is reopened often, and a mode that silently
 /// resets to the cheaper search would have the user believe they composed a set when they ran
-/// the plain search. Pinned at the source level for the same reason — the handler lives on a
+/// the all-fields search. Pinned at the source level for the same reason — the handler lives on a
 /// GPUI view this crate cannot construct in a test.
 #[test]
 fn the_compose_switch_persists_every_change() {
@@ -396,14 +473,90 @@ fn the_compose_switch_persists_every_change() {
     );
 }
 
+/// The filter-search popup must present settings as a form, not as one technical text stream.
+///
+/// Breakage this pins: flattening the composition block back into the generic two-column row.
+/// The checkbox would lose MoonUI's own clickable label, the work budget would return to one
+/// wrapping sentence, and the three groups would again be visually indistinguishable. Returning
+/// the width to 210 or removing the height-bound scroll would make the redesigned form unreadable
+/// or unreachable in a narrow group window; omitting `beam_width` would hide the real work limit.
+#[test]
+fn the_filter_search_popup_keeps_its_grouped_composition_block() {
+    let shell = read_src("analytics/tuner/shell.rs");
+    let content = braced_body(&shell, "fn filter_settings_content(");
+    let popover = braced_body(&shell, "fn filter_search_settings(");
+    let budget_labels = braced_body(&shell, "fn compose_budget_labels(");
+
+    assert!(
+        shell.contains("const SETTINGS_POPUP_W: f32 = 250.0;"),
+        "the grouped form needs the reviewed 250-unit content width"
+    );
+    assert!(
+        content.contains(".max_h(popup_max_h)") && content.contains(".overflow_y_scroll()"),
+        "all settings must remain reachable when the popup is taller than the viewport"
+    );
+    assert!(
+        budget_labels.contains("budget.beam_width")
+            && budget_labels.contains("analytics.tuner.compose_budget_beam"),
+        "the composition card must display the production beam width"
+    );
+
+    let sections = [
+        "analytics.tuner.cfg_search_section",
+        "analytics.tuner.cfg_validation_section",
+        "analytics.tuner.cfg_repeat_section",
+    ];
+    let mut previous = None;
+    for section in sections {
+        let position = content
+            .find(section)
+            .unwrap_or_else(|| panic!("the settings popup must render the {section} group"));
+        if let Some(previous) = previous {
+            assert!(
+                position > previous,
+                "settings groups must remain in search, validation, reproducibility order"
+            );
+        }
+        previous = Some(position);
+    }
+    for needle in [
+        "analytics.tuner.compose_short",
+        "MoonTag::new()",
+        "compose_budget_labels(&budget)",
+    ] {
+        assert!(
+            content.contains(needle),
+            "the contained composition setting must keep {needle}"
+        );
+    }
+    let checkbox = content
+        .find("MoonCheckbox::new(SharedString::from(\"tun-cfg-compose-f\"))")
+        .expect("the composition block must use MoonUI's checkbox");
+    let handler = content[checkbox..]
+        .find(".on_change(")
+        .map(|offset| checkbox + offset)
+        .expect("the composition checkbox must keep its change handler");
+    assert!(
+        content[checkbox..handler].contains(".label(")
+            && content[checkbox..handler].contains("analytics.tuner.compose_toggle"),
+        "the composition checkbox must own its localized clickable label"
+    );
+    assert!(
+        popover.contains("content_width_font(SETTINGS_POPUP_W)")
+            && popover.contains("overlay_closable(false)")
+            && popover.contains("close_on_content_click(false)"),
+        "the wider form must keep font-scaled sizing and nested-dropdown dismissal protection"
+    );
+}
+
 /// The tuner's expensive settings are hidden, not merely narrowed, on a machine below the bar.
 ///
 /// One predicate — `moon_core`'s `heavy_search_supported` — decides all three: whether the
 /// composition switch is rendered, whether a saved composition setting is honoured, and how many
 /// depths the dropdown offers. They must not drift apart, because each half of a disagreement is
-/// a lie: a switch rendered where the search ignores it silently runs the plain search under the
-/// composed label, and a setting honoured where no switch exists changes what the run button does
-/// with nothing on screen to explain it.
+/// a lie: a switch rendered where the search ignores it silently runs the all-fields search under
+/// the composed label, and a setting honoured where no switch exists changes what the run button
+/// does with nothing on screen to explain it.
 ///
 /// Pinned at the source level because the switch lives on a GPUI view this crate cannot build,
 /// and because a test machine only ever exercises ONE side of the bar.

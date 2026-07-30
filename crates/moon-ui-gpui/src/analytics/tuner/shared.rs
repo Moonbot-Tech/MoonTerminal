@@ -5,7 +5,7 @@
 //! between them, and a helper that drifts in here stops being reviewable as shared.
 
 use gpui::*;
-use moon_ui::{MoonPalette, MoonTooltipView, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonPalette, MoonTooltipView};
 
 use super::super::AnalyticsView;
 use crate::design;

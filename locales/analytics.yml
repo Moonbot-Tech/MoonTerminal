@@ -218,6 +218,18 @@ analytics.tuner.cfg_title:
   ru: "Настройки подбора"
   en: "Search settings"
   es: "Ajustes de búsqueda"
+analytics.tuner.cfg_search_section:
+  ru: "Основное"
+  en: "Search"
+  es: "Búsqueda"
+analytics.tuner.cfg_validation_section:
+  ru: "Проверка результата"
+  en: "Validation"
+  es: "Validación"
+analytics.tuner.cfg_repeat_section:
+  ru: "Повторяемость"
+  en: "Reproducibility"
+  es: "Reproducibilidad"
 analytics.tuner.seed:
   ru: "seed"
   en: "seed"
@@ -239,22 +251,34 @@ analytics.tuner.train_share:
   ru: "обучение"
   en: "train on"
   es: "entrenar"
-analytics.tuner.compose:
-  ru: "состав"
-  en: "field set"
-  es: "conjunto"
+analytics.tuner.compose_toggle:
+  ru: "Подбирать состав полей"
+  en: "Select the field set"
+  es: "Seleccionar el conjunto de campos"
+analytics.tuner.compose_short:
+  ru: "Сравнит сокращённый состав, все поля и вариант без дополнительных фильтров."
+  en: "Compares a reduced set, all fields, and a route without additional filters."
+  es: "Compara un conjunto reducido, todos los campos y una ruta sin filtros adicionales."
 analytics.tuner.compose_run:
   ru: "Подобрать состав"
   en: "Compose set"
   es: "Componer conjunto"
 analytics.tuner.compose_help:
-  ru: "Подбирает не только пороги, но и сам состав полей. Кандидаты проверяются на отрезках периода, которых поиск не видел: поле входит, только если помогает на большинстве отрезков, и выбрасывается, если без него не хуже. Галочки полей остаются границей — состав берётся только из разрешённых. Нужна выбранная стратегия."
-  en: "Chooses the field set as well as the thresholds. Candidates are scored on stretches of the period the search never saw: a field joins only if it helps in most of them, and is dropped when the set does no worse without it. The field checkboxes stay the boundary — the set is drawn only from what they admit. A strategy must be selected."
-  es: "Elige el conjunto de campos además de los umbrales. Los candidatos se evalúan en tramos del periodo que la búsqueda no vio: un campo entra solo si ayuda en la mayoría de ellos, y se descarta si el conjunto no empeora sin él. Las casillas de campos siguen siendo el límite: el conjunto se toma solo de las admitidas. Debe haber una estrategia seleccionada."
-analytics.tuner.compose_budget:
-  ru: "ядер %{cores} · до %{fields} полей · %{folds} среза"
-  en: "%{cores} cores · up to %{fields} fields · %{folds} folds"
-  es: "%{cores} núcleos · hasta %{fields} campos · %{folds} cortes"
+  ru: "Сравнивает три равноправных пути: отдельный состав, совместный поиск по всем разрешённым полям и отсутствие дополнительных фильтров. Несколько лучших ветвей исследуют весь разрешённый набор, начиная с одиночных полей; два отдельных среза выбирают итог. Галочки остаются границей поиска. Нужна выбранная стратегия."
+  en: "Compares three equal paths: a distinct field set, joint search across every admitted field, and no additional filters. Several leading branches explore the entire admitted pool from single fields upward; two separate folds choose the result. The checkboxes remain the search boundary. A strategy must be selected."
+  es: "Compara tres caminos equivalentes: un conjunto propio, la búsqueda conjunta en todos los campos permitidos y ningún filtro adicional. Varias ramas principales exploran todo el grupo permitido desde campos individuales; dos cortes separados eligen el resultado. Las casillas siguen siendo el límite. Debe seleccionarse una estrategia."
+analytics.tuner.compose_budget_fields:
+  ru: "полей: %{n}"
+  en: "fields: %{n}"
+  es: "campos: %{n}"
+analytics.tuner.compose_budget_beam:
+  ru: "ветвей: %{n}"
+  en: "beam: %{n}"
+  es: "ramas: %{n}"
+analytics.tuner.compose_budget_folds:
+  ru: "срезов: %{n}"
+  en: "folds: %{n}"
+  es: "cortes: %{n}"
 analytics.tuner.compose_started:
   ru: "подбираю состав…"
   en: "composing the set…"
@@ -267,10 +291,26 @@ analytics.tuner.compose_set:
   ru: "состав"
   en: "set"
   es: "conjunto"
-analytics.tuner.compose_empty:
-  ru: "ни одно поле не оправдало себя вне выборки"
-  en: "no field held up out of sample"
-  es: "ningún campo se sostuvo fuera de muestra"
+analytics.tuner.compose_result:
+  ru: "итог"
+  en: "result"
+  es: "resultado"
+analytics.tuner.compose_decision_reduced:
+  ru: "лучший результат дал отдельный сокращённый состав"
+  en: "a distinct reduced field set produced the best result"
+  es: "un conjunto reducido propio produjo el mejor resultado"
+analytics.tuner.compose_decision_all:
+  ru: "лучший результат дал совместный поиск по всем разрешённым полям"
+  en: "joint search across every admitted field produced the best result"
+  es: "la búsqueda conjunta en todos los campos permitidos produjo el mejor resultado"
+analytics.tuner.compose_decision_all_direct:
+  ru: "выполнен совместный поиск по всем разрешённым полям"
+  en: "joint search across every admitted field was executed"
+  es: "se ejecutó la búsqueda conjunta en todos los campos permitidos"
+analytics.tuner.compose_decision_none:
+  ru: "лучший результат получен без дополнительных фильтров"
+  en: "no additional filters produced the best result"
+  es: "el mejor resultado se obtuvo sin filtros adicionales"
 analytics.tuner.compose_small:
   ru: "период не делится на срезы — состав не подбирался"
   en: "the period cannot be cut into folds — the set was not composed"

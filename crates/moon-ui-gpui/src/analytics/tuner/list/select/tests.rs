@@ -6,7 +6,7 @@
 use moon_core::db::analytics::GroupStat;
 
 use super::super::MAX_ROWS;
-use super::{RangeOutcome, RowClick, drawn_order, range_extras, row_click_intent};
+use super::{drawn_order, range_extras, row_click_intent, RangeOutcome, RowClick};
 
 /// A group carrying only the two fields the range reads.
 fn g(name: &str) -> GroupStat {

@@ -191,6 +191,57 @@ fn a_config_without_the_new_analytics_keys_keeps_todays_behaviour() {
         "automatic composition must stay OFF for every existing config: it is a different, \
          slower search, and no update should silently change what a familiar button does"
     );
+    assert_eq!(
+        decoded.analytics_strat_sort, None,
+        "an older config has no saved strategy-list sort"
+    );
+}
+
+/// Strategy-list sorting must survive a restart without making `layout.toml` fragile.
+///
+/// The round trip proves both the stable column key and direction. The malformed cases assert
+/// the neighbouring period because the real failure is not merely losing sort: without
+/// `de_lenient`, one hand-edited tuple can reject the whole layout and later overwrite every
+/// window position with defaults.
+///
+/// Breakage this pins: removing `deserialize_with = "de_lenient"` from
+/// `layout.rs:analytics_strat_sort`. The first malformed value below would reject the document
+/// instead of preserving the period and treating sort as unset.
+#[test]
+fn strategy_sort_survives_restart_without_endangering_layout() {
+    let saved = WindowLayout {
+        analytics_strat_sort: Some(("core".to_string(), false)),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load");
+    assert_eq!(
+        decoded.analytics_strat_sort,
+        Some(("core".to_string(), false)),
+        "column key and ascending direction must both survive"
+    );
+
+    for written in [
+        "\"core\"",
+        "5",
+        "true",
+        "[\"core\"]",
+        "[\"core\", false, true]",
+        "[\"core\", 7]",
+    ] {
+        let doc = format!("analytics_period = \"p-cur-month\"\nanalytics_strat_sort = {written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(
+            decoded.analytics_period.as_deref(),
+            Some("p-cur-month"),
+            "{written}: the rest of the layout must survive"
+        );
+        assert_eq!(
+            decoded.analytics_strat_sort, None,
+            "{written}: an unusable sort value must be ignored"
+        );
+    }
 }
 
 /// The composition switch must survive a round trip and a hand-edited value.

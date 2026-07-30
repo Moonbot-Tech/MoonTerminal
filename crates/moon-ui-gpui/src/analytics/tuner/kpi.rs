@@ -5,7 +5,7 @@
 //! first. An axis that wants a differently-shaped matrix should widen this one, not fork it.
 
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonPalette};
 use rust_i18n::t;
 
 use super::super::summary::{fmt_signed, fmt_signed_plain, sign_color};

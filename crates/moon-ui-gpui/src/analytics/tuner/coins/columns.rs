@@ -5,7 +5,7 @@
 //! [`MetricCol`] pool, but the coin table is narrower, carries its own tick columns, and its
 //! width guard has to read ITS numbers, not the roomier table's.
 
-use super::super::columns::{COL_PF, COL_PROFIT, COL_TRADES, COL_WINRATE, COL_WORST, MetricCol};
+use super::super::columns::{MetricCol, COL_PF, COL_PROFIT, COL_TRADES, COL_WINRATE, COL_WORST};
 
 /// Per-coin columns: the same order, minus the per-trade average and the best case. Both tables
 /// are visible at once in "Coins" mode, so a differing order would cost the reader the position

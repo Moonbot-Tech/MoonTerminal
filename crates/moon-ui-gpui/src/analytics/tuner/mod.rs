@@ -46,7 +46,7 @@ mod time;
 pub(super) use coins::picker::CoinListsState;
 pub(super) use coins::state::CoinsState;
 pub(super) use filter::state::TunerState;
-pub(super) use list::{StratListFilter, VisibleRows};
+pub(super) use list::{restore_strat_sort, StratListFilter, VisibleRows};
 pub(super) use time::state::TimeTunerState;
 
 // Column descriptors of the comparison tables — re-exported so the submodules (`list`) take
@@ -57,12 +57,12 @@ pub(in crate::analytics::tuner) use coins::columns::{
 };
 pub(in crate::analytics::tuner) use columns::{metric_cell, sort_arrow_of, toggle_sort_key};
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonPalette};
 use rust_i18n::t;
 pub(in crate::analytics::tuner) use strat_columns::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W,
-    KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
-    SORT_NAME, STRAT_NAME_MIN_W, metric_bit,
+    metric_bit, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX,
+    KIND_MIN_W, KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND,
+    SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W, STRAT_SORT_DEFAULT,
 };
 /// The default visible-column mask is read by the parent too (`analytics::mod`, when it
 /// creates the view).

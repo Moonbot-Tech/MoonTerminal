@@ -5,7 +5,10 @@
 
 use moon_core::db::analytics::GroupStat;
 
-use super::{StratListFilter, VisibleKey, VisibleRows, filter_sort_indices, memo_is_fresh};
+use super::{
+    filter_sort_indices, memo_is_fresh, restore_strat_sort, StratListFilter, VisibleKey,
+    VisibleRows, SORT_NAME,
+};
 
 /// A group with just the fields these tests filter and sort on.
 fn g(name: &str, kind: &str, alive: Option<i64>, bl: i64, profit: f64) -> GroupStat {
@@ -137,4 +140,37 @@ fn search_and_kind_select_by_index() {
     assert_eq!(filter_sort_indices(&all, &k), vec![0, 2]);
     k.kind = Some("MoonHook".into());
     assert_eq!(filter_sort_indices(&all, &k), vec![2]);
+}
+
+/// Saved sort state must restore a real column and reject a removed or mistyped key.
+///
+/// The oracle is the visible row order, not the tuple returned by the normalizer: names and
+/// profits deliberately disagree, so accepting an unknown key would activate the consumer's
+/// name-sort default and reverse the expected rows.
+///
+/// Breakage this pins: `list::restore_strat_sort` returning every saved key without validation.
+/// A removed column id would then silently sort by strategy name after restart while its arrow
+/// disappeared, making the user's saved method and the displayed method disagree.
+#[test]
+fn saved_strategy_sort_restores_only_real_columns() {
+    let all = vec![
+        g("A low", "K", Some(2), 0, 1.0),
+        g("Z high", "K", Some(2), 0, 9.0),
+    ];
+
+    let mut invalid = key();
+    invalid.sort = restore_strat_sort(Some(("removed.column".to_string(), false)));
+    assert_eq!(
+        filter_sort_indices(&all, &invalid),
+        vec![1, 0],
+        "an unknown key must restore profit descending, not fall through to name ascending"
+    );
+
+    let mut valid = key();
+    valid.sort = restore_strat_sort(Some((SORT_NAME.to_string(), false)));
+    assert_eq!(
+        filter_sort_indices(&all, &valid),
+        vec![0, 1],
+        "a valid saved key and its ascending direction must survive"
+    );
 }

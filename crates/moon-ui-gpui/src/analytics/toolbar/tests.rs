@@ -6,11 +6,11 @@
 
 use std::collections::HashSet;
 
-use moon_core::db::ReadFail;
 use moon_core::db::analytics::UndatedCloses;
+use moon_core::db::ReadFail;
 
 use super::super::AnalyticsSessionState;
-use super::{UndatedBanner, sole_core_name, undated_banner_state};
+use super::{sole_core_name, undated_banner_state, UndatedBanner};
 
 /// Some undated trades, with money attached.
 fn found(n: i64) -> Option<UndatedCloses> {

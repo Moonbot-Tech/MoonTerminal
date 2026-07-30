@@ -20,17 +20,17 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
-    v_flex,
+    h_flex, v_flex, MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState,
+    MoonPalette,
 };
 use rust_i18n::t;
 
 use super::super::{AnalyticsView, LoadState};
-pub(in crate::analytics::tuner) use super::shared::{N_VAR, TunerKind, card, glyph_btn};
+pub(in crate::analytics::tuner) use super::shared::{card, glyph_btn, TunerKind, N_VAR};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::tuner::threshold_search::ComposeSkip;
-use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
+use moon_core::db::tuner::threshold_search::{ComposeDecision, ComposeSkip};
+use moon_core::db::tuner::{FieldClass, StratFilters, FIELDS};
 pub(in crate::analytics::tuner) use state::{flag_of, fmt_bound, parse_num, staged_dirty};
 
 /// Histogram buckets.
@@ -806,6 +806,17 @@ impl AnalyticsView {
                 // own; the number that says whether those four survived the period nobody fitted
                 // has to be in the same glance, not somewhere the user could scroll away from.
                 .when_some(split.composed.as_ref(), |el, set| {
+                    let decision = match set.decision {
+                        ComposeDecision::ReducedSet => {
+                            t!("analytics.tuner.compose_decision_reduced")
+                        }
+                        ComposeDecision::AllAllowedFields => {
+                            t!("analytics.tuner.compose_decision_all")
+                        }
+                        ComposeDecision::NoAdditionalFilters => {
+                            t!("analytics.tuner.compose_decision_none")
+                        }
+                    };
                     let fields: Vec<String> = set
                         .fields
                         .iter()
@@ -817,20 +828,73 @@ impl AnalyticsView {
                             format!("{label} {support}/{}", set.folds)
                         })
                         .collect();
-                    // Three different answers, and only the first is "composition found
-                    // nothing". A set whose fields were all left unfiltered by the full-budget
-                    // refit is composition having found something the refit then disagreed
-                    // with — reporting that as "no field held up" states the opposite.
+                    let el = el.child(
+                        h_flex()
+                            .w_full()
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(
+                                div()
+                                    .w(design::font_w_px(cx, 74.0))
+                                    .flex_none()
+                                    .truncate()
+                                    .text_color(moon(p.text_muted))
+                                    .child(t!("analytics.tuner.compose_result").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(moon(p.text_soft))
+                                    .child(decision.to_string()),
+                            ),
+                    );
+                    // The result line names the selected path. This second line is detail only:
+                    // applied fields and their support, or a disagreement between the selected
+                    // mask and the later full-budget refit.
                     let text = if !fields.is_empty() {
                         fields.join(" · ")
-                    } else if set.dropped_at_refit > 0 {
+                    } else {
                         t!(
                             "analytics.tuner.compose_refit_dropped",
                             n = set.dropped_at_refit
                         )
                         .to_string()
+                    };
+                    if fields.is_empty() && set.dropped_at_refit == 0 {
+                        el
                     } else {
-                        t!("analytics.tuner.compose_empty").to_string()
+                        el.child(
+                            h_flex()
+                                .w_full()
+                                .gap(design::ui_px(cx, 6.0))
+                                .child(
+                                    div()
+                                        .w(design::font_w_px(cx, 74.0))
+                                        .flex_none()
+                                        .truncate()
+                                        .text_color(moon(p.text_muted))
+                                        .child(t!("analytics.tuner.compose_set").to_string()),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(moon(p.text_soft))
+                                        .child(text),
+                                ),
+                        )
+                    }
+                })
+                // Composition was asked for and could not compare its three paths. State both
+                // what DID run and why the comparison was unavailable.
+                .when_some(split.compose_skipped, |el, why| {
+                    // Each reason asks for a different action — widen the period, or pick a
+                    // strategy — so the executed path and the reason remain separate lines.
+                    let text = match why {
+                        ComposeSkip::TooFewFolds => t!("analytics.tuner.compose_small"),
+                        ComposeSkip::NoStrategyScope => t!("analytics.tuner.compose_no_scope"),
                     };
                     el.child(
                         h_flex()
@@ -842,7 +906,7 @@ impl AnalyticsView {
                                     .flex_none()
                                     .truncate()
                                     .text_color(moon(p.text_muted))
-                                    .child(t!("analytics.tuner.compose_set").to_string()),
+                                    .child(t!("analytics.tuner.compose_result").to_string()),
                             )
                             .child(
                                 div()
@@ -850,20 +914,13 @@ impl AnalyticsView {
                                     .min_w_0()
                                     .truncate()
                                     .text_color(moon(p.text_soft))
-                                    .child(text),
+                                    .child(
+                                        t!("analytics.tuner.compose_decision_all_direct")
+                                            .to_string(),
+                                    ),
                             ),
                     )
-                })
-                // Composition was asked for and could not run. Saying so beats letting the user
-                // read a plain joint search as a composed one.
-                .when_some(split.compose_skipped, |el, why| {
-                    // Each reason asks for a different action — widen the period, or pick a
-                    // strategy — so they cannot share one line.
-                    let text = match why {
-                        ComposeSkip::TooFewFolds => t!("analytics.tuner.compose_small"),
-                        ComposeSkip::NoStrategyScope => t!("analytics.tuner.compose_no_scope"),
-                    };
-                    el.child(
+                    .child(
                         div()
                             .w_full()
                             .truncate()
