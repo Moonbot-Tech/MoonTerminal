@@ -385,8 +385,10 @@ impl Default for WarnAxesCfg {
     }
 }
 
-/// Chart visibility, alert sound, and detection thresholds per warning axis. Defaults reproduce the
-/// engine's previous hard-coded constants, so an unset config behaves exactly as before.
+/// Chart visibility, alert sound, and detection thresholds per warning axis. Defaults are the
+/// operator-tuned starting point (CPU 70%/5s, memory +15%/30s, latency ×2 yellow / ×10 red over a
+/// 15 s baseline / 3 s hold); the engine's `WarnTuning::default()` constants are only a
+/// pre-config fallback, so a fresh `layout.toml` opens on these numbers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WarnParams {
@@ -435,7 +437,7 @@ pub struct MemWarn {
 }
 impl Default for MemWarn {
     fn default() -> Self {
-        Self { chart: true, sound: None, pct: 12, window: 30 }
+        Self { chart: true, sound: None, pct: 15, window: 30 }
     }
 }
 
@@ -473,7 +475,7 @@ pub struct LatWarn {
 }
 impl Default for LatWarn {
     fn default() -> Self {
-        Self { chart: true, sound: None, yellow: 2, red: 10, window: 60, hold: 3 }
+        Self { chart: true, sound: None, yellow: 2, red: 10, window: 15, hold: 3 }
     }
 }
 
