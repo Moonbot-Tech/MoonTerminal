@@ -169,23 +169,67 @@ fn per_core_slices_coexist_by_badge() {
         .unwrap();
 
     // Server graph and two cores' graphs, all under the same subjects but different badges.
-    store.insert_series(rowid, 0, "server", 60_000, &[(50, 60)]).unwrap();
-    store.insert_series(rowid, 7, "core", 60_000, &[(30, 40)]).unwrap();
-    store.insert_series(rowid, 9, "core", 60_000, &[(10, 20)]).unwrap();
-    store.insert_ping_series(rowid, 7, "ping", 60_000, &[120]).unwrap();
-    store.insert_ping_series(rowid, 9, "ping", 60_000, &[999]).unwrap();
+    store
+        .insert_series(rowid, 0, "server", 60_000, &[(50, 60)])
+        .unwrap();
+    store
+        .insert_series(rowid, 7, "core", 60_000, &[(30, 40)])
+        .unwrap();
+    store
+        .insert_series(rowid, 9, "core", 60_000, &[(10, 20)])
+        .unwrap();
+    store
+        .insert_ping_series(rowid, 7, "ping", 60_000, &[120])
+        .unwrap();
+    store
+        .insert_ping_series(rowid, 9, "ping", 60_000, &[999])
+        .unwrap();
 
-    assert_eq!(store.series_for_episode(rowid, 0, "server").unwrap().as_deref(), Some(&[(50u8, 60u8)][..]));
-    assert_eq!(store.series_for_episode(rowid, 7, "core").unwrap().as_deref(), Some(&[(30u8, 40u8)][..]));
-    assert_eq!(store.series_for_episode(rowid, 9, "core").unwrap().as_deref(), Some(&[(10u8, 20u8)][..]));
-    assert_eq!(store.ping_series_for_episode(rowid, 7, "ping").unwrap().as_deref(), Some(&[120u16][..]));
-    assert_eq!(store.ping_series_for_episode(rowid, 9, "ping").unwrap().as_deref(), Some(&[999u16][..]));
+    assert_eq!(
+        store
+            .series_for_episode(rowid, 0, "server")
+            .unwrap()
+            .as_deref(),
+        Some(&[(50u8, 60u8)][..])
+    );
+    assert_eq!(
+        store
+            .series_for_episode(rowid, 7, "core")
+            .unwrap()
+            .as_deref(),
+        Some(&[(30u8, 40u8)][..])
+    );
+    assert_eq!(
+        store
+            .series_for_episode(rowid, 9, "core")
+            .unwrap()
+            .as_deref(),
+        Some(&[(10u8, 20u8)][..])
+    );
+    assert_eq!(
+        store
+            .ping_series_for_episode(rowid, 7, "ping")
+            .unwrap()
+            .as_deref(),
+        Some(&[120u16][..])
+    );
+    assert_eq!(
+        store
+            .ping_series_for_episode(rowid, 9, "ping")
+            .unwrap()
+            .as_deref(),
+        Some(&[999u16][..])
+    );
 
     // Pruning below the episode start removes its slices but keeps the episode row.
     let deleted = store.prune_slices(10_000).unwrap();
     assert_eq!(deleted, 5, "all five slices pruned");
     assert_eq!(store.series_for_episode(rowid, 0, "server").unwrap(), None);
-    assert_eq!(store.recent_episodes(10).unwrap().len(), 1, "episode row survives the prune");
+    assert_eq!(
+        store.recent_episodes(10).unwrap().len(),
+        1,
+        "episode row survives the prune"
+    );
 }
 
 /// The per-episode ping slice (a `u16`-per-sample blob under the `ping` subject) must round-trip,
@@ -252,5 +296,8 @@ fn ping_series_round_trips() {
             90,
         ))
         .unwrap();
-    assert_eq!(store.ping_series_for_episode(other, 0, "ping").unwrap(), None);
+    assert_eq!(
+        store.ping_series_for_episode(other, 0, "ping").unwrap(),
+        None
+    );
 }

@@ -8,8 +8,8 @@ use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 
 use super::{
-    CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, LATENCY_SUSTAIN_SECS, LatencySeverity, RingSubject,
-    WarnAxis, WarnEnabled, latency_severity,
+    CPU_SUSTAIN_SECS, CoreSample, CoreWarnEngine, LATENCY_SUSTAIN_SECS, LatencySeverity,
+    RingSubject, WarnAxis, WarnEnabled, latency_severity,
 };
 
 /// Build one Ready core sample; `process` and `system` CPU are set equal, memory optional.

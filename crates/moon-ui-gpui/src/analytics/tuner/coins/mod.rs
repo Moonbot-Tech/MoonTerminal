@@ -29,9 +29,9 @@ pub(in crate::analytics::tuner) mod state;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonScrollbarVisibility, MoonSlider,
-    MoonSliderEvent, MoonSliderState, MoonVirtualList,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
+    MoonInputEvent, MoonInputState, MoonPalette, MoonScrollbarVisibility, MoonSlider,
+    MoonSliderEvent, MoonSliderState, MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -39,14 +39,14 @@ use super::super::AnalyticsView;
 use super::kpi::kpi_matrix_card;
 use super::list::MAX_ROWS;
 use super::{
-    metric_cell, sort_arrow_of, toggle_sort_key, COIN_COLS, COIN_NAME_MIN_W, COIN_ROW_GAP,
-    COIN_ROW_PAD_X, COIN_TICK_W, SORT_NAME,
+    COIN_COLS, COIN_NAME_MIN_W, COIN_ROW_GAP, COIN_ROW_PAD_X, COIN_TICK_W, SORT_NAME, metric_cell,
+    sort_arrow_of, toggle_sort_key,
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
 use rows::{CoinCounts, CoinRow};
-use state::{coin_token, CoinFilter};
+use state::{CoinFilter, coin_token};
 
 impl AnalyticsView {
     /// Lazily-created coin search input; commits on every change so the table filters

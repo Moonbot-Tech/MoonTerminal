@@ -21,8 +21,8 @@ use super::CoreStatusView;
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::ordering::GroupSortField;
 use super::presentation::{
-    LoadLevel, cpu_level, cpu_load, free_mem_level, lat_level, level_color, memory_free, memory_u16,
-    percent, ping_plain,
+    LoadLevel, cpu_level, cpu_load, free_mem_level, lat_level, level_color, memory_free,
+    memory_u16, percent, ping_plain,
 };
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.

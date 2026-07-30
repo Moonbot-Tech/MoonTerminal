@@ -17,13 +17,35 @@
 //! elsewhere). See `config::backup`. Flat config files are moved to `cfg/` once at startup;
 //! see `migrate_flat_to_cfg`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Application identifier for user directories outside the bundle. Matches
 /// `CFBundleIdentifier` in `.github/scripts/make-dmg.sh`. Unused on Windows, where data
 /// lives beside the executable.
 #[cfg_attr(windows, allow(dead_code))]
 const APP_ID: &str = "com.moonbot.moonterminal";
+
+/// File names that form the complete SQLite reports-replica set.
+const REPORTS_DB_FILE_NAMES: [&str; 3] =
+    ["reports.sqlite", "reports.sqlite-wal", "reports.sqlite-shm"];
+
+/// Name of the directory containing preserved damaged report replicas.
+const DAMAGED_REPORTS_DIR_NAME: &str = "damaged-reports";
+
+/// Coordination database used only for the process-lifetime reports lease.
+const REPORTS_LEASE_DB_NAME: &str = "reports-recovery-lock.sqlite";
+
+/// Metadata file inside one published damaged-replica snapshot.
+const REPORT_RECOVERY_METADATA_NAME: &str = "recovery.json";
+
+/// Subdirectory holding atomically retired source files after publication.
+const REPORT_RECOVERY_ORIGINALS_NAME: &str = "originals";
+
+/// Unpublished finalization marker used as the atomic commit source.
+const REPORT_RECOVERY_FINALIZING_NAME: &str = ".finalized.incoming";
+
+/// Marker proving that a published recovery snapshot finished source retirement.
+const REPORT_RECOVERY_FINALIZED_NAME: &str = "finalized";
 
 /// Directory beside the executable. This is the data directory on Windows; on macOS/Linux,
 /// it is only the source of a one-time migration from inside the bundle.
@@ -165,6 +187,9 @@ pub fn hotkeys_path() -> PathBuf {
 /// dedicated application directory (Application Support/.config), so databases live there.
 /// One-time migration renames the old root `reports.sqlite` plus -wal/-shm; rename is instant
 /// on one volume and moving wal/shm together preserves database consistency.
+///
+/// Returns:
+///     Canonical database directory after the one-time layout migration attempt.
 pub fn db_dir() -> PathBuf {
     #[cfg(windows)]
     let dir = data_dir().join("data");
@@ -176,7 +201,7 @@ pub fn db_dir() -> PathBuf {
             log::warn!("не удалось создать директорию БД {}: {e}", dir.display());
             return;
         }
-        for name in ["reports.sqlite", "reports.sqlite-wal", "reports.sqlite-shm"] {
+        for name in REPORTS_DB_FILE_NAMES {
             let old = data_dir().join(name);
             let new = dir.join(name);
             if old != new && old.exists() && !new.exists() {
@@ -194,8 +219,80 @@ pub fn db_dir() -> PathBuf {
 }
 
 /// SQLite report DB (typed `orders_rep` replica; legacy `closed_sell_reports` read-only).
+///
+/// Returns:
+///     Canonical main report-replica path.
 pub fn reports_db_path() -> PathBuf {
-    db_dir().join("reports.sqlite")
+    db_dir().join(REPORTS_DB_FILE_NAMES[0])
+}
+
+/// Main, WAL, and SHM paths that together form the reports-replica file set.
+///
+/// Returns:
+///     Canonical report paths in main, WAL, and SHM order.
+pub fn reports_db_files() -> [PathBuf; 3] {
+    let dir = db_dir();
+    REPORTS_DB_FILE_NAMES.map(|name| dir.join(name))
+}
+
+/// Directory containing immutable snapshots of confirmed-damaged report replicas.
+///
+/// Returns:
+///     Canonical damaged-reports directory.
+pub fn damaged_reports_dir() -> PathBuf {
+    db_dir().join(DAMAGED_REPORTS_DIR_NAME)
+}
+
+/// SQLite file used to hold the reports-replica interprocess lease.
+///
+/// Returns:
+///     Canonical coordination database path.
+pub fn reports_recovery_lease_path() -> PathBuf {
+    db_dir().join(REPORTS_LEASE_DB_NAME)
+}
+
+/// Versioned recovery metadata inside one damaged-replica snapshot.
+///
+/// Args:
+///     snapshot: Published or staging snapshot directory.
+///
+/// Returns:
+///     Metadata path within that snapshot.
+pub fn report_recovery_metadata_path(snapshot: &Path) -> PathBuf {
+    snapshot.join(REPORT_RECOVERY_METADATA_NAME)
+}
+
+/// Directory containing the atomically retired original main/WAL/SHM files.
+///
+/// Args:
+///     snapshot: Published or staging snapshot directory.
+///
+/// Returns:
+///     Retired-originals directory within that snapshot.
+pub fn report_recovery_originals_dir(snapshot: &Path) -> PathBuf {
+    snapshot.join(REPORT_RECOVERY_ORIGINALS_NAME)
+}
+
+/// Unpublished finalization-marker path inside one damaged-replica snapshot.
+///
+/// Args:
+///     snapshot: Published snapshot directory.
+///
+/// Returns:
+///     Temporary marker path used before the atomic commit rename.
+pub fn report_recovery_finalizing_path(snapshot: &Path) -> PathBuf {
+    snapshot.join(REPORT_RECOVERY_FINALIZING_NAME)
+}
+
+/// Completion marker inside one fully finalized damaged-replica snapshot.
+///
+/// Args:
+///     snapshot: Published snapshot directory.
+///
+/// Returns:
+///     Finalization-marker path within that snapshot.
+pub fn report_recovery_finalized_path(snapshot: &Path) -> PathBuf {
+    snapshot.join(REPORT_RECOVERY_FINALIZED_NAME)
 }
 
 /// SQLite database for the local kline cache (see `market::kline_cache`), separate from reports.

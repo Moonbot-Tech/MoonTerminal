@@ -4,8 +4,8 @@
 
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette,
-    MoonScrollbarVisibility, MoonVirtualList,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonScrollbarVisibility,
+    MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 use std::collections::HashSet;
@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use super::super::super::AnalyticsView;
 use super::super::{
-    metric_bit, metric_cell, StratMode, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W,
-    CORE_W, CORE_W_MAX, KIND_MIN_W, KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE,
-    SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_NAME_MIN_W,
+    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, CORE_MIN_W, CORE_W, CORE_W_MAX, KIND_MIN_W,
+    KIND_W, LASTEDIT_MIN_W, LASTEDIT_W, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
+    SORT_NAME, STRAT_NAME_MIN_W, StratMode, metric_bit, metric_cell,
 };
 use super::MAX_ROWS;
 use crate::design;

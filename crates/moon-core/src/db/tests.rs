@@ -172,8 +172,10 @@ fn exhausted_retry_round_keeps_the_owned_batch() {
             }
             Ok(attempt)
         },
+        |_| false,
         |_, _| waits.set(waits.get() + 1),
-    );
+    )
+    .unwrap();
 
     assert_eq!(committed_attempt, REPORT_BATCH_ATTEMPTS + 1);
     assert_eq!(waits.get(), 1);
@@ -184,6 +186,88 @@ fn exhausted_retry_round_keeps_the_owned_batch() {
             .unwrap(),
         1
     );
+}
+
+/// `db/mod.rs:commit_stateful_batch_until_success` must abort a corruption-class owned batch.
+///
+/// Replacing the production abort predicate with `false` invokes the wait callback below after the
+/// transaction retry allowance and loops forever in production, so the named zero-wait assertion
+/// protects the user-visible guarantee that a damaged replica stops receiving writes and ACKs.
+#[test]
+fn corruption_aborts_the_owned_batch_without_entering_backoff() {
+    let _state_guard = integrity::test_state_guard();
+    integrity::reset_test_state();
+    let conn = Connection::open_in_memory().unwrap();
+    let attempts = Cell::new(0usize);
+    let waits = Cell::new(0usize);
+    let mut state = 0usize;
+
+    let result = commit_stateful_batch_until_success(
+        &conn,
+        &mut state,
+        |_transaction, candidate| {
+            attempts.set(attempts.get() + 1);
+            *candidate += 1;
+            Err::<(), _>(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::DatabaseCorrupt,
+                    extended_code: 11,
+                },
+                None,
+            ))
+        },
+        integrity::writer_should_stop,
+        |_, _| waits.set(waits.get() + 1),
+    );
+
+    assert!(matches!(
+        result,
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if error.code == rusqlite::ErrorCode::DatabaseCorrupt
+    ));
+    assert_eq!(attempts.get(), REPORT_BATCH_ATTEMPTS);
+    assert_eq!(waits.get(), 0);
+    assert_eq!(state, 0);
+    integrity::reset_test_state();
+}
+
+/// `db/mod.rs:commit_stateful_batch_until_success` must bound non-corruption retry rounds.
+///
+/// Raising `REPORT_BATCH_MAX_FAILED_ROUNDS` by one makes the independent attempt-count assertion
+/// fail; without any ceiling, one permanent I/O or permission error wedges the bounded producer
+/// channel forever while no report page can be acknowledged.
+#[test]
+fn permanent_non_corruption_failure_closes_the_writer_after_the_bound() {
+    let conn = Connection::open_in_memory().unwrap();
+    let attempts = Cell::new(0usize);
+    let waits = Cell::new(0usize);
+    let mut state = 0usize;
+
+    let result = commit_stateful_batch_until_success(
+        &conn,
+        &mut state,
+        |_transaction, candidate| {
+            attempts.set(attempts.get() + 1);
+            *candidate += 1;
+            Err::<(), _>(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::ReadOnly,
+                    extended_code: 8,
+                },
+                None,
+            ))
+        },
+        |_| false,
+        |_, _| waits.set(waits.get() + 1),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+        attempts.get(),
+        REPORT_BATCH_ATTEMPTS * REPORT_BATCH_MAX_FAILED_ROUNDS as usize
+    );
+    assert_eq!(waits.get(), REPORT_BATCH_MAX_FAILED_ROUNDS as usize - 1);
+    assert_eq!(state, 0);
 }
 
 /// `db/mod.rs:passive_wal_checkpoint` must return SQLite's progress tuple; replacing

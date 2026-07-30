@@ -529,10 +529,20 @@ fn cluster_card_body(
         ));
     }
     if let Some(ping) = cluster.ping_peak {
-        lines.push(ms_reading(t!("core_status.chart_ping").to_string(), ping, p, cx));
+        lines.push(ms_reading(
+            t!("core_status.chart_ping").to_string(),
+            ping,
+            p,
+            cx,
+        ));
     }
     if let Some(exch) = cluster.exch_peak {
-        lines.push(ms_reading(t!("core_status.chart_exch").to_string(), exch, p, cx));
+        lines.push(ms_reading(
+            t!("core_status.chart_exch").to_string(),
+            exch,
+            p,
+            cx,
+        ));
     }
     if cluster.conn {
         lines.push(reading(
@@ -552,8 +562,14 @@ fn cluster_card_body(
     // Both pings as their own reading lines, so a long value can never run off the card edge and they
     // read as belonging to the core rather than crammed onto the server line. Skipped when the reading
     // never arrived (0 = no sample), matching the row's dash-when-absent.
-    let ping_line = (snap.round_trip_ms > 0)
-        .then(|| ms_reading(t!("core_status.chart_ping").to_string(), snap.round_trip_ms, p, cx));
+    let ping_line = (snap.round_trip_ms > 0).then(|| {
+        ms_reading(
+            t!("core_status.chart_ping").to_string(),
+            snap.round_trip_ms,
+            p,
+            cx,
+        )
+    });
     let exch_line = (snap.order_api_latency_ms > 0).then(|| {
         ms_reading(
             t!("core_status.chart_exch").to_string(),
@@ -649,8 +665,9 @@ fn warn_graph(
         .collect();
     // Each ping rides its own ms scale (round-trip is not a percentage) via the shared ping-axis
     // scale: a tidy 50 ms step with headroom so a line at its maximum does not hug/clip the top edge.
-    let ms_scale =
-        |series: &[u16]| crate::panels::common::ms_axis_scale(series.iter().copied().max().unwrap_or(0));
+    let ms_scale = |series: &[u16]| {
+        crate::panels::common::ms_axis_scale(series.iter().copied().max().unwrap_or(0))
+    };
     let ping_scale = ms_scale(&ping);
     let ping_pts: Vec<(f32, f32)> = ping
         .iter()

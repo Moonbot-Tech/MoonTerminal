@@ -12,7 +12,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
@@ -53,7 +53,13 @@ const START_DELAY: Duration = Duration::from_secs(20);
 const MAX_SCAN_TIME: Duration = Duration::from_secs(120);
 
 static RESULT: OnceLock<Integrity> = OnceLock::new();
+static LIVE_DAMAGE: OnceLock<Integrity> = OnceLock::new();
+static LIVE_DAMAGE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static STARTED: AtomicBool = AtomicBool::new(false);
+pub(super) static WRITES_BLOCKED: AtomicBool = AtomicBool::new(false);
+static WRITE_BARRIER: RwLock<()> = RwLock::new(());
+#[cfg(test)]
+static TEST_STATE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Current verdict, or `None` before startup or while the check is pending.
 ///
@@ -62,8 +68,15 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 /// deep-cloned on every frame — including the frames a chart hover repaints.
 ///
 /// Polled, never subscribed to, per the panel rules.
+///
+/// Returns:
+///     Published live damage first, then the one-shot background verdict.
 pub fn status() -> Option<&'static Integrity> {
-    RESULT.get()
+    if LIVE_DAMAGE_ACTIVE.load(Ordering::Acquire) {
+        LIVE_DAMAGE.get().or_else(|| RESULT.get())
+    } else {
+        RESULT.get()
+    }
 }
 
 /// How long a poller should wait before asking [`status`] again.
@@ -76,8 +89,17 @@ pub fn poll_hint() -> Duration {
 }
 
 /// Start the one-shot check. Idempotent: later calls are no-ops.
+///
+/// The function returns immediately after spawning, or after publishing a setup failure.
 pub fn spawn_check() {
     if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if !super::report_recovery::access_permitted() {
+        publish(Integrity::CheckFailed(
+            "reports replica access is disabled because this process does not own the lease"
+                .to_string(),
+        ));
         return;
     }
     let path = paths::reports_db_path();
@@ -96,9 +118,90 @@ pub fn spawn_check() {
     }
 }
 
-/// Publish the first terminal verdict without replacing an existing result.
-fn publish(v: Integrity) {
-    let _ = RESULT.set(v);
+/// Publish the first terminal verdict and block future writes after confirmed damage.
+///
+/// Args:
+///     verdict: Completed integrity-check outcome.
+fn publish(verdict: Integrity) {
+    if matches!(verdict, Integrity::Damaged(_)) {
+        let _barrier = WRITE_BARRIER.write().unwrap_or_else(|p| p.into_inner());
+        WRITES_BLOCKED.store(true, Ordering::Release);
+        let _ = RESULT.set(verdict);
+        return;
+    }
+    let _ = RESULT.set(verdict);
+}
+
+/// Return whether confirmed in-session corruption has disabled the report writer.
+pub(super) fn writes_blocked() -> bool {
+    WRITES_BLOCKED.load(Ordering::Acquire)
+}
+
+/// Clone corruption already confirmed by a preflight read.
+///
+/// Returns:
+///     Active corruption verdict, or `None` after recovery or before any corrupt read.
+pub(super) fn active_damage() -> Option<Integrity> {
+    LIVE_DAMAGE_ACTIVE
+        .load(Ordering::Acquire)
+        .then(|| LIVE_DAMAGE.get().cloned())
+        .flatten()
+}
+
+/// Hold the shared publication barrier while a committed batch is published and acknowledged.
+///
+/// Returns:
+///     Read guard that prevents a damage verdict from becoming visible until ACK publication ends.
+pub(super) fn writer_ack_guard() -> RwLockReadGuard<'static, ()> {
+    WRITE_BARRIER.read().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Decide whether one writer error requires a permanent fail-closed stop.
+///
+/// Args:
+///     error: Error returned after the transaction-level retry allowance.
+///
+/// Returns:
+///     `true` for a corruption-class error or a prior background damage verdict.
+pub(super) fn writer_should_stop(error: &rusqlite::Error) -> bool {
+    if super::read_fail::classify(error) == FailKind::Corrupt {
+        record_corruption(error);
+    }
+    writes_blocked()
+}
+
+/// Publish corruption discovered outside the background checker and disable writes.
+///
+/// Args:
+///     error: Corruption-class SQLite error from a reader or writer.
+pub(super) fn record_corruption(error: &rusqlite::Error) {
+    let _barrier = WRITE_BARRIER.write().unwrap_or_else(|p| p.into_inner());
+    WRITES_BLOCKED.store(true, Ordering::Release);
+    let _ = LIVE_DAMAGE.set(Integrity::Damaged(vec![error.to_string()]));
+    LIVE_DAMAGE_ACTIVE.store(true, Ordering::Release);
+}
+
+/// Clear a preflight corruption latch after its exact file set was safely recovered.
+///
+/// This is intentionally unavailable to ordinary callers: only recovery publication plus atomic
+/// source retirement can make the process safe to write again.
+pub(super) fn clear_after_recovery() {
+    let _barrier = WRITE_BARRIER.write().unwrap_or_else(|p| p.into_inner());
+    LIVE_DAMAGE_ACTIVE.store(false, Ordering::Release);
+    WRITES_BLOCKED.store(false, Ordering::Release);
+}
+
+/// Serialize tests that exercise the process-global corruption latch.
+#[cfg(test)]
+pub(super) fn test_state_guard() -> std::sync::MutexGuard<'static, ()> {
+    TEST_STATE_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Restore the process-global corruption latch to an inactive state for one serialized test.
+#[cfg(test)]
+pub(super) fn reset_test_state() {
+    LIVE_DAMAGE_ACTIVE.store(false, Ordering::Release);
+    WRITES_BLOCKED.store(false, Ordering::Release);
 }
 
 /// Run the check synchronously. Public to the crate so tests can drive it
@@ -238,5 +341,4 @@ fn classify_pragma_error(e: rusqlite::Error, stage: &str) -> Integrity {
 }
 
 #[cfg(test)]
-/// Integrity-check regression tests over temporary SQLite files.
 mod tests;

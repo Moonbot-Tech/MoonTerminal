@@ -11,7 +11,7 @@ use moon_ui::MoonInputState;
 use crate::load_state::LoadState;
 use moon_core::db::analytics::HourStat;
 use moon_core::db::tuner::{
-    format_week_span, format_working_time, SliderProfiles, TimeAxes, TimeWindow, VarStats, Variant,
+    SliderProfiles, TimeAxes, TimeWindow, VarStats, Variant, format_week_span, format_working_time,
 };
 /// Variants besides the "Fact" one (v1, v2) — same as the filter tuner's N_VAR.
 pub(in crate::analytics::tuner) const TIME_N_VAR: usize = 2;

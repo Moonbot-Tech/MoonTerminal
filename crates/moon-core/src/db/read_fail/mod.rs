@@ -85,13 +85,27 @@ static WARN_SEEN: OnceLock<Mutex<HashMap<(&'static str, FailKind), (Option<Insta
 /// dated log file carry the line even when the Analytics window is closed.
 /// `ctx` names the query that failed (e.g. `"analytics: scan_period prepare"`).
 ///
+/// Corruption also latches the shared integrity failure so the sole writer stops
+/// before another batch and the Analytics warning reflects damage found after
+/// the one-shot background scan.
+///
 /// Repeats of the same `(ctx, kind)` are collapsed — see [`WARN_REPEAT_GAP`].
-pub(crate) fn read_fail(ctx: &'static str, e: rusqlite::Error) -> ReadFail {
-    let kind = classify(&e);
-    log_throttled(ctx, kind, &e);
+///
+/// Args:
+///     ctx: Static operation label for diagnostics and throttling.
+///     error: SQLite failure to classify and publish.
+///
+/// Returns:
+///     Classified failure suitable for propagation to the UI.
+pub(crate) fn read_fail(ctx: &'static str, error: rusqlite::Error) -> ReadFail {
+    let kind = classify(&error);
+    if kind == FailKind::Corrupt {
+        super::integrity::record_corruption(&error);
+    }
+    log_throttled(ctx, kind, &error);
     ReadFail::Failed {
         kind,
-        msg: Arc::from(format!("{e}")),
+        msg: Arc::from(format!("{error}")),
     }
 }
 

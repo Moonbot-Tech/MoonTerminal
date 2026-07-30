@@ -17,6 +17,7 @@ use crate::design::moon;
 use crate::load_state::LoadState;
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::integrity::Integrity;
+use moon_core::db::report_recovery::RecoveryNotice;
 use moon_core::db::{ProfitMetric, ReadFail, SideFilter};
 
 /// Unscaled width of the Analytics side-selector trigger.
@@ -477,12 +478,62 @@ impl AnalyticsView {
             .content(MoonCalendar::new(cal))
     }
 
-    /// Return the background integrity warning as `(title, detail)` when needed.
+    /// Return the startup-recovery or background-integrity note as `(title, detail)`.
     ///
-    /// Polls rather than subscribing, with at most one delayed retry timer armed
-    /// while the check is running. Successful and absent-replica verdicts render
-    /// no warning.
+    /// Blocked/failed recovery is more actionable than the expected damage verdict and therefore
+    /// has priority. A successful recovery remains visible for this process without claiming to
+    /// know when every core has completed its independent catch-up.
+    ///
+    /// Args:
+    ///     cx: View context used to schedule the bounded integrity re-poll.
+    ///
+    /// Returns:
+    ///     Localized title/detail pair, or `None` when no notice is required.
     pub(super) fn integrity_note(&mut self, cx: &mut Context<Self>) -> Option<(String, String)> {
+        let recovery_note = moon_core::db::report_recovery::status();
+        match recovery_note {
+            Some(RecoveryNotice::Blocked {
+                detail: _,
+                snapshot_dir: Some(snapshot),
+            }) => {
+                return Some((
+                    t!("analytics.recovery_blocked").to_string(),
+                    t!(
+                        "analytics.recovery_blocked_snapshot",
+                        path = snapshot.display().to_string()
+                    )
+                    .to_string(),
+                ));
+            }
+            Some(RecoveryNotice::Blocked {
+                detail: _,
+                snapshot_dir: None,
+            }) => {
+                return Some((
+                    t!("analytics.recovery_blocked").to_string(),
+                    t!("analytics.recovery_blocked_detail").to_string(),
+                ));
+            }
+            Some(RecoveryNotice::Failed { detail: _ }) => {
+                return Some((
+                    t!("analytics.recovery_failed").to_string(),
+                    t!("analytics.recovery_failed_detail").to_string(),
+                ));
+            }
+            Some(RecoveryNotice::Recovered { .. }) | None => {}
+        }
+        let recovered = match recovery_note {
+            Some(RecoveryNotice::Recovered { snapshot_dir }) => Some((
+                t!("analytics.recovery_done").to_string(),
+                t!(
+                    "analytics.recovery_done_detail",
+                    path = snapshot_dir.display().to_string()
+                )
+                .to_string(),
+            )),
+            _ => None,
+        };
+
         let Some(verdict) = moon_core::db::integrity::status() else {
             // Still running. Re-poll once per armed timer; the check cannot
             // publish before its own startup delay, so the first wait matches
@@ -502,7 +553,7 @@ impl AnalyticsView {
                 })
                 .detach();
             }
-            return None;
+            return recovered;
         };
         match verdict {
             Integrity::Damaged(lines) => Some((
@@ -512,7 +563,7 @@ impl AnalyticsView {
             Integrity::CheckFailed(msg) => {
                 Some((t!("analytics.integrity_unchecked").to_string(), msg.clone()))
             }
-            Integrity::Ok | Integrity::NotPresent => None,
+            Integrity::Ok | Integrity::NotPresent => recovered,
         }
     }
 

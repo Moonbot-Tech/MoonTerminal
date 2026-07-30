@@ -9,10 +9,10 @@
 //! lists that date's running total per core, plus the number of trades.
 
 use gpui::*;
-use moon_ui::{h_flex, v_flex, MoonPalette};
+use moon_ui::{MoonPalette, h_flex, v_flex};
 
 use super::super::AnalyticsView;
-use super::charts::{bucket_label, bucket_popup, core_color, muted_caption, PopupMode, CHART_H};
+use super::charts::{CHART_H, PopupMode, bucket_label, bucket_popup, core_color, muted_caption};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{CoreSeries, DayPoint};

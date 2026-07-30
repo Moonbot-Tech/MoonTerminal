@@ -44,9 +44,21 @@ fn open_rw() -> Option<Connection> {
     Some(conn)
 }
 
-/// Attaches the reports replica. A read-only attachment is unnecessary because writes target only
-/// `version_stats` in the main file. Without the replica, uncached statistics remain zero and cached values are reused.
+/// Attach the reports replica only after its recovery preflight authorized this process.
+///
+/// A read-only attachment is unnecessary because writes target only `version_stats` in the main
+/// file. Without authorized replica access, uncached statistics remain zero and cached values are
+/// reused.
+///
+/// Args:
+///     conn: Open strategies connection that will own the attachment.
+///
+/// Returns:
+///     `true` after a successful attachment, otherwise `false`.
 fn attach_reports(conn: &Connection) -> bool {
+    if crate::db::report_recovery::ensure_access().is_err() {
+        return false;
+    }
     let rep = paths::reports_db_path();
     if !rep.exists() {
         return false;

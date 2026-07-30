@@ -14,22 +14,21 @@ mod tests;
 
 use gpui::*;
 use moon_ui::{
-    h_flex, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
     MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
-    MoonPalette,
+    MoonPalette, h_flex,
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
 
 pub(in crate::analytics::tuner) use select::{
-    drawn_order, range_extras, row_click_intent, RangeOutcome, RowClick,
+    RangeOutcome, RowClick, drawn_order, range_extras, row_click_intent,
 };
 
 use super::super::AnalyticsView;
 use super::{
-    metric_bit, sort_arrow_of, toggle_sort_key, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT,
-    METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_COLS_ALL,
-    STRAT_SORT_DEFAULT,
+    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
+    SORT_NAME, STRAT_COLS_ALL, STRAT_SORT_DEFAULT, metric_bit, sort_arrow_of, toggle_sort_key,
 };
 use crate::design;
 use crate::design::moon;

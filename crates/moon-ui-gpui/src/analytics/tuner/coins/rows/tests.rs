@@ -1,4 +1,4 @@
-use super::super::state::{coin_token, CoinLists, CoinsState};
+use super::super::state::{CoinLists, CoinsState, coin_token};
 use super::rows_for;
 use moon_core::db::analytics::GroupStat;
 

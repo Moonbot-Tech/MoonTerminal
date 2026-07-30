@@ -1,4 +1,4 @@
-use super::{StratMode, STRAT_MODES};
+use super::{STRAT_MODES, StratMode};
 use moon_core::config::layout::StratColsByMode;
 
 /// Each axis must address its OWN slot. Two axes sharing one is the copy-paste that makes

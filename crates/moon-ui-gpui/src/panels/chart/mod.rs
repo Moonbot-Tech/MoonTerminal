@@ -16,11 +16,11 @@
 mod figures;
 mod geom;
 mod news;
-mod warn;
 mod refs;
 mod render;
 mod render_input;
 mod trade;
+mod warn;
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};

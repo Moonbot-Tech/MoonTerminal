@@ -96,7 +96,15 @@ fn one_wedge_per_distinct_tag_colour() {
     // Two tags share a colour and a third adds one: two wedges, not three.
     let mark = NewsMark::new(0, [0xFF0000, 0x00FF00, 0xFF0000]);
     assert_eq!(mark.colors(), [0xFF0000, 0x00FF00]);
-    build_news_geometry(&[mark], 0.0, None, [255, 255, 255], 1.0, SHAPE_GEM, &mut out);
+    build_news_geometry(
+        &[mark],
+        0.0,
+        None,
+        [255, 255, 255],
+        1.0,
+        SHAPE_GEM,
+        &mut out,
+    );
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].sector, 0.0);
     assert_eq!(out[1].sector, 1.0);
@@ -117,8 +125,24 @@ fn a_hovered_mark_grows_upward_from_the_axis() {
     let mut rest = Vec::new();
     let mut hot = Vec::new();
     let marks = [NewsMark::new(0, [])];
-    build_news_geometry(&marks, 0.0, None, [255, 255, 255], 1.0, SHAPE_GEM, &mut rest);
-    build_news_geometry(&marks, 0.0, Some(0), [255, 255, 255], 1.0, SHAPE_GEM, &mut hot);
+    build_news_geometry(
+        &marks,
+        0.0,
+        None,
+        [255, 255, 255],
+        1.0,
+        SHAPE_GEM,
+        &mut rest,
+    );
+    build_news_geometry(
+        &marks,
+        0.0,
+        Some(0),
+        [255, 255, 255],
+        1.0,
+        SHAPE_GEM,
+        &mut hot,
+    );
     assert!(hot[0].size > rest[0].size, "the hovered gem is bigger");
     assert!(hot[0].thickness > rest[0].thickness);
     // The instance's `price` is its center's distance above the plot bottom, and the gem's lower tip

@@ -97,8 +97,9 @@ pub(crate) fn latency_severity(
         return LatencySeverity::Normal;
     };
     // Integer ratio test: value >= base * num / 100, without floating point.
-    let over =
-        |num: u32| u64::from(value) * u64::from(LATENCY_PCT_DEN) >= u64::from(base) * u64::from(num);
+    let over = |num: u32| {
+        u64::from(value) * u64::from(LATENCY_PCT_DEN) >= u64::from(base) * u64::from(num)
+    };
     if over(red_num) {
         LatencySeverity::Critical
     } else if over(yellow_num) {
@@ -117,7 +118,9 @@ pub(crate) fn latency_severity(
 /// and only once it has persisted long enough to age INTO the retained window does it become the new
 /// normal and stop warning. Callers pass `window / 2`, so a spike warns for roughly half the window.
 fn latency_baseline(window: &VecDeque<(i64, u16)>, now_sec: i64, exclude_secs: i64) -> Option<u32> {
-    let prior = window.iter().filter(|(sec, _)| now_sec - sec >= exclude_secs);
+    let prior = window
+        .iter()
+        .filter(|(sec, _)| now_sec - sec >= exclude_secs);
     let n = prior.clone().count();
     if n < LATENCY_MIN_SAMPLES {
         return None;
@@ -646,7 +649,8 @@ impl CoreWarnEngine {
                 self.ping_base.insert(*id, base);
             }
             if let Some(base) = latency_baseline(&track.exch, now_sec, (t.exch_window / 2).max(1)) {
-                self.exch_base.insert(*id, base.min(u32::from(u16::MAX)) as u16);
+                self.exch_base
+                    .insert(*id, base.min(u32::from(u16::MAX)) as u16);
             }
         }
 
@@ -1142,7 +1146,11 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
             // timed-out) reading, which must not draw into its persisted graph; 0 marks that gap.
             let (ping, exch) = if sample.status == ConnStatus::Ready {
                 (
-                    sample.sys.round_trip_ms.unwrap_or(0).min(u32::from(u16::MAX)) as u16,
+                    sample
+                        .sys
+                        .round_trip_ms
+                        .unwrap_or(0)
+                        .min(u32::from(u16::MAX)) as u16,
                     sample.sys.order_api_latency_ms.unwrap_or(0),
                 )
             } else {
@@ -1166,7 +1174,11 @@ fn build_ring_samples(samples: &[CoreSample]) -> Vec<RingSample> {
         }
         let (ping, exch) = if sample.status == ConnStatus::Ready {
             (
-                sample.sys.round_trip_ms.unwrap_or(0).min(u32::from(u16::MAX)) as u16,
+                sample
+                    .sys
+                    .round_trip_ms
+                    .unwrap_or(0)
+                    .min(u32::from(u16::MAX)) as u16,
                 sample.sys.order_api_latency_ms.unwrap_or(0),
             )
         } else {

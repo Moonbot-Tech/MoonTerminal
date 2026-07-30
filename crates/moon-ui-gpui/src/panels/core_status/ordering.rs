@@ -76,11 +76,12 @@ pub(super) fn compare_groups(
         GroupSortField::Name => Ordering::Equal,
         GroupSortField::Cpu => a.system_cpu_percent.cmp(&b.system_cpu_percent),
         GroupSortField::Mem => free_pct(a).cmp(&free_pct(b)),
-        GroupSortField::Ping => {
-            worst_latency(a, |sys| sys.round_trip_ms).cmp(&worst_latency(b, |sys| sys.round_trip_ms))
-        }
+        GroupSortField::Ping => worst_latency(a, |sys| sys.round_trip_ms)
+            .cmp(&worst_latency(b, |sys| sys.round_trip_ms)),
         GroupSortField::Exch => worst_latency(a, |sys| sys.order_api_latency_ms.map(u32::from))
-            .cmp(&worst_latency(b, |sys| sys.order_api_latency_ms.map(u32::from))),
+            .cmp(&worst_latency(b, |sys| {
+                sys.order_api_latency_ms.map(u32::from)
+            })),
         GroupSortField::Cores => a
             .ready_count
             .cmp(&b.ready_count)
