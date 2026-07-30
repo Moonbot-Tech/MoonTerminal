@@ -1,6 +1,5 @@
 //! Shared connection and metric presentation rules for both Core Status modes.
 
-use gpui::*;
 use moon_core::feed::ConnStatus;
 use moon_ui::MoonPalette;
 use rust_i18n::t;
@@ -76,6 +75,20 @@ pub(super) fn memory_u16(value: Option<u16>) -> String {
 pub(super) fn ping(value: Option<u32>) -> String {
     value
         .map(|value| format!("{} {}", value, t!("core_status.ms")))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Format a latency in milliseconds WITHOUT the unit, e.g. `142`, for the By IP tree where the
+/// column header carries the unit. `-` when unavailable.
+///
+/// Args:
+///     value: Round-trip time from `Event::KernelHealth`.
+///
+/// Returns:
+///     Bare millisecond number, or an ASCII unavailable marker.
+pub(super) fn ping_plain(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -209,18 +222,3 @@ pub(super) fn level_color(level: LoadLevel, palette: MoonPalette) -> u32 {
     }
 }
 
-/// Render a themed metric glyph sized to sit inline with a metric value.
-///
-/// Args:
-///     path: Bundled MoonUI icon path (for example `icons/cpu.svg`).
-///     palette: Active Moon palette supplying the soft metric color.
-///
-/// Returns:
-///     A fixed-size SVG tinted to the metric text color.
-pub(super) fn metric_icon(path: &'static str, palette: MoonPalette) -> impl IntoElement {
-    svg()
-        .path(path)
-        .size(px(12.0))
-        .flex_none()
-        .text_color(rgb(palette.text_soft))
-}

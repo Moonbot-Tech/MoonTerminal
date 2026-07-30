@@ -10,7 +10,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonInput, MoonInputState, MoonListItem, MoonPalette, MoonTree, MoonTreeItem,
-    MoonTreeState, h_flex,
+    MoonTreeState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -21,7 +21,7 @@ use super::CoreStatusView;
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::presentation::{
     LoadLevel, cpu_level, cpu_load, free_mem_level, lat_level, level_color, memory_free, memory_u16,
-    metric_icon, percent, ping,
+    percent, ping_plain,
 };
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
@@ -30,6 +30,18 @@ const IP_MASK: &str = "************";
 const CPU_W: f32 = 100.0;
 const MEM_W: f32 = 116.0;
 const PING_W: f32 = 64.0;
+/// Fixed width of the server-name column (name truncates; the pencil sits at its right edge), so the
+/// IP column beside it starts at the same x on every row.
+const NAME_W: f32 = 150.0;
+/// Fixed width of the IP column (masked/real address plus the eye toggle), its own aligned column.
+const IP_W: f32 = 118.0;
+/// Fixed width of the ready/total core-count cell, so the "Ядра" header caption lines up over it.
+const CORES_W: f32 = 40.0;
+/// Width of the metric icon inside `metric_cell` (its `gap_1` to the value is added separately); a
+/// header caption reserves the same lead so it sits over the value, not the icon.
+const MET_ICON_W: f32 = 12.0;
+/// Left/right inset matching `MoonListItem`'s `px_3`, so the fixed header aligns with the tree rows.
+const ROW_INSET_W: f32 = 12.0;
 
 /// Build server roots, each with one collapsed folder of core children.
 ///
@@ -120,9 +132,10 @@ pub(super) fn grouped_server_view(
             })
             .collect::<HashMap<_, _>>(),
     );
+    let header_palette = MoonPalette::active(cx);
     // Headless tree: it installs no row click/expand handlers and does not override `.selected`, so
     // the panel drives selection (body click) and expansion (chevron click) itself.
-    MoonTree::custom(state, move |entry, meta, _window, app| {
+    let tree = MoonTree::custom(state, move |entry, meta, _window, app| {
         let p = MoonPalette::active(app);
         if entry.is_root() {
             if let Some(server_index) = server_positions.get(entry.item().id()).copied() {
@@ -159,8 +172,88 @@ pub(super) fn grouped_server_view(
             .selected(false)
             .child(entry.item().label().clone())
     })
-    .size_full()
-    .into_any_element()
+    .w_full();
+
+    // A fixed caption row above the scrolling tree: names each metric column so the stripped-unit
+    // values (no "яд."/"своб"/"мс") still read as a table. It mirrors the row layout — same insets,
+    // chevron gutter, `flex_1` spacer and fixed column widths — so its captions land over the values.
+    v_flex()
+        .size_full()
+        .child(server_header(header_palette, cx))
+        .child(tree.flex_1().min_h_0())
+        .into_any_element()
+}
+
+/// Render the fixed By IP caption row: one heading per metric column, aligned to the tree rows.
+///
+/// Args:
+///     p: Active Moon palette.
+///     cx: Application context, for the font-scaled caption size and dot-column width.
+///
+/// Returns:
+///     A single header row with a subtle bottom divider.
+fn server_header(p: MoonPalette, cx: &App) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap_2()
+        .pl(px(ROW_INSET_W))
+        .pr(px(ROW_INSET_W))
+        .py_1()
+        .border_b_1()
+        .border_color(rgb(p.border))
+        .text_size(crate::design::t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        // Chevron gutter (matches `server_row`'s 12 px expand trigger).
+        .child(div().w(px(12.0)).flex_none())
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .w(px(NAME_W))
+                        .flex_none()
+                        .child(t!("core_status.col.server").to_string()),
+                )
+                .child(
+                    div()
+                        .w(px(IP_W))
+                        .flex_none()
+                        .child(t!("core_status.hdr.ip").to_string()),
+                )
+                .child(div().flex_1())
+                .child(header_cell(t!("core_status.hdr.cpu").to_string(), CPU_W))
+                .child(header_cell(t!("core_status.hdr.mem").to_string(), MEM_W))
+                .child(header_cell(t!("core_status.chart_ping").to_string(), PING_W))
+                .child(header_cell(t!("core_status.chart_exch").to_string(), PING_W))
+                .child(
+                    div()
+                        .w(px(CORES_W))
+                        .flex_none()
+                        .child(t!("core_status.cores").to_string()),
+                )
+                // Dot column: matches the `status_dot` width so the "Ядра" caption lands over the ratio.
+                .child(div().w(crate::design::ui_px(cx, 5.0)).flex_none()),
+        )
+}
+
+/// One metric caption, offset by the metric icon's lead so it sits over the value box (not the icon).
+///
+/// Args:
+///     caption: Localized column heading.
+///     value_w: The matching value-box width from the row's `metric_cell`.
+///
+/// Returns:
+///     A fixed-width caption cell aligned to its column.
+fn header_cell(caption: String, value_w: f32) -> impl IntoElement {
+    h_flex()
+        .flex_none()
+        .gap_1()
+        .child(div().w(px(MET_ICON_W)).flex_none())
+        .child(div().w(px(value_w)).child(caption))
 }
 
 /// Render one server summary header (name, masked IP, machine CPU/memory, status).
@@ -184,21 +277,12 @@ fn server_row(
     p: MoonPalette,
     app: &App,
 ) -> impl IntoElement {
-    let has_ip = group.address.is_some();
     // Chevron: down when expanded, right when collapsed.
     let marker = if expanded { "\u{25BE}" } else { "\u{25B8}" };
     let dot_color = match group.connectivity {
         ServerConnectivity::Online => p.green,
         ServerConnectivity::Degraded => p.amber,
         ServerConnectivity::Offline => p.red,
-    };
-    let ip_text = if revealed {
-        group
-            .address
-            .map(|address| address.to_string())
-            .unwrap_or_default()
-    } else {
-        IP_MASK.to_string()
     };
 
     h_flex()
@@ -243,18 +327,9 @@ fn server_row(
                     }
                 })
                 .child(server_identity(group, edit_input, weak_view, p))
-                .when(has_ip, |row| {
-                    row.child(
-                        div()
-                            .flex_none()
-                            .text_color(rgb(if revealed { p.text_soft } else { p.text_muted }))
-                            .child(ip_text),
-                    )
-                    .child(eye_action(group.key, revealed, weak_view))
-                })
+                .child(ip_column(group, revealed, weak_view, p))
                 .child(div().flex_1())
                 .child(metric_cell(
-                    "icons/cpu.svg",
                     cpu_load(group.system_cpu_percent, group.logical_cpu_count),
                     CPU_W,
                     level_color(cpu_level(group.system_cpu_percent), p),
@@ -262,7 +337,6 @@ fn server_row(
                     p,
                 ))
                 .child(metric_cell(
-                    "icons/memory-stick.svg",
                     memory_free(group.process_memory_mb, group.free_physical_memory_mb),
                     MEM_W,
                     level_color(
@@ -281,8 +355,7 @@ fn server_row(
                         c.sys.round_trip_ms.map(|v| (v, lat_level(c.ping_sev)))
                     });
                     metric_cell(
-                        "icons/globe.svg",
-                        ping(value),
+                        ping_plain(value),
                         PING_W,
                         level_color(level, p),
                         group.ping_warn,
@@ -296,8 +369,7 @@ fn server_row(
                             .map(|v| (u32::from(v), lat_level(c.exch_sev)))
                     });
                     metric_cell(
-                        "icons/external-link.svg",
-                        ping(value),
+                        ping_plain(value),
                         PING_W,
                         level_color(level, p),
                         group.exch_warn,
@@ -306,6 +378,7 @@ fn server_row(
                 })
                 .child(
                     div()
+                        .w(px(CORES_W))
                         .flex_none()
                         .text_color(rgb(p.text_soft))
                         .child(format!("{}/{}", group.ready_count, group.cores.len())),
@@ -380,7 +453,6 @@ fn core_row(
         )
         .child(div().flex_1())
         .child(metric_cell(
-            "icons/cpu.svg",
             percent(core.sys.process_cpu_percent),
             CPU_W,
             level_color(cpu_level(core.sys.process_cpu_percent), p),
@@ -388,7 +460,6 @@ fn core_row(
             p,
         ))
         .child(metric_cell(
-            "icons/memory-stick.svg",
             memory_u16(core.sys.used_memory_mb),
             MEM_W,
             p.text_soft,
@@ -398,8 +469,7 @@ fn core_row(
         // This core's client↔core round-trip (globe), coloured relative to this core's own baseline;
         // the cell's own warn triangle marks a sustained above-baseline ping, like the CPU/memory cells.
         .child(metric_cell(
-            "icons/globe.svg",
-            ping(core.sys.round_trip_ms),
+            ping_plain(core.sys.round_trip_ms),
             PING_W,
             level_color(ping_lvl, p),
             core.ping_warn,
@@ -407,8 +477,7 @@ fn core_row(
         ))
         // This core's core→exchange order latency (external-link), also relative to its own baseline.
         .child(metric_cell(
-            "icons/external-link.svg",
-            ping(core.sys.order_api_latency_ms.map(u32::from)),
+            ping_plain(core.sys.order_api_latency_ms.map(u32::from)),
             PING_W,
             level_color(exch_lvl, p),
             core.exch_warn,
@@ -455,7 +524,7 @@ fn server_identity(
     if let Some(state) = edit_input {
         return h_flex()
             .flex_none()
-            .w(px(130.0))
+            .w(px(NAME_W))
             // The row's mouse-down toggles selection; keep it off the edit field.
             .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
             .child(
@@ -470,13 +539,18 @@ fn server_identity(
     }
     let weak_view = weak_view.clone();
     let start_name = group.display_name.clone();
+    // A fixed-width column: the name takes the room and truncates, the pencil stays pinned at its
+    // right edge, so the IP column beside it starts at the same x on every row.
     h_flex()
+        .w(px(NAME_W))
         .flex_none()
         .items_center()
         .gap_1()
+        .overflow_hidden()
         .child(
             div()
-                .max_w(px(150.0))
+                .flex_1()
+                .min_w_0()
                 .truncate()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(p.text))
@@ -484,6 +558,7 @@ fn server_identity(
         )
         .child(
             div()
+                .flex_none()
                 .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
                 .child(
                     MoonButton::new(SharedString::from(format!(
@@ -505,6 +580,52 @@ fn server_identity(
                 ),
         )
         .into_any_element()
+}
+
+/// Render the IP column: the masked (or revealed) address plus the eye toggle, in a fixed-width slot
+/// so every server's address lines up under the "IP" header. A server with no known endpoint gets an
+/// empty slot of the same width, so its metric columns still align.
+///
+/// Args:
+///     group: Server snapshot supplying the address and identity key.
+///     revealed: Whether the IP is currently shown.
+///     weak_view: Non-owning panel handle for the reveal callback.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A fixed-width IP cell.
+fn ip_column(
+    group: &ServerStatusGroup,
+    revealed: bool,
+    weak_view: &WeakEntity<CoreStatusView>,
+    p: MoonPalette,
+) -> impl IntoElement {
+    let has_ip = group.address.is_some();
+    let ip_text = if revealed {
+        group
+            .address
+            .map(|address| address.to_string())
+            .unwrap_or_default()
+    } else {
+        IP_MASK.to_string()
+    };
+    h_flex()
+        .w(px(IP_W))
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .overflow_hidden()
+        .when(has_ip, |row| {
+            row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(if revealed { p.text_soft } else { p.text_muted }))
+                    .child(ip_text),
+            )
+            .child(eye_action(group.key, revealed, weak_view))
+        })
 }
 
 /// Render the eye control that momentarily reveals a masked server IP.
@@ -550,20 +671,23 @@ fn eye_action(
         )
 }
 
-/// Render one inline metric as a themed icon next to a fixed-width value.
+/// Render one inline metric value in a fixed-width box, with a leading slot for its warning mark.
 ///
-/// The value box is a fixed width so a changing number never reflows the row.
+/// No decorative icon: the 12 px lead holds the SUSTAINED-warning triangle for THIS metric when set,
+/// so the mark sits directly left of its own value instead of trailing the fixed box into the next
+/// column (which read as the neighbour's warning). Empty otherwise, so every column stays aligned and
+/// matches the header caption's lead.
 ///
 /// Args:
-///     icon: Bundled MoonUI icon path.
 ///     value: Preformatted localized metric text.
 ///     value_w: Fixed width in pixels for the value box.
+///     color: Threshold color of the number.
+///     warn: Whether this metric has an open sustained-warning episode.
 ///     p: Active Moon palette.
 ///
 /// Returns:
-///     A compact icon-and-value pair with a stable footprint.
+///     A compact metric cell with a stable footprint.
 fn metric_cell(
-    icon: &'static str,
     value: String,
     value_w: f32,
     color: u32,
@@ -574,7 +698,19 @@ fn metric_cell(
         .flex_none()
         .items_center()
         .gap_1()
-        .child(metric_icon(icon, p))
+        .child(
+            div()
+                .w(px(MET_ICON_W))
+                .flex_none()
+                // A warning is a SUSTAINED/trend signal, distinct from the threshold-based number color.
+                .children(warn.then(|| {
+                    svg()
+                        .path("icons/triangle-alert.svg")
+                        .size(px(12.0))
+                        .flex_none()
+                        .text_color(rgb(p.amber))
+                })),
+        )
         .child(
             div()
                 .w(px(value_w))
@@ -583,14 +719,6 @@ fn metric_cell(
                 .text_color(rgb(color))
                 .child(value),
         )
-        // A warning is a SUSTAINED/trend signal, distinct from the threshold-based number color.
-        .children(warn.then(|| {
-            svg()
-                .path("icons/triangle-alert.svg")
-                .size(px(12.0))
-                .flex_none()
-                .text_color(rgb(p.amber))
-        }))
 }
 
 #[cfg(test)]

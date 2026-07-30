@@ -75,13 +75,13 @@ core_status.hide_ip:
   en: "Hide IP"
   es: "Ocultar IP"
 core_status.cpu_load:
-  ru: "%{value} (%{n} яд.)"
-  en: "%{value} (%{n} core)"
-  es: "%{value} (%{n} núcl.)"
+  ru: "%{value} (%{n})"
+  en: "%{value} (%{n})"
+  es: "%{value} (%{n})"
 core_status.mem_free:
-  ru: "%{pct}% своб (%{gb} ГБ)"
-  en: "%{pct}% free (%{gb} GB)"
-  es: "%{pct}% libre (%{gb} GB)"
+  ru: "%{pct}% (%{gb} ГБ)"
+  en: "%{pct}% (%{gb} GB)"
+  es: "%{pct}% (%{gb} GB)"
 core_status.unknown_server:
   ru: "IP неизвестен: %{core}"
   en: "Unknown IP: %{core}"
@@ -172,6 +172,23 @@ core_status.col.updated:
   ru: "Обновлено"
   en: "Updated"
   es: "Actualizado"
+
+# --- By IP column header (the fixed caption row above the server tree) ---
+# CPU column: percentage plus the machine's logical-core count in parentheses.
+core_status.hdr.cpu:
+  ru: "CPU (ядра)"
+  en: "CPU (cores)"
+  es: "CPU (núcl.)"
+# Memory column: free share and the reconstructed total RAM.
+core_status.hdr.mem:
+  ru: "Память своб."
+  en: "Mem. free"
+  es: "Mem. libre"
+# IP column heading (the abbreviation is identical across locales).
+core_status.hdr.ip:
+  ru: "IP"
+  en: "IP"
+  es: "IP"
 
 # --- Detached-window chart legend ---
 core_status.chart_cpu:
