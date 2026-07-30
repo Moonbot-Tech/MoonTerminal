@@ -6,8 +6,8 @@
 //! column added to one must not appear in the other by accident.
 
 use super::columns::{
-    MetricCol, COL_AVG, COL_BEST, COL_BL, COL_PF, COL_PROFIT, COL_TRADES, COL_WINRATE, COL_WL,
-    COL_WORST,
+    COL_AVG, COL_BEST, COL_BL, COL_PF, COL_PROFIT, COL_TRADES, COL_WINRATE, COL_WL, COL_WORST,
+    MetricCol,
 };
 
 /// Strategy comparison columns, in reading order: identity, then how many trades back the figure,

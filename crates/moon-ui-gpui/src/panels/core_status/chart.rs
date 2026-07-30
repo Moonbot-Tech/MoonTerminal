@@ -101,8 +101,9 @@ pub(super) fn server_chart(
 
     // Each ping rides its own auto-scaled ms axis (round-trip is not a percentage), mapped into the
     // 0..100 plot height via the shared ping-axis scale (tidy 50 ms step + headroom).
-    let ms_scale =
-        |ring: &VecDeque<u16>| crate::panels::common::ms_axis_scale(ring.iter().copied().max().unwrap_or(0));
+    let ms_scale = |ring: &VecDeque<u16>| {
+        crate::panels::common::ms_axis_scale(ring.iter().copied().max().unwrap_or(0))
+    };
     let cur_ping = ping_points.back().copied();
     let ping_scale = ms_scale(ping_points);
     let ping = to_series(ping_points, span, |ms| *ms as f32 / ping_scale * 100.0);

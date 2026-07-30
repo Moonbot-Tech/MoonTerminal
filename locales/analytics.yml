@@ -565,6 +565,34 @@ analytics.integrity_unchecked:
   ru: "Проверка целостности реплики не выполнена."
   en: "The replica integrity check did not run."
   es: "No se realizó la verificación de integridad de la réplica."
+analytics.recovery_done:
+  ru: "Повреждённая реплика отчётов безопасно заменена."
+  en: "The damaged reports replica was safely replaced."
+  es: "La réplica de informes dañada se reemplazó de forma segura."
+analytics.recovery_done_detail:
+  ru: "Старые файлы сохранены в %{path}. Чистая реплика готова снова синхронизироваться из MoonBot."
+  en: "The old files were preserved in %{path}. A clean replica is ready to synchronize again from MoonBot."
+  es: "Los archivos antiguos se conservaron en %{path}. Una réplica limpia está lista para volver a sincronizarse desde MoonBot."
+analytics.recovery_blocked:
+  ru: "Автовосстановление отчётов остановлено."
+  en: "Automatic reports recovery was stopped."
+  es: "Se detuvo la recuperación automática de informes."
+analytics.recovery_blocked_detail:
+  ru: "Текущие файлы оставлены без изменений, запись отчётов отключена. Проверьте диск и программы синхронизации файлов."
+  en: "The current files were left unchanged and report writing is disabled. Check the disk and file synchronization software."
+  es: "Los archivos actuales se dejaron sin cambios y la escritura de informes está desactivada. Compruebe el disco y el software de sincronización de archivos."
+analytics.recovery_blocked_snapshot:
+  ru: "Текущие файлы оставлены без изменений, запись отчётов отключена. Предыдущая копия: %{path}. Проверьте диск и программы синхронизации файлов."
+  en: "The current files were left unchanged and report writing is disabled. Previous copy: %{path}. Check the disk and file synchronization software."
+  es: "Los archivos actuales se dejaron sin cambios y la escritura de informes está desactivada. Copia anterior: %{path}. Compruebe el disco y el software de sincronización de archivos."
+analytics.recovery_failed:
+  ru: "Безопасное автовосстановление отчётов не выполнено."
+  en: "Safe automatic reports recovery did not complete."
+  es: "La recuperación automática segura de informes no se completó."
+analytics.recovery_failed_detail:
+  ru: "Запись отчётов отключена. Файлы остаются по текущим путям или в опубликованной папке восстановления. Подробности есть во вкладке «Лог»."
+  en: "Report writing is disabled. Files remain at their current paths or in the published recovery folder. See the Log tab for details."
+  es: "La escritura de informes está desactivada. Los archivos permanecen en sus rutas actuales o en la carpeta de recuperación publicada. Consulte la pestaña Registro para obtener detalles."
 
 analytics.kpi.profit:
   ru: "Прибыль, %{unit}"

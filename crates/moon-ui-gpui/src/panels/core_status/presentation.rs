@@ -221,4 +221,3 @@ pub(super) fn level_color(level: LoadLevel, palette: MoonPalette) -> u32 {
         LoadLevel::Critical => palette.red,
     }
 }
-

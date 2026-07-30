@@ -24,6 +24,7 @@ pub mod metrics;
 pub(crate) mod read_fail;
 mod rep;
 mod report_read;
+pub mod report_recovery;
 #[cfg(test)]
 mod test_support;
 pub mod tuner;
@@ -174,6 +175,9 @@ const REPORT_QUEUE_CAP: usize = 16_384;
 /// Maximum attempts for one owned writer batch before the writer fails closed.
 const REPORT_BATCH_ATTEMPTS: usize = 4;
 
+/// Maximum exhausted retry rounds before a non-corruption error closes the writer.
+const REPORT_BATCH_MAX_FAILED_ROUNDS: u32 = 8;
+
 /// Publish one successfully committed writer batch to report-data consumers.
 ///
 /// The dirty bit is a bounded one-slot signal. Repeated commits coalesce while it is already set
@@ -240,22 +244,40 @@ fn commit_stateful_batch<S: Clone, T>(
 /// Keep one owned writer batch fail-closed until SQLite accepts it.
 ///
 /// Each round retains the transaction-level retry policy from [`commit_stateful_batch`].
-/// Exhausted rounds invoke `wait`, which applies production backoff without dropping the batch
-/// or closing the bounded channel. Tests inject a non-blocking wait to exercise recovery.
+/// Exhausted transient rounds invoke `wait`, which applies production backoff without dropping the
+/// batch. Confirmed damage or the bounded failed-round ceiling closes the writer without
+/// acknowledging the owned batch, preventing an infinite retry from wedging the feed thread.
+///
+/// Args:
+///     conn: Sole writer connection.
+///     state: Last committed in-memory replica state.
+///     apply: Rebuilds one candidate state and transaction on every attempt.
+///     should_abort: Classifies a failed round that must stop immediately.
+///     wait: Applies backoff after an exhausted retry round.
+///
+/// Returns:
+///     Committed effects, or the last error after fail-closed termination.
 fn commit_stateful_batch_until_success<S: Clone, T>(
     conn: &Connection,
     state: &mut S,
     mut apply: impl FnMut(&Connection, &mut S) -> rusqlite::Result<T>,
+    mut should_abort: impl FnMut(&rusqlite::Error) -> bool,
     mut wait: impl FnMut(u32, &rusqlite::Error),
-) -> T {
+) -> rusqlite::Result<T> {
     let mut failed_rounds = 0u32;
     loop {
         match commit_stateful_batch(conn, state, |transaction, candidate| {
             apply(transaction, candidate)
         }) {
-            Ok(effects) => return effects,
+            Ok(effects) => return Ok(effects),
             Err(error) => {
+                if should_abort(&error) {
+                    return Err(error);
+                }
                 failed_rounds = failed_rounds.saturating_add(1);
+                if failed_rounds >= REPORT_BATCH_MAX_FAILED_ROUNDS {
+                    return Err(error);
+                }
                 wait(failed_rounds, &error);
             }
         }
@@ -283,9 +305,12 @@ fn passive_wal_checkpoint(conn: &Connection) -> rusqlite::Result<WalCheckpointSt
 
 /// Start the sole report-replica writer and mark its shared state dirty after each commit.
 ///
+/// Args:
+///     permit: Private capability proving startup recovery and the process lease succeeded.
+///
 /// Returns:
 ///     The writer handle, or `None` when the database or writer thread cannot be initialized.
-pub fn spawn_writer() -> Option<ReportsHandle> {
+pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<ReportsHandle> {
     let (tx, rx): (std::sync::mpsc::SyncSender<DbMsg>, Receiver<DbMsg>) =
         std::sync::mpsc::sync_channel(REPORT_QUEUE_CAP);
     let path = paths::reports_db_path();
@@ -318,11 +343,7 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
         .spawn(move || {
             log::info!("отчёты: writer запущен ({})", path.display());
             // WAL path used by the lazy checkpoint based on the ACTUAL file size below.
-            let wal_path = {
-                let mut s = path.clone().into_os_string();
-                s.push("-wal");
-                std::path::PathBuf::from(s)
-            };
+            let wal_path = paths::reports_db_files()[1].clone();
             // Batch messages into one transaction: catch-up emits thousands of rows,
             // and per-row autocommit (fsync) would stretch catch-up into minutes.
             let mut thr_count: u64 = 0;
@@ -333,10 +354,21 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                 .checked_sub(Duration::from_secs(30))
                 .unwrap_or_else(std::time::Instant::now);
             loop {
+                if integrity::writes_blocked() {
+                    log::error!("reports: writer stopped because replica corruption was confirmed");
+                    break;
+                }
                 let first = match rx.recv() {
                     Ok(m) => m,
                     Err(_) => break,
                 };
+                if integrity::writes_blocked() {
+                    log::error!(
+                        "reports: writer stopped after receiving a batch because replica \
+                         corruption was confirmed"
+                    );
+                    break;
+                }
                 let mut batch = vec![first];
                 while batch.len() < 512 {
                     match rx.try_recv() {
@@ -347,7 +379,7 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                 thr_count += batch.len() as u64;
                 // Keep the owned batch until one whole attempt commits. ACK indices are
                 // recreated per attempt and become observable only after that commit.
-                let ack_indices = commit_stateful_batch_until_success(
+                let ack_indices = match commit_stateful_batch_until_success(
                     &conn,
                     &mut rep_state,
                     |transaction, candidate| {
@@ -359,6 +391,7 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                         }
                         Ok(ack_indices)
                     },
+                    integrity::writer_should_stop,
                     |failed_rounds, error| {
                         let delay =
                             Duration::from_secs(1u64 << failed_rounds.saturating_sub(1).min(5));
@@ -370,7 +403,28 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                         );
                         std::thread::sleep(delay);
                     },
-                );
+                ) {
+                    Ok(indices) => indices,
+                    Err(error) => {
+                        log::error!(
+                            "reports: writer stopped after repeated or permanent replica failure; \
+                             owned batch was not acknowledged: {error}"
+                        );
+                        break;
+                    }
+                };
+                let _ack_guard = integrity::writer_ack_guard();
+                // The background scan can publish damage while this transaction is committing.
+                // The publication barrier makes this check and every following ACK indivisible
+                // from publishing a damage latch. Once damage becomes visible, no later ACK can
+                // advance the core past uncertain data.
+                if integrity::writes_blocked() {
+                    log::error!(
+                        "reports: writer stopped after commit because integrity damage was \
+                         published; owned batch was not acknowledged"
+                    );
+                    break;
+                }
                 for msg in &batch {
                     if let DbMsg::SyncComplete { core_uid, done } = msg {
                         rep::commit_sync_complete(&rep_state, *core_uid, done);
@@ -385,6 +439,7 @@ pub fn spawn_writer() -> Option<ReportsHandle> {
                         log::warn!("reports(rep): page_applied failed: {error:?}");
                     }
                 }
+                drop(_ack_guard);
                 // If this batch dropped the legacy table, run a one-off VACUUM outside the
                 // transaction to reclaim its hundreds of MB. Only the writer is blocked.
                 if rep_state.vacuum_pending {
@@ -557,8 +612,16 @@ fn tune_reader(conn: &Connection) {
 /// Open a reader while distinguishing an absent replica from a SQLite failure.
 ///
 /// A genuinely absent file maps to `NotReady`; metadata and SQLite open errors
-/// map to `Failed` so callers cannot present them as an empty period.
+/// map to `Failed` so callers cannot present them as an empty period. Access also
+/// fails when this process does not own the recovery lease.
+///
+/// Returns:
+///     Tuned report connection for the sole current process.
 pub fn open_reader() -> ReadResult<Connection> {
+    report_recovery::ensure_access().map_err(|error| ReadFail::Failed {
+        kind: FailKind::Other,
+        msg: Arc::from(error.to_string()),
+    })?;
     let path = paths::reports_db_path();
     metadata_gate(&path, "отчёты(reader): доступ к файлу")?;
     let conn = Connection::open(&path).map_err(|e| read_fail("отчёты(reader)", e))?;

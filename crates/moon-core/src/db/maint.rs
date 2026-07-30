@@ -10,7 +10,16 @@ use rusqlite::Connection;
 /// Checkpoint WAL (TRUNCATE) and VACUUM to reclaim deleted-row space and
 /// truncate an oversized `-wal` file. Blocks writers during VACUUM and therefore
 /// runs only after an explicit user action.
+///
+/// Args:
+///     path: Database to compact; the reports path additionally requires the process lease.
+///
+/// Returns:
+///     Success after VACUUM completes.
 pub fn compact_db(path: &Path) -> anyhow::Result<()> {
+    if path == crate::config::paths::reports_db_path() {
+        super::report_recovery::ensure_access()?;
+    }
     let conn = Connection::open(path)?;
     let _ = conn.busy_timeout(Duration::from_secs(30));
     let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));

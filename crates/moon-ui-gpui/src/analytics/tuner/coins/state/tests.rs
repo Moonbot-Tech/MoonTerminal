@@ -1,7 +1,7 @@
-use super::{coin_token, CoinFilter, CoinLists, CoinsState};
+use super::{CoinFilter, CoinLists, CoinsState, coin_token};
+use moon_core::db::ReadFail;
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::coin_lists::{CoinListEntries, CoinListRow, CoinListRows};
-use moon_core::db::ReadFail;
 
 fn coin(name: &str) -> GroupStat {
     GroupStat {

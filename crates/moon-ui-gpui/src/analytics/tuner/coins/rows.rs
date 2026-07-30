@@ -17,8 +17,8 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::SharedString;
 
-use super::super::list::{partial_sort, MAX_ROWS};
-use super::state::{coin_token, CoinFilter, CoinsState};
+use super::super::list::{MAX_ROWS, partial_sort};
+use super::state::{CoinFilter, CoinsState, coin_token};
 use moon_core::db::analytics::GroupStat;
 
 /// One row, ready to draw. Owned, so the cache outlives the borrows it was built from —

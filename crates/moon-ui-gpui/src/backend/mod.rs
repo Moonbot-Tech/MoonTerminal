@@ -124,13 +124,22 @@ fn capture_topology(
     };
     // Server graph (badge 0) + its two worst-ping lines.
     if let Some(s) = ring_slice(server, start_ms, now_ms) {
-        warn("server", store.insert_series(episode_id, 0, "server", base_ms, &s));
+        warn(
+            "server",
+            store.insert_series(episode_id, 0, "server", base_ms, &s),
+        );
     }
     if let Some(p) = ring_slice(ping, start_ms, now_ms) {
-        warn("ping", store.insert_ping_series(episode_id, 0, "ping", base_ms, &p));
+        warn(
+            "ping",
+            store.insert_ping_series(episode_id, 0, "ping", base_ms, &p),
+        );
     }
     if let Some(e) = ring_slice(exch, start_ms, now_ms) {
-        warn("exch", store.insert_ping_series(episode_id, 0, "exch", base_ms, &e));
+        warn(
+            "exch",
+            store.insert_ping_series(episode_id, 0, "exch", base_ms, &e),
+        );
     }
     // Every core (badge = core id): its own CPU/memory pair and its two pings, split out of the
     // combined per-core sample so each rides its existing blob format. Distinct subjects from the
@@ -144,9 +153,18 @@ fn capture_topology(
         let cm: Vec<(u8, u8)> = slice.iter().map(|m| (m.cpu, m.mem)).collect();
         let pings: Vec<u16> = slice.iter().map(|m| m.ping).collect();
         let exchs: Vec<u16> = slice.iter().map(|m| m.exch).collect();
-        warn("core", store.insert_series(episode_id, badge, "core", base_ms, &cm));
-        warn("core ping", store.insert_ping_series(episode_id, badge, "core_ping", base_ms, &pings));
-        warn("core exch", store.insert_ping_series(episode_id, badge, "core_exch", base_ms, &exchs));
+        warn(
+            "core",
+            store.insert_series(episode_id, badge, "core", base_ms, &cm),
+        );
+        warn(
+            "core ping",
+            store.insert_ping_series(episode_id, badge, "core_ping", base_ms, &pings),
+        );
+        warn(
+            "core exch",
+            store.insert_ping_series(episode_id, badge, "core_exch", base_ms, &exchs),
+        );
     }
 }
 

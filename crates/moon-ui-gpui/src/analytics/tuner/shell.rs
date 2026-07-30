@@ -12,15 +12,15 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::ReadFail;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonTag, MoonTooltipView,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
+    MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover,
+    MoonPopoverPlacement, MoonTag, MoonTooltipView, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::filter::state::{
-    canonical_iters, edge_options, iters_of, persist_seed, SuggestJob, SuggestState, TRAIN_OPTIONS,
+    SuggestJob, SuggestState, TRAIN_OPTIONS, canonical_iters, edge_options, iters_of, persist_seed,
 };
 use super::shared::TunerKind;
 use crate::design;
@@ -577,10 +577,9 @@ impl AnalyticsView {
         let gap = design::ui_px(cx, 6.0);
         let section_gap = design::ui_px(cx, 8.0);
         let label_w = design::font_w_px(cx, 90.0);
-        let popup_max_h = px(
-            (f32::from(window.viewport_size().height) - f32::from(design::ui_px(cx, 24.0)))
-                .max(f32::from(design::ui_px(cx, 180.0))),
-        );
+        let popup_max_h = px((f32::from(window.viewport_size().height)
+            - f32::from(design::ui_px(cx, 24.0)))
+        .max(f32::from(design::ui_px(cx, 180.0))));
         let head = h_flex()
             .w_full()
             .items_center()
@@ -655,13 +654,9 @@ impl AnalyticsView {
                 t!("analytics.tuner.edges").to_string(),
                 div().flex_none().child(ed_combo).into_any_element(),
             ))
-            .child(
-                div()
-                    .mt(section_gap - gap)
-                    .child(section_title(
-                        t!("analytics.tuner.cfg_validation_section").to_string(),
-                    )),
-            )
+            .child(div().mt(section_gap - gap).child(section_title(
+                t!("analytics.tuner.cfg_validation_section").to_string(),
+            )))
             // Holding trades back is what turns a suggestion from "these ranges fit the past" into
             // a claim that can be checked, so the control sits with the settings and its verdict
             // is printed under the grid rather than hidden in a log line.
@@ -700,9 +695,7 @@ impl AnalyticsView {
                             })
                             .child(
                                 MoonCheckbox::new(SharedString::from("tun-cfg-compose-f"))
-                                    .label(
-                                        t!("analytics.tuner.compose_toggle").to_string(),
-                                    )
+                                    .label(t!("analytics.tuner.compose_toggle").to_string())
                                     .checked(self.tuner.compose)
                                     .size(MoonCheckboxSize::Compact)
                                     // `on_change` hands the callback an `&mut App`, not a
@@ -728,29 +721,24 @@ impl AnalyticsView {
                                 div()
                                     .w_full()
                                     .text_color(moon(p.text_muted))
-                                    .child(
-                                        t!("analytics.tuner.compose_short").to_string(),
-                                    ),
+                                    .child(t!("analytics.tuner.compose_short").to_string()),
                             )
                             .child(
                                 h_flex()
                                     .w_full()
                                     .flex_wrap()
                                     .gap(design::ui_px(cx, 4.0))
-                                    .children(metrics.map(|label| {
-                                        MoonTag::new().mono(false).child(label)
-                                    })),
+                                    .children(
+                                        metrics
+                                            .map(|label| MoonTag::new().mono(false).child(label)),
+                                    ),
                             ),
                     )
                 },
             )
-            .child(
-                div()
-                    .mt(section_gap - gap)
-                    .child(section_title(
-                        t!("analytics.tuner.cfg_repeat_section").to_string(),
-                    )),
-            )
+            .child(div().mt(section_gap - gap).child(section_title(
+                t!("analytics.tuner.cfg_repeat_section").to_string(),
+            )))
             .child(row(
                 t!("analytics.tuner.seed").to_string(),
                 div()

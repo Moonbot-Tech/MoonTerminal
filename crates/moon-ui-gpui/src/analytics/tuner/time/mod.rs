@@ -17,11 +17,11 @@ pub(in crate::analytics::tuner) mod state;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{h_flex, v_flex, MoonPalette};
+use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::super::summary::{fmt_signed, sign_color};
 use super::super::AnalyticsView;
+use super::super::summary::{fmt_signed, sign_color};
 use super::kpi::kpi_matrix_card;
 use crate::design;
 use crate::design::{moon, moon_alpha};

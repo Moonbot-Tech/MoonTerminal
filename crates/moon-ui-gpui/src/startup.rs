@@ -218,6 +218,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
     // Configure file logging from the config and purge old log files once at startup.
     moon_core::applog::set_file_logging(cfg.log_to_file, cfg.log_retention_days);
     moon_core::applog::purge_old();
+    // Preserve the old reports replica only after its core uids have contributed to `uid_floor`,
+    // but before any writer exists. The private permit also proves this process owns the
+    // interprocess lease; `spawn_writer` cannot be called without it.
+    let report_write_permit = moon_core::db::report_recovery::prepare();
     let group_list = crate::window::group_window::groups(&cfg);
     log::info!("groups: {group_list:?} (servers: {})", cfg.servers.len());
 
@@ -253,7 +257,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         // replication, while Backend retains `generation` for report-derived views. The
         // one-bit signal is only a causal edge after commit; generation remains the source of
         // truth, and an already-set bit safely coalesces a catch-up burst.
-        let reports = moon_core::db::spawn_writer();
+        let reports = report_write_permit.and_then(moon_core::db::spawn_writer);
         let report_dirty = reports.as_ref().map(|reports| reports.commit_dirty.clone());
         let report_revision = cx.new(|_| crate::ReportRevision);
         // Check the complete replica once because individual reads only detect

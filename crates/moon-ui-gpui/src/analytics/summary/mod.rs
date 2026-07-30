@@ -4,7 +4,7 @@
 //! analytics-mock artifact.
 
 use gpui::*;
-use moon_ui::{h_flex, v_flex, MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonTone};
+use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonTone, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::AnalyticsView;

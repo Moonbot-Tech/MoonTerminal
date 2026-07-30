@@ -20,17 +20,17 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState,
-    MoonPalette,
+    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
 use super::super::{AnalyticsView, LoadState};
-pub(in crate::analytics::tuner) use super::shared::{card, glyph_btn, TunerKind, N_VAR};
+pub(in crate::analytics::tuner) use super::shared::{N_VAR, TunerKind, card, glyph_btn};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::threshold_search::{ComposeDecision, ComposeSkip};
-use moon_core::db::tuner::{FieldClass, StratFilters, FIELDS};
+use moon_core::db::tuner::{FIELDS, FieldClass, StratFilters};
 pub(in crate::analytics::tuner) use state::{flag_of, fmt_bound, parse_num, staged_dirty};
 
 /// Histogram buckets.

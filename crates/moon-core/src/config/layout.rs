@@ -419,7 +419,12 @@ pub struct CpuWarn {
 }
 impl Default for CpuWarn {
     fn default() -> Self {
-        Self { chart: true, sound: None, pct: 70, hold: 5 }
+        Self {
+            chart: true,
+            sound: None,
+            pct: 70,
+            hold: 5,
+        }
     }
 }
 
@@ -437,7 +442,12 @@ pub struct MemWarn {
 }
 impl Default for MemWarn {
     fn default() -> Self {
-        Self { chart: true, sound: None, pct: 15, window: 30 }
+        Self {
+            chart: true,
+            sound: None,
+            pct: 15,
+            window: 30,
+        }
     }
 }
 
@@ -451,7 +461,10 @@ pub struct ConnWarn {
 }
 impl Default for ConnWarn {
     fn default() -> Self {
-        Self { chart: true, sound: None }
+        Self {
+            chart: true,
+            sound: None,
+        }
     }
 }
 
@@ -475,7 +488,14 @@ pub struct LatWarn {
 }
 impl Default for LatWarn {
     fn default() -> Self {
-        Self { chart: true, sound: None, yellow: 2, red: 10, window: 15, hold: 3 }
+        Self {
+            chart: true,
+            sound: None,
+            yellow: 2,
+            red: 10,
+            window: 15,
+            hold: 3,
+        }
     }
 }
 

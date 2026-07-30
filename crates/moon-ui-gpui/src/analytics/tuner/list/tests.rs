@@ -6,8 +6,8 @@
 use moon_core::db::analytics::GroupStat;
 
 use super::{
-    filter_sort_indices, memo_is_fresh, restore_strat_sort, StratListFilter, VisibleKey,
-    VisibleRows, SORT_NAME,
+    SORT_NAME, StratListFilter, VisibleKey, VisibleRows, filter_sort_indices, memo_is_fresh,
+    restore_strat_sort,
 };
 
 /// A group with just the fields these tests filter and sort on.

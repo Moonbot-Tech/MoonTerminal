@@ -9,8 +9,8 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonNotification,
-    MoonPalette, MoonWindowExt as _,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonNotification, MoonPalette,
+    MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -138,7 +138,7 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) {
         use crate::strategies::tree::ops::{
-            set_field, unique_name, NewStrategy, STRATEGY_NAME_FIELD,
+            NewStrategy, STRATEGY_NAME_FIELD, set_field, unique_name,
         };
         let Some(target) = dlg.targets.first() else {
             return;

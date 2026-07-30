@@ -1,9 +1,14 @@
 use super::*;
 
+/// Each failure keeps its own granularity and read corruption disables writes.
+///
+/// Removing `integrity::record_corruption` from `read_fail` leaves the final writer-block
+/// assertion false, so an Analytics read could prove the replica malformed while the writer keeps
+/// retrying and acknowledging later batches.
 #[test]
-/// Each failure keeps its own granularity, so the UI can give guidance that
-/// is true of THAT failure rather than one blanket "retry".
 fn failures_keep_their_kind_and_not_ready_has_none() {
+    let _state = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
     let corrupt = read_fail(
         "test",
         rusqlite::Error::SqliteFailure(
@@ -34,6 +39,8 @@ fn failures_keep_their_kind_and_not_ready_has_none() {
             ..
         }
     ));
+    assert!(super::super::integrity::writes_blocked());
+    super::super::integrity::reset_test_state();
 }
 
 /// Repeated instances of the same failure are suppressed within the window.

@@ -7,11 +7,11 @@ use std::collections::HashMap;
 
 use chrono::Datelike;
 use gpui::*;
-use moon_ui::{h_flex, v_flex, MoonPalette};
+use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::super::summary::{fmt_signed, sign_color};
 use super::super::AnalyticsView;
+use super::super::summary::{fmt_signed, sign_color};
 use super::{date_of, days_in_month, month_start, split_i18n, today_start};
 use crate::design;
 use crate::design::{moon, moon_alpha};

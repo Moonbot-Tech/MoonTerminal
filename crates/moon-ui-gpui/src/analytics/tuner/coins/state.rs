@@ -16,10 +16,10 @@ use moon_ui::{MoonInputState, MoonSliderState};
 
 use super::super::COIN_DEFAULT_SORT;
 use crate::load_state::LoadState;
+use moon_core::db::ReadResult;
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::coin_lists::CoinListRows;
 use moon_core::db::tuner::{VarStats, Variant};
-use moon_core::db::ReadResult;
 
 /// Which coins the table shows. A coin may sit in BOTH lists — the views are separate
 /// lenses, not a partition, so nothing has to resolve that contradiction.
