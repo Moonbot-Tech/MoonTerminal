@@ -109,6 +109,10 @@ fn capture_topology(
     start_ms: i64,
     now_ms: i64,
 ) {
+    // NOTE for the future timestamped reader: `base_ms` assumes the slice reaches the full back edge.
+    // A subject whose ring is shorter than the back window yields a slice whose first sample is NEWER
+    // than `base_ms`, so times must be derived from the slice (aligned to `start_ms` and its length),
+    // not from `base_ms`. No current reader uses `base_ms`, so this is latent.
     let base_ms = start_ms - WARN_SLICE_BACK_MS;
     let warn = |what: &str, r: rusqlite::Result<()>| {
         if let Err(err) = r {
@@ -126,7 +130,9 @@ fn capture_topology(
         warn("exch", store.insert_ping_series(episode_id, 0, "exch", base_ms, &e));
     }
     // Every core (badge = core id): its own CPU/memory pair and its two pings, split out of the
-    // combined per-core sample so each rides its existing blob format.
+    // combined per-core sample so each rides its existing blob format. Distinct subjects from the
+    // server ("core*"/"server"+"ping"/"exch") so a core id of 0 cannot collide with the server
+    // sentinel badge (0) on the shared unique key.
     for (id, ring) in cores {
         let Some(slice) = ring_slice(*ring, start_ms, now_ms) else {
             continue;
@@ -136,8 +142,8 @@ fn capture_topology(
         let pings: Vec<u16> = slice.iter().map(|m| m.ping).collect();
         let exchs: Vec<u16> = slice.iter().map(|m| m.exch).collect();
         warn("core", store.insert_series(episode_id, badge, "core", base_ms, &cm));
-        warn("core ping", store.insert_ping_series(episode_id, badge, "ping", base_ms, &pings));
-        warn("core exch", store.insert_ping_series(episode_id, badge, "exch", base_ms, &exchs));
+        warn("core ping", store.insert_ping_series(episode_id, badge, "core_ping", base_ms, &pings));
+        warn("core exch", store.insert_ping_series(episode_id, badge, "core_exch", base_ms, &exchs));
     }
 }
 
