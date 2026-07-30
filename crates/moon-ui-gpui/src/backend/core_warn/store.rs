@@ -340,6 +340,7 @@ fn axis_str(axis: WarnAxis) -> &'static str {
         WarnAxis::MemGrowth => "mem_growth",
         WarnAxis::Unreachable => "connectivity",
         WarnAxis::Ping => "ping",
+        WarnAxis::ExchPing => "exch_ping",
     }
 }
 
@@ -349,6 +350,7 @@ fn axis_from(name: &str) -> WarnAxis {
         "mem_growth" => WarnAxis::MemGrowth,
         "connectivity" => WarnAxis::Unreachable,
         "ping" => WarnAxis::Ping,
+        "exch_ping" => WarnAxis::ExchPing,
         _ => WarnAxis::SysCpu,
     }
 }

@@ -5,6 +5,8 @@ use moon_core::feed::ConnStatus;
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
+use crate::backend::core_warn::{LatencySeverity, latency_severity};
+
 /// Visual metadata shared by Flat and By IP connection rows.
 pub(super) struct ConnectionPresentation {
     /// Localized lifecycle label, including stage or failure details.
@@ -77,40 +79,39 @@ pub(super) fn ping(value: Option<u32>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-/// Classify client↔core round-trip latency, where a higher time is worse.
+/// Classify a latency against the core's own rolling BASELINE, where "far above the usual" is worse.
 ///
-/// `Critical` at the same threshold the ping WARNING fires (`PING_WARN_MS` = 500 ms), so the colour
-/// and the badge agree; `Warning` at half that.
+/// Purely relative — a link that is always slow makes that its own baseline and stays `Normal`, while
+/// a spike above the usual tints — so it never yellows a core whose high ping IS its normal (the
+/// 20/60/200 ms case). Delegates to the engine's `latency_severity`, the single source of truth, so
+/// the colour and the ping/exch warning always fire at the same point.
 ///
 /// Args:
-///     value: Round-trip time in milliseconds.
+///     value: Current smoothed latency in ms.
+///     baseline: The core's rolling mean latency in ms, or `None` until it is established.
 ///
 /// Returns:
-///     `Warning` from 250 ms, `Critical` from 500 ms, else `Normal` (including unknown).
-pub(super) fn ping_level(value: Option<u32>) -> LoadLevel {
+///     `Warning` from baseline ×1.10, `Critical` from ×1.30 (each with a small absolute floor), else
+///     `Normal` (including an unknown value or an unestablished baseline).
+fn latency_level(value: Option<u32>, baseline: Option<u32>) -> LoadLevel {
     match value {
-        Some(ms) if ms >= 500 => LoadLevel::Critical,
-        Some(ms) if ms >= 250 => LoadLevel::Warning,
-        _ => LoadLevel::Normal,
+        Some(v) => match latency_severity(v, baseline) {
+            LatencySeverity::Normal => LoadLevel::Normal,
+            LatencySeverity::Warning => LoadLevel::Warning,
+            LatencySeverity::Critical => LoadLevel::Critical,
+        },
+        None => LoadLevel::Normal,
     }
 }
 
-/// Classify core→exchange order-API latency, where a higher time is worse.
-///
-/// Higher thresholds than [`ping_level`]: order round-trips to an exchange are naturally slower than
-/// the local transport ping, so a value that would flag the transport link is normal here.
-///
-/// Args:
-///     value: Order-API latency in milliseconds.
-///
-/// Returns:
-///     `Warning` from 500 ms, `Critical` from 1000 ms, else `Normal` (including unknown).
-pub(super) fn order_level(value: Option<u16>) -> LoadLevel {
-    match value {
-        Some(ms) if ms >= 1000 => LoadLevel::Critical,
-        Some(ms) if ms >= 500 => LoadLevel::Warning,
-        _ => LoadLevel::Normal,
-    }
+/// Colour level for a client↔core round-trip, relative to the core's baseline. See [`latency_level`].
+pub(super) fn ping_level(value: Option<u32>, baseline: Option<u32>) -> LoadLevel {
+    latency_level(value, baseline)
+}
+
+/// Colour level for a core→exchange order latency, relative to the core's baseline.
+pub(super) fn order_level(value: Option<u16>, baseline: Option<u16>) -> LoadLevel {
+    latency_level(value.map(u32::from), baseline.map(u32::from))
 }
 
 /// Format machine CPU load with the machine's logical-core count, e.g. `34% (16 core)`.

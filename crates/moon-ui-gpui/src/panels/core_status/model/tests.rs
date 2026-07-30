@@ -25,6 +25,9 @@ fn row(
             port,
         }),
         ping_warn: false,
+        exch_warn: false,
+        ping_base: None,
+        exch_base: None,
     }
 }
 

@@ -353,9 +353,12 @@ pub struct WarnAxesCfg {
     /// Dropped-core connectivity warning (per server).
     #[serde(default = "def_true")]
     pub conn: bool,
-    /// Sustained high client↔core ping/RTT warning (per core).
+    /// Sustained above-baseline client↔core ping/RTT warning (per core).
     #[serde(default = "def_true")]
     pub ping: bool,
+    /// Sustained above-baseline core→exchange order-API latency warning (per core).
+    #[serde(default = "def_true")]
+    pub exch: bool,
 }
 
 impl Default for WarnAxesCfg {
@@ -366,6 +369,7 @@ impl Default for WarnAxesCfg {
             mem: true,
             conn: true,
             ping: true,
+            exch: true,
         }
     }
 }

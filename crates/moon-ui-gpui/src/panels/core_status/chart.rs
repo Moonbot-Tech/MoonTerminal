@@ -1,12 +1,12 @@
-//! Detached-window CPU / memory time chart for one server.
+//! Detached-window CPU / memory time chart for ONE subject.
 //!
 //! Built only when the panel is a full window (never a dock tab, so the tab pays no canvas cost).
-//! The server contributes two filled-and-stroked series on a fixed 0..100 % Y axis: machine CPU and
-//! occupied memory. When the server runs more than one core, each core adds a thinner, unfilled pair
-//! (process CPU strong, process memory faint) in its own hue, drawn beneath the server pair. The X
-//! axis is the FULL selected window (5 min or 1 hour) and is always drawn at full width — data grows
-//! in from the right instead of stretching. Left: % scale. Right: current server values. Records
-//! continuously, unlike the snapshot table.
+//! The subject — the selected server's machine aggregate, or, once a core is clicked in the expanded
+//! server list, that single core's process — contributes two filled-and-stroked series on a fixed
+//! 0..100 % Y axis: CPU and memory. Individual cores are NOT overlaid on the server aggregate; the
+//! user picks a core to see it on its own. The X axis is the FULL selected window (5 min or 1 hour)
+//! and is always drawn at full width — data grows in from the right instead of stretching. Left: %
+//! scale. Right: current values. Records continuously, unlike the snapshot table.
 
 use std::collections::VecDeque;
 
@@ -31,55 +31,8 @@ const GRID: [u8; 5] = [0, 25, 50, 75, 100];
 const GRID_DIVISIONS: usize = 30;
 /// A HH:MM:SS time label is placed at every Nth vertical division.
 const LABEL_EVERY: usize = 6;
-/// Stroke width of the two prominent server series.
+/// Stroke width of the two prominent series.
 const SERVER_STROKE: f32 = 1.5;
-/// Stroke width of the thinner per-core series.
-const CORE_STROKE: f32 = 1.0;
-/// Alpha of a core's fainter (memory) line, relative to its solid (CPU) line.
-const CORE_MEM_ALPHA: f32 = 0.5;
-
-/// One core's process history and its assigned series hue, overlaid on the server chart.
-pub(super) struct CoreLine {
-    /// Core display name shown in the wrapped core legend.
-    pub(super) name: String,
-    /// `(process CPU %, process memory share %)` samples, oldest first.
-    pub(super) points: VecDeque<(u8, u8)>,
-    /// Palette color this core's pair is drawn in.
-    pub(super) color: u32,
-}
-
-/// Fallback per-core series hue, cycled from the palette and deliberately skipping the server's
-/// blue/green AND both ping lines (accent = client↔core, orange = core→exchange) so a core line
-/// never reads as a server or ping line.
-///
-/// Args:
-///     p: Active Moon palette.
-///     i: Core index within its server.
-///
-/// Returns:
-///     A palette color for the core's line pair.
-pub(super) fn core_line_color(p: MoonPalette, i: usize) -> u32 {
-    [
-        p.amber,
-        p.red,
-        p.yellow,
-        p.text_muted,
-        p.text_soft,
-        p.text_dim,
-    ][i % 6]
-}
-
-/// One core's prepared draw data: both metric series in plot-fraction space plus its two line hues.
-struct CoreDraw {
-    /// Process-CPU series as `(x fraction, value %)`.
-    cpu: Vec<(f32, f32)>,
-    /// Process-memory-share series as `(x fraction, value %)`.
-    mem: Vec<(f32, f32)>,
-    /// Solid CPU line color.
-    line: Hsla,
-    /// Fainter memory line color.
-    faint: Hsla,
-}
 
 /// Map a ring to `(x fraction, value)` points for one metric, anchoring the newest sample to the
 /// right edge so shorter rings grow in from the right and stay time-aligned with longer ones.
@@ -104,13 +57,14 @@ fn to_series<T>(points: &VecDeque<T>, span: usize, pick: impl Fn(&T) -> f32) -> 
         .collect()
 }
 
-/// Render one server's CPU/memory history — the server pair plus any per-core pairs — as a chart
-/// with axes and window buttons.
+/// Render one subject's CPU/memory history — the server aggregate OR a single selected core — as a
+/// chart with axes and window buttons. No per-core overlays: exactly one CPU/memory pair is drawn.
 ///
 /// Args:
-///     server_points: `(cpu %, occupied memory %)` machine samples, oldest first.
-///     core_series: Per-core process histories to overlay (empty for a single-core server).
-///     title: Server display name shown in the legend.
+///     server_points: `(cpu %, memory %)` samples for the subject, oldest first.
+///     ping_points: Client↔core round-trip samples (the machine's), oldest first.
+///     exch_points: Core→exchange order-latency samples (the machine's), oldest first.
+///     title: Subject display name (server or core) shown in the legend.
 ///     window: Selected time span (5 min or 1 hour).
 ///     now_sec: Current Unix second for the X-axis labels.
 ///     view: Panel handle for the window-switch buttons.
@@ -122,7 +76,6 @@ fn to_series<T>(points: &VecDeque<T>, span: usize, pick: impl Fn(&T) -> f32) -> 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn server_chart(
     server_points: &VecDeque<(u8, u8)>,
-    core_series: &[CoreLine],
     ping_points: &VecDeque<u16>,
     exch_points: &VecDeque<u16>,
     title: String,
@@ -147,29 +100,15 @@ pub(super) fn server_chart(
     let cur_mem = server_points.back().map(|(_, mem)| *mem);
 
     // Each ping rides its own auto-scaled ms axis (round-trip is not a percentage), mapped into the
-    // 0..100 plot height and rounded up to a tidy 50 ms step so the line does not hug the ceiling.
-    let ms_scale = |ring: &VecDeque<u16>| {
-        (ring.iter().copied().max().unwrap_or(0) as f32 / 50.0)
-            .ceil()
-            .max(1.0)
-            * 50.0
-    };
+    // 0..100 plot height via the shared ping-axis scale (tidy 50 ms step + headroom).
+    let ms_scale =
+        |ring: &VecDeque<u16>| crate::panels::common::ms_axis_scale(ring.iter().copied().max().unwrap_or(0));
     let cur_ping = ping_points.back().copied();
     let ping_scale = ms_scale(ping_points);
     let ping = to_series(ping_points, span, |ms| *ms as f32 / ping_scale * 100.0);
     let cur_exch = exch_points.back().copied();
     let exch_scale = ms_scale(exch_points);
     let exch = to_series(exch_points, span, |ms| *ms as f32 / exch_scale * 100.0);
-
-    let core_draws: Vec<CoreDraw> = core_series
-        .iter()
-        .map(|core| CoreDraw {
-            cpu: to_series(&core.points, span, |s| s.0 as f32),
-            mem: to_series(&core.points, span, |s| s.1 as f32),
-            line: design::moon(core.color),
-            faint: design::moon_alpha(core.color, CORE_MEM_ALPHA),
-        })
-        .collect();
 
     let plot = canvas(
         |_, _, _| (),
@@ -197,29 +136,7 @@ pub(super) fn server_chart(
                     grid,
                 ));
             }
-            // Cores underneath (memory fainter than CPU), then the server pair on top.
-            for core in &core_draws {
-                paint_series(
-                    window,
-                    bounds.origin,
-                    w,
-                    h,
-                    &core.mem,
-                    None,
-                    core.faint,
-                    CORE_STROKE,
-                );
-                paint_series(
-                    window,
-                    bounds.origin,
-                    w,
-                    h,
-                    &core.cpu,
-                    None,
-                    core.line,
-                    CORE_STROKE,
-                );
-            }
+            // The subject's memory pair below, its CPU pair on top.
             paint_series(
                 window,
                 bounds.origin,
@@ -295,7 +212,6 @@ pub(super) fn server_chart(
         .child(legend_row(
             title, window, &view, cpu_line, mem_line, ping_line, exch_line, p,
         ))
-        .children((!core_series.is_empty()).then(|| core_legend_row(core_series, p)))
         .child(plot_area)
         .child(x_axis_row(now_sec, window, p, cx))
         .into_any_element()
@@ -436,15 +352,6 @@ fn legend_row(
             exch_line,
             p,
         ))
-}
-
-/// Second legend row: one wrapped chip per core, in the same hue as its line pair.
-fn core_legend_row(core_series: &[CoreLine], p: MoonPalette) -> impl IntoElement {
-    h_flex().w_full().flex_wrap().gap_x_2().gap_y_1().children(
-        core_series
-            .iter()
-            .map(|core| legend_chip(core.name.clone(), design::moon(core.color), p)),
-    )
 }
 
 /// One window-selector pill; the active window is accent-tinted.

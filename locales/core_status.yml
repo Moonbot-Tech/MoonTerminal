@@ -126,14 +126,6 @@ core_status.process_memory_total:
   ru: "RAM процессов %{value}"
   en: "Process RAM %{value}"
   es: "RAM procesos %{value}"
-core_status.free_memory:
-  ru: "Свободно %{value}"
-  en: "Free %{value}"
-  es: "Libre %{value}"
-core_status.logical_cpus:
-  ru: "Логич. CPU %{value}"
-  en: "Logical CPUs %{value}"
-  es: "CPU lógicos %{value}"
 
 # --- Table columns ---
 core_status.col.server:
@@ -247,9 +239,13 @@ core_status.warn_cfg.conn:
   en: "Core dropout"
   es: "Caída de núcleo"
 core_status.warn_cfg.ping:
-  ru: "Высокий пинг"
-  en: "High ping"
-  es: "Ping alto"
+  ru: "Скачок пинга ядра"
+  en: "Core ping spike"
+  es: "Pico de ping del núcleo"
+core_status.warn_cfg.exch:
+  ru: "Скачок пинга биржи"
+  en: "Exchange ping spike"
+  es: "Pico de ping de bolsa"
 
 # --- Units and relative time ---
 core_status.mb:

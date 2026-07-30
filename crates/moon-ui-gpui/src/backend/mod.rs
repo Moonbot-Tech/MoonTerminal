@@ -1107,6 +1107,7 @@ impl Backend {
             mem: axes.mem,
             conn: axes.conn,
             ping: axes.ping,
+            exch: axes.exch,
         }
     }
 

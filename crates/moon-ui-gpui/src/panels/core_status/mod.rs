@@ -111,6 +111,9 @@ pub struct CoreStatusView {
     /// Server whose chart the detached window shows; clicking a server row selects it. `None` falls
     /// back to the first server.
     chart_server: Option<ServerKey>,
+    /// A specific core to chart instead of the server aggregate; set by clicking a core in the
+    /// expanded list, cleared when a server row is clicked. Takes precedence over `chart_server`.
+    chart_core: Option<CoreId>,
     cached_rows: Rc<Vec<CoreStatusRow>>,
     cached_groups: Rc<Vec<ServerStatusGroup>>,
     /// Servers whose IP is momentarily revealed by the eye control. Transient: cleared on blur,
@@ -203,6 +206,7 @@ impl CoreStatusView {
             detached,
             chart_window: ChartWindow::default(),
             chart_server: None,
+            chart_core: None,
             cached_rows: Rc::new(Vec::new()),
             cached_groups: Rc::new(Vec::new()),
             revealed_ips: HashSet::new(),
@@ -338,6 +342,7 @@ impl Render for CoreStatusView {
                 self.editing,
                 self.edit_input.clone(),
                 self.chart_server,
+                self.chart_core,
                 &self.tree_state,
                 cx,
             ),
@@ -391,44 +396,61 @@ impl Render for CoreStatusView {
             }
         };
 
-        // A detached window gets a live CPU/memory chart for the expanded (or first) server. The
-        // dock tab builds nothing here, so it pays no chart cost.
+        // A detached window gets a live CPU/memory chart for ONE subject: a clicked core, else the
+        // clicked (or first) server's machine aggregate — never per-core overlays. The dock tab builds
+        // nothing here, so it pays no chart cost.
         let chart_el: Option<AnyElement> = self
             .detached
             .then(|| {
-                // Follows the clicked server (chart_server), not expansion; falls back to the first.
+                let b = self.backend.read(cx);
+                let now_sec = moon_chart::paint::now_unix_ms() as i64 / 1000;
+                // A selected core, if it is still in scope, charts its own process; the machine's ping
+                // rings stay as context. Falls through to the server aggregate otherwise.
+                if let Some((group, core)) = self.chart_core.and_then(|core_id| {
+                    groups.iter().find_map(|group| {
+                        group
+                            .cores
+                            .iter()
+                            .find(|core| core.id == core_id)
+                            .map(|core| (group, core))
+                    })
+                }) {
+                    let points = b.core_line_hist.ring(core.id).cloned().unwrap_or_default();
+                    let (ping_points, exch_points) = group
+                        .address
+                        .map(|ip| {
+                            (
+                                b.server_ping_hist.ring(ip).cloned().unwrap_or_default(),
+                                b.server_exch_hist.ring(ip).cloned().unwrap_or_default(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    return Some(chart::server_chart(
+                        &points,
+                        &ping_points,
+                        &exch_points,
+                        core.name.clone(),
+                        self.chart_window,
+                        now_sec,
+                        cx.entity().downgrade(),
+                        p,
+                        cx,
+                    ));
+                }
+                // Follows the clicked server (chart_server), else the first server that HAS an address
+                // — an address-less (unknown-endpoint) server has no history ring to chart, so it must
+                // fall through rather than blank the chart.
                 let target = self
                     .chart_server
                     .and_then(|key| groups.iter().find(|group| group.key == key))
-                    .or_else(|| groups.first())?;
+                    .filter(|group| group.address.is_some())
+                    .or_else(|| groups.iter().find(|group| group.address.is_some()))?;
                 let ip = target.address?;
-                let b = self.backend.read(cx);
                 let points = b.core_chart_hist.ring(ip).cloned().unwrap_or_default();
-                // Per-core line pairs only when the server runs more than one core (a single core's
-                // pair would just shadow the server pair). Cores with no history yet are skipped.
-                let core_series: Vec<chart::CoreLine> = if target.cores.len() > 1 {
-                    target
-                        .cores
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, core)| {
-                            let points = b.core_line_hist.ring(core.id)?.clone();
-                            Some(chart::CoreLine {
-                                name: core.name.clone(),
-                                points,
-                                color: chart::core_line_color(p, i),
-                            })
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
                 let ping_points = b.server_ping_hist.ring(ip).cloned().unwrap_or_default();
                 let exch_points = b.server_exch_hist.ring(ip).cloned().unwrap_or_default();
-                let now_sec = moon_chart::paint::now_unix_ms() as i64 / 1000;
                 Some(chart::server_chart(
                     &points,
-                    &core_series,
                     &ping_points,
                     &exch_points,
                     target.display_name.clone(),

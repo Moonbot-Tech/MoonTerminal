@@ -35,7 +35,7 @@ impl CoreStatusView {
             .variant(MoonButtonVariant::Ghost)
             .tooltip(t!("core_status.warn_cfg.title").to_string())
             .render();
-        // Order mirrors the badge card: CPU, memory, ping, then connectivity.
+        // Order mirrors the badge card: CPU, memory, ping, exch-ping, then connectivity.
         let content = v_flex()
             .w_full()
             .gap(design::ui_px(cx, 4.0))
@@ -61,6 +61,13 @@ impl CoreStatusView {
                 axes.ping,
                 &self.backend,
                 |axes, on| axes.ping = on,
+            ))
+            .child(warn_axis_check(
+                "cs-warn-exch",
+                t!("core_status.warn_cfg.exch").to_string(),
+                axes.exch,
+                &self.backend,
+                |axes, on| axes.exch = on,
             ))
             .child(warn_axis_check(
                 "cs-warn-conn",

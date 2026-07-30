@@ -58,8 +58,10 @@ struct WarnCluster {
     cpu_peak: Option<u16>,
     /// Worst memory-growth peak (used MB) among members, if any memory episode.
     mem_peak: Option<u16>,
-    /// Worst ping peak (RTT ms) among members, if any ping episode.
+    /// Worst client↔core ping peak (RTT ms) among members, if any ping episode.
     ping_peak: Option<u16>,
+    /// Worst core→exchange ping peak (order-latency ms) among members, if any exch-ping episode.
+    exch_peak: Option<u16>,
     /// Whether any member is a connectivity (dropped-core) warning.
     conn: bool,
     /// Whether any member is still open.
@@ -409,6 +411,7 @@ fn cluster_episodes(mut episodes: Vec<WarnEpisode>) -> Vec<WarnCluster> {
                     cpu_peak: None,
                     mem_peak: None,
                     ping_peak: None,
+                    exch_peak: None,
                     conn: false,
                     open: episode.end_ms.is_none(),
                     cores: Vec::new(),
@@ -444,6 +447,13 @@ fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
             cluster.ping_peak = Some(
                 cluster
                     .ping_peak
+                    .map_or(episode.peak, |p| p.max(episode.peak)),
+            )
+        }
+        WarnAxis::ExchPing => {
+            cluster.exch_peak = Some(
+                cluster
+                    .exch_peak
                     .map_or(episode.peak, |p| p.max(episode.peak)),
             )
         }
@@ -518,12 +528,10 @@ fn cluster_card_body(
         ));
     }
     if let Some(ping) = cluster.ping_peak {
-        lines.push(reading(
-            t!("core_status.chart_ping").to_string(),
-            format!("{} {}", ping, t!("core_status.ms")),
-            p,
-            cx,
-        ));
+        lines.push(ms_reading(t!("core_status.chart_ping").to_string(), ping, p, cx));
+    }
+    if let Some(exch) = cluster.exch_peak {
+        lines.push(ms_reading(t!("core_status.chart_exch").to_string(), exch, p, cx));
     }
     if cluster.conn {
         lines.push(reading(
@@ -534,35 +542,25 @@ fn cluster_card_body(
         ));
     }
 
-    // Full state at detection: the server, then the chart's current core.
+    // Full state at detection: the server (CPU / memory only — the pings live under the core), then
+    // the chart's current core with both pings beneath it.
     let snap = &cluster.snap;
     let cpu_lbl = t!("core_status.chart_cpu").to_string();
     let mem_lbl = t!("core_status.chart_mem").to_string();
-    let mut server_val = format!("{cpu_lbl} {}% · {mem_lbl} {}%", snap.sys_cpu, snap.occ_mem);
-    if snap.round_trip_ms > 0 {
-        server_val.push_str(&format!(
-            " · {} {} {}",
-            t!("core_status.chart_ping"),
-            snap.round_trip_ms,
-            t!("core_status.ms")
-        ));
-    }
-    if snap.order_api_latency_ms > 0 {
-        server_val.push_str(&format!(
-            " · {} {} {}",
-            t!("core_status.chart_exch"),
+    let server_val = format!("{cpu_lbl} {}% · {mem_lbl} {}%", snap.sys_cpu, snap.occ_mem);
+    // Both pings as their own reading lines, so a long value can never run off the card edge and they
+    // read as belonging to the core rather than crammed onto the server line. Skipped when the reading
+    // never arrived (0 = no sample), matching the row's dash-when-absent.
+    let ping_line = (snap.round_trip_ms > 0)
+        .then(|| ms_reading(t!("core_status.chart_ping").to_string(), snap.round_trip_ms, p, cx));
+    let exch_line = (snap.order_api_latency_ms > 0).then(|| {
+        ms_reading(
+            t!("core_status.chart_exch").to_string(),
             snap.order_api_latency_ms,
-            t!("core_status.ms")
-        ));
-    }
-    let server_extra = format!(
-        "{} · {}",
-        t!(
-            "core_status.free_memory",
-            value = format!("{} {}", snap.free_mb, t!("core_status.mb"))
-        ),
-        t!("core_status.logical_cpus", value = snap.logical_cpus)
-    );
+            p,
+            cx,
+        )
+    });
     let core_line = core_reading.map(|(cpu, mem, name)| {
         // (0, 0) at detection means the core process had not reported telemetry yet (e.g. it was
         // still starting up) — show a dash rather than a misleading 0 %.
@@ -598,8 +596,10 @@ fn cluster_card_body(
             p,
             cx,
         ))
-        .child(muted_line(server_extra, p, cx))
         .children(core_line)
+        // Both pings (client↔core, then core→exchange) at detection, under the core they belong to.
+        .children(ping_line)
+        .children(exch_line)
         .when(!cores.is_empty(), |this| {
             this.child(muted_line(cores.join(", "), p, cx))
         })
@@ -646,13 +646,10 @@ fn warn_graph(
         .enumerate()
         .map(|(i, s)| (frac(points.len(), i), s.1 as f32))
         .collect();
-    // Each ping rides its own ms scale (round-trip is not a percentage), rounded up to a 50 ms step.
-    let ms_scale = |series: &[u16]| {
-        (series.iter().copied().max().unwrap_or(0) as f32 / 50.0)
-            .ceil()
-            .max(1.0)
-            * 50.0
-    };
+    // Each ping rides its own ms scale (round-trip is not a percentage) via the shared ping-axis
+    // scale: a tidy 50 ms step with headroom so a line at its maximum does not hug/clip the top edge.
+    let ms_scale =
+        |series: &[u16]| crate::panels::common::ms_axis_scale(series.iter().copied().max().unwrap_or(0));
     let ping_scale = ms_scale(&ping);
     let ping_pts: Vec<(f32, f32)> = ping
         .iter()
@@ -756,6 +753,11 @@ fn reading(label: String, value: String, p: MoonPalette, cx: &App) -> AnyElement
                 .child(value),
         )
         .into_any_element()
+}
+
+/// One `"label   N ms"` reading line (a latency in milliseconds).
+fn ms_reading(label: String, ms: u16, p: MoonPalette, cx: &App) -> AnyElement {
+    reading(label, format!("{} {}", ms, t!("core_status.ms")), p, cx)
 }
 
 /// Human duration of a cluster: `Nс` / `Nм`, or "идёт" while still open.

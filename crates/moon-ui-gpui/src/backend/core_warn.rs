@@ -5,16 +5,20 @@
 //! second, keeps the rolling CPU/memory history the warnings need, and turns the SUSTAINED/trend
 //! signals into WARNING EPISODES with a start and an end time.
 //!
-//! Four axes:
+//! Five axes:
 //! - `SysCpu` — a machine's system CPU held at/above the threshold (per server IP).
 //! - `MemGrowth` — a core's used memory rising above its window minimum (per core).
 //! - `Unreachable` — a core that had reached Ready is now Disconnected/Failed — a real drop, on any
 //!   server (per server IP), including a single-core server going fully down.
-//! - `Ping` — the client↔core UDP round-trip time held at/above the threshold (per core).
+//! - `Ping` — the client↔core UDP round-trip held ABOVE THE CORE'S OWN BASELINE (per core).
+//! - `ExchPing` — the core→exchange order-API latency held ABOVE THE CORE'S OWN BASELINE (per core).
 //!
 //! `SysCpu` and `MemGrowth` are ported verbatim from the panel so their displayed warnings do not
 //! change; `Unreachable` uses the same connectivity rule the panel showed, now sourced here (so it
-//! also becomes an episode). All three drive both the panel display and the episode log.
+//! also becomes an episode). `Ping`/`ExchPing` are PURELY RELATIVE: each is judged against that
+//! core's rolling mean latency, so a link that is *always* slow makes that its own baseline and never
+//! warns, while a spike above the usual does — even on a fast link. All drive both the panel display
+//! and the episode log.
 //!
 //! The panel reads the current warning state and the smoothed CPU from here; the closed/open episode
 //! log is produced now and consumed by the upcoming chart-badge phase.
@@ -37,14 +41,142 @@ const MEM_GROWTH_PCT: u32 = 12;
 const WARN_CPU_PCT: u32 = 70;
 /// The CPU warning fires only after the machine has stayed high this many consecutive seconds.
 const CPU_SUSTAIN_SECS: u32 = 5;
-/// A client↔core UDP round-trip at or above this many ms (as reported by the core) counts toward the
-/// ping warning. A healthy transport link stays well under it, so ordinary latency does not trip it.
-const PING_WARN_MS: u32 = 500;
-/// The ping warning fires only after the RTT has stayed high this many consecutive seconds, so a
+/// A latency baseline is the mean client↔core (or core→exchange) latency over this many recent
+/// seconds. A short spike barely moves it, so "above the usual" is measured against a stable mean.
+const LATENCY_BASELINE_SECS: i64 = 60;
+/// At least this many baseline samples before a deviation can be judged; below it, always `Normal`
+/// (no colour, no warning), so a just-connected core cannot warn on one reading.
+const LATENCY_MIN_SAMPLES: usize = 5;
+/// CRITICAL — the level the ping/exch WARNING fires at — is a latency ≥ baseline × this / 100.
+const LATENCY_WARN_NUM: u32 = 130;
+/// WARNING colour (yellow) is a latency ≥ baseline × this / 100.
+const LATENCY_YELLOW_NUM: u32 = 110;
+/// Percentage denominator for the two ratios above.
+const LATENCY_PCT_DEN: u32 = 100;
+/// ...but also at least this many ms ABOVE the baseline, so a tiny ping (20 → 27 ms is +35 %) does
+/// not trip on the percentage alone. The critical (warning) floor.
+const LATENCY_WARN_FLOOR_MS: u32 = 50;
+/// The yellow-colour floor: smaller than the warning floor so a moderate rise still tints.
+const LATENCY_YELLOW_FLOOR_MS: u32 = 20;
+/// A latency stays CRITICAL this many consecutive seconds before its episode/badge opens, so a
 /// single slow sample does not flag.
-const PING_SUSTAIN_SECS: u32 = 5;
+const LATENCY_SUSTAIN_SECS: u32 = 3;
 /// Closed episodes kept in memory before the oldest is dropped (the disk store arrives with badges).
 const EPISODE_CAP: usize = 2048;
+
+/// Where a latency sample sits relative to its rolling baseline, higher = worse.
+///
+/// Ordered so a caller can combine severities with `max` (`Normal < Warning < Critical`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum LatencySeverity {
+    /// At or near the usual — no colour, no warning.
+    Normal,
+    /// Notably above the usual — the yellow colour.
+    Warning,
+    /// Far above the usual — the red colour and the level the ping/exch warning fires at.
+    Critical,
+}
+
+/// Classify a latency (ms) against its per-core rolling `baseline` (ms), higher = worse.
+///
+/// Purely relative to the baseline, with a small absolute floor so a small ping that is a large
+/// PERCENTAGE jump but a small ABSOLUTE jump does not flag. A `None` baseline (not enough samples yet)
+/// or a zero baseline is always `Normal`. The single source of truth shared by the engine's warning
+/// decision and the panel's metric colouring, so red and "warning" always mean the same thing.
+///
+/// Args:
+///     value: The current smoothed latency in ms.
+///     baseline: The core's rolling mean latency in ms, or `None` until it is established.
+///
+/// Returns:
+///     Where `value` sits relative to `baseline`.
+pub(crate) fn latency_severity(value: u32, baseline: Option<u32>) -> LatencySeverity {
+    let Some(base) = baseline.filter(|b| *b > 0) else {
+        return LatencySeverity::Normal;
+    };
+    let delta = value.saturating_sub(base);
+    // Integer ratio test: value >= base * num / 100, without floating point.
+    let over = |num: u32| u64::from(value) * u64::from(LATENCY_PCT_DEN) >= u64::from(base) * u64::from(num);
+    if over(LATENCY_WARN_NUM) && delta >= LATENCY_WARN_FLOOR_MS {
+        LatencySeverity::Critical
+    } else if over(LATENCY_YELLOW_NUM) && delta >= LATENCY_YELLOW_FLOOR_MS {
+        LatencySeverity::Warning
+    } else {
+        LatencySeverity::Normal
+    }
+}
+
+/// Mean of a latency window in ms over the seconds BEFORE `now_sec`, or `None` until at least the
+/// minimum count of prior samples exists.
+///
+/// The current second's sample is excluded so a spike cannot dampen the very baseline it is judged
+/// against — most visible at the minimum-sample floor, where including it would lift the effective
+/// threshold. Dedup keeps at most one entry per second, so the filter drops exactly the current one.
+fn latency_baseline(window: &VecDeque<(i64, u16)>, now_sec: i64) -> Option<u32> {
+    let prior = window.iter().filter(|(sec, _)| *sec != now_sec);
+    let n = prior.clone().count();
+    if n < LATENCY_MIN_SAMPLES {
+        return None;
+    }
+    let sum: u64 = prior.map(|(_, v)| u64::from(*v)).sum();
+    Some((sum / n as u64).min(u64::from(u32::MAX)) as u32)
+}
+
+/// Advance one core's per-axis latency sustain counter and fill its warning set, shared by the
+/// client↔core-ping and core→exchange-ping axes (identical logic, different fields).
+///
+/// A latency stays CRITICAL (≥ baseline × threshold) while Ready; the counter counts consecutive
+/// critical seconds and resets otherwise, and the warning fires once it holds the sustain window —
+/// but only while the axis is enabled (the counter advances regardless, so re-enabling reacts fast).
+///
+/// Args:
+///     high: Per-core consecutive-critical-seconds counter for this axis.
+///     warn: Per-core warning set for this axis, filled here.
+///     id: The core being judged.
+///     baseline: The core's rolling baseline for this axis (ms), or `None` until established.
+///     value: The core's current latency reading (ms), or `None` when absent.
+///     ready: Whether the core is Ready (only a Ready core has a live reading).
+///     enabled: Whether this axis is switched on.
+fn advance_latency_warn(
+    high: &mut HashMap<CoreId, u32>,
+    warn: &mut HashSet<CoreId>,
+    id: CoreId,
+    baseline: Option<u32>,
+    value: Option<u32>,
+    ready: bool,
+    enabled: bool,
+) {
+    let critical =
+        ready && value.is_some_and(|ms| latency_severity(ms, baseline) == LatencySeverity::Critical);
+    let next = if critical {
+        high.get(&id).copied().unwrap_or(0).saturating_add(1)
+    } else {
+        0
+    };
+    high.insert(id, next);
+    if enabled && next >= LATENCY_SUSTAIN_SECS {
+        warn.insert(id);
+    }
+}
+
+/// Fold one Ready-second latency reading into a rolling baseline window, dropping samples older than
+/// the baseline span. A `None` reading is skipped (the window keeps its last values).
+fn record_latency(window: &mut VecDeque<(i64, u16)>, now_sec: i64, value: Option<u16>) {
+    let Some(v) = value else {
+        return;
+    };
+    if window.back().map(|(sec, _)| *sec) == Some(now_sec) {
+        window.back_mut().unwrap().1 = v;
+    } else {
+        window.push_back((now_sec, v));
+        while window
+            .front()
+            .is_some_and(|(sec, _)| now_sec - sec > LATENCY_BASELINE_SECS)
+        {
+            window.pop_front();
+        }
+    }
+}
 
 /// Per-axis master switches, mirrored from the persisted layout each tick.
 ///
@@ -60,8 +192,10 @@ pub(crate) struct WarnEnabled {
     pub(crate) mem: bool,
     /// Connectivity axis on.
     pub(crate) conn: bool,
-    /// Ping/RTT axis on.
+    /// Client↔core ping axis on.
     pub(crate) ping: bool,
+    /// Core→exchange ping (order-API latency) axis on.
+    pub(crate) exch: bool,
 }
 
 impl Default for WarnEnabled {
@@ -72,6 +206,7 @@ impl Default for WarnEnabled {
             mem: true,
             conn: true,
             ping: true,
+            exch: true,
         }
     }
 }
@@ -84,6 +219,7 @@ impl WarnEnabled {
             WarnAxis::MemGrowth => self.mem,
             WarnAxis::Unreachable => self.conn,
             WarnAxis::Ping => self.ping,
+            WarnAxis::ExchPing => self.exch,
         }
     }
 }
@@ -109,8 +245,10 @@ pub(crate) enum WarnAxis {
     MemGrowth,
     /// A core that was up has dropped (Disconnected/Failed), per server.
     Unreachable,
-    /// The client↔core UDP round-trip time held high (per core).
+    /// The client↔core UDP round-trip held above the core's own baseline (per core).
     Ping,
+    /// The core→exchange order-API latency held above the core's own baseline (per core).
+    ExchPing,
 }
 
 /// The subject a chart-history ring sample belongs to.
@@ -146,7 +284,9 @@ pub(crate) struct TickResult {
 
 /// The server's telemetry captured at the moment a warning fired, so the card can show the full
 /// state at detection instead of only the peak.
-#[allow(dead_code)] // Fields read by the chart card and persistence.
+// Fields feed the chart card and the persisted episode row; `free_mb`/`logical_cpus` are persisted
+// only (the card dropped its free-memory/logical-CPU line), so they read as dead to the linter here.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct WarnSnapshot {
     /// System CPU percent.
@@ -207,6 +347,12 @@ struct CoreTrack {
     cpu: [CpuBucket; 3],
     /// One `(second, used MB)` sample per second over the memory-growth window.
     mem: VecDeque<(i64, u16)>,
+    /// One `(second, client↔core round-trip ms)` per second over the latency-baseline window,
+    /// recorded only while the core is Ready (a stale reading must not skew the baseline).
+    link: VecDeque<(i64, u16)>,
+    /// One `(second, core→exchange order latency ms)` per second over the latency-baseline window,
+    /// Ready-seconds only.
+    exch: VecDeque<(i64, u16)>,
 }
 
 impl CoreTrack {
@@ -259,6 +405,8 @@ enum WarnKey {
     Conn(IpAddr),
     /// One core's client↔core round-trip time.
     Ping(CoreId),
+    /// One core's core→exchange order-API latency.
+    ExchPing(CoreId),
 }
 
 /// Backend warning engine: rolling per-core history, current warning state, and the episode log.
@@ -268,8 +416,14 @@ pub(crate) struct CoreWarnEngine {
     track: HashMap<CoreId, CoreTrack>,
     /// Per-server consecutive high-CPU seconds.
     sys_high: HashMap<IpAddr, u32>,
-    /// Per-core consecutive high-ping seconds.
+    /// Per-core consecutive above-baseline client↔core-ping seconds.
     ping_high: HashMap<CoreId, u32>,
+    /// Per-core consecutive above-baseline core→exchange-ping seconds.
+    exch_high: HashMap<CoreId, u32>,
+    /// Per-core rolling client↔core-ping baseline (ms), refreshed each tick for the panel colouring.
+    ping_base: HashMap<CoreId, u32>,
+    /// Per-core rolling core→exchange-ping baseline (ms), refreshed each tick.
+    exch_base: HashMap<CoreId, u16>,
     /// Axis master switches, refreshed from the layout each tick.
     enabled: WarnEnabled,
     /// Currently-open warnings, keyed by subject.
@@ -293,8 +447,10 @@ pub(crate) struct CoreWarnEngine {
     /// Cores that have reached `Ready` at least once, so a later drop is a real disconnect rather
     /// than a never-connected core (which must not warn).
     ever_ready: HashSet<CoreId>,
-    /// Cores whose client↔core round-trip is currently sustained-high (the ping warning).
+    /// Cores whose client↔core round-trip is sustained above their baseline (the ping warning).
     ping_warn: HashSet<CoreId>,
+    /// Cores whose core→exchange latency is sustained above their baseline (the exch-ping warning).
+    exch_warn: HashSet<CoreId>,
 }
 
 impl CoreWarnEngine {
@@ -365,16 +521,38 @@ impl CoreWarnEngine {
                 }
             }
         }
+
+        // Latency baselines: only a Ready core's live reading feeds the rolling mean — a dropped
+        // core keeps its last (possibly timed-out) sample, which must not become the "usual".
+        if sample.status == ConnStatus::Ready {
+            record_latency(
+                &mut track.link,
+                now_sec,
+                sample
+                    .sys
+                    .round_trip_ms
+                    .map(|ms| ms.min(u32::from(u16::MAX)) as u16),
+            );
+            record_latency(&mut track.exch, now_sec, sample.sys.order_api_latency_ms);
+        }
     }
 
     /// Rebuild the per-core averages, per-server sustained-CPU counters, and the current warning sets.
     fn recompute_state(&mut self, samples: &[CoreSample], now_sec: i64) {
         self.avg.clear();
         self.mem_growing.clear();
+        self.ping_base.clear();
+        self.exch_base.clear();
         for (id, track) in &self.track {
             self.avg.insert(*id, track.averaged(now_sec));
             if self.enabled.mem && mem_grew(&track.mem) {
                 self.mem_growing.insert(*id);
+            }
+            if let Some(base) = latency_baseline(&track.link, now_sec) {
+                self.ping_base.insert(*id, base);
+            }
+            if let Some(base) = latency_baseline(&track.exch, now_sec) {
+                self.exch_base.insert(*id, base.min(u32::from(u16::MAX)) as u16);
             }
         }
 
@@ -426,28 +604,36 @@ impl CoreWarnEngine {
             }
         }
 
-        // Ping: a core whose client↔core round-trip stays at/above the threshold for the sustain
-        // window. Per core, like memory. The counter advances regardless of the enable switch so
-        // re-enabling reacts on the next second, but the warning set only fills while enabled.
+        // Ping (client↔core) and exch (core→exchange): a Ready core whose smoothed latency stays
+        // CRITICAL — at/above its own baseline × 1.30 — for the sustain window. Per core, like memory.
+        // Purely relative, so a link that is always slow never warns while a spike above the usual
+        // does. The counter advances regardless of the enable switch so re-enabling reacts on the
+        // next second, but the warning set only fills while enabled. Only a Ready core is judged: a
+        // Disconnected/Failed core keeps its last reading, which must not climb the counter.
         self.ping_high.retain(|id, _| present.contains(id));
+        self.exch_high.retain(|id, _| present.contains(id));
         self.ping_warn.clear();
+        self.exch_warn.clear();
         for sample in samples {
-            // Only a Ready core has a live RTT; a Disconnected/Failed core keeps its last `sys`
-            // reading, so without this gate its stale round-trip would keep the counter climbing and
-            // raise a phantom ping warning for an offline core.
-            let next = match sample.sys.round_trip_ms {
-                Some(ms) if ms >= PING_WARN_MS && sample.status == ConnStatus::Ready => self
-                    .ping_high
-                    .get(&sample.id)
-                    .copied()
-                    .unwrap_or(0)
-                    .saturating_add(1),
-                _ => 0,
-            };
-            self.ping_high.insert(sample.id, next);
-            if self.enabled.ping && next >= PING_SUSTAIN_SECS {
-                self.ping_warn.insert(sample.id);
-            }
+            let ready = sample.status == ConnStatus::Ready;
+            advance_latency_warn(
+                &mut self.ping_high,
+                &mut self.ping_warn,
+                sample.id,
+                self.ping_base.get(&sample.id).copied(),
+                sample.sys.round_trip_ms,
+                ready,
+                self.enabled.ping,
+            );
+            advance_latency_warn(
+                &mut self.exch_high,
+                &mut self.exch_warn,
+                sample.id,
+                self.exch_base.get(&sample.id).copied().map(u32::from),
+                sample.sys.order_api_latency_ms.map(u32::from),
+                ready,
+                self.enabled.exch,
+            );
         }
     }
 
@@ -502,6 +688,18 @@ impl CoreWarnEngine {
                 (ip_of.get(id).copied(), Some(*id), peak),
             );
         }
+        // Exch-ping peak is the current core→exchange latency in ms.
+        for id in &self.exch_warn {
+            let peak = samples
+                .iter()
+                .find(|sample| sample.id == *id)
+                .and_then(|sample| sample.sys.order_api_latency_ms)
+                .unwrap_or(0);
+            active.insert(
+                WarnKey::ExchPing(*id),
+                (ip_of.get(id).copied(), Some(*id), peak),
+            );
+        }
 
         // Open or extend.
         for (key, (server_ip, core_id, peak)) in &active {
@@ -543,6 +741,7 @@ impl CoreWarnEngine {
                 WarnKey::Mem(_) => WarnAxis::MemGrowth,
                 WarnKey::Conn(_) => WarnAxis::Unreachable,
                 WarnKey::Ping(_) => WarnAxis::Ping,
+                WarnKey::ExchPing(_) => WarnAxis::ExchPing,
             };
             let episode = WarnEpisode {
                 id: open.id,
@@ -589,9 +788,25 @@ impl CoreWarnEngine {
         self.conn_warn.contains(&ip)
     }
 
-    /// Whether one core's client↔core round-trip is currently sustained-high (the ping warning).
+    /// Whether one core's client↔core round-trip is sustained above its baseline (the ping warning).
     pub(crate) fn core_ping_warn(&self, id: CoreId) -> bool {
         self.ping_warn.contains(&id)
+    }
+
+    /// Whether one core's core→exchange latency is sustained above its baseline (the exch warning).
+    pub(crate) fn core_exch_warn(&self, id: CoreId) -> bool {
+        self.exch_warn.contains(&id)
+    }
+
+    /// One core's current client↔core-ping baseline (ms), or `None` until enough samples exist.
+    /// The panel colours the metric relative to this, so red and the warning always agree.
+    pub(crate) fn core_ping_baseline(&self, id: CoreId) -> Option<u32> {
+        self.ping_base.get(&id).copied()
+    }
+
+    /// One core's current core→exchange-ping baseline (ms), or `None` until enough samples exist.
+    pub(crate) fn core_exch_baseline(&self, id: CoreId) -> Option<u16> {
+        self.exch_base.get(&id).copied()
     }
 
     /// Refresh the axis master switches from the layout (called each tick before sampling).
@@ -629,6 +844,7 @@ impl CoreWarnEngine {
                     WarnKey::Mem(_) => WarnAxis::MemGrowth,
                     WarnKey::Conn(_) => WarnAxis::Unreachable,
                     WarnKey::Ping(_) => WarnAxis::Ping,
+                    WarnKey::ExchPing(_) => WarnAxis::ExchPing,
                 },
                 server_ip: open.server_ip,
                 core_id: open.core_id,

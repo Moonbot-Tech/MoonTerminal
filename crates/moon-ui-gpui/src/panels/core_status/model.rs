@@ -23,9 +23,16 @@ pub(super) struct CoreStatusRow {
     pub(super) sys: CoreSysStatus,
     /// Endpoint decoded by the feed without exposing the exported key.
     pub(super) endpoint: Option<CoreEndpoint>,
-    /// Whether this specific core has a sustained-high client↔core ping (the per-core ping warning),
-    /// so its own row can show the cause the server-level badge only hints at.
+    /// Whether this specific core has a sustained above-baseline client↔core ping (the per-core ping
+    /// warning), so its own row can show the cause the server-level badge only hints at.
     pub(super) ping_warn: bool,
+    /// Whether this core has a sustained above-baseline core→exchange ping (the exch-ping warning).
+    pub(super) exch_warn: bool,
+    /// This core's rolling client↔core-ping baseline (ms), for colouring its ping relative to itself.
+    /// `None` until the engine has enough samples.
+    pub(super) ping_base: Option<u32>,
+    /// This core's rolling core→exchange-ping baseline (ms), for the same relative colouring.
+    pub(super) exch_base: Option<u16>,
 }
 
 /// Stable grouping identity for a known host or one isolated unknown core.
@@ -92,9 +99,11 @@ pub(super) struct ServerStatusGroup {
     /// Connectivity warning: a core dropped (Disconnected/Failed) while the server still has a ready
     /// core — "one fell off while the rest works". Filled by the panel from the backend engine.
     pub(super) conn_warn: bool,
-    /// Ping warning: any core on this server has a sustained-high client↔core round-trip. Aggregated
-    /// from the backend engine (ping is per core; this lights the server's attention state).
+    /// Ping warning: any core on this server has a sustained above-baseline client↔core round-trip.
+    /// Aggregated from the backend engine (ping is per core; this lights the server's attention state).
     pub(super) ping_warn: bool,
+    /// Exch-ping warning: any core on this server has a sustained above-baseline core→exchange ping.
+    pub(super) exch_warn: bool,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
@@ -139,6 +148,7 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 mem_warn: false,
                 conn_warn: false,
                 ping_warn: false,
+                exch_warn: false,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,

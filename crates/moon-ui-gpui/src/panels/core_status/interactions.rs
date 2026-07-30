@@ -36,10 +36,30 @@ impl CoreStatusView {
     /// Returns:
     ///     Nothing; only the selection and a repaint change.
     pub(super) fn select_chart_server(&mut self, key: ServerKey, cx: &mut Context<Self>) {
-        if self.chart_server != Some(key) {
+        // A server-row click charts the machine aggregate, so any per-core selection is cleared.
+        if self.chart_server != Some(key) || self.chart_core.is_some() {
             self.chart_server = Some(key);
+            self.chart_core = None;
             cx.notify();
         }
+    }
+
+    /// Chart one specific core (from a core-row click in the expanded server list) instead of the
+    /// server aggregate. Clicking the already-charted core clears it, reverting to the server.
+    ///
+    /// Args:
+    ///     id: Clicked core identity.
+    ///     cx: View context used to repaint.
+    ///
+    /// Returns:
+    ///     Nothing; only the selection and a repaint change.
+    pub(super) fn select_chart_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
+        self.chart_core = if self.chart_core == Some(id) {
+            None
+        } else {
+            Some(id)
+        };
+        cx.notify();
     }
 
     /// Toggle one server's expansion from a chevron click (the headless tree does not do it).
