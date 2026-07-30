@@ -156,6 +156,49 @@ fn the_joint_threshold_search_leaves_its_window_usable() {
     );
 }
 
+/// The restart box must show the same bounded count that Search will execute.
+///
+/// The binary crate offers no public GPUI surface for driving this input. The pure parser test
+/// proves the canonical value, while this source contract proves Blur/Enter writes that value
+/// back through the real input state. Removing `canonical_iters` or returning to `subscribe`
+/// leaves an over-limit number visible even though persistence and Search silently clamp it.
+#[test]
+fn the_restart_box_canonicalizes_its_executed_count() {
+    let shell = read_src("analytics/tuner/shell.rs");
+    let body = braced_body(&shell, "fn shell_cfg_input(");
+    assert!(
+        body.contains("subscribe_in("),
+        "`shell_cfg_input` needs the window-aware subscription to rewrite finished input"
+    );
+    let normalization = body
+        .split_once("let value = if matches!(")
+        .expect("the input callback must choose whether to canonicalize")
+        .1
+        .split_once("match (kind, which)")
+        .expect("normalization must happen before the setting is committed")
+        .0;
+    for needle in [
+        "TunerKind::Filter",
+        "CfgInput::Restarts",
+        "MoonInputEvent::Blur",
+        "MoonInputEvent::PressEnter",
+        "canonical_iters(&raw)",
+    ] {
+        assert!(
+            normalization.contains(needle),
+            "restart Blur/Enter normalization must contain {needle:?}"
+        );
+    }
+    let writeback = normalization
+        .split_once("if value != raw {")
+        .expect("a changed canonical value must be written back")
+        .1;
+    assert!(
+        writeback.contains("input.set_value(value.clone(), window, cx)"),
+        "the canonical restart count must replace the visible raw input"
+    );
+}
+
 /// Manual v1 edits must retire a suggestion started from an older draft. Removing
 /// either call lets a late Filter/Time sweep silently overwrite the user's input.
 #[test]
@@ -479,7 +522,8 @@ fn the_compose_switch_persists_every_change() {
 /// The checkbox would lose MoonUI's own clickable label, the work budget would return to one
 /// wrapping sentence, and the three groups would again be visually indistinguishable. Returning
 /// the width to 210 or removing the height-bound scroll would make the redesigned form unreadable
-/// or unreachable in a narrow group window; omitting `beam_width` would hide the real work limit.
+/// or unreachable in a narrow group window; omitting either adaptive beam bound or the seed count
+/// would hide the real work policy.
 #[test]
 fn the_filter_search_popup_keeps_its_grouped_composition_block() {
     let shell = read_src("analytics/tuner/shell.rs");
@@ -496,9 +540,16 @@ fn the_filter_search_popup_keeps_its_grouped_composition_block() {
         "all settings must remain reachable when the popup is taller than the viewport"
     );
     assert!(
-        budget_labels.contains("budget.beam_width")
-            && budget_labels.contains("analytics.tuner.compose_budget_beam"),
-        "the composition card must display the production beam width"
+        content.contains("analytics.tuner.compose_help") && content.contains(".tooltip("),
+        "the detailed multi-seed and adaptive-beam explanation must remain attached as a tooltip"
+    );
+    assert!(
+        budget_labels.contains("budget.beam_width_min")
+            && budget_labels.contains("budget.beam_width_max")
+            && budget_labels.contains("budget.seed_groups")
+            && budget_labels.contains("analytics.tuner.compose_budget_beam")
+            && budget_labels.contains("analytics.tuner.compose_budget_seeds"),
+        "the composition card must display the production adaptive beam and seed budget"
     );
 
     let sections = [
