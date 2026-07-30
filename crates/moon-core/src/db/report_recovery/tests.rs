@@ -328,6 +328,8 @@ fn resumed_recovery_starts_its_cooldown_when_finalization_completes() {
 /// the unexpected child proves cleanup remains non-recursive and cannot erase foreign contents.
 #[test]
 fn preflight_cleans_recognized_staging_and_preserves_unexpected_contents() {
+    let _state_guard = integrity::test_state_guard();
+    integrity::reset_test_state();
     let root = test_root("staging-cleanup");
     let files = test_files(&root);
     let recovery_root = root.join("damaged-reports");
@@ -356,6 +358,7 @@ fn preflight_cleans_recognized_staging_and_preserves_unexpected_contents() {
     );
 
     std::fs::remove_dir_all(root).unwrap();
+    integrity::reset_test_state();
 }
 
 /// `db/report_recovery.rs:pending_snapshots` must resume an invalid partial final marker.
