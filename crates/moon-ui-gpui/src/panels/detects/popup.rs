@@ -1,6 +1,6 @@
 //! Detection-feed display configurator: the panel toolbar's ⚙ button triggers a [`MoonPopover`].
-//! Its moonui overlay layer is not clipped by the panel. Outside-click dismissal is disabled to
-//! protect nested dropdown overlays; the close button, Escape, or the gear dismisses it. The size
+//! Its moonui overlay layer is not clipped by the panel. Outside-click dismissal is off to protect
+//! the nested field menus; the close button or the gear dismisses it. The size
 //! tab selects the ACTIVE feed size, so switching tabs updates the feed immediately as a live
 //! preview. Width, height, rail, and gradient sliders, the chart type, and a slot grid mirror the
 //! field positions on each card (mini 2×2, medium 3×2, large 3×3) inside a rail-backed card frame.
@@ -22,10 +22,15 @@ use moon_core::config::{
 
 use super::{DetectsPanel, cards};
 use crate::design;
-use crate::panels::{RadioMark, radio_items};
+use crate::panels::{
+    POPUP_GROUP_INSET, RadioMark, popup_close_button, popup_group, popup_title, radio_items,
+};
 
 /// Popup width in logical pixels: three large-slot columns (76-pixel dropdown plus three 20-pixel
 /// toggles), with room for gaps, borders, and padding.
+///
+/// This is the CONTENT width handed to `MoonPopover::content_width_ui`; the popover adds its own
+/// padding and border around it.
 const POPUP_W: f32 = 560.0;
 
 /// Size tabs as `(size code, localization key)` pairs.
@@ -118,13 +123,20 @@ pub(super) fn toolbar(
         .variant(MoonButtonVariant::Ghost)
         .tooltip(t!("detects.cfg.title").to_string())
         .render();
-    let popover = MoonPopover::new("detects-view-popover")
+    // Built ONLY while open: `MoonPopover` takes its content eagerly, so a shut popover would
+    // otherwise rebuild three group boxes, three sliders and the whole slot grid with its per-slot
+    // dropdowns on every render of the panel, and throw the tree away.
+    let body = this.popup_open.then(|| content(this, cfg, p, cx));
+    let mut popover = MoonPopover::new("detects-view-popover")
         .placement(MoonPopoverPlacement::BottomStart)
         .content_width_ui(POPUP_W)
         .close_on_content_click(false)
-        // Dropdown menus occupy separate deferred layers and may extend beyond the popover. Without
-        // this override, clicking those extensions counts as an outside click and closes the popover.
-        // The close button, Escape, and the gear remain the explicit dismissal paths.
+        // A `MoonDropdown` menu inside this popover paints in its OWN deferred layer, outside
+        // this popover's box, and `on_mouse_down_out` is bounds-based and runs in the CAPTURE
+        // phase — so the click that picks an item reads as "outside" and would shut the popover
+        // before the pick landed. Until MoonUI suppresses that (see the Popover entry in
+        // docs-internal/FORK_BUGS.md), outside-click dismissal has to be off here; the ✕ and the
+        // gear are the dismissal paths.
         .overlay_closable(false)
         .open(this.popup_open)
         .on_open_change(move |open, window, app| {
@@ -137,8 +149,10 @@ pub(super) fn toolbar(
                 cx.notify();
             });
         })
-        .trigger(gear)
-        .content(content(this, cfg, p, cx));
+        .trigger(gear);
+    if let Some(body) = body {
+        popover = popover.content(body);
+    }
     h_flex()
         .w_full()
         .flex_none()
@@ -147,25 +161,6 @@ pub(super) fn toolbar(
         .px_2()
         .bg(rgb(p.tabbar))
         .child(popover)
-}
-
-/// Wraps popup content in a thin bordered group with a caption, matching `candle_popup::framed`.
-fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 4.0))
-        .px(design::ui_px(cx, 6.0))
-        .py(design::ui_px(cx, 4.0))
-        .border_1()
-        .border_color(rgb(p.border))
-        .rounded(design::r_button(cx))
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_muted))
-                .child(title),
-        )
-        .child(body)
 }
 
 /// Builds a slider row with a left caption and a right value label.
@@ -344,13 +339,7 @@ fn content(
     let head = h_flex()
         .w_full()
         .items_center()
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_muted))
-                .child(t!("detects.cfg.title").to_string()),
-        )
-        .child(div().flex_1())
+        .child(popup_title(t!("detects.cfg.title"), p, cx))
         .child(
             MoonButton::new("det-view-copy")
                 .label(t!("settings.copy").to_string())
@@ -367,17 +356,13 @@ fn content(
                 .on_click(cx.listener(|this, _, window, cx| this.paste_view(window, cx)))
                 .render(),
         )
-        .child(
-            MoonButton::new("det-view-close")
-                .label("✕")
-                .size(MoonButtonSize::Micro)
-                .variant(MoonButtonVariant::Ghost)
-                .on_click(cx.listener(|this, _, _w, cx| {
-                    this.popup_open = false;
-                    cx.notify();
-                }))
-                .render(),
-        );
+        .child(popup_close_button(
+            "det-view-close",
+            cx.listener(|this, _, _w, cx| {
+                this.popup_open = false;
+                cx.notify();
+            }),
+        ));
 
     // Size tabs select the active feed size, making the feed itself the live preview.
     let entity_tab = entity.clone();
@@ -535,15 +520,27 @@ fn content(
         grid = grid.child(row);
         ix += cols;
     }
+    // `panel_high` lifts the mock card off the popup body. It used to be `shell_high` against a
+    // `panel_high` content fill; that fill is gone now that `MoonPopover` owns the surface, and
+    // `MoonPopover` paints `shell_high` itself — keeping the old token would have flattened the
+    // card into its own background and left it as a bare 1px outline.
     let grid_card = div()
         .relative()
         .w_full()
         .rounded(design::ui_px(cx, 6.0))
         .border_1()
         .border_color(rgb(p.border))
-        .bg(rgb(p.shell_high))
+        .bg(rgb(p.panel_high))
         .overflow_hidden()
-        .children(cards::rail_layers(p.blue, 3.0, 20.0, POPUP_W - 28.0, cx))
+        // The rail overlay is drawn at an explicit width, so it has to be told how much of the
+        // content box the group frame around it consumes.
+        .children(cards::rail_layers(
+            p.blue,
+            3.0,
+            20.0,
+            POPUP_W - POPUP_GROUP_INSET,
+            cx,
+        ))
         .child(
             div()
                 .w_full()
@@ -553,46 +550,47 @@ fn content(
                 .child(grid),
         );
 
+    // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     v_flex()
         .id("detects-view-popup")
         .w_full()
-        .p(design::ui_px(cx, 8.0))
         .gap(design::ui_px(cx, 8.0))
-        .bg(rgb(p.panel_high))
-        .border_1()
-        .border_color(rgb(p.border))
-        .rounded(design::r_button(cx))
         .child(head)
         .child(tabs_row)
-        .child(framed(
-            t!("detects.cfg.frame_size").to_string(),
-            p,
-            cx,
-            v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(w_row)
-                .child(h_row)
-                .child(chart_row)
-                .into_any_element(),
-        ))
-        .child(framed(
-            t!("detects.cfg.rail_frame").to_string(),
-            p,
-            cx,
-            v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 6.0))
-                .child(rail_caption)
-                .child(rail_row)
-                .child(grad_row)
-                .into_any_element(),
-        ))
-        .child(framed(
-            t!("detects.cfg.frame_fields").to_string(),
-            p,
-            cx,
-            grid_card.into_any_element(),
-        ))
+        .child(
+            popup_group(
+                "detects-frame-size",
+                t!("detects.cfg.frame_size").to_string(),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(w_row)
+                    .child(h_row)
+                    .child(chart_row),
+            ),
+        )
+        .child(
+            popup_group(
+                "detects-frame-rail",
+                t!("detects.cfg.rail_frame").to_string(),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(rail_caption)
+                    .child(rail_row)
+                    .child(grad_row),
+            ),
+        )
+        .child(
+            popup_group(
+                "detects-frame-fields",
+                t!("detects.cfg.frame_fields").to_string(),
+            )
+            .child(grid_card),
+        )
         .into_any_element()
 }

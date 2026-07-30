@@ -127,14 +127,11 @@ pub struct ChartTabs {
     focus: FocusHandle,
     /// Whether the pencil-style popup is open for tool, color, width, opacity, and line-style selection.
     fig_style_popup_open: bool,
-    /// In-scene layout-settings popup for the active tab.
+    /// Anchored layout-settings popup for the active tab.
     /// Chart text renders below the regular GPUI scene, so this popup needs no separate OS window.
     layout_popup_open: bool,
-    /// Whether the cursor has entered the popup; leaving after first entry closes it and commits input.
-    layout_popup_hovered: bool,
-    /// In-scene Candles and Trades popup for global candle-display settings.
+    /// Anchored Candles and Trades popup for global candle-display settings.
     candle_popup_open: bool,
-    candle_popup_hovered: bool,
     /// Fit-mode height field.
     layout_fit_input: Entity<MoonInputState>,
     /// Scroll-mode height field.
@@ -469,9 +466,7 @@ impl ChartTabs {
             focus: cx.focus_handle(),
             fig_style_popup_open: false,
             layout_popup_open: false,
-            layout_popup_hovered: false,
             candle_popup_open: false,
-            candle_popup_hovered: false,
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,

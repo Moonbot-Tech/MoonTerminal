@@ -10,8 +10,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::super::candle_popup::{self, CandlePopupHost};
-use super::super::common::{self, LayoutPopupHost};
+use super::super::candle_popup;
+use super::super::common;
 use super::super::{chart_pane_label, coin_search};
 use super::DetachedChartHost;
 use crate::design;
@@ -66,19 +66,7 @@ impl Render for DetachedChartHost {
             .controls(MoonWindowFrameControls::Close)
             .show_controls(design::show_custom_window_controls());
         let popup_open = self.layout_popup_open;
-        let layout_popup = common::layout_popup_overlay(
-            self,
-            "detached-chart-layout",
-            px(38.0),
-            t!("chart.layout.apply_all_charts").to_string(),
-            cx,
-        );
-        let layout_dismiss = common::layout_popup_dismiss(self, "detached-chart-layout", cx);
-        // Per-window-tab "Candles and Trades" popup, opened by ❚ beside ⚙ and anchored below the header.
         let candle_popup_open = self.candle_popup_open;
-        let candle_popup =
-            candle_popup::candle_popup_overlay(self, "detached-chart-candles", px(38.0), cx);
-        let candle_dismiss = candle_popup::candle_popup_dismiss(self, "detached-chart-candles", cx);
         // Header market-search input and matches. Render the list at the `v_flex` level after the
         // body; otherwise the later-painted window body covers the header dropdown.
         let coin_search_el = div().w(design::font_w_px(cx, 80.0)).child(
@@ -149,8 +137,11 @@ impl Render for DetachedChartHost {
                         panel.clone(),
                         p,
                     ))
-                    .child({
-                        let entity = cx.entity();
+                    // Both buttons ARE their popovers' triggers, so each popup opens under its
+                    // own button on MoonUI's Root layer.
+                    .child(candle_popup::candle_popup_host(
+                        self,
+                        "detached-chart-candles",
                         MoonButton::new("detached-candle-settings")
                             .label("❚")
                             .tooltip(t!("chart.candles.tip").to_string())
@@ -161,32 +152,26 @@ impl Render for DetachedChartHost {
                                 MoonButtonVariant::Ghost
                             })
                             .selected(candle_popup_open)
-                            .on_click(move |_, _window, app| {
-                                entity.update(app, |this, cx| this.toggle_candle_popup(cx));
+                            .render(),
+                        cx,
+                    ))
+                    .child(common::layout_popup_host(
+                        self,
+                        "detached-chart-layout",
+                        MoonButton::new("detached-layout-settings")
+                            .label("⚙")
+                            .tooltip(t!("chart.layout.tip").to_string())
+                            .size(MoonButtonSize::Micro)
+                            .variant(if popup_open {
+                                MoonButtonVariant::Blue
+                            } else {
+                                MoonButtonVariant::Ghost
                             })
-                            .render()
-                    })
-                    .child({
-                        let entity = cx.entity();
-                        div().relative().child(
-                            MoonButton::new("detached-layout-settings")
-                                .label("⚙")
-                                .tooltip(t!("chart.layout.tip").to_string())
-                                .size(MoonButtonSize::Micro)
-                                .variant(if popup_open {
-                                    MoonButtonVariant::Blue
-                                } else {
-                                    MoonButtonVariant::Ghost
-                                })
-                                .selected(popup_open)
-                                .on_click(move |_, window, app| {
-                                    entity.update(app, |this, cx| {
-                                        this.toggle_layout_popup(window, cx)
-                                    });
-                                })
-                                .render(),
-                        )
-                    })
+                            .selected(popup_open)
+                            .render(),
+                        t!("chart.layout.apply_all_charts").to_string(),
+                        cx,
+                    ))
                     .child(
                         MoonButton::new("detached-close-all")
                             .label("🗑")
@@ -214,9 +199,5 @@ impl Render for DetachedChartHost {
             )
             .children(coin_dismiss)
             .children(coin_popup)
-            .children(layout_dismiss)
-            .children(layout_popup)
-            .children(candle_dismiss)
-            .children(candle_popup)
     }
 }

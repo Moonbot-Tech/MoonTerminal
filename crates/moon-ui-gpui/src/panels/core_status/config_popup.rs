@@ -17,7 +17,7 @@ use rust_i18n::t;
 use super::CoreStatusView;
 use crate::Backend;
 use crate::design;
-use crate::panels::common::{RadioMark, radio_items};
+use crate::panels::common::{RadioMark, popup_close_button, popup_title, radio_items};
 use moon_core::config::layout::{WarnAxesCfg, WarnParams};
 
 // Fixed column widths (UI px) so every control lines up in a table down the rows. The widest row
@@ -36,10 +36,13 @@ const CAP_H: f32 = 12.0;
 const CTRL_H: f32 = 28.0;
 /// The most threshold columns any row has (the latency axes: yellow, red, window, hold).
 const MAX_PARAMS: usize = 4;
-/// Popover width: the eight columns (name, on, chart, four params, sound) plus the seven gaps between
-/// them plus the content padding and a small margin, so nothing wraps to a second line.
+/// Popover CONTENT width: the eight columns (name, on, chart, four params, sound) plus the seven
+/// gaps between them plus a small margin, so nothing wraps to a second line.
+///
+/// `MoonPopover::content_width_ui` adds its own padding and border around this, and the content no
+/// longer pads itself, so no term here accounts for popup chrome.
 const WARN_CFG_W: f32 =
-    NAME_W + ON_W + CHART_W + MAX_PARAMS as f32 * PARAM_W + SOUND_W + 7.0 * COL_GAP + 24.0;
+    NAME_W + ON_W + CHART_W + MAX_PARAMS as f32 * PARAM_W + SOUND_W + 7.0 * COL_GAP + 16.0;
 
 /// Unit a threshold value is shown in.
 #[derive(Clone, Copy)]
@@ -76,8 +79,6 @@ impl CoreStatusView {
     /// stops the backend recording that axis AND hides its history; "chart" toggles only the badge/line
     /// drawing; the thresholds retune detection live.
     pub(super) fn warn_gear(&self, cx: &Context<Self>) -> impl IntoElement {
-        let axes = self.backend.read(cx).warn_axes();
-        let params = self.backend.read(cx).warn_params();
         let view = cx.entity();
         let gear = MoonButton::new("core-status-warn-gear")
             .label("⚙")
@@ -86,11 +87,75 @@ impl CoreStatusView {
             .tooltip(t!("core_status.warn_cfg.title").to_string())
             .render();
 
-        let content = v_flex()
+        let mut popover = MoonPopover::new("core-status-warn-popover")
+            // Open ABOVE the gear (right edge aligned to it, growing left), so the wide panel sits
+            // over the content area and the gear stays visible below it.
+            .placement(MoonPopoverPlacement::TopEnd)
+            .content_width_ui(WARN_CFG_W)
+            .close_on_content_click(false)
+            // A `MoonDropdown` menu inside this popover paints in its OWN deferred layer, outside
+            // this popover's box, and `on_mouse_down_out` is bounds-based and runs in the CAPTURE
+            // phase — so the click that picks an item reads as "outside" and would shut the popover
+            // before the pick landed. Until MoonUI suppresses that (see the Popover entry in
+            // docs-internal/FORK_BUGS.md), outside-click dismissal has to be off here; the ✕ and the
+            // gear are the dismissal paths.
+            .overlay_closable(false)
+            .open(self.warn_cfg_open)
+            .on_open_change(move |open, _window, app| {
+                view.update(app, |this, cx| {
+                    this.warn_cfg_open = open;
+                    cx.notify();
+                });
+            })
+            .trigger(gear);
+        // Built ONLY while open. `MoonPopover` takes its content eagerly, so a shut popover would
+        // otherwise rebuild five warning rows — their steppers, sound dropdowns and locale lookups —
+        // on every render of a panel that repaints on the ping cadence, and throw the tree away.
+        if self.warn_cfg_open {
+            popover = popover.content(self.warn_cfg_content(cx));
+        }
+        popover
+    }
+
+    /// Builds the alert popover's body: the head row plus one row per warning axis.
+    ///
+    /// Split from [`Self::warn_gear`] so it is only called while the popover is open.
+    ///
+    /// Args:
+    ///     cx: Core Status view context.
+    ///
+    /// Returns:
+    ///     The popover content tree.
+    fn warn_cfg_content(&self, cx: &Context<Self>) -> AnyElement {
+        let axes = self.backend.read(cx).warn_axes();
+        let params = self.backend.read(cx).warn_params();
+
+        // Title row with an explicit close control, matching the other settings popups. It is not
+        // decoration here: outside-click dismissal is off (see `warn_gear`), so the ✕ is what keeps
+        // this popover closable.
+        let head = h_flex()
+            .w_full()
+            .items_center()
+            .gap(design::ui_px(cx, 6.0))
+            .child(popup_title(
+                t!("core_status.warn_cfg.title"),
+                MoonPalette::active(cx),
+                cx,
+            ))
+            .child(popup_close_button(
+                "core-status-warn-close",
+                cx.listener(|this, _, _w, cx| {
+                    this.warn_cfg_open = false;
+                    cx.notify();
+                }),
+            ));
+
+        // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
+        v_flex()
+            .id("core-status-warn-content")
             .w_full()
             .gap(design::ui_px(cx, 2.0))
-            .px(design::ui_px(cx, 4.0))
-            .py(design::ui_px(cx, 6.0))
+            .child(head)
             .child(self.warn_row(
                 "cpu",
                 t!("core_status.warn_cfg.cpu").to_string(),
@@ -213,23 +278,7 @@ impl CoreStatusView {
                 ),
                 cx,
             ))
-            .into_any_element();
-
-        MoonPopover::new("core-status-warn-popover")
-            // Open ABOVE the gear (right edge aligned to it, growing left), so the wide panel sits
-            // over the content area and the gear stays visible below it.
-            .placement(MoonPopoverPlacement::TopEnd)
-            .content_width_ui(WARN_CFG_W)
-            .close_on_content_click(false)
-            .open(self.warn_cfg_open)
-            .on_open_change(move |open, _window, app| {
-                view.update(app, |this, cx| {
-                    this.warn_cfg_open = open;
-                    cx.notify();
-                });
-            })
-            .trigger(gear)
-            .content(content)
+            .into_any_element()
     }
 
     /// One warning row laid out as fixed table columns: name · Вкл · Чарт · up to four thresholds ·

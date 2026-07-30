@@ -472,12 +472,6 @@ impl super::candle_popup::CandlePopupHost for ChartTabs {
     fn set_candle_popup_open(&mut self, open: bool) {
         self.candle_popup_open = open;
     }
-    fn candle_popup_hovered(&self) -> bool {
-        self.candle_popup_hovered
-    }
-    fn set_candle_popup_hovered(&mut self, hovered: bool) {
-        self.candle_popup_hovered = hovered;
-    }
     fn candle_view_override(&self, cx: &App) -> Option<moon_core::market::CandleViewCfg> {
         match &self.active {
             Tab::Main => self.main.read(cx).candle_view(),
@@ -515,12 +509,6 @@ impl LayoutPopupHost for ChartTabs {
     }
     fn set_popup_open(&mut self, open: bool) {
         self.layout_popup_open = open;
-    }
-    fn popup_hovered(&self) -> bool {
-        self.layout_popup_hovered
-    }
-    fn set_popup_hovered(&mut self, hovered: bool) {
-        self.layout_popup_hovered = hovered;
     }
     fn fit_input(&self) -> &Entity<MoonInputState> {
         &self.layout_fit_input

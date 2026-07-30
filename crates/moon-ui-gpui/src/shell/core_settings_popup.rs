@@ -24,7 +24,7 @@ use rust_i18n::t;
 use moon_core::feed::{ClientSettingsEdit, LevManageEdit, RuntimeState};
 use moon_core::session::CoreId;
 
-use crate::panels::icon_checkbox;
+use crate::panels::{icon_checkbox, popup_group, popup_title};
 use crate::{Backend, design};
 
 /// Ordinal of the Alerts strategy kind, matching MoonProto `StrategyKindId::ALERTS = 22`.
@@ -192,25 +192,6 @@ fn lev_checkbox(
         })
 }
 
-/// Frames a group with a thin border and caption above it, matching `chart_tabs/layout_popup`.
-fn framed(title: String, p: MoonPalette, cx: &App, body: AnyElement) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 4.0))
-        .px(design::ui_px(cx, 6.0))
-        .py(design::ui_px(cx, 4.0))
-        .border_1()
-        .border_color(rgb(p.border))
-        .rounded(design::r_button(cx))
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text_muted))
-                .child(title),
-        )
-        .child(body)
-}
-
 /// Builds a checkbox-slider-input parameter with a title above the control row. Shell subscriptions
 /// commit slider and input changes, while `checkbox` controls enablement.
 #[allow(clippy::too_many_arguments)]
@@ -315,8 +296,7 @@ pub fn core_settings_content(
     // where the unlabeled dots were cramped beside the gear button.
     let rt = cd.and_then(|d| d.runtime_state);
 
-    // MoonPopover, hosted by the header gear button, supplies the background, border, and outer
-    // padding. This renderer provides only fixed-width content.
+    // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     let root = v_flex()
         .id("core-settings-popup")
         .w(design::font_w_px(cx, CONTENT_W))
@@ -326,17 +306,7 @@ pub fn core_settings_content(
                 .w_full()
                 .items_center()
                 .gap(design::ui_px(cx, 8.0))
-                .child(
-                    // flex_1, min_w_0, and truncate let the title shrink; otherwise the row exceeds
-                    // CONTENT_W and pushes status labels beyond the popover's right edge.
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgb(p.text_muted))
-                        .child(t!("core_settings.title").to_string()),
-                )
+                .child(popup_title(t!("core_settings.title"), p, cx))
                 .child(runtime_status(rt, p, cx)),
         );
 
@@ -502,10 +472,11 @@ pub fn core_settings_content(
             },
         )
     };
-    let defaults = framed(
+    let defaults = popup_group(
+        "core-frame-defaults",
         t!("core_settings.frame_defaults").to_string(),
-        p,
-        cx,
+    )
+    .child(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 8.0))
@@ -554,8 +525,7 @@ pub fn core_settings_content(
                 backend,
                 group,
                 ClientSettingsEdit::SellIceberg,
-            ))
-            .into_any_element(),
+            )),
     );
 
     // Risk Limits group: token blacklist. It combines the `use_coins_black_list` flag and
@@ -637,10 +607,11 @@ pub fn core_settings_content(
             .small()
             .into_any_element()
     };
-    let risks = framed(
+    let risks = popup_group(
+        "core-frame-risks",
         t!("core_settings.frame_risks").to_string(),
-        p,
-        cx,
+    )
+    .child(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 6.0))
@@ -654,8 +625,7 @@ pub fn core_settings_content(
                     .child(bl_expand_btn),
             )
             .child(div().w_full().child(bl_field))
-            .child(exclude_check)
-            .into_any_element(),
+            .child(exclude_check),
     );
 
     // Leverage and Margin group backed by LevManage.
@@ -671,10 +641,11 @@ pub fn core_settings_content(
             )
         })
         .unwrap_or((false, false, false, false, false));
-    let leverage = framed(
+    let leverage = popup_group(
+        "core-frame-leverage",
         t!("core_settings.frame_leverage").to_string(),
-        p,
-        cx,
+    )
+    .child(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 6.0))
@@ -717,8 +688,7 @@ pub fn core_settings_content(
                 backend,
                 group,
                 LevManageEdit::TlgReport,
-            ))
-            .into_any_element(),
+            )),
     );
 
     // Actions group. Reset Session and Reset All are omitted because TResetProfitCommand resets
@@ -736,10 +706,11 @@ pub fn core_settings_content(
         .full_width()
         .on_click(move |_, _w, app| on_cancel_all(app))
         .render();
-    let actions = framed(
+    let actions = popup_group(
+        "core-frame-actions",
         t!("core_settings.frame_actions").to_string(),
-        p,
-        cx,
+    )
+    .child(
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 6.0))
@@ -750,8 +721,7 @@ pub fn core_settings_content(
                 p,
                 cx,
             ))
-            .child(cancel_all)
-            .into_any_element(),
+            .child(cancel_all),
     );
 
     root.child(header_row)

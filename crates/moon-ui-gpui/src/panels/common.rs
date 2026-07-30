@@ -1,14 +1,14 @@
 //! Shared panel UI helpers: adaptive number formatting, mutually exclusive dropdown items, a data
-//! table host, repaint gating, and the detached-window toolbar action. Panel-specific behavior stays
-//! in its owning module.
+//! table host, the settings-popup group frame, repaint gating, and the detached-window toolbar
+//! action. Panel-specific behavior stays in its owning module.
 
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButton, MoonButtonSize, MoonCheckbox, MoonCheckboxSize, MoonMenuItem,
-    MoonPalette, MoonTooltipView,
+    DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
+    MoonCheckboxSize, MoonGroupBox, MoonMenuItem, MoonPalette, MoonTooltipView,
 };
 
 use crate::Backend;
@@ -64,6 +64,101 @@ where
             item.on_click(move |_, _, app| on_select(app, value))
         })
         .collect()
+}
+
+/// Design-unit padding [`popup_group`] applies inside its frame, on every side.
+pub(crate) const POPUP_GROUP_PAD: f32 = 6.0;
+
+/// Design-unit width a [`popup_group`] frame consumes across BOTH sides: its padding plus the
+/// 1-wide border `MoonGroupBox` draws.
+///
+/// Width constants that must fit content inside a group subtract this instead of restating the
+/// frame's metrics — three of them used to, and a change to the padding above silently wrong-sized
+/// all three.
+pub(crate) const POPUP_GROUP_INSET: f32 = 2.0 * (POPUP_GROUP_PAD + 1.0);
+
+/// [`POPUP_GROUP_INSET`] in rendered pixels at the current UI scale.
+///
+/// Args:
+///     cx: Application context supplying the active UI scale.
+///
+/// Returns:
+///     Scaled width the group frame takes from the row inside it.
+pub(crate) fn popup_group_inset_px(cx: &App) -> f32 {
+    f32::from(design::ui_px(cx, POPUP_GROUP_INSET))
+}
+
+/// Builds the shared captioned group box used inside **settings popups**.
+///
+/// Scope is settings popups only. `panels/order_edit` builds its own `MoonGroupBox` with a heavier
+/// padding and an opaque fill, which is right for a dialog body sitting on a panel and wrong here.
+///
+/// `NoFill` keeps the frame transparent: every caller already sits on a popup surface that paints
+/// the background, and a second opaque fill on top of it only muddies that surface.
+///
+/// Args:
+///     id: Stable element identity, unique within the hosting popup.
+///     title: Localized caption rendered above the group's contents.
+///
+/// Returns:
+///     A group box ready to receive children.
+pub(crate) fn popup_group(
+    id: impl Into<SharedString>,
+    title: impl Into<SharedString>,
+) -> MoonGroupBox {
+    MoonGroupBox::new(id)
+        .title(title)
+        .background_policy(MoonBackgroundPolicy::NoFill)
+        .padding(POPUP_GROUP_PAD)
+        .gap(4.0)
+}
+
+/// Builds the title cell of a settings popup's head row.
+///
+/// A popup title has to outrank the group captions beneath it, and `MoonGroupBox` draws those at a
+/// larger, bolder step than `t_caption` — so the title sits on `t_body`. It also claims the row's
+/// free width and truncates, which keeps a long localized title from pushing the head row's
+/// trailing controls (apply-to-all, copy/paste, close) off the popup's edge.
+///
+/// Args:
+///     title: Localized popup title.
+///     p: Active palette.
+///     cx: Application context supplying the text scale.
+///
+/// Returns:
+///     The title cell, ready to be the first child of the head row.
+pub(crate) fn popup_title(title: impl Into<SharedString>, p: MoonPalette, cx: &App) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .text_size(design::t_body(cx))
+        .text_color(rgb(p.text))
+        .child(title.into())
+}
+
+/// Builds the ✕ that dismisses a settings popup.
+///
+/// Every settings popup needs one, and for the popups that must disable outside-click dismissal to
+/// protect a nested dropdown menu it is the ONLY reliable way out — Escape is not, see the Popover
+/// entry in `docs-internal/FORK_BUGS.md`.
+///
+/// Args:
+///     id: Stable element identity, unique within the hosting popup.
+///     on_click: Handler that closes the popup, normally a `cx.listener`.
+///
+/// Returns:
+///     The rendered close button.
+pub(crate) fn popup_close_button(
+    id: impl Into<ElementId>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    MoonButton::new(id)
+        .label("✕")
+        .size(MoonButtonSize::Micro)
+        .variant(MoonButtonVariant::Ghost)
+        .on_click(on_click)
+        .render()
 }
 
 /// Builds an unlabeled compact checkbox with a tooltip. A `div.id.tooltip` wrapper

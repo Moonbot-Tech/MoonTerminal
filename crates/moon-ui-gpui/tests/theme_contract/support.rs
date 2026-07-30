@@ -84,3 +84,27 @@ pub fn braced_body<'a>(source: &'a str, signature: &str) -> &'a str {
     }
     panic!("expected `{signature}` to have a matching closing brace");
 }
+
+/// Return the source between `anchor` and the first `stop` after it, excluding both.
+///
+/// The idiom several of these invariants need: isolate ONE builder chain so a check about the
+/// element being built cannot be satisfied — or broken — by a sibling further down the file.
+///
+/// Args:
+///     source: Rust source to slice.
+///     anchor: Unique marker the chain starts at.
+///     stop: Marker that ends the chain.
+///     what: Subject named in the panic messages.
+///
+/// Returns:
+///     The slice between the two markers.
+pub fn chain_between<'a>(source: &'a str, anchor: &str, stop: &str, what: &str) -> &'a str {
+    let after = source
+        .split_once(anchor)
+        .unwrap_or_else(|| panic!("{what}: expected to find `{anchor}`"))
+        .1;
+    after
+        .split_once(stop)
+        .unwrap_or_else(|| panic!("{what}: expected `{stop}` after `{anchor}`"))
+        .0
+}

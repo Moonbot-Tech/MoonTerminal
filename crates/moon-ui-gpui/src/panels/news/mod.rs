@@ -598,8 +598,12 @@ impl NewsView {
         let active = settings.any_filter();
         let label = self.tags_label(&settings);
         let trigger = self.tags_trigger(label, active, cx);
-        let content = self.tags_content(cx);
-        MoonPopover::new("news-tags-popover")
+        // Built ONLY while open: `MoonPopover` takes its content eagerly, so a shut popover would
+        // otherwise rebuild a row-with-colour-picker for every tag in the catalog on every render of
+        // the panel, and throw the tree away. (The settings clone above stays — the trigger label
+        // needs it whether the popover is open or not.)
+        let content = self.tags_open.then(|| self.tags_content(cx));
+        let mut popover = MoonPopover::new("news-tags-popover")
             .placement(MoonPopoverPlacement::BottomStart)
             .content_width_ui(260.0)
             .close_on_content_click(false)
@@ -614,8 +618,11 @@ impl NewsView {
                     cx.notify();
                 });
             })
-            .trigger(trigger)
-            .content(content)
+            .trigger(trigger);
+        if let Some(content) = content {
+            popover = popover.content(content);
+        }
+        popover
     }
 
     /// Return the localized Tags trigger label and its visible-count summary.
@@ -675,17 +682,13 @@ impl NewsView {
                     .render(),
             )
             .child(div().flex_1())
-            .child(
-                MoonButton::new("news-tags-close")
-                    .label("✕")
-                    .size(MoonButtonSize::Micro)
-                    .variant(MoonButtonVariant::Ghost)
-                    .on_click(cx.listener(|this, _, _w, cx| {
-                        this.tags_open = false;
-                        cx.notify();
-                    }))
-                    .render(),
-            );
+            .child(crate::panels::popup_close_button(
+                "news-tags-close",
+                cx.listener(|this, _, _w, cx| {
+                    this.tags_open = false;
+                    cx.notify();
+                }),
+            ));
         // "No tags" visibility toggle — untagged news carry nothing to colour, so it has no swatches.
         let untagged = self.untagged_row(!settings.hide_untagged(), p, cx);
         let tag_rows: Vec<AnyElement> = rows
@@ -696,15 +699,11 @@ impl NewsView {
                 self.tag_row(key, label, hidden, current, p, cx)
             })
             .collect();
+        // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
         v_flex()
             .id("news-tags-content")
             .w_full()
-            .p(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, 4.0))
-            .bg(rgb(p.panel_high))
-            .border_1()
-            .border_color(rgb(p.border))
-            .rounded(design::r_button(cx))
             .font_family(design::mono())
             .child(head)
             .child(untagged)

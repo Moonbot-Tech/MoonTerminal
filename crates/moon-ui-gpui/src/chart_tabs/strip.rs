@@ -11,8 +11,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::candle_popup::{self, CandlePopupHost};
-use super::common::{self, LayoutPopupHost};
+use super::candle_popup;
+use super::common;
 use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
 
@@ -172,8 +172,7 @@ impl Render for ChartTabs {
                 .render()
         });
 
-        // The active tab's layout control and adjacent scale dropdown are both per-tab. Their popup
-        // is a regular in-scene overlay because chart text renders under the scene and cannot cover it.
+        // The active tab's layout control and adjacent scale dropdown are both per-tab.
         let popup_open = self.layout_popup_open;
         let p_strip = MoonPalette::active(cx);
         let scale_dropdown = crate::controls::scale_dropdown_for_tabs(
@@ -182,8 +181,16 @@ impl Render for ChartTabs {
             cx.entity(),
             p_strip,
         );
-        let settings_btn = {
-            let entity = cx.entity();
+        let apply_all_label = if matches!(self.active, Tab::Main) {
+            t!("chart.layout.apply_all_windows").to_string()
+        } else {
+            t!("chart.layout.apply_all_charts").to_string()
+        };
+        // The gear IS the popover trigger, so the popup opens under its own button and rides
+        // MoonUI's Root layer instead of an in-scene overlay the strip's clipping could cut.
+        let settings_btn = common::layout_popup_host(
+            self,
+            "chart-layout",
             MoonButton::new("chart-layout-settings")
                 .label("⚙")
                 .size(MoonButtonSize::Micro)
@@ -193,15 +200,15 @@ impl Render for ChartTabs {
                     MoonButtonVariant::Ghost
                 })
                 .selected(popup_open)
-                .on_click(move |_, window, app| {
-                    entity.update(app, |this, cx| this.toggle_layout_popup(window, cx));
-                })
-                .render()
-        };
+                .render(),
+            apply_all_label,
+            cx,
+        );
         // The candle/trade display control beside layout edits the global setting set.
         let candle_popup_open = self.candle_popup_open;
-        let candle_btn = {
-            let entity = cx.entity();
+        let candle_btn = candle_popup::candle_popup_host(
+            self,
+            "chart-candles",
             MoonButton::new("chart-candle-settings")
                 .label("❚")
                 .tooltip(t!("chart.candles.tip").to_string())
@@ -212,11 +219,9 @@ impl Render for ChartTabs {
                     MoonButtonVariant::Ghost
                 })
                 .selected(candle_popup_open)
-                .on_click(move |_, _window, app| {
-                    entity.update(app, |this, cx| this.toggle_candle_popup(cx));
-                })
-                .render()
-        };
+                .render(),
+            cx,
+        );
         // The per-window market search sits left of scale and queries the active tab's cores.
         // Absolutely position matches below its wrapper and place the cluster outside the strip's
         // clipping layer so `overflow_hidden` cannot cut off the dropdown.
@@ -266,8 +271,8 @@ impl Render for ChartTabs {
 
         let fig_tools = self.render_fig_tools(cx);
 
-        // Right cluster: drawing tools, market, scale, optional gather, and layout. Keep layout at
-        // the right edge because its popup uses the same six-pixel right anchor below.
+        // Right cluster: drawing tools, market, scale, optional gather, candles, and layout. Both
+        // settings buttons carry their own anchored popovers, so nothing here positions a popup.
         let right_cluster = div().absolute().right(px(6.0)).top(px(4.0)).child(
             h_flex()
                 .items_center()
@@ -279,30 +284,6 @@ impl Render for ChartTabs {
                 .child(candle_btn)
                 .child(settings_btn),
         );
-        // Render the active tab's layout popup and dismiss layer through the same overlay and
-        // `LayoutPopupHost` callbacks used by detached windows.
-        let apply_all_label = if matches!(self.active, Tab::Main) {
-            t!("chart.layout.apply_all_windows").to_string()
-        } else {
-            t!("chart.layout.apply_all_charts").to_string()
-        };
-        let layout_popup = common::layout_popup_overlay(
-            self,
-            "chart-layout",
-            px(strip_h + design::ui_value(cx, 4.0)),
-            apply_all_label,
-            cx,
-        );
-        let layout_dismiss = common::layout_popup_dismiss(self, "chart-layout", cx);
-        // The global Candles and Trades popup shares the layout popup's anchor.
-        let candle_popup = candle_popup::candle_popup_overlay(
-            self,
-            "chart-candles",
-            px(strip_h + design::ui_value(cx, 4.0)),
-            cx,
-        );
-        let candle_dismiss = candle_popup::candle_popup_dismiss(self, "chart-candles", cx);
-
         v_flex()
             .size_full()
             .relative()
@@ -327,9 +308,5 @@ impl Render for ChartTabs {
             // layer catches clicks elsewhere and closes the list.
             .children(coin_dismiss)
             .child(right_cluster)
-            .children(layout_dismiss)
-            .children(layout_popup)
-            .children(candle_dismiss)
-            .children(candle_popup)
     }
 }
