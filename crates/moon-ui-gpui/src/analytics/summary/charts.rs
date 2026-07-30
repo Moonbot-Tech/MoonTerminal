@@ -3,7 +3,7 @@
 //! cumulative chart share. The cumulative chart itself lives in `cumulative`.
 
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonPalette};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
@@ -97,7 +97,7 @@ pub(super) fn daily_bars(
         .min(0.0);
     let span = (vmax - vmin).max(1e-6);
     let up_frac = (vmax / span) as f32; // share of the height above the zero line
-    // Value labels stay readable only while the bars are few.
+                                        // Value labels stay readable only while the bars are few.
     let labels_on = days.len() <= 45;
     // Space reserved for the labels: always on top (above the tallest green
     // bar), on the bottom only when there is a negative value (the label goes

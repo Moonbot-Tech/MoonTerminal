@@ -7,11 +7,11 @@
 //! `VarStats`, so every tuning mode reuses it (Filter/Time/…).
 
 use gpui::*;
-use moon_ui::{MoonPalette, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonPalette};
 use rust_i18n::t;
 
-use super::super::super::AnalyticsView;
 use super::super::super::summary::{fmt_signed, sign_color};
+use super::super::super::AnalyticsView;
 use super::super::kpi::kpi_matrix_card;
 use super::super::shared::collapse_caret;
 use super::card;

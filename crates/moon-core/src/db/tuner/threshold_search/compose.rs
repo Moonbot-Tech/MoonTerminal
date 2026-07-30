@@ -13,9 +13,9 @@
 //!
 //! Two rules do the real work:
 //!
-//! * a field joins only if it helps in a strict MAJORITY of folds, not merely on average — one
-//!   fold's lucky streak can carry a mean, and that is how a wrapper selector talks itself into
-//!   noise;
+//! * a completed reduced set is accepted only if it helps in a strict MAJORITY of folds, not
+//!   merely on average — weak intermediate branches may survive long enough to expose a useful
+//!   interaction, but one fold's lucky streak cannot admit their final set;
 //! * when dropping a field costs nothing, it goes. Ties go to the SMALLER set, and that is the
 //!   whole complexity penalty. Writing it as a penalty term instead would need a coefficient
 //!   trading profit against field count — a number in someone's currency, varying by scope over
@@ -26,15 +26,42 @@
 //! whatever it is measured on — a few dozen looks at the same stretch and it starts fitting that
 //! too — so composition stays entirely inside the fitting region, and the held-back tail remains
 //! the one number nobody optimized against.
+//!
+//! A bounded beam keeps several alternative paths alive, including temporarily weak singletons
+//! that may form a strong pair. Up to three folds rank those paths; two later folds see only the
+//! one subset and decide which of three paths wins: that strict subset, all admitted fields, or
+//! no additional field filters.
 
+use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::ops::Range;
 
 use super::handle::SearchHandle;
 use super::search::Search;
+use super::ComposeDecision;
 use crate::db::metrics::improvement_margin;
 
 #[cfg(test)]
 mod tests;
+
+/// Parallel branches retained at each composition depth.
+///
+/// Eight keeps twice as many alternative interactions alive as the initial beam without turning
+/// 24 fields into an exponential search. Growing through all 24 fields produces at most 2,232
+/// scored masks before slot constraints and duplicate children reduce that number.
+const BEAM_WIDTH: usize = 8;
+
+/// Largest restart count spent fitting one candidate on one ranking fold.
+///
+/// Candidate selection is a coarse ordering pass. The final refit still receives the user's full
+/// restart count, while this cap gives the beam a hard work bound independent of a 50k setting.
+const RANKING_RESTARTS_MAX: usize = 256;
+
+/// User restarts represented by one ranking restart before the hard cap applies.
+const RANKING_RESTART_DIVISOR: usize = 32;
+
+/// Final folds reserved from beam ranking and used only to gate its one winner.
+const GATE_FOLDS: usize = 2;
 
 /// One walk-forward fold: a search fitted on a prefix, and the stretch it is measured on.
 pub(super) struct Fold {
@@ -48,20 +75,29 @@ pub(super) struct Fold {
 pub(super) struct ComposeParams {
     /// Restarts each candidate ranking run gets. Deliberately smaller than the final refit's:
     /// ranking needs to order candidates, not to squeeze the last basis point out of one.
-    pub(super) restarts: usize,
+    pub(super) ranking_restarts: usize,
+    /// Full user restart budget used for the two outer-gate comparisons.
+    ///
+    /// The ordinary all-field control benefits more from additional starts than a reduced mask,
+    /// so gating both on the ranking budget would make the ordinary option artificially weak.
+    pub(super) gate_restarts: usize,
     /// Base seed; every step derives its own stream from it.
     pub(super) seed: u64,
     /// Whether bounds are rounded outward — the user's own setting, applied here too so what is
     /// SELECTED is what will be APPLIED.
     pub(super) round: bool,
-    /// Fields the forward pass may accept.
+    /// Deepest set the beam may build.
     pub(super) max_fields: usize,
+    /// Parallel branches retained at each depth.
+    pub(super) beam_width: usize,
 }
 
 /// The composed set.
 pub(super) struct ComposeOutcome {
     /// Per field, whether it is in the chosen set.
     pub(super) chosen: Vec<bool>,
+    /// Which independently evaluated path produced `chosen`.
+    pub(super) decision: ComposeDecision,
     /// Per field, how many folds gave it a range under the FINAL set — how reproducible its
     /// contribution is across time, which is the only confidence figure here that was not
     /// selected for.
@@ -79,8 +115,10 @@ pub(super) struct ComposeOutcome {
 pub struct ComposeBudget {
     /// Folds the fitting region is cut into.
     pub folds: usize,
-    /// Fields the forward pass may accept.
+    /// Deepest set the beam may build.
     pub max_fields: usize,
+    /// Parallel branches retained at each depth.
+    pub beam_width: usize,
     /// Logical cores this was built for, so the UI can explain the numbers it is showing.
     pub cores: usize,
 }
@@ -88,12 +126,19 @@ pub struct ComposeBudget {
 impl ComposeBudget {
     /// Restarts one candidate ranking run gets, out of the count the user asked for.
     ///
-    /// A quarter of it: ranking has to ORDER candidates, not squeeze the last basis point out of
-    /// one, and it pays that cost once per candidate per fold. Never zero — a run of no restarts
-    /// finds nothing and would read as "this scope has no answer" rather than as a budget too
-    /// small to say. The FINAL refit is not scaled here at all.
+    /// One thirty-second of it, capped at [`RANKING_RESTARTS_MAX`]: beam search ranks hundreds of
+    /// masks, so the former quarter-budget would multiply a 50k request into millions of ranking
+    /// restarts. Never zero — a run of no restarts finds nothing and would read as "this scope has
+    /// no answer" rather than as a budget too small to say. The outer gate and final refit are not
+    /// scaled here.
+    ///
+    /// Args:
+    ///     user_restarts: Restart count used by the later full-budget gate and refit.
+    ///
+    /// Returns:
+    ///     Restart count allowed for one candidate on one fold.
     pub fn ranking_restarts(&self, user_restarts: usize) -> usize {
-        (user_restarts / 4).max(super::RESTARTS_MIN)
+        (user_restarts / RANKING_RESTART_DIVISOR).clamp(super::RESTARTS_MIN, RANKING_RESTARTS_MAX)
     }
 }
 
@@ -109,15 +154,23 @@ pub fn composition_budget() -> Option<ComposeBudget> {
 /// [`composition_budget`] with the core count supplied, so the policy itself is testable.
 ///
 /// One tier above the bar: a machine with twice the bar's cores composes no wider. The width is
-/// set by what makes the ANSWER trustworthy — three folds and up to six fields — not by what the
-/// hardware could stand, and a bigger machine spends its cores finishing sooner.
+/// set by what makes the ANSWER trustworthy — three inner folds and two untouched gates. The
+/// beam is bounded by [`BEAM_WIDTH`] rather than an arbitrary set-size ceiling, so every admitted
+/// field count remains reachable while several competing interactions survive each layer.
+///
+/// Args:
+///     cores: Logical processors available to the search.
+///
+/// Returns:
+///     Fixed composition limits, or `None` below the heavy-search bar.
 fn budget_for(cores: usize) -> Option<ComposeBudget> {
     if cores < super::search::HEAVY_SEARCH_MIN_CORES {
         return None;
     }
     Some(ComposeBudget {
-        folds: 3,
-        max_fields: 6,
+        folds: 5,
+        max_fields: super::super::FIELDS.len(),
+        beam_width: BEAM_WIDTH,
         cores,
     })
 }
@@ -180,10 +233,22 @@ fn drops(incumbent: &[f64], without: &[f64]) -> bool {
 ///
 /// Returns `None` when the run was stopped — a partial score vector is not comparable with a
 /// complete one, and picking a winner from mixed evidence is worse than not answering.
+///
+/// Args:
+///     folds: Walk-forward folds to score.
+///     mask: Fields the fold searches may use.
+///     p: Seed and rounding settings shared by this composition.
+///     requested_restarts: Restart budget for each non-empty mask on each fold.
+///     step: Deterministic restart-stream discriminator.
+///     handle: Cancellation and progress channel.
+///
+/// Returns:
+///     Profit on each fold's validation stretch, or `None` when cancelled.
 fn score_set(
     folds: &[Fold],
     mask: &[bool],
     p: &ComposeParams,
+    requested_restarts: usize,
     step: usize,
     handle: &SearchHandle,
 ) -> Option<Vec<f64>> {
@@ -192,7 +257,7 @@ fn score_set(
     // outcome. Ranking the incumbent at step one — the one score always taken over an empty mask
     // — would otherwise repeat a single answer up to thousands of times per fold.
     let restarts = if mask.iter().any(|m| *m) {
-        p.restarts
+        requested_restarts
     } else {
         1
     };
@@ -212,9 +277,17 @@ fn score_set(
 /// copies of one per-field flag vector would have to agree for this to match the descent's own
 /// slot rule, and nothing would check that they did.
 ///
-/// The descent enforces that limit internally too, so this changes no answer — it stops the
-/// forward pass from spending a step, and one of the user's `max_fields`, on a field that could
-/// never carry a range anyway.
+/// The descent enforces that limit internally too, so this changes no answer — it stops the beam
+/// from spending a branch, and one of the user's `max_fields`, on a field that could never carry a
+/// range anyway.
+///
+/// Args:
+///     mask: Fields already present in the branch.
+///     is_slot: Fields that consume a Delta2/Delta3 slot.
+///     locked_slots: Slots already occupied by fixed filters.
+///
+/// Returns:
+///     Whether no further slot field can be admitted.
 fn slots_are_full(mask: &[bool], is_slot: &[bool], locked_slots: usize) -> bool {
     let used = mask
         .iter()
@@ -224,95 +297,256 @@ fn slots_are_full(mask: &[bool], is_slot: &[bool], locked_slots: usize) -> bool 
     locked_slots + used >= 2
 }
 
-/// Compose the field set: grow it while growing helps, then shrink it while shrinking is free.
+/// One field-set mask and its scores on a common set of folds.
+struct ScoredMask {
+    /// Fields admitted by this branch.
+    mask: Vec<bool>,
+    /// Validation profit on each fold.
+    scores: Vec<f64>,
+}
+
+/// Deterministic mask order, preferring lower field indices.
 ///
-/// Returns `None` when the run was stopped before it had a complete answer.
-pub(super) fn compose(
-    folds: &[Fold],
-    p: &ComposeParams,
-    handle: &SearchHandle,
-) -> Option<ComposeOutcome> {
-    let first = folds.first()?;
-    let nf = first.search.free_mask().len();
-    let locked_slots = first.search.locked_slots();
-    let is_slot = first.search.slot_flags();
-    // A field is a candidate only where EVERY fold can search it. The folds share one `locked`,
-    // so they already agree; intersecting rather than trusting that keeps a future fold-building
-    // change from quietly handing the forward pass a field one fold would ignore.
-    let candidate: Vec<bool> = (0..nf)
-        .map(|fi| folds.iter().all(|f| f.search.free_mask()[fi]))
-        .collect();
+/// Args:
+///     a: Left mask.
+///     b: Right mask.
+///
+/// Returns:
+///     Lexicographic ordering of the masks' chosen field indices.
+fn mask_order(a: &[bool], b: &[bool]) -> Ordering {
+    a.iter()
+        .enumerate()
+        .filter_map(|(index, chosen)| chosen.then_some(index))
+        .cmp(
+            b.iter()
+                .enumerate()
+                .filter_map(|(index, chosen)| chosen.then_some(index)),
+        )
+}
 
-    let mut mask = vec![false; nf];
-    // Every score in this function is taken at the CURRENT step's seed, so nothing is carried
-    // between steps: a set's worth is only ever compared with another set measured on the same
-    // random starts.
-    let mut step = 0usize;
+/// Rank masks by validation mean, with a stable field-index tie break.
+///
+/// Args:
+///     a: Left scored mask.
+///     b: Right scored mask.
+///
+/// Returns:
+///     Ordering suitable for best-first sorting.
+fn ranked_order(a: &ScoredMask, b: &ScoredMask) -> Ordering {
+    mean(&b.scores)
+        .total_cmp(&mean(&a.scores))
+        .then_with(|| mask_order(&a.mask, &b.mask))
+}
 
-    // ── forward: take the best field while one is worth taking ──
-    while mask.iter().filter(|m| **m).count() < p.max_fields {
-        step += 1;
-        let slots_full = slots_are_full(&mask, is_slot, locked_slots);
-        let pool: Vec<usize> = (0..nf)
-            .filter(|fi| candidate[*fi] && !mask[*fi] && !(slots_full && is_slot[*fi]))
-            .collect();
-        if pool.is_empty() {
+/// Build a bounded beam of alternative field sets, including temporarily weak branches.
+///
+/// Every mask in one depth is scored with the same `step`, so the production scorer derives the
+/// same restart stream for comparable candidates. Masks are retained by rank even when they do
+/// not yet beat the empty set: two individually weak fields can still form a useful pair.
+///
+/// Args:
+///     candidate: Fields the beam may add.
+///     is_slot: Fields that consume one of the two Delta2/Delta3 slots.
+///     locked_slots: Slots already consumed by fixed filters.
+///     max_fields: Deepest set the beam may build.
+///     width: Branches retained after each depth.
+///     score: Deterministic scorer for a mask and layer progress.
+///
+/// Returns:
+///     Retained masks from every completed depth, or `None` when scoring was cancelled.
+fn beam_candidates<F>(
+    candidate: &[bool],
+    is_slot: &[bool],
+    locked_slots: usize,
+    max_fields: usize,
+    width: usize,
+    mut score: F,
+) -> Option<Vec<Vec<bool>>>
+where
+    F: FnMut(&[bool], usize, usize, usize) -> Option<Vec<f64>>,
+{
+    if width == 0 || max_fields == 0 {
+        return Some(Vec::new());
+    }
+    let mut frontier = vec![vec![false; candidate.len()]];
+    let mut retained = Vec::new();
+    for depth in 1..=max_fields {
+        let mut seen = HashSet::new();
+        let mut expanded = Vec::new();
+        for parent in &frontier {
+            let slots_full = slots_are_full(parent, is_slot, locked_slots);
+            for fi in 0..candidate.len() {
+                if !candidate[fi] || parent[fi] || (slots_full && is_slot[fi]) {
+                    continue;
+                }
+                let mut mask = parent.clone();
+                mask[fi] = true;
+                if seen.insert(mask.clone()) {
+                    expanded.push(mask);
+                }
+            }
+        }
+        if expanded.is_empty() {
             break;
         }
-        // The incumbent is re-scored on THIS step's stream. Comparing it at the seed of an
-        // earlier step would put the two sides of the decision on different random starts, and
-        // the difference between them would carry the seed's luck as well as the field's.
-        let incumbent = score_set(folds, &mask, p, step, handle)?;
-        let mut best: Option<(usize, Vec<f64>)> = None;
-        for (i, fi) in pool.iter().enumerate() {
-            handle.set_stage(step, i, pool.len());
-            mask[*fi] = true;
-            let scored = score_set(folds, &mask, p, step, handle);
-            mask[*fi] = false;
-            let scored = scored?;
-            // Admissibility FIRST, ranking second. Ranking by mean and testing the winner
-            // afterwards lets one fold's outlier decide the whole step: a field that earns a
-            // fortune in a single fold and loses in the rest has the highest mean, fails the
-            // majority rule, and — being the only candidate ever tested — ends the forward pass
-            // while a field that satisfies both rules sits untaken in the same pool. That is the
-            // exact coincidence the majority rule exists to reject, given veto power instead.
-            if !accepts(&incumbent, &scored) {
-                continue;
-            }
-            // Strict improvement only, so among equal candidates the LOWEST field index wins —
-            // the same tie-break the restart merge uses, and the reason a rerun of one seed
-            // returns one answer rather than whichever candidate the loop happened to reach.
-            if best
-                .as_ref()
-                .is_none_or(|(_, b)| mean(&scored) > mean(b) + noise_floor(b, &scored))
-            {
-                best = Some((*fi, scored));
-            }
+        let total = expanded.len();
+        let mut scored = Vec::with_capacity(total);
+        for (done, mask) in expanded.into_iter().enumerate() {
+            scored.push(ScoredMask {
+                scores: score(&mask, depth, done, total)?,
+                mask,
+            });
         }
-        // Nothing in the pool clears both rules against the incumbent: the set is done growing.
-        let Some((fi, _)) = best else { break };
-        mask[fi] = true;
+        scored.sort_by(ranked_order);
+        scored.truncate(width);
+        frontier = scored.into_iter().map(|ranked| ranked.mask).collect();
+        retained.extend(frontier.iter().cloned());
+    }
+    Some(retained)
+}
+
+/// Pick the strongest reduced mask that robustly beats the strongest inner control.
+///
+/// Args:
+///     control_scores: Fold profits of all-fields search or no filters, whichever is stronger.
+///     candidates: Beam finalists re-scored on one common restart stream.
+///     empty: Empty mask returned when no finalist clears the control.
+///
+/// Returns:
+///     Best acceptable reduced mask, or `empty`.
+fn inner_winner(
+    control_scores: &[f64],
+    mut candidates: Vec<ScoredMask>,
+    empty: &[bool],
+) -> Vec<bool> {
+    candidates.retain(|candidate| accepts(control_scores, &candidate.scores));
+    candidates.sort_by(|a, b| {
+        mean(&b.scores)
+            .total_cmp(&mean(&a.scores))
+            .then_with(|| {
+                a.mask
+                    .iter()
+                    .filter(|chosen| **chosen)
+                    .count()
+                    .cmp(&b.mask.iter().filter(|chosen| **chosen).count())
+            })
+            .then_with(|| mask_order(&a.mask, &b.mask))
+    });
+    candidates
+        .into_iter()
+        .next()
+        .map_or_else(|| empty.to_vec(), |candidate| candidate.mask)
+}
+
+/// One of the three search paths selected by the outer gate.
+#[derive(Debug, PartialEq, Eq)]
+struct GateChoice {
+    /// User-facing meaning of the selected mask.
+    decision: ComposeDecision,
+    /// Fields admitted into the final full-budget refit.
+    mask: Vec<bool>,
+}
+
+/// Select between a strict subset, all admitted fields, and no additional filters.
+///
+/// Only one beam subset reaches this function, so the gate is not reused to rank the frontier.
+/// The three paths are ranked symmetrically: first by how many alternatives they beat on a strict
+/// majority of gate folds, then by mean gate profit when pairwise comparisons are inconclusive.
+/// An exact tie prefers fewer fields. With two reserved folds, a pairwise win must repeat on both
+/// rather than ride one lucky validation stretch.
+///
+/// Args:
+///     no_filters: Empty mask and its gate scores.
+///     all_fields: All admitted fields and their gate scores.
+///     subset: One beam-selected mask and its gate scores.
+///
+/// Returns:
+///     Decision and mask supported by the reserved gate folds.
+fn gate_choice(
+    no_filters: (&[bool], &[f64]),
+    all_fields: (&[bool], &[f64]),
+    subset: (&[bool], &[f64]),
+) -> GateChoice {
+    if all_fields.0 == no_filters.0 {
+        return GateChoice {
+            decision: ComposeDecision::NoAdditionalFilters,
+            mask: no_filters.0.to_vec(),
+        };
+    }
+    let mut choices = vec![
+        (
+            ComposeDecision::NoAdditionalFilters,
+            no_filters.0,
+            no_filters.1,
+        ),
+        (
+            ComposeDecision::AllAllowedFields,
+            all_fields.0,
+            all_fields.1,
+        ),
+    ];
+    if subset.0 != no_filters.0 && subset.0 != all_fields.0 {
+        choices.push((ComposeDecision::ReducedSet, subset.0, subset.1));
     }
 
-    // ── backward: give back every field the set turned out not to need ──
-    //
-    // The forward pass takes fields one at a time against the set it had at the time, so a field
-    // that earned its place early can be made redundant by a better one arriving later. Without
-    // this pass that field stays in the strategy forever, doing nothing but narrowing it.
+    let mut wins = vec![0usize; choices.len()];
+    for candidate in 0..choices.len() {
+        for alternative in 0..choices.len() {
+            if candidate != alternative && accepts(choices[alternative].2, choices[candidate].2) {
+                wins[candidate] += 1;
+            }
+        }
+    }
+
+    let field_count = |mask: &[bool]| mask.iter().filter(|chosen| **chosen).count();
+    let mut best = 0usize;
+    for candidate in 1..choices.len() {
+        let ordering = wins[candidate]
+            .cmp(&wins[best])
+            .then_with(|| mean(choices[candidate].2).total_cmp(&mean(choices[best].2)))
+            .then_with(|| field_count(choices[best].1).cmp(&field_count(choices[candidate].1)));
+        if ordering.is_gt() {
+            best = candidate;
+        }
+    }
+    GateChoice {
+        decision: choices[best].0,
+        mask: choices[best].1.to_vec(),
+    }
+}
+
+/// Remove fields whose absence costs nothing on the inner selection folds.
+///
+/// Args:
+///     folds: Inner folds already used for candidate ranking.
+///     mask: Reduced winner to simplify.
+///     p: Composition search settings.
+///     step: Last seed-stream step consumed before shrinking.
+///     handle: Cancellation and progress channel.
+///
+/// Returns:
+///     Simplified mask and final consumed step, or `None` when cancelled.
+fn shrink_mask(
+    folds: &[Fold],
+    mut mask: Vec<bool>,
+    p: &ComposeParams,
+    mut step: usize,
+    handle: &SearchHandle,
+) -> Option<(Vec<bool>, usize)> {
     loop {
         step += 1;
-        let mut incumbent = score_set(folds, &mask, p, step, handle)?;
+        let mut incumbent = score_set(folds, &mask, p, p.ranking_restarts, step, handle)?;
         let mut removed = false;
+        let held = mask.iter().filter(|chosen| **chosen).count();
         let mut tried = 0usize;
-        let held = mask.iter().filter(|m| **m).count();
-        for fi in 0..nf {
+        for fi in 0..mask.len() {
             if !mask[fi] {
                 continue;
             }
             handle.set_stage(step, tried, held);
             tried += 1;
             mask[fi] = false;
-            let without = score_set(folds, &mask, p, step, handle);
+            let without = score_set(folds, &mask, p, p.ranking_restarts, step, handle);
             let Some(without) = without else {
                 mask[fi] = true;
                 return None;
@@ -325,12 +559,111 @@ pub(super) fn compose(
             }
         }
         if !removed {
-            break;
+            return Some((mask, step));
         }
     }
+}
 
-    // ── support: how many folds actually gave each chosen field a range ──
-    //
+/// Compose the field set with a bounded beam, then choose among three equal search paths.
+///
+/// Args:
+///     folds: Chronological walk-forward folds; the final two are reserved as gates.
+///     p: Restart, seed, rounding, and depth limits.
+///     handle: Cancellation and progress channel shared with the caller.
+///
+/// Returns:
+///     Chosen mask with fold support, or `None` when stopped before a complete answer.
+pub(super) fn compose(
+    folds: &[Fold],
+    p: &ComposeParams,
+    handle: &SearchHandle,
+) -> Option<ComposeOutcome> {
+    let first = folds.first()?;
+    if folds.len() <= GATE_FOLDS {
+        return None;
+    }
+    let (inner_folds, gate_folds) = folds.split_at(folds.len() - GATE_FOLDS);
+    if inner_folds.len() < 2 {
+        return None;
+    }
+    let nf = first.search.free_mask().len();
+    let locked_slots = first.search.locked_slots();
+    let is_slot = first.search.slot_flags();
+    // A field is a candidate only where EVERY fold can search it. The folds share one `locked`,
+    // so they already agree; intersecting rather than trusting that keeps a future fold-building
+    // change from quietly handing the beam a field one fold would ignore.
+    let candidate: Vec<bool> = (0..nf)
+        .map(|fi| folds.iter().all(|fold| fold.search.free_mask()[fi]))
+        .collect();
+    let no_filters = vec![false; nf];
+    let all_fields = candidate.clone();
+    let finalists = beam_candidates(
+        &candidate,
+        is_slot,
+        locked_slots,
+        p.max_fields,
+        p.beam_width,
+        |mask, depth, done, total| {
+            handle.set_stage(depth, done, total);
+            score_set(inner_folds, mask, p, p.ranking_restarts, depth, handle)
+        },
+    )?;
+
+    // Re-score every retained finalist on one COMMON stream. Scores used to choose a frontier at
+    // different depths came from different streams and are intentionally not compared here.
+    let mut step = p.max_fields + 1;
+    let no_filters_inner = score_set(
+        inner_folds,
+        &no_filters,
+        p,
+        p.ranking_restarts,
+        step,
+        handle,
+    )?;
+    let all_fields_inner = score_set(
+        inner_folds,
+        &all_fields,
+        p,
+        p.ranking_restarts,
+        step,
+        handle,
+    )?;
+    let inner_control = if accepts(&no_filters_inner, &all_fields_inner) {
+        &all_fields_inner
+    } else {
+        &no_filters_inner
+    };
+    let total = finalists.len();
+    let mut ranked = Vec::with_capacity(total);
+    for (done, mask) in finalists.into_iter().enumerate() {
+        handle.set_stage(step, done, total);
+        ranked.push(ScoredMask {
+            scores: score_set(inner_folds, &mask, p, p.ranking_restarts, step, handle)?,
+            mask,
+        });
+    }
+    let subset = inner_winner(inner_control, ranked, &no_filters);
+    let (subset, next_step) = shrink_mask(inner_folds, subset, p, step, handle)?;
+    step = next_step + 1;
+
+    // The final folds are an OUTER gate: only the already-selected subset reaches them.
+    // Comparing every beam candidate here would merely overfit more validation stretches.
+    handle.set_stage(step, 0, 3);
+    let no_filters_gate = score_set(gate_folds, &no_filters, p, p.gate_restarts, step, handle)?;
+    handle.set_stage(step, 1, 3);
+    let all_fields_gate = score_set(gate_folds, &all_fields, p, p.gate_restarts, step, handle)?;
+    handle.set_stage(step, 2, 3);
+    let subset_gate = if subset == no_filters {
+        no_filters_gate.clone()
+    } else {
+        score_set(gate_folds, &subset, p, p.gate_restarts, step, handle)?
+    };
+    let choice = gate_choice(
+        (&no_filters, &no_filters_gate),
+        (&all_fields, &all_fields_gate),
+        (&subset, &subset_gate),
+    );
+
     // Measured under the FINAL set rather than accumulated during the search, so the number
     // beside a field describes the set the user is being shown and cannot disagree with it.
     step += 1;
@@ -338,13 +671,16 @@ pub(super) fn compose(
     let seed = super::search::restart_seed(p.seed, step);
     for (i, fold) in folds.iter().enumerate() {
         handle.set_stage(step, i, folds.len());
-        let outcome = fold.search.run_masked(&mask, p.restarts, seed, handle)?;
+        let outcome = fold
+            .search
+            .run_masked(&choice.mask, p.ranking_restarts, seed, handle)?;
         for (fi, _, _) in fold.search.applied_ranges(&outcome.sel, p.round) {
             support[fi] = support[fi].saturating_add(1);
         }
     }
     Some(ComposeOutcome {
-        chosen: mask,
+        chosen: choice.mask,
+        decision: choice.decision,
         support,
         folds: folds.len().min(u8::MAX as usize) as u8,
     })

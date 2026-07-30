@@ -7,16 +7,16 @@ use gpui::*;
 use moon_ui::MoonInputState;
 
 use super::super::super::LoadState;
-use super::super::shared::{N_VAR, SaveDialog};
-use moon_core::db::ReadFail;
+use super::super::shared::{SaveDialog, N_VAR};
 use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::threshold_search::{
-    ComposeSkip, ComposedSet, RESTARTS_MIN, SearchHandle, edges_max, heavy_search_supported,
-    restarts_max,
+    edges_max, heavy_search_supported, restarts_max, ComposeSkip, ComposedSet, SearchHandle,
+    RESTARTS_MIN,
 };
 use moon_core::db::tuner::{
-    Bound, FIELDS, FieldClass, HistBucket, StratFilters, VarStats, Variant,
+    Bound, FieldClass, HistBucket, StratFilters, VarStats, Variant, FIELDS,
 };
+use moon_core::db::ReadFail;
 
 /// Every quantile depth the search accepts, coarsest first. What is OFFERED is a prefix of this
 /// — see [`edge_options`].

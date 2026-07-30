@@ -17,15 +17,15 @@ mod year;
 
 use chrono::{Datelike, NaiveDate};
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
+use moon_ui::{h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette};
 use rust_i18n::t;
 
 use super::AnalyticsView;
 use crate::design;
 use crate::design::moon;
-use crate::load_state::{LoadState, note_el};
-use moon_core::db::ReadResult;
+use crate::load_state::{note_el, LoadState};
 use moon_core::db::analytics::{CalendarPeriod, DayCell, Query};
+use moon_core::db::ReadResult;
 
 /// Store one consistent Calendar period result without collapsing classified read failures.
 ///
@@ -111,11 +111,19 @@ pub(super) fn month_start(y: i32, m: u32) -> i64 {
 }
 
 pub(super) fn next_month(y: i32, m: u32) -> (i32, u32) {
-    if m == 12 { (y + 1, 1) } else { (y, m + 1) }
+    if m == 12 {
+        (y + 1, 1)
+    } else {
+        (y, m + 1)
+    }
 }
 
 fn prev_month(y: i32, m: u32) -> (i32, u32) {
-    if m == 1 { (y - 1, 12) } else { (y, m - 1) }
+    if m == 1 {
+        (y - 1, 12)
+    } else {
+        (y, m - 1)
+    }
 }
 
 /// Days in a month (difference between the two 1st-of-month midnights).

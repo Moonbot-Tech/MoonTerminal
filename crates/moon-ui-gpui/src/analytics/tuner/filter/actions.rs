@@ -11,11 +11,11 @@ use rust_i18n::t;
 use super::super::super::AnalyticsView;
 use super::super::shared::SaveTarget;
 use super::state::{
-    SearchSplit, SuggestJob, SuggestState, edges_of, iters_of, seed_of, train_frac,
+    edges_of, iters_of, seed_of, train_frac, SearchSplit, SuggestJob, SuggestState,
 };
 use super::{fmt_bound, parse_num, staged_dirty};
 use moon_core::db::tuner::threshold_search::{SearchHandle, SearchParams};
-use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
+use moon_core::db::tuner::{slot_type_for, FieldClass, FIELDS};
 
 /// How often the suggestion row repaints while a search runs.
 ///
@@ -119,10 +119,11 @@ impl AnalyticsView {
                     }
                 };
                 // Caption the run as composition unless the core explicitly skipped it. A skipped
-                // run (no strategy scope or too few folds) fell back to the plain search, so it
-                // has an honest restart count and must not be captioned as composition while the
-                // summary beside it explains why none happened. With no answer there is no result
-                // metadata to distinguish an early small-sample exit, so the requested mode wins.
+                // run (no strategy scope or too few folds) executes the all-fields path directly,
+                // so it has an honest restart count and must not be captioned as composition while
+                // the summary explains why comparison did not happen. With no answer there is no
+                // result metadata to distinguish an early small-sample exit, so the requested
+                // mode wins.
                 let composed = compose
                     && found
                         .as_ref()
@@ -155,13 +156,16 @@ impl AnalyticsView {
                         || "not split".to_string(),
                         |h| format!("{:+.2} over {}", h.profit, h.n),
                     );
-                    // The composed set is logged beside the two figures for the same reason they
-                    // are logged together: "four fields chosen" and "what they earned on trades
-                    // nobody fitted" are only a verdict as a pair.
-                    let set = res.composed.as_ref().map_or_else(
+                    // The selected path and its applied fields are logged beside the two figures:
+                    // the decision and what it earned on trades nobody fitted form one verdict.
+                    let decision = res.composed.as_ref().map_or_else(
                         || {
-                            res.compose_skipped
-                                .map_or_else(String::new, |why| format!(", composition {why:?}"))
+                            res.compose_skipped.map_or_else(String::new, |why| {
+                                format!(
+                                    ", decision AllAllowedFields, composition comparison \
+                                     unavailable: {why:?}"
+                                )
+                            })
                         },
                         |c| {
                             let fields: Vec<String> = c
@@ -169,12 +173,16 @@ impl AnalyticsView {
                                 .iter()
                                 .map(|(col, n)| format!("{col} {n}/{}", c.folds))
                                 .collect();
-                            format!(", composed [{}]", fields.join(" "))
+                            format!(
+                                ", composition {:?}, fields [{}]",
+                                c.decision,
+                                fields.join(" ")
+                            )
                         },
                     );
                     log::info!(
                         "analytics: smart suggestion — in sample {:+.2} over {}, \
-                         out of sample {holdout}, restarts {completed}, seed {}{set}{}",
+                         out of sample {holdout}, restarts {completed}, seed {}{decision}{}",
                         res.train.profit,
                         res.train.n,
                         res.seed,
@@ -716,7 +724,11 @@ impl AnalyticsView {
         for (flag, ignore) in flags {
             // UseBV_SV_Filter is an enabler (inverted ignore semantics).
             let value = if flag == "UseBV_SV_Filter" {
-                if ignore { "NO" } else { "YES" }
+                if ignore {
+                    "NO"
+                } else {
+                    "YES"
+                }
             } else if ignore {
                 "YES"
             } else {

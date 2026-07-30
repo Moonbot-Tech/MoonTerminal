@@ -125,6 +125,8 @@ pub struct FieldRange {
 /// shape of that disagreement reaching the user.
 #[derive(Clone, Debug)]
 pub struct ComposedSet {
+    /// Which of the three independently evaluated search paths won.
+    pub decision: ComposeDecision,
     /// Chosen fields that the final refit gave a range, each with the number of folds that also
     /// gave it one — how reproducible its contribution is across the period.
     pub fields: Vec<(&'static str, u8)>,
@@ -135,12 +137,26 @@ pub struct ComposedSet {
     pub dropped_at_refit: usize,
 }
 
+/// Final path selected by composition's reserved gate folds.
+///
+/// These are equal candidate answers, not a primary answer plus error recovery: composition
+/// explicitly scores all three and reports the strongest supported one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposeDecision {
+    /// A strict non-empty subset of the admitted fields ranked strongest across the gate folds.
+    ReducedSet,
+    /// Joint search across every field admitted by the checkboxes was strongest.
+    AllAllowedFields,
+    /// Applying no additional report-field threshold was strongest.
+    NoAdditionalFilters,
+}
+
 /// Why a requested composition did not run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComposeSkip {
-    /// The fitting region could not be cut into at least two walk-forward folds — too few
-    /// trades, or too few distinct close timestamps to cut between. One fold is not a second
-    /// opinion, so composing on it would produce a set with nothing behind it.
+    /// The fitting region could not be cut into at least four walk-forward folds — too few
+    /// trades, or too few distinct close timestamps to cut between. Composition needs at least
+    /// two folds to select a candidate and two untouched folds to compare the three paths.
     TooFewFolds,
     /// No strategy was selected, so the sample is the whole replica rather than one strategy on
     /// the cores it runs on. Thresholds are never fitted across that mixture, and a set composed
@@ -163,15 +179,16 @@ pub struct SearchResult {
     pub holdout: Option<Tally>,
     /// Base seed the restarts were derived from, so a result can be reproduced exactly.
     ///
-    /// For a plain search, the caller-owned [`SearchHandle`] carries the completed-restart count
+    /// For a single all-fields search, the caller-owned [`SearchHandle`] carries the
+    /// completed-restart count
     /// instead of duplicating it here. Under composition that counter spans all ranking runs and
     /// folds, so it remains progress rather than metadata about the final refit.
     pub seed: u64,
     /// The field set composition chose, or `None` when composition was not asked for or could
     /// not run.
     pub composed: Option<ComposedSet>,
-    /// Why composition did not run, when it WAS asked for. The ranges above then come from the
-    /// plain joint search, so the caller has an answer and a reason rather than a silence.
+    /// Why composition did not run, when it WAS asked for. The ranges above then come directly
+    /// from the all-fields path, so the caller has an answer and a reason rather than a silence.
     pub compose_skipped: Option<ComposeSkip>,
 }
 
@@ -209,7 +226,7 @@ pub struct SearchParams<'a> {
     /// only the composed fields are refitted.
     ///
     /// Honoured only on a machine that clears [`HEAVY_SEARCH_MIN_CORES`]; below that it is
-    /// ignored and the plain search runs, because the feature is not offered there at all.
+    /// ignored and the all-fields search runs, because the feature is not offered there at all.
     pub compose: bool,
 }
 
@@ -220,9 +237,9 @@ pub struct SearchParams<'a> {
 /// the strategy format cannot store more.
 ///
 /// `handle` stops the search and carries its progress; build a fresh one per call. A stopped
-/// search returns the best complete answer it reached. For a plain search, `completed()` is the
-/// number of completed restarts behind that answer; during composition it is an internal work
-/// counter spanning candidate rankings, folds, and the final refit.
+/// search returns the best complete answer it reached. For an all-fields search, `completed()` is
+/// the number of completed restarts behind that answer; during composition it is an internal
+/// work counter spanning candidate rankings, folds, and the final refit.
 ///
 /// With `params.train_frac` below 1 the search only ever sees the oldest share of the period and
 /// the rest becomes the result's holdout, which is what separates a range that found something
@@ -282,7 +299,7 @@ pub fn suggest(
     // A machine below the bar has no budget, and composition simply does not happen — no skip
     // reason either. The switch does not exist there, so a request can only arrive from a
     // settings file carried over from a larger machine, and a note explaining a feature this
-    // build never shows would be a worse answer than the plain search it silently falls back to.
+    // build never shows would be a worse answer than directly running the all-fields path.
     let composed = params
         .compose
         .then(composition_budget)
@@ -357,6 +374,7 @@ fn composed_set(out: &compose::ComposeOutcome, applied: &[(usize, f64, f64)]) ->
         .map(|(fi, _, _)| (FIELDS[*fi].col, out.support[*fi]))
         .collect();
     ComposedSet {
+        decision: out.decision,
         dropped_at_refit: out.chosen.iter().filter(|c| **c).count() - fields.len(),
         fields,
         folds: out.folds,
@@ -369,8 +387,23 @@ fn composed_set(out: &compose::ComposeOutcome, applied: &[(usize, f64, f64)]) ->
 /// derives its own quantile edges from its own rows — edges taken from the whole fitting region
 /// would place a fold's thresholds using the very stretch that fold exists to be measured on.
 ///
-/// `Err` means composition was asked for and could not honestly run; the caller then falls back
-/// to the plain joint search and reports the reason. `Ok(None)` means it was stopped.
+/// `Err` means composition was asked for and could not honestly run; the caller then executes
+/// the all-fields path directly and reports the reason. `Ok(None)` means it was stopped.
+///
+/// Args:
+///     cols: One shared columnar scan of the selected report rows.
+///     params: User search settings and fixed field masks.
+///     is_slot: Fields that consume a Delta2/Delta3 slot.
+///     closes: Chronological close timestamps used to cut folds.
+///     min_n: Minimum retained trades in the full fitting region.
+///     ne: Quantile edge count.
+///     train_n: Rows available to fitting and composition.
+///     seed: Base restart seed.
+///     budget: Machine-specific fold, depth, and ranking limits.
+///     handle: Cancellation and progress channel.
+///
+/// Returns:
+///     A completed composed set, an honest skip reason, or `None` when cancelled.
 #[allow(clippy::too_many_arguments)]
 fn compose_set(
     cols: &Arc<search::Columns>,
@@ -394,16 +427,19 @@ fn compose_set(
         train_n,
         budget.folds,
     );
-    // One fold is not a second opinion: a set chosen on a single stretch has nothing behind it
-    // but that stretch, which is the state composition exists to improve on.
-    if folds.len() < 2 {
+    // At least two folds select the subset candidate (three under the standard budget); the final
+    // two stay out of that ranking and compare the subset, all-fields, and no-filter paths.
+    if folds.len() < 4 {
         return Err(ComposeSkip::TooFewFolds);
     }
     let p = compose::ComposeParams {
-        restarts: budget.ranking_restarts(params.restarts.clamp(RESTARTS_MIN, restarts_max())),
+        ranking_restarts: budget
+            .ranking_restarts(params.restarts.clamp(RESTARTS_MIN, restarts_max())),
+        gate_restarts: params.restarts.clamp(RESTARTS_MIN, restarts_max()),
         seed,
         round: params.round,
         max_fields: budget.max_fields,
+        beam_width: budget.beam_width,
     };
     Ok(compose::compose(&folds, &p, handle))
 }

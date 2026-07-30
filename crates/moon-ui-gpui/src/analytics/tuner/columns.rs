@@ -115,7 +115,11 @@ pub(super) const COL_WL: MetricCol = MetricCol {
 
 /// A count that renders as nothing when it is zero.
 pub(super) fn blank_if_zero(n: i64) -> String {
-    if n > 0 { n.to_string() } else { String::new() }
+    if n > 0 {
+        n.to_string()
+    } else {
+        String::new()
+    }
 }
 
 pub(super) const COL_WORST: MetricCol = MetricCol {

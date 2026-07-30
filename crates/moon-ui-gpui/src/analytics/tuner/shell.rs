@@ -12,23 +12,23 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::ReadFail;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
-    MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette, MoonPopover,
-    MoonPopoverPlacement, MoonTooltipView, h_flex, v_flex,
+    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuSize, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, MoonTag, MoonTooltipView,
 };
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::filter::state::{
-    SuggestJob, SuggestState, TRAIN_OPTIONS, edge_options, iters_of, persist_seed,
+    edge_options, iters_of, persist_seed, SuggestJob, SuggestState, TRAIN_OPTIONS,
 };
 use super::shared::TunerKind;
 use crate::design;
-use crate::design::moon;
+use crate::design::{moon, moon_alpha};
 
 /// Content width of the suggestion settings popover, before the font scale and the component's
 /// own padding, which [`MoonPopover::content_width_font`] adds.
-const SETTINGS_POPUP_W: f32 = 210.0;
+const SETTINGS_POPUP_W: f32 = 250.0;
 
 /// Which settings box of a suggestion row is being built.
 #[derive(Clone, Copy, PartialEq)]
@@ -441,6 +441,14 @@ impl AnalyticsView {
     /// a shut popover would otherwise rebuild two menus, their closures and a dozen locale
     /// lookups on every frame — and this panel repaints several times a second for the whole of
     /// a running search, which is exactly when nobody is looking at these knobs.
+    ///
+    /// Args:
+    ///     p: Active Moon palette.
+    ///     window: Window that owns the popover layers.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     The controlled settings popover and its gear trigger.
     fn filter_search_settings(
         &mut self,
         p: MoonPalette,
@@ -479,7 +487,15 @@ impl AnalyticsView {
         popover.into_any_element()
     }
 
-    /// The knobs themselves, built only when the settings popover is open.
+    /// Build the scroll-bounded, grouped controls shown inside the settings popover.
+    ///
+    /// Args:
+    ///     p: Active Moon palette.
+    ///     window: Window supplying input state and the viewport height bound.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Popup content that remains reachable in the narrowest supported window.
     fn filter_settings_content(
         &mut self,
         p: MoonPalette,
@@ -559,14 +575,20 @@ impl AnalyticsView {
             .menu_size(MoonMenuSize::Compact)
             .items(ed_items);
         let gap = design::ui_px(cx, 6.0);
-        let label_w = design::font_w_px(cx, 74.0);
+        let section_gap = design::ui_px(cx, 8.0);
+        let label_w = design::font_w_px(cx, 90.0);
+        let popup_max_h = px(
+            (f32::from(window.viewport_size().height) - f32::from(design::ui_px(cx, 24.0)))
+                .max(f32::from(design::ui_px(cx, 180.0))),
+        );
         let head = h_flex()
             .w_full()
             .items_center()
             .child(
                 div()
                     .flex_1()
-                    .text_color(moon(p.text_muted))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(moon(p.text))
                     .child(t!("analytics.tuner.cfg_title").to_string()),
             )
             .child(
@@ -585,8 +607,22 @@ impl AnalyticsView {
                 .w_full()
                 .items_center()
                 .gap(gap)
-                .child(div().w(label_w).flex_none().child(caption))
+                .child(
+                    div()
+                        .w(label_w)
+                        .flex_none()
+                        .text_color(moon(p.text_muted))
+                        .child(caption),
+                )
                 .child(body)
+        };
+        let section_title = |title: String| {
+            div()
+                .w_full()
+                .pt(design::ui_px(cx, 3.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(moon(p.text_soft))
+                .child(title)
         };
         // No padding, background, border or corners here: `MoonPopover` supplies all four, and
         // `content_width_font` treats the number it is given as the width of the CONTENT, adding
@@ -595,13 +631,18 @@ impl AnalyticsView {
         let mut content = v_flex()
             .id("tun-cfg-popup")
             .w_full()
+            .max_h(popup_max_h)
+            .overflow_y_scroll()
             .gap(gap)
             .text_size(design::t_caption(cx))
             .child(head)
+            .child(section_title(
+                t!("analytics.tuner.cfg_search_section").to_string(),
+            ))
             .child(row(
                 t!("analytics.tuner.min_trades").to_string(),
                 div()
-                    .w(design::font_w_px(cx, 60.0))
+                    .w(design::font_w_px(cx, 76.0))
                     .flex_none()
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-mn-f"))
@@ -614,6 +655,13 @@ impl AnalyticsView {
                 t!("analytics.tuner.edges").to_string(),
                 div().flex_none().child(ed_combo).into_any_element(),
             ))
+            .child(
+                div()
+                    .mt(section_gap - gap)
+                    .child(section_title(
+                        t!("analytics.tuner.cfg_validation_section").to_string(),
+                    )),
+            )
             // Holding trades back is what turns a suggestion from "these ranges fit the past" into
             // a claim that can be checked, so the control sits with the settings and its verdict
             // is printed under the grid rather than hidden in a log line.
@@ -633,68 +681,80 @@ impl AnalyticsView {
                 moon_core::db::tuner::threshold_search::composition_budget(),
                 |el, budget| {
                     let help = SharedString::from(t!("analytics.tuner.compose_help").to_string());
+                    let metrics = compose_budget_labels(&budget);
                     el.child(
-                        // The switch and its caption share ONE hover target carrying the whole
-                        // explanation. What this mode does is not guessable from a one-word
-                        // label, and a user who has to ask elsewhere has already told someone
-                        // else how the strategy is being tuned.
+                        // One contained block makes the mode, its short explanation, and its real
+                        // work budget read as one setting instead of an unrelated checkbox plus a
+                        // wrapped diagnostic sentence.
                         v_flex()
                             .id("tun-cfg-compose-help")
                             .w_full()
                             .gap(gap)
+                            .p(design::ui_px(cx, 8.0))
+                            .rounded(design::ui_px(cx, 6.0))
+                            .border_1()
+                            .border_color(moon(p.border))
+                            .bg(moon_alpha(p.panel_high, 0.32))
                             .tooltip(move |_w, cx| {
                                 cx.new(|_| MoonTooltipView::new(help.clone())).into()
                             })
-                            .child(row(
-                                t!("analytics.tuner.compose").to_string(),
-                                h_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .items_center()
-                                    .gap(gap)
-                                    .child(
-                                        MoonCheckbox::new(SharedString::from("tun-cfg-compose-f"))
-                                            .checked(self.tuner.compose)
-                                            .size(MoonCheckboxSize::Compact)
-                                            // `on_change` hands the callback an `&mut App`, not a
-                                            // `Context`, so this is one of the call sites where a
-                                            // `cx.listener` does not fit.
-                                            .on_change({
-                                                let view = cx.entity();
-                                                move |checked: &bool, _w, app| {
-                                                    let on = *checked;
-                                                    view.update(app, |this, cx| {
-                                                        this.tuner.compose = on;
-                                                        // The two searches answer different
-                                                        // questions, so a suggestion made by one
-                                                        // is not a suggestion by the other.
-                                                        this.tuner.invalidate_suggest();
-                                                        this.persist_tuner_compose(cx);
-                                                        cx.notify();
-                                                    });
-                                                }
-                                            }),
+                            .child(
+                                MoonCheckbox::new(SharedString::from("tun-cfg-compose-f"))
+                                    .label(
+                                        t!("analytics.tuner.compose_toggle").to_string(),
                                     )
-                                    .into_any_element(),
-                            ))
-                            // What the run will actually do, stated up front — including the core
-                            // count that cleared the hard bar, since that is the one input the
-                            // user cannot change from this popover. On its OWN line: beside the
-                            // checkbox it would have about half the width the sentence needs, and
-                            // fixed limits that have to be read cannot be truncated.
+                                    .checked(self.tuner.compose)
+                                    .size(MoonCheckboxSize::Compact)
+                                    // `on_change` hands the callback an `&mut App`, not a
+                                    // `Context`, so this is one of the call sites where a
+                                    // `cx.listener` does not fit.
+                                    .on_change({
+                                        let view = cx.entity();
+                                        move |checked: &bool, _w, app| {
+                                            let on = *checked;
+                                            view.update(app, |this, cx| {
+                                                this.tuner.compose = on;
+                                                // The two searches answer different questions,
+                                                // so a suggestion made by one is not a
+                                                // suggestion by the other.
+                                                this.tuner.invalidate_suggest();
+                                                this.persist_tuner_compose(cx);
+                                                cx.notify();
+                                            });
+                                        }
+                                    }),
+                            )
                             .child(
                                 div()
                                     .w_full()
                                     .text_color(moon(p.text_muted))
-                                    .child(compose_budget_caption(&budget)),
+                                    .child(
+                                        t!("analytics.tuner.compose_short").to_string(),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .flex_wrap()
+                                    .gap(design::ui_px(cx, 4.0))
+                                    .children(metrics.map(|label| {
+                                        MoonTag::new().mono(false).child(label)
+                                    })),
                             ),
                     )
                 },
             )
+            .child(
+                div()
+                    .mt(section_gap - gap)
+                    .child(section_title(
+                        t!("analytics.tuner.cfg_repeat_section").to_string(),
+                    )),
+            )
             .child(row(
                 t!("analytics.tuner.seed").to_string(),
                 div()
-                    .w(design::font_w_px(cx, 100.0))
+                    .w(design::font_w_px(cx, 126.0))
                     .flex_none()
                     .child(
                         MoonInput::new(SharedString::from("tun-cfg-seed-f"))
@@ -945,16 +1005,27 @@ impl AnalyticsView {
     }
 }
 
-/// What composition will actually be allowed to do on this machine.
+/// Compact labels for the composition work budget shown inside its setting block.
 ///
-/// Takes the budget rather than resolving one, so the caption can only ever describe the same
-/// budget that decided the switch is shown at all.
-fn compose_budget_caption(b: &moon_core::db::tuner::threshold_search::ComposeBudget) -> String {
-    t!(
-        "analytics.tuner.compose_budget",
-        cores = b.cores,
-        fields = b.max_fields,
-        folds = b.folds
-    )
-    .to_string()
+/// Args:
+///     budget: The same machine budget that allowed the composition block to render.
+///
+/// Returns:
+///     Localized field-count, beam-width, and fold-count labels.
+fn compose_budget_labels(
+    budget: &moon_core::db::tuner::threshold_search::ComposeBudget,
+) -> [String; 3] {
+    [
+        t!(
+            "analytics.tuner.compose_budget_fields",
+            n = budget.max_fields
+        )
+        .to_string(),
+        t!(
+            "analytics.tuner.compose_budget_beam",
+            n = budget.beam_width
+        )
+        .to_string(),
+        t!("analytics.tuner.compose_budget_folds", n = budget.folds).to_string(),
+    ]
 }

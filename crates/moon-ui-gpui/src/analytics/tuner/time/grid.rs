@@ -16,14 +16,14 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
-    MoonTooltipView, h_flex, v_flex,
+    h_flex, v_flex, MoonCheckbox, MoonCheckboxSize, MoonInput, MoonInputEvent, MoonInputState,
+    MoonPalette, MoonTooltipView,
 };
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
-use super::super::shared::{TunerKind, glyph_btn};
-use super::state::{N_FIELD, fmt_min, fmt_week_ep};
+use super::super::shared::{glyph_btn, TunerKind};
+use super::state::{fmt_min, fmt_week_ep, N_FIELD};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::TimeWindow;

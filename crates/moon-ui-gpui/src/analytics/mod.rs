@@ -26,27 +26,27 @@ mod toolbar;
 mod tuner;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
-pub(in crate::analytics) use period::{Period, Tab, day_of_secs, fmt_day, secs_of_day};
+pub(in crate::analytics) use period::{day_of_secs, fmt_day, secs_of_day, Period, Tab};
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonBackgroundPolicy, MoonCalendarEvent, MoonCalendarState, MoonDate,
-    MoonInputState, MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
+    h_flex, v_flex, MoonAlert, MoonBackgroundPolicy, MoonCalendarEvent, MoonCalendarState,
+    MoonDate, MoonInputState, MoonPalette, MoonWindowFrame, Root,
 };
 use rust_i18n::t;
 
 use crate::design::{moon, moon_alpha};
-use crate::{Backend, design};
+use crate::{design, Backend};
 use moon_core::db::analytics::{DayCell, Query, StrategyBase, Summary};
 use moon_core::db::{FailKind, ProfitMetric, ReadFail, SideFilter};
 
-use crate::load_state::{LoadState, note_el};
-use refresh::{BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh, visible_refresh};
+use crate::load_state::{note_el, LoadState};
+use refresh::{visible_refresh, BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
@@ -114,7 +114,11 @@ pub(in crate::analytics) fn pnl_is_pct() -> bool {
 }
 /// Unit suffix for a profit-metric figure: "%" in percent mode, empty in USDT mode.
 pub(in crate::analytics) fn pnl_suffix() -> &'static str {
-    if pnl_is_pct() { "%" } else { "" }
+    if pnl_is_pct() {
+        "%"
+    } else {
+        ""
+    }
 }
 /// Standalone unit token for a label or axis caption that stands BESIDE a profit figure rather
 /// than riding on it: "USDT" in money mode, "%" in percent mode. A number already carries its own
@@ -122,7 +126,11 @@ pub(in crate::analytics) fn pnl_suffix() -> &'static str {
 /// language-neutral (see locales/README.md), so — like `pnl_suffix` — it lives in code, not the
 /// dictionary, and slots into a `%{unit}` placeholder.
 pub(in crate::analytics) fn pnl_unit_label() -> &'static str {
-    if pnl_is_pct() { "%" } else { "USDT" }
+    if pnl_is_pct() {
+        "%"
+    } else {
+        "USDT"
+    }
 }
 
 /// Process-lifetime Analytics choices restored when its OS window is recreated.
@@ -392,6 +400,10 @@ impl AnalyticsView {
         let saved_tuner_train = backend.read(cx).layout.analytics_tuner_train;
         let saved_tuner_fields = backend.read(cx).layout.analytics_tuner_fields.clone();
         let saved_tuner_compose = backend.read(cx).layout.analytics_tuner_compose;
+        // Strategy-list sort is process-persistent. Unknown keys return to the same
+        // profit-descending default used before this preference existed.
+        let saved_strat_sort =
+            tuner::restore_strat_sort(backend.read(cx).layout.analytics_strat_sort.clone());
         // Profit metric from the previous run (default USDT).
         let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
             ProfitMetric::Percent
@@ -495,7 +507,7 @@ impl AnalyticsView {
             strat_active_only: true,
             strat_lists: tuner::StratListFilter::All,
             strat_search_input: None,
-            strat_sort: Some(("analytics.col.profit".to_string(), true)),
+            strat_sort: saved_strat_sort,
             strat_cols: saved_strat_cols,
             strat_core_w: None,
             strat_visible: None,

@@ -14,21 +14,22 @@ mod tests;
 
 use gpui::*;
 use moon_ui::{
-    MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    h_flex, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
     MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
-    MoonPalette, h_flex,
+    MoonPalette,
 };
 use rust_i18n::t;
 use std::cmp::Ordering;
 
 pub(in crate::analytics::tuner) use select::{
-    RangeOutcome, RowClick, drawn_order, range_extras, row_click_intent,
+    drawn_order, range_extras, row_click_intent, RangeOutcome, RowClick,
 };
 
 use super::super::AnalyticsView;
 use super::{
-    COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT,
-    STRAT_COLS_ALL, metric_bit, sort_arrow_of, toggle_sort_key,
+    metric_bit, sort_arrow_of, toggle_sort_key, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT,
+    METRIC_COLS, SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, STRAT_COLS_ALL,
+    STRAT_SORT_DEFAULT,
 };
 use crate::design;
 use crate::design::moon;
@@ -79,6 +80,26 @@ impl StratListFilter {
 /// Show at most this many groups (the replica can hold thousands of names; the tail beyond
 /// the top by |profit| carries little information, and the DOM is not infinitely stretchy).
 pub(in crate::analytics::tuner) const MAX_ROWS: usize = 300;
+
+/// Restore a saved strategy-list sort only when its stable key still names a real column.
+///
+/// Args:
+///     saved: Optional `(column key, descending)` value read from `layout.toml`.
+///
+/// Returns:
+///     A valid saved choice, or the profit-descending default.
+pub(in crate::analytics) fn restore_strat_sort(
+    saved: Option<(String, bool)>,
+) -> Option<(String, bool)> {
+    saved
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                SORT_NAME | SORT_KIND | SORT_CORE | SORT_LASTEDIT
+            ) || METRIC_COLS.iter().any(|column| column.key == key)
+        })
+        .or_else(|| Some((STRAT_SORT_DEFAULT.0.to_string(), STRAT_SORT_DEFAULT.1)))
+}
 
 /// Everything the strategy list's filter and sort depend on.
 ///
@@ -267,10 +288,17 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Click a column header — the shared rule (`toggle_sort_key`), so this table and the
-    /// coin table below it cannot disagree about what a click means.
+    /// Click a column header, update the shared rule, and persist the exact key and direction.
+    ///
+    /// Every strategy header reaches this one method, so marking the layout dirty here makes
+    /// persistence structural rather than a responsibility of each rendered column.
     pub(super) fn toggle_sort(&mut self, key: &str, cx: &mut Context<Self>) {
         toggle_sort_key(&mut self.strat_sort, key);
+        let value = self.strat_sort.clone();
+        self.backend.update(cx, |backend, _| {
+            backend.layout.analytics_strat_sort = value;
+            backend.layout_dirty = true;
+        });
         cx.notify();
     }
 

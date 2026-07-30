@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex,
+    h_flex, MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement,
 };
 use rust_i18n::t;
 

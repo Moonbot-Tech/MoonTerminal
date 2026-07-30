@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh, core_metadata_wait,
-    report_result_is_stale, strategy_base_allows_axis, visible_refresh,
+    core_metadata_wait, report_result_is_stale, strategy_base_allows_axis, visible_refresh,
+    BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh,
 };
 use crate::analytics::Tab;
 
