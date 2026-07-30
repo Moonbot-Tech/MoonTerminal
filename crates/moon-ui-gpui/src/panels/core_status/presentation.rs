@@ -5,7 +5,7 @@ use moon_core::feed::ConnStatus;
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
-use crate::backend::core_warn::{LatencySeverity, latency_severity};
+use crate::backend::core_warn::LatencySeverity;
 
 /// Visual metadata shared by Flat and By IP connection rows.
 pub(super) struct ConnectionPresentation {
@@ -79,39 +79,16 @@ pub(super) fn ping(value: Option<u32>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
-/// Classify a latency against the core's own rolling BASELINE, where "far above the usual" is worse.
-///
-/// Purely relative — a link that is always slow makes that its own baseline and stays `Normal`, while
-/// a spike above the usual tints — so it never yellows a core whose high ping IS its normal (the
-/// 20/60/200 ms case). Delegates to the engine's `latency_severity`, the single source of truth, so
-/// the colour and the ping/exch warning always fire at the same point.
-///
-/// Args:
-///     value: Current smoothed latency in ms.
-///     baseline: The core's rolling mean latency in ms, or `None` until it is established.
-///
-/// Returns:
-///     `Warning` from baseline ×1.10, `Critical` from ×1.30 (purely relative — no ms floor), else
-///     `Normal` (including an unknown value or an unestablished baseline).
-fn latency_level(value: Option<u32>, baseline: Option<u32>) -> LoadLevel {
-    match value {
-        Some(v) => match latency_severity(v, baseline) {
-            LatencySeverity::Normal => LoadLevel::Normal,
-            LatencySeverity::Warning => LoadLevel::Warning,
-            LatencySeverity::Critical => LoadLevel::Critical,
-        },
-        None => LoadLevel::Normal,
+/// Map the engine's latency severity (already computed against the core's baseline and the axis
+/// thresholds) to the shared load level for colouring. The engine is the single source of truth, so
+/// the row colour and the ping/exch warning always agree — a core whose high ping IS its normal (the
+/// 20/60/200 ms case) stays `Normal`.
+pub(super) fn lat_level(sev: LatencySeverity) -> LoadLevel {
+    match sev {
+        LatencySeverity::Normal => LoadLevel::Normal,
+        LatencySeverity::Warning => LoadLevel::Warning,
+        LatencySeverity::Critical => LoadLevel::Critical,
     }
-}
-
-/// Colour level for a client↔core round-trip, relative to the core's baseline. See [`latency_level`].
-pub(super) fn ping_level(value: Option<u32>, baseline: Option<u32>) -> LoadLevel {
-    latency_level(value, baseline)
-}
-
-/// Colour level for a core→exchange order latency, relative to the core's baseline.
-pub(super) fn order_level(value: Option<u16>, baseline: Option<u16>) -> LoadLevel {
-    latency_level(value.map(u32::from), baseline.map(u32::from))
 }
 
 /// Format machine CPU load with the machine's logical-core count, e.g. `34% (16 core)`.

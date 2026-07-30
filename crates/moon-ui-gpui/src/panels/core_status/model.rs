@@ -28,11 +28,11 @@ pub(super) struct CoreStatusRow {
     pub(super) ping_warn: bool,
     /// Whether this core has a sustained above-baseline core→exchange ping (the exch-ping warning).
     pub(super) exch_warn: bool,
-    /// This core's rolling client↔core-ping baseline (ms), for colouring its ping relative to itself.
-    /// `None` until the engine has enough samples.
-    pub(super) ping_base: Option<u32>,
-    /// This core's rolling core→exchange-ping baseline (ms), for the same relative colouring.
-    pub(super) exch_base: Option<u16>,
+    /// This core's current client↔core-ping colour severity (relative to its own baseline and the
+    /// axis thresholds), computed by the engine so colour and warning always agree.
+    pub(super) ping_sev: crate::backend::core_warn::LatencySeverity,
+    /// This core's current core→exchange-ping colour severity.
+    pub(super) exch_sev: crate::backend::core_warn::LatencySeverity,
 }
 
 /// Stable grouping identity for a known host or one isolated unknown core.

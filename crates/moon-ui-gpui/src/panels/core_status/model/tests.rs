@@ -26,8 +26,8 @@ fn row(
         }),
         ping_warn: false,
         exch_warn: false,
-        ping_base: None,
-        exch_base: None,
+        ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
+        exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
     }
 }
 

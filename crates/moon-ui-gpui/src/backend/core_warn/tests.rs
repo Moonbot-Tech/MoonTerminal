@@ -395,16 +395,18 @@ fn never_connected_or_connecting_does_not_warn_connectivity() {
 /// the only test, so it fires the same on small and large pings.
 #[test]
 fn latency_severity_is_purely_relative() {
-    assert_eq!(latency_severity(500, None), LatencySeverity::Normal);
-    assert_eq!(latency_severity(500, Some(0)), LatencySeverity::Normal);
-    assert_eq!(latency_severity(210, Some(200)), LatencySeverity::Normal);
+    // Default thresholds: yellow +10 % (num 110), red +30 % (num 130).
+    let sev = |v, b| latency_severity(v, b, 110, 130);
+    assert_eq!(sev(500, None), LatencySeverity::Normal);
+    assert_eq!(sev(500, Some(0)), LatencySeverity::Normal);
+    assert_eq!(sev(210, Some(200)), LatencySeverity::Normal);
     // 200 → 240 is +20 %: yellow, under the +30 % critical ratio.
-    assert_eq!(latency_severity(240, Some(200)), LatencySeverity::Warning);
+    assert_eq!(sev(240, Some(200)), LatencySeverity::Warning);
     // 200 → 300 is +50 %: critical.
-    assert_eq!(latency_severity(300, Some(200)), LatencySeverity::Critical);
+    assert_eq!(sev(300, Some(200)), LatencySeverity::Critical);
     // A small ping obeys the same percentages: 20 → 27 (+35 %) is now critical, no ms floor.
-    assert_eq!(latency_severity(27, Some(20)), LatencySeverity::Critical);
-    assert_eq!(latency_severity(22, Some(20)), LatencySeverity::Warning);
+    assert_eq!(sev(27, Some(20)), LatencySeverity::Critical);
+    assert_eq!(sev(22, Some(20)), LatencySeverity::Warning);
 }
 
 /// A ping that spikes ABOVE the core's established baseline must open exactly one per-core ping
@@ -455,10 +457,8 @@ fn ping_spike_above_baseline_opens_then_closes_per_core_episode() {
 #[test]
 fn stable_high_ping_never_warns() {
     let mut engine = CoreWarnEngine::default();
-    let mut sec = 1;
-    for _ in 0..(LATENCY_SUSTAIN_SECS as i64 + 20) {
+    for sec in 1..=(LATENCY_SUSTAIN_SECS as i64 + 20) {
         engine.tick(&[sample_rtt(4, IP, Some(200))], sec * 1000);
-        sec += 1;
     }
     assert!(
         !engine.core_ping_warn(4),

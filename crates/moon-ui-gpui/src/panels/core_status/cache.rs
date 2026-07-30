@@ -50,8 +50,8 @@ impl CoreStatusView {
                 endpoint,
                 ping_warn: b.warn.core_ping_warn(id),
                 exch_warn: b.warn.core_exch_warn(id),
-                ping_base: b.warn.core_ping_baseline(id),
-                exch_base: b.warn.core_exch_baseline(id),
+                ping_sev: b.warn.core_ping_level(id),
+                exch_sev: b.warn.core_exch_level(id),
             });
         }
         out

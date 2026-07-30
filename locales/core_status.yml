@@ -246,6 +246,53 @@ core_status.warn_cfg.exch:
   ru: "Скачок пинга биржи"
   en: "Exchange ping spike"
   es: "Pico de ping de bolsa"
+# Column captions on a warning row (above the controls).
+core_status.warn_cfg.col.on:
+  ru: "Вкл"
+  en: "On"
+  es: "Act"
+core_status.warn_cfg.col.chart:
+  ru: "Чарт"
+  en: "Chart"
+  es: "Gráf"
+core_status.warn_cfg.col.sound:
+  ru: "Звук"
+  en: "Sound"
+  es: "Sonido"
+# Threshold captions.
+core_status.warn_cfg.p.threshold:
+  ru: "Порог"
+  en: "Level"
+  es: "Umbral"
+core_status.warn_cfg.p.hold:
+  ru: "Держ"
+  en: "Hold"
+  es: "Ret"
+core_status.warn_cfg.p.growth:
+  ru: "Рост"
+  en: "Rise"
+  es: "Subida"
+core_status.warn_cfg.p.window:
+  ru: "Окно"
+  en: "Window"
+  es: "Ventana"
+core_status.warn_cfg.p.yellow:
+  ru: "Жёлт"
+  en: "Yellow"
+  es: "Amar"
+core_status.warn_cfg.p.red:
+  ru: "Красн"
+  en: "Red"
+  es: "Rojo"
+# "no sound" option and the seconds unit in the alert popup.
+core_status.warn_cfg.sound_none:
+  ru: "Нет"
+  en: "None"
+  es: "Ninguno"
+core_status.warn_cfg.u.sec:
+  ru: "с"
+  en: "s"
+  es: "s"
 
 # --- Units and relative time ---
 core_status.mb:

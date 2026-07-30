@@ -941,7 +941,16 @@ impl Backend {
         };
         let enabled = self.warn_enabled();
         self.warn.set_enabled(enabled);
+        let tuning = self.warn_tuning();
+        self.warn.set_tuning(tuning);
         let result = self.warn.tick(&samples, now_ms);
+        // Play each newly-opened axis's alert sound once (independent of chart visibility). The axis
+        // is necessarily enabled — a disabled axis opens nothing.
+        for axis in &result.opened {
+            if let Some(name) = self.warn_sound(*axis) {
+                crate::media::sound::play(&name);
+            }
+        }
         // Record this second's raw chart history into the shared rings (backend-always, so the
         // Core Status chart and the upcoming badge slices have data regardless of any open panel).
         let sec = now_ms / 1000;
@@ -1111,6 +1120,73 @@ impl Backend {
         }
     }
 
+    /// The engine's numeric detection thresholds, projected from the persisted per-axis params.
+    /// Latency percents (`yellow`/`red` as +N %) become the ratio ×100 the engine consumes.
+    fn warn_tuning(&self) -> crate::backend::core_warn::WarnTuning {
+        let p = &self.layout.warn_params;
+        // Ratio ×100; clamp yellow to red so a mis-set yellow > red can't make the yellow band
+        // unreachable (severity checks red first) — it just collapses to no yellow.
+        let ping_red = 100 + u32::from(p.ping.red);
+        let exch_red = 100 + u32::from(p.exch.red);
+        crate::backend::core_warn::WarnTuning {
+            cpu_pct: u32::from(p.cpu.pct),
+            // Hold clamped to ≥1: a hand-edited 0 would otherwise make `next >= hold` true even on a
+            // non-critical second (counter resets to 0), warning permanently.
+            cpu_hold: u32::from(p.cpu.hold).max(1),
+            mem_pct: u32::from(p.mem.pct),
+            mem_window: i64::from(p.mem.window),
+            ping_yellow_num: (100 + u32::from(p.ping.yellow)).min(ping_red),
+            ping_red_num: ping_red,
+            ping_window: i64::from(p.ping.window),
+            ping_hold: u32::from(p.ping.hold).max(1),
+            exch_yellow_num: (100 + u32::from(p.exch.yellow)).min(exch_red),
+            exch_red_num: exch_red,
+            exch_window: i64::from(p.exch.window),
+            exch_hold: u32::from(p.exch.hold).max(1),
+        }
+    }
+
+    /// The alert sound stem configured for one axis, or `None` when silent.
+    fn warn_sound(&self, axis: crate::backend::core_warn::WarnAxis) -> Option<String> {
+        use crate::backend::core_warn::WarnAxis;
+        let p = &self.layout.warn_params;
+        let sound = match axis {
+            WarnAxis::SysCpu => &p.cpu.sound,
+            WarnAxis::MemGrowth => &p.mem.sound,
+            WarnAxis::Unreachable => &p.conn.sound,
+            WarnAxis::Ping => &p.ping.sound,
+            WarnAxis::ExchPing => &p.exch.sound,
+        };
+        sound.clone().filter(|s| !s.trim().is_empty())
+    }
+
+    /// Whether one axis draws on charts (separate from whether it is detected/recorded).
+    fn warn_chart(&self, axis: crate::backend::core_warn::WarnAxis) -> bool {
+        use crate::backend::core_warn::WarnAxis;
+        let p = &self.layout.warn_params;
+        match axis {
+            WarnAxis::SysCpu => p.cpu.chart,
+            WarnAxis::MemGrowth => p.mem.chart,
+            WarnAxis::Unreachable => p.conn.chart,
+            WarnAxis::Ping => p.ping.chart,
+            WarnAxis::ExchPing => p.exch.chart,
+        }
+    }
+
+    /// The persisted per-axis warning params (chart visibility, sound, thresholds).
+    pub(crate) fn warn_params(&self) -> moon_core::config::layout::WarnParams {
+        self.layout.warn_params.clone()
+    }
+
+    /// Replace the per-axis warning params, marking the layout dirty and invalidating chart marks.
+    pub(crate) fn set_warn_params(&mut self, params: moon_core::config::layout::WarnParams) {
+        if self.layout.warn_params != params {
+            self.layout.warn_params = params;
+            self.layout_dirty = true;
+            self.warn.bump_rev();
+        }
+    }
+
     /// Warning episodes for one server within `[from_ms, to_ms]`: persisted (closed) plus still-open.
     ///
     /// The chart draws a badge per episode. Merges the SQLite log with the engine's live open
@@ -1139,9 +1215,10 @@ impl Backend {
                 out.push(open);
             }
         }
-        // A disabled axis hides its already-recorded history from the chart too, not just new episodes.
+        // A disabled axis hides its already-recorded history from the chart too; an axis with
+        // "show on chart" off is still recorded and listed, just not drawn here.
         let enabled = self.warn_enabled();
-        out.retain(|episode| enabled.allows(episode.axis));
+        out.retain(|episode| enabled.allows(episode.axis) && self.warn_chart(episode.axis));
         out
     }
 

@@ -20,8 +20,8 @@ use moon_core::session::CoreId;
 use super::CoreStatusView;
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::presentation::{
-    LoadLevel, cpu_level, cpu_load, free_mem_level, level_color, memory_free, memory_u16,
-    metric_icon, order_level, percent, ping, ping_level,
+    LoadLevel, cpu_level, cpu_load, free_mem_level, lat_level, level_color, memory_free, memory_u16,
+    metric_icon, percent, ping,
 };
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
@@ -278,9 +278,7 @@ fn server_row(
                 // client↔core, then core→exchange.
                 .child({
                     let (value, level) = worst_by_level(&group.cores, |c| {
-                        c.sys
-                            .round_trip_ms
-                            .map(|v| (v, ping_level(Some(v), c.ping_base)))
+                        c.sys.round_trip_ms.map(|v| (v, lat_level(c.ping_sev)))
                     });
                     metric_cell(
                         "icons/globe.svg",
@@ -295,7 +293,7 @@ fn server_row(
                     let (value, level) = worst_by_level(&group.cores, |c| {
                         c.sys
                             .order_api_latency_ms
-                            .map(|v| (u32::from(v), order_level(Some(v), c.exch_base)))
+                            .map(|v| (u32::from(v), lat_level(c.exch_sev)))
                     });
                     metric_cell(
                         "icons/external-link.svg",
@@ -350,19 +348,11 @@ fn core_row(
         ConnStatus::Failed(_) => p.red,
         ConnStatus::Disconnected => p.text_muted,
     };
-    // Only a Ready core has a live ping; a dropped core keeps a stale reading that must not show an
-    // alarm colour, so its ping/exch cells stay neutral (the name colour already marks it offline).
-    let ready = core.status == ConnStatus::Ready;
-    let ping_lvl = if ready {
-        ping_level(core.sys.round_trip_ms, core.ping_base)
-    } else {
-        LoadLevel::Normal
-    };
-    let exch_lvl = if ready {
-        order_level(core.sys.order_api_latency_ms, core.exch_base)
-    } else {
-        LoadLevel::Normal
-    };
+    // The engine computes each ping's severity against the core's own baseline and leaves a dropped
+    // core at `Normal` (only a Ready core has a live reading), so a stale offline ping shows no alarm
+    // colour without a separate gate here.
+    let ping_lvl = lat_level(core.ping_sev);
+    let exch_lvl = lat_level(core.exch_sev);
     h_flex()
         .w_full()
         .min_w_0()
