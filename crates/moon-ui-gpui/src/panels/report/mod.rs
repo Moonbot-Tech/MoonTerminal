@@ -17,10 +17,16 @@ mod export;
 mod query;
 mod render;
 mod state;
+mod strategy_filter;
 mod widths;
 mod window;
 
 use query::ReportData;
+use strategy_filter::{
+    ReportStrategyCatalog, ReportStrategyChoice, ReportStrategyDelegate, ReportStrategySearch,
+    exact_strategy_selection, merge_strategy_metadata, normalized_strategy_filter_keys,
+    ordered_strategy_cores, strategy_choice_indices, strategy_groups, strategy_selection_summary,
+};
 use widths::complete_widths;
 
 use std::collections::HashSet;
@@ -32,12 +38,11 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::MoonWindowExt as _;
 use moon_ui::{
-    DockArea, IndexPath, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
-    MoonCheckbox, MoonCheckboxSize, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
-    MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonNotification, MoonPalette, MoonSelect, MoonSelectEvent, MoonSelectItem,
-    MoonSelectState, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt,
-    h_flex, v_flex,
+    DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
+    MoonCheckboxSize, MoonCombobox, MoonComboboxEvent, MoonComboboxState, MoonDataCell,
+    MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput,
+    MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette,
+    MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -221,6 +226,8 @@ pub struct ReportPanel {
     pub(super) cores: Vec<(u64, String)>,
     /// Strategy identities currently available to the exact strategy selector.
     pub(super) strategies: Vec<ReportStrategy>,
+    /// Exact keys confirmed by the latest metadata refresh, excluding retained stale choices.
+    pub(super) available_strategy_keys: HashSet<ReportStrategyKey>,
     /// Cached schema, kept outside `data` so failures cannot collapse controls or widths.
     pub(super) cols: Rc<Vec<String>>,
     /// Report rows and totals; in-flight refreshes may retain stale data, but
@@ -232,10 +239,18 @@ pub struct ReportPanel {
 
     /// Multi-selected core UIDs; an empty set means all cores.
     pub(super) sel_cores: HashSet<u64>,
-    /// Exact selected strategy, or `None` for all strategies.
-    pub(super) strategy: Option<ReportStrategyKey>,
-    /// Searchable, virtualized MoonUI selector synchronized with [`Self::strategy`].
-    strategy_select: Entity<MoonSelectState<ReportStrategyKey>>,
+    /// Exact selected strategies, or `None` for implicit All as in the shared core selector.
+    pub(super) selected_strategies: Option<HashSet<ReportStrategyKey>>,
+    /// Searchable, grouped, virtualized MoonUI selector synchronized with Report filters.
+    strategy_select: Entity<MoonComboboxState<ReportStrategyDelegate>>,
+    /// Immutable grouped rows and availability indices retained until metadata changes.
+    strategy_catalog: Rc<ReportStrategyCatalog>,
+    /// Search text shared across metadata delegate replacements.
+    strategy_search: ReportStrategySearch,
+    /// Whether metadata changes require replacing the grouped combobox delegate on next render.
+    strategy_select_items_dirty: bool,
+    /// Whether filter changes require replacing the retained combobox selection on next render.
+    strategy_select_selection_dirty: bool,
     coin: Entity<MoonInputState>,
     /// Mirror of the coin input, updated on `Change`.
     ///

@@ -46,28 +46,49 @@ impl ReportPanel {
         )
     }
 
-    /// Render the searchable, virtualized exact strategy selector.
+    /// Render the searchable, virtualized strategy selector grouped by core.
     ///
     /// Args:
     ///     cx: Panel context used for responsive trigger and menu sizing.
     ///
     /// Returns:
-    ///     A MoonUI select that renders only visible strategy rows.
+    ///     A MoonUI combobox that renders only visible core and strategy rows.
     pub(super) fn strategy_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        div().w(design::font_w_px(cx, 300.0)).child(
-            MoonSelect::new(&self.strategy_select)
-                .id("rep-strategy")
-                .placeholder(t!("report.all_strategies").to_string())
-                .cleanable(true)
-                .searchable(true)
-                .search_placeholder(t!("report.search_strategies").to_string())
-                .appearance(true)
-                .trigger_variant(MoonButtonVariant::Soft)
-                .trigger_size(MoonButtonSize::Action)
-                .menu_width(f32::from(design::font_w_px(cx, 380.0)))
-                .menu_max_height(design::ui_value(cx, 420.0))
-                .menu_size(MoonMenuSize::Compact),
-        )
+        let (summary, _) = strategy_selection_summary(
+            &self.available_strategy_keys,
+            self.selected_strategies.as_ref(),
+            &t!("report.all_strategies"),
+            |n| t!("report.strategies_n", n = n).to_string(),
+        );
+        div()
+            .w(design::font_w_px(cx, crate::controls::CORE_COMBO_TRIGGER_W))
+            .child(
+                MoonCombobox::new(&self.strategy_select)
+                    .h(design::ui_px(cx, 26.0))
+                    .placeholder(t!("report.all_strategies").to_string())
+                    .cleanable(false)
+                    .search_placeholder(t!("report.search_strategies").to_string())
+                    .appearance(true)
+                    .menu_width(design::font_w_px(cx, 380.0))
+                    .menu_max_h(design::ui_px(cx, 420.0))
+                    .render_trigger(move |_, _, cx| {
+                        let palette = MoonPalette::active(cx);
+                        h_flex()
+                            .w_full()
+                            .justify_between()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .truncate()
+                                    .child(summary.clone()),
+                            )
+                            // A custom MoonCombobox trigger suppresses its built-in trailing icon.
+                            .child(div().text_color(rgb(palette.text_muted)).child("▾"))
+                    }),
+            )
     }
 
     /// Render the direction filter: all, Long, or Short.
