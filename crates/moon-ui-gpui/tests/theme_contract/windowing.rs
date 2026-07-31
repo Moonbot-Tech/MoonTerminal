@@ -259,3 +259,53 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
         "docs/FIRETEST.md должен описывать FireTest как runtime/perf сценарий, а не статическую проверку исходников"
     );
 }
+
+#[test]
+fn a_diagnostic_run_never_writes_the_developers_workspace() {
+    // FireTest drives the real app: it opens tool windows, switches the locale, changes the price
+    // scale, and will detach and repin panels. Every one of those marks state dirty, and for a long
+    // time the 100 ms tick duly flushed it — so running the diagnostic quietly rewrote the saved
+    // workspace it was supposed to be observing.
+    //
+    // There are exactly two places anything reaches disk, and both must be gated as a WHOLE rather
+    // than per file: a guard per `*_dirty` branch is one a newly persisted thing can be added
+    // without.
+    let startup = read_src("startup.rs");
+    let main_rs = read_src("main.rs");
+
+    assert!(
+        main_rs.contains("persist_allowed: bool"),
+        "Backend must carry the flag that decides whether this process may persist at all"
+    );
+    assert!(
+        startup.contains("persist_allowed: firetest_config.is_none()"),
+        "the flag must be derived from --debug-script at construction, not set later by a caller \
+         who might forget"
+    );
+
+    let quit = braced_body(&startup, "cx.on_app_quit(");
+    assert!(
+        quit.contains("if !b.persist_allowed {"),
+        "the quit flush must bail out before it writes anything"
+    );
+
+    // The debounced flush is the one that actually fires during a run: FireTest ends with
+    // `std::process::exit`, which never reaches `on_app_quit` at all.
+    assert!(
+        startup.contains("if b.persist_allowed {"),
+        "the debounced flush must be wrapped as a whole"
+    );
+    for saver in [
+        "b.layout.save()",
+        "dock_persist::save_all",
+        "detached::save_all",
+        "chart_persist::save_all",
+        "b.tab_badges.save()",
+        "b.config.save()",
+    ] {
+        assert!(
+            startup.contains(saver),
+            "{saver} is expected in startup.rs; if it moved, this contract must follow it"
+        );
+    }
+}

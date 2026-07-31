@@ -292,6 +292,14 @@ struct Backend {
     report_window_view: Option<WeakEntity<crate::panels::ReportPanel>>,
     /// Built-in debug scenario runner (`--debug-script chart-smoke`). None in normal app runs.
     firetest: Option<firetest::Runtime>,
+    /// Whether this process may write layout, docks, detached geometry, charts or config to disk.
+    ///
+    /// False for the whole life of a `--debug-script` run. FireTest drives the real app — it opens
+    /// tool windows, switches the locale, changes the price scale, and will detach and repin
+    /// panels — and every one of those marks state dirty that the 100 ms tick would flush. Without
+    /// this the diagnostic run silently rewrites the developer's saved workspace, which it did for
+    /// a long time. Checked at the only two places that flush, in `startup.rs`.
+    persist_allowed: bool,
     /// Detached dock panels, recording panel identity, source group, and window geometry.
     /// Loaded at startup and saved after changes; ported from egui's `WindowLayout.detached`.
     detached: Vec<detached::DetachedSpec>,

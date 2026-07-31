@@ -362,6 +362,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
             report_window: None,
             report_window_view: None,
             firetest: firetest_config.clone().map(firetest::Runtime::new),
+            // A diagnostic run never persists: it drives the real app, so everything it does would
+            // otherwise land in the developer's saved workspace.
+            persist_allowed: firetest_config.is_none(),
             hovered_chart: None,
             detached,
             detached_dirty: false,
@@ -478,6 +481,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
             moon_core::detect_diag::line("[quit] on_app_quit → сохраняю charts.json");
             app_quit_backend.update(cx, |b, _| {
                 b.quitting = true;
+                // One of the two places anything reaches disk; the other is the debounced tick
+                // below. A diagnostic run leaves the workspace exactly as it found it.
+                if !b.persist_allowed {
+                    return;
+                }
                 if b.config_dirty {
                     if let Err(e) = b.config.save() {
                         log::warn!("config save (quit) failed: {e}");
@@ -597,36 +605,42 @@ pub(crate) fn run() -> anyhow::Result<()> {
                             b.session
                                 .reconnect(id, &b.config, b.reports.as_ref().map(|h| &h.tx));
                         }
-                        if b.layout_dirty {
-                            b.layout.save();
-                            b.layout_dirty = false;
-                        }
-                        if b.dock_dirty {
-                            dock_persist::save_all(&b.dock_states);
-                            b.dock_dirty = false;
-                        }
-                        if b.detached_dirty {
-                            detached::save_all(&b.detached);
-                            b.detached_dirty = false;
-                        }
-                        if b.chart_specs_dirty {
-                            chart_persist::save_all(&b.chart_specs);
-                            b.chart_specs_dirty = false;
-                        }
-                        if b.tab_badges_dirty {
-                            b.tab_badges.save();
-                            b.tab_badges_dirty = false;
-                        }
-                        if b.figures.borrow().dirty {
-                            b.figures.borrow_mut().save();
-                        }
-                        if b.config_dirty {
-                            // Debounce config saves: mouse-wheel resizing updates memory frequently,
-                            // but writes to disk once per drain tick rather than on every wheel tick.
-                            if let Err(e) = b.config.save() {
-                                log::warn!("config save (debounced) failed: {e}");
+                        // The debounced flush — the other of the two places anything reaches disk.
+                        // Guarded as a whole rather than per file so a new persisted thing added
+                        // below cannot forget the rule. The dirty flags stay set: nothing is lost,
+                        // it is simply never written during a diagnostic run.
+                        if b.persist_allowed {
+                            if b.layout_dirty {
+                                b.layout.save();
+                                b.layout_dirty = false;
                             }
-                            b.config_dirty = false;
+                            if b.dock_dirty {
+                                dock_persist::save_all(&b.dock_states);
+                                b.dock_dirty = false;
+                            }
+                            if b.detached_dirty {
+                                detached::save_all(&b.detached);
+                                b.detached_dirty = false;
+                            }
+                            if b.chart_specs_dirty {
+                                chart_persist::save_all(&b.chart_specs);
+                                b.chart_specs_dirty = false;
+                            }
+                            if b.tab_badges_dirty {
+                                b.tab_badges.save();
+                                b.tab_badges_dirty = false;
+                            }
+                            if b.figures.borrow().dirty {
+                                b.figures.borrow_mut().save();
+                            }
+                            if b.config_dirty {
+                                // Debounce config saves: mouse-wheel resizing updates memory frequently,
+                                // but writes to disk once per drain tick rather than on every wheel tick.
+                                if let Err(e) = b.config.save() {
+                                    log::warn!("config save (debounced) failed: {e}");
+                                }
+                                b.config_dirty = false;
+                            }
                         }
                         b.flush_backend_notify(cx);
                         let reqs = std::mem::take(&mut b.show_group_request);
