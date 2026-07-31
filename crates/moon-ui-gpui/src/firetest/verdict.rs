@@ -539,16 +539,22 @@ fn check_storm(
     // entity notifications rather than by the chart's frames, so dividing them by `chart_present`
     // measures nothing — the recorded ratio wanders between 0.04 and 0.80 in the baseline alone.
     //
-    // What the run promises about them is `docs/FIRETEST.md`'s "Shell/Orders/Chart GPUI render не
-    // должны улетать в сотни render/s". That is an absolute statement and it stays one. Only
-    // `chart_render` is divided by the chart count: it is bumped once per chart panel, so its
-    // LEVEL genuinely scales with how many charts the layout restored — unlike a delta, where the
-    // per-chart term cancels in the subtraction.
+    // What the run promises about them is absolute, and it stays absolute. Only `chart_render` is
+    // divided by the chart count: it is a GLOBAL counter, bumped once per chart panel per render,
+    // so its LEVEL genuinely scales with how many charts the layout restored — unlike a delta,
+    // where the per-chart term cancels in the subtraction.
     //
     // The narrower contract — cursor movement must not wake the chart entity at all — is stated
     // directly by `chart_mouse_move_entity`, `chart_input_notify` and `chart_canvas_notify`, which
     // the caller checks and which read 0 on a healthy run. Those are the oracle; this is the
     // backstop for a wake arriving by some other route.
+    //
+    // Shell and Orders are held at 30/s: measured across 93 sample-seconds, including every storm
+    // second, they never left 5.7/s average and 11/s peak. The chart ceiling is far looser because
+    // a known behaviour legitimately reaches it — a newly arrived chart pulses its border for
+    // 2600 ms (`chart_tabs/stack.rs`), which notifies the owning stack at frame rate and re-renders
+    // every panel in it, ~59/s per chart. That is the app's cost to decide on, not a threshold to
+    // tighten blindly; drop this to match Shell once it is settled.
     check_max(
         fail,
         &named("chart_render_per_chart"),
@@ -559,13 +565,13 @@ fn check_storm(
         fail,
         &named("shell_render"),
         storm.max_rate("shell_render"),
-        120.0,
+        30.0,
     );
     check_max(
         fail,
         &named("orders_render"),
         storm.max_rate("orders_render"),
-        120.0,
+        30.0,
     );
 
     // The chart's own pass. Draws are per-frame work by nature, so the absolute ratio is about
