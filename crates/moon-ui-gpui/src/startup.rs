@@ -481,8 +481,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
             moon_core::detect_diag::line("[quit] on_app_quit → сохраняю charts.json");
             app_quit_backend.update(cx, |b, _| {
                 b.quitting = true;
-                // One of the two places anything reaches disk; the other is the debounced tick
-                // below. A diagnostic run leaves the workspace exactly as it found it.
+                // One of the two DEBOUNCED flush sites; the other is the coordinator tick below.
+                // Not reached by FireTest at all, which exits through `std::process::exit` — kept
+                // gated so the rule holds however the run ends.
                 if !b.persist_allowed {
                     return;
                 }
@@ -605,10 +606,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
                             b.session
                                 .reconnect(id, &b.config, b.reports.as_ref().map(|h| &h.tx));
                         }
-                        // The debounced flush — the other of the two places anything reaches disk.
-                        // Guarded as a whole rather than per file so a new persisted thing added
-                        // below cannot forget the rule. The dirty flags stay set: nothing is lost,
-                        // it is simply never written during a diagnostic run.
+                        // The debounced workspace flush. Guarded as a whole rather than per file so
+                        // a newly persisted thing added below cannot forget the rule; the dirty
+                        // flags stay set, so nothing is lost, it is simply never written.
+                        //
+                        // This is the flush a diagnostic run actually reaches. It does NOT make the
+                        // run write-free: the report DB writer, `strat_db`, `AppConfig::load`'s own
+                        // uid save, log purging and panels that write straight through all bypass
+                        // the dirty-flag mechanism entirely. `order-cancel-lag` in particular
+                        // places a real order that lands permanently in `reports.sqlite`.
                         if b.persist_allowed {
                             if b.layout_dirty {
                                 b.layout.save();

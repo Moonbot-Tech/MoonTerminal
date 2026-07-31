@@ -292,13 +292,20 @@ struct Backend {
     report_window_view: Option<WeakEntity<crate::panels::ReportPanel>>,
     /// Built-in debug scenario runner (`--debug-script chart-smoke`). None in normal app runs.
     firetest: Option<firetest::Runtime>,
-    /// Whether this process may write layout, docks, detached geometry, charts or config to disk.
+    /// Whether this process may flush the debounced workspace state — layout, docks, detached
+    /// geometry, chart specs, badges, figures and config — to disk.
     ///
-    /// False for the whole life of a `--debug-script` run. FireTest drives the real app — it opens
+    /// False for the whole life of a `--debug-script` run. FireTest drives the real app: it opens
     /// tool windows, switches the locale, changes the price scale, and will detach and repin
-    /// panels — and every one of those marks state dirty that the 100 ms tick would flush. Without
-    /// this the diagnostic run silently rewrites the developer's saved workspace, which it did for
-    /// a long time. Checked at the only two places that flush, in `startup.rs`.
+    /// panels. Every one of those marks state dirty, and the 100 ms tick duly wrote it, so the
+    /// diagnostic silently rewrote the workspace it was meant to be observing.
+    ///
+    /// Scope, stated precisely because it is narrower than "a run writes nothing": this gates the
+    /// two DEBOUNCED flush sites in `startup.rs` — the coordinator tick and the quit hook. It does
+    /// NOT gate writes that bypass the dirty-flag mechanism: the report DB writer, the one-shot
+    /// chart-id remap that runs before this struct exists, `AppConfig::load`'s own migration save,
+    /// or panels that write straight through (`detects_view`, `news_tag_settings`, the Settings
+    /// window's snapshot save). Those are separate holes; closing them needs a different mechanism.
     persist_allowed: bool,
     /// Detached dock panels, recording panel identity, source group, and window geometry.
     /// Loaded at startup and saved after changes; ported from egui's `WindowLayout.detached`.
