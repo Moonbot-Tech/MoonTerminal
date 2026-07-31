@@ -217,30 +217,80 @@ impl ReportPanel {
         )
     }
 
-    /// Detached-window trash button that toggles deletion mode and doubles as its Save.
+    /// Build the responsive bottom action bar for the current row selection.
     ///
-    /// A square icon button matching the main toolbar's window launchers (raw `ICON_BTN_W`, an SVG
-    /// glyph, `ToolbarCompact`). Soft (inactive) → click enters the mode and shows the `deleted`
-    /// checkbox column; while in the mode with no edits, a click leaves it; once any checkbox
-    /// changed it turns amber and a click commits (see [`ReportPanel::on_delete_button`]).
-    /// `selected` marks the active mode so it reads as pressed even before an edit arms the amber.
-    pub(super) fn delete_mode_button(&self, cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        let variant = if self.delete_dirty() {
-            MoonButtonVariant::Amber
-        } else {
-            MoonButtonVariant::Soft
-        };
-        MoonButton::new("rep-delmode")
-            // Icon-only width stays raw, like the toolbar launchers — one source in `controls::toolbar`.
-            .width(crate::controls::toolbar::ICON_BTN_W)
-            .variant(variant)
-            .size(MoonButtonSize::ToolbarCompact)
-            .selected(self.delete_mode)
-            .leading_icon(MoonButtonIconSlot::new("icons/delete.svg").color(p.text_soft))
-            .tooltip(t!("report.delete_mode_tip").to_string())
-            .on_click(cx.listener(|t, _, window, c| t.on_delete_button(window, c)))
-            .render()
+    /// Args:
+    ///     palette: Active Moon palette used for the contained selection surface.
+    ///     cx: Panel context used to wire actions and count selected replicated targets.
+    ///
+    /// Returns:
+    ///     A wrapping action row suitable for narrow dock and wide standalone hosts.
+    pub(super) fn selection_bar(&self, palette: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        let selected = self.selection.len();
+        let mutable = self.selection.mutable_count();
+        let mut bar = h_flex()
+            .w_full()
+            .flex_wrap()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .bg(rgba_from(palette.accent, 0.08))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(design::ui_px(cx, 130.0))
+                    .text_size(design::t_body(cx))
+                    .font_bold()
+                    .text_color(rgb(palette.text))
+                    .child(t!("report.selection.count", n = selected).to_string()),
+            )
+            .child(
+                MoonButton::new("report-selection-clear")
+                    .size(MoonButtonSize::Micro)
+                    .variant(MoonButtonVariant::Ghost)
+                    .label(t!("report.selection.clear").to_string())
+                    .leading_icon(MoonButtonIconSlot::new("icons/close.svg"))
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_report_selection(cx)))
+                    .render(),
+            )
+            .child(
+                MoonButton::new("report-selection-copy")
+                    .size(MoonButtonSize::Micro)
+                    .outline()
+                    .label(t!("report.selection.copy").to_string())
+                    .leading_icon(MoonButtonIconSlot::new("icons/copy.svg"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.copy_report_selection(window, cx)),
+                    )
+                    .render(),
+            );
+        if mutable > 0 {
+            let (label, icon) = if self.deleted_only {
+                (
+                    t!("report.selection.restore", n = mutable).to_string(),
+                    "icons/undo-2.svg",
+                )
+            } else {
+                (
+                    t!("report.selection.delete", n = mutable).to_string(),
+                    "icons/delete.svg",
+                )
+            };
+            let mutation = MoonButton::new("report-selection-mutate")
+                .size(MoonButtonSize::Micro)
+                .label(label)
+                .leading_icon(MoonButtonIconSlot::new(icon))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.mutate_report_selection(!this.deleted_only, window, cx)
+                }));
+            bar = bar.child(if self.deleted_only {
+                mutation.outline().render()
+            } else {
+                mutation.danger().render()
+            });
+        }
+        bar.into_any_element()
     }
 
     /// Build the CSV/XLSX export menu for the visible or full schema.

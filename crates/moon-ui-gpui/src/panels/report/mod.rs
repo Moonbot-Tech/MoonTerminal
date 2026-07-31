@@ -16,12 +16,14 @@ mod controls;
 mod export;
 mod query;
 mod render;
+mod selection;
 mod state;
 mod strategy_filter;
 mod widths;
 mod window;
 
 use query::ReportData;
+use selection::ReportSelection;
 use strategy_filter::{
     ReportStrategyCatalog, ReportStrategyChoice, ReportStrategyDelegate, ReportStrategySearch,
     exact_strategy_selection, merge_strategy_metadata, normalized_strategy_filter_keys,
@@ -43,7 +45,7 @@ use moon_ui::{
     MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDataTableWidthPolicy,
     MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
     MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone, MoonWindowFrame, Panel,
-    PanelEvent, PanelState, Root, StyledExt, h_flex, v_flex,
+    PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -278,14 +280,8 @@ pub struct ReportPanel {
     pub(super) deleted_only: bool,
     /// Whether this Analytics-scoped panel excludes undated/non-positive close timestamps.
     closed_only: bool,
-    /// Deletion mode (detached window only): the `deleted` column's checkboxes become editable and
-    /// the trash button turns into a Save. Toggled by [`Self::on_delete_button`].
-    pub(super) delete_mode: bool,
-    /// Uncommitted deletion-mode edits: `(core_uid, newrecid) -> desired deleted flag`, holding
-    /// only rows whose desired state DIFFERS from the database, so a non-empty map means the Save
-    /// is armed. Cleared on commit ([`Self::commit_deletions`]); kept across background refreshes
-    /// so an in-flight edit is not lost when the writer generation bumps.
-    pub(super) pending_deleted: std::collections::HashMap<(u64, i64), bool>,
+    /// Controlled multi-selection keyed by stable report row identity.
+    selection: ReportSelection,
     needs_query: bool,
     query_inflight: bool,
     query_seq: u64,

@@ -65,19 +65,45 @@ report.filter.deleted_tip:
   ru: "Только удалённые из отчёта сделки. Выкл — удалённые скрыты."
   en: "Only trades deleted from the report. Off — deleted trades are hidden."
   es: "Solo operaciones eliminadas del informe. Desactivado: se ocultan."
-# Tooltip on the trash button (detached window only) that toggles deletion mode; the SVG icon is
-# added in code. In the mode the `deleted` column's checkboxes become editable and the button turns
-# into a Save. Deleted trades are excluded from analytics.
-report.delete_mode_tip:
-  ru: "Режим пометки как удалённое. Удалённое не участвует в аналитике."
-  en: "Mark-as-deleted mode. Deleted trades are excluded from analytics."
-  es: "Modo de marcar como eliminado. Lo eliminado no cuenta en la analítica."
 # Error toast when a soft-delete/restore could not be sent (the core is offline or gone). The
-# edits stay armed (the button keeps the amber Save) so nothing is silently lost.
+# affected rows stay selected so nothing is silently lost.
 report.delete_send_failed:
-  ru: "Не удалось отправить пометку: ядро недоступно. Правки сохранены."
-  en: "Could not send the change: the core is unavailable. Edits are kept."
-  es: "No se pudo enviar el cambio: el núcleo no está disponible. Se conservan las ediciones."
+  ru: "Не удалось отправить изменение: ядро недоступно. Строки остались выбранными."
+  en: "Could not send the change: the core is unavailable. Rows remain selected."
+  es: "No se pudo enviar el cambio: el núcleo no está disponible. Las filas siguen seleccionadas."
+# Bottom action bar shown only while report rows are selected.
+report.selection.count:
+  ru: "Выбрано: %{n}"
+  en: "Selected: %{n}"
+  es: "Seleccionadas: %{n}"
+report.selection.clear:
+  ru: "Снять"
+  en: "Clear"
+  es: "Limpiar"
+report.selection.copy:
+  ru: "Копировать"
+  en: "Copy"
+  es: "Copiar"
+report.selection.delete:
+  ru: "Удалить (%{n})"
+  en: "Delete (%{n})"
+  es: "Eliminar (%{n})"
+report.selection.restore:
+  ru: "Восстановить (%{n})"
+  en: "Restore (%{n})"
+  es: "Restaurar (%{n})"
+report.selection.copied:
+  ru: "Сделки скопированы: %{n}"
+  en: "Copied trades: %{n}"
+  es: "Operaciones copiadas: %{n}"
+report.selection.delete_queued:
+  ru: "Поставлено на удаление: %{n}. Выбор снимется после ответа ядра."
+  en: "Queued for deletion: %{n}. Selection clears after the core response."
+  es: "En cola para eliminar: %{n}. La selección se borra tras la respuesta del núcleo."
+report.selection.restore_queued:
+  ru: "Поставлено на восстановление: %{n}. Выбор снимется после ответа ядра."
+  en: "Queued for restore: %{n}. Selection clears after the core response."
+  es: "En cola para restaurar: %{n}. La selección se borra tras la respuesta del núcleo."
 # The ▦ glyph is added separately in code; the dictionary contains text only.
 report.columns_menu:
   ru: "Колонки"

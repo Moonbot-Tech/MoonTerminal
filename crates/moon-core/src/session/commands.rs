@@ -338,7 +338,7 @@ impl SessionManager {
     }
 
     /// Soft-delete (`deleted=true`) or restore (`false`) report rows on `core`, addressed by
-    /// `newrecid` ranges and singles (the Report panel's deletion mode). An empty selection is a
+    /// `newrecid` ranges and singles from the Report action bar. An empty selection is a
     /// no-op. The core echoes `ReportEvent::RowsDeleted`, which flips the local replica's
     /// `deleted` flag; the Report panel refreshes from that echo, not optimistically.
     pub fn set_report_rows_deleted(

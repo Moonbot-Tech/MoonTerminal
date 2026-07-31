@@ -278,8 +278,7 @@ impl ReportPanel {
                 .unwrap_or(ReportKind::Real),
             deleted_only: false,
             closed_only: scope.is_some(),
-            delete_mode: false,
-            pending_deleted: std::collections::HashMap::new(),
+            selection: ReportSelection::default(),
             needs_query: true,
             query_inflight: false,
             query_seq: 0,
@@ -310,7 +309,7 @@ impl ReportPanel {
     ///     cx: Panel context used to update inputs and request one query.
     ///
     /// Returns:
-    ///     Nothing; pending deletion edits and unrelated coin filters are cleared.
+    ///     Nothing; row selection and unrelated coin filters are cleared.
     pub(crate) fn apply_scope(
         &mut self,
         scope: ReportScope,
@@ -327,8 +326,7 @@ impl ReportPanel {
         self.period = Period::All;
         self.deleted_only = false;
         self.closed_only = true;
-        self.delete_mode = false;
-        self.pending_deleted.clear();
+        self.selection.clear();
         self.coin_query.clear();
         self.coin_popup_open = false;
         self.from_query = scope.date_from.map(db::fmt_unix_date).unwrap_or_default();

@@ -310,7 +310,7 @@ pub enum CoreCmd {
     /// `SetOrderStop`; VStop uses a separate `update_vstop`. See `feed::order_edit`.
     UpdateOrderStopsForm { uid: u64, form: OrderStopsForm },
     /// Soft-delete (`deleted=true`) or restore (`false`) report rows on this core, addressed by
-    /// `newrecid` ranges and singles — the Report panel's "deletion mode". The core commits it to
+    /// `newrecid` ranges and singles from the Report selection action bar. The core commits it to
     /// its report database and echoes `ReportEvent::RowsDeleted` to all subscribers, which flips
     /// the local replica's `deleted` flag; nothing is applied locally until that echo. Soft, not
     /// physical: a `deleted=false` batch restores the rows.

@@ -8,6 +8,17 @@ impl ReportPanel {
     /// `vis` indexes [`Self::cols`]. Empty rows keep the header and show the
     /// panel overlay. Loading with stale data may reach this function; loading
     /// without data, `NotReady`, and `Failed` are replaced by `note_el`.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Current report snapshot and stable row identities.
+    /// * `vis` - Source-column indices selected for display.
+    /// * `p` - Active MoonUI palette.
+    /// * `cx` - Panel context used by row and sort callbacks.
+    ///
+    /// # Returns
+    ///
+    /// The table element with caller-controlled multi-row selection.
     pub(super) fn table_el(
         &self,
         data: Arc<ReportData>,
@@ -18,16 +29,15 @@ impl ReportPanel {
         let visible = Rc::new(vis.to_vec());
         let row_count = data.rows.len();
         let view = cx.entity();
-        // Keep a separate handle for row click callbacks; sorting also captures
-        // the original entity handle.
+        let view_sort = view.clone();
         let view_row = view.clone();
+        let view_click = view.clone();
+        let view_select_all = view.clone();
         let backend = self.backend.clone();
         let table_state = self.table_state.clone();
         let row_cols = self.cols.clone();
         let cols = columns::report_columns(&self.cols, vis);
-        // Deletion-mode inputs for the `deleted` checkbox cell, snapshotted for the row builder.
-        let delete_mode = self.delete_mode;
-        let pending = Rc::new(self.pending_deleted.clone());
+        let selection = self.selection.clone();
         // With no explicit filter, the coin menu may act on every core currently
         // known to the report selector.
         let selected_cores: Rc<Vec<u64>> = Rc::new(if self.sel_cores.is_empty() {
@@ -52,8 +62,7 @@ impl ReportPanel {
                     &selected_cores,
                     &backend,
                     &view_row,
-                    delete_mode,
-                    &pending,
+                    selection.contains(data.row_keys.get(ri).copied().flatten()),
                     p,
                 )
             })
@@ -61,11 +70,19 @@ impl ReportPanel {
             .columns(cols)
             .width_policy(MoonDataTableWidthPolicy::Preserve)
             .horizontal_scrollbar_visibility(MoonScrollbarVisibility::Always)
+            .controlled_row_selection(true)
             .header_height(design::TABLE_HEAD_H)
             .row_height(design::TABLE_ROW_H)
+            .on_select_row(move |row, window, app| {
+                let modifiers = window.modifiers();
+                view_click.update(app, |this, cx| this.select_report_row(row, modifiers, cx));
+            })
+            .on_select_all_rows(move |_window, app| {
+                view_select_all.update(app, |this, cx| this.select_all_report_rows(cx));
+            })
             .on_sort(move |key, ascending, _window, app| {
                 let key = key.to_string();
-                view.update(app, |t, cx| t.set_report_sort(&key, !ascending, cx));
+                view_sort.update(app, |t, cx| t.set_report_sort(&key, !ascending, cx));
             }),
         )
         .into_any_element()
@@ -273,13 +290,6 @@ impl Render for ReportPanel {
                 )
             })
             .child(self.deleted_check(cx))
-            // Deletion mode is a detached-window-only action (the compact docked filter row has no
-            // space for per-row checkboxes), and only meaningful when the schema has a `deleted`
-            // column to edit — otherwise the button would be a dead control.
-            .when(
-                self.detached && self.cols.iter().any(|c| c == "deleted"),
-                |f| f.child(self.delete_mode_button(cx)),
-            )
             // Export and the field selector sit at the RIGHT edge, away from the filters. The row
             // wraps, so they ride in their own `ml_auto` group instead of behind a `flex_1` spacer:
             // a flexible spacer inside a wrapping row would claim a whole line of its own once the
@@ -294,15 +304,12 @@ impl Render for ReportPanel {
                     .child(self.columns_menu(cx)),
             );
 
-        // Table. Deletion mode force-shows the `deleted` checkbox column without persisting it, so
-        // the mode is self-contained and leaves the saved column set untouched on exit.
+        // Table columns follow the user's persisted visibility set in every host.
         let vis: Vec<usize> = self
             .cols
             .iter()
             .enumerate()
-            .filter(|(_, c)| {
-                self.visible.contains(c.as_str()) || (self.delete_mode && c.as_str() == "deleted")
-            })
+            .filter(|(_, c)| self.visible.contains(c.as_str()))
             .map(|(i, _)| i)
             .collect();
         // Resolve `LoadState` before inspecting schema or visibility. A failed
@@ -405,6 +412,10 @@ impl Render for ReportPanel {
             .child(div().w_full().h(px(1.0)).bg(border))
             .child(table_el)
             .child(div().w_full().h(px(1.0)).bg(border))
+            .when(self.selection.len() > 0, |this| {
+                this.child(self.selection_bar(p, cx))
+                    .child(div().w_full().h(px(1.0)).bg(border))
+            })
             .child(totals);
         if self.standalone {
             root.child(

@@ -150,11 +150,18 @@ fn id_text_col(col: &str) -> bool {
     matches!(col, "strategyid" | "exorderid" | "taskid" | "newrecid")
 }
 
-/// Converts a database value to CSV text, formatting dates while leaving other values raw.
+/// Convert a database value to export text, formatting dates while leaving other values raw.
 ///
 /// `isshort` and `emulator` remain 0/1, numbers use their `Display` form, and NULL becomes an empty
 /// field. Report queries do not contain blobs.
-fn field_text(col: &str, v: &Value) -> String {
+///
+/// Args:
+///     col: Runtime report column name.
+///     v: SQLite value from that column.
+///
+/// Returns:
+///     Display-ready text shared by file export and clipboard TSV.
+pub(super) fn field_text(col: &str, v: &Value) -> String {
     if date_col(col) {
         return match v {
             Value::Integer(i) => db::fmt_unix(*i),

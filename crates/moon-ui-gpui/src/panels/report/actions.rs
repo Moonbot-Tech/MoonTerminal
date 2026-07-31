@@ -1,4 +1,4 @@
-//! [ReportPanel] user actions: core/side/period/kind filters, deletion mode, column toggles, and export.
+//! [ReportPanel] filters, controlled row selection, row actions, column toggles, and export.
 
 use super::*;
 
@@ -164,111 +164,178 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
-    /// Toggle the deleted-trades checkbox: off hides soft-deleted trades, on shows only them.
+    /// Toggle between active and deleted-only report rows.
+    ///
+    /// Args:
+    ///     on: Whether the next query should show only soft-deleted trades.
+    ///     cx: Panel context used to clear stale selection and request the query.
+    ///
+    /// Returns:
+    ///     Nothing. Selection is cleared before the action bar can change to the opposite command.
     pub(super) fn set_deleted_only(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.deleted_only != on {
             self.deleted_only = on;
+            self.selection.clear();
             self.request_requery(cx);
         }
     }
 
-    /// Whether the deletion-mode Save is armed: in mode with at least one uncommitted edit.
-    pub(super) fn delete_dirty(&self) -> bool {
-        self.delete_mode && !self.pending_deleted.is_empty()
-    }
-
-    /// The trash button: enter deletion mode, or — once in it — Save the edits when any exist, else
-    /// leave the mode. This one control is both the toggle and the commit, per the panel spec. The
-    /// `deleted` checkbox column is force-shown while the mode is on (see the render), so entering
-    /// needs no persisted column change.
-    pub(super) fn on_delete_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.delete_mode {
-            self.delete_mode = true;
-            cx.notify();
-        } else if self.pending_deleted.is_empty() {
-            self.delete_mode = false;
-            cx.notify();
-        } else {
-            self.commit_deletions(window, cx);
-        }
-    }
-
-    /// Record one checkbox edit. Stores the desired flag only when it DIFFERS from the database
-    /// value `orig`, so toggling a row back to its original state disarms it. Legacy rows
-    /// (`rec == 0`) have no `newrecid` and cannot be soft-deleted, so they are ignored.
-    pub(super) fn set_row_deleted(
+    /// Apply one table-row click to the controlled Report selection.
+    ///
+    /// Args:
+    ///     row: Current visible row index.
+    ///     modifiers: Native modifier snapshot from the owning window.
+    ///     cx: Panel context used to repaint the selection and action bar.
+    ///
+    /// Returns:
+    ///     Nothing. Shift takes precedence over Ctrl/Command.
+    pub(super) fn select_report_row(
         &mut self,
-        core: u64,
-        rec: i64,
-        want: bool,
-        orig: bool,
+        row: usize,
+        modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
-        if rec == 0 {
+        let Some(data) = self.data.data() else {
             return;
-        }
-        if want == orig {
-            self.pending_deleted.remove(&(core, rec));
-        } else {
-            self.pending_deleted.insert((core, rec), want);
-        }
+        };
+        self.selection.click(
+            data.row_keys.get(row).copied().flatten(),
+            &data.row_keys,
+            modifiers.shift,
+            modifiers.secondary(),
+        );
         cx.notify();
     }
 
-    /// Send the pending edits to their cores, grouped into one soft-delete and one restore batch
-    /// per core. Edits whose core accepted the send are dropped and the mode is left; edits whose
-    /// core rejected it (offline / removed from the session set) are KEPT so the amber Save stays
-    /// armed and the intent is not silently lost, with a toast reporting the failure. The rows
-    /// change on screen only when each core's `ReportEvent::RowsDeleted` echo lands and the replica
-    /// refreshes — not optimistically.
-    pub(super) fn commit_deletions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // (to_delete, to_restore) newrecid lists per core.
-        let mut per_core: std::collections::HashMap<u64, (Vec<i64>, Vec<i64>)> =
-            std::collections::HashMap::new();
-        for (&(core, rec), &want) in self.pending_deleted.iter() {
-            let entry = per_core.entry(core).or_default();
-            if want {
-                entry.0.push(rec);
-            } else {
-                entry.1.push(rec);
-            }
+    /// Select every stable row in the current filtered and sorted Report table.
+    ///
+    /// Args:
+    ///     cx: Panel context used to read the event-time result and repaint the action bar.
+    ///
+    /// Returns:
+    ///     Nothing. The current table is capped by the report query's top-100 contract.
+    pub(super) fn select_all_report_rows(&mut self, cx: &mut Context<Self>) {
+        let Some(data) = self.data.data() else {
+            return;
+        };
+        self.selection.select_all(&data.row_keys);
+        cx.notify();
+    }
+
+    /// Clear the controlled Report row selection.
+    ///
+    /// Args:
+    ///     cx: Panel context used to repaint the panel.
+    ///
+    /// Returns:
+    ///     Nothing after the selection and Shift anchor have been cleared.
+    pub(super) fn clear_report_selection(&mut self, cx: &mut Context<Self>) {
+        self.selection.clear();
+        cx.notify();
+    }
+
+    /// Copy selected rows as spreadsheet-friendly TSV in current visual order.
+    ///
+    /// Args:
+    ///     window: Owning window used to show the completion notification.
+    ///     cx: Panel context used for table state and clipboard access.
+    ///
+    /// Returns:
+    ///     Nothing when data, selection, or visible columns are empty.
+    pub(super) fn copy_report_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(data) = self.data.data() else {
+            return;
+        };
+        let indices = selection::ordered_visible_indices(
+            &self.cols,
+            &self.visible,
+            &self.table_state.read(cx),
+        );
+        if self.selection.len() == 0 || indices.is_empty() {
+            return;
         }
-        let mut failed: std::collections::HashSet<u64> = std::collections::HashSet::new();
-        self.backend.update(cx, |b, _| {
-            for (core, (del, res)) in per_core {
-                for (deleted, recs) in [(true, del), (false, res)] {
-                    if !recs.is_empty()
-                        && b.session
-                            .set_report_rows_deleted(core, deleted, Vec::new(), recs)
-                            .is_err()
-                    {
-                        failed.insert(core);
-                    }
+        let text = selection::selected_tsv(data, &self.cols, &indices, &self.selection);
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        window.push_notification(
+            MoonNotification::success(
+                t!("report.selection.copied", n = self.selection.len()).to_string(),
+            ),
+            cx,
+        );
+    }
+
+    /// Queue soft-delete or restore for every selected replicated row.
+    ///
+    /// Args:
+    ///     deleted: `true` sends the protocol's delete flag; `false` sends restore.
+    ///     window: Owning window used for queued/failure notifications.
+    ///     cx: Panel context used to access sessions and repaint retained selection.
+    ///
+    /// Returns:
+    ///     Nothing. Local queue acceptance is not treated as a core acknowledgement, so selected
+    ///     rows remain selected until `ReportEvent::RowsDeleted` refreshes them out of this view.
+    pub(super) fn mutate_report_selection(
+        &mut self,
+        deleted: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(data) = self.data.data() else {
+            return;
+        };
+        let targets = self.selection.mutation_targets(data);
+        if targets.is_empty() {
+            return;
+        }
+        let mut queued = 0usize;
+        let mut failed = false;
+        self.backend.update(cx, |backend, _| {
+            for (core_uid, rec_ids) in targets {
+                let count = rec_ids.len();
+                if backend
+                    .session
+                    .set_report_rows_deleted(core_uid, deleted, Vec::new(), rec_ids)
+                    .is_ok()
+                {
+                    queued += count;
+                } else {
+                    failed = true;
                 }
             }
         });
-        // Keep only the edits whose core rejected the send; the rest reached their core.
-        self.pending_deleted
-            .retain(|(core, _), _| failed.contains(core));
-        if failed.is_empty() {
-            self.delete_mode = false;
-        } else {
+        if queued > 0 {
+            let note = if deleted {
+                t!("report.selection.delete_queued", n = queued).to_string()
+            } else {
+                t!("report.selection.restore_queued", n = queued).to_string()
+            };
+            window.push_notification(MoonNotification::success(note), cx);
+        }
+        if failed {
             window.push_notification(
                 MoonNotification::error(t!("report.delete_send_failed").to_string()),
                 cx,
             );
         }
-        cx.notify();
     }
-    /// Toggle a column by name and persist it using [`Self::persist_visible`].
+
+    /// Toggle a column by name, clear invisible selection when needed, and persist the result.
     ///
     /// Hiding the last column writes an empty `app_meta` set but does not erase a prior per-context
     /// entry, which may restore that older non-empty set when the panel is recreated.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Runtime report column name to show or hide.
+    /// * `cx` - Panel context used to persist and redraw the new state.
     pub(super) fn toggle_column(&mut self, name: String, cx: &mut Context<Self>) {
         if self.visible.contains(name.as_str()) {
             self.visible.remove(&name);
         } else {
             self.visible.insert(name);
+        }
+        if self.visible.is_empty() {
+            self.selection.clear();
         }
         self.persist_visible(cx);
         cx.notify();
