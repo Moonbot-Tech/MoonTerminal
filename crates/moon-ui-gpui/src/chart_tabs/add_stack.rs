@@ -9,7 +9,7 @@ use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
 
 use super::stack::{
-    COMPACT_STABLE, ChartStackEntry, HIGHLIGHT, apply_setting, chart_stack_card, compare_role,
+    COMPACT_STABLE, ChartStackEntry, apply_setting, chart_stack_card, compare_role,
     render_chart_stack, resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin,
     set_panels_candle_view, set_panels_cursor_labels, set_panels_line_labels,
     set_panels_liquidations, set_panels_orderbook_enabled, set_panels_price_axis_pos,
@@ -144,6 +144,28 @@ impl AddChartStack {
         self.last_count_change = Instant::now();
     }
 
+    /// Hand the arrival stamp to slot `i`'s chart so its OWN PASS draws and paces the border flash.
+    ///
+    /// Nothing here notifies or schedules a timer. The earlier version repainted the stack at
+    /// 10 Hz for 2.6 s (and before that, every vblank), and each repaint re-rendered every
+    /// `ChartPanel` in the tab. The chart's own pass is driven by the vsync clock regardless, so
+    /// the flash now costs presents instead of view renders — measured over seven live arrivals,
+    /// `chart_render` did not move at all.
+    ///
+    /// Not free, and worth knowing before adding more of these: a present is a WINDOW present, so
+    /// every sibling canvas in that window re-runs its own pass, text shaping included.
+    fn flash_arrival(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(entry) = self.charts.get(i) else {
+            return;
+        };
+        let at = entry.arrived_at;
+        let accent = moon_ui::MoonPalette::active(cx).accent;
+        entry
+            .panel
+            .clone()
+            .update(cx, |p, _| p.set_arrival_pulse(Some(at), accent));
+    }
+
     /// Arm the roughly 1 Hz COMPRESS-compaction debounce timer if needed. It ticks while charts
     /// exist and rearms itself in the callback. Composition/layout events start it, not render.
     /// Patterned after `MainChartStack::arm_idle_timer`.
@@ -251,6 +273,7 @@ impl AddChartStack {
                 self.charts[i].vacated = false;
                 self.charts[i].arrived_at = Instant::now();
                 self.touch_count_change(); // The chart reopened, so reset the debounce interval.
+                self.flash_arrival(i, cx);
             }
             let panel = self.charts[i].panel.clone();
             panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
@@ -268,6 +291,7 @@ impl AddChartStack {
                 self.charts[i].arrived_at = Instant::now();
                 self.charts[i].vacated = false;
                 self.touch_count_change(); // A chart reused an empty slot; reset the debounce.
+                self.flash_arrival(i, cx);
                 let panel = self.charts[i].panel.clone();
                 panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
                 cx.notify();
@@ -340,6 +364,7 @@ impl AddChartStack {
             .push(ChartStackEntry::new(core, market.to_string(), panel));
         self.touch_count_change(); // A new chart appeared; reset the debounce interval.
         self.arm_compact_timer(cx); // Start the compaction timer if it is not already armed.
+        self.flash_arrival(self.charts.len() - 1, cx); // Flash the border on the new slot.
         // In comparison mode, a new ticker immediately receives eligibility and the anchor's
         // shared Y window.
         self.sync_compare(cx);
@@ -733,7 +758,6 @@ impl Render for AddChartStack {
         }
         let count = self.charts.len();
         let border = rgb(palette.border);
-        let accent = rgb(palette.accent);
         let base_id = format!("add-chart-stack-{}", self.num);
         let horizontal = self
             .layout_orientation
@@ -742,7 +766,6 @@ impl Render for AddChartStack {
         let entity = cx.entity();
         let p = palette;
         let title_size = crate::design::t_body(cx);
-        let highlight_radius = crate::design::ui_px(cx, 2.0);
         let visible_order = render_order.clone();
         let panel_order = render_order.clone();
         let tile_order = render_order.clone();
@@ -773,26 +796,18 @@ impl Render for AddChartStack {
             },
             move |s, ix, panel, size, flex, min_w, horizontal, border, _ent| {
                 let real_ix = tile_order.get(ix).copied().unwrap_or(ix);
-                let (id, label, fresh) = match s.charts.get(real_ix) {
+                let (id, label) = match s.charts.get(real_ix) {
                     Some(e) => (
                         format!("add-chart-stack-tile-{}-{}-{}", s.num, e.core, e.market),
                         e.market.clone(),
-                        e.arrived_at.elapsed() < HIGHLIGHT,
                     ),
                     None => (
                         format!("add-chart-stack-tile-{}-{ix}", s.num),
                         "Chart".to_string(),
-                        false,
                     ),
                 };
-                let mut tile = chart_stack_card(
-                    SharedString::from(id.clone()),
-                    label,
-                    panel,
-                    p,
-                    border,
-                    title_size,
-                );
+                let mut tile =
+                    chart_stack_card(SharedString::from(id), label, panel, p, border, title_size);
                 // Fill width/height across the axis. Along the axis, use flex with a cap (COMPRESS
                 // down to size), fixed size without flex, or stretch (FIT). Horizontal uses the X
                 // axis (width); vertical uses the Y axis (height).
@@ -825,30 +840,10 @@ impl Render for AddChartStack {
                         tile.h(px(v)).min_h(px(v))
                     };
                 }
-                // Highlight a newly arrived chart with a bright accent border and three pulses
-                // during `HIGHLIGHT`. Inset it by 1 px so `overflow_hidden` does not clip it; the
-                // opacity stays visible at the peak while GPUI drives the frames.
-                let highlight = fresh.then(|| {
-                    div()
-                        .absolute()
-                        .top(px(1.0))
-                        .left(px(1.0))
-                        .right(px(1.0))
-                        .bottom(px(9.0))
-                        .border_2()
-                        .border_color(accent)
-                        .rounded(highlight_radius)
-                        .with_animation(
-                            SharedString::from(format!("{id}-arrive")),
-                            Animation::new(HIGHLIGHT),
-                            |el, delta| {
-                                // Three distinct repeated flashes: 0 → 1 → 0.
-                                let pulse = (delta * std::f32::consts::PI * 3.0).sin().abs();
-                                el.opacity(pulse)
-                            },
-                        )
-                });
-                tile.children(highlight).into_any_element()
+                // The arrival flash is NOT a child here any more: it is drawn by the chart's own
+                // pass (`chartdx::render_state`, `set_arrival_pulse`). A GPUI element would have to
+                // be repainted, and repainting this stack re-renders every `ChartPanel` in it.
+                tile.into_any_element()
             },
             move |s, ix| {
                 let real_ix = role_order.get(ix).copied().unwrap_or(ix);

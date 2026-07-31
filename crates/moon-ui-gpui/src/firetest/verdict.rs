@@ -550,11 +550,19 @@ fn check_storm(
     // backstop for a wake arriving by some other route.
     //
     // Shell and Orders are held at 30/s: measured across 93 sample-seconds, including every storm
-    // second, they never left 5.7/s average and 11/s peak. The chart ceiling is far looser because
-    // a known behaviour legitimately reaches it — a newly arrived chart pulses its border for
-    // 2600 ms (`chart_tabs/stack.rs`), which notifies the owning stack at frame rate and re-renders
-    // every panel in it, ~59/s per chart. That is the app's cost to decide on, not a threshold to
-    // tighten blindly; drop this to match Shell once it is settled.
+    // second, they never left 5.7/s average and 11/s peak. The chart ceiling was loosened to 120
+    // for ONE known behaviour: a newly arrived chart pulsed its border for 2600 ms, notifying the
+    // owning stack at frame rate and re-rendering every panel in it, ~59/s per chart.
+    //
+    // That pulse now lives in the chart's OWN PASS (`chartdx::render_state`) and costs presents
+    // instead of view renders: measured over seven live arrivals, `chart_render` did not move at
+    // all while the flash ran. The reason for the loosening is therefore gone entirely, not
+    // reduced.
+    //
+    // The number is still NOT lowered here: a chart only arrives when a live detect fires, so a
+    // FireTest run can finish without a single arrival, and tightening a ceiling against runs that
+    // never exercised the behaviour proves nothing. Lower it against a run whose `render_diag.log`
+    // shows a non-zero `chart_arrival_pulse` alongside the new peak.
     check_max(
         fail,
         &named("chart_render_per_chart"),

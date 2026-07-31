@@ -28,9 +28,23 @@ macro_rules! diag_counters {
 
 diag_counters!(
     ORDERS_RENDER     => "orders_render",
-    // The News feed repaints on a news revision change — plus, for two seconds, on every frame
-    // while a just-arrived card's arrival tint fades. This counter is what tells the two apart.
+    // The News feed repaints on a news revision change — plus, while a just-arrived card's arrival
+    // tint fades, at `crate::pulse::PULSE_TICK`. This counter is what tells the two apart; compare
+    // it against `pulse_tick` to see which of the two is driving.
     NEWS_RENDER       => "news_render",
+    // View repaints requested by `crate::pulse` to advance a decorative fade. Its only user is the
+    // News arrival tint: a timer that re-renders the owning PANEL, so if it ever fails to stop it
+    // looks exactly like a mysterious idle floor.
+    //
+    // Deliberately NOT shared with the chart arrival flash — that one costs presents rather than
+    // view renders, and one counter answering for two mechanisms answers for neither. See
+    // `chart_arrival_pulse`.
+    PULSE_TICK        => "pulse_tick",
+    // Presents requested by the chart's own pass to advance the new-chart border flash
+    // (`chartdx::render_state`). Zero is the normal state; a run with no chart arrival says nothing
+    // about the flash's cost, which is exactly why this is counted separately. A value that never
+    // returns to zero means the flash failed to expire and this canvas is presenting forever.
+    CHART_ARRIVAL_PULSE => "chart_arrival_pulse",
     SHELL_RENDER      => "shell_render",
     CHART_RENDER      => "chart_render",
     DETACHED_RENDER   => "detached_render",

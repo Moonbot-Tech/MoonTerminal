@@ -103,25 +103,24 @@ pub(super) fn news_card(
         .collect();
     // Arrival tint: a just-arrived card lights up in the table-selection colour and fades to
     // nothing, so a new item is obvious without anything moving. It is a full-bleed layer declared
-    // BEFORE the content, so it sits under the text and under the tag rail. GPUI drives the frames
-    // and stops on its own once the animation completes (`Animation` is one-shot), so the panel goes
-    // back to repainting only when the feed changes.
-    let flash = arrived.filter(|at| at.elapsed() < FLASH).map(|_| {
-        div()
-            .absolute()
-            .inset_0()
-            .bg(rgba_from(p.table_selected, FLASH_PEAK))
-            .with_animation(
-                SharedString::from(format!("news-flash-{}", item.id)),
-                Animation::new(FLASH),
-                |el, delta| {
-                    // Hold, then ease out (quadratic): the tail is what reads as "fading", while a
-                    // linear ramp just switches off.
-                    let t = ((delta - FLASH_HOLD) / (1.0 - FLASH_HOLD)).clamp(0.0, 1.0);
-                    el.opacity((1.0 - t) * (1.0 - t))
-                },
-            )
-    });
+    // BEFORE the content, so it sits under the text and under the tag rail.
+    //
+    // The frames come from the panel's `crate::pulse` timer and the opacity from the arrival
+    // stamp, not from a GPUI animation: an animation repaints the WHOLE window at vblank for its
+    // full 2 s. Reading the stamp also means a card scrolled into view late shows the tail it is
+    // actually in, instead of restarting the fade from full.
+    let flash = arrived
+        .and_then(|at| crate::pulse::phase(at, FLASH))
+        .map(|delta| {
+            // Hold, then ease out (quadratic): the tail is what reads as "fading", while a linear
+            // ramp just switches off.
+            let t = ((delta - FLASH_HOLD) / (1.0 - FLASH_HOLD)).clamp(0.0, 1.0);
+            div()
+                .absolute()
+                .inset_0()
+                .bg(rgba_from(p.table_selected, FLASH_PEAK))
+                .opacity((1.0 - t) * (1.0 - t))
+        });
 
     let rail = (!rail_colors.is_empty()).then(|| {
         div()

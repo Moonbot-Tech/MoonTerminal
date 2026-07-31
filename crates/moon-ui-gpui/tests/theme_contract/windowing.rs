@@ -75,6 +75,103 @@ fn terminal_secondary_tool_windows_use_tool_window_options() {
     );
 }
 
+/// Decorative animation goes through `crate::pulse`, never `with_animation`.
+///
+/// GPUI drives `with_animation` from `request_animation_frame`, which notifies the OWNER VIEW and
+/// marks every ancestor dirty. So an animation re-renders its owning view in full at vblank for
+/// its whole duration. MoonUI's dock caches each panel, which spares SIBLING panels — it does not
+/// spare the owner or anything the owner renders. On a chart stack that measured 274-338 chart
+/// renders/s from one arriving chart, against 5-6/s for the same window under a mouse storm.
+///
+/// The replacement is a ~10 Hz timer plus an opacity read from the owner's own `Instant`. This ban
+/// exists because the defect is invisible in review: the call site looks like an ordinary builder
+/// method, and the cost lands on unrelated views in the same window.
+#[test]
+fn decorative_animation_goes_through_the_pulse_timer() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+
+    let mut violations = Vec::new();
+    for path in sources {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let rel = path.strip_prefix(&root).unwrap_or(&path);
+        for (line_ix, line) in text.lines().enumerate() {
+            // Comment lines are skipped on purpose: `pulse.rs` and both call sites explain the ban
+            // by naming the banned call, and prose must not trip its own rule.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            // Both halves of the API: the builder method and the descriptor it takes. Banning only
+            // the method leaves `AnimationExt::with_animation(el, ..)` and any future spelling that
+            // still needs an `Animation` through.
+            if line.contains("with_animation(") || line.contains("Animation::new(") {
+                violations.push(format!("{}:{}", rel.display(), line_ix + 1));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "`with_animation` repaints every view in the window at vblank for its whole duration — \
+         drive the pulse from `crate::pulse::arm` and read its opacity from `crate::pulse::phase` \
+         instead: {violations:?}"
+    );
+
+    // The ban alone is satisfiable by deleting the decoration, and — worse — by keeping the
+    // opacity while dropping the timer that advances it, which reads as "done" and leaves a
+    // decoration frozen at whichever value the last unrelated repaint caught. So bind both halves
+    // at both surviving call sites: whoever computes a phase must also arm a timer.
+    // The chart stack is deliberately NOT paired here: its arrival flash moved into the chart's own
+    // GPU pass, which is cheaper still. It gets its own binding below.
+    {
+        let (owner, drawer) = ("panels/news/mod.rs", "panels/news/render.rs");
+        // Comment-stripped, like the ban above: prose naming the call must not satisfy a rule
+        // about making it.
+        let code = |rel: &str| {
+            read_src(rel)
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let drawing = code(drawer);
+        assert!(
+            drawing.contains("pulse::phase("),
+            "{drawer} draws a pulse, so its opacity must come from `crate::pulse::phase`"
+        );
+        let arming = code(owner);
+        assert!(
+            arming.contains("pulse::arm("),
+            "{owner} owns a pulse, so it must arm the repaint timer that advances it — an opacity \
+             with no timer freezes at whatever the last unrelated repaint left behind"
+        );
+
+        // The chart's arrival flash: same two halves, different mechanism. It is drawn by the own
+        // pass and paced there, and the load-bearing half is EXPIRY — leave `arrival_pulse` set and
+        // that canvas requests a present ten times a second for the rest of the session, which
+        // reads as a mysterious idle floor and no runtime gate would attribute it.
+        let render_state = code("chartdx/render_state.rs");
+        let frame = braced_body(&render_state, "fn frame(&mut self, info: GpuFrameInfo)");
+        assert!(
+            frame.contains("self.arrival_pulse = None"),
+            "`RenderState::frame` must clear `arrival_pulse` when the flash is over — nothing else \
+             stops the presents it requests"
+        );
+        assert!(
+            frame.contains("CHART_ARRIVAL_PULSE"),
+            "the arrival flash must count its presents, or a flash that never ends is invisible in \
+             render_diag.log"
+        );
+        assert!(
+            code("chart_tabs/add_stack.rs").contains("set_arrival_pulse("),
+            "the chart stack must hand its arrival stamp to the panel's own pass; without it the \
+             flash never starts and every test here still passes"
+        );
+    }
+}
+
 #[test]
 fn terminal_windows_use_closed_window_frame_api() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

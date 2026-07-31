@@ -782,6 +782,15 @@ impl ChartPanel {
         self.chart.last_price()
     }
 
+    /// Starts the accent border flash for a chart that just arrived in a stack slot.
+    ///
+    /// Deliberately takes no `cx` and issues no notify: the flash is drawn and paced by the chart's
+    /// own pass. Repainting the owning stack instead would re-render every chart panel in the tab
+    /// ten times a second, which is the cost this exists to avoid.
+    pub fn set_arrival_pulse(&mut self, at: Option<std::time::Instant>, accent: u32) {
+        self.chart.set_arrival_pulse(at, accent);
+    }
+
     /// Supplies the comparison anchor's latest price for the large broom-mode delta below a peer's
     /// corner caption. The engine schedules a present when the value changes, so no notify is needed.
     pub fn set_compare_ref_price(&mut self, price: Option<f64>) {

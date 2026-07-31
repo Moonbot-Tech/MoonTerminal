@@ -125,6 +125,9 @@ impl ChartEngine {
             cursor: None,
             ghost_price: None,
             compare_ref_price: None,
+            arrival_pulse: None,
+            arrival_pulse_color: [0.0; 4],
+            last_arrival_present_at: None,
             cursor_color: {
                 let mut c = rgb4(theme.cross);
                 c[3] = theme.cross_alpha;
@@ -276,6 +279,16 @@ impl ChartEngine {
     /// Clears this engine's ghost crosshair when leaving comparison mode.
     pub fn clear_ghost_cursor(&mut self) {
         self.state.borrow_mut().set_ghost_price(None);
+    }
+
+    /// Starts the accent border flash for a chart that just appeared in a stack slot, or clears it.
+    ///
+    /// `accent` is the palette token; the flash never picks its own colour. The own-pass paces and
+    /// expires the flash from the stamp, so this schedules no timer and requests no GPUI render.
+    pub fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: u32) -> bool {
+        // `MoonPalette` stores colours as packed `0xRRGGBB`; the chart layers take sRGB channels.
+        let color = rgb4([(accent >> 16) as u8, (accent >> 8) as u8, accent as u8]);
+        self.state.borrow_mut().set_arrival_pulse(at, color)
     }
 
     /// Sets the comparison tab anchor's last price, used for the large delta beneath the corner
