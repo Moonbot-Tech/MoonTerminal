@@ -555,20 +555,29 @@ fn check_storm(
     // owning stack at frame rate and re-rendering every panel in it, ~59/s per chart.
     //
     // That pulse now lives in the chart's OWN PASS (`chartdx::render_state`) and costs presents
-    // instead of view renders: measured over seven live arrivals, `chart_render` did not move at
-    // all while the flash ran. The reason for the loosening is therefore gone entirely, not
-    // reduced.
+    // instead of view renders, so the reason for the loosening is gone entirely.
     //
-    // The number is still NOT lowered here: a chart only arrives when a live detect fires, so a
-    // FireTest run can finish without a single arrival, and tightening a ceiling against runs that
-    // never exercised the behaviour proves nothing. Lower it against a run whose `render_diag.log`
-    // shows a non-zero `chart_arrival_pulse` alongside the new peak.
+    // Retightened to match Shell, from a distribution rather than a guess: six consecutive runs,
+    // FOUR of which actually fired the flash (`chart_arrival_pulse` 22-24, i.e. one full 2.6 s
+    // arrival each), peaked at 9 renders/s per chart. The runs WITH an arrival were
+    // indistinguishable from the two without — which is the measurement that earns this number.
+    // 30 keeps roughly the same margin over the observed peak that Shell and Orders carry.
     check_max(
         fail,
         &named("chart_render_per_chart"),
         bench.per_chart(storm.max_rate("chart_render")),
-        120.0,
+        30.0,
     );
+    // NOT gated here, deliberately: `chart_present` is the DENOMINATOR of every per-frame ratio
+    // below, so a decoration that forgets to stop presenting inflates it and quietly loosens all of
+    // them at once. An absolute per-chart ceiling was tried and removed — twice wrong. The number
+    // was miscalibrated (max present and max chart count come from different seconds, so dividing
+    // one by the other understated it by 2x), and more importantly a ceiling cannot catch the
+    // failure it was aimed at: a stuck flash presents at exactly its design rate.
+    //
+    // What separates a 2.6 s burst from a permanent floor is DURATION, not rate — so the gate
+    // belongs in `idle_floor` as an AVERAGE of `chart_arrival_pulse`: a burst inside a longer idle
+    // window averages near zero, a flash that never expires averages 10. Not yet written.
     check_max(
         fail,
         &named("shell_render"),
