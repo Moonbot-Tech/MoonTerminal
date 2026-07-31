@@ -28,22 +28,60 @@ pub(super) struct ReportData {
 /// One completed background batch with optional selector-metadata refresh.
 struct ReportRead {
     cores: Option<Vec<(u64, String)>>,
-    strategies: Option<Vec<ReportStrategy>>,
+    /// Canonical non-strategy scope and its choices from this exact snapshot.
+    strategy_metadata: Option<(ReportFilter, Vec<ReportStrategy>)>,
     cols: Vec<String>,
     data: ReportData,
+}
+
+/// Canonicalize the predicates that determine which strategies are available in the selector.
+///
+/// Args:
+///     filter: Complete Report filter, including the current strategy selection.
+///
+/// Returns:
+///     An equality-stable filter with no strategy predicate, sorted core ids, and the same coin
+///     normalization used by the SQL read layer.
+fn strategy_catalog_scope(filter: &ReportFilter) -> ReportFilter {
+    let mut scope = filter.clone();
+    scope.strategies = None;
+    scope.core_uids.sort_unstable();
+    scope.core_uids.dedup();
+    scope.coin = scope.coin.trim().to_uppercase();
+    scope
+}
+
+/// Decide whether one query must refresh the strategy catalog and retain its exact scope.
+///
+/// Args:
+///     filter: Complete filter for the pending rows query.
+///     published_scope: Scope of the last successfully published strategy catalog.
+///     periodic_refresh: Whether the existing metadata refresh interval elapsed.
+///
+/// Returns:
+///     The canonical scope to query, or `None` when the published catalog remains valid.
+fn strategy_metadata_request(
+    filter: &ReportFilter,
+    published_scope: Option<&ReportFilter>,
+    periodic_refresh: bool,
+) -> Option<ReportFilter> {
+    let scope = strategy_catalog_scope(filter);
+    (periodic_refresh || published_scope != Some(&scope)).then_some(scope)
 }
 
 /// Read selector metadata when requested, rows, and totals from one WAL snapshot.
 ///
 /// `NotReady` means the reports replica is absent. `Failed` means opening the
 /// connection, pinning the snapshot, probing schema, or running any query failed.
-/// `with_metadata` skips the core and strategy lists on most rounds.
+/// Core metadata keeps its minute cadence, while strategy metadata also refreshes whenever its
+/// canonical non-strategy filter scope changes.
 ///
 /// Args:
 ///     filter: Complete database filter.
 ///     sort_key: Validated-at-query report sort candidate.
 ///     sort_desc: Whether rows sort descending.
-///     with_metadata: Whether to refresh selector metadata in this snapshot.
+///     with_core_metadata: Whether to refresh the core selector in this snapshot.
+///     strategy_scope: Canonical strategy-catalog scope to refresh, or `None` to reuse it.
 ///
 /// Returns:
 ///     One consistent report batch.
@@ -54,7 +92,8 @@ fn run_report_query(
     filter: ReportFilter,
     sort_key: String,
     sort_desc: bool,
-    with_metadata: bool,
+    with_core_metadata: bool,
+    strategy_scope: Option<ReportFilter>,
 ) -> ReadResult<ReportRead> {
     let started = std::time::Instant::now();
     let conn = db::open_reader()?;
@@ -62,16 +101,14 @@ fn run_report_query(
     // could straddle a writer commit, including legacy cleanup after sync, and
     // publish rows and totals from different database states.
     let snap = db::read_snapshot(&conn)?;
-    let cores = if with_metadata {
+    let cores = if with_core_metadata {
         Some(db::distinct_cores(&snap)?)
     } else {
         None
     };
-    let strategies = if with_metadata {
-        Some(db::distinct_strategies(&snap)?)
-    } else {
-        None
-    };
+    let strategy_metadata = strategy_scope
+        .map(|scope| db::distinct_strategies(&snap, &scope).map(|strategies| (scope, strategies)))
+        .transpose()?;
     let table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
     let totals = db::query_totals(&snap, &filter)?;
     // Log measured query latency so slow refreshes are visible; the panel controls their frequency.
@@ -80,7 +117,7 @@ fn run_report_query(
         log::warn!(
             "отчёты: медленный query {ms}ms (rows={} cores={} filter: dates={:?}/{:?})",
             table.rows.len(),
-            with_metadata,
+            with_core_metadata,
             filter.date_from,
             filter.date_to,
         );
@@ -89,7 +126,7 @@ fn run_report_query(
     }
     Ok(ReportRead {
         cores,
-        strategies,
+        strategy_metadata,
         cols: table.cols,
         data: ReportData {
             rows: table.rows,
@@ -186,22 +223,35 @@ impl ReportPanel {
         // Keep stale rows while a refresh is in flight to avoid flicker. A
         // completed `NotReady` or `Failed` result discards them through `LoadState`.
         self.data.begin();
-        // Refresh core and strategy selectors at most once per minute. The legacy core scan and
-        // distinct strategy scan are metadata work, not a cost every row refresh should pay.
-        let with_metadata = self
+        // Refresh cores at most once per minute. Strategies share that periodic refresh but also
+        // refresh immediately when a non-strategy filter changes; sort-only reads reuse the catalog.
+        let with_core_metadata = self
             .last_metadata_at
             .map(|t| t.elapsed() >= std::time::Duration::from_secs(60))
             .unwrap_or(true);
 
         let request_id = self.query_seq;
         let filter = self.filter(cx);
+        let strategy_scope = strategy_metadata_request(
+            &filter,
+            self.last_strategy_scope.as_ref(),
+            with_core_metadata,
+        );
         let sort_key = self.sort_key.clone();
         let sort_desc = self.sort_desc;
 
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
-                .spawn(async move { run_report_query(filter, sort_key, sort_desc, with_metadata) })
+                .spawn(async move {
+                    run_report_query(
+                        filter,
+                        sort_key,
+                        sort_desc,
+                        with_core_metadata,
+                        strategy_scope,
+                    )
+                })
                 .await;
 
             let _ = cx.update(|cx| {
@@ -217,15 +267,20 @@ impl ReportPanel {
 
                     match result {
                         Ok(read) => {
-                            let metadata_changed =
-                                read.cores.is_some() || read.strategies.is_some();
-                            if metadata_changed {
+                            let ReportRead {
+                                cores,
+                                strategy_metadata,
+                                cols,
+                                data,
+                            } = read;
+                            let metadata_changed = cores.is_some() || strategy_metadata.is_some();
+                            if cores.is_some() {
                                 this.last_metadata_at = Some(std::time::Instant::now());
                             }
-                            if let Some(cores) = read.cores {
+                            if let Some(cores) = cores {
                                 this.cores = cores;
                             }
-                            if let Some(strategies) = read.strategies {
+                            if let Some((strategy_scope, strategies)) = strategy_metadata {
                                 let (strategies, available) = merge_strategy_metadata(
                                     &this.strategies,
                                     strategies,
@@ -233,13 +288,14 @@ impl ReportPanel {
                                 );
                                 this.strategies = strategies;
                                 this.available_strategy_keys = available;
+                                this.last_strategy_scope = Some(strategy_scope);
                             }
                             if metadata_changed {
                                 this.queue_strategy_select_sync(true, cx);
                             }
-                            let cols_changed = *this.cols != read.cols;
-                            this.cols = Rc::new(read.cols);
-                            this.data.apply(Ok(read.data));
+                            let cols_changed = *this.cols != cols;
+                            this.cols = Rc::new(cols);
+                            this.data.apply(Ok(data));
                             // Complete the width map when schema membership changes
                             // so new columns stay stable while neighbors resize. A
                             // double-click reset intentionally removes one entry.
@@ -264,3 +320,6 @@ impl ReportPanel {
         .detach();
     }
 }
+
+#[cfg(test)]
+mod tests;
