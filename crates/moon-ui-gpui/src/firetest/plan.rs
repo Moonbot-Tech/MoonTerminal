@@ -34,6 +34,11 @@ const BASELINE: Duration = Duration::from_millis(5000);
 const BASELINE_WARMUP: Duration = Duration::from_millis(1500);
 /// Quiet tail before the verdict, letting the last present and the last samples land.
 const COOLDOWN: Duration = Duration::from_millis(1200);
+/// The idle window: how long the run sits with a live chart open and nothing touching it.
+const IDLE_FLOOR: Duration = Duration::from_millis(5000);
+/// Head of the idle window that is not sampled, so the last frames of the preceding forced
+/// high-present mode do not count as idle work.
+const IDLE_FLOOR_WARMUP: Duration = Duration::from_millis(1500);
 /// Timeout for finding an active visible core/window to open the chart on.
 const OPEN_TIMEOUT: Duration = Duration::from_millis(10_000);
 /// Timeout for the chart reporting its real on-screen bounds after it opened.
@@ -56,6 +61,7 @@ pub(super) enum Phase {
     WaitOpen,
     WaitProbe,
     Settle,
+    IdleFloor,
     Baseline,
     Storm,
     StaticTextGap,
@@ -259,6 +265,17 @@ pub(super) const CHART_SMOKE: &[StageDef] = &[
     WAIT_OPEN,
     WAIT_PROBE,
     SETTLE_LIVE_CHART,
+    // Deliberately HERE, before anything is built: the static text layer has no disable path and
+    // the tool windows are never closed, so an idle window placed after them would be measuring
+    // idle plus 10k retained labels plus three open windows and calling the result a floor.
+    //
+    // Not `hot()`, which is the whole point — this is the only stage that measures the app when
+    // nothing is forcing it to work. A live BTC feed still legitimately drives the chart's own
+    // pass, so what this catches is the GPUI view path waking without input: a broadcast on every
+    // tick, a panel repainting on a revision that did not change, a timer nobody needed.
+    StageDef::new(Phase::IdleFloor, "idle_floor", stages::idle_floor::measure)
+        .dwell(IDLE_FLOOR)
+        .warmup(IDLE_FLOOR_WARMUP),
     StageDef::new(Phase::Baseline, "baseline", stages::perf::start_storm)
         .dwell(BASELINE)
         .hot()

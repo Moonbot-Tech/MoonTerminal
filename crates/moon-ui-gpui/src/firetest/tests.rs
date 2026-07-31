@@ -63,6 +63,7 @@ fn chart_smoke_stage_plan_is_one_contiguous_scenario() {
             "open_chart",
             "wait_chart_probe",
             "settle_live_chart",
+            "idle_floor",
             "baseline",
             "mouse_storm",
             "static_text_gap",
@@ -157,7 +158,8 @@ fn the_columns_match_the_run_they_replaced() {
             "mouse_storm",
             "static_text_warmup",
             "static_text_storm",
-        ]
+        ],
+        "the idle floor must NOT appear here: it is the one measured stage that runs cold"
     );
 
     let probing: Vec<&str> = CHART_SMOKE
@@ -171,6 +173,8 @@ fn the_columns_match_the_run_they_replaced() {
             "wait_chart_probe",
             "settle_live_chart",
             "baseline",
+            // `idle_floor` sits between settle and baseline and is deliberately absent: it aims
+            // no storm, so it has no reason to accept a fresh probe.
             "mouse_storm",
             "static_text_gap",
             "static_text_warmup",
@@ -183,7 +187,7 @@ fn the_columns_match_the_run_they_replaced() {
         .filter(|stage| !stage.sample_warmup.is_zero())
         .map(|stage| stage.name)
         .collect();
-    assert_eq!(warming, vec!["baseline"]);
+    assert_eq!(warming, vec!["idle_floor", "baseline"]);
 
     // The reason too, not just which rows carry one: swapping two deadlines' messages would send
     // the developer looking at the wrong stage.

@@ -23,6 +23,44 @@ impl Runtime {
             std::process::exit(0);
         }
 
+        let idle = PhaseStats::of(&self.samples, Phase::IdleFloor);
+        if idle.is_empty() {
+            self.fail("no idle floor diag samples");
+            return;
+        }
+        // Reported before any threshold is applied to it: the ceilings below were calibrated from
+        // these numbers on a live bench, and the line is what a future recalibration reads.
+        //
+        // avg AND max for every rate, deliberately. A single hot second — a fading arrival tint,
+        // one burst of feed — reads identically to a permanently spinning panel if only the peak
+        // is printed, and the two want opposite fixes.
+        let Some(bench) = self.bench else {
+            self.fail("idle floor did not record the bench shape");
+            return;
+        };
+        let idle_rate =
+            |label: &str| format!("{:.0}/{:.0}", idle.avg_rate(label), idle.max_rate(label));
+        firetest_info(&format!(
+            "[firetest] idle_floor bench cores={} charts={} windows={}",
+            bench.cores, bench.charts, bench.windows
+        ));
+        firetest_info(&format!(
+            "[firetest] idle_floor avg/max shell={} orders={} news={} chart_render={} detached={} backend_notify={} chart_present={} clock={} order_sync={} compact={} assets={} cpu={:.1}/{:.1}%",
+            idle_rate("shell_render"),
+            idle_rate("orders_render"),
+            idle_rate("news_render"),
+            idle_rate("chart_render"),
+            idle_rate("detached_render"),
+            idle_rate("backend_notify"),
+            idle_rate("chart_present"),
+            idle_rate("clock_notify"),
+            idle_rate("chart_order_sync"),
+            idle_rate("compact_tick"),
+            idle_rate("assets_render"),
+            idle.avg_cpu(),
+            idle.max_cpu(),
+        ));
+
         let baseline = PhaseStats::of(&self.samples, Phase::Baseline);
         let clean_storm = PhaseStats::of(&self.samples, Phase::Storm);
         let static_text_storm = PhaseStats::of(&self.samples, Phase::StaticTextStorm);
@@ -75,6 +113,91 @@ impl Runtime {
         let static_text_chart_mouse_min = chart_mouse_min_hz(static_text_avg_rate("chart_present"));
 
         let mut fail = Vec::new();
+
+        // The idle floor, stated PER UNIT of the bench. A run on one core with one chart and a run
+        // on fifty cores with five charts must reach the same verdict, so every ceiling here is
+        // divided by whatever the counter scales with before it is compared. The law per counter
+        // lives in `bench.rs`, which also marks which laws are documented and which are assumed.
+        //
+        // The numbers are measured-then-margined, not invented: three live runs on a bench of
+        // cores=1 charts=1 windows=2 gave shell 5-8, orders 0, news/detached 4-5 avg,
+        // backend_notify 4-5, clock 1, compact 0-1, assets 4-5, order_sync 5-8, cpu 2.4-4.2%.
+        //
+        // News and the detached panel are gated on the AVERAGE only. One run peaked at 115/s for a
+        // single second, which is the arrival-tint fade `diag.rs` documents — legitimate, and a max
+        // ceiling would fail the run for it.
+        check_max(
+            &mut fail,
+            "idle_shell_render_per_window",
+            bench.per_window(idle.max_rate("shell_render")),
+            10.0,
+        );
+        check_max(
+            &mut fail,
+            "idle_orders_render_per_window",
+            bench.per_window(idle.max_rate("orders_render")),
+            5.0,
+        );
+        check_max(
+            &mut fail,
+            "idle_news_render_avg_per_window",
+            bench.per_window(idle.avg_rate("news_render")),
+            15.0,
+        );
+        check_max(
+            &mut fail,
+            "idle_detached_render_avg_per_window",
+            bench.per_window(idle.avg_rate("detached_render")),
+            15.0,
+        );
+        check_max(
+            &mut fail,
+            "idle_assets_render_per_window",
+            bench.per_window(idle.max_rate("assets_render")),
+            10.0,
+        );
+        // One roughly 1 Hz timer per Shell window, per `diag.rs`. A per-window rate above that
+        // means a window grew a second clock, or the clock stopped being 1 Hz.
+        check_max(
+            &mut fail,
+            "idle_clock_notify_per_window",
+            bench.per_window(idle.max_rate("clock_notify")),
+            2.5,
+        );
+        // One self-rearming ~1 Hz compaction timer per non-empty chart stack.
+        check_max(
+            &mut fail,
+            "idle_compact_tick_per_chart",
+            bench.per_chart(idle.max_rate("compact_tick")),
+            2.5,
+        );
+        // Feed-driven: the drain wakes the backend, and every open chart observes each wake.
+        check_max(
+            &mut fail,
+            "idle_backend_notify_per_core",
+            bench.per_core(idle.max_rate("backend_notify")),
+            12.0,
+        );
+        check_max(
+            &mut fail,
+            "idle_chart_order_sync_per_chart",
+            bench.per_chart(idle.max_rate("chart_order_sync")),
+            15.0,
+        );
+        check_max(&mut fail, "idle_cpu_process_avg", idle.avg_cpu(), 12.0);
+        check_max(&mut fail, "idle_cpu_process_max", idle.max_cpu(), 20.0);
+        // RECORDED, NOT ENDORSED. With no input and no forced present, `ChartPanel::render` runs
+        // 41-93/s per chart on this bench — more often than under the mouse storm, where the same
+        // counter is held to 10/s because waking the entity on cursor movement is a known defect.
+        // Whatever wakes it at idle has not been identified, so this ceiling catches that cost
+        // DOUBLING rather than blessing it. Lower it once the wake source is found and fixed.
+        check_max(
+            &mut fail,
+            "idle_chart_render_avg_per_chart",
+            bench.per_chart(idle.avg_rate("chart_render")),
+            150.0,
+        );
+
         check_min(
             &mut fail,
             "firetest_mouse_sent",
