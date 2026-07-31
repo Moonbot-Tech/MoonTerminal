@@ -23,6 +23,14 @@ report.filter.all:
   ru: "Все"
   en: "All"
   es: "Todas"
+report.all_strategies:
+  ru: "Все стратегии"
+  en: "All strategies"
+  es: "Todas las estrategias"
+report.search_strategies:
+  ru: "Поиск стратегии..."
+  en: "Search strategies..."
+  es: "Buscar estrategias..."
 report.filter.core:
   ru: "Ядро:"
   en: "Core:"

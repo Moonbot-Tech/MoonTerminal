@@ -1,8 +1,8 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
 //! It displays closed trades from the local SQLite database, with core, coin, side, date,
-//! order-kind, and deleted-trades filters plus column selection above the table and exact period
-//! totals below it. The
+//! strategy, order-kind, and deleted-trades filters plus column selection above the table and
+//! exact period totals below it. The
 //! generic table supports every displayable database column and header-click sorting. A writer
 //! generation counter in `Backend.reports` triggers throttled automatic refreshes.
 //!
@@ -18,6 +18,7 @@ mod query;
 mod render;
 mod state;
 mod widths;
+mod window;
 
 use query::ReportData;
 use widths::complete_widths;
@@ -31,11 +32,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::MoonWindowExt as _;
 use moon_ui::{
-    DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
+    DockArea, IndexPath, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
+    MoonCheckbox, MoonCheckboxSize, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
     MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonNotification, MoonPalette, MoonTone, Panel, PanelEvent, PanelState,
-    StyledExt, h_flex, v_flex,
+    MoonMenuSize, MoonNotification, MoonPalette, MoonSelect, MoonSelectEvent, MoonSelectItem,
+    MoonSelectState, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt,
+    h_flex, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -44,7 +46,11 @@ use rust_i18n::t;
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
 use crate::{Backend, design};
-use moon_core::db::{self, ReadResult, ReportFilter, SideFilter};
+use moon_core::db::{
+    self, ReadResult, ReportFilter, ReportStrategy, ReportStrategyKey, SideFilter,
+};
+
+pub use window::open_scoped;
 
 /// Moonbot-style report period presets with UTC-day boundaries.
 ///
@@ -134,6 +140,58 @@ impl ReportKind {
             ReportKind::Emu => Some(true),
         }
     }
+
+    /// Restore the UI kind selector from the database emulator filter.
+    ///
+    /// Args:
+    ///     emulator: Database emulator constraint.
+    ///
+    /// Returns:
+    ///     The equivalent Report kind option.
+    fn from_filter(emulator: Option<bool>) -> Self {
+        match emulator {
+            None => Self::All,
+            Some(false) => Self::Real,
+            Some(true) => Self::Emu,
+        }
+    }
+}
+
+/// Initial or replacement filter applied by Analytics to a standalone Report window.
+#[derive(Clone, Debug)]
+pub struct ReportScope {
+    /// Exact strategy identity, including the core on which the id is meaningful.
+    pub strategy: ReportStrategyKey,
+    /// Human-readable name retained even when report metadata has not loaded yet.
+    pub strategy_name: String,
+    /// Inclusive UTC lower close-date bound.
+    pub date_from: Option<i64>,
+    /// Inclusive UTC upper close-date bound.
+    pub date_to: Option<i64>,
+    /// Direction copied from the Analytics filters.
+    pub side: SideFilter,
+    /// Emulator filter copied from Analytics.
+    pub emulator: Option<bool>,
+}
+
+/// Resolve the coin-search group for one Report core.
+///
+/// Args:
+///     backend: Shared application backend.
+///     core_uid: Exact Report core identity.
+///     cx: Application context used to inspect live sessions.
+///
+/// Returns:
+///     The live core group, or the same deterministic fallback used for offline cores.
+fn report_group_for_core(backend: &Entity<Backend>, core_uid: u64, cx: &App) -> String {
+    backend
+        .read(cx)
+        .session
+        .sessions()
+        .iter()
+        .find(|session| session.id == core_uid)
+        .map(|session| session.group.clone())
+        .unwrap_or_else(|| "default".to_string())
 }
 
 /// Database column names visible by default.
@@ -152,6 +210,7 @@ const DEFAULT_VISIBLE: &[&str] = &[
     "comment",
 ];
 
+/// Closed-trade report surface shared by docked, detached, and scoped standalone hosts.
 pub struct ReportPanel {
     pub(super) backend: Entity<Backend>,
     pub(super) group: String,
@@ -160,6 +219,8 @@ pub struct ReportPanel {
 
     conn: Option<Connection>,
     pub(super) cores: Vec<(u64, String)>,
+    /// Strategy identities currently available to the exact strategy selector.
+    pub(super) strategies: Vec<ReportStrategy>,
     /// Cached schema, kept outside `data` so failures cannot collapse controls or widths.
     pub(super) cols: Rc<Vec<String>>,
     /// Report rows and totals; in-flight refreshes may retain stale data, but
@@ -171,6 +232,10 @@ pub struct ReportPanel {
 
     /// Multi-selected core UIDs; an empty set means all cores.
     pub(super) sel_cores: HashSet<u64>,
+    /// Exact selected strategy, or `None` for all strategies.
+    pub(super) strategy: Option<ReportStrategyKey>,
+    /// Searchable, virtualized MoonUI selector synchronized with [`Self::strategy`].
+    strategy_select: Entity<MoonSelectState<ReportStrategyKey>>,
     coin: Entity<MoonInputState>,
     /// Mirror of the coin input, updated on `Change`.
     ///
@@ -180,7 +245,11 @@ pub struct ReportPanel {
     /// Whether the shared `controls::coin_search` match popup is open.
     coin_popup_open: bool,
     from: Entity<MoonInputState>,
+    /// Mirror of the From input, used to suppress duplicate scoped-update queries.
+    from_query: String,
     to: Entity<MoonInputState>,
+    /// Mirror of the To input, used to suppress duplicate scoped-update queries.
+    to_query: String,
     pub(super) side: SideFilter,
     /// Period preset, defaulting to Today as in Moonbot.
     ///
@@ -191,6 +260,8 @@ pub struct ReportPanel {
     pub(super) kind: ReportKind,
     /// Show ONLY soft-deleted trades when set; hide them when clear (the default).
     pub(super) deleted_only: bool,
+    /// Whether this Analytics-scoped panel excludes undated/non-positive close timestamps.
+    closed_only: bool,
     /// Deletion mode (detached window only): the `deleted` column's checkboxes become editable and
     /// the trash button turns into a Save. Toggled by [`Self::on_delete_button`].
     pub(super) delete_mode: bool,
@@ -209,9 +280,8 @@ pub struct ReportPanel {
     last_query_start: Option<std::time::Instant>,
     /// Whether a trailing generation-refresh timer is already waiting out the throttle interval.
     throttle_armed: bool,
-    /// Time when the last core-list query was launched; its full-database grouping is requested at
-    /// most once per minute.
-    last_cores_at: Option<std::time::Instant>,
+    /// Time when core and strategy metadata were last requested; refreshed at most once per minute.
+    last_metadata_at: Option<std::time::Instant>,
 
     /// Visible columns by name rather than index, so runtime schema additions do not shift choices.
     /// A newly discovered column is visible only if its name is already present in the resolved
@@ -222,6 +292,8 @@ pub struct ReportPanel {
     widths_id: String,
     /// Whether the panel is detached; docked tabs omit manual date fields for a compact filter row.
     detached: bool,
+    /// Whether this panel owns the dedicated standalone Report tool window and its title bar.
+    standalone: bool,
     /// Width snapshot from the previous observation, used by [`Self::clamp_table_widths`] to detect
     /// the column currently being dragged.
     last_widths: std::collections::HashMap<String, f32>,

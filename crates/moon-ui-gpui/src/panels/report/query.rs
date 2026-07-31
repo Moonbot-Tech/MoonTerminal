@@ -25,26 +25,36 @@ pub(super) struct ReportData {
     pub(super) totals: (f64, i64),
 }
 
-/// One completed background batch: data, schema, and optional core refresh.
-///
-/// An empty `cores` vector is also used when the core query is skipped (see `with_cores`).
+/// One completed background batch with optional selector-metadata refresh.
 struct ReportRead {
-    cores: Vec<(u64, String)>,
+    cores: Option<Vec<(u64, String)>>,
+    strategies: Option<Vec<ReportStrategy>>,
     cols: Vec<String>,
     data: ReportData,
 }
 
-/// Read cores when requested, rows, and totals from one WAL snapshot.
+/// Read selector metadata when requested, rows, and totals from one WAL snapshot.
 ///
 /// `NotReady` means the reports replica is absent. `Failed` means opening the
 /// connection, pinning the snapshot, probing schema, or running any query failed.
-/// `with_cores` skips the core list on most rounds — a throttle from when that list cost a
-/// full-database grouping (`db::distinct_cores`, since rewritten as a loose index scan).
+/// `with_metadata` skips the core and strategy lists on most rounds.
+///
+/// Args:
+///     filter: Complete database filter.
+///     sort_key: Validated-at-query report sort candidate.
+///     sort_desc: Whether rows sort descending.
+///     with_metadata: Whether to refresh selector metadata in this snapshot.
+///
+/// Returns:
+///     One consistent report batch.
+///
+/// Errors:
+///     Propagates report database readiness, schema, and query failures.
 fn run_report_query(
     filter: ReportFilter,
     sort_key: String,
     sort_desc: bool,
-    with_cores: bool,
+    with_metadata: bool,
 ) -> ReadResult<ReportRead> {
     let started = std::time::Instant::now();
     let conn = db::open_reader()?;
@@ -52,10 +62,15 @@ fn run_report_query(
     // could straddle a writer commit, including legacy cleanup after sync, and
     // publish rows and totals from different database states.
     let snap = db::read_snapshot(&conn)?;
-    let cores = if with_cores {
-        db::distinct_cores(&snap)?
+    let cores = if with_metadata {
+        Some(db::distinct_cores(&snap)?)
     } else {
-        Vec::new()
+        None
+    };
+    let strategies = if with_metadata {
+        Some(db::distinct_strategies(&snap)?)
+    } else {
+        None
     };
     let table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
     let totals = db::query_totals(&snap, &filter)?;
@@ -65,7 +80,7 @@ fn run_report_query(
         log::warn!(
             "отчёты: медленный query {ms}ms (rows={} cores={} filter: dates={:?}/{:?})",
             table.rows.len(),
-            with_cores,
+            with_metadata,
             filter.date_from,
             filter.date_to,
         );
@@ -74,6 +89,7 @@ fn run_report_query(
     }
     Ok(ReportRead {
         cores,
+        strategies,
         cols: table.cols,
         data: ReportData {
             rows: table.rows,
@@ -85,24 +101,32 @@ fn run_report_query(
 }
 
 impl ReportPanel {
-    pub(super) fn filter(&self, cx: &App) -> ReportFilter {
+    /// Assemble the exact database filter represented by the retained controls.
+    ///
+    /// Args:
+    ///     _cx: Application context retained for the panel filter interface.
+    ///
+    /// Returns:
+    ///     A filter shared by rows, totals, and export.
+    pub(super) fn filter(&self, _cx: &App) -> ReportFilter {
         // A preset overrides the manual date only on the edge it SETS itself. Every preset
         // but "All" sets the lower one; only "Yesterday" sets the upper one — for the rest
         // `to = None`, and then the upper edge comes from the "To:" field if it holds a date.
         let (pfrom, pto) = self.period.range();
-        let date_from = pfrom.or_else(|| db::parse_ymd(&self.from.read(cx).value()));
-        let date_to = pto.or_else(|| db::parse_ymd(&self.to.read(cx).value()).map(|d| d + 86_399));
+        let date_from = pfrom.or_else(|| db::parse_ymd(&self.from_query));
+        let date_to = pto.or_else(|| db::parse_ymd(&self.to_query).map(|d| d + 86_399));
         ReportFilter {
             core_uids: self.sel_cores.iter().copied().collect(),
             date_from,
             date_to,
             // Normalize Russian-layout keystrokes for the SQL filter as well as the search popup;
             // otherwise Cyrillic input would reach `coin LIKE` unchanged and return no matches.
-            coin: crate::controls::coin_search::normalize_layout(&self.coin.read(cx).value())
-                .into_owned(),
+            coin: crate::controls::coin_search::normalize_layout(&self.coin_query).into_owned(),
             side: self.side,
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,
+            closed_only: self.closed_only,
+            strategy: self.strategy,
         }
     }
 
@@ -144,6 +168,13 @@ impl ReportPanel {
         .detach();
     }
 
+    /// Coalesce report reads and optionally refresh selector metadata once per minute.
+    ///
+    /// Args:
+    ///     cx: Panel context used to spawn and publish the background read.
+    ///
+    /// Returns:
+    ///     Nothing; an in-flight read absorbs the request through `needs_query`.
     pub(super) fn schedule_requery(&mut self, cx: &mut Context<Self>) {
         if !self.needs_query || self.query_inflight {
             return;
@@ -155,17 +186,12 @@ impl ReportPanel {
         // Keep stale rows while a refresh is in flight to avoid flicker. A
         // completed `NotReady` or `Failed` result discards them through `LoadState`.
         self.data.begin();
-        // Refresh the core list at most once per minute. On a fully migrated replica the
-        // grouping this throttle was built for is gone (`db::distinct_cores` now seeks), so the
-        // interval could be shortened — but the legacy source still pays for a grouped pass,
-        // so it keeps guarding a real cost on a half-migrated install. Left as is.
-        let with_cores = self
-            .last_cores_at
+        // Refresh core and strategy selectors at most once per minute. The legacy core scan and
+        // distinct strategy scan are metadata work, not a cost every row refresh should pay.
+        let with_metadata = self
+            .last_metadata_at
             .map(|t| t.elapsed() >= std::time::Duration::from_secs(60))
             .unwrap_or(true);
-        if with_cores {
-            self.last_cores_at = Some(std::time::Instant::now());
-        }
 
         let request_id = self.query_seq;
         let filter = self.filter(cx);
@@ -175,7 +201,7 @@ impl ReportPanel {
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
-                .spawn(async move { run_report_query(filter, sort_key, sort_desc, with_cores) })
+                .spawn(async move { run_report_query(filter, sort_key, sort_desc, with_metadata) })
                 .await;
 
             let _ = cx.update(|cx| {
@@ -191,10 +217,29 @@ impl ReportPanel {
 
                     match result {
                         Ok(read) => {
-                            // An empty core result never replaces the cached list;
-                            // this also preserves it when the query is skipped.
-                            if !read.cores.is_empty() {
-                                this.cores = read.cores;
+                            if read.cores.is_some() || read.strategies.is_some() {
+                                this.last_metadata_at = Some(std::time::Instant::now());
+                            }
+                            if let Some(cores) = read.cores {
+                                this.cores = cores;
+                            }
+                            if let Some(mut strategies) = read.strategies {
+                                if let Some(key) = this.strategy {
+                                    if !strategies.iter().any(|strategy| strategy.key == key) {
+                                        let selected = this
+                                            .strategies
+                                            .iter()
+                                            .find(|strategy| strategy.key == key)
+                                            .cloned()
+                                            .unwrap_or_else(|| ReportStrategy {
+                                                key,
+                                                name: key.strategy_id.to_string(),
+                                            });
+                                        strategies.push(selected);
+                                    }
+                                }
+                                this.strategies = strategies;
+                                this.sync_strategy_select(true, cx);
                             }
                             let cols_changed = *this.cols != read.cols;
                             this.cols = Rc::new(read.cols);

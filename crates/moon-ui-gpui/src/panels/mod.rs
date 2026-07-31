@@ -46,5 +46,5 @@ pub use detects::DetectsPanel;
 pub use log::LogPanel;
 pub use news::NewsView;
 pub use orders::OrdersPanel;
-pub use report::ReportPanel;
+pub use report::{ReportPanel, ReportScope, open_scoped as open_scoped_report};
 pub use stub::StubPanel;

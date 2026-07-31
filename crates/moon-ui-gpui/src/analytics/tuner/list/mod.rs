@@ -22,7 +22,7 @@ use rust_i18n::t;
 use std::cmp::Ordering;
 
 pub(in crate::analytics::tuner) use select::{
-    RangeOutcome, RowClick, drawn_order, range_extras, row_click_intent,
+    RangeOutcome, RowClick, drawn_order, inclusive_report_bounds, range_extras, row_click_intent,
 };
 
 use super::super::AnalyticsView;

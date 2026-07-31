@@ -122,6 +122,101 @@ impl StratMode {
 }
 
 impl AnalyticsView {
+    /// Open the singleton Report window with this exact strategy and current Analytics filters.
+    ///
+    /// Args:
+    ///     key: Strategy row key in `strategyid@core_uid` form.
+    ///     name: Display name retained by the Report selector.
+    ///     window: Analytics owner window.
+    ///     cx: Analytics context used to open or retarget the Report window.
+    ///
+    /// Returns:
+    ///     Nothing; malformed legacy keys are ignored.
+    fn open_strategy_report(
+        &self,
+        key: &str,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((strategy_id, Some(core_uid))) = parse_strat_key(key) else {
+            return;
+        };
+        let query = self.query();
+        let (date_from, date_to) = list::inclusive_report_bounds(query.from, query.to);
+        let owner_display = window.display(cx).map(|display| display.id());
+        crate::panels::open_scoped_report(
+            self.backend.clone(),
+            crate::panels::ReportScope {
+                strategy: moon_core::db::ReportStrategyKey {
+                    core_uid,
+                    strategy_id,
+                },
+                strategy_name: name,
+                date_from,
+                date_to,
+                side: query.side,
+                emulator: query.emulator,
+            },
+            Some(window.window_handle()),
+            owner_display,
+            cx,
+        );
+    }
+
+    /// Resolve an exact live strategy target from a row key.
+    ///
+    /// Args:
+    ///     key: Strategy row key in `strategyid@core_uid` form.
+    ///     cx: Application context used to read the live store.
+    ///
+    /// Returns:
+    ///     Exact `(core_uid, unsigned strategy id)` when the non-manual row is live.
+    fn live_strategy_target(&self, key: &str, cx: &App) -> Option<(u64, u64)> {
+        let Some((strategy_id, Some(core_uid))) = parse_strat_key(key) else {
+            return None;
+        };
+        if strategy_id == 0 {
+            return None;
+        }
+        let live_id = strategy_id as u64;
+        self.backend
+            .read(cx)
+            .session
+            .store()
+            .core(core_uid)
+            .is_some_and(|core| {
+                core.strategies
+                    .iter()
+                    .any(|strategy| strategy.id == live_id)
+            })
+            .then_some((core_uid, live_id))
+    }
+
+    /// Open Strategies on an exact live pair, rechecking liveness at click time.
+    ///
+    /// Args:
+    ///     key: Strategy row key in `strategyid@core_uid` form.
+    ///     window: Analytics owner window.
+    ///     cx: Analytics context used to navigate.
+    ///
+    /// Returns:
+    ///     Nothing; stale, manual, and malformed targets are ignored.
+    fn open_live_strategy(&self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((core_uid, strategy_id)) = self.live_strategy_target(key, cx) else {
+            return;
+        };
+        let owner_display = window.display(cx).map(|display| display.id());
+        crate::strategies::open_goto(
+            self.backend.clone(),
+            core_uid,
+            strategy_id,
+            Some(window.window_handle()),
+            owner_display,
+            cx,
+        );
+    }
+
     /// Change the selected strategy: detail + tuner scope.
     ///
     /// Args:

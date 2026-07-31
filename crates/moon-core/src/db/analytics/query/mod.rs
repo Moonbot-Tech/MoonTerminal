@@ -157,7 +157,15 @@ const UNIFIED_COLS: &[&str] = &[
 /// Returns the plain column whenever attribution is off, the strategy database is not
 /// attached, or the source lacks a column this needs — a source that cannot answer must not
 /// be made to guess.
-pub(super) fn effective_sid_expr(
+///
+/// Args:
+///     alias: SQL alias of the report source.
+///     cols: Columns available on that source.
+///     on: Whether attached strategy metadata may be used.
+///
+/// Returns:
+///     A SQL expression yielding the effective signed strategy id.
+pub(in crate::db) fn effective_sid_expr(
     alias: &str,
     cols: &std::collections::HashSet<String>,
     on: bool,
@@ -233,9 +241,8 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
     // that do not attach (a deleted strategy, or no parseable name) stay in "Manual" rather
     // than being guessed at.
     //
-    // The Report window deliberately does NOT follow this: it reads through its own queries,
-    // and the two panels are allowed to disagree here. Anyone "fixing" that divergence should
-    // know it was chosen.
+    // The Report strategy filter reuses this same expression, so opening a strategy from
+    // Analytics includes the liquidation rows that contributed to its summary.
     //
     // Attachment is PROBED rather than passed down: the callers that attach the strategy
     // database do so on this same connection, and the tests deliberately do not. Not to be
@@ -312,7 +319,13 @@ pub(super) const WHERE_UNDATED: &str = "(closedate IS NULL OR closedate <= 0)";
 /// Probed rather than tracked: `open_reader` attaches it, but a caller may hand us a
 /// connection it opened itself, and a second ATTACH under the same alias fails. Asking the
 /// connection is the only answer that cannot go stale.
-pub(super) fn strategies_attached(conn: &Connection) -> bool {
+///
+/// Args:
+///     conn: SQLite connection that may carry the `strat` attachment.
+///
+/// Returns:
+///     Whether the attached strategy table can execute a read.
+pub(in crate::db) fn strategies_attached(conn: &Connection) -> bool {
     // EXECUTED, not merely prepared. `prepare` validates the schema and nothing else, so a
     // corrupt or unreadable strategies.sqlite passed this check and then failed mid-scan —
     // and because the attribution subquery is baked into the unified source, that failure

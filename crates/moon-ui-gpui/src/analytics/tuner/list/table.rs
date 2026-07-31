@@ -4,8 +4,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonScrollbarVisibility,
-    MoonVirtualList, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonPalette,
+    MoonScrollbarVisibility, MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 use std::collections::HashSet;
@@ -223,7 +223,7 @@ impl AnalyticsView {
     }
 }
 
-/// A comparison-table row; a click selects/deselects the group.
+/// A comparison-table row; single-click selects, double-click opens its scoped report.
 ///
 /// A free function taking a WEAK handle, not a method: `MoonVirtualList`'s row factory is
 /// `'static` and outlives the render, so a strong `cx.entity()` capture would close
@@ -232,6 +232,18 @@ impl AnalyticsView {
 ///
 /// `core_w` is the content-measured core-column width (see [`core_col_w`]) — passed in
 /// because the header must lay the same value out, or it drifts off the column.
+///
+/// Args:
+///     view: Current Analytics state.
+///     weak: Weak callback owner that avoids a retained-element cycle.
+///     g: Strategy aggregate represented by the row.
+///     p: Active palette.
+///     scale: Current font scale.
+///     core_w: Shared measured core-column width.
+///     cx: Application context used for live gating and sizing.
+///
+/// Returns:
+///     One virtualized strategy row.
 fn strategy_row(
     view: &AnalyticsView,
     weak: &WeakEntity<AnalyticsView>,
@@ -249,6 +261,29 @@ fn strategy_row(
     // strategyid=0 = manual orders — a label instead of a bare "0" (both in the
     // row and in the selection: the tuner/dialog titles take the same one).
     let name = super::super::super::summary::strat_display(&g.name);
+    let strategy_button = view.live_strategy_target(&key, cx).is_some().then(|| {
+        let weak = weak.clone();
+        let navigation_key = key.clone();
+        div()
+            .flex_none()
+            .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
+            .child(
+                MoonButton::new(SharedString::from(format!("an-open-strategy-{}", g.key)))
+                    .width(design::micro_control_h_value(cx))
+                    .variant(MoonButtonVariant::Soft)
+                    .size(MoonButtonSize::Micro)
+                    .leading_icon(MoonButtonIconSlot::new("icons/bot.svg").color(p.text_soft))
+                    .tooltip(t!("toolbar.strategies").to_string())
+                    .on_click(move |_, window, app| {
+                        app.stop_propagation();
+                        let navigation_key = navigation_key.clone();
+                        let _ = weak.update(app, |this, cx| {
+                            this.open_live_strategy(&navigation_key, window, cx);
+                        });
+                    })
+                    .render(),
+            )
+    });
     // "Alive right now" indicator: ● green — present in a core and enabled,
     // ● muted — present but disabled, ○ outline — deleted from the cores.
     let alive_dot = g.alive.map(|a| {
@@ -288,6 +323,7 @@ fn strategy_row(
                 .min_w(design::font_w_px(cx, STRAT_NAME_MIN_W))
                 .gap(design::ui_px(cx, 6.0))
                 .items_center()
+                .children(strategy_button)
                 .children(alive_dot)
                 // A flex basis prevents the truncated div from collapsing to an ellipsis, while
                 // `min_w_0` lets it truncate inside the floor held by its parent.
@@ -343,17 +379,20 @@ fn strategy_row(
         )
         .on_click({
             let weak = weak.clone();
-            move |ev: &ClickEvent, _window, app| {
+            move |ev: &ClickEvent, window, app| {
                 // secondary() = Ctrl on Windows/Linux, ⌘ on macOS — the standard
                 // multi-select modifier (mirrors the strategies tree in tree_moon.rs).
                 // Shift takes precedence over it, as it does there. A keyboard-activated
                 // click reports default modifiers, so it lands on the plain single-select —
                 // which is the behaviour keyboard activation should have anyway.
                 let m = ev.modifiers();
-                let intent = super::row_click_intent(m.shift, m.secondary());
+                let intent = super::row_click_intent(ev.click_count(), m.shift, m.secondary());
                 let (key, name) = (key.clone(), name.clone());
                 // The view may already be gone; a dropped window is not an error here.
                 let _ = weak.update(app, |this, cx| match intent {
+                    super::RowClick::OpenReport => {
+                        this.open_strategy_report(&key, name, window, cx);
+                    }
                     super::RowClick::Range => this.select_range(key, name, cx),
                     super::RowClick::Multi => this.toggle_multi(key, name, cx),
                     super::RowClick::Single => this.select_single(key, name, cx),

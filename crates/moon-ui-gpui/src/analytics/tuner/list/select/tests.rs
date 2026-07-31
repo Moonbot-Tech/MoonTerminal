@@ -6,7 +6,9 @@
 use moon_core::db::analytics::GroupStat;
 
 use super::super::MAX_ROWS;
-use super::{RangeOutcome, RowClick, drawn_order, range_extras, row_click_intent};
+use super::{
+    RangeOutcome, RowClick, drawn_order, inclusive_report_bounds, range_extras, row_click_intent,
+};
 
 /// A group carrying only the two fields the range reads.
 fn g(name: &str) -> GroupStat {
@@ -103,13 +105,40 @@ fn the_range_keeps_display_order_so_anchor_removal_promotes_the_topmost_row() {
 /// Shift-clicking with Ctrl still pressed — which is exactly what happens when a user extends a
 /// selection they just built with Ctrl — would then toggle a single row instead of taking the
 /// range, silently discarding the gesture.
+///
+/// Returns:
+///     Nothing; click-modifier precedence is asserted.
 #[test]
 fn shift_takes_precedence_over_the_multi_select_modifier() {
-    assert_eq!(row_click_intent(true, true), RowClick::Range);
-    assert_eq!(row_click_intent(true, false), RowClick::Range);
-    assert_eq!(row_click_intent(false, true), RowClick::Multi);
+    assert_eq!(row_click_intent(1, true, true), RowClick::Range);
+    assert_eq!(row_click_intent(1, true, false), RowClick::Range);
+    assert_eq!(row_click_intent(1, false, true), RowClick::Multi);
     // A keyboard-activated click reports no modifiers at all, so it lands here.
-    assert_eq!(row_click_intent(false, false), RowClick::Single);
+    assert_eq!(row_click_intent(1, false, false), RowClick::Single);
+}
+
+/// Changing `row_click_intent` from `click_count >= 2` to `>= 3` must fail this
+/// assertion; otherwise a normal double-click would select a row instead of opening its report.
+///
+/// Returns:
+///     Nothing; double-click precedence is asserted.
+#[test]
+fn double_click_opens_report_before_selection_modifiers() {
+    assert_eq!(row_click_intent(2, true, true), RowClick::OpenReport);
+}
+
+/// Removing the `to - 1` conversion must fail this assertion because Report would include
+/// one second from the next Analytics day, and an unbounded Analytics start must stay unset.
+///
+/// Returns:
+///     Nothing; Analytics-exclusive bounds are converted exactly once.
+#[test]
+fn analytics_period_becomes_inclusive_report_bounds() {
+    assert_eq!(inclusive_report_bounds(-1, 172_800), (None, Some(172_799)));
+    assert_eq!(
+        inclusive_report_bounds(86_400, 172_800),
+        (Some(86_400), Some(172_799))
+    );
 }
 
 /// An anchor the list is not drawing yields no range at all.
