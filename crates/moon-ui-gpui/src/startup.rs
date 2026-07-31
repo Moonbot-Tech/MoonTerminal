@@ -697,7 +697,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         crate::diag::write_sample(ms, &sample, &ctx);
                         cx.update(|cx| {
                             coord_backend.update(cx, |b, _| {
-                                crate::firetest::record_diag_sample(b, ms, &sample);
+                                crate::firetest::record_diag_sample(b, &sample);
                             });
                         });
                     }

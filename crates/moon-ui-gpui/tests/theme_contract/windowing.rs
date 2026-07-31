@@ -163,7 +163,36 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
 #[test]
 fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let firetest = fs::read_to_string(root.join("firetest.rs")).unwrap();
+    // FireTest is a directory of stage modules, not one file: the invariants below are about the
+    // scenario as a whole, so they read every source under it rather than a single path that a
+    // later split would silently empty out.
+    let firetest_dir = root.join("firetest");
+    let mut firetest_files = Vec::new();
+    rust_sources(&firetest_dir, &mut firetest_files);
+    // Name the modules that carry the run's shape. A count would pass on any two files; these are
+    // the ones the invariants below are actually about — the plan, the dispatcher, the scoring, and
+    // the per-stage directory.
+    for required in ["mod.rs", "plan.rs", "verdict.rs", "stages/mod.rs"] {
+        let path = firetest_dir.join(required);
+        assert!(
+            firetest_files.contains(&path),
+            "FireTest must keep {required} under src/firetest/: the scenario's plan, dispatch and \
+             scoring each stay a module of their own"
+        );
+    }
+    // COMMENTS ARE STRIPPED, and that is the point. Concatenating a directory sweeps in every
+    // `//!` and `///` line, and a rule about what the code DOES must not be satisfiable — or
+    // breakable — by prose that merely mentions the thing. `lines()` also drops the `\r` of a CRLF
+    // checkout, which is why no separate normalization pass is needed.
+    let firetest = firetest_files
+        .iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let docs = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
