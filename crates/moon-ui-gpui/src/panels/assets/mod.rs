@@ -17,18 +17,21 @@
 //! rule exists to prevent.
 //!
 //! Split by responsibility: state/data/lifecycle/window here; the table, the core bar/list and
-//! the footer in [`table`]; balance aggregation and its trust-aware rendering in [`balances`];
+//! the footer in [`table`]; the selectable fields, their persistence and the header sort in
+//! [`columns`]; balance aggregation and its trust-aware rendering in [`balances`];
 //! the 3 wallet containers and the drag&drop transfer dialog in [`wallets`].
 
 mod balances;
 mod cache;
 mod collect;
+mod columns;
 mod render;
 mod table;
 mod wallets;
 mod window;
 
 use collect::{AssetEntry, WalletColumnSnapshot, money};
+use columns::AssetCol;
 pub use window::open;
 use window::{ASSETS_HEADER_H, assets_header};
 
@@ -38,10 +41,11 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonDataCell, MoonDataRow,
-    MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonInput, MoonInputState, MoonPalette,
-    MoonSlider, MoonSliderEvent, MoonSliderState, MoonTone, MoonWindowFrame, Panel, PanelEvent,
-    PanelState, Root, h_flex, v_flex,
+    DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDataCell,
+    MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput,
+    MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette, MoonSlider, MoonSliderEvent,
+    MoonSliderState, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, h_flex,
+    v_flex,
 };
 
 use crate::Backend;
@@ -117,6 +121,13 @@ pub struct AssetsView {
     /// to cover rows it silently dropped — the same "partial sum shown as complete" the balance
     /// side of the footer is built to prevent.
     cached_value_excluded: usize,
+    /// Fields hidden by the column selector, persisted per context through
+    /// [`crate::persistence::table_persist`]. Empty means every field is shown; the action buttons
+    /// are a field like any other and can be hidden too.
+    hidden_cols: Vec<AssetCol>,
+    /// Active header sort as `(column, ascending)`. `None` keeps the default order — largest value
+    /// first. Applied while rebuilding the cache, never during a repaint.
+    sort: Option<(AssetCol, bool)>,
     /// Asset-table column widths and sorting state. Its widths persist through
     /// [`crate::persistence::table_persist`].
     table_state: Entity<MoonDataTableState>,
@@ -238,6 +249,8 @@ impl AssetsView {
             cached_wallets: Rc::new(Vec::new()),
             cached_total_value: 0.0,
             cached_value_excluded: 0,
+            hidden_cols: Vec::new(),
+            sort: None,
             table_state,
             widths_id,
             dock: None,
@@ -252,6 +265,9 @@ impl AssetsView {
             .map(|(id, _)| id)
             .collect();
         this.selected_core = cores.first().copied();
+        // Restore the persisted field set before the first cache build so the initial frame already
+        // renders the user's columns.
+        this.apply_ctx_columns(cx);
         for core in &cores {
             if let Err(error) = this.backend.read(cx).session.refresh_transfer_assets(*core) {
                 log::warn!("assets initial refresh failed for core {core}: {error}");
