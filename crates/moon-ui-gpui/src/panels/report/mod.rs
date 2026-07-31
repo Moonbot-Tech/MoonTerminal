@@ -23,9 +23,9 @@ mod window;
 
 use query::ReportData;
 use strategy_filter::{
-    ReportStrategyChoice, ReportStrategyDelegate, ReportStrategySearch,
-    filters_for_strategy_choice, ordered_strategy_cores, selected_strategy_choice,
-    strategy_choice_index, strategy_groups,
+    ReportStrategyCatalog, ReportStrategyChoice, ReportStrategyDelegate, ReportStrategySearch,
+    exact_strategy_selection, merge_strategy_metadata, normalized_strategy_filter_keys,
+    ordered_strategy_cores, strategy_choice_indices, strategy_groups, strategy_selection_summary,
 };
 use widths::complete_widths;
 
@@ -226,6 +226,8 @@ pub struct ReportPanel {
     pub(super) cores: Vec<(u64, String)>,
     /// Strategy identities currently available to the exact strategy selector.
     pub(super) strategies: Vec<ReportStrategy>,
+    /// Exact keys confirmed by the latest metadata refresh, excluding retained stale choices.
+    pub(super) available_strategy_keys: HashSet<ReportStrategyKey>,
     /// Cached schema, kept outside `data` so failures cannot collapse controls or widths.
     pub(super) cols: Rc<Vec<String>>,
     /// Report rows and totals; in-flight refreshes may retain stale data, but
@@ -237,11 +239,13 @@ pub struct ReportPanel {
 
     /// Multi-selected core UIDs; an empty set means all cores.
     pub(super) sel_cores: HashSet<u64>,
-    /// Exact selected strategy, or `None` for all strategies.
-    pub(super) strategy: Option<ReportStrategyKey>,
+    /// Exact selected strategies, or `None` for implicit All as in the shared core selector.
+    pub(super) selected_strategies: Option<HashSet<ReportStrategyKey>>,
     /// Searchable, grouped, virtualized MoonUI selector synchronized with Report filters.
     strategy_select: Entity<MoonComboboxState<ReportStrategyDelegate>>,
-    /// Search text retained across metadata delegate replacements.
+    /// Immutable grouped rows and availability indices retained until metadata changes.
+    strategy_catalog: Rc<ReportStrategyCatalog>,
+    /// Search text shared across metadata delegate replacements.
     strategy_search: ReportStrategySearch,
     /// Whether metadata changes require replacing the grouped combobox delegate on next render.
     strategy_select_items_dirty: bool,

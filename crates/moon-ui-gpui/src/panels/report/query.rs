@@ -126,7 +126,7 @@ impl ReportPanel {
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,
             closed_only: self.closed_only,
-            strategy: self.strategy,
+            strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
         }
     }
 
@@ -225,22 +225,14 @@ impl ReportPanel {
                             if let Some(cores) = read.cores {
                                 this.cores = cores;
                             }
-                            if let Some(mut strategies) = read.strategies {
-                                if let Some(key) = this.strategy {
-                                    if !strategies.iter().any(|strategy| strategy.key == key) {
-                                        let selected = this
-                                            .strategies
-                                            .iter()
-                                            .find(|strategy| strategy.key == key)
-                                            .cloned()
-                                            .unwrap_or_else(|| ReportStrategy {
-                                                key,
-                                                name: key.strategy_id.to_string(),
-                                            });
-                                        strategies.push(selected);
-                                    }
-                                }
+                            if let Some(strategies) = read.strategies {
+                                let (strategies, available) = merge_strategy_metadata(
+                                    &this.strategies,
+                                    strategies,
+                                    this.selected_strategies.as_ref(),
+                                );
                                 this.strategies = strategies;
+                                this.available_strategy_keys = available;
                             }
                             if metadata_changed {
                                 this.queue_strategy_select_sync(true, cx);

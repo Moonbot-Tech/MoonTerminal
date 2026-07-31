@@ -126,8 +126,11 @@ pub struct ReportFilter {
     pub deleted_only: bool,
     /// Require a positive close timestamp, matching Analytics' closed-trade universe.
     pub closed_only: bool,
-    /// Exact strategy identity; the core is part of the key because ids repeat across cores.
-    pub strategy: Option<ReportStrategyKey>,
+    /// Exact strategy identities; `None` selects all strategies, while `Some` remains constrained.
+    ///
+    /// The core is part of every key because strategy ids repeat across cores. An explicit empty
+    /// collection intentionally matches no rows so a lost/stale selection cannot broaden a query.
+    pub strategies: Option<Vec<ReportStrategyKey>>,
 }
 
 /// Exact report strategy identity across all connected cores.
@@ -267,16 +270,7 @@ fn build_where(
             .join(",");
         sql.push_str(&format!(" AND r.core_uid IN ({ids})"));
     }
-    if let Some(strategy) = f.strategy {
-        if has("core_uid") && has("strategyid") {
-            let sid = super::analytics::effective_sid_expr("r", cols, has_strategy_names);
-            sql.push_str(&format!(" AND r.core_uid = ? AND COALESCE({sid}, 0) = ?"));
-            params.push(Box::new(strategy.core_uid as i64));
-            params.push(Box::new(strategy.strategy_id));
-        } else {
-            sql.push_str(" AND 1=0");
-        }
-    }
+    append_strategy_filter(&mut sql, f, cols, has_strategy_names);
     if f.closed_only {
         if has("closedate") {
             sql.push_str(" AND r.closedate > 0");
@@ -327,6 +321,61 @@ fn build_where(
     (sql, params)
 }
 
+/// Append the exact multi-strategy predicate without consuming SQLite bind-variable capacity.
+///
+/// Strategy and core ids are typed integers, so grouping their numeric literals by core is safe and
+/// keeps a very large checkbox selection below SQLite's parameter limit. An explicit empty set or
+/// a source without strategy identity remains a no-match constraint.
+///
+/// Args:
+///     sql: Mutable WHERE clause receiving the strategy predicate.
+///     filter: Complete Report filter containing the optional exact-key collection.
+///     columns: Columns available on the current report source.
+///     has_strategy_names: Whether liquidation attribution metadata is readable.
+///
+/// Returns:
+///     Nothing; `sql` is unchanged only when the strategy filter is implicit All.
+fn append_strategy_filter(
+    sql: &mut String,
+    filter: &ReportFilter,
+    columns: &std::collections::HashSet<String>,
+    has_strategy_names: bool,
+) {
+    let Some(strategies) = &filter.strategies else {
+        return;
+    };
+    if strategies.is_empty() || !columns.contains("core_uid") || !columns.contains("strategyid") {
+        sql.push_str(" AND 1=0");
+        return;
+    }
+
+    let mut by_core: std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>> =
+        std::collections::BTreeMap::new();
+    for strategy in strategies {
+        by_core
+            .entry(strategy.core_uid)
+            .or_default()
+            .insert(strategy.strategy_id);
+    }
+    let sid = super::analytics::effective_sid_expr("r", columns, has_strategy_names);
+    let groups = by_core
+        .into_iter()
+        .map(|(core_uid, strategy_ids)| {
+            let ids = strategy_ids
+                .into_iter()
+                .map(|strategy_id| strategy_id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "(r.core_uid = {} AND COALESCE({sid}, 0) IN ({ids}))",
+                core_uid as i64
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    sql.push_str(&format!(" AND ({groups})"));
+}
+
 /// Aggregate profit and order count over the complete filter, not only the top N.
 ///
 /// Returns `Failed` when source discovery or any aggregate query fails; only a
@@ -345,7 +394,11 @@ fn build_where(
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<(f64, i64)> {
     const CTX: &str = "отчёты: query_totals";
     let (mut sum, mut count) = (0.0f64, 0i64);
-    let has_strategy_names = f.strategy.is_some() && super::analytics::strategies_attached(conn);
+    let has_strategy_names = f
+        .strategies
+        .as_ref()
+        .is_some_and(|strategies| !strategies.is_empty())
+        && super::analytics::strategies_attached(conn);
     for src in read_sources_res(conn)? {
         let (where_sql, params) = build_where(f, &src.cols, has_strategy_names);
         let profit = if src.cols.contains("profitbtc") {
@@ -396,7 +449,11 @@ pub fn query_reports(
     let col = sort_column(&cols, sort_key);
     let sort_ix = cols.iter().position(|c| *c == col);
     let dir = if desc { "DESC" } else { "ASC" };
-    let has_strategy_names = f.strategy.is_some() && super::analytics::strategies_attached(conn);
+    let has_strategy_names = f
+        .strategies
+        .as_ref()
+        .is_some_and(|strategies| !strategies.is_empty())
+        && super::analytics::strategies_attached(conn);
 
     // Query the top N from EACH source separately so indexes work, then merge below.
     // Each entry is `(core_uid, rec_id, data)`; `rec_id` is the replica `newrecid` or 0 for a

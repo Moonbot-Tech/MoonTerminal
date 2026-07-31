@@ -142,7 +142,10 @@ impl ReportPanel {
                 .default_value(to_query.clone())
                 .placeholder(t!("report.filter.date_ph").to_string())
         });
-        let selected_strategy = scope.as_ref().map(|scope| scope.strategy);
+        let selected_strategies = scope.as_ref().map(|scope| HashSet::from([scope.strategy]));
+        // Scoped labels are seeded before the first metadata snapshot, so they are display choices
+        // but not yet confirmed available choices.
+        let available_strategy_keys = HashSet::new();
         let initial_selected_cores = scope
             .as_ref()
             .map(|scope| HashSet::from([scope.strategy.core_uid]))
@@ -154,20 +157,20 @@ impl ReportPanel {
             &t!("report.all_strategies"),
             &t!("analytics.manual_orders"),
         );
-        let strategy_select_index = strategy_choice_index(
-            &groups,
-            selected_strategy_choice(selected_strategy, &initial_selected_cores),
-        );
+        let strategy_select_indices =
+            strategy_choice_indices(&groups, selected_strategies.as_ref());
         let strategy_search = ReportStrategyDelegate::search_state();
-        let strategy_delegate = ReportStrategyDelegate::new(groups, strategy_search.clone());
+        let strategy_catalog =
+            ReportStrategyDelegate::catalog(groups, available_strategy_keys.clone());
+        let strategy_delegate = ReportStrategyDelegate::new(
+            strategy_catalog.clone(),
+            selected_strategies.as_ref(),
+            strategy_search.clone(),
+        );
         let strategy_select = cx.new(|cx| {
-            MoonComboboxState::new(
-                strategy_delegate,
-                strategy_select_index.into_iter().collect(),
-                window,
-                cx,
-            )
-            .searchable(true)
+            MoonComboboxState::new(strategy_delegate, strategy_select_indices, window, cx)
+                .multiple(true)
+                .searchable(true)
         });
         cx.subscribe(
             &strategy_select,
@@ -177,7 +180,7 @@ impl ReportPanel {
                 };
                 // The widget already owns this selection mutation; only programmatic Report
                 // mutations need to synchronize the widget back from panel state.
-                panel.set_strategy_choice(choices.first().copied(), cx);
+                panel.set_strategy_choices(choices, cx);
             },
         )
         .detach();
@@ -243,13 +246,15 @@ impl ReportPanel {
             conn,
             cores,
             strategies,
+            available_strategy_keys,
             cols: Rc::new(init_cols),
             data: LoadState::default(),
             sort_key,
             sort_desc,
             sel_cores: initial_selected_cores,
-            strategy: selected_strategy,
+            selected_strategies,
             strategy_select,
+            strategy_catalog,
             strategy_search,
             strategy_select_items_dirty: false,
             strategy_select_selection_dirty: false,
@@ -317,7 +322,7 @@ impl ReportPanel {
         upsert_strategy_choice(&mut self.strategies, scope.strategy, scope.strategy_name);
         self.group = report_group_for_core(&self.backend, scope.strategy.core_uid, cx);
         self.sel_cores = HashSet::from([scope.strategy.core_uid]);
-        self.strategy = Some(scope.strategy);
+        self.selected_strategies = Some(HashSet::from([scope.strategy]));
         self.queue_strategy_select_sync(true, cx);
         self.side = scope.side;
         self.kind = ReportKind::from_filter(scope.emulator);
@@ -369,7 +374,7 @@ impl ReportPanel {
     ///     cx: Panel render context used to update the retained entity.
     ///
     /// Returns:
-    ///     Nothing; a missing choice clears to the global All-strategies placeholder.
+    ///     Nothing; selected values outside the retained query remain selected by exact identity.
     pub(super) fn flush_strategy_select_sync(
         &mut self,
         window: &mut Window,
@@ -378,24 +383,37 @@ impl ReportPanel {
         if !self.strategy_select_items_dirty && !self.strategy_select_selection_dirty {
             return;
         }
-        let ordered_cores =
-            ordered_strategy_cores(&self.strategies, &self.cores, &self.backend.read(cx).config);
-        let groups = strategy_groups(
-            &self.strategies,
-            &ordered_cores,
-            &t!("report.all_strategies"),
-            &t!("analytics.manual_orders"),
+        if self.strategy_select_items_dirty {
+            let ordered_cores = ordered_strategy_cores(
+                &self.strategies,
+                &self.cores,
+                &self.backend.read(cx).config,
+            );
+            let groups = strategy_groups(
+                &self.strategies,
+                &ordered_cores,
+                &t!("report.all_strategies"),
+                &t!("analytics.manual_orders"),
+            );
+            self.strategy_catalog =
+                ReportStrategyDelegate::catalog(groups, self.available_strategy_keys.clone());
+        }
+        let selected = self
+            .strategy_catalog
+            .selected_indices(self.selected_strategies.as_ref());
+        let unfiltered = ReportStrategyDelegate::unfiltered(
+            self.strategy_catalog.clone(),
+            self.selected_strategies.as_ref(),
+            self.strategy_search.clone(),
         );
-        let selected = strategy_choice_index(
-            &groups,
-            selected_strategy_choice(self.strategy, &self.sel_cores),
+        let filtered = ReportStrategyDelegate::new(
+            self.strategy_catalog.clone(),
+            self.selected_strategies.as_ref(),
+            self.strategy_search.clone(),
         );
-        let unfiltered =
-            ReportStrategyDelegate::unfiltered(groups.clone(), self.strategy_search.clone());
-        let filtered = ReportStrategyDelegate::new(groups, self.strategy_search.clone());
         self.strategy_select.update(cx, |select, select_cx| {
-            // Synchronize against the complete hierarchy, then restore the retained filtered
-            // result so an off-search choice keeps its value and trigger label.
+            // Synchronize against a full delegate, then restore the retained filtered view. The
+            // selection snapshot keeps item values even when their rows are outside the query.
             select.set_items(unfiltered, window, select_cx);
             select.set_selected_indices(selected, window, select_cx);
             select.set_items(filtered, window, select_cx);

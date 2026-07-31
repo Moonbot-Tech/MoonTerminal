@@ -78,10 +78,10 @@ fn strategy_fixture() -> Connection {
 fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
     let conn = strategy_fixture();
     let filter = ReportFilter {
-        strategy: Some(ReportStrategyKey {
+        strategies: Some(vec![ReportStrategyKey {
             core_uid: 2,
             strategy_id: -7,
-        }),
+        }]),
         closed_only: true,
         ..ReportFilter::default()
     };
@@ -105,7 +105,7 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
     let choice = distinct_strategies(&conn)
         .expect("load strategy choices")
         .into_iter()
-        .find(|strategy| strategy.key == filter.strategy.expect("exact filter"))
+        .find(|strategy| strategy.key == filter.strategies.as_ref().expect("exact filter")[0])
         .expect("selected strategy choice");
     assert_eq!(choice.name, "OWNER");
     assert!(
@@ -124,10 +124,10 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
     );
 
     let manual = ReportFilter {
-        strategy: Some(ReportStrategyKey {
+        strategies: Some(vec![ReportStrategyKey {
             core_uid: 2,
             strategy_id: 0,
-        }),
+        }]),
         closed_only: true,
         ..ReportFilter::default()
     };
@@ -142,5 +142,103 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
     assert_eq!(
         manual_rows.rows[0][manual_coin],
         Value::Text("NULL-MANUAL".to_string())
+    );
+}
+
+/// Replacing the grouped exact-key predicate with only its first key must lose one selected row,
+/// while treating `Some(vec![])` as implicit All must expose every fixture row. Either regression
+/// makes checkbox state disagree with rows, totals, and export.
+///
+/// Returns:
+///     Nothing; multiple and empty explicit filter semantics are asserted.
+#[test]
+fn multiple_and_explicit_empty_strategy_filters_remain_exact() {
+    let conn = strategy_fixture();
+    let multiple = ReportFilter {
+        strategies: Some(vec![
+            ReportStrategyKey {
+                core_uid: 1,
+                strategy_id: -7,
+            },
+            ReportStrategyKey {
+                core_uid: 2,
+                strategy_id: 8,
+            },
+        ]),
+        closed_only: true,
+        ..ReportFilter::default()
+    };
+
+    let table = query_reports(&conn, &multiple, "closedate", false, 100)
+        .expect("query multiple strategies");
+    let coin = table
+        .cols
+        .iter()
+        .position(|column| column == "coin")
+        .expect("coin column");
+    let coins = table
+        .rows
+        .iter()
+        .map(|row| row[coin].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        coins,
+        vec![
+            Value::Text("WRONG-CORE".to_string()),
+            Value::Text("WRONG-STRATEGY".to_string()),
+        ]
+    );
+    assert_eq!(
+        query_totals(&conn, &multiple).expect("query multiple-strategy totals"),
+        (40.0, 2)
+    );
+
+    let empty = ReportFilter {
+        strategies: Some(Vec::new()),
+        ..ReportFilter::default()
+    };
+    assert!(query_reports(&conn, &empty, "closedate", false, 100)
+        .expect("query explicit empty strategy set")
+        .rows
+        .is_empty());
+    assert_eq!(
+        query_totals(&conn, &empty).expect("query explicit empty totals"),
+        (0.0, 0)
+    );
+}
+
+/// Returning early from `report_read:append_strategy_filter` for a multi-key complete selector
+/// universe must expose `NO-STRATEGY-COLUMN`, a legacy source with no checkbox identity.
+///
+/// Returns:
+///     Nothing; a complete explicit selector universe remains an exact database predicate.
+#[test]
+fn complete_explicit_strategy_universe_excludes_unidentifiable_sources() {
+    let conn = strategy_fixture();
+    let complete = ReportFilter {
+        strategies: Some(
+            distinct_strategies(&conn)
+                .expect("load complete identifiable strategy universe")
+                .into_iter()
+                .map(|strategy| strategy.key)
+                .collect(),
+        ),
+        closed_only: true,
+        ..ReportFilter::default()
+    };
+    let table = query_reports(&conn, &complete, "closedate", false, 100)
+        .expect("query complete explicit strategy universe");
+    let coin = table
+        .cols
+        .iter()
+        .position(|column| column == "coin")
+        .expect("complete-filter coin column");
+
+    assert!(
+        table
+            .rows
+            .iter()
+            .all(|row| row[coin] != Value::Text("NO-STRATEGY-COLUMN".to_string())),
+        "a complete explicit checkbox set must still exclude sources without strategy identity"
     );
 }

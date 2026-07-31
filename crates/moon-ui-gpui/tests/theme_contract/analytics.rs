@@ -7,9 +7,9 @@ use super::support::*;
 ///
 /// Removing `.children(strategy_button)` is a plausible compile-clean edit that would hide the
 /// Strategies launcher; removing the double-click arm would make rows select-only again. Replacing
-/// Replacing the grouped `MoonCombobox` with the old eager `MoonDropdown` recreates the
-/// user-visible freeze at 1,000 items. Removing the existing-window `apply_scope` call silently
-/// creates stale or duplicate Reports.
+/// the grouped `MoonCombobox` with the old eager `MoonDropdown` recreates the user-visible freeze
+/// at 1,000 items. Removing the existing-window `apply_scope` call silently creates stale or
+/// duplicate Reports.
 /// Removing saved-bound restoration or its observer resets moved Report windows after reopening.
 ///
 /// Returns:
@@ -87,7 +87,11 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     let strategy_combo = braced_body(&report_controls, "pub(super) fn strategy_combo(");
     for needle in [
         "MoonCombobox::new(&self.strategy_select)",
-        ".cleanable(true)",
+        ".h(design::ui_px(cx, 26.0))",
+        ".cleanable(false)",
+        ".render_trigger(",
+        "crate::controls::CORE_COMBO_TRIGGER_W",
+        "report.strategies_n",
         "report.search_strategies",
     ] {
         assert!(
@@ -101,27 +105,32 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
         "opening Reports must not rebuild an eager MoonMenuItem per strategy"
     );
     for needle in [
-        "MoonSearchableGroup::new",
+        "ReportStrategyChoice::All",
         "ReportStrategyChoice::Core",
         "ReportStrategyChoice::Exact",
+        "fn on_will_change(",
+        "available_core_indices(core_uid)",
         "self.search.replace(query.to_string())",
-        "search_text: format!(\"{core_name} {row_label}\").to_lowercase()",
+        "selected_available_by_core",
+        "source_rows: Option<Vec<usize>>",
     ] {
         assert!(
             report_strategy_filter.contains(needle),
-            "the strategy delegate must retain grouped core-wide/exact search semantics via {needle:?}"
+            "the strategy delegate must retain grouped exact multi-selection via {needle:?}"
         );
     }
     assert!(
         report_state.contains("MoonComboboxState::new(")
-            && report_state.contains("ReportStrategyDelegate::new(")
+            && report_state.contains(".multiple(true)")
             && report_state.contains(".searchable(true)"),
-        "Report strategy state must retain MoonUI's grouped virtualized searchable-list engine"
+        "Report strategy state must retain MoonUI's grouped virtualized multi-select engine"
     );
     let sync_select = braced_body(&report_state, "pub(super) fn flush_strategy_select_sync(");
     for needle in [
-        "ordered_strategy_cores(",
-        "strategy_groups(",
+        "if self.strategy_select_items_dirty",
+        "self.strategy_catalog =",
+        ".selected_indices(self.selected_strategies.as_ref())",
+        "ReportStrategyDelegate::catalog(",
         "ReportStrategyDelegate::unfiltered(",
         "select.set_items(unfiltered, window, select_cx)",
         "select.set_selected_indices(selected, window, select_cx)",
@@ -139,6 +148,11 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
             && braced_body(&report_actions, "fn reconcile_strategy_core(")
                 .contains("self.queue_strategy_select_sync(false, cx)"),
         "metadata, repeated scoped opens, and core exclusion must keep widget state synchronized"
+    );
+    assert!(
+        report_query.contains("merge_strategy_metadata(")
+            && report_query.contains("this.available_strategy_keys = available"),
+        "metadata refresh must preserve selected stale labels without marking them available"
     );
     let open_report = braced_body(&report_window, "pub fn open_scoped(");
     for needle in [
@@ -170,12 +184,12 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
             && standalone.contains("layout_dirty = true"),
         "moving or resizing the standalone Report must enter the shared layout persistence path"
     );
-    let set_strategy = braced_body(&report_actions, "pub(super) fn set_strategy_choice(");
+    let set_strategy = braced_body(&report_actions, "pub(super) fn set_strategy_choices(");
     assert!(
-        set_strategy.contains("filters_for_strategy_choice(choice)")
-            && set_strategy.contains("self.sel_cores = sel_cores")
-            && set_strategy.contains("self.strategy = strategy"),
-        "core-wide, exact, and global choices must update both Report filter dimensions"
+        set_strategy.contains("exact_strategy_selection(choices)")
+            && set_strategy.contains(".map(|strategy| strategy.core_uid)")
+            && set_strategy.contains("self.selected_strategies = selected_strategies"),
+        "multi-strategy changes must synchronize every exact core with the shared core selector"
     );
     for signature in [
         "pub(super) fn toggle_core(",
@@ -190,8 +204,9 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     let filter = braced_body(&report_query, "pub(super) fn filter(");
     assert!(
         filter.contains("closed_only: self.closed_only")
-            && filter.contains("strategy: self.strategy"),
-        "the database filter must retain the Analytics closed universe and exact strategy"
+            && filter.contains("strategies: normalized_strategy_filter_keys(")
+            && filter.contains("self.selected_strategies.as_ref()"),
+        "rows, totals, and export must share the stale-safe exact multi-strategy filter"
     );
 }
 
