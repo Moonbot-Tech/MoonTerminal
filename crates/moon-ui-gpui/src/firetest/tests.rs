@@ -63,6 +63,7 @@ fn chart_smoke_stage_plan_is_one_contiguous_scenario() {
             "open_chart",
             "wait_chart_probe",
             "settle_live_chart",
+            "idle_floor",
             "baseline",
             "mouse_storm",
             "static_text_gap",
@@ -119,20 +120,25 @@ fn order_cancel_lag_script_is_a_narrow_order_only_run() {
 }
 
 #[test]
-fn the_chart_is_held_hot_for_every_stage_the_verdict_scores() {
+fn the_storms_and_their_baseline_are_all_equally_hot() {
+    // The comparison the verdict is built on only means something if the storms and the baseline
+    // they are measured against ran in the SAME present mode. `idle_floor` is scored too, but by
+    // absolute ceilings rather than by a delta, and it is cold BY DESIGN — so it is named here as
+    // an exception rather than left to look like an oversight.
     for stage in CHART_SMOKE {
-        let scored = matches!(
-            stage.phase,
-            Phase::Baseline | Phase::Storm | Phase::StaticTextStorm
-        );
-        if scored {
-            assert!(
+        match stage.phase {
+            Phase::Baseline | Phase::Storm | Phase::StaticTextStorm => assert!(
                 stage.present_pressure,
-                "{} is scored by the verdict, so it must run under forced present pressure: \
-                 comparing a storm against a chart that was not equally hot measures the market, \
-                 not the cursor",
+                "{} is compared against its baseline, so it must run under forced present \
+                 pressure: comparing a storm against a chart that was not equally hot measures \
+                 the market, not the cursor",
                 stage.name
-            );
+            ),
+            Phase::IdleFloor => assert!(
+                !stage.present_pressure,
+                "the idle floor exists to measure the app when nothing forces it to work"
+            ),
+            _ => {}
         }
     }
 }
@@ -157,7 +163,8 @@ fn the_columns_match_the_run_they_replaced() {
             "mouse_storm",
             "static_text_warmup",
             "static_text_storm",
-        ]
+        ],
+        "the idle floor must NOT appear here: it is the one measured stage that runs cold"
     );
 
     let probing: Vec<&str> = CHART_SMOKE
@@ -171,6 +178,8 @@ fn the_columns_match_the_run_they_replaced() {
             "wait_chart_probe",
             "settle_live_chart",
             "baseline",
+            // `idle_floor` sits between settle and baseline and is deliberately absent: it aims
+            // no storm, so it has no reason to accept a fresh probe.
             "mouse_storm",
             "static_text_gap",
             "static_text_warmup",
@@ -183,7 +192,7 @@ fn the_columns_match_the_run_they_replaced() {
         .filter(|stage| !stage.sample_warmup.is_zero())
         .map(|stage| stage.name)
         .collect();
-    assert_eq!(warming, vec!["baseline"]);
+    assert_eq!(warming, vec!["idle_floor", "baseline"]);
 
     // The reason too, not just which rows carry one: swapping two deadlines' messages would send
     // the developer looking at the wrong stage.

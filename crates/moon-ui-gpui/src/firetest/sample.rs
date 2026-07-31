@@ -66,6 +66,12 @@ impl<'a> PhaseStats<'a> {
         self.samples.is_empty()
     }
 
+    /// How many seconds of this phase were actually scored. A phase with one sample makes its
+    /// `max` and its `avg` the same number, which is worth seeing in the log.
+    pub(super) fn len(&self) -> usize {
+        self.samples.len()
+    }
+
     /// Mean over the set, or `0.0` when it is empty.
     fn avg(&self, f: impl Fn(&Sample) -> f64) -> f64 {
         if self.samples.is_empty() {

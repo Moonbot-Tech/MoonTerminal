@@ -17,6 +17,7 @@
 //! FireTest deliberately drives the real app: a real chart on a real core, real OS mouse input,
 //! real windows. Static architecture checks belong in `tests/theme_contract/`, never here.
 
+mod bench;
 mod config;
 // Named `logging`, not `log`: a module called `log` here would shadow the `log` crate for every
 // later edit in this file, and the shadowing error reads as a missing macro.
@@ -61,6 +62,8 @@ pub(crate) struct Runtime {
     cursor: usize,
     phase_since: Instant,
     probe: Option<ChartProbe>,
+    /// How much app the idle window was measured against. `None` until that stage records it.
+    bench: Option<bench::BenchShape>,
     samples: Vec<Sample>,
     storm: Option<MouseStorm>,
     opened_group: Option<String>,
@@ -97,6 +100,7 @@ impl Runtime {
             cursor: 0,
             phase_since: now,
             probe: None,
+            bench: None,
             samples: Vec::new(),
             storm: None,
             opened_group: None,

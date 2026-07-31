@@ -242,6 +242,7 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
     );
     assert!(
         docs.contains("находит реальные bounds графика")
+            && docs.contains("stage=idle_floor")
             && docs.contains("stage=command_error_contract")
             && docs.contains("stage=tool_windows_open")
             && docs.contains("stage=tool_windows_verify_open")

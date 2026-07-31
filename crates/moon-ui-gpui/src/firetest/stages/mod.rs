@@ -9,6 +9,7 @@
 
 pub(super) mod chart;
 pub(super) mod command_error;
+pub(super) mod idle_floor;
 pub(super) mod locale;
 pub(super) mod order_cancel;
 pub(super) mod perf;
