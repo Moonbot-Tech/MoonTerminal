@@ -34,8 +34,9 @@ pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
-    display_columns, distinct_cores, max_core_uid, query_reports, query_totals, ProfitMetric,
-    ReportFilter, ReportTable, SideFilter, DISPLAY_COLUMNS,
+    display_columns, distinct_cores, distinct_strategies, max_core_uid, query_reports,
+    query_totals, ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable,
+    SideFilter, DISPLAY_COLUMNS,
 };
 
 use read_fail::read_fail;

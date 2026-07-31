@@ -124,6 +124,28 @@ pub struct ReportFilter {
     /// `true` shows ONLY them. A NULL column value counts as not deleted, matching
     /// the analytics filter; a source without the column holds no soft-deleted rows.
     pub deleted_only: bool,
+    /// Require a positive close timestamp, matching Analytics' closed-trade universe.
+    pub closed_only: bool,
+    /// Exact strategy identity; the core is part of the key because ids repeat across cores.
+    pub strategy: Option<ReportStrategyKey>,
+}
+
+/// Exact report strategy identity across all connected cores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReportStrategyKey {
+    /// Runtime core identity stored by the report replica.
+    pub core_uid: u64,
+    /// Delphi-signed strategy id stored in reports and `strategies.sqlite`.
+    pub strategy_id: i64,
+}
+
+/// Strategy option shown by the Report filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportStrategy {
+    /// Exact database identity used by the filter.
+    pub key: ReportStrategyKey,
+    /// Strategy name from `strategies.sqlite`, or the numeric id when metadata is unavailable.
+    pub name: String,
 }
 
 /// Build the runtime display-column list from the typed and legacy schemas.
@@ -213,14 +235,24 @@ fn sort_column(cols: &[String], key: &str) -> String {
     }
 }
 
-/// Apply column predicates only to columns that EXIST in the source.
+/// Apply report predicates to one aliased source.
 ///
 /// Before the core schema arrives, the replica may lack `closedate`, `coin`,
 /// `isshort`, or `emulator`; filtering on an absent column would fail the entire
-/// SELECT, while an absent column also means there is no data for that condition.
+/// SELECT. An exact strategy is different: a source without either identity column
+/// cannot prove a match and therefore contributes zero rows.
+///
+/// Args:
+///     f: Complete Report filter.
+///     cols: Columns available on this source.
+///     has_strategy_names: Whether liquidation attribution metadata is readable.
+///
+/// Returns:
+///     Parameterized SQL suffix and its ordered bound values.
 fn build_where(
     f: &ReportFilter,
     cols: &std::collections::HashSet<String>,
+    has_strategy_names: bool,
 ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
     let has = |n: &str| cols.contains(n);
     let mut sql = String::from(" WHERE 1=1");
@@ -233,44 +265,61 @@ fn build_where(
             .map(|u| (*u as i64).to_string())
             .collect::<Vec<_>>()
             .join(",");
-        sql.push_str(&format!(" AND core_uid IN ({ids})"));
+        sql.push_str(&format!(" AND r.core_uid IN ({ids})"));
+    }
+    if let Some(strategy) = f.strategy {
+        if has("core_uid") && has("strategyid") {
+            let sid = super::analytics::effective_sid_expr("r", cols, has_strategy_names);
+            sql.push_str(&format!(" AND r.core_uid = ? AND COALESCE({sid}, 0) = ?"));
+            params.push(Box::new(strategy.core_uid as i64));
+            params.push(Box::new(strategy.strategy_id));
+        } else {
+            sql.push_str(" AND 1=0");
+        }
+    }
+    if f.closed_only {
+        if has("closedate") {
+            sql.push_str(" AND r.closedate > 0");
+        } else {
+            sql.push_str(" AND 1=0");
+        }
     }
     if has("closedate") {
         if let Some(from) = f.date_from {
-            sql.push_str(" AND closedate IS NOT NULL AND closedate >= ?");
+            sql.push_str(" AND r.closedate IS NOT NULL AND r.closedate >= ?");
             params.push(Box::new(from));
         }
         if let Some(to) = f.date_to {
-            sql.push_str(" AND closedate IS NOT NULL AND closedate <= ?");
+            sql.push_str(" AND r.closedate IS NOT NULL AND r.closedate <= ?");
             params.push(Box::new(to));
         }
     }
     let coin = f.coin.trim();
     if !coin.is_empty() && has("coin") {
-        sql.push_str(" AND coin LIKE ?");
+        sql.push_str(" AND r.coin LIKE ?");
         params.push(Box::new(format!("%{}%", coin.to_uppercase())));
     }
     if has("isshort") {
         match f.side {
             SideFilter::All => {}
-            SideFilter::Long => sql.push_str(" AND isshort = 0"),
-            SideFilter::Short => sql.push_str(" AND isshort = 1"),
+            SideFilter::Long => sql.push_str(" AND r.isshort = 0"),
+            SideFilter::Short => sql.push_str(" AND r.isshort = 1"),
         }
     }
     if has("emulator") {
         match f.emulator {
             None => {}
-            Some(true) => sql.push_str(" AND COALESCE(emulator, 0) = 1"),
-            Some(false) => sql.push_str(" AND COALESCE(emulator, 0) = 0"),
+            Some(true) => sql.push_str(" AND COALESCE(r.emulator, 0) = 1"),
+            Some(false) => sql.push_str(" AND COALESCE(r.emulator, 0) = 0"),
         }
     }
     // Deleted-mode semantics live on `ReportFilter::deleted_only`; the `1=0` arm makes
     // a column-less source contribute nothing when only deleted rows are wanted.
     if has("deleted") {
         sql.push_str(if f.deleted_only {
-            " AND COALESCE(deleted, 0) <> 0"
+            " AND COALESCE(r.deleted, 0) <> 0"
         } else {
-            " AND COALESCE(deleted, 0) = 0"
+            " AND COALESCE(r.deleted, 0) = 0"
         });
     } else if f.deleted_only {
         sql.push_str(" AND 1=0");
@@ -283,17 +332,28 @@ fn build_where(
 /// Returns `Failed` when source discovery or any aggregate query fails; only a
 /// successful empty result returns `(0.0, 0)`. The open connection means this
 /// function cannot return `NotReady`.
+///
+/// Args:
+///     conn: Open report reader or snapshot.
+///     f: Complete Report filter.
+///
+/// Returns:
+///     Exact profit sum and row count across all sources.
+///
+/// Errors:
+///     Returns `Failed` for source, SQL, or row conversion errors.
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<(f64, i64)> {
     const CTX: &str = "отчёты: query_totals";
     let (mut sum, mut count) = (0.0f64, 0i64);
+    let has_strategy_names = f.strategy.is_some() && super::analytics::strategies_attached(conn);
     for src in read_sources_res(conn)? {
-        let (where_sql, params) = build_where(f, &src.cols);
+        let (where_sql, params) = build_where(f, &src.cols, has_strategy_names);
         let profit = if src.cols.contains("profitbtc") {
-            "COALESCE(SUM(profitbtc),0.0)"
+            "COALESCE(SUM(r.profitbtc),0.0)"
         } else {
             "0.0"
         };
-        let sql = format!("SELECT {profit}, COUNT(*) FROM {}{where_sql}", src.table);
+        let sql = format!("SELECT {profit}, COUNT(*) FROM {} r{where_sql}", src.table);
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let (s, c) = conn
             .query_row(&sql, refs.as_slice(), |r| {
@@ -311,6 +371,19 @@ pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<(f64, i64
 /// Source, schema, query, and row-conversion errors map to `Failed`; no partial
 /// table is returned, which also keeps exports from writing incomplete data.
 /// The open connection means this function cannot return `NotReady`.
+///
+/// Args:
+///     conn: Open report reader or snapshot.
+///     f: Complete Report filter.
+///     sort_key: Requested runtime column name.
+///     desc: Whether to sort descending.
+///     limit: Maximum merged rows.
+///
+/// Returns:
+///     Runtime columns and the top matching report rows.
+///
+/// Errors:
+///     Returns `Failed` for source, schema, SQL, or row conversion errors.
 pub fn query_reports(
     conn: &Connection,
     f: &ReportFilter,
@@ -323,13 +396,14 @@ pub fn query_reports(
     let col = sort_column(&cols, sort_key);
     let sort_ix = cols.iter().position(|c| *c == col);
     let dir = if desc { "DESC" } else { "ASC" };
+    let has_strategy_names = f.strategy.is_some() && super::analytics::strategies_attached(conn);
 
     // Query the top N from EACH source separately so indexes work, then merge below.
     // Each entry is `(core_uid, rec_id, data)`; `rec_id` is the replica `newrecid` or 0 for a
     // legacy row that has none.
     let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
     for src in read_sources_res(conn)? {
-        let (where_sql, mut params) = build_where(f, &src.cols);
+        let (where_sql, mut params) = build_where(f, &src.cols, has_strategy_names);
         let select = source_select(&src, &cols);
         // `newrecid` is a real column only on the typed replica; a legacy source projects 0, which
         // marks its rows as not soft-deletable (0 is never a real rec id).
@@ -347,7 +421,7 @@ pub fn query_reports(
             "1".to_string()
         };
         let sql = format!(
-            "SELECT core_uid, {rec_id_select}, {select} FROM {}{where_sql} ORDER BY {order} LIMIT ?",
+            "SELECT r.core_uid, {rec_id_select}, {select} FROM {} r{where_sql} ORDER BY {order} LIMIT ?",
             src.table
         );
         params.push(Box::new(limit as i64));
@@ -532,3 +606,87 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
     }
     Ok(out)
 }
+
+/// Load exact strategy identities present in report sources.
+///
+/// Identity uses the same liquidation attribution and NULL-to-Manual semantics as
+/// the exact filter, so every offered option can return the rows it represents.
+/// Legacy sources that cannot identify strategies are skipped. Names come from the
+/// attached strategy database when available and otherwise use the signed numeric id.
+///
+/// Args:
+///     conn: Open report reader or snapshot with optional strategy attachment.
+///
+/// Returns:
+///     Sorted exact strategy choices present in report sources.
+///
+/// Errors:
+///     Returns `Failed` for source, strategy metadata, SQL, or row conversion errors.
+pub fn distinct_strategies(conn: &Connection) -> ReadResult<Vec<ReportStrategy>> {
+    const CTX: &str = "reports: distinct_strategies";
+    let has_strategy_names = super::analytics::strategies_attached(conn);
+    let mut names = std::collections::HashMap::new();
+    if has_strategy_names {
+        let mut stmt = conn
+            .prepare("SELECT core_uid, strategy_id, name FROM strat.strategies")
+            .map_err(|e| read_fail(CTX, e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u64,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| read_fail(CTX, e))?;
+        for row in rows {
+            let (core_uid, strategy_id, name) = row.map_err(|e| read_fail(CTX, e))?;
+            names.insert((core_uid, strategy_id), name);
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for src in read_sources_res(conn)? {
+        if !src.cols.contains("core_uid") || !src.cols.contains("strategyid") {
+            continue;
+        }
+        let strategy_id = super::analytics::effective_sid_expr("r", &src.cols, has_strategy_names);
+        let sql = format!(
+            "SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {} r",
+            src.table
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| read_fail(CTX, e))?;
+        for row in rows {
+            let (core_uid, strategy_id) = row.map_err(|e| read_fail(CTX, e))?;
+            if seen.insert((core_uid, strategy_id)) {
+                out.push(ReportStrategy {
+                    key: ReportStrategyKey {
+                        core_uid,
+                        strategy_id,
+                    },
+                    name: names
+                        .get(&(core_uid, strategy_id))
+                        .cloned()
+                        .unwrap_or_else(|| strategy_id.to_string()),
+                });
+            }
+        }
+    }
+    out.sort_by_cached_key(|strategy| {
+        (
+            strategy.name.to_lowercase(),
+            strategy.key.core_uid,
+            strategy.key.strategy_id,
+        )
+    });
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests;

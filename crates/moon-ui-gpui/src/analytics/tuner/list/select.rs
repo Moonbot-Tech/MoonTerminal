@@ -12,6 +12,8 @@ use crate::analytics::summary::strat_display;
 /// What a click on a strategy row means, once its modifiers are read.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(in crate::analytics::tuner) enum RowClick {
+    /// Double-click: open a Report scoped to this strategy.
+    OpenReport,
     /// Plain click: single-select, or toggle the sole selection off.
     Single,
     /// Ctrl/Command: add or remove this row from the extras.
@@ -20,27 +22,50 @@ pub(in crate::analytics::tuner) enum RowClick {
     Range,
 }
 
-/// Resolve a row click's meaning from its modifiers.
+/// Resolve a row click's meaning from its native count and modifiers.
 ///
-/// A pure function rather than three branches inside the GPUI closure, so the precedence is
-/// testable: Shift WINS over Ctrl/Command when both are held, matching the strategies tree. A
-/// keyboard-activated click reports no modifiers at all and therefore lands on `Single`, which is
-/// the behaviour keyboard activation should have anyway.
+/// Double-click wins before every selection modifier. For single clicks, Shift wins over
+/// Ctrl/Command, matching the strategies tree.
 ///
 /// Args:
+///     click_count: Native click count reported by GPUI.
 ///     shift: Whether Shift was held.
 ///     secondary: Whether the platform multi-select modifier was held (Ctrl, or ⌘ on macOS).
 ///
 /// Returns:
 ///     The selection gesture to run.
-pub(in crate::analytics::tuner) fn row_click_intent(shift: bool, secondary: bool) -> RowClick {
-    if shift {
+pub(in crate::analytics::tuner) fn row_click_intent(
+    click_count: usize,
+    shift: bool,
+    secondary: bool,
+) -> RowClick {
+    if click_count >= 2 {
+        RowClick::OpenReport
+    } else if shift {
         RowClick::Range
     } else if secondary {
         RowClick::Multi
     } else {
         RowClick::Single
     }
+}
+
+/// Convert Analytics `[from, to)` bounds to Report's inclusive optional bounds.
+///
+/// Args:
+///     from: Inclusive Analytics lower bound, or a negative value for unbounded history.
+///     to: Exclusive Analytics upper bound.
+///
+/// Returns:
+///     Optional inclusive Report lower and upper bounds.
+pub(in crate::analytics::tuner) fn inclusive_report_bounds(
+    from: i64,
+    to: i64,
+) -> (Option<i64>, Option<i64>) {
+    (
+        (from >= 0).then_some(from),
+        (to > 0).then_some(to.saturating_sub(1)),
+    )
 }
 
 /// The rows the list actually DREW, as `(key, display name)` in display order.

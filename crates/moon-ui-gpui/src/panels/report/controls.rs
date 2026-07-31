@@ -46,6 +46,30 @@ impl ReportPanel {
         )
     }
 
+    /// Render the searchable, virtualized exact strategy selector.
+    ///
+    /// Args:
+    ///     cx: Panel context used for responsive trigger and menu sizing.
+    ///
+    /// Returns:
+    ///     A MoonUI select that renders only visible strategy rows.
+    pub(super) fn strategy_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        div().w(design::font_w_px(cx, 300.0)).child(
+            MoonSelect::new(&self.strategy_select)
+                .id("rep-strategy")
+                .placeholder(t!("report.all_strategies").to_string())
+                .cleanable(true)
+                .searchable(true)
+                .search_placeholder(t!("report.search_strategies").to_string())
+                .appearance(true)
+                .trigger_variant(MoonButtonVariant::Soft)
+                .trigger_size(MoonButtonSize::Action)
+                .menu_width(f32::from(design::font_w_px(cx, 380.0)))
+                .menu_max_height(design::ui_value(cx, 420.0))
+                .menu_size(MoonMenuSize::Compact),
+        )
+    }
+
     /// Render the direction filter: all, Long, or Short.
     pub(super) fn side_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let cur = match self.side {

@@ -32,8 +32,10 @@ pub use query::Query;
 
 pub(in crate::db) use groups::{coin_groups_on, strategies_for_coins_on};
 use groups::{groups, kind_stats, top_trades};
-pub(in crate::db) use query::{attach_strategies, unified_from};
-use query::{effective_sid_expr, strategies_attached, WHERE_UNDATED};
+use query::WHERE_UNDATED;
+pub(in crate::db) use query::{
+    attach_strategies, effective_sid_expr, strategies_attached, unified_from,
+};
 
 /// Period totals: counters and metrics computed from the trade sequence ordered by
 /// `closedate`, including profit factor, maximum drawdown, streaks, and duration.

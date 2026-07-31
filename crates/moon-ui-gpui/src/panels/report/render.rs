@@ -140,6 +140,14 @@ impl Panel for ReportPanel {
 }
 
 impl Render for ReportPanel {
+    /// Render the Report controls, table, totals, and optional standalone window chrome.
+    ///
+    /// Args:
+    ///     _window: Owning window; child callbacks receive it directly.
+    ///     cx: Panel render context.
+    ///
+    /// Returns:
+    ///     The complete Report surface.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let border = rgb(p.border);
@@ -224,6 +232,7 @@ impl Render for ReportPanel {
             .px_2()
             .py_1()
             .child(self.core_combo(cx))
+            .child(self.strategy_combo(cx))
             .child(
                 div()
                     .text_size(design::t_body(cx))
@@ -362,7 +371,7 @@ impl Render for ReportPanel {
             }
         };
 
-        v_flex()
+        let root = v_flex()
             .id("report-panel")
             .size_full()
             .relative()
@@ -373,12 +382,26 @@ impl Render for ReportPanel {
             // width measurement.
             .font_family(design::mono())
             .bg(rgb(p.table_body))
+            .when(self.standalone, |this| {
+                this.child(window::report_header(p, &self.table_state, cx))
+            })
             // Keep the popup dismiss layer below the filters in z-order; see `coin_dismiss`.
             .children(coin_dismiss)
             .child(filters)
             .child(div().w_full().h(px(1.0)).bg(border))
             .child(table_el)
             .child(div().w_full().h(px(1.0)).bg(border))
-            .child(totals)
+            .child(totals);
+        if self.standalone {
+            root.child(
+                MoonWindowFrame::tool("report-window-frame-hit", 0.0)
+                    .header_height(window::REPORT_HEADER_H)
+                    .leading_inset(design::titlebar_leading_inset())
+                    .show_controls(design::show_custom_window_controls())
+                    .hit_overlay(),
+            )
+        } else {
+            root
+        }
     }
 }

@@ -3,6 +3,161 @@
 
 use super::support::*;
 
+/// Strategy rows must keep both navigation paths and the Report filter in the wrapping controls.
+///
+/// Removing `.children(strategy_button)` is a plausible compile-clean edit that would hide the
+/// Strategies launcher; removing the double-click arm would make rows select-only again. Replacing
+/// `MoonSelect` with the old eager `MoonDropdown` recreates the user-visible freeze at 1,000 items.
+/// Removing the existing-window `apply_scope` call silently creates stale or duplicate Reports.
+///
+/// Returns:
+///     Nothing; the source-level binary UI contract is asserted.
+#[test]
+fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let tuner = read_src("analytics/tuner/mod.rs");
+    let report = read_src("panels/report/render.rs");
+    let report_actions = read_src("panels/report/actions.rs");
+    let report_controls = read_src("panels/report/controls.rs");
+    let report_query = read_src("panels/report/query.rs");
+    let report_state = read_src("panels/report/state.rs");
+    let report_window = read_src("panels/report/window.rs");
+    let row = braced_body(&table, "fn strategy_row(");
+    for needle in [
+        ".children(strategy_button)",
+        "icons/bot.svg",
+        "app.stop_propagation()",
+        "super::RowClick::OpenReport",
+        "this.open_strategy_report",
+    ] {
+        assert!(
+            row.contains(needle),
+            "`strategy_row` must retain {needle:?} for the two row navigation actions"
+        );
+    }
+    let live = braced_body(&tuner, "fn open_live_strategy(");
+    assert!(
+        live.contains("self.live_strategy_target(key, cx)")
+            && live.contains("crate::strategies::open_goto("),
+        "the editor action must recheck the live pair before using the existing goto path"
+    );
+    let live_gate = braced_body(&tuner, "fn live_strategy_target(");
+    for needle in [
+        "strategy_id == 0",
+        ".store()",
+        ".core(core_uid)",
+        "strategy.id == live_id",
+        ".then_some((core_uid, live_id))",
+    ] {
+        assert!(
+            live_gate.contains(needle),
+            "the editor button must retain exact live/manual gating via {needle:?}"
+        );
+    }
+    let report_scope = braced_body(&tuner, "fn open_strategy_report(");
+    for needle in [
+        "list::inclusive_report_bounds(query.from, query.to)",
+        "core_uid,",
+        "strategy_id,",
+        "strategy_name: name",
+        "date_from,",
+        "date_to,",
+        "side: query.side",
+        "emulator: query.emulator",
+    ] {
+        assert!(
+            report_scope.contains(needle),
+            "Analytics-to-Report scope must retain {needle:?}"
+        );
+    }
+    let render = braced_body(&report, "fn render(");
+    let strategy = render
+        .find(".child(self.strategy_combo(cx))")
+        .expect("Report controls must include the strategy selector");
+    let wrapping = render
+        .find(".flex_wrap()")
+        .expect("Report controls must retain narrow-width wrapping");
+    assert!(
+        wrapping < strategy && !render.contains(".overflow_x_scroll()"),
+        "the strategy selector must stay inside the wrapping filter row without horizontal scroll"
+    );
+    let strategy_combo = braced_body(&report_controls, "pub(super) fn strategy_combo(");
+    for needle in [
+        "MoonSelect::new(&self.strategy_select)",
+        ".cleanable(true)",
+        ".searchable(true)",
+        "report.search_strategies",
+    ] {
+        assert!(
+            strategy_combo.contains(needle),
+            "the large strategy selector must retain MoonUI's virtual searchable path via {needle:?}"
+        );
+    }
+    assert!(
+        !strategy_combo.contains("self.strategies.iter()")
+            && !strategy_combo.contains("MoonDropdown::new"),
+        "opening Reports must not rebuild an eager MoonMenuItem per strategy"
+    );
+    let sync_select = braced_body(&report_state, "pub(super) fn sync_strategy_select(");
+    for needle in [
+        "strategy_select_items(&self.strategies, &self.cores)",
+        "select.set_items(items, select_cx)",
+        "select.set_selected_value(&key)",
+        "select.clear_selection()",
+    ] {
+        assert!(
+            sync_select.contains(needle),
+            "programmatic Report changes must synchronize the retained selector via {needle:?}"
+        );
+    }
+    assert!(
+        braced_body(&report_state, "pub(crate) fn apply_scope(")
+            .contains("self.sync_strategy_select(true, cx)")
+            && report_query.contains("this.sync_strategy_select(true, cx)")
+            && braced_body(&report_actions, "fn reconcile_strategy_core(")
+                .contains("self.sync_strategy_select(false, cx)"),
+        "metadata, repeated scoped opens, and core exclusion must keep widget state synchronized"
+    );
+    let open_report = braced_body(&report_window, "pub fn open_scoped(");
+    for needle in [
+        "backend.report_window_view.clone()",
+        "panel.apply_scope(next, window, panel_cx)",
+        "window.activate_window()",
+        "cx.open_window(options",
+    ] {
+        assert!(
+            open_report.contains(needle),
+            "scoped Reports must retain singleton reuse and stale-handle recovery via {needle:?}"
+        );
+    }
+    assert!(
+        open_report.contains("display.visible_bounds()")
+            && open_report.contains("initial_report_bounds("),
+        "Report geometry must derive from the selected display's visible global bounds"
+    );
+    let set_strategy = braced_body(&report_actions, "pub(super) fn set_strategy(");
+    assert!(
+        set_strategy.contains("HashSet::from([strategy.core_uid])"),
+        "selecting a strategy must make its exact core visible in the core selector"
+    );
+    for signature in [
+        "pub(super) fn toggle_core(",
+        "pub(super) fn toggle_exchange_cores(",
+        "pub(super) fn filter_to_core(",
+    ] {
+        assert!(
+            braced_body(&report_actions, signature).contains("self.reconcile_strategy_core(cx);"),
+            "{signature} must clear a strategy excluded by the new core selection"
+        );
+    }
+    let filter = braced_body(&report_query, "pub(super) fn filter(");
+    assert!(
+        filter.contains("closed_only: self.closed_only")
+            && filter.contains("strategy: self.strategy"),
+        "the database filter must retain the Analytics closed universe and exact strategy"
+    );
+}
+
 /// Analytics tabs size from their title while the complete core/filter group wraps together.
 ///
 /// This binary crate exposes no importable GPUI view. The source contract pins two plausible

@@ -2,10 +2,115 @@
 
 use super::*;
 
+/// Insert or refresh a scoped strategy before the periodic metadata snapshot contains it.
+///
+/// Args:
+///     strategies: Current exact strategy choices.
+///     key: Scoped strategy identity.
+///     name: Scoped display name.
+///
+/// Returns:
+///     Nothing; an existing exact key receives the latest display name.
+fn upsert_strategy_choice(
+    strategies: &mut Vec<ReportStrategy>,
+    key: ReportStrategyKey,
+    name: String,
+) {
+    if let Some(strategy) = strategies.iter_mut().find(|strategy| strategy.key == key) {
+        strategy.name = name;
+    } else {
+        strategies.push(ReportStrategy { key, name });
+    }
+}
+
+/// Build searchable MoonUI choices in one linear metadata pass.
+///
+/// Args:
+///     strategies: Exact strategy identities and names.
+///     cores: Database core identities and display names.
+///
+/// Returns:
+///     Searchable items labeled as `strategy - core`.
+fn strategy_select_items(
+    strategies: &[ReportStrategy],
+    cores: &[(u64, String)],
+) -> Vec<MoonSelectItem<ReportStrategyKey>> {
+    let core_names: std::collections::HashMap<u64, &str> = cores
+        .iter()
+        .map(|(core_uid, name)| (*core_uid, name.as_str()))
+        .collect();
+    strategies
+        .iter()
+        .map(|strategy| {
+            let name = if strategy.key.strategy_id == 0 {
+                t!("analytics.manual_orders").to_string()
+            } else {
+                strategy.name.clone()
+            };
+            let core = core_names
+                .get(&strategy.key.core_uid)
+                .map(|name| (*name).to_string())
+                .unwrap_or_else(|| strategy.key.core_uid.to_string());
+            MoonSelectItem::new(strategy.key, format!("{name} - {core}"))
+        })
+        .collect()
+}
+
+/// Resolve the selected MoonUI row from the exact Report filter.
+///
+/// Args:
+///     strategies: Choices in widget order.
+///     selected: Exact selected strategy, or `None` for all strategies.
+///
+/// Returns:
+///     Selected row index, or `None` so the placeholder represents all strategies.
+fn strategy_selected_index(
+    strategies: &[ReportStrategy],
+    selected: Option<ReportStrategyKey>,
+) -> Option<IndexPath> {
+    selected.and_then(|key| {
+        strategies
+            .iter()
+            .position(|strategy| strategy.key == key)
+            .map(IndexPath::new)
+    })
+}
+
 impl ReportPanel {
+    /// Create a regular docked or detachable Report panel with its default filters.
+    ///
+    /// Args:
+    ///     backend: Shared application backend.
+    ///     group: Group used by report coin search.
+    ///     window: Owning GPUI window.
+    ///     cx: Construction context.
+    ///
+    /// Returns:
+    ///     A panel with the default Report filters and its first query scheduled.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_scope(backend, group, None, window, cx)
+    }
+
+    /// Create a Report panel, seeding an optional Analytics scope before its first query.
+    ///
+    /// Args:
+    ///     backend: Shared application backend.
+    ///     group: Group used by report coin search.
+    ///     scope: Optional exact Analytics filter to seed atomically.
+    ///     window: Owning GPUI window.
+    ///     cx: Construction context.
+    ///
+    /// Returns:
+    ///     A scoped or default Report panel with one background query scheduled.
+    pub(crate) fn new_with_scope(
+        backend: Entity<Backend>,
+        group: String,
+        scope: Option<ReportScope>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -22,6 +127,12 @@ impl ReportPanel {
             .as_ref()
             .and_then(|c| db::distinct_cores(c).ok())
             .unwrap_or_default();
+        // Strategy discovery can scan a large covering index, so the first background batch owns
+        // it. A scoped window still seeds its selected label immediately.
+        let mut strategies: Vec<ReportStrategy> = Vec::new();
+        if let Some(scope) = &scope {
+            upsert_strategy_choice(&mut strategies, scope.strategy, scope.strategy_name.clone());
+        }
         let last_gen = generation
             .as_ref()
             .map(|g| g.load(Ordering::Relaxed))
@@ -58,15 +169,47 @@ impl ReportPanel {
         })
         .detach();
 
+        let coin_query = String::new();
+        let from_query = scope
+            .as_ref()
+            .and_then(|scope| scope.date_from)
+            .map(db::fmt_unix_date)
+            .unwrap_or_default();
+        let to_query = scope
+            .as_ref()
+            .and_then(|scope| scope.date_to)
+            .map(db::fmt_unix_date)
+            .unwrap_or_default();
         let coin = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("report.filter.coin_ph").to_string())
+            MoonInputState::new(window, cx)
+                .default_value(coin_query.clone())
+                .placeholder(t!("report.filter.coin_ph").to_string())
         });
         let from = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("report.filter.date_ph").to_string())
+            MoonInputState::new(window, cx)
+                .default_value(from_query.clone())
+                .placeholder(t!("report.filter.date_ph").to_string())
         });
         let to = cx.new(|cx| {
-            MoonInputState::new(window, cx).placeholder(t!("report.filter.date_ph").to_string())
+            MoonInputState::new(window, cx)
+                .default_value(to_query.clone())
+                .placeholder(t!("report.filter.date_ph").to_string())
         });
+        let selected_strategy = scope.as_ref().map(|scope| scope.strategy);
+        let strategy_select_index = strategy_selected_index(&strategies, selected_strategy);
+        let select_items = strategy_select_items(&strategies, &cores);
+        let strategy_select =
+            cx.new(|cx| MoonSelectState::new(select_items, strategy_select_index, window, cx));
+        cx.subscribe(
+            &strategy_select,
+            |panel, _, event: &MoonSelectEvent<ReportStrategyKey>, cx| {
+                let MoonSelectEvent::Confirm(strategy) = event;
+                // The widget already owns this selection mutation; only programmatic Report
+                // mutations need to synchronize the widget back from panel state.
+                panel.set_strategy(*strategy, cx);
+            },
+        )
+        .detach();
         // Any coin-field change requests a query. Manual input also opens the match popup. An
         // `on_pick` substitution updates `coin_query` first, so either a synchronous or deferred
         // Change event sees the mirror already matched and does not reopen the popup.
@@ -76,23 +219,38 @@ impl ReportPanel {
                 if t.coin_query != value {
                     t.coin_query = value;
                     t.coin_popup_open = !t.coin_query.trim().is_empty();
+                    t.request_requery(cx);
                 }
-                t.request_requery(cx);
             }
         })
         .detach();
         // A non-empty manual date switches to All so a preset cannot silently take precedence.
-        for st in [&from, &to] {
-            cx.subscribe(st, |t, e, ev: &MoonInputEvent, cx| {
-                if matches!(ev, MoonInputEvent::Change) {
-                    if !e.read(cx).value().trim().is_empty() {
+        cx.subscribe(&from, |t, e, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                let value = e.read(cx).value().to_string();
+                if t.from_query != value {
+                    t.from_query = value;
+                    if !t.from_query.trim().is_empty() {
                         t.period = Period::All;
                     }
                     t.request_requery(cx);
                 }
-            })
-            .detach();
-        }
+            }
+        })
+        .detach();
+        cx.subscribe(&to, |t, e, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                let value = e.read(cx).value().to_string();
+                if t.to_query != value {
+                    t.to_query = value;
+                    if !t.to_query.trim().is_empty() {
+                        t.period = Period::All;
+                    }
+                    t.request_requery(cx);
+                }
+            }
+        })
+        .detach();
         // The dedicated report-revision channel avoids repainting every shell on each commit.
         let report_revision = backend.read(cx).report_revision.clone();
         cx.observe(&report_revision, |this, _revision, cx| {
@@ -113,20 +271,39 @@ impl ReportPanel {
             last_gen,
             conn,
             cores,
+            strategies,
             cols: Rc::new(init_cols),
             data: LoadState::default(),
             sort_key,
             sort_desc,
-            sel_cores: HashSet::new(),
+            sel_cores: scope
+                .as_ref()
+                .map(|scope| HashSet::from([scope.strategy.core_uid]))
+                .unwrap_or_default(),
+            strategy: selected_strategy,
+            strategy_select,
             coin,
-            coin_query: String::new(),
+            coin_query,
             coin_popup_open: false,
             from,
+            from_query,
             to,
-            side: SideFilter::All,
-            period: Period::Today,
-            kind: ReportKind::Real,
+            to_query,
+            side: scope
+                .as_ref()
+                .map(|scope| scope.side)
+                .unwrap_or(SideFilter::All),
+            period: if scope.is_some() {
+                Period::All
+            } else {
+                Period::Today
+            },
+            kind: scope
+                .as_ref()
+                .map(|scope| ReportKind::from_filter(scope.emulator))
+                .unwrap_or(ReportKind::Real),
             deleted_only: false,
+            closed_only: scope.is_some(),
             delete_mode: false,
             pending_deleted: std::collections::HashMap::new(),
             needs_query: true,
@@ -134,11 +311,12 @@ impl ReportPanel {
             query_seq: 0,
             last_query_start: None,
             throttle_armed: false,
-            last_cores_at: None,
+            last_metadata_at: None,
             visible,
             table_state,
             widths_id,
             detached: false,
+            standalone: false,
             last_widths: std::collections::HashMap::new(),
             dock: None,
             focus: cx.focus_handle(),
@@ -148,6 +326,73 @@ impl ReportPanel {
         this.apply_ctx_columns(cx);
         this.schedule_requery(cx);
         this
+    }
+
+    /// Replace the standalone window's exact strategy and inherited Analytics filters.
+    ///
+    /// Args:
+    ///     scope: Replacement exact strategy, date, side, and emulator filters.
+    ///     window: Existing standalone Report window.
+    ///     cx: Panel context used to update inputs and request one query.
+    ///
+    /// Returns:
+    ///     Nothing; pending deletion edits and unrelated coin filters are cleared.
+    pub(crate) fn apply_scope(
+        &mut self,
+        scope: ReportScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        upsert_strategy_choice(&mut self.strategies, scope.strategy, scope.strategy_name);
+        self.group = report_group_for_core(&self.backend, scope.strategy.core_uid, cx);
+        self.sel_cores = HashSet::from([scope.strategy.core_uid]);
+        self.strategy = Some(scope.strategy);
+        self.sync_strategy_select(true, cx);
+        self.side = scope.side;
+        self.kind = ReportKind::from_filter(scope.emulator);
+        self.period = Period::All;
+        self.deleted_only = false;
+        self.closed_only = true;
+        self.delete_mode = false;
+        self.pending_deleted.clear();
+        self.coin_query.clear();
+        self.coin_popup_open = false;
+        self.from_query = scope.date_from.map(db::fmt_unix_date).unwrap_or_default();
+        self.to_query = scope.date_to.map(db::fmt_unix_date).unwrap_or_default();
+
+        self.coin.update(cx, |input, input_cx| {
+            input.set_value(String::new(), window, input_cx)
+        });
+        let from = self.from_query.clone();
+        self.from.update(cx, |input, input_cx| {
+            input.set_value(from, window, input_cx)
+        });
+        let to = self.to_query.clone();
+        self.to
+            .update(cx, |input, input_cx| input.set_value(to, window, input_cx));
+        self.request_requery(cx);
+    }
+
+    /// Synchronize the retained MoonUI selector from Report metadata and filter state.
+    ///
+    /// Args:
+    ///     refresh_items: Whether core/strategy metadata changed and choices must be rebuilt.
+    ///     cx: Panel context used to update the retained select entity.
+    ///
+    /// Returns:
+    ///     Nothing; a missing selected key clears to the All-strategies placeholder.
+    pub(super) fn sync_strategy_select(&mut self, refresh_items: bool, cx: &mut Context<Self>) {
+        let items = refresh_items.then(|| strategy_select_items(&self.strategies, &self.cores));
+        let selected = self.strategy;
+        self.strategy_select.update(cx, |select, select_cx| {
+            if let Some(items) = items {
+                select.set_items(items, select_cx);
+            }
+            match selected {
+                Some(key) if select.set_selected_value(&key) => {}
+                _ => select.clear_selection(),
+            }
+        });
     }
 
     /// Return retained table state for the detached window's automatic-width reset button.
@@ -170,6 +415,19 @@ impl ReportPanel {
             c.notify();
         });
         self.apply_ctx_columns(cx);
+        cx.notify();
+    }
+
+    /// Enable the dedicated Report title bar while retaining detached table controls.
+    ///
+    /// Args:
+    ///     cx: Panel context used to restore detached widths and repaint.
+    ///
+    /// Returns:
+    ///     Nothing.
+    pub(crate) fn mark_standalone(&mut self, cx: &mut Context<Self>) {
+        self.mark_table_detached(cx);
+        self.standalone = true;
         cx.notify();
     }
 
@@ -235,3 +493,6 @@ impl ReportPanel {
         self.save_ctx_columns(cx);
     }
 }
+
+#[cfg(test)]
+mod tests;

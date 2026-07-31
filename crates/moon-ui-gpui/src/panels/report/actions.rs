@@ -27,6 +27,7 @@ impl ReportPanel {
                 }
             }
         }
+        self.reconcile_strategy_core(cx);
         self.request_requery(cx);
     }
 
@@ -49,6 +50,7 @@ impl ReportPanel {
     ) {
         let available = self.cores.iter().map(|(core, _)| *core).collect();
         if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
+            self.reconcile_strategy_core(cx);
             self.request_requery(cx);
         }
     }
@@ -56,13 +58,61 @@ impl ReportPanel {
     /// Set the filter to only the clicked Core-cell UID, or clear it when already the sole selection.
     ///
     /// This matches Core-cell filtering in Orders and Assets.
+    ///
+    /// Args:
+    ///     uid: Core identity from the clicked report row.
+    ///     cx: Panel context used to request the replacement query.
+    ///
+    /// Returns:
+    ///     Nothing.
     pub(super) fn filter_to_core(&mut self, uid: u64, cx: &mut Context<Self>) {
         if self.sel_cores.len() == 1 && self.sel_cores.contains(&uid) {
             self.sel_cores.clear();
         } else {
             self.sel_cores = HashSet::from([uid]);
         }
+        self.reconcile_strategy_core(cx);
         self.request_requery(cx);
+    }
+
+    /// Select one exact strategy and its core, or clear the strategy constraint.
+    ///
+    /// Args:
+    ///     strategy: Exact strategy identity, or `None` for every strategy.
+    ///     cx: Panel context used to request the replacement query.
+    ///
+    /// Returns:
+    ///     Nothing; unchanged selections are ignored. The emitting MoonSelect already owns the
+    ///     matching widget-state mutation.
+    pub(super) fn set_strategy(
+        &mut self,
+        strategy: Option<ReportStrategyKey>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.strategy == strategy {
+            return;
+        }
+        self.strategy = strategy;
+        if let Some(strategy) = strategy {
+            self.sel_cores = HashSet::from([strategy.core_uid]);
+        }
+        self.request_requery(cx);
+    }
+
+    /// Clear a strategy whose core is excluded by an explicit core selection.
+    ///
+    /// Args:
+    ///     cx: Panel context used to synchronize the retained selector.
+    ///
+    /// Returns:
+    ///     Nothing; an implicit All selection retains the strategy.
+    fn reconcile_strategy_core(&mut self, cx: &mut Context<Self>) {
+        if let Some(strategy) = self.strategy {
+            if !self.sel_cores.is_empty() && !self.sel_cores.contains(&strategy.core_uid) {
+                self.strategy = None;
+                self.sync_strategy_select(false, cx);
+            }
+        }
     }
 
     /// Toggle all runtime columns on, or retain only the first when all are already visible.
