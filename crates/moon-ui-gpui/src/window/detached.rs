@@ -165,6 +165,8 @@ impl DetachedWindow {
         cx.on_release(move |this, app| {
             this.backend.update(app, |b, _| {
                 b.repin_request.push((g.clone(), p.clone()));
+                // Same edge, so the handle map can never outlive the window it points at.
+                b.detached_panel_windows.remove(&(g.clone(), p.clone()));
             });
         })
         .detach();

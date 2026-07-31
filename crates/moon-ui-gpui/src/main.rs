@@ -318,6 +318,20 @@ struct Backend {
     /// `(group, panel_name)`. The group's Shell consumes each request, adds the panel back to its
     /// `DockArea`, and removes the detached specification.
     repin_request: Vec<(String, String)>,
+    /// Requests to detach a docked panel into its own window, as `(group, panel_name)`.
+    ///
+    /// The mirror of `repin_request`, and it exists for the same reason: detaching is otherwise
+    /// reachable only as a `DockEvent` a human raises by double-clicking a tab, so nothing that
+    /// holds only a `Backend` — FireTest's panel round-trip stage — can drive it. The group's
+    /// Shell drains this beside the repins and routes each through the same `defer_detach_panel`
+    /// the UI uses, so the tested path is the real one.
+    panel_detach_request: Vec<(String, String)>,
+    /// Live detached panel windows, keyed by `(group, panel_name)`.
+    ///
+    /// `detached::spawn` returns the handle and the detach path used to drop it, which left no way
+    /// to close a panel window from code — a round-trip check has to close what it opened. Entries
+    /// are removed when the window releases, which is the same edge that queues the repin.
+    detached_panel_windows: HashMap<(String, String), WindowHandle<Root>>,
     /// Requests to return a chart tab to its strip after its detached window closes, as
     /// `(group, number, bucket)`. The group's `ChartTabs` consumes each request and reattaches it.
     chart_repin_request: Vec<(String, u32, moon_core::config::ChartBucket)>,

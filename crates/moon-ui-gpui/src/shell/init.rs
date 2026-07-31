@@ -147,6 +147,7 @@ impl Shell {
             crate::diag::bump(&crate::diag::SHELL_OBS_FIRE);
             this.drain_order_size_edit_request(cx);
             this.drain_sell_edit_request(cx);
+            this.drain_panel_detach_requests(cx);
             this.drain_repin_requests(cx);
             this.drain_engine_action_toasts(cx);
             let now = Instant::now();
