@@ -12,6 +12,16 @@ use crate::Backend;
 
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
+
+/// Stage `root_overlay_contract`.
+pub(in crate::firetest) fn verify(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    runtime.verify_root_overlay_contract(backend, cx).into()
+}
 
 impl Runtime {
     /// Run the full overlay contract inside the Strategies window and clean up after itself.

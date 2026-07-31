@@ -3,13 +3,16 @@
 //! `moonterminal --debug-script chart-smoke` opens a chart, injects a short native mouse storm
 //! over it and fails the process if cursor movement wakes expensive GPUI paths or burns CPU.
 //!
-//! The run is one ordered state machine and nothing else: [`plan::Phase`] is the list of stages,
-//! [`Runtime::tick`] below is the only place that advances between them, and [`verdict`] scores the
-//! samples at the end. Everything one stage needs lives in its own module under [`stages`], so its
-//! logic is a file of its own rather than another slice of a single long file. Placing that stage
-//! in the run is deliberately still four explicit edits — a `Phase` variant, its `stage_name`, its
-//! entry in `STAGE_PLAN`, and a `tick` arm here — because the contract tests read the plan and the
-//! names, and a stage that nobody decided where to put is exactly what they exist to catch.
+//! The run is a table walk: [`plan`] holds one row per stage, [`Runtime::tick`] below reads the
+//! current row and advances, and [`verdict`] scores the samples at the end. Nothing in this file
+//! branches on which stage is current — if a rule starts needing a phase name here, it wants to be
+//! a column in the table instead. That is what makes an inserted stage cheap: its successor is its
+//! position, so no neighbour is edited and no arm is written here.
+//!
+//! What a new stage still costs, honestly: its `run` function in a module under [`stages`], that
+//! module's line in `stages/mod.rs`, a `Phase` variant, its row in the table, its name in the
+//! `tests.rs` oracle and in `docs/FIRETEST.md`, plus a `Runtime` field if it carries state across
+//! ticks and a threshold in [`verdict`] if it is scored.
 //!
 //! FireTest deliberately drives the real app: a real chart on a real core, real OS mouse input,
 //! real windows. Static architecture checks belong in `tests/theme_contract/`, never here.
@@ -40,34 +43,10 @@ pub(crate) use config::Config;
 pub(crate) use probe::ChartProbe;
 
 use logging::{firetest_error, firetest_info};
-use plan::{Phase, phase_after_settle};
+use plan::{DONE_STAGE_NAME, StageDef, StageStep, plan_for};
 use sample::Sample;
 use stages::order_cancel::OrderCancelRun;
 use storm::MouseStorm;
-
-// Every timing below paces the dispatcher, so they all live beside it. A stage module holds its
-// stage's logic and types, not the clock the run advances on.
-/// Grace period before the run touches the app, so startup finishes first.
-const START_DELAY: Duration = Duration::from_millis(1000);
-/// How long the freshly opened live chart is left alone before measuring anything.
-const SETTLE: Duration = Duration::from_millis(5000);
-/// Length of the cursor-free high-present baseline the storm is compared against.
-const BASELINE: Duration = Duration::from_millis(5000);
-/// Leading part of the baseline that is NOT sampled, so its first hot frames do not raise the
-/// ceiling the storm is measured against.
-const BASELINE_WARMUP: Duration = Duration::from_millis(1500);
-/// Quiet tail before the verdict, letting the last present and the last samples land.
-const COOLDOWN: Duration = Duration::from_millis(1200);
-/// Timeout for finding an active visible core/window to open the chart on.
-const OPEN_TIMEOUT: Duration = Duration::from_millis(10_000);
-/// Timeout for the chart reporting its real on-screen bounds after it opened.
-const PROBE_TIMEOUT: Duration = Duration::from_millis(10_000);
-/// Settling pause between the short contract stages, so each observes the previous one's effect.
-const STAGE_GAP: Duration = Duration::from_millis(200);
-/// How long the static text layer bakes before the second storm starts.
-const TEXT_WARMUP: Duration = Duration::from_millis(2500);
-/// How long the whole place/cancel/observe chain may take before the order stage gives up.
-const ORDER_CANCEL_TIMEOUT: Duration = Duration::from_millis(15_000);
 
 /// The live state of one FireTest run.
 ///
@@ -75,8 +54,11 @@ const ORDER_CANCEL_TIMEOUT: Duration = Duration::from_millis(15_000);
 /// visible to every module under it, which is exactly the stage modules that write them.
 pub(crate) struct Runtime {
     config: Config,
-    started: Instant,
-    phase: Phase,
+    /// The table this run walks — the whole scenario, chosen once by script.
+    plan: &'static [StageDef],
+    /// Index into `plan`. Past the end means the run is over; there is no separate "done" flag,
+    /// so nothing can report a stage the cursor disagrees with.
+    cursor: usize,
     phase_since: Instant,
     probe: Option<ChartProbe>,
     samples: Vec<Sample>,
@@ -95,6 +77,7 @@ impl Runtime {
     pub(crate) fn new(config: Config) -> Self {
         diag::force_enable();
         let now = Instant::now();
+        let plan = plan_for(config.script);
         firetest_info(&format!(
             "[firetest] script={:?} market={} storm_ms={} mouse_hz={:.0} text_labels={} order_cancel_lag={}",
             config.script,
@@ -104,11 +87,14 @@ impl Runtime {
             config.text_labels,
             config.order_cancel_lag
         ));
-        firetest_info("[firetest] stage=start");
+        firetest_info(&format!(
+            "[firetest] stage={}",
+            plan.first().map_or(DONE_STAGE_NAME, |stage| stage.name)
+        ));
         Self {
             config,
-            started: now,
-            phase: Phase::WaitStartup,
+            plan,
+            cursor: 0,
             phase_since: now,
             probe: None,
             samples: Vec::new(),
@@ -123,268 +109,114 @@ impl Runtime {
         }
     }
 
-    /// Enter `phase`, restart its clock, and write its stage line to `firetest.log`.
-    fn set_phase(&mut self, phase: Phase) {
-        self.phase = phase;
-        self.phase_since = Instant::now();
-        firetest_info(&format!("[firetest] stage={}", phase.stage_name()));
-    }
-
-    /// Accept the chart's reported bounds, but only while a stage still needs them: a probe from a
-    /// later stage would retarget a storm that has already been aimed.
+    /// Accept the chart's reported bounds, if the current stage declared it wants them.
     fn observe_probe(&mut self, probe: ChartProbe) {
-        if matches!(
-            self.phase,
-            Phase::WaitProbe
-                | Phase::Settle
-                | Phase::Baseline
-                | Phase::Storm
-                | Phase::StaticTextGap
-                | Phase::StaticTextWarmup
-                | Phase::StaticTextStorm
-        ) {
+        if self.current_stage().is_some_and(|stage| stage.wants_probe) {
             self.probe = Some(probe);
         }
     }
 
-    /// Store one per-second diag sample against the current phase.
+    /// Store one per-second diag sample against the current stage's phase.
     ///
-    /// The first `BASELINE_WARMUP` of the baseline is dropped on purpose: those samples still carry
-    /// the cost of entering high-present mode, and the baseline's PEAK is what every `*_delta`
-    /// threshold is measured against.
+    /// A stage's `sample_warmup` head is dropped on purpose: those samples still carry the cost of
+    /// entering the mode the stage is measuring, and a baseline's PEAK is what every `*_delta`
+    /// threshold is measured against. Past the last row there is nothing left to record.
     fn record_sample(
         &mut self,
         rates: &[diag::DiagRate],
         metrics: MetricsSnapshot,
         gpu_frame_ms: f64,
     ) {
-        if self.phase == Phase::Done {
+        let Some(stage) = self.current_stage() else {
             return;
-        }
-        if self.phase == Phase::Baseline && self.phase_since.elapsed() < BASELINE_WARMUP {
+        };
+        if self.phase_since.elapsed() < stage.sample_warmup {
             return;
         }
         self.samples.push(Sample {
-            phase: self.phase,
+            phase: stage.phase,
             rates: rates.to_vec(),
             metrics,
             gpu_frame_ms,
         });
     }
 
-    /// Advance the state machine by one app tick.
+    /// Advance the run by one app tick.
     ///
-    /// Each arm is only the transition rule for its phase; the work itself lives in the matching
-    /// module under [`stages`].
+    /// The whole state machine is this: read the current row, hold the chart in whatever present
+    /// mode the row declares, wait out its dwell, fail it if it has overstayed, otherwise let it
+    /// act. A row that answers `Next` hands over to the row after it in the table — no stage names
+    /// its successor, so inserting one never means editing its neighbour.
     fn tick(&mut self, backend: &mut Backend, cx: &mut Context<Backend>) {
-        match self.phase {
-            Phase::WaitStartup => {
-                if self.started.elapsed() >= START_DELAY {
-                    self.set_phase(Phase::WaitOpen);
-                }
-            }
-            Phase::WaitOpen => {
-                if self.try_open_chart(backend, cx) {
-                    self.set_phase(Phase::WaitProbe);
-                } else if self.phase_since.elapsed() >= OPEN_TIMEOUT {
-                    self.fail("no active visible core/window to open chart");
-                } else {
-                    self.wait_log("waiting for active visible core/window");
-                }
-            }
-            Phase::WaitProbe => {
-                if self.probe.is_some() {
-                    self.set_phase(Phase::Settle);
-                } else if self.phase_since.elapsed() >= PROBE_TIMEOUT {
-                    self.fail("chart opened but no chart bounds probe arrived");
-                } else {
-                    self.wait_log("waiting for chart bounds probe");
-                }
-            }
-            Phase::Settle => {
-                self.set_present_pressure(backend, true);
-                if self.phase_since.elapsed() >= SETTLE {
-                    let next_phase = phase_after_settle(self.config.script);
-                    if self.config.is_order_cancel_script() {
-                        self.set_present_pressure(backend, false);
-                    }
-                    self.set_phase(next_phase);
-                }
-            }
-            Phase::Baseline => {
-                self.set_present_pressure(backend, true);
-                if self.phase_since.elapsed() >= BASELINE {
-                    match self.start_mouse_storm() {
-                        Ok(storm) => {
-                            self.storm = Some(storm);
-                            self.set_phase(Phase::Storm);
-                        }
-                        Err(err) => self.fail(&err),
-                    }
-                }
-            }
-            Phase::Storm => {
-                self.set_present_pressure(backend, true);
-                let done = self.storm.as_ref().is_some_and(MouseStorm::is_done);
-                if done || self.phase_since.elapsed() >= self.config.storm {
-                    self.stop_storm();
-                    self.set_phase(Phase::StaticTextGap);
-                }
-            }
-            Phase::StaticTextGap => {
-                self.set_present_pressure(backend, false);
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    let text_applied = self.enable_text_overlay(backend, cx);
-                    if text_applied == 0 {
-                        self.fail("chart opened but static text stress overlay did not attach");
-                        return;
-                    }
-                    self.set_phase(Phase::StaticTextWarmup);
-                }
-            }
-            Phase::StaticTextWarmup => {
-                self.set_present_pressure(backend, true);
-                if self.phase_since.elapsed() >= TEXT_WARMUP {
-                    match self.start_mouse_storm() {
-                        Ok(storm) => {
-                            self.storm = Some(storm);
-                            self.set_phase(Phase::StaticTextStorm);
-                        }
-                        Err(err) => self.fail(&err),
-                    }
-                }
-            }
-            Phase::StaticTextStorm => {
-                self.set_present_pressure(backend, true);
-                let done = self.storm.as_ref().is_some_and(MouseStorm::is_done);
-                if done || self.phase_since.elapsed() >= self.config.storm {
-                    self.stop_storm();
-                    self.set_present_pressure(backend, false);
-                    self.set_phase(Phase::CommandErrorContract);
-                }
-            }
-            Phase::CommandErrorContract => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    if let Err(error) = self.verify_command_error_contract(backend) {
-                        self.fail(&error);
-                    } else {
-                        self.set_phase(Phase::ToolWindowsOpen);
-                    }
-                }
-            }
-            Phase::ToolWindowsOpen => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    self.request_tool_windows_open(cx);
-                    self.set_phase(Phase::ToolWindowsVerifyOpen);
-                }
-            }
-            Phase::ToolWindowsVerifyOpen => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    if let Err(error) = self.verify_tool_windows_open(backend) {
-                        self.fail(&error);
-                    } else {
-                        self.request_tool_windows_open(cx);
-                        self.set_phase(Phase::ToolWindowsDedup);
-                    }
-                }
-            }
-            Phase::ToolWindowsDedup => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    self.set_phase(Phase::ToolWindowsVerifyDedup);
-                }
-            }
-            Phase::ToolWindowsVerifyDedup => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    if let Err(error) = self.verify_tool_windows_dedup(backend) {
-                        self.fail(&error);
-                    } else {
-                        self.set_phase(Phase::RootOverlayContract);
-                    }
-                }
-            }
-            Phase::RootOverlayContract => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    if let Err(error) = self.verify_root_overlay_contract(backend, cx) {
-                        self.fail(&error);
-                    } else {
-                        self.set_phase(Phase::LocaleSwitch);
-                    }
-                }
-            }
-            Phase::LocaleSwitch => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    self.request_locale_switch(backend, cx);
-                    self.set_phase(Phase::LocaleSwitchVerify);
-                }
-            }
-            Phase::LocaleSwitchVerify => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    let result = self.verify_locale_switch(backend);
-                    self.restore_locale(backend, cx);
-                    if let Err(error) = result {
-                        self.fail(&error);
-                    } else {
-                        self.set_phase(Phase::PriceScale50);
-                    }
-                }
-            }
-            Phase::PriceScale50 => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    self.request_price_scale(backend, Some(0.50), cx);
-                    self.set_phase(Phase::PriceScale20);
-                }
-            }
-            Phase::PriceScale20 => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    if let Err(error) = self.verify_price_scale(backend, Some(0.50)) {
-                        self.fail(&error);
-                    } else {
-                        self.request_price_scale(backend, Some(0.20), cx);
-                        self.set_phase(Phase::PriceScaleAuto);
-                    }
-                }
-            }
-            Phase::PriceScaleAuto => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    if let Err(error) = self.verify_price_scale(backend, Some(0.20)) {
-                        self.fail(&error);
-                    } else {
-                        self.request_price_scale(backend, None, cx);
-                        self.set_phase(Phase::PriceScaleVerifyAuto);
-                    }
-                }
-            }
-            Phase::PriceScaleVerifyAuto => {
-                if self.phase_since.elapsed() >= STAGE_GAP {
-                    if let Err(error) = self.verify_price_scale(backend, None) {
-                        self.fail(&error);
-                    } else {
-                        self.set_phase(Phase::OrderCancelLag);
-                    }
-                }
-            }
-            Phase::OrderCancelLag => {
-                if self.phase_since.elapsed() >= ORDER_CANCEL_TIMEOUT {
-                    self.fail("order_cancel_lag timed out");
-                    return;
-                }
-                match self.tick_order_cancel_lag(backend) {
-                    Ok(true) => self.set_phase(Phase::Cooldown),
-                    Ok(false) => {}
-                    Err(error) => self.fail(&error),
-                }
-            }
-            Phase::Cooldown => {
-                self.set_present_pressure(backend, false);
-                if self.phase_since.elapsed() >= COOLDOWN {
-                    self.evaluate_and_exit();
-                }
-            }
-            Phase::Done => {}
-            Phase::StageCount => {
-                unreachable!("firetest phase count sentinel is not a runtime phase")
-            }
+        let Some(stage) = self.current_stage() else {
+            return;
+        };
+        self.set_present_pressure(backend, stage.present_pressure);
+        let elapsed = self.phase_since.elapsed();
+        if elapsed < stage.min_dwell {
+            return;
         }
+        match stage.run(self, backend, cx) {
+            // The deadline is judged only after the stage has had this tick's attempt. Ticks are
+            // 100 ms apart, so checking first would fail a run whose core or probe arrived during
+            // the very window the deadline expired in. Two deliberate consequences: a stage's own
+            // `Fail` outranks its deadline, which reports what actually went wrong instead of
+            // "timed out"; and the order stage gets one last attempt, which is the attempt that
+            // cancels the order it placed rather than abandoning it.
+            StageStep::Stay => {
+                if let Some((timeout, reason)) = stage.timeout
+                    && elapsed >= timeout
+                {
+                    self.fail(reason);
+                }
+            }
+            StageStep::Next => self.advance(backend),
+            StageStep::Fail(reason) => self.fail(&reason),
+        }
+    }
+
+    /// The row the run is on, or `None` once it has passed the last one.
+    ///
+    /// The plan is `'static`, so this borrows the row rather than `self` and a stage can be handed
+    /// `&mut Runtime` while the dispatcher still holds it.
+    fn current_stage(&self) -> Option<&'static StageDef> {
+        self.plan.get(self.cursor)
+    }
+
+    /// Write the current row's name — or the closing name, once past the last row — to the log.
+    /// The one place a `stage=` line is produced, so no caller can invent a name of its own.
+    fn log_stage(&self) {
+        firetest_info(&format!(
+            "[firetest] stage={}",
+            self.current_stage().map_or(DONE_STAGE_NAME, |s| s.name)
+        ));
+    }
+
+    /// Move to the next row, announce it, and put the chart into that row's present mode.
+    ///
+    /// The mode is applied here rather than only at the top of the next tick so no stage ever runs
+    /// a tick under its predecessor's. Past the last row the run is over, which is the one stage
+    /// line that is not a row's name.
+    fn advance(&mut self, backend: &mut Backend) {
+        // Clamped, not incremented: a stage's `run` holds `&mut Runtime` and may have ended the
+        // run itself (`finish` parks the cursor at the end). Without this, answering `Next` after
+        // that would step past the end and make `current_stage` disagree with "finished".
+        self.cursor = (self.cursor + 1).min(self.plan.len());
+        self.phase_since = Instant::now();
+        self.log_stage();
+        // Applied here as well as at the top of `tick`: `tick`'s call covers the very first row,
+        // this one covers the handover, so no stage ever runs a tick in its predecessor's mode.
+        if let Some(stage) = self.current_stage() {
+            self.set_present_pressure(backend, stage.present_pressure);
+        }
+    }
+
+    /// End the run: step past every remaining row so no further stage acts and no further sample
+    /// is recorded, and write the closing stage line.
+    fn finish(&mut self) {
+        self.cursor = self.plan.len();
+        self.phase_since = Instant::now();
+        self.log_stage();
     }
 
     /// Log a "still waiting" line at most once a second, so a stuck stage is visible in the log
@@ -399,7 +231,7 @@ impl Runtime {
 
     /// End the run as a failure: stop the storm so the cursor is released, then exit with code 2.
     fn fail(&mut self, reason: &str) {
-        self.set_phase(Phase::Done);
+        self.finish();
         self.stop_storm();
         firetest_error(&format!(
             "[firetest] result=FAIL FIRETEST FAIL reason={reason}"

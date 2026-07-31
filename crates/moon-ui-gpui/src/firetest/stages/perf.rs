@@ -12,7 +12,56 @@ use crate::Backend;
 
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
 use crate::firetest::storm::{MouseStorm, start_mouse_storm};
+
+/// Stages `baseline` and `static_text_warmup`: the measurement window has elapsed, so aim a storm
+/// at the chart and move on. Both stages exist to hold the chart hot for a fixed time first, which
+/// is why the row's `min_dwell` carries the duration and this only starts the storm.
+pub(in crate::firetest) fn start_storm(
+    runtime: &mut Runtime,
+    _backend: &mut Backend,
+    _cx: &mut Context<Backend>,
+) -> StageStep {
+    match runtime.start_mouse_storm() {
+        Ok(storm) => {
+            runtime.storm = Some(storm);
+            StageStep::Next
+        }
+        Err(err) => StageStep::Fail(err),
+    }
+}
+
+/// Stages `mouse_storm` and `static_text_storm`: hold until the storm thread finishes or its
+/// configured duration is up, then release the cursor. The duration is a run knob rather than a
+/// constant, which is why it is checked here instead of being the row's `min_dwell`.
+pub(in crate::firetest) fn await_storm(
+    runtime: &mut Runtime,
+    _backend: &mut Backend,
+    _cx: &mut Context<Backend>,
+) -> StageStep {
+    let done = runtime.storm.as_ref().is_some_and(MouseStorm::is_done);
+    if done || runtime.phase_since.elapsed() >= runtime.config.storm {
+        runtime.stop_storm();
+        StageStep::Next
+    } else {
+        StageStep::Stay
+    }
+}
+
+/// Stage `static_text_gap`: attach the retained text layer, failing the run if nothing took it —
+/// a silently skipped overlay would leave the second storm measuring the first storm's conditions.
+pub(in crate::firetest) fn attach_text_overlay(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    if runtime.enable_text_overlay(backend, cx) == 0 {
+        StageStep::Fail("chart opened but static text stress overlay did not attach".to_string())
+    } else {
+        StageStep::Next
+    }
+}
 
 impl Runtime {
     /// Start a storm over the observed chart bounds. Fails when no probe has arrived.

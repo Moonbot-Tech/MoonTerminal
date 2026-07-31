@@ -12,6 +12,57 @@ use crate::Backend;
 
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
+
+/// Stage `price_scale_50`: send the first scale. Each later stage checks the previous request
+/// landed before sending its own, so one stage's settling pause is the next one's evidence.
+pub(in crate::firetest) fn request_50(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    runtime.request_price_scale(backend, Some(0.50), cx);
+    StageStep::Next
+}
+
+/// Stage `price_scale_20`.
+pub(in crate::firetest) fn verify_50_then_request_20(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    match runtime.verify_price_scale(backend, Some(0.50)) {
+        Ok(()) => {
+            runtime.request_price_scale(backend, Some(0.20), cx);
+            StageStep::Next
+        }
+        Err(error) => StageStep::Fail(error),
+    }
+}
+
+/// Stage `price_scale_auto`.
+pub(in crate::firetest) fn verify_20_then_request_auto(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    match runtime.verify_price_scale(backend, Some(0.20)) {
+        Ok(()) => {
+            runtime.request_price_scale(backend, None, cx);
+            StageStep::Next
+        }
+        Err(error) => StageStep::Fail(error),
+    }
+}
+
+/// Stage `price_scale_verify_auto`: the fixed scale must also be clearable, not just settable.
+pub(in crate::firetest) fn verify_auto(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    _cx: &mut Context<Backend>,
+) -> StageStep {
+    runtime.verify_price_scale(backend, None).into()
+}
 
 impl Runtime {
     /// Write a scale request for the opened group, as the chart toolbar does.

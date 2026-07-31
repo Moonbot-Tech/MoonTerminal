@@ -11,6 +11,42 @@ use crate::Backend;
 
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
+
+/// Stage `tool_windows_open`: ask for all three windows.
+pub(in crate::firetest) fn request_open(
+    runtime: &mut Runtime,
+    _backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    runtime.request_tool_windows_open(cx);
+    StageStep::Next
+}
+
+/// Stage `tool_windows_verify_open`: record the window identities, then ask again — the second
+/// open is what the dedup stage measures.
+pub(in crate::firetest) fn verify_open_then_reopen(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    match runtime.verify_tool_windows_open(backend) {
+        Ok(()) => {
+            runtime.request_tool_windows_open(cx);
+            StageStep::Next
+        }
+        Err(error) => StageStep::Fail(error),
+    }
+}
+
+/// Stage `tool_windows_verify_dedup`.
+pub(in crate::firetest) fn verify_dedup(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    _cx: &mut Context<Backend>,
+) -> StageStep {
+    runtime.verify_tool_windows_dedup(backend).into()
+}
 
 impl Runtime {
     /// Ask for all three tool windows. Deferred because opening a window from inside a `Backend`

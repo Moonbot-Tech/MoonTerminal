@@ -13,6 +13,29 @@ use crate::Backend;
 
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
+
+/// Stage `locale_switch`.
+pub(in crate::firetest) fn request_switch(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    runtime.request_locale_switch(backend, cx);
+    StageStep::Next
+}
+
+/// Stage `locale_switch_verify`: check the switch landed, then restore the original locale
+/// whatever the verdict — a failed run must not leave later stages and logs in another language.
+pub(in crate::firetest) fn verify_then_restore(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    let result = runtime.verify_locale_switch(backend);
+    runtime.restore_locale(backend, cx);
+    result.into()
+}
 
 impl Runtime {
     /// Switch the interface locale through the same live path as `Settings::apply_settings`:

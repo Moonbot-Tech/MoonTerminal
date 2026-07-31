@@ -17,7 +17,7 @@ impl Runtime {
     /// The narrow order script has no perf samples to score — reaching this point at all means its
     /// one stage already passed.
     pub(super) fn evaluate_and_exit(&mut self) {
-        self.set_phase(Phase::Done);
+        self.finish();
         if self.config.is_order_cancel_script() {
             firetest_info("[firetest] result=PASS FIRETEST PASS order_cancel_lag");
             std::process::exit(0);

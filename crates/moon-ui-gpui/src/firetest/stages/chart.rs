@@ -10,6 +10,35 @@ use crate::Backend;
 
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
+
+/// Stage `open_chart`: keep asking until a core is ready, or until the stage times out.
+pub(in crate::firetest) fn open_chart(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    cx: &mut Context<Backend>,
+) -> StageStep {
+    if runtime.try_open_chart(backend, cx) {
+        StageStep::Next
+    } else {
+        runtime.wait_log("waiting for active visible core/window");
+        StageStep::Stay
+    }
+}
+
+/// Stage `wait_chart_probe`: hold until the chart reports the bounds the storm will aim at.
+pub(in crate::firetest) fn wait_probe(
+    runtime: &mut Runtime,
+    _backend: &mut Backend,
+    _cx: &mut Context<Backend>,
+) -> StageStep {
+    if runtime.probe.is_some() {
+        StageStep::Next
+    } else {
+        runtime.wait_log("waiting for chart bounds probe");
+        StageStep::Stay
+    }
+}
 
 impl Runtime {
     /// Request the configured market on the first eligible core, returning whether the request was
