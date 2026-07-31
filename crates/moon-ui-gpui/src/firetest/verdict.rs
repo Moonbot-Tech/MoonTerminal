@@ -1,7 +1,7 @@
 //! Turning the collected samples into PASS or FAIL.
 //!
 //! Two shapes of threshold live here and they mean different things. An absolute ceiling
-//! (`chart_render`, `cpu_process_max`) says "this must never be that high at all". A `*_delta`
+//! (`cpu_process_max`, `chart_render_per_chart`) says "this must never be that high at all". A
 //! ceiling says "the storm must not add this much OVER the already-hot baseline" — that is the one
 //! that survives a live market, because the baseline phase already paid for the feed's own work.
 //! Every failed check is reported, not just the first: one run should hand back the whole list.
@@ -250,36 +250,20 @@ impl Runtime {
             max_rate("chart_mouse_move_entity"),
             5.0,
         );
-        // Deltas over the baseline, NOT absolute ceilings. These three counters scale with the
-        // bench — with how many charts the saved layout restored, and with how fast the chart is
-        // presenting, which FireTest itself inflates via forced present. An absolute ceiling
-        // therefore measures the developer's layout: `chart_render` sat at 5/s on a bench
-        // presenting 115/s and at 235/s on one presenting 600/s, with no code change between them.
-        // That is the whole of the "flaky red baseline" this run was known for.
+        // Each storm scored against the baseline separately and through the same function, so one
+        // phase cannot quietly carry a ceiling the other lacks. Scoring them jointly used to charge
+        // the static-text phase's draw cost — 10k retained labels — to "cursor-only mousemove".
         //
-        // The baseline phase runs with the SAME forced present and the SAME charts and no cursor,
-        // so the bench cancels out of the difference and what is left is what the cursor added —
-        // which is the thing these checks were always meant to be about.
-        // Each storm scored against the baseline separately, and both through the same function,
-        // so neither can quietly lose a ceiling the other has.
-        check_storm_deltas(&mut fail, "", &clean_storm, &baseline, bench, 1.0);
-        // The static-text storm gets the SAME checks with a wider allowance, measured not guessed.
-        // Attaching 10k retained labels costs this chart's own pass +55..110/s of draw and bake and
-        // +65..191/s of userdata draw over the baseline — every one of those counters rising by the
-        // same amount, which is the signature of more presents rather than more work per present.
-        //
-        // RECORDED, NOT ENDORSED, and newly visible: before this, the static-text phase carried no
-        // draw or bake ceiling at all, and its cost was averaged into the clean storm's numbers,
-        // where it read as the cursor's fault. The right end state is a per-present ratio — draws
-        // divided by `chart_present` — which would separate "presents more often" from "does more
-        // work per present" and let this allowance go back to 1.0. Until then it catches a doubling.
-        check_storm_deltas(
+        // Both get the SAME ceilings: the per-present ratios below are what makes that possible.
+        // The text layer's cost showed up as more frames, not as more work per frame, so once the
+        // frame count is divided out there is nothing left to make an allowance for.
+        check_storm(&mut fail, "", &clean_storm, &baseline, bench);
+        check_storm(
             &mut fail,
             "static_text_",
             &static_text_storm,
             &baseline,
             bench,
-            20.0,
         );
         check_max(
             &mut fail,
@@ -490,94 +474,115 @@ fn chart_mouse_min_hz(present_hz: f64) -> f64 {
 ///
 /// The baseline's PEAK is the reference, and the storm's AVERAGE is compared to it, so a live feed
 /// that happened to be busier during one phase cannot make this red on its own.
-fn check_storm_deltas(
+/// Score one storm phase against the baseline, per present.
+///
+/// Called once per storm, so a ceiling added here applies to every storm by construction — the
+/// drift that let the two phases be scored differently cannot come back.
+///
+/// EVERYTHING here is a ratio to `chart_present`, and that is the whole design. These counters
+/// are bumped inside the chart's own pass, so their raw rate is "how many frames happened" times
+/// "what each frame cost". Only the second factor is about the code. The first is decided by the
+/// developer's saved layout — measured on one machine, one binary, consecutive runs, the same
+/// `bg_draw` sat anywhere between 28/s and 246/s — and dividing it out is what makes the verdict
+/// mean the same thing on a one-chart bench and a five-chart one.
+///
+/// It also removes a second, independent source of red: the baseline does not always reach the
+/// storm's present rate, because forced present amplifies delivered frames rather than generating
+/// them, and the cursor generates them. A raw delta charges that difference to the code; a ratio
+/// does not. Across 13 recorded runs the raw `bg_draw` delta ranged 0..109 while the ratio delta
+/// stayed within 0..0.13.
+///
+/// Two shapes, both needed:
+///   * the DELTA over the baseline's ratio — what this storm added per frame;
+///   * an ABSOLUTE ratio ceiling — what a frame may cost at all. Without it, a regression present
+///     in the baseline AND the storm cancels out and is invisible, which is exactly what the
+///     absolute `chart_render <= 10/s` check used to cover before it was removed for being
+///     bench-dependent. Per present it is not bench-dependent.
+fn check_storm(
     fail: &mut Vec<String>,
     prefix: &str,
     storm: &PhaseStats,
     baseline: &PhaseStats,
     bench: BenchShape,
-    allowance: f64,
 ) {
-    // PER CHART. Every counter below is bumped once per chart per pass, so a bench that restored
-    // five charts produces five times the rate for identical code. Measured on one machine, same
-    // binary, consecutive runs: charts=1 -> chart_present 119/s, charts=2 -> 341/s, charts=5 ->
-    // 793/s, and the draw deltas rose with them until the run went red. The saved layout decides
-    // how many charts come back, so without this division the verdict is a property of the
-    // developer's desktop.
-    let delta =
-        |label: &str| bench.per_chart((storm.avg_rate(label) - baseline.max_rate(label)).max(0.0));
+    let storm_present = storm.avg_rate("chart_present");
+    let baseline_present = baseline.max_rate("chart_present");
+    // A phase with no presents has no frames to charge anything to. Reported rather than silently
+    // scored: every ratio below would otherwise be 0.0 and pass.
+    if storm_present < 1.0 {
+        fail.push(format!("{prefix}chart_present {storm_present:.1} < 1.0"));
+        return;
+    }
+    let per_frame = |label: &str| storm.avg_rate(label) / storm_present;
+    let baseline_per_frame = |label: &str| {
+        if baseline_present < 1.0 {
+            0.0
+        } else {
+            baseline.max_rate(label) / baseline_present
+        }
+    };
+    let delta = |label: &str| (per_frame(label) - baseline_per_frame(label)).max(0.0);
     let named = |name: &str| format!("{prefix}{name}");
-    let ceiling = |base: f64| base * allowance;
-    // The GPUI view path: a storm must not wake a panel that has no reason to redraw.
+
+    // The GPUI view path is deliberately NOT scored per frame. These count view renders, driven by
+    // entity notifications rather than by the chart's frames, so dividing them by `chart_present`
+    // measures nothing — the recorded ratio wanders between 0.04 and 0.80 in the baseline alone.
+    //
+    // What the run promises about them is `docs/FIRETEST.md`'s "Shell/Orders/Chart GPUI render не
+    // должны улетать в сотни render/s". That is an absolute statement and it stays one. Only
+    // `chart_render` is divided by the chart count: it is bumped once per chart panel, so its
+    // LEVEL genuinely scales with how many charts the layout restored — unlike a delta, where the
+    // per-chart term cancels in the subtraction.
+    //
+    // The narrower contract — cursor movement must not wake the chart entity at all — is stated
+    // directly by `chart_mouse_move_entity`, `chart_input_notify` and `chart_canvas_notify`, which
+    // the caller checks and which read 0 on a healthy run. Those are the oracle; this is the
+    // backstop for a wake arriving by some other route.
     check_max(
         fail,
-        &named("shell_render_delta"),
-        delta("shell_render"),
-        ceiling(8.0),
+        &named("chart_render_per_chart"),
+        bench.per_chart(storm.max_rate("chart_render")),
+        120.0,
     );
     check_max(
         fail,
-        &named("orders_render_delta"),
-        delta("orders_render"),
-        ceiling(8.0),
+        &named("shell_render"),
+        storm.max_rate("shell_render"),
+        30.0,
     );
     check_max(
         fail,
-        &named("chart_render_delta"),
-        delta("chart_render"),
-        ceiling(8.0),
+        &named("orders_render"),
+        storm.max_rate("orders_render"),
+        30.0,
     );
-    // The chart's own pass: draws are cheap-ish, bakes rebuild a cached texture and are not.
-    check_max(
-        fail,
-        &named("chart_gpu_prepare_delta"),
-        delta("chart_gpu_prepare"),
-        ceiling(8.0),
-    );
-    check_max(
-        fail,
-        &named("bg_draw_delta"),
-        delta("bg_draw"),
-        ceiling(12.0),
-    );
-    check_max(
-        fail,
-        &named("grid_draw_delta"),
-        delta("grid_draw"),
-        ceiling(12.0),
-    );
-    // A strict cross-platform signal, deliberately not widened: a backend that cannot hold it is a
-    // reason to bring its retained/base cache up to parity, not to raise the ceiling.
-    check_max(
-        fail,
-        &named("combo_draw_delta"),
-        delta("combo_draw"),
-        ceiling(12.0),
-    );
-    check_max(
-        fail,
-        &named("userdata_draw_delta"),
-        delta("userdata_draw"),
-        ceiling(12.0),
-    );
-    check_max(
-        fail,
-        &named("base_bake_delta"),
-        delta("base_bake"),
-        ceiling(8.0),
-    );
-    check_max(
-        fail,
-        &named("combo_bake_delta"),
-        delta("combo_bake"),
-        ceiling(8.0),
-    );
-    check_max(
-        fail,
-        &named("orderbook_bake_delta"),
-        delta("orderbook_bake"),
-        ceiling(8.0),
-    );
+
+    // The chart's own pass. Draws are per-frame work by nature, so the absolute ratio is about
+    // "one draw per frame, not five"; bakes rebuild a cached texture and should be far rarer than
+    // one per frame, which is the whole point of the cache.
+    for (label, delta_max, abs_max) in [
+        ("chart_gpu_prepare", 0.25, 1.30),
+        ("bg_draw", 0.25, 1.30),
+        ("grid_draw", 0.25, 1.30),
+        ("combo_draw", 0.25, 1.30),
+        ("userdata_draw", 0.25, 1.60),
+        ("base_bake", 0.25, 1.30),
+        ("combo_bake", 0.25, 1.30),
+        ("orderbook_bake", 0.25, 1.30),
+    ] {
+        check_max(
+            fail,
+            &named(&format!("{label}_per_frame_delta")),
+            delta(label),
+            delta_max,
+        );
+        check_max(
+            fail,
+            &named(&format!("{label}_per_frame")),
+            per_frame(label),
+            abs_max,
+        );
+    }
 }
 
 /// Record a failure when `got` is below the floor.
