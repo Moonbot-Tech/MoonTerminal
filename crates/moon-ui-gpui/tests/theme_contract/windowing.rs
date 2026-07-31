@@ -163,7 +163,36 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
 #[test]
 fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let firetest = fs::read_to_string(root.join("firetest.rs")).unwrap();
+    // FireTest is a directory of stage modules, not one file: the invariants below are about the
+    // scenario as a whole, so they read every source under it rather than a single path that a
+    // later split would silently empty out.
+    let firetest_dir = root.join("firetest");
+    let mut firetest_files = Vec::new();
+    rust_sources(&firetest_dir, &mut firetest_files);
+    // Name the modules that carry the run's shape. A count would pass on any two files; these are
+    // the ones the invariants below are actually about — the plan, the dispatcher, the scoring, and
+    // the per-stage directory.
+    for required in ["mod.rs", "plan.rs", "verdict.rs", "stages/mod.rs"] {
+        let path = firetest_dir.join(required);
+        assert!(
+            firetest_files.contains(&path),
+            "FireTest must keep {required} under src/firetest/: the scenario's plan, dispatch and \
+             scoring each stay a module of their own"
+        );
+    }
+    // COMMENTS ARE STRIPPED, and that is the point. Concatenating a directory sweeps in every
+    // `//!` and `///` line, and a rule about what the code DOES must not be satisfiable — or
+    // breakable — by prose that merely mentions the thing. `lines()` also drops the `\r` of a CRLF
+    // checkout, which is why no separate normalization pass is needed.
+    let firetest = firetest_files
+        .iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let docs = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -213,6 +242,7 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
     );
     assert!(
         docs.contains("находит реальные bounds графика")
+            && docs.contains("stage=idle_floor")
             && docs.contains("stage=command_error_contract")
             && docs.contains("stage=tool_windows_open")
             && docs.contains("stage=tool_windows_verify_open")
@@ -227,5 +257,68 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
             && !docs.contains("include_str!")
             && !docs.contains("source contract"),
         "docs/FIRETEST.md должен описывать FireTest как runtime/perf сценарий, а не статическую проверку исходников"
+    );
+}
+
+#[test]
+fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
+    // FireTest drives the real app: it opens tool windows, switches the locale, changes the price
+    // scale, and will detach and repin panels. Every one of those marks state dirty, and for a long
+    // time the 100 ms tick duly flushed it — so running the diagnostic quietly rewrote the saved
+    // workspace it was supposed to be observing.
+    //
+    // This covers the two DEBOUNCED workspace flushes only. It is deliberately not a claim that a
+    // diagnostic run writes nothing — the report DB writer, `strat_db`, `AppConfig::load`'s uid
+    // save and panels that write straight through all bypass the dirty-flag mechanism. What it
+    // does pin is that both debounced flushes are gated as a WHOLE: a guard per `*_dirty` branch
+    // is one that a newly persisted thing can be added without.
+    let startup = read_src("startup.rs");
+    let main_rs = read_src("main.rs");
+
+    assert!(
+        main_rs.contains("persist_allowed: bool"),
+        "Backend must carry the flag that decides whether this process may persist at all"
+    );
+    assert!(
+        startup.contains("persist_allowed: firetest_config.is_none()"),
+        "the flag must be derived from --debug-script at construction, not set later by a caller \
+         who might forget"
+    );
+
+    let quit = braced_body(&startup, "cx.on_app_quit(");
+    assert!(
+        quit.contains("if !b.persist_allowed {"),
+        "the quit flush must bail out before it writes anything"
+    );
+
+    // The debounced flush is the one that actually fires during a run: FireTest ends with
+    // `std::process::exit`, which never reaches `on_app_quit` at all.
+    //
+    // Scope, not presence. A guard wrapping a single `*_dirty` branch would satisfy a bare
+    // `contains`, which is exactly the per-file form the rule above forbids — so the guarded block
+    // is sliced out and every saver has to be found INSIDE it.
+    let guarded = braced_body(&startup, "if b.persist_allowed {");
+    for saver in [
+        "b.layout.save()",
+        "dock_persist::save_all",
+        "detached::save_all",
+        "chart_persist::save_all",
+        "b.tab_badges.save()",
+        "b.figures.borrow_mut().save()",
+        "b.config.save()",
+    ] {
+        assert!(
+            guarded.contains(saver),
+            "{saver} must sit inside the `if b.persist_allowed` block: a debounced save outside it \
+             writes the developer's workspace during a --debug-script run"
+        );
+    }
+    // And the notify that follows the block must stay OUTSIDE it — suppressing persistence must
+    // not also suppress the backend wake the rest of the app depends on.
+    assert!(
+        startup.contains("b.flush_backend_notify(cx)")
+            && !guarded.contains("b.flush_backend_notify(cx)"),
+        "the backend notify must exist and stay OUTSIDE the guard: suppressing persistence must \
+         not also suppress the wake the rest of the app runs on"
     );
 }

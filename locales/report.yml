@@ -171,6 +171,10 @@ report.cores_n:
   ru: "Ядер: %{n}"
   en: "Cores: %{n}"
   es: "Núcleos: %{n}"
+report.strategies_n:
+  ru: "Стратегий: %{n}"
+  en: "Strategies: %{n}"
+  es: "Estrategias: %{n}"
 # The core-list field label matches Orders (orders.all_cores).
 report.all_cores:
   ru: "Все ядра"

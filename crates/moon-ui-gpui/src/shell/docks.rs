@@ -34,6 +34,29 @@ fn dock_home_priority(name: &str) -> usize {
 }
 
 impl Shell {
+    /// Detach the panels queued on `Backend`, through the same path the tab's double-click uses.
+    ///
+    /// Exists so something holding only a `Backend` can drive a detach — the UI event is otherwise
+    /// the only way in. Drained beside the repins, on the same backend observation.
+    pub(super) fn drain_panel_detach_requests(&mut self, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        let panels: Vec<String> = self.backend.update(cx, |b, _| {
+            let mut mine = Vec::new();
+            b.panel_detach_request.retain(|(g, p)| {
+                if *g == group {
+                    mine.push(p.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            mine
+        });
+        for panel in panels {
+            self.defer_detach_panel(panel, cx);
+        }
+    }
+
     pub(super) fn drain_repin_requests(&mut self, cx: &mut Context<Self>) {
         let group = self.group.clone();
         let repins: Vec<String> = self.backend.update(cx, |b, _| {
@@ -163,6 +186,8 @@ impl Shell {
                     }
                 }
                 let owner = window.window_handle();
+                // `spawn` records the window handle on `Backend` itself, so every detach route
+                // gets it and none has to remember.
                 if let Err(err) = detached::spawn(app, &backend, &spec, Some(owner)) {
                     log::warn!(
                         "detach panel failed group={} panel={}: {err:#}",

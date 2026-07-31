@@ -75,44 +75,55 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
-    /// Select one exact strategy and its core, or clear the strategy constraint.
+    /// Apply the exact set emitted by the grouped multi-strategy combobox.
     ///
     /// Args:
-    ///     strategy: Exact strategy identity, or `None` for every strategy.
+    ///     choices: Exact strategy values after one checkbox or core-group toggle.
     ///     cx: Panel context used to request the replacement query.
     ///
     /// Returns:
-    ///     Nothing; unchanged selections are ignored. The emitting MoonSelect already owns the
+    ///     Nothing; unchanged selections are ignored. The emitting combobox already owns the
     ///     matching widget-state mutation.
-    pub(super) fn set_strategy(
+    pub(super) fn set_strategy_choices(
         &mut self,
-        strategy: Option<ReportStrategyKey>,
+        choices: &[ReportStrategyChoice],
         cx: &mut Context<Self>,
     ) {
-        if self.strategy == strategy {
+        let selected_strategies = exact_strategy_selection(choices);
+        let sel_cores = selected_strategies
+            .iter()
+            .flatten()
+            .map(|strategy| strategy.core_uid)
+            .collect::<HashSet<_>>();
+        if self.sel_cores == sel_cores && self.selected_strategies == selected_strategies {
             return;
         }
-        self.strategy = strategy;
-        if let Some(strategy) = strategy {
-            self.sel_cores = HashSet::from([strategy.core_uid]);
-        }
+        self.sel_cores = sel_cores;
+        self.selected_strategies = selected_strategies;
         self.request_requery(cx);
     }
 
-    /// Clear a strategy whose core is excluded by an explicit core selection.
+    /// Remove every exact strategy whose core is excluded by an explicit core selection.
     ///
     /// Args:
     ///     cx: Panel context used to synchronize the retained selector.
     ///
     /// Returns:
-    ///     Nothing; an implicit All selection retains the strategy.
+    ///     Nothing; an implicit All selection remains implicit All. Removing the final exact key
+    ///     returns to All, matching the shared core selector's empty-selection convention.
     fn reconcile_strategy_core(&mut self, cx: &mut Context<Self>) {
-        if let Some(strategy) = self.strategy {
-            if !self.sel_cores.is_empty() && !self.sel_cores.contains(&strategy.core_uid) {
-                self.strategy = None;
-                self.sync_strategy_select(false, cx);
+        let became_empty = if let Some(strategies) = &mut self.selected_strategies {
+            if !self.sel_cores.is_empty() {
+                strategies.retain(|strategy| self.sel_cores.contains(&strategy.core_uid));
             }
+            strategies.is_empty()
+        } else {
+            false
+        };
+        if became_empty {
+            self.selected_strategies = None;
         }
+        self.queue_strategy_select_sync(false, cx);
     }
 
     /// Toggle all runtime columns on, or retain only the first when all are already visible.

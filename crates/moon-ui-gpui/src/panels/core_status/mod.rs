@@ -9,6 +9,8 @@
 //! widths for `:dock` and `:win`. This module owns data and lifecycle; [`server_view`]
 //! and [`table`] own the two presentations.
 
+mod by_ip_header;
+mod by_ip_widths;
 mod cache;
 mod chart;
 mod config_popup;
@@ -136,6 +138,12 @@ pub struct CoreStatusView {
     warn_table_state: Entity<MoonDataTableState>,
     /// Whether the alert-axis toggle popover (the gear beside the mode control) is open.
     warn_cfg_open: bool,
+    /// Last measured width of the By IP list, in pixels; `0` until the first frame measures it.
+    ///
+    /// The By IP view draws its own fixed columns (it is a tree, not a data table), so it needs the
+    /// rendered width to know when they no longer fit. [`server_view`] writes it from a measuring
+    /// canvas and only when it actually changes, so a repaint does not feed itself.
+    by_ip_width: f32,
     /// Context-qualified column-width persistence ID (`core-status-table:dock` or `:win`).
     widths_id: String,
     dock: Option<WeakEntity<DockArea>>,
@@ -222,6 +230,7 @@ impl CoreStatusView {
             table_state,
             warn_table_state,
             warn_cfg_open: false,
+            by_ip_width: 0.0,
             widths_id,
             dock: None,
             focus,
@@ -330,7 +339,7 @@ impl Render for CoreStatusView {
     ///
     /// Returns:
     ///     Full dock, detached-window, or group-host panel contents.
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let cores = self.scope_cores(self.backend.read(cx));
         let rows = self.cached_rows.clone();
         let groups = self.cached_groups.clone();
@@ -348,6 +357,10 @@ impl Render for CoreStatusView {
                 self.chart_server,
                 self.chart_core,
                 self.group_sort,
+                self.by_ip_width,
+                // Row insets are `rems`, so the By-IP width budget needs the window's rem size —
+                // MoonUI's Root sets it from the theme font size, which the Font slider moves.
+                f32::from(window.rem_size()),
                 &self.tree_state,
                 cx,
             ),

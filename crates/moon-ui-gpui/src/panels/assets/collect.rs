@@ -112,15 +112,25 @@ fn wallet_asset_row(
         liq_price: 0.0,
         leverage: 0,
         pnl_usdt: 0.0,
+        // A wallet row is a pure spot balance: it has no position, so no unrealized PnL exists.
+        pnl_live: false,
     }
 }
 
 /// Sorts rows by descending [`AssetEntry::value`], placing the largest held balances first.
+///
+/// Equal values (the whole dust block sits at zero) break by core and coin, so the order does not
+/// depend on what the slice happened to hold before — a stable sort would otherwise preserve a
+/// previous header sort inside that block and make "no sort" look like a leftover one.
 pub(super) fn sort_by_value(out: &mut [AssetEntry]) {
     out.sort_by(|a, b| {
         b.value
             .partial_cmp(&a.value)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.core_name.cmp(&b.core_name))
+            // The SAME ticker comparison the header sorts use, so the default order and a cleared
+            // sort cannot disagree on a mixed-case wallet ticker.
+            .then_with(|| super::columns::cmp_coin(a, b))
     });
 }
 

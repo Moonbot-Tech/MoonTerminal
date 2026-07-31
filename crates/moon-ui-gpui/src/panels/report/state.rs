@@ -23,59 +23,6 @@ fn upsert_strategy_choice(
     }
 }
 
-/// Build searchable MoonUI choices in one linear metadata pass.
-///
-/// Args:
-///     strategies: Exact strategy identities and names.
-///     cores: Database core identities and display names.
-///
-/// Returns:
-///     Searchable items labeled as `strategy - core`.
-fn strategy_select_items(
-    strategies: &[ReportStrategy],
-    cores: &[(u64, String)],
-) -> Vec<MoonSelectItem<ReportStrategyKey>> {
-    let core_names: std::collections::HashMap<u64, &str> = cores
-        .iter()
-        .map(|(core_uid, name)| (*core_uid, name.as_str()))
-        .collect();
-    strategies
-        .iter()
-        .map(|strategy| {
-            let name = if strategy.key.strategy_id == 0 {
-                t!("analytics.manual_orders").to_string()
-            } else {
-                strategy.name.clone()
-            };
-            let core = core_names
-                .get(&strategy.key.core_uid)
-                .map(|name| (*name).to_string())
-                .unwrap_or_else(|| strategy.key.core_uid.to_string());
-            MoonSelectItem::new(strategy.key, format!("{name} - {core}"))
-        })
-        .collect()
-}
-
-/// Resolve the selected MoonUI row from the exact Report filter.
-///
-/// Args:
-///     strategies: Choices in widget order.
-///     selected: Exact selected strategy, or `None` for all strategies.
-///
-/// Returns:
-///     Selected row index, or `None` so the placeholder represents all strategies.
-fn strategy_selected_index(
-    strategies: &[ReportStrategy],
-    selected: Option<ReportStrategyKey>,
-) -> Option<IndexPath> {
-    selected.and_then(|key| {
-        strategies
-            .iter()
-            .position(|strategy| strategy.key == key)
-            .map(IndexPath::new)
-    })
-}
-
 impl ReportPanel {
     /// Create a regular docked or detachable Report panel with its default filters.
     ///
@@ -193,18 +140,45 @@ impl ReportPanel {
                 .default_value(to_query.clone())
                 .placeholder(t!("report.filter.date_ph").to_string())
         });
-        let selected_strategy = scope.as_ref().map(|scope| scope.strategy);
-        let strategy_select_index = strategy_selected_index(&strategies, selected_strategy);
-        let select_items = strategy_select_items(&strategies, &cores);
-        let strategy_select =
-            cx.new(|cx| MoonSelectState::new(select_items, strategy_select_index, window, cx));
+        let selected_strategies = scope.as_ref().map(|scope| HashSet::from([scope.strategy]));
+        // Scoped labels are seeded before the first metadata snapshot, so they are display choices
+        // but not yet confirmed available choices.
+        let available_strategy_keys = HashSet::new();
+        let initial_selected_cores = scope
+            .as_ref()
+            .map(|scope| HashSet::from([scope.strategy.core_uid]))
+            .unwrap_or_default();
+        let ordered_cores = ordered_strategy_cores(&strategies, &cores, &backend.read(cx).config);
+        let groups = strategy_groups(
+            &strategies,
+            &ordered_cores,
+            &t!("report.all_strategies"),
+            &t!("analytics.manual_orders"),
+        );
+        let strategy_select_indices =
+            strategy_choice_indices(&groups, selected_strategies.as_ref());
+        let strategy_search = ReportStrategyDelegate::search_state();
+        let strategy_catalog =
+            ReportStrategyDelegate::catalog(groups, available_strategy_keys.clone());
+        let strategy_delegate = ReportStrategyDelegate::new(
+            strategy_catalog.clone(),
+            selected_strategies.as_ref(),
+            strategy_search.clone(),
+        );
+        let strategy_select = cx.new(|cx| {
+            MoonComboboxState::new(strategy_delegate, strategy_select_indices, window, cx)
+                .multiple(true)
+                .searchable(true)
+        });
         cx.subscribe(
             &strategy_select,
-            |panel, _, event: &MoonSelectEvent<ReportStrategyKey>, cx| {
-                let MoonSelectEvent::Confirm(strategy) = event;
+            |panel, _, event: &MoonComboboxEvent<ReportStrategyDelegate>, cx| {
+                let MoonComboboxEvent::Change(choices) = event else {
+                    return;
+                };
                 // The widget already owns this selection mutation; only programmatic Report
                 // mutations need to synchronize the widget back from panel state.
-                panel.set_strategy(*strategy, cx);
+                panel.set_strategy_choices(choices, cx);
             },
         )
         .detach();
@@ -270,16 +244,18 @@ impl ReportPanel {
             conn,
             cores,
             strategies,
+            available_strategy_keys,
             cols: Rc::new(init_cols),
             data: LoadState::default(),
             sort_key,
             sort_desc,
-            sel_cores: scope
-                .as_ref()
-                .map(|scope| HashSet::from([scope.strategy.core_uid]))
-                .unwrap_or_default(),
-            strategy: selected_strategy,
+            sel_cores: initial_selected_cores,
+            selected_strategies,
             strategy_select,
+            strategy_catalog,
+            strategy_search,
+            strategy_select_items_dirty: false,
+            strategy_select_selection_dirty: false,
             coin,
             coin_query,
             coin_popup_open: false,
@@ -343,8 +319,8 @@ impl ReportPanel {
         upsert_strategy_choice(&mut self.strategies, scope.strategy, scope.strategy_name);
         self.group = report_group_for_core(&self.backend, scope.strategy.core_uid, cx);
         self.sel_cores = HashSet::from([scope.strategy.core_uid]);
-        self.strategy = Some(scope.strategy);
-        self.sync_strategy_select(true, cx);
+        self.selected_strategies = Some(HashSet::from([scope.strategy]));
+        self.queue_strategy_select_sync(true, cx);
         self.side = scope.side;
         self.kind = ReportKind::from_filter(scope.emulator);
         self.period = Period::All;
@@ -370,26 +346,77 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
-    /// Synchronize the retained MoonUI selector from Report metadata and filter state.
+    /// Schedule synchronization of the retained strategy combobox on its next render.
     ///
     /// Args:
-    ///     refresh_items: Whether core/strategy metadata changed and choices must be rebuilt.
-    ///     cx: Panel context used to update the retained select entity.
+    ///     refresh_items: Whether core/strategy metadata changed and groups must be rebuilt.
+    ///     cx: Panel context used to request a render with a live window handle.
     ///
     /// Returns:
-    ///     Nothing; a missing selected key clears to the All-strategies placeholder.
-    pub(super) fn sync_strategy_select(&mut self, refresh_items: bool, cx: &mut Context<Self>) {
-        let items = refresh_items.then(|| strategy_select_items(&self.strategies, &self.cores));
-        let selected = self.strategy;
+    ///     Nothing; repeated requests coalesce before element construction.
+    pub(super) fn queue_strategy_select_sync(
+        &mut self,
+        refresh_items: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.strategy_select_items_dirty |= refresh_items;
+        self.strategy_select_selection_dirty = true;
+        cx.notify();
+    }
+
+    /// Apply queued strategy metadata and selection changes with the owning window available.
+    ///
+    /// Args:
+    ///     window: Owning window required by the MoonUI combobox replacement API.
+    ///     cx: Panel render context used to update the retained entity.
+    ///
+    /// Returns:
+    ///     Nothing; selected values outside the retained query remain selected by exact identity.
+    pub(super) fn flush_strategy_select_sync(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.strategy_select_items_dirty && !self.strategy_select_selection_dirty {
+            return;
+        }
+        if self.strategy_select_items_dirty {
+            let ordered_cores = ordered_strategy_cores(
+                &self.strategies,
+                &self.cores,
+                &self.backend.read(cx).config,
+            );
+            let groups = strategy_groups(
+                &self.strategies,
+                &ordered_cores,
+                &t!("report.all_strategies"),
+                &t!("analytics.manual_orders"),
+            );
+            self.strategy_catalog =
+                ReportStrategyDelegate::catalog(groups, self.available_strategy_keys.clone());
+        }
+        let selected = self
+            .strategy_catalog
+            .selected_indices(self.selected_strategies.as_ref());
+        let unfiltered = ReportStrategyDelegate::unfiltered(
+            self.strategy_catalog.clone(),
+            self.selected_strategies.as_ref(),
+            self.strategy_search.clone(),
+        );
+        let filtered = ReportStrategyDelegate::new(
+            self.strategy_catalog.clone(),
+            self.selected_strategies.as_ref(),
+            self.strategy_search.clone(),
+        );
         self.strategy_select.update(cx, |select, select_cx| {
-            if let Some(items) = items {
-                select.set_items(items, select_cx);
-            }
-            match selected {
-                Some(key) if select.set_selected_value(&key) => {}
-                _ => select.clear_selection(),
-            }
+            // Synchronize against a full delegate, then restore the retained filtered view. The
+            // selection snapshot keeps item values even when their rows are outside the query.
+            select.set_items(unfiltered, window, select_cx);
+            select.set_selected_indices(selected, window, select_cx);
+            select.set_items(filtered, window, select_cx);
         });
+        self.strategy_select_items_dirty = false;
+        self.strategy_select_selection_dirty = false;
     }
 
     /// Return retained table state for the detached window's automatic-width reset button.
@@ -418,13 +445,32 @@ impl ReportPanel {
     /// Enable the dedicated Report title bar while retaining detached table controls.
     ///
     /// Args:
+    ///     window: Standalone Report window whose geometry is persisted.
     ///     cx: Panel context used to restore detached widths and repaint.
     ///
     /// Returns:
     ///     Nothing.
-    pub(crate) fn mark_standalone(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn mark_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mark_table_detached(cx);
         self.standalone = true;
+        cx.observe_window_bounds(window, |this, window, cx| {
+            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
+                return;
+            };
+            this.backend.update(cx, |backend, _| {
+                if backend
+                    .layout
+                    .report_window
+                    .map(|geometry| (geometry.x, geometry.y, geometry.w, geometry.h))
+                    != Some((x, y, w, h))
+                {
+                    backend.layout.report_window =
+                        Some(moon_core::config::layout::GeomRect { x, y, w, h });
+                    backend.layout_dirty = true;
+                }
+            });
+        })
+        .detach();
         cx.notify();
     }
 
