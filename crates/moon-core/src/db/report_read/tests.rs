@@ -3,7 +3,9 @@
 use rusqlite::types::Value;
 use rusqlite::Connection;
 
-use super::{distinct_strategies, query_reports, query_totals, ReportFilter, ReportStrategyKey};
+use super::{
+    distinct_strategies, query_reports, query_totals, ReportFilter, ReportStrategyKey, SideFilter,
+};
 
 /// Build two typed cores with the same signed strategy id plus an unidentifiable legacy row.
 ///
@@ -24,20 +26,32 @@ fn strategy_fixture() -> Connection {
          ALTER TABLE orders_rep ADD COLUMN coin TEXT;
          ALTER TABLE orders_rep ADD COLUMN strategyid INTEGER;
          ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN isshort INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN emulator INTEGER;
          ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
          ALTER TABLE orders_rep ADD COLUMN signaltype TEXT;
          INSERT INTO orders_rep
              (core_uid, core_name, newrecid, closedate, profitbtc, coin, strategyid, deleted,
-              channelname, signaltype)
+              isshort, emulator, channelname, signaltype)
          VALUES
-             (1, 'CORE-A', 1, 100, 10.0, 'WRONG-CORE', -7, 0, '', ''),
-             (2, 'CORE-B', 1, 200, 20.0, 'EXPECTED', -7, 0, '', ''),
-             (2, 'CORE-B', 2, 300, 30.0, 'WRONG-STRATEGY', 8, 0, '', ''),
-             (2, 'CORE-B', 3, 250, -5.0, 'ATTRIBUTED', 0, 0, 'LIQUIDATION', 'OWNER ( Kind )'),
-             (2, 'CORE-B', 4, 0, 90.0, 'UNDATED', -7, 0, '', ''),
-             (2, 'CORE-B', 5, 350, -9.0, 'ONLY-ATTRIBUTED', 0, 0,
+             (1, 'CORE-A', 1, 100, 10.0, 'WRONG-CORE', -7, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 1, 200, 20.0, 'EXPECTED', -7, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 2, 300, 30.0, 'WRONG-STRATEGY', 8, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 3, 250, -5.0, 'ATTRIBUTED', 0, 0, 0, 0,
+              'LIQUIDATION', 'OWNER ( Kind )'),
+             (2, 'CORE-B', 4, 0, 90.0, 'UNDATED', -7, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 5, 350, -9.0, 'ONLY-ATTRIBUTED', 0, 0, 0, 0,
               'LIQUIDATION', 'ONLY-LIQ ( Kind )'),
-             (2, 'CORE-B', 6, 360, 6.0, 'NULL-MANUAL', NULL, 0, '', '');
+             (2, 'CORE-B', 6, 360, 6.0, 'NULL-MANUAL', NULL, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 101, 220, 1.0, 'MATCH', 101, 0, 0, 0, '', ''),
+             (3, 'CORE-C', 102, 220, 1.0, 'MATCH', 102, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 103, 189, 1.0, 'MATCH', 103, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 104, 311, 1.0, 'MATCH', 104, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 105, 220, 1.0, 'OTHER', 105, 0, 0, 0, '', ''),
+             (2, 'CORE-B', 106, 220, 1.0, 'MATCH', 106, 0, 1, 0, '', ''),
+             (2, 'CORE-B', 107, 220, 1.0, 'MATCH', 107, 0, 0, 1, '', ''),
+             (2, 'CORE-B', 108, 220, 1.0, 'MATCH', 108, 1, 0, 0, '', ''),
+             (2, 'CORE-B', 109, 0, 1.0, 'OPEN-MATCH', 109, 0, 0, 0, '', '');
          CREATE TABLE closed_sell_reports (
              core_uid INTEGER NOT NULL,
              core_name TEXT NOT NULL,
@@ -102,14 +116,14 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
         query_totals(&conn, &filter).expect("query filtered totals"),
         (15.0, 2)
     );
-    let choice = distinct_strategies(&conn)
+    let choice = distinct_strategies(&conn, &ReportFilter::default())
         .expect("load strategy choices")
         .into_iter()
         .find(|strategy| strategy.key == filter.strategies.as_ref().expect("exact filter")[0])
         .expect("selected strategy choice");
     assert_eq!(choice.name, "OWNER");
     assert!(
-        distinct_strategies(&conn)
+        distinct_strategies(&conn, &ReportFilter::default())
             .expect("load attributed-only strategy choice")
             .iter()
             .any(|strategy| {
@@ -143,6 +157,72 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
         manual_rows.rows[0][manual_coin],
         Value::Text("NULL-MANUAL".to_string())
     );
+}
+
+/// Removing `build_where` from `report_read:distinct_strategies` must expose one of the core,
+/// date, coin, side, emulator, or deleted decoys. Applying `filter.strategies` there instead must
+/// hide strategy 101, even though it matches every non-strategy predicate. Ignoring `closed_only`
+/// must expose the open strategy 109.
+///
+/// Returns:
+///     Nothing; exact catalog identities are asserted from independent fixture literals.
+#[test]
+fn strategy_choices_follow_report_scope_without_self_filtering() {
+    let conn = strategy_fixture();
+    let scoped = ReportFilter {
+        core_uids: vec![2],
+        date_from: Some(190),
+        date_to: Some(310),
+        coin: " match ".to_string(),
+        side: SideFilter::Long,
+        emulator: Some(false),
+        deleted_only: false,
+        closed_only: true,
+        strategies: Some(vec![ReportStrategyKey {
+            core_uid: 2,
+            strategy_id: -7,
+        }]),
+    };
+    let keys = distinct_strategies(&conn, &scoped)
+        .expect("load scoped strategy choices")
+        .into_iter()
+        .map(|strategy| (strategy.key.core_uid, strategy.key.strategy_id))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys, std::collections::BTreeSet::from([(2, 101)]));
+
+    let deleted = ReportFilter {
+        deleted_only: true,
+        strategies: None,
+        ..scoped.clone()
+    };
+    let deleted_keys = distinct_strategies(&conn, &deleted)
+        .expect("load deleted strategy choices")
+        .into_iter()
+        .map(|strategy| (strategy.key.core_uid, strategy.key.strategy_id))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(deleted_keys, std::collections::BTreeSet::from([(2, 108)]));
+
+    let open = ReportFilter {
+        core_uids: vec![2],
+        coin: "OPEN-MATCH".to_string(),
+        closed_only: false,
+        ..ReportFilter::default()
+    };
+    let open_keys = distinct_strategies(&conn, &open)
+        .expect("load open strategy choice")
+        .into_iter()
+        .map(|strategy| (strategy.key.core_uid, strategy.key.strategy_id))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(open_keys, std::collections::BTreeSet::from([(2, 109)]));
+    assert!(distinct_strategies(
+        &conn,
+        &ReportFilter {
+            closed_only: true,
+            ..open
+        },
+    )
+    .expect("load closed-only strategy choices")
+    .is_empty());
 }
 
 /// Replacing the grouped exact-key predicate with only its first key must lose one selected row,
@@ -217,7 +297,7 @@ fn complete_explicit_strategy_universe_excludes_unidentifiable_sources() {
     let conn = strategy_fixture();
     let complete = ReportFilter {
         strategies: Some(
-            distinct_strategies(&conn)
+            distinct_strategies(&conn, &ReportFilter::default())
                 .expect("load complete identifiable strategy universe")
                 .into_iter()
                 .map(|strategy| strategy.key)

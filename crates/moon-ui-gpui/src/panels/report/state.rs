@@ -286,6 +286,7 @@ impl ReportPanel {
             last_query_start: None,
             throttle_armed: false,
             last_metadata_at: None,
+            last_strategy_scope: None,
             visible,
             table_state,
             widths_id,

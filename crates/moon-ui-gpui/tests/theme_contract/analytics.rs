@@ -215,9 +215,9 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     let set_strategy = braced_body(&report_actions, "pub(super) fn set_strategy_choices(");
     assert!(
         set_strategy.contains("exact_strategy_selection(choices)")
-            && set_strategy.contains(".map(|strategy| strategy.core_uid)")
-            && set_strategy.contains("self.selected_strategies = selected_strategies"),
-        "multi-strategy changes must synchronize every exact core with the shared core selector"
+            && set_strategy.contains("self.selected_strategies = selected_strategies")
+            && !set_strategy.contains("self.sel_cores"),
+        "multi-strategy changes must not narrow the independent core filter and self-lock the catalog"
     );
     for signature in [
         "pub(super) fn toggle_core(",
@@ -235,6 +235,13 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
             && filter.contains("strategies: normalized_strategy_filter_keys(")
             && filter.contains("self.selected_strategies.as_ref()"),
         "rows, totals, and export must share the stale-safe exact multi-strategy filter"
+    );
+    assert!(
+        report_query.contains("strategy_metadata_request(")
+            && report_query.contains("self.last_strategy_scope.as_ref()")
+            && report_query.contains("db::distinct_strategies(&snap, &scope)")
+            && report_query.contains("this.last_strategy_scope = Some(strategy_scope)"),
+        "strategy choices must refresh from the active non-strategy Report scope and publish its matching snapshot"
     );
 }
 

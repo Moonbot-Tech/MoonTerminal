@@ -77,6 +77,10 @@ impl ReportPanel {
 
     /// Apply the exact set emitted by the grouped multi-strategy combobox.
     ///
+    /// Strategy selection stays independent of the core selector. Exact keys already carry their
+    /// core identity, while rewriting `sel_cores` here would shrink the available strategy scope
+    /// after the first checkbox and prevent adding a strategy from another core.
+    ///
     /// Args:
     ///     choices: Exact strategy values after one checkbox or core-group toggle.
     ///     cx: Panel context used to request the replacement query.
@@ -90,15 +94,9 @@ impl ReportPanel {
         cx: &mut Context<Self>,
     ) {
         let selected_strategies = exact_strategy_selection(choices);
-        let sel_cores = selected_strategies
-            .iter()
-            .flatten()
-            .map(|strategy| strategy.core_uid)
-            .collect::<HashSet<_>>();
-        if self.sel_cores == sel_cores && self.selected_strategies == selected_strategies {
+        if self.selected_strategies == selected_strategies {
             return;
         }
-        self.sel_cores = sel_cores;
         self.selected_strategies = selected_strategies;
         self.request_requery(cx);
     }

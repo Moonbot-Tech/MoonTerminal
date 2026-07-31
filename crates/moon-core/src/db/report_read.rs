@@ -109,7 +109,8 @@ pub enum ProfitMetric {
     Percent,
 }
 
-#[derive(Debug, Clone, Default)]
+/// Complete filter shared by Report rows, totals, export, and strategy discovery.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReportFilter {
     /// Selected cores for the multi-select filter; empty means all cores.
     pub core_uids: Vec<u64>,
@@ -664,23 +665,31 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
     Ok(out)
 }
 
-/// Load exact strategy identities present in report sources.
+/// Load exact strategy identities present in report sources within the active Report scope.
 ///
 /// Identity uses the same liquidation attribution and NULL-to-Manual semantics as
 /// the exact filter, so every offered option can return the rows it represents.
 /// Legacy sources that cannot identify strategies are skipped. Names come from the
 /// attached strategy database when available and otherwise use the signed numeric id.
+/// The strategy predicate itself is deliberately removed so an active checkbox does not hide
+/// alternative strategies that match every other Report filter.
 ///
 /// Args:
 ///     conn: Open report reader or snapshot with optional strategy attachment.
+///     filter: Active Report filter; every predicate except `strategies` scopes discovery.
 ///
 /// Returns:
 ///     Sorted exact strategy choices present in report sources.
 ///
 /// Errors:
 ///     Returns `Failed` for source, strategy metadata, SQL, or row conversion errors.
-pub fn distinct_strategies(conn: &Connection) -> ReadResult<Vec<ReportStrategy>> {
+pub fn distinct_strategies(
+    conn: &Connection,
+    filter: &ReportFilter,
+) -> ReadResult<Vec<ReportStrategy>> {
     const CTX: &str = "reports: distinct_strategies";
+    let mut scope = filter.clone();
+    scope.strategies = None;
     let has_strategy_names = super::analytics::strategies_attached(conn);
     let mut names = std::collections::HashMap::new();
     if has_strategy_names {
@@ -709,13 +718,16 @@ pub fn distinct_strategies(conn: &Connection) -> ReadResult<Vec<ReportStrategy>>
             continue;
         }
         let strategy_id = super::analytics::effective_sid_expr("r", &src.cols, has_strategy_names);
+        let (where_sql, params) = build_where(&scope, &src.cols, has_strategy_names);
         let sql = format!(
-            "SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {} r",
-            src.table
+            "SELECT DISTINCT r.core_uid, COALESCE({strategy_id}, 0) FROM {} r{where_sql}",
+            src.table,
         );
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|value| value.as_ref()).collect();
         let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(refs.as_slice(), |row| {
                 Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)?))
             })
             .map_err(|e| read_fail(CTX, e))?;

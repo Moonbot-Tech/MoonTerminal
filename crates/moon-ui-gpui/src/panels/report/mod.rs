@@ -296,8 +296,10 @@ pub struct ReportPanel {
     last_query_start: Option<std::time::Instant>,
     /// Whether a trailing generation-refresh timer is already waiting out the throttle interval.
     throttle_armed: bool,
-    /// Time when core and strategy metadata were last requested; refreshed at most once per minute.
+    /// Time when periodic selector metadata was last published.
     last_metadata_at: Option<std::time::Instant>,
+    /// Canonical non-strategy filter scope of the last successfully published strategy catalog.
+    last_strategy_scope: Option<ReportFilter>,
 
     /// Visible columns by name rather than index, so runtime schema additions do not shift choices.
     /// A newly discovered column is visible only if its name is already present in the resolved
