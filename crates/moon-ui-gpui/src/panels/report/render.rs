@@ -277,8 +277,19 @@ impl Render for ReportPanel {
                 self.detached && self.cols.iter().any(|c| c == "deleted"),
                 |f| f.child(self.delete_mode_button(cx)),
             )
-            .child(self.export_menu(cx))
-            .child(self.columns_menu(cx));
+            // Export and the field selector sit at the RIGHT edge, away from the filters. The row
+            // wraps, so they ride in their own `ml_auto` group instead of behind a `flex_1` spacer:
+            // a flexible spacer inside a wrapping row would claim a whole line of its own once the
+            // filters wrap, pushing both buttons onto a second row.
+            .child(
+                h_flex()
+                    .ml_auto()
+                    .flex_none()
+                    .items_center()
+                    .gap_2()
+                    .child(self.export_menu(cx))
+                    .child(self.columns_menu(cx)),
+            );
 
         // Table. Deletion mode force-shows the `deleted` checkbox column without persisting it, so
         // the mode is self-contained and leaves the saved column set untouched on exit.

@@ -71,6 +71,11 @@ orders.columns:
   ru: "Поля"
   en: "Fields"
   es: "Campos"
+# Tooltip of the gear button that opens the sorting and filtering menu.
+orders.settings:
+  ru: "Настройки"
+  en: "Settings"
+  es: "Ajustes"
 orders.kind.all:
   ru: "Все"
   en: "All"

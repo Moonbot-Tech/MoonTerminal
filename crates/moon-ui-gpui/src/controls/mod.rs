@@ -44,7 +44,12 @@ pub use toolbar::toolbar;
 ///
 /// Consumers that reserve responsive toolbar space use the same value as [`core_combo`], so the
 /// layout cannot drift from the MoonUI dropdown it contains.
-pub(crate) const CORE_COMBO_TRIGGER_W: f32 = 118.0;
+///
+/// Narrowed by 10% from 118 px: the trigger only ever shows "All cores" or "Cores: N", and the
+/// bars that carry it (Orders, Report, Assets, Core Status, Analytics, and the Screener's own
+/// core source selector, which uses it as its lower bound) win that space for their controls. The
+/// longest label is the Spanish "Todos los núcleos", which truncates here as it already did at 118.
+pub(crate) const CORE_COMBO_TRIGGER_W: f32 = 106.0;
 
 /// Trading-metric slider bounds `(min, max, step)` matching core semantics.
 ///

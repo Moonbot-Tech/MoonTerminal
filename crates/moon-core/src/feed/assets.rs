@@ -232,20 +232,35 @@ pub(super) fn build_assets(
         };
         let mut live_pnl = 0.0;
         let mut have_position_pnl = false;
+        // A leg that exists but carries no entry price contributes nothing, so the sum covers only
+        // part of the position — a half-truth that must not be published as the live figure (see
+        // `pnl_live` below, and `AssetRow::pnl_live` for what a consumer does with it).
+        let mut legs_complete = true;
         if mark > 0.0 {
-            if bp.long_pos_size != 0.0 && bp.long_pos_price > 0.0 {
-                live_pnl += (mark - bp.long_pos_price) * bp.long_pos_size.abs();
-                have_position_pnl = true;
+            if bp.long_pos_size != 0.0 {
+                if bp.long_pos_price > 0.0 {
+                    live_pnl += (mark - bp.long_pos_price) * bp.long_pos_size.abs();
+                    have_position_pnl = true;
+                } else {
+                    legs_complete = false;
+                }
             }
-            if bp.short_pos_size != 0.0 && bp.short_pos_price > 0.0 {
-                live_pnl += (bp.short_pos_price - mark) * bp.short_pos_size.abs();
-                have_position_pnl = true;
+            if bp.short_pos_size != 0.0 {
+                if bp.short_pos_price > 0.0 {
+                    live_pnl += (bp.short_pos_price - mark) * bp.short_pos_size.abs();
+                    have_position_pnl = true;
+                } else {
+                    legs_complete = false;
+                }
             }
             if !have_position_pnl && bp.pos_size != 0.0 && bp.pos_price > 0.0 {
                 let short = bp.pos_size < 0.0 || bp.pos_dir == OrderType::Sell;
                 let dir = if short { -1.0 } else { 1.0 };
                 live_pnl = (mark - bp.pos_price) * bp.pos_size.abs() * dir;
                 have_position_pnl = true;
+                // The net position covers the whole market, legs included, so an unpriced leg above
+                // no longer leaves anything out.
+                legs_complete = true;
             }
         }
         let pnl_usdt = if have_position_pnl {
@@ -255,6 +270,11 @@ pub(super) fn build_assets(
             // server's accumulated market profit in quote currency.
             (bp.total_profit_b + bp.total_profit_l + bp.total_profit_s) * rate
         };
+        // Only the live branch, covering EVERY leg, converted at a KNOWN rate, is an unrealized
+        // figure a display may present as such. An unknown rate (`0`) turns any PnL into a finite
+        // `0.0` that reads as a flat position, and a hedge whose second leg has no entry price
+        // yields half the truth — neither qualifies.
+        let pnl_live = have_position_pnl && legs_complete && rate > 0.0 && pnl_usdt.is_finite();
         // Row position size/price: use net `pos_size`; if the core keeps legs SEPARATELY
         // (hedge mode, or the server stores the short in `short_pos_size` while net = 0), use
         // the net of the legs (short is negative). Otherwise a real futures short with
@@ -286,6 +306,7 @@ pub(super) fn build_assets(
             liq_price: bp.liq_price,
             leverage: lev,
             pnl_usdt,
+            pnl_live,
         });
     }
     let g = balances.global();
