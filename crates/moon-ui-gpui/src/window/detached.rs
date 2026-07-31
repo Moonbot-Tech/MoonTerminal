@@ -165,6 +165,8 @@ impl DetachedWindow {
         cx.on_release(move |this, app| {
             this.backend.update(app, |b, _| {
                 b.repin_request.push((g.clone(), p.clone()));
+                // Same edge, so the handle map can never outlive the window it points at.
+                b.detached_panel_windows.remove(&(g.clone(), p.clone()));
             });
         })
         .detach();
@@ -329,7 +331,9 @@ pub fn spawn(
     );
     let backend = backend.clone();
     let spec = spec.clone();
-    app.open_window(opts, move |window, cx| {
+    let key = (spec.group.clone(), spec.panel.clone());
+    let record = backend.clone();
+    let handle = app.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         // Build the panel in detached-window mode from the registry. Known panels supply their
         // view and any header auto-width reset binding; an unknown name falls back to a stub.
@@ -364,5 +368,13 @@ pub fn spawn(
             )
         });
         cx.new(|cx| Root::new(dw, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
-    })
+    })?;
+    // Recorded HERE rather than at the call sites, because there are three of them — the startup
+    // restore, the dock's detach action and the panel toolbar button — and a map filled by only
+    // some of them is worse than no map: it reads as "every live detached window" while quietly
+    // missing the ones nobody remembered. The window's own `on_release` clears the entry.
+    record.update(app, |b, _| {
+        b.detached_panel_windows.insert(key, handle);
+    });
+    Ok(handle)
 }

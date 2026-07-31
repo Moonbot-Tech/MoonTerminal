@@ -369,6 +369,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
             detached,
             detached_dirty: false,
             repin_request: Vec::new(),
+            panel_detach_request: Vec::new(),
+            detached_panel_windows: HashMap::new(),
             chart_repin_request: Vec::new(),
             chart_apply_all: Vec::new(),
             chart_candle_apply_all: Vec::new(),
