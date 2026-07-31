@@ -1,11 +1,12 @@
-//! Assets window chrome: the control bar (core selector, dust threshold), the positions/balances
-//! table, the footer, and the "Wallets" section core list (free/total).
+//! Assets window chrome: the control bar (core selector, dust threshold, field selector), the
+//! positions/balances table, the footer, and the "Wallets" section core list (free/total).
 //!
 //! The footer carries both summaries the panel produces — the visible rows on the left, the
 //! scope's account equity on the right — with [`super::balances`] rendering the account side.
-//! `AssetsView` supplies table rows already sorted by descending raw USDT value. The table renders
-//! that order and uses caller-owned column-width state, restored and persisted separately for dock
-//! and window contexts by the panel owner.
+//! `AssetsView` supplies table rows already ordered — by the active header sort, otherwise by
+//! descending raw USDT value — and the visible field set; both live in [`super::columns`]. The
+//! table renders that order and uses caller-owned column-width state, restored and persisted
+//! separately for dock and window contexts by the panel owner.
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
@@ -124,6 +125,10 @@ impl AssetsView {
                     .text_color(rgb(p.text_muted))
                     .child(format!("≥ {}$", self.min_value_usd.round() as i64)),
             )
+            // The field selector sits at the RIGHT edge, apart from the filters — the same split
+            // Orders, Report and the Screener use.
+            .child(div().flex_1())
+            .child(self.columns_menu(cx))
     }
 
     /// Render the shared exchange-grouped core multi-selector with its localized summary label.
@@ -436,29 +441,23 @@ impl AssetsView {
     }
 }
 
-/// Define the Moonbot Assets columns for coin, quantity, USDT value, and two actions.
+/// Define the visible Moonbot Assets columns, action buttons included.
 ///
-/// This shared multi-core panel adds a Core column on the left; Moonbot's window is per-core.
-fn assets_columns() -> Vec<MoonDataTableColumn> {
-    let numeric =
-        |key: &'static str, title: String, w: f32| MoonDataTableColumn::new(key, title, w).right();
-    vec![
-        MoonDataTableColumn::new("core", t!("assets.col.core").to_string(), 90.0),
-        MoonDataTableColumn::new("coin", t!("assets.col.coin").to_string(), 80.0),
-        numeric("qty", t!("assets.col.qty").to_string(), 130.0),
-        numeric("value", t!("assets.col.value").to_string(), 110.0),
-        // Market Sell and Order buttons.
-        // `no_grow` keeps the pair at its designed width: the column carries no title and no text,
-        // so a share of a wide viewport buys it nothing and only pushes coin/qty/value apart.
-        MoonDataTableColumn::new("actions", String::new(), 170.0).no_grow(),
-    ]
+/// This shared multi-core panel adds a Core column on the left; Moonbot's window is per-core. Which
+/// columns appear — the buttons among them — comes from the field selector ([`super::columns`]).
+fn assets_columns(visible: &[AssetCol]) -> Vec<MoonDataTableColumn> {
+    visible.iter().map(|c| c.column()).collect()
 }
 
 /// Assets table with caller-supplied empty-state copy for the current scope.
+///
+/// `visible` is the field set in canonical order; the row builder emits its cells in exactly that
+/// order, so a hidden field costs no cell.
 pub(super) fn assets_table(
     id: &'static str,
     rows: Rc<Vec<AssetEntry>>,
     sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
+    visible: Rc<Vec<AssetCol>>,
     state: &Entity<MoonDataTableState>,
     empty_msg: String,
     cx: &Context<AssetsView>,
@@ -466,8 +465,10 @@ pub(super) fn assets_table(
     let empty = rows.is_empty();
     let row_count = rows.len();
     let view = cx.entity();
+    let sort_view = cx.entity();
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
+    let row_cols = visible.clone();
 
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
@@ -481,55 +482,94 @@ pub(super) fn assets_table(
             // transfer-wallet rows expose canonical token names. Coin matching bridges the two
             // representations when marking a row as being sold.
             let on_sale = sell_marked.contains(&(e.core, e.row.coin.to_ascii_uppercase()));
-            assets_row(e, &view, p, on_sale)
+            assets_row(e, &row_cols, &view, p, on_sale)
         })
-        .columns(assets_columns())
+        .columns(assets_columns(&visible))
         .state(state)
         .header_height(design::TABLE_HEAD_H)
-        .row_height(design::TABLE_ROW_H),
+        .row_height(design::TABLE_ROW_H)
+        // A header click re-sorts the cached rows; the action column is not sortable.
+        .on_sort(move |key, ascending, _window, app| {
+            let key = key.to_string();
+            sort_view.update(app, |this, cx| this.set_sort(&key, ascending, cx));
+        }),
     )
 }
 
 /// Build one table row using `display_value` for both the value cell and footer-compatible data.
+///
+/// `visible` is the field set in canonical order, so the row emits exactly the cells the columns
+/// declare — including the action buttons, which the selector can turn off like any other field.
 fn assets_row(
     e: &AssetEntry,
+    visible: &[AssetCol],
     view: &Entity<AssetsView>,
     p: MoonPalette,
     on_sale: bool,
 ) -> MoonDataRow {
-    let r = &e.row;
-    let is_position = r.pos_size != 0.0;
-    // For spot, show the full held balance: free plus the amount locked in open sell orders. Like
-    // Moonbot, this keeps a holding with TP orders visible instead of showing its near-zero free
-    // amount. For futures, show the remaining position and its notional at market price in the
-    // USD-stable quote currency. `fmt::qty` uses magnitude-bounded precision from tenths through
-    // thousandths rather than adaptive formatting.
-    let qty = if is_position {
-        moon_core::util::fmt::qty(r.pos_size)
-    } else {
-        let held = if r.qty_full.abs() > r.qty.abs() {
-            r.qty_full
-        } else {
-            r.qty
-        };
-        moon_core::util::fmt::qty(held)
+    let is_position = e.row.pos_size != 0.0;
+    let cells: Vec<MoonDataCell> = visible
+        .iter()
+        .map(|col| match col {
+            // Clicking Core filters to exactly that core; clicking it again resets the filter to All.
+            AssetCol::Core => MoonDataCell::element(core_cell(e, view, p)),
+            // Clicking the ticker opens its market on Main using the row's core, as in Orders and
+            // Report.
+            AssetCol::Coin => MoonDataCell::element(coin_cell(e, view, p, on_sale)),
+            // For spot, show the full held balance: free plus the amount locked in open sell orders.
+            // Like Moonbot, this keeps a holding with TP orders visible instead of showing its
+            // near-zero free amount. For futures, show the remaining position and its notional at
+            // market price in the USD-stable quote currency. `fmt::qty` uses magnitude-bounded
+            // precision from tenths through thousandths rather than adaptive formatting.
+            AssetCol::Qty => {
+                MoonDataCell::text(moon_core::util::fmt::qty(super::columns::row_qty(e)))
+            }
+            // The value column and the footer's Σ read the SAME field — see
+            // `AssetEntry::display_value`. A dash, never `inf,0$`: a broken price must not read as
+            // an astronomically valuable row, and the same non-finite check keeps that row out of Σ
+            // with the footer saying so.
+            AssetCol::Value => MoonDataCell::text(super::balances::money_or_dash(e.display_value)),
+            AssetCol::Pnl => pnl_cell(e),
+            AssetCol::Actions => actions_cell(e, view, p, is_position),
+        })
+        .collect();
+    MoonDataRow::new(cells)
+        // Highlight a coin or position being sold by an active sell order or a SellSet/
+        // SellAlmostDone phase on this core; the ticker also receives a blue `SELL` badge.
+        .selected(on_sale)
+}
+
+/// Build the unrealized-PnL cell as a signed green or red amount.
+///
+/// The number comes straight from `AssetRow::pnl_usdt`, which the FEED computes once per snapshot
+/// as `(mark − entry) × size` per position leg (`moon_core::feed::assets`) and converts into USDT.
+/// Recomputing it here would put the same arithmetic on a per-frame path for no new information,
+/// and would risk drifting away from the figure the Orders panel shows.
+///
+/// [`super::columns::pnl_display`] decides whether there is anything to show at all: a spot balance
+/// has no unrealized PnL, and neither a missing entry price nor an unknown quote rate may print as
+/// a confident `0.00`. Those all get a muted dash, and the PnL sort orders them the same way.
+fn pnl_cell(e: &AssetEntry) -> MoonDataCell {
+    let Some(v) = super::columns::pnl_display(e) else {
+        return MoonDataCell::text("–").tone(MoonTone::Muted);
     };
-    // The value column and the footer's Σ read the SAME field — see `AssetEntry::display_value`.
-    // A dash, never `inf,0$`: a broken price must not read as an astronomically valuable row,
-    // and the same non-finite check keeps that row out of Σ with the footer saying so.
-    let sum = super::balances::money_or_dash(e.display_value);
-    MoonDataRow::new([
-        // Clicking Core filters to exactly that core; clicking it again resets the filter to All.
-        MoonDataCell::element(core_cell(e, view, p)),
-        // Clicking the ticker opens its market on Main using the row's core, as in Orders and Report.
-        MoonDataCell::element(coin_cell(e, view, p, on_sale)),
-        MoonDataCell::text(qty),
-        MoonDataCell::text(sum),
-        actions_cell(e, view, p, is_position),
-    ])
-    // Highlight a coin or position being sold by an active sell order or a SellSet/SellAlmostDone
-    // phase on this core; the ticker also receives a blue `SELL` badge.
-    .selected(on_sale)
+    // `> 0.0` for the sign, not `>= 0.0`: a short resting exactly at its entry produces `-0.0`,
+    // which passes `>= 0.0` and would render as `+-0.00`.
+    let text = if v > 0.0 {
+        format!("+{v:.2}")
+    } else if v < 0.0 {
+        format!("{v:.2}")
+    } else {
+        "0.00".to_string()
+    };
+    let tone = if v < 0.0 {
+        MoonTone::Danger
+    } else {
+        MoonTone::Positive
+    };
+    // Two decimals without `$`, matching the Orders PnL column — this is a currency amount, not an
+    // adaptive price.
+    MoonDataCell::text(text).tone(tone).weight(500.0)
 }
 
 /// Render a muted core-name cell that filters the panel to exactly that core when clicked.

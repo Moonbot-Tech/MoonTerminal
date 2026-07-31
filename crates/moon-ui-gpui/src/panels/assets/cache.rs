@@ -58,7 +58,13 @@ impl AssetsView {
         }
         self.request_missing_transfers(b);
         self.sell_marked = Rc::new(self.collect_sell_marked(b));
-        self.cached_entries = Rc::new(self.collect(b));
+        // Apply the header sort here, over the collector's default order: rows are rebuilt on data
+        // changes (about 1 Hz while the panel is open), so it costs one pass per rebuild and
+        // nothing per repaint. With no active sort this is a no-op and `collect`'s
+        // descending-value order stands.
+        let mut entries = self.collect(b);
+        self.sort_entries(&mut entries);
+        self.cached_entries = Rc::new(entries);
         self.cached_aggs = Rc::new(self.per_core(b));
         self.cached_all_futures = self.all_scope_cores_futures(b);
         self.rebuild_wallet_cache(b);

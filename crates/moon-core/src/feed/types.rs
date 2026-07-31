@@ -503,6 +503,14 @@ pub struct AssetRow {
     /// `total_profit_*`, which remains frozen between balance pushes. Without a position or entry
     /// price, as for a spot balance, it falls back to server total profit times the conversion rate.
     pub pnl_usdt: f64,
+    /// Whether [`Self::pnl_usdt`] really is the LIVE unrealized figure: derived from a mark/last
+    /// price and an entry price, and converted with a known quote rate.
+    ///
+    /// `false` covers the two cases a consumer cannot tell apart by looking at the number: the
+    /// accumulated-server-profit fallback above (a spot balance, or a position whose mark or entry
+    /// price is missing), and an unknown quote rate, which silently turns any PnL into a confident
+    /// `0.00`. A display that prints unrealized PnL must show nothing rather than either of those.
+    pub pnl_live: bool,
 }
 
 /// Core account totals from `GlobalBalance`, decoupled from moonproto.

@@ -430,7 +430,8 @@ impl ScreenerView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .fit_trigger_width(118.0, 260.0)
+            // Same lower bound as every other core selector; it grows past it for a long core name.
+            .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
             .fit_menu_width(160.0, 560.0)
             .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(360.0)
@@ -449,7 +450,7 @@ impl ScreenerView {
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(34.0)
+            .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(170.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
