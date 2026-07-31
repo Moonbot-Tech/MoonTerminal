@@ -186,24 +186,16 @@ impl Shell {
                     }
                 }
                 let owner = window.window_handle();
-                let handle = match detached::spawn(app, &backend, &spec, Some(owner)) {
-                    Ok(handle) => handle,
-                    Err(err) => {
-                        log::warn!(
-                            "detach panel failed group={} panel={}: {err:#}",
-                            group,
-                            panel_name
-                        );
-                        return;
-                    }
-                };
-                // Kept rather than dropped: without the handle nothing can close a panel window
-                // from code, and a round-trip check has to close what it opened. The window's own
-                // release removes the entry, on the same edge that queues the repin.
-                backend.update(app, |b, _| {
-                    b.detached_panel_windows
-                        .insert((group.clone(), panel_name.clone()), handle);
-                });
+                // `spawn` records the window handle on `Backend` itself, so every detach route
+                // gets it and none has to remember.
+                if let Err(err) = detached::spawn(app, &backend, &spec, Some(owner)) {
+                    log::warn!(
+                        "detach panel failed group={} panel={}: {err:#}",
+                        group,
+                        panel_name
+                    );
+                    return;
+                }
                 dock.update(app, |area, cx| {
                     area.remove_panel_by_name(&panel_name, window, cx);
                 });
