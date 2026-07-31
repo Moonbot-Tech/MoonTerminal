@@ -318,6 +318,36 @@ struct Backend {
     /// `(group, panel_name)`. The group's Shell consumes each request, adds the panel back to its
     /// `DockArea`, and removes the detached specification.
     repin_request: Vec<(String, String)>,
+    /// Requests to detach a docked panel into its own window, as `(group, panel_name)`.
+    ///
+    /// The mirror of `repin_request`, and it exists for the same reason: detaching is otherwise
+    /// reachable only as a `DockEvent` a human raises by double-clicking a tab, so nothing that
+    /// holds only a `Backend` — FireTest's panel round-trip stage — can drive it. The group's
+    /// Shell drains this beside the repins and routes each through the same `defer_detach_panel`
+    /// the UI uses, so the tested path is the real one.
+    ///
+    /// Pushing alone does NOT wake anything: the drain runs from Shell's `cx.observe(&backend)`,
+    /// which fires only on a Backend notify gated behind `backend_dirty_since_notify` and 250 ms.
+    /// A caller must also `mark_backend_dirty`, or the request waits for incidental feed traffic.
+    ///
+    /// The drain consumes a request whether or not the detach happens — `defer_detach_panel`
+    /// declines an unsupported panel, an already-detached one, and a failed spawn. There is no
+    /// completion or failure signal; a caller watches `dock_states` and gives up on a deadline.
+    panel_detach_request: Vec<(String, String)>,
+    /// Live detached panel windows, keyed by `(group, panel_name)`.
+    ///
+    /// `detached::spawn` returned the handle and every caller dropped it, which left no way to
+    /// close a panel window from code — a round-trip check has to close what it opened. The
+    /// insertion lives inside `spawn` itself, so all three detach routes fill it: the startup
+    /// restore, the dock's detach action and the panel toolbar button. Entries are removed when
+    /// the window releases, the same edge that queues the repin.
+    ///
+    /// Keyed by identity of the panel, not of the window: two live windows for one `(group,
+    /// panel)` would leave the map describing only the second, and the first's release would then
+    /// clear an entry that still has a window behind it. The dock's detach path cannot produce
+    /// that — it declines an already-detached panel — but the toolbar route has no such check, so
+    /// a reader should treat a missing entry as "no window to close", never as "no window exists".
+    detached_panel_windows: HashMap<(String, String), WindowHandle<Root>>,
     /// Requests to return a chart tab to its strip after its detached window closes, as
     /// `(group, number, bucket)`. The group's `ChartTabs` consumes each request and reattaches it.
     chart_repin_request: Vec<(String, u32, moon_core::config::ChartBucket)>,
