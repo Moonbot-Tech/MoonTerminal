@@ -45,6 +45,57 @@ fn initial_report_bounds(visible: Option<Bounds<Pixels>>) -> Bounds<Pixels> {
     }
 }
 
+/// Restore saved Report geometry inside the selected display's current usable desktop.
+///
+/// Exact bounds survive while safe. Resolution, DPI, or work-area changes clamp an oversized or
+/// edge-crossing rectangle without discarding the user's retained placement. Unusable dimensions
+/// fall back to the normal large initial geometry.
+///
+/// Args:
+///     saved: Last persisted standalone Report rectangle.
+///     visible: Selected fallback display bounds.
+///     saved_origin_is_visible: Whether an attached display contains the saved origin.
+///
+/// Returns:
+///     Reachable saved bounds clamped to the current display, or safe initial bounds.
+fn restored_report_bounds(
+    saved: Option<moon_core::config::GeomRect>,
+    visible: Option<Bounds<Pixels>>,
+    saved_origin_is_visible: bool,
+) -> Bounds<Pixels> {
+    let fallback = initial_report_bounds(visible);
+    let Some(saved) = saved.filter(|_| saved_origin_is_visible) else {
+        return fallback;
+    };
+    let minimum_width = REPORT_WINDOW_MIN_W.min(f32::from(fallback.size.width));
+    let minimum_height = REPORT_WINDOW_MIN_H.min(f32::from(fallback.size.height));
+    let saved_width = saved.w as f32;
+    let saved_height = saved.h as f32;
+    if saved_width < minimum_width || saved_height < minimum_height {
+        return fallback;
+    }
+    let Some(visible) = visible else {
+        return Bounds {
+            origin: point(px(saved.x as f32), px(saved.y as f32)),
+            size: size(px(saved_width), px(saved_height)),
+        };
+    };
+
+    let visible_x = f32::from(visible.origin.x);
+    let visible_y = f32::from(visible.origin.y);
+    let width = saved_width.min(f32::from(visible.size.width));
+    let height = saved_height.min(f32::from(visible.size.height));
+    let max_x = visible_x + f32::from(visible.size.width) - width;
+    let max_y = visible_y + f32::from(visible.size.height) - height;
+    Bounds {
+        origin: point(
+            px((saved.x as f32).clamp(visible_x, max_x)),
+            px((saved.y as f32).clamp(visible_y, max_y)),
+        ),
+        size: size(px(width), px(height)),
+    }
+}
+
 /// Build the Report title bar with width reset and native window controls.
 ///
 /// Args:
@@ -139,12 +190,23 @@ pub fn open_scoped(
     }
 
     let group = report_group_for_core(&backend, scope.strategy.core_uid, cx);
+    let saved = backend.read(cx).layout.report_window;
+    let saved_origin = saved.map(|geometry| point(px(geometry.x as f32), px(geometry.y as f32)));
+    let saved_origin_is_visible = saved_origin.is_some_and(|origin| {
+        cx.displays()
+            .into_iter()
+            .any(|display| display.bounds().contains(&origin))
+    });
     let display_id =
-        crate::window::windowing::saved_or_owner_display_id(None, owner, owner_display, cx);
+        crate::window::windowing::saved_or_owner_display_id(saved_origin, owner, owner_display, cx);
     let display = display_id
         .and_then(|display_id| cx.find_display(display_id))
         .or_else(|| cx.primary_display());
-    let bounds = initial_report_bounds(display.as_ref().map(|display| display.visible_bounds()));
+    let bounds = restored_report_bounds(
+        saved,
+        display.as_ref().map(|display| display.visible_bounds()),
+        saved_origin_is_visible,
+    );
     let min_size = size(
         px(REPORT_WINDOW_MIN_W.min(f32::from(bounds.size.width))),
         px(REPORT_WINDOW_MIN_H.min(f32::from(bounds.size.height))),
@@ -162,7 +224,9 @@ pub fn open_scoped(
         let panel = cx.new(|cx| {
             ReportPanel::new_with_scope(backend_for_window.clone(), group, Some(scope), window, cx)
         });
-        panel.update(cx, |panel, panel_cx| panel.mark_standalone(panel_cx));
+        panel.update(cx, |panel, panel_cx| {
+            panel.mark_standalone(window, panel_cx)
+        });
         backend_for_window.update(cx, |backend, _| {
             backend.report_window_view = Some(panel.downgrade());
         });
