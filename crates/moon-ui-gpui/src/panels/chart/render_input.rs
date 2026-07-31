@@ -385,6 +385,11 @@ pub(super) fn mouse_move(
             this.set_order_interaction(None, cx)
         };
         if order_hover_changed {
+            // One notify here re-renders the WHOLE window: `mark_view_dirty` marks every ancestor,
+            // and a re-rendered root sets `refreshing`, which bypasses each descendant's view
+            // cache. Counted because the existing mouse counters do not instrument this branch at
+            // all — the harness gates "mouse-move must not wake the scene" on counters blind to it.
+            crate::diag::bump(&crate::diag::CHART_HOVER_NOTIFY);
             cx.notify();
         }
         if within {

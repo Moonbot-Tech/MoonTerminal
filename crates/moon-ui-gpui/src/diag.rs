@@ -45,6 +45,12 @@ diag_counters!(
     // about the flash's cost, which is exactly why this is counted separately. A value that never
     // returns to zero means the flash failed to expire and this canvas is presenting forever.
     CHART_ARRIVAL_PULSE => "chart_arrival_pulse",
+    // Order-line hover enter/leave inside the fast mouse-move branch. Each one is a `cx.notify()`
+    // that dirties the view AND every ancestor, and a re-rendered root bypasses every descendant's
+    // cache — so one of these repaints the entire window. `chart_input_notify` and
+    // `chart_canvas_notify` do NOT cover this path, which is why storm-time window repaints have
+    // gone unexplained: the gate watched counters blind to the branch that fires.
+    CHART_HOVER_NOTIFY => "chart_hover_notify",
     SHELL_RENDER      => "shell_render",
     CHART_RENDER      => "chart_render",
     DETACHED_RENDER   => "detached_render",
