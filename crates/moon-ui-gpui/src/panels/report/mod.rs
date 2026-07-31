@@ -34,10 +34,10 @@ use moon_ui::MoonWindowExt as _;
 use moon_ui::{
     DockArea, IndexPath, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
     MoonCheckbox, MoonCheckboxSize, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
-    MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonMenuSize, MoonNotification, MoonPalette, MoonSelect, MoonSelectEvent, MoonSelectItem,
-    MoonSelectState, MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt,
-    h_flex, v_flex,
+    MoonDataTableState, MoonDataTableWidthPolicy, MoonDropdown, MoonInput, MoonInputEvent,
+    MoonInputState, MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette,
+    MoonScrollbarVisibility, MoonSelect, MoonSelectEvent, MoonSelectItem, MoonSelectState,
+    MoonTone, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -294,9 +294,6 @@ pub struct ReportPanel {
     detached: bool,
     /// Whether this panel owns the dedicated standalone Report tool window and its title bar.
     standalone: bool,
-    /// Width snapshot from the previous observation, used by [`Self::clamp_table_widths`] to detect
-    /// the column currently being dragged.
-    last_widths: std::collections::HashMap<String, f32>,
     // `table_state()` exposes the retained state to the detached window's automatic-width button.
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,

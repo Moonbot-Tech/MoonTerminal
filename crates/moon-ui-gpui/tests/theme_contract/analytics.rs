@@ -3,6 +3,34 @@
 
 use super::support::*;
 
+/// Report columns must preserve retained widths and expose their overflow through a visible bar.
+///
+/// Replacing `Preserve` with `Fit` would silently compress long fields again. Restoring the old
+/// clamp observer would also rewrite the user's retained widths to the current viewport, so moving
+/// the window back to a wider host could not recover them.
+#[test]
+fn report_table_uses_scrollable_preserved_widths() {
+    let render = read_src("panels/report/render.rs");
+    let state = read_src("panels/report/state.rs");
+    let widths = read_src("panels/report/widths.rs");
+    let table = braced_body(&render, "pub(super) fn table_el(");
+
+    assert!(
+        table.contains(".width_policy(MoonDataTableWidthPolicy::Preserve)")
+            && table.contains(".horizontal_scrollbar_visibility(MoonScrollbarVisibility::Always)"),
+        "every Report host must use preserved column widths and an always-visible overflow bar"
+    );
+    assert!(
+        state.contains("table_persist::persist(&this.backend, &this.widths_id, &state, cx)")
+            && !state.contains("clamp_table_widths"),
+        "column-state observation must persist exact user widths without viewport clamping"
+    );
+    assert!(
+        !widths.contains("plan_clamp") && !widths.contains("clamp_table_widths"),
+        "the superseded width-budget clamp must not remain as a second sizing policy"
+    );
+}
+
 /// Strategy rows must keep both navigation paths and the Report filter in the wrapping controls.
 ///
 /// Removing `.children(strategy_button)` is a plausible compile-clean edit that would hide the

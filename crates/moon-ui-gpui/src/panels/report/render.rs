@@ -59,6 +59,8 @@ impl ReportPanel {
             })
             .state(&table_state)
             .columns(cols)
+            .width_policy(MoonDataTableWidthPolicy::Preserve)
+            .horizontal_scrollbar_visibility(MoonScrollbarVisibility::Always)
             .header_height(design::TABLE_HEAD_H)
             .row_height(design::TABLE_ROW_H)
             .on_sort(move |key, ascending, _window, app| {
