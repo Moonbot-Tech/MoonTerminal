@@ -1,4 +1,14 @@
-use super::*;
+//! Contract tests for the shape of a FireTest run.
+//!
+//! They guard one decision: `chart-smoke` is ONE ordered scenario, not a bag of side tests. A new
+//! phase that is not placed in the plan, or a narrow script that quietly grows unrelated stages,
+//! fails here rather than in a confusing live run.
+//!
+//! The imports name their modules because the subjects no longer live in the parent: the plan is in
+//! `plan`, the script in `config`.
+
+use super::config::{Config, Script};
+use super::plan::{ORDER_CANCEL_LAG_STAGE_PLAN, Phase, STAGE_PLAN, phase_after_settle};
 
 #[test]
 fn chart_smoke_stage_plan_covers_every_runtime_phase() {
