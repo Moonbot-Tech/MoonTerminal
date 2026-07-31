@@ -10,6 +10,7 @@ use super::support::*;
 /// the grouped `MoonCombobox` with the old eager `MoonDropdown` recreates the user-visible freeze
 /// at 1,000 items. Removing the existing-window `apply_scope` call silently creates stale or
 /// duplicate Reports.
+/// Removing saved-bound restoration or its observer resets moved Report windows after reopening.
 ///
 /// Returns:
 ///     Nothing; the source-level binary UI contract is asserted.
@@ -166,9 +167,22 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
         );
     }
     assert!(
-        open_report.contains("display.visible_bounds()")
-            && open_report.contains("initial_report_bounds("),
-        "Report geometry must derive from the selected display's visible global bounds"
+        open_report.contains("layout.report_window")
+            && open_report.contains("saved_or_owner_display_id(")
+            && open_report.contains("restored_report_bounds(")
+            && open_report.contains("saved_origin_is_visible"),
+        "Report geometry must restore the saved rectangle and retain the display-safe fallback"
+    );
+    assert!(
+        !open_report.contains("cfg!(target_os = \"macos\")"),
+        "saved Report origins must not bypass attached-display validation on macOS"
+    );
+    let standalone = braced_body(&report_state, "pub(crate) fn mark_standalone(");
+    assert!(
+        standalone.contains("observe_window_bounds(")
+            && standalone.contains("layout.report_window")
+            && standalone.contains("layout_dirty = true"),
+        "moving or resizing the standalone Report must enter the shared layout persistence path"
     );
     let set_strategy = braced_body(&report_actions, "pub(super) fn set_strategy_choices(");
     assert!(

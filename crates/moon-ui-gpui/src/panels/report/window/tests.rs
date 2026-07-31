@@ -2,7 +2,8 @@
 
 use gpui::{Bounds, point, px, size};
 
-use super::initial_report_bounds;
+use super::{initial_report_bounds, restored_report_bounds};
+use moon_core::config::GeomRect;
 
 /// Restoring the old 1240x720 constants must fail this assertion and recreate the cramped window
 /// reported by the user.
@@ -38,4 +39,86 @@ fn report_clamps_inside_a_smaller_secondary_display() {
     assert_eq!(f32::from(bounds.origin.y), 64.0);
     assert_eq!(f32::from(bounds.size.width), 1232.0);
     assert_eq!(f32::from(bounds.size.height), 672.0);
+}
+
+/// Reusing saved coordinates after their monitor disappears must fail this assertion and would
+/// reopen the standalone Report outside the current desktop.
+///
+/// Returns:
+///     Nothing; stale geometry falls back to safe bounds on the selected display.
+#[test]
+fn report_discards_geometry_from_a_disconnected_display() {
+    let visible = Bounds {
+        origin: point(px(0.0), px(0.0)),
+        size: size(px(1920.0), px(1080.0)),
+    };
+    let bounds = restored_report_bounds(
+        Some(GeomRect {
+            x: 2400,
+            y: 180,
+            w: 1200,
+            h: 800,
+        }),
+        Some(visible),
+        false,
+    );
+
+    assert_eq!(f32::from(bounds.origin.x), 140.0);
+    assert_eq!(f32::from(bounds.origin.y), 24.0);
+    assert_eq!(f32::from(bounds.size.width), 1640.0);
+    assert_eq!(f32::from(bounds.size.height), 1032.0);
+}
+
+/// Returning saved bounds unchanged after a display shrinks must fail these edge assertions and
+/// would reopen a reachable Report partly outside the usable desktop.
+///
+/// Returns:
+///     Nothing; saved size and origin are clamped together to the current work area.
+#[test]
+fn report_clamps_saved_geometry_after_display_changes() {
+    let bounds = restored_report_bounds(
+        Some(GeomRect {
+            x: 2500,
+            y: 600,
+            w: 1400,
+            h: 900,
+        }),
+        Some(Bounds {
+            origin: point(px(1920.0), px(40.0)),
+            size: size(px(1280.0), px(720.0)),
+        }),
+        true,
+    );
+
+    assert_eq!(f32::from(bounds.origin.x), 1920.0);
+    assert_eq!(f32::from(bounds.origin.y), 40.0);
+    assert_eq!(f32::from(bounds.size.width), 1280.0);
+    assert_eq!(f32::from(bounds.size.height), 720.0);
+}
+
+/// Accepting a hand-edited 1x1 saved rectangle must fail this assertion and would make the Report
+/// unusable even though its origin still belongs to an attached display.
+///
+/// Returns:
+///     Nothing; unusable persisted dimensions restore the safe initial geometry.
+#[test]
+fn report_rejects_unusable_saved_dimensions() {
+    let bounds = restored_report_bounds(
+        Some(GeomRect {
+            x: 400,
+            y: 300,
+            w: 1,
+            h: 1,
+        }),
+        Some(Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(1920.0), px(1080.0)),
+        }),
+        true,
+    );
+
+    assert_eq!(f32::from(bounds.origin.x), 140.0);
+    assert_eq!(f32::from(bounds.origin.y), 24.0);
+    assert_eq!(f32::from(bounds.size.width), 1640.0);
+    assert_eq!(f32::from(bounds.size.height), 1032.0);
 }
