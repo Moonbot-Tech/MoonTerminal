@@ -259,3 +259,66 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
         "docs/FIRETEST.md должен описывать FireTest как runtime/perf сценарий, а не статическую проверку исходников"
     );
 }
+
+#[test]
+fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
+    // FireTest drives the real app: it opens tool windows, switches the locale, changes the price
+    // scale, and will detach and repin panels. Every one of those marks state dirty, and for a long
+    // time the 100 ms tick duly flushed it — so running the diagnostic quietly rewrote the saved
+    // workspace it was supposed to be observing.
+    //
+    // This covers the two DEBOUNCED workspace flushes only. It is deliberately not a claim that a
+    // diagnostic run writes nothing — the report DB writer, `strat_db`, `AppConfig::load`'s uid
+    // save and panels that write straight through all bypass the dirty-flag mechanism. What it
+    // does pin is that both debounced flushes are gated as a WHOLE: a guard per `*_dirty` branch
+    // is one that a newly persisted thing can be added without.
+    let startup = read_src("startup.rs");
+    let main_rs = read_src("main.rs");
+
+    assert!(
+        main_rs.contains("persist_allowed: bool"),
+        "Backend must carry the flag that decides whether this process may persist at all"
+    );
+    assert!(
+        startup.contains("persist_allowed: firetest_config.is_none()"),
+        "the flag must be derived from --debug-script at construction, not set later by a caller \
+         who might forget"
+    );
+
+    let quit = braced_body(&startup, "cx.on_app_quit(");
+    assert!(
+        quit.contains("if !b.persist_allowed {"),
+        "the quit flush must bail out before it writes anything"
+    );
+
+    // The debounced flush is the one that actually fires during a run: FireTest ends with
+    // `std::process::exit`, which never reaches `on_app_quit` at all.
+    //
+    // Scope, not presence. A guard wrapping a single `*_dirty` branch would satisfy a bare
+    // `contains`, which is exactly the per-file form the rule above forbids — so the guarded block
+    // is sliced out and every saver has to be found INSIDE it.
+    let guarded = braced_body(&startup, "if b.persist_allowed {");
+    for saver in [
+        "b.layout.save()",
+        "dock_persist::save_all",
+        "detached::save_all",
+        "chart_persist::save_all",
+        "b.tab_badges.save()",
+        "b.figures.borrow_mut().save()",
+        "b.config.save()",
+    ] {
+        assert!(
+            guarded.contains(saver),
+            "{saver} must sit inside the `if b.persist_allowed` block: a debounced save outside it \
+             writes the developer's workspace during a --debug-script run"
+        );
+    }
+    // And the notify that follows the block must stay OUTSIDE it — suppressing persistence must
+    // not also suppress the backend wake the rest of the app depends on.
+    assert!(
+        startup.contains("b.flush_backend_notify(cx)")
+            && !guarded.contains("b.flush_backend_notify(cx)"),
+        "the backend notify must exist and stay OUTSIDE the guard: suppressing persistence must \
+         not also suppress the wake the rest of the app runs on"
+    );
+}
