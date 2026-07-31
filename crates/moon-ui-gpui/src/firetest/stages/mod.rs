@@ -1,20 +1,17 @@
 //! One module per stage of the run.
 //!
-//! Each module owns its stage's logic — the request that drives the app, the verification that
-//! reads the result back, and its log lines — as `impl Runtime` blocks, so the dispatcher in the
-//! parent stays a readable list of phases. Every timing stays in the parent: the dispatcher is what
-//! paces the run, and a duration split across modules is a duration nobody can weigh against its
-//! neighbours.
+//! Each module exposes one free `fn` per row it owns in [`super::plan`] — the stage's tick rule,
+//! answering `Stay` / `Next` / `Fail`. That function is the whole of what the dispatcher knows
+//! about the stage; everything it calls stays an `impl Runtime` method beside it.
 //!
-//! The modules are private: an `impl Runtime` block applies wherever it is written, so nothing
-//! outside needs to name the module. `order_cancel` is the one exception — the run holds its
-//! in-flight state as a `Runtime` field, so its type has to be nameable in the parent.
+//! What a stage does NOT own is when it runs. Its dwell, deadline, present mode and sampling rule
+//! are cells in the table, not code here, so they can be read against every other stage's at once.
 
-mod chart;
-mod command_error;
-mod locale;
+pub(super) mod chart;
+pub(super) mod command_error;
+pub(super) mod locale;
 pub(super) mod order_cancel;
-mod perf;
-mod price_scale;
-mod root_overlay;
-mod tool_windows;
+pub(super) mod perf;
+pub(super) mod price_scale;
+pub(super) mod root_overlay;
+pub(super) mod tool_windows;

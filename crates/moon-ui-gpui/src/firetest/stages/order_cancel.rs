@@ -14,8 +14,24 @@ use moon_core::util::now_unix_ms_i64;
 
 use crate::Backend;
 
+use gpui::Context;
+
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
+
+/// Stage `order_cancel_lag`.
+pub(in crate::firetest) fn run(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    _cx: &mut Context<Backend>,
+) -> StageStep {
+    match runtime.tick_order_cancel_lag(backend) {
+        Ok(true) => StageStep::Next,
+        Ok(false) => StageStep::Stay,
+        Err(error) => StageStep::Fail(error),
+    }
+}
 
 /// Where the scenario currently is: waiting for the placed order, or for the cancelled one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

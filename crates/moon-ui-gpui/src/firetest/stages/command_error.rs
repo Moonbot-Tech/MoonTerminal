@@ -6,8 +6,20 @@
 
 use crate::Backend;
 
+use gpui::Context;
+
 use crate::firetest::Runtime;
 use crate::firetest::logging::firetest_info;
+use crate::firetest::plan::StageStep;
+
+/// Stage `command_error_contract`.
+pub(in crate::firetest) fn verify(
+    runtime: &mut Runtime,
+    backend: &mut Backend,
+    _cx: &mut Context<Backend>,
+) -> StageStep {
+    runtime.verify_command_error_contract(backend).into()
+}
 
 impl Runtime {
     /// Send one command to a sentinel core id that cannot exist and require an error back.
