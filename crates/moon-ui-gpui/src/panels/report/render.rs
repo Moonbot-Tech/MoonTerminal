@@ -143,12 +143,13 @@ impl Render for ReportPanel {
     /// Render the Report controls, table, totals, and optional standalone window chrome.
     ///
     /// Args:
-    ///     _window: Owning window; child callbacks receive it directly.
+    ///     window: Owning window used to flush retained strategy-combobox updates.
     ///     cx: Panel render context.
     ///
     /// Returns:
     ///     The complete Report surface.
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.flush_strategy_select_sync(window, cx);
         let p = MoonPalette::active(cx);
         let border = rgb(p.border);
 

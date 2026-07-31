@@ -75,27 +75,26 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
-    /// Select one exact strategy and its core, or clear the strategy constraint.
+    /// Apply a core-wide, exact-strategy, or global strategy-filter choice.
     ///
     /// Args:
-    ///     strategy: Exact strategy identity, or `None` for every strategy.
+    ///     choice: Grouped combobox choice, or `None` for every core and strategy.
     ///     cx: Panel context used to request the replacement query.
     ///
     /// Returns:
-    ///     Nothing; unchanged selections are ignored. The emitting MoonSelect already owns the
+    ///     Nothing; unchanged selections are ignored. The emitting combobox already owns the
     ///     matching widget-state mutation.
-    pub(super) fn set_strategy(
+    pub(super) fn set_strategy_choice(
         &mut self,
-        strategy: Option<ReportStrategyKey>,
+        choice: Option<ReportStrategyChoice>,
         cx: &mut Context<Self>,
     ) {
-        if self.strategy == strategy {
+        let (sel_cores, strategy) = filters_for_strategy_choice(choice);
+        if self.sel_cores == sel_cores && self.strategy == strategy {
             return;
         }
+        self.sel_cores = sel_cores;
         self.strategy = strategy;
-        if let Some(strategy) = strategy {
-            self.sel_cores = HashSet::from([strategy.core_uid]);
-        }
         self.request_requery(cx);
     }
 
@@ -110,9 +109,9 @@ impl ReportPanel {
         if let Some(strategy) = self.strategy {
             if !self.sel_cores.is_empty() && !self.sel_cores.contains(&strategy.core_uid) {
                 self.strategy = None;
-                self.sync_strategy_select(false, cx);
             }
         }
+        self.queue_strategy_select_sync(false, cx);
     }
 
     /// Toggle all runtime columns on, or retain only the first when all are already visible.
