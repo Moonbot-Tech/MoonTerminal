@@ -421,13 +421,32 @@ impl ReportPanel {
     /// Enable the dedicated Report title bar while retaining detached table controls.
     ///
     /// Args:
+    ///     window: Standalone Report window whose geometry is persisted.
     ///     cx: Panel context used to restore detached widths and repaint.
     ///
     /// Returns:
     ///     Nothing.
-    pub(crate) fn mark_standalone(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn mark_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mark_table_detached(cx);
         self.standalone = true;
+        cx.observe_window_bounds(window, |this, window, cx| {
+            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
+                return;
+            };
+            this.backend.update(cx, |backend, _| {
+                if backend
+                    .layout
+                    .report_window
+                    .map(|geometry| (geometry.x, geometry.y, geometry.w, geometry.h))
+                    != Some((x, y, w, h))
+                {
+                    backend.layout.report_window =
+                        Some(moon_core::config::layout::GeomRect { x, y, w, h });
+                    backend.layout_dirty = true;
+                }
+            });
+        })
+        .detach();
         cx.notify();
     }
 

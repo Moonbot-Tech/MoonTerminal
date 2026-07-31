@@ -326,3 +326,45 @@ fn a_hand_written_field_list_cannot_discard_the_saved_layout() {
         );
     }
 }
+
+/// Standalone Report geometry must survive restart without making `layout.toml` fragile.
+///
+/// Breakage this pins: marking `layout.rs:WindowLayout::report_window` as skipped would lose the
+/// user's window placement on restart, while removing its `de_lenient` deserializer would let one
+/// malformed rectangle reject every neighbouring layout preference.
+#[test]
+fn report_window_geometry_survives_restart_without_endangering_layout() {
+    let saved = WindowLayout {
+        report_window: Some(GeomRect {
+            x: 120,
+            y: 180,
+            w: 1640,
+            h: 1100,
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load");
+    let geometry = decoded
+        .report_window
+        .expect("standalone Report geometry must survive a save-and-reload cycle");
+    assert_eq!(
+        (geometry.x, geometry.y, geometry.w, geometry.h),
+        (120, 180, 1640, 1100)
+    );
+
+    for written in ["\"wide\"", "17", "true", "[120, 180, 1640]", "{ x = 120 }"] {
+        let doc = format!("analytics_period = \"p-cur-month\"\nreport_window = {written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(
+            decoded.analytics_period.as_deref(),
+            Some("p-cur-month"),
+            "{written}: malformed Report geometry discarded a neighbouring setting"
+        );
+        assert!(
+            decoded.report_window.is_none(),
+            "{written}: unusable Report geometry must be ignored"
+        );
+    }
+}

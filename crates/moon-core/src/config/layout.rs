@@ -178,6 +178,9 @@ pub struct WindowLayout {
     /// "Analytics" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub analytics_window: Option<GeomRect>,
+    /// Standalone "Report" window geometry opened from Analytics.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub report_window: Option<GeomRect>,
     /// Selected "Analytics" period preset (id such as "p-cur-month"), so the window
     /// opens with the previous selection. None = default ("Current month").
     #[serde(default)]
