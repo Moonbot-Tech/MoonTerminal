@@ -217,7 +217,9 @@ impl ReportPanel {
 
                     match result {
                         Ok(read) => {
-                            if read.cores.is_some() || read.strategies.is_some() {
+                            let metadata_changed =
+                                read.cores.is_some() || read.strategies.is_some();
+                            if metadata_changed {
                                 this.last_metadata_at = Some(std::time::Instant::now());
                             }
                             if let Some(cores) = read.cores {
@@ -239,7 +241,9 @@ impl ReportPanel {
                                     }
                                 }
                                 this.strategies = strategies;
-                                this.sync_strategy_select(true, cx);
+                            }
+                            if metadata_changed {
+                                this.queue_strategy_select_sync(true, cx);
                             }
                             let cols_changed = *this.cols != read.cols;
                             this.cols = Rc::new(read.cols);

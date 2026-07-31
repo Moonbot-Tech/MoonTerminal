@@ -7,8 +7,9 @@ use super::support::*;
 ///
 /// Removing `.children(strategy_button)` is a plausible compile-clean edit that would hide the
 /// Strategies launcher; removing the double-click arm would make rows select-only again. Replacing
-/// `MoonSelect` with the old eager `MoonDropdown` recreates the user-visible freeze at 1,000 items.
-/// Removing the existing-window `apply_scope` call silently creates stale or duplicate Reports.
+/// Replacing the grouped `MoonCombobox` with the old eager `MoonDropdown` recreates the
+/// user-visible freeze at 1,000 items. Removing the existing-window `apply_scope` call silently
+/// creates stale or duplicate Reports.
 ///
 /// Returns:
 ///     Nothing; the source-level binary UI contract is asserted.
@@ -21,6 +22,7 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     let report_controls = read_src("panels/report/controls.rs");
     let report_query = read_src("panels/report/query.rs");
     let report_state = read_src("panels/report/state.rs");
+    let report_strategy_filter = read_src("panels/report/strategy_filter.rs");
     let report_window = read_src("panels/report/window.rs");
     let row = braced_body(&table, "fn strategy_row(");
     for needle in [
@@ -83,9 +85,8 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     );
     let strategy_combo = braced_body(&report_controls, "pub(super) fn strategy_combo(");
     for needle in [
-        "MoonSelect::new(&self.strategy_select)",
+        "MoonCombobox::new(&self.strategy_select)",
         ".cleanable(true)",
-        ".searchable(true)",
         "report.search_strategies",
     ] {
         assert!(
@@ -98,12 +99,32 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
             && !strategy_combo.contains("MoonDropdown::new"),
         "opening Reports must not rebuild an eager MoonMenuItem per strategy"
     );
-    let sync_select = braced_body(&report_state, "pub(super) fn sync_strategy_select(");
     for needle in [
-        "strategy_select_items(&self.strategies, &self.cores)",
-        "select.set_items(items, select_cx)",
-        "select.set_selected_value(&key)",
-        "select.clear_selection()",
+        "MoonSearchableGroup::new",
+        "ReportStrategyChoice::Core",
+        "ReportStrategyChoice::Exact",
+        "self.search.replace(query.to_string())",
+        "search_text: format!(\"{core_name} {row_label}\").to_lowercase()",
+    ] {
+        assert!(
+            report_strategy_filter.contains(needle),
+            "the strategy delegate must retain grouped core-wide/exact search semantics via {needle:?}"
+        );
+    }
+    assert!(
+        report_state.contains("MoonComboboxState::new(")
+            && report_state.contains("ReportStrategyDelegate::new(")
+            && report_state.contains(".searchable(true)"),
+        "Report strategy state must retain MoonUI's grouped virtualized searchable-list engine"
+    );
+    let sync_select = braced_body(&report_state, "pub(super) fn flush_strategy_select_sync(");
+    for needle in [
+        "ordered_strategy_cores(",
+        "strategy_groups(",
+        "ReportStrategyDelegate::unfiltered(",
+        "select.set_items(unfiltered, window, select_cx)",
+        "select.set_selected_indices(selected, window, select_cx)",
+        "select.set_items(filtered, window, select_cx)",
     ] {
         assert!(
             sync_select.contains(needle),
@@ -112,10 +133,10 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     }
     assert!(
         braced_body(&report_state, "pub(crate) fn apply_scope(")
-            .contains("self.sync_strategy_select(true, cx)")
-            && report_query.contains("this.sync_strategy_select(true, cx)")
+            .contains("self.queue_strategy_select_sync(true, cx)")
+            && report_query.contains("this.queue_strategy_select_sync(true, cx)")
             && braced_body(&report_actions, "fn reconcile_strategy_core(")
-                .contains("self.sync_strategy_select(false, cx)"),
+                .contains("self.queue_strategy_select_sync(false, cx)"),
         "metadata, repeated scoped opens, and core exclusion must keep widget state synchronized"
     );
     let open_report = braced_body(&report_window, "pub fn open_scoped(");
@@ -135,10 +156,12 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
             && open_report.contains("initial_report_bounds("),
         "Report geometry must derive from the selected display's visible global bounds"
     );
-    let set_strategy = braced_body(&report_actions, "pub(super) fn set_strategy(");
+    let set_strategy = braced_body(&report_actions, "pub(super) fn set_strategy_choice(");
     assert!(
-        set_strategy.contains("HashSet::from([strategy.core_uid])"),
-        "selecting a strategy must make its exact core visible in the core selector"
+        set_strategy.contains("filters_for_strategy_choice(choice)")
+            && set_strategy.contains("self.sel_cores = sel_cores")
+            && set_strategy.contains("self.strategy = strategy"),
+        "core-wide, exact, and global choices must update both Report filter dimensions"
     );
     for signature in [
         "pub(super) fn toggle_core(",
