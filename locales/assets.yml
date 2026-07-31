@@ -140,6 +140,23 @@ assets.col.kind:
   ru: "Рынок"
   en: "Market"
   es: "Mercado"
+# Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
+# price of each leg. "PnL" is a trading term kept untranslated across the terminal.
+assets.col.pnl:
+  ru: "PnL"
+  en: "PnL"
+  es: "PnL"
+# Field-selector entry for the Market Sell / Order button column. The column header itself is
+# blank, so this name exists only in the menu.
+assets.col.actions:
+  ru: "Кнопки"
+  en: "Buttons"
+  es: "Botones"
+# Tooltip of the table field selector, matching the Orders and Report wording.
+assets.columns:
+  ru: "Поля"
+  en: "Fields"
+  es: "Campos"
 
 # --- Position action buttons ---
 assets.open_global_hint:

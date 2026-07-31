@@ -123,6 +123,7 @@ impl Render for AssetsView {
             "assets-table",
             entries,
             self.sell_marked.clone(),
+            Rc::new(self.visible_cols()),
             &self.table_state,
             empty_msg,
             cx,

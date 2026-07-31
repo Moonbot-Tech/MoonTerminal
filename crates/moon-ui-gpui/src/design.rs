@@ -57,6 +57,23 @@ pub fn chrome_section(cx: &App) -> Div {
         .gap(ui_px(cx, CHROME_GAP))
 }
 
+/// Rendered width that makes a glyph button SQUARE — the column selector (`▦`) and the report
+/// export (`⇩`).
+///
+/// It returns the button's own drawn height, so the caller must pass it to a RENDERED width
+/// (`MoonDropdown::trigger_width`, `MoonButton::width`), never to a `*_scaled` variant: MoonUI
+/// scales a scaled trigger width by `font()` (which adds the Font-slider delta) while it scales the
+/// height by `ui()` (a pure multiply), so the two diverge as soon as the slider leaves zero — a
+/// scaled 26 renders ≈31×26 at the shipped default delta.
+///
+/// MIRRORS MoonUI, like [`micro_control_h_value`]: `MoonButtonMetrics::base_for_size(Size::Small)`,
+/// which `MoonButtonSize::Action` resolves to, is `height 26`, `line_height 14`, so its `pad_y` is
+/// `6` — exactly the arguments below. `MoonButtonMetrics` is private there, so nothing checks this
+/// automatically; if MoonUI's Small metrics move, this must follow by hand.
+pub fn glyph_btn_w(cx: &App) -> f32 {
+    fit_h_value(cx, 26.0, 14.0, 6.0)
+}
+
 /// Ceiling for a header selector label (core, manual strategy).
 ///
 /// Those pills size to their content and both names are arbitrary user text, so without a ceiling
@@ -637,8 +654,16 @@ pub fn chrome_divider(cx: &App, p: MoonPalette) -> impl IntoElement {
 
 pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {
     div()
-        .w(ui_px(cx, 5.0))
-        .h(ui_px(cx, 5.0))
+        .w(px(status_dot_w(cx)))
+        .h(px(status_dot_w(cx)))
         .rounded(ui_px(cx, 999.0))
         .bg(solid(color))
+}
+
+/// Drawn width of a [`status_dot`], for a layout that must reserve its column.
+///
+/// One source with the dot itself: a row that leaves a gap for it and the dot that fills the gap
+/// cannot drift apart when the UI scale changes.
+pub fn status_dot_w(cx: &App) -> f32 {
+    ui_value(cx, 5.0)
 }

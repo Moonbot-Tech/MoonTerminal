@@ -18,6 +18,7 @@ use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 
 use super::CoreStatusView;
+use super::by_ip_widths::{ByIpWidths, CELL_GAP_W, CHEVRON_W, ROW_GAP_W, TREE_SCROLLBAR_W};
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::ordering::GroupSortField;
 use super::presentation::{
@@ -27,25 +28,6 @@ use super::presentation::{
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
 const IP_MASK: &str = "************";
-/// Fixed value-box widths so a changing number never reflows the row.
-const CPU_W: f32 = 100.0;
-const MEM_W: f32 = 116.0;
-const PING_W: f32 = 64.0;
-/// Fixed width of the server-name column (name truncates; the pencil sits at its right edge), so the
-/// IP column beside it starts at the same x on every row.
-const NAME_W: f32 = 150.0;
-/// Fixed width of the IP column (masked/real address plus the eye toggle), its own aligned column.
-const IP_W: f32 = 118.0;
-/// Fixed width of the ready/total core-count cell, so the "Ядра" header caption lines up over it.
-const CORES_W: f32 = 40.0;
-/// Width of the metric icon inside `metric_cell` (its `gap_1` to the value is added separately); a
-/// header caption reserves the same lead so it sits over the value, not the icon.
-const MET_ICON_W: f32 = 12.0;
-/// Left/right inset matching `MoonListItem`'s `px_3`, so the fixed header aligns with the tree rows.
-const ROW_INSET_W: f32 = 12.0;
-/// Extra left indent of a core (child) name inside its name column, so it reads as a tree child sitting
-/// under — and slightly right of — its server.
-const CORE_INDENT: f32 = 16.0;
 
 /// Build server roots, each with one collapsed folder of core children.
 ///
@@ -82,6 +64,9 @@ pub(super) fn tree_items(groups: &[ServerStatusGroup]) -> Vec<MoonTreeItem> {
 ///     edit_input: Shared input state backing the inline rename field.
 ///     chart_selected: The server highlighted by a body click (the chart target), if any.
 ///     chart_core: The core highlighted by a core-row click (charts that core), if any.
+///     sort: The active By-IP column sort, for the header arrows.
+///     measured_width: Width the width probe recorded on the previous frame; `0` before the first.
+///     rem_size: The window's rem size, which sets the row insets.
 ///     state: MoonTree state that owns scrolling and selection.
 ///     cx: Panel context used to create a weak action callback.
 ///
@@ -96,24 +81,17 @@ pub(super) fn grouped_server_view(
     chart_selected: Option<ServerKey>,
     chart_core: Option<CoreId>,
     sort: (GroupSortField, bool),
+    measured_width: f32,
+    rem_size: f32,
     state: &Entity<MoonTreeState>,
     cx: &Context<CoreStatusView>,
 ) -> AnyElement {
-    if groups.is_empty() {
-        let p = MoonPalette::active(cx);
-        return div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(rgb(p.text_muted))
-            .child(t!("core_status.empty").to_string())
-            .into_any_element();
-    }
-
+    let groups_empty = groups.is_empty();
     let weak_view = cx.entity().downgrade();
     // A second handle for the (sortable) header, since the tree's render closure moves `weak_view`.
     let header_weak = weak_view.clone();
+    // A third for the width probe below, which outlives this call inside the canvas closure.
+    let weak_measure = weak_view.clone();
     let server_positions = Rc::new(
         groups
             .iter()
@@ -140,6 +118,17 @@ pub(super) fn grouped_server_view(
             .collect::<HashMap<_, _>>(),
     );
     let header_palette = MoonPalette::active(cx);
+    // One shrink factor for the whole view, from the width the previous frame measured. Header and
+    // rows read the SAME widths, so the captions cannot drift off their values.
+    //
+    // The right edge must stay clear of the status dot AND of the tree's scrollbar: MoonUI draws
+    // that scrollbar as an OVERLAY, taking no layout width, so a row sized to the full measurement
+    // would slide its last column underneath it.
+    let widths = ByIpWidths::for_width(
+        measured_width,
+        crate::design::status_dot_w(cx) + TREE_SCROLLBAR_W,
+        rem_size,
+    );
     // Headless tree: it installs no row click/expand handlers and does not override `.selected`, so
     // the panel drives selection (body click) and expansion (chevron click) itself.
     let tree = MoonTree::custom(state, move |entry, meta, _window, app| {
@@ -158,6 +147,7 @@ pub(super) fn grouped_server_view(
                             revealed.contains(&group.key),
                             entry.is_expanded(),
                             editing_input,
+                            widths,
                             &weak_view,
                             p,
                             app,
@@ -172,7 +162,7 @@ pub(super) fn grouped_server_view(
                 // A core row highlights when it is the charted core, and clicking it charts that core.
                 return MoonListItem::new(meta.index)
                     .selected(chart_core == Some(core.id))
-                    .child(core_row(core, &weak_view, p, app));
+                    .child(core_row(core, widths, &weak_view, p, app));
             }
         }
         MoonListItem::new(meta.index)
@@ -186,200 +176,69 @@ pub(super) fn grouped_server_view(
     // chevron gutter, `flex_1` spacer and fixed column widths — so its captions land over the values.
     v_flex()
         .size_full()
-        .child(server_header(header_palette, sort, &header_weak, cx))
-        .child(tree.flex_1().min_h_0())
-        .into_any_element()
-}
-
-/// Render the fixed By IP caption row: one heading per column, aligned to the tree rows. Every
-/// heading except IP is a sort control — clicking it sorts the server list by that column (an arrow
-/// marks the active one). Warnings still pin to the top regardless of the sort.
-///
-/// Args:
-///     p: Active Moon palette.
-///     sort: The active `(field, ascending)` sort, to mark the column and drive the toggle.
-///     weak_view: Non-owning panel handle for the sort click.
-///     cx: Application context, for the font-scaled caption size and dot-column width.
-///
-/// Returns:
-///     A single header row with a subtle bottom divider.
-fn server_header(
-    p: MoonPalette,
-    sort: (GroupSortField, bool),
-    weak_view: &WeakEntity<CoreStatusView>,
-    cx: &App,
-) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .items_center()
-        .gap_2()
-        .pl(px(ROW_INSET_W))
-        .pr(px(ROW_INSET_W))
-        .h(px(crate::design::TABLE_HEAD_H))
-        // Match the MoonDataTable header: filled head background and a bottom separator.
-        .bg(rgb(p.table_head))
-        .border_b_1()
-        .border_color(rgb(p.border))
-        .text_size(crate::design::t_caption(cx))
-        .text_color(rgb(p.text_muted))
-        // Chevron gutter (matches `server_row`'s 12 px expand trigger).
-        .child(div().w(px(12.0)).flex_none())
+        .relative()
+        // Width probe: an absolutely positioned zero-cost canvas that measures the view and stores
+        // the result on the panel, so the NEXT frame can shrink the columns to fit. It notifies only
+        // when the width actually moved (half a pixel of hysteresis), which is what keeps a repaint
+        // from feeding itself.
+        //
+        // It sits OUTSIDE the empty-state branch below on purpose: a resize performed while no
+        // server has reported yet would otherwise leave a stale width for the first real frame.
         .child(
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .child(col_sort_header(
-                    t!("core_status.col.server").to_string(),
-                    GroupSortField::Name,
-                    NAME_W,
-                    sort,
-                    p,
-                    weak_view,
-                ))
-                // IP is masked, so it is not a sort key — a plain caption.
-                .child(
+            canvas(
+                {
+                    let weak = weak_measure;
+                    move |bounds, _, app| {
+                        let w = f32::from(bounds.size.width);
+                        let Some(view) = weak.upgrade() else { return };
+                        if (view.read(app).by_ip_width - w).abs() <= 0.5 {
+                            return;
+                        }
+                        // DEFERRED, not applied here: this runs during the frame's prepaint, and
+                        // `WindowInvalidator::invalidate_view` refuses to dirty the window while a
+                        // draw phase is active — a `notify` raised here is dropped and no follow-up
+                        // frame is scheduled. The deferred callback runs as a normal effect after
+                        // the frame, where the notify lands and the next frame uses the new width.
+                        // (MoonDataTable notifies straight from its own probe, which is why its
+                        // width only ever settles on a later, unrelated repaint.)
+                        app.defer(move |app| {
+                            view.update(app, |this, cx| {
+                                if (this.by_ip_width - w).abs() > 0.5 {
+                                    this.by_ip_width = w;
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        )
+        .map(|root| {
+            // Nothing to label and nothing to lay out: show the empty state, keeping the probe.
+            if groups_empty {
+                return root.child(
                     div()
-                        .w(px(IP_W))
-                        .flex_none()
-                        .child(t!("core_status.hdr.ip").to_string()),
-                )
-                .child(div().flex_1())
-                .child(metric_sort_header(
-                    t!("core_status.hdr.cpu").to_string(),
-                    GroupSortField::Cpu,
-                    CPU_W,
-                    sort,
-                    p,
-                    weak_view,
-                ))
-                .child(metric_sort_header(
-                    t!("core_status.hdr.mem").to_string(),
-                    GroupSortField::Mem,
-                    MEM_W,
-                    sort,
-                    p,
-                    weak_view,
-                ))
-                .child(metric_sort_header(
-                    t!("core_status.chart_ping").to_string(),
-                    GroupSortField::Ping,
-                    PING_W,
-                    sort,
-                    p,
-                    weak_view,
-                ))
-                .child(metric_sort_header(
-                    t!("core_status.chart_exch").to_string(),
-                    GroupSortField::Exch,
-                    PING_W,
-                    sort,
-                    p,
-                    weak_view,
-                ))
-                .child(col_sort_header(
-                    t!("core_status.cores").to_string(),
-                    GroupSortField::Cores,
-                    CORES_W,
-                    sort,
-                    p,
-                    weak_view,
-                ))
-                // Dot column: matches the `status_dot` width so the "Ядра" caption lands over the ratio.
-                .child(div().w(crate::design::ui_px(cx, 5.0)).flex_none()),
-        )
-}
-
-/// The sort arrow suffix for a heading, matching the MoonDataTable header (`↑` ascending, `↓`
-/// descending), or empty when another field is active.
-fn sort_arrow(field: GroupSortField, sort: (GroupSortField, bool)) -> &'static str {
-    if sort.0 == field {
-        if sort.1 { " \u{2191}" } else { " \u{2193}" }
-    } else {
-        ""
-    }
-}
-
-/// A clickable metric heading offset by the metric icon's lead so it sits over the value box, with
-/// the sort arrow and an active-column highlight.
-///
-/// Args:
-///     label: Localized column heading.
-///     field: The sort field this heading selects.
-///     value_w: The matching value-box width from the row's `metric_cell`.
-///     sort: The active sort, for the arrow and highlight.
-///     p: Active Moon palette.
-///     weak_view: Non-owning panel handle for the sort click.
-///
-/// Returns:
-///     A fixed-width clickable caption cell aligned to its column.
-fn metric_sort_header(
-    label: String,
-    field: GroupSortField,
-    value_w: f32,
-    sort: (GroupSortField, bool),
-    p: MoonPalette,
-    weak_view: &WeakEntity<CoreStatusView>,
-) -> impl IntoElement {
-    let text = format!("{label}{}", sort_arrow(field, sort));
-    let active = sort.0 == field;
-    let weak_view = weak_view.clone();
-    h_flex()
-        .flex_none()
-        .gap_1()
-        .cursor_pointer()
-        .on_mouse_down(MouseButton::Left, move |_, _, app| {
-            if let Some(view) = weak_view.upgrade() {
-                view.update(app, |this, cx| this.set_group_sort(field, cx));
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(header_palette.text_muted))
+                        .child(t!("core_status.empty").to_string()),
+                );
             }
+            root.child(super::by_ip_header::server_header(
+                header_palette,
+                sort,
+                widths,
+                &header_weak,
+                cx,
+            ))
+            .child(tree.flex_1().min_h_0())
         })
-        .child(div().w(px(MET_ICON_W)).flex_none())
-        .child(
-            div()
-                .w(px(value_w))
-                .when(active, |el| el.text_color(rgb(p.text_soft)))
-                .child(text),
-        )
-}
-
-/// A clickable fixed-width heading for a non-metric column (name, cores), with the sort arrow and an
-/// active-column highlight.
-///
-/// Args:
-///     label: Localized column heading.
-///     field: The sort field this heading selects.
-///     width: The matching column width.
-///     sort: The active sort, for the arrow and highlight.
-///     p: Active Moon palette.
-///     weak_view: Non-owning panel handle for the sort click.
-///
-/// Returns:
-///     A fixed-width clickable caption.
-fn col_sort_header(
-    label: String,
-    field: GroupSortField,
-    width: f32,
-    sort: (GroupSortField, bool),
-    p: MoonPalette,
-    weak_view: &WeakEntity<CoreStatusView>,
-) -> impl IntoElement {
-    let text = format!("{label}{}", sort_arrow(field, sort));
-    let active = sort.0 == field;
-    let weak_view = weak_view.clone();
-    div()
-        .w(px(width))
-        .flex_none()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .cursor_pointer()
-        .when(active, |el| el.text_color(rgb(p.text_soft)))
-        .on_mouse_down(MouseButton::Left, move |_, _, app| {
-            if let Some(view) = weak_view.upgrade() {
-                view.update(app, |this, cx| this.set_group_sort(field, cx));
-            }
-        })
-        .child(text)
+        .into_any_element()
 }
 
 /// Render one server summary header (name, masked IP, machine CPU/memory, status).
@@ -388,17 +247,22 @@ fn col_sort_header(
 ///     group: Aggregated server snapshot.
 ///     revealed: Whether the IP is currently shown.
 ///     edit_input: Present only while this server's name is being renamed inline.
+///     w: Shared column widths for this frame, already shrunk to the measured row width.
 ///     weak_view: Non-owning panel handle for the row actions.
 ///     p: Active Moon palette.
 ///     app: Application context used to scale the status dot.
 ///
 /// Returns:
 ///     A single header row; the name stays fixed while a spacer pushes metrics right.
+// One more argument than clippy's default: the shared column widths, which every row must read
+// from the same source as the header.
+#[allow(clippy::too_many_arguments)]
 fn server_row(
     group: &ServerStatusGroup,
     revealed: bool,
     expanded: bool,
     edit_input: Option<Entity<MoonInputState>>,
+    w: ByIpWidths,
     weak_view: &WeakEntity<CoreStatusView>,
     p: MoonPalette,
     app: &App,
@@ -415,14 +279,14 @@ fn server_row(
         .w_full()
         .min_w_0()
         .items_center()
-        .gap_2()
+        .gap(px(ROW_GAP_W))
         .overflow_hidden()
         // The chevron is the ONLY expand trigger and toggles expansion directly (headless tree).
         .child({
             let weak_view = weak_view.clone();
             let key = group.key;
             div()
-                .w(px(12.0))
+                .w(px(CHEVRON_W))
                 .flex_none()
                 .cursor_pointer()
                 .text_color(rgb(p.text_muted))
@@ -440,7 +304,7 @@ fn server_row(
                 .flex_1()
                 .min_w_0()
                 .items_center()
-                .gap_2()
+                .gap(px(ROW_GAP_W))
                 .overflow_hidden()
                 .on_mouse_down(MouseButton::Left, {
                     let weak_view = weak_view.clone();
@@ -452,19 +316,21 @@ fn server_row(
                         }
                     }
                 })
-                .child(server_identity(group, edit_input, weak_view, p))
-                .child(ip_column(group, revealed, weak_view, p))
+                .child(server_identity(group, edit_input, w, weak_view, p))
+                .child(ip_column(group, revealed, w, weak_view, p))
                 .child(div().flex_1())
                 .child(metric_cell(
                     cpu_load(group.system_cpu_percent, group.logical_cpu_count),
-                    CPU_W,
+                    w.cpu,
+                    w.icon,
                     level_color(cpu_level(group.system_cpu_percent), p),
                     group.cpu_warn,
                     p,
                 ))
                 .child(metric_cell(
                     memory_free(group.process_memory_mb, group.free_physical_memory_mb),
-                    MEM_W,
+                    w.mem,
+                    w.icon,
                     level_color(
                         free_mem_level(group.process_memory_mb, group.free_physical_memory_mb),
                         p,
@@ -482,7 +348,8 @@ fn server_row(
                     });
                     metric_cell(
                         ping_plain(value),
-                        PING_W,
+                        w.ping,
+                        w.icon,
                         level_color(level, p),
                         group.ping_warn,
                         p,
@@ -496,7 +363,8 @@ fn server_row(
                     });
                     metric_cell(
                         ping_plain(value),
-                        PING_W,
+                        w.ping,
+                        w.icon,
                         level_color(level, p),
                         group.exch_warn,
                         p,
@@ -504,20 +372,29 @@ fn server_row(
                 })
                 .child(
                     div()
-                        .w(px(CORES_W))
+                        .w(px(w.cores))
                         .flex_none()
                         .text_color(rgb(p.text_soft))
                         .child(format!("{}/{}", group.ready_count, group.cores.len())),
                 )
-                // A dropped core while others still run — the connectivity warning, next to the dot.
-                .children(group.conn_warn.then(|| {
-                    svg()
-                        .path("icons/triangle-alert.svg")
-                        .size(px(12.0))
-                        .flex_none()
-                        .text_color(rgb(p.amber))
-                }))
-                .child(crate::design::status_dot(dot_color, app)),
+                // A dropped core while others still run — the connectivity warning, next to the
+                // dot. The SLOT is always present, warning or not: rendering it only on a degraded
+                // row would push that row's whole metric block left of the captions, which is
+                // exactly the row whose numbers are being read.
+                .child(div().w(px(w.icon)).flex_none().overflow_hidden().children(
+                    group.conn_warn.then(|| {
+                        svg()
+                            .path("icons/triangle-alert.svg")
+                            // Follows its slot: a fixed 12 would overhang once the row shrinks.
+                            .size(px(w.icon))
+                            .flex_none()
+                            .text_color(rgb(p.amber))
+                    }),
+                ))
+                .child(crate::design::status_dot(dot_color, app))
+                // Keep the row clear of the tree's overlay scrollbar, which takes no layout width
+                // and would otherwise cover the dot.
+                .child(div().w(px(TREE_SCROLLBAR_W)).flex_none()),
         )
 }
 
@@ -529,6 +406,7 @@ fn server_row(
 ///
 /// Args:
 ///     core: Per-process snapshot.
+///     w: Shared column widths for this frame, matching the server row above it.
 ///     weak_view: Non-owning panel handle for the chart-this-core click.
 ///     p: Active Moon palette.
 ///     app: Application context, for the font-scaled dot-column width.
@@ -537,6 +415,7 @@ fn server_row(
 ///     A core row whose metrics align under the server metrics.
 fn core_row(
     core: &CoreStatusRow,
+    w: ByIpWidths,
     weak_view: &WeakEntity<CoreStatusView>,
     p: MoonPalette,
     app: &App,
@@ -559,7 +438,7 @@ fn core_row(
         .w_full()
         .min_w_0()
         .items_center()
-        .gap_2()
+        .gap(px(ROW_GAP_W))
         .overflow_hidden()
         .cursor_pointer()
         // Clicking a core row charts that core; the detached window reads `chart_core`.
@@ -573,38 +452,40 @@ fn core_row(
             }
         })
         // Empty chevron gutter, matching the server row's 12 px expand column so the body aligns.
-        .child(div().w(px(12.0)).flex_none())
+        .child(div().w(px(CHEVRON_W)).flex_none())
         .child(
             h_flex()
                 .flex_1()
                 .min_w_0()
                 .items_center()
-                .gap_2()
+                .gap(px(ROW_GAP_W))
                 .overflow_hidden()
-                // Name in the server's NAME_W column, indented as a tree child and greyed.
+                // Name in the server's name column, indented as a tree child and greyed.
                 .child(
                     div()
-                        .w(px(NAME_W))
+                        .w(px(w.name))
                         .flex_none()
-                        .pl(px(CORE_INDENT))
+                        .pl(px(w.indent))
                         .overflow_hidden()
                         .truncate()
                         .text_color(rgb(name_color))
                         .child(core.name.clone()),
                 )
                 // Empty IP column so the metrics start under the server's columns.
-                .child(div().w(px(IP_W)).flex_none())
+                .child(div().w(px(w.ip)).flex_none())
                 .child(div().flex_1())
                 .child(metric_cell(
                     percent(core.sys.process_cpu_percent),
-                    CPU_W,
+                    w.cpu,
+                    w.icon,
                     level_color(cpu_level(core.sys.process_cpu_percent), p),
                     false,
                     p,
                 ))
                 .child(metric_cell(
                     memory_u16(core.sys.used_memory_mb),
-                    MEM_W,
+                    w.mem,
+                    w.icon,
                     p.text_soft,
                     false,
                     p,
@@ -613,7 +494,8 @@ fn core_row(
                 // cell's own warn triangle marks a sustained above-baseline ping, like the CPU cell.
                 .child(metric_cell(
                     ping_plain(core.sys.round_trip_ms),
-                    PING_W,
+                    w.ping,
+                    w.icon,
                     level_color(ping_lvl, p),
                     core.ping_warn,
                     p,
@@ -621,14 +503,18 @@ fn core_row(
                 // This core's core→exchange order latency, also relative to its own baseline.
                 .child(metric_cell(
                     ping_plain(core.sys.order_api_latency_ms.map(u32::from)),
-                    PING_W,
+                    w.ping,
+                    w.icon,
                     level_color(exch_lvl, p),
                     core.exch_warn,
                     p,
                 ))
-                // Empty ratio + dot slots, matching the server row's trailing width so `exch` aligns.
-                .child(div().w(px(CORES_W)).flex_none())
-                .child(div().w(crate::design::ui_px(app, 5.0)).flex_none()),
+                // Empty ratio, warning, dot and scrollbar slots, matching the server row's trailing
+                // width so `exch` aligns.
+                .child(div().w(px(w.cores)).flex_none())
+                .child(div().w(px(w.icon)).flex_none())
+                .child(div().w(px(crate::design::status_dot_w(app))).flex_none())
+                .child(div().w(px(TREE_SCROLLBAR_W)).flex_none()),
         )
 }
 
@@ -656,6 +542,7 @@ fn worst_by_level(
 /// Args:
 ///     group: Server snapshot supplying the display name and identity key.
 ///     edit_input: Present only while this server's name is being renamed inline.
+///     w: Shared column widths, supplying the name column.
 ///     weak_view: Non-owning panel handle for the rename callback.
 ///     p: Active Moon palette.
 ///
@@ -664,6 +551,7 @@ fn worst_by_level(
 fn server_identity(
     group: &ServerStatusGroup,
     edit_input: Option<Entity<MoonInputState>>,
+    w: ByIpWidths,
     weak_view: &WeakEntity<CoreStatusView>,
     p: MoonPalette,
 ) -> AnyElement {
@@ -671,7 +559,7 @@ fn server_identity(
     if let Some(state) = edit_input {
         return h_flex()
             .flex_none()
-            .w(px(NAME_W))
+            .w(px(w.name))
             // The row's mouse-down toggles selection; keep it off the edit field.
             .on_mouse_down(MouseButton::Left, |_, _, app| app.stop_propagation())
             .child(
@@ -689,7 +577,7 @@ fn server_identity(
     // A fixed-width column: the name takes the room and truncates, the pencil stays pinned at its
     // right edge, so the IP column beside it starts at the same x on every row.
     h_flex()
-        .w(px(NAME_W))
+        .w(px(w.name))
         .flex_none()
         .items_center()
         .gap_1()
@@ -736,6 +624,7 @@ fn server_identity(
 /// Args:
 ///     group: Server snapshot supplying the address and identity key.
 ///     revealed: Whether the IP is currently shown.
+///     w: Shared column widths, supplying the IP column.
 ///     weak_view: Non-owning panel handle for the reveal callback.
 ///     p: Active Moon palette.
 ///
@@ -744,6 +633,7 @@ fn server_identity(
 fn ip_column(
     group: &ServerStatusGroup,
     revealed: bool,
+    w: ByIpWidths,
     weak_view: &WeakEntity<CoreStatusView>,
     p: MoonPalette,
 ) -> impl IntoElement {
@@ -757,7 +647,7 @@ fn ip_column(
         IP_MASK.to_string()
     };
     h_flex()
-        .w(px(IP_W))
+        .w(px(w.ip))
         .flex_none()
         .items_center()
         .gap_1()
@@ -780,6 +670,7 @@ fn ip_column(
 /// Args:
 ///     key: Server identity toggled by the control.
 ///     revealed: Whether the IP is currently shown.
+///     w: Shared column widths, supplying the IP column.
 ///     weak_view: Non-owning panel handle for the reveal callback.
 ///
 /// Returns:
@@ -820,14 +711,15 @@ fn eye_action(
 
 /// Render one inline metric value in a fixed-width box, with a leading slot for its warning mark.
 ///
-/// No decorative icon: the 12 px lead holds the SUSTAINED-warning triangle for THIS metric when set,
+/// No decorative icon: the icon lead holds the SUSTAINED-warning triangle for THIS metric when set,
 /// so the mark sits directly left of its own value instead of trailing the fixed box into the next
 /// column (which read as the neighbour's warning). Empty otherwise, so every column stays aligned and
 /// matches the header caption's lead.
 ///
 /// Args:
 ///     value: Preformatted localized metric text.
-///     value_w: Fixed width in pixels for the value box.
+///     value_w: Width in pixels for the value box, from the frame's shared widths.
+///     icon_w: Width of the warning-icon lead, from the same widths.
 ///     color: Threshold color of the number.
 ///     warn: Whether this metric has an open sustained-warning episode.
 ///     p: Active Moon palette.
@@ -837,6 +729,7 @@ fn eye_action(
 fn metric_cell(
     value: String,
     value_w: f32,
+    icon_w: f32,
     color: u32,
     warn: bool,
     p: MoonPalette,
@@ -844,16 +737,19 @@ fn metric_cell(
     h_flex()
         .flex_none()
         .items_center()
-        .gap_1()
+        .gap(px(CELL_GAP_W))
         .child(
             div()
-                .w(px(MET_ICON_W))
+                .w(px(icon_w))
+                .overflow_hidden()
                 .flex_none()
                 // A warning is a SUSTAINED/trend signal, distinct from the threshold-based number color.
                 .children(warn.then(|| {
                     svg()
                         .path("icons/triangle-alert.svg")
-                        .size(px(12.0))
+                        // Follows its slot: a fixed 12 would overhang into the value box once the
+                        // row shrinks.
+                        .size(px(icon_w))
                         .flex_none()
                         .text_color(rgb(p.amber))
                 })),
