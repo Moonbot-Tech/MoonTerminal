@@ -92,7 +92,9 @@ retained buffer + culling, а не бессмысленную заливку GPU
 - opt-in place/cancel order test должен измерять путь `cancel_order` → входящий orders/server-log → `OrderLineStore` → chart userdata → GPU prepare → chart present/draw, и краснеть, если отменённый ордер дошёл до store, но график долго продолжает показывать старое состояние;
 - cursor-only mousemove не должен делать `cx.notify()` для chart input/canvas;
 - static text stress поверх графика не должен ломать mouse/input hot path и GPU frame budget;
-- Shell/Orders/Chart GPUI render не должны улетать в сотни render/s;
+- Shell и Orders GPUI render держат абсолютный потолок (замерено: 5.7/s средн., 11/s пик);
+  `chart_render` — счётчик ГЛОБАЛЬНЫЙ, суммарный по всем открытым `ChartPanel`, поэтому его
+  потолок делится на число чартов, иначе он врёт тем сильнее, чем больше чартов открыто;
 - cursor-only mousemove не должен увеличивать частоту дорогих chart base draw/bake (`bg_draw`, `grid_draw`, `base_bake`, `combo_bake`, `orderbook_bake`) сверх baseline;
 - `combo_draw_delta` остаётся строгим кроссплатформенным сигналом: cursor-only mousemove не должен добавлять дорогой combo draw сверх baseline. Если Metal/wgpu падают здесь, это не повод ослаблять FireTest, а сигнал довести retained/base-cache parity до уровня DX.
 - CPU процесса не должен заметно расти от одной возни мышью;
