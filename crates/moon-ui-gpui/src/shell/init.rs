@@ -147,8 +147,12 @@ impl Shell {
             crate::diag::bump(&crate::diag::SHELL_OBS_FIRE);
             this.drain_order_size_edit_request(cx);
             this.drain_sell_edit_request(cx);
-            this.drain_panel_detach_requests(cx);
+            // Repins first. Both defer, so whichever is queued first runs first — and a detach
+            // requested while a repin of the same panel is still pending would hit the "already
+            // detached" guard and be swallowed, because the pending repin has not yet cleared the
+            // spec. Draining repins first makes detach-after-close work in a single tick.
             this.drain_repin_requests(cx);
+            this.drain_panel_detach_requests(cx);
             this.drain_engine_action_toasts(cx);
             let now = Instant::now();
             // User-triggered Follow/Live and scale changes, plus any order-size revision, bypass

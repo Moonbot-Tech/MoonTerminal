@@ -325,6 +325,14 @@ struct Backend {
     /// holds only a `Backend` — FireTest's panel round-trip stage — can drive it. The group's
     /// Shell drains this beside the repins and routes each through the same `defer_detach_panel`
     /// the UI uses, so the tested path is the real one.
+    ///
+    /// Pushing alone does NOT wake anything: the drain runs from Shell's `cx.observe(&backend)`,
+    /// which fires only on a Backend notify gated behind `backend_dirty_since_notify` and 250 ms.
+    /// A caller must also `mark_backend_dirty`, or the request waits for incidental feed traffic.
+    ///
+    /// The drain consumes a request whether or not the detach happens — `defer_detach_panel`
+    /// declines an unsupported panel, an already-detached one, and a failed spawn. There is no
+    /// completion or failure signal; a caller watches `dock_states` and gives up on a deadline.
     panel_detach_request: Vec<(String, String)>,
     /// Live detached panel windows, keyed by `(group, panel_name)`.
     ///
