@@ -18,9 +18,9 @@ const MAX_REPORT_ROWS: usize = 100;
 pub(super) struct ReportData {
     pub(super) rows: Vec<Vec<Value>>,
     pub(super) core_uids: Vec<u64>,
-    /// `newrecid` per row, parallel to `rows`; `0` for a legacy row that cannot be soft-deleted.
-    /// The deletion-mode checkboxes read it to address rows in `set_report_rows_deleted`.
-    pub(super) rec_ids: Vec<i64>,
+    /// Stable semantic identity parallel to `rows`; malformed legacy rows without `id` are `None`
+    /// and remain unselectable rather than receiving an index-based identity that can drift.
+    pub(super) row_keys: Vec<Option<selection::ReportRowKey>>,
     /// Exact `(profit sum, order count)` over the full filter, not the displayed top N.
     pub(super) totals: (f64, i64),
 }
@@ -111,6 +111,7 @@ fn run_report_query(
         .transpose()?;
     let table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
     let totals = db::query_totals(&snap, &filter)?;
+    let row_keys = selection::row_keys(&table.cols, &table.rows, &table.core_uids, &table.rec_ids);
     // Log measured query latency so slow refreshes are visible; the panel controls their frequency.
     let ms = started.elapsed().as_millis();
     if ms > 250 {
@@ -131,7 +132,7 @@ fn run_report_query(
         data: ReportData {
             rows: table.rows,
             core_uids: table.core_uids,
-            rec_ids: table.rec_ids,
+            row_keys,
             totals,
         },
     })
@@ -290,6 +291,7 @@ impl ReportPanel {
                                 this.available_strategy_keys = available;
                                 this.last_strategy_scope = Some(strategy_scope);
                             }
+                            this.selection.retain_visible(&data.row_keys);
                             if metadata_changed {
                                 this.queue_strategy_select_sync(true, cx);
                             }
@@ -311,7 +313,10 @@ impl ReportPanel {
                         }
                         // Preserve schema and core choices across a failed read;
                         // only rows and totals disappear so the failure can render.
-                        Err(e) => this.data.apply(Err(e)),
+                        Err(e) => {
+                            this.selection.clear();
+                            this.data.apply(Err(e));
+                        }
                     }
                     cx.notify();
                 });

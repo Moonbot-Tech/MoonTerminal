@@ -80,8 +80,8 @@ pub struct ReportTable {
     /// `newrecid` (the replica replication key) for each row, parallel to `rows`.
     ///
     /// Also a hidden service column. It is the id the soft-delete protocol addresses, so the
-    /// Report panel's deletion mode reads it to build `set_report_rows_deleted`. Legacy rows,
-    /// which have no `newrecid` and cannot be soft-deleted, carry `0` — never a real rec id.
+    /// Report panel actions read it to build `set_report_rows_deleted`. Legacy rows, which have no
+    /// `newrecid` and cannot be soft-deleted, carry `0` — never a real rec id.
     pub rec_ids: Vec<i64>,
 }
 

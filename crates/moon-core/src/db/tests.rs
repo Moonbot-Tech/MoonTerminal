@@ -913,7 +913,7 @@ fn set_deleted_without_column_is_a_noop() {
 }
 
 /// `query_reports` returns `rec_ids` parallel to `rows`: the replica `newrecid` for replica rows
-/// and `0` for a legacy row that has none. The deletion-mode checkboxes address rows by this id,
+/// and `0` for a legacy row that has none. Report row actions address replicated rows by this id,
 /// so a wrong or misaligned value would soft-delete the wrong trade.
 #[test]
 fn query_reports_exposes_rec_ids_aligned_to_rows() {

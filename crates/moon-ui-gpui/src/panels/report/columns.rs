@@ -22,10 +22,21 @@ pub(super) fn report_columns(cols: &[String], vis: &[usize]) -> Vec<MoonDataTabl
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Build one report row; missing values render as empty cells, while coin and core cells retain actions.
+/// Build one report row; missing values render empty while coin and core cells retain actions.
 ///
-/// `delete_mode` and `pending` drive the `deleted` column's checkbox: editable in the mode, with
-/// `pending` overriding the database value for rows the user has toggled but not yet committed.
+/// Args:
+///     ri: Visible source-row index.
+///     cols: Runtime report schema in source order.
+///     data: Current report result containing the row and core identity.
+///     vis: Visible source-column indices in render order.
+///     selected_cores: Current core scope for coin actions.
+///     backend: Shared backend used by interactive cells.
+///     view: Owning Report panel entity.
+///     selected: Whether the controlled selection contains this row.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A MoonDataTable row whose highlight mirrors the controlled selection.
 pub(super) fn report_data_row(
     ri: usize,
     cols: &[String],
@@ -34,14 +45,12 @@ pub(super) fn report_data_row(
     selected_cores: &Rc<Vec<u64>>,
     backend: &Entity<Backend>,
     view: &Entity<ReportPanel>,
-    delete_mode: bool,
-    pending: &Rc<std::collections::HashMap<(u64, i64), bool>>,
+    selected: bool,
     p: MoonPalette,
 ) -> MoonDataRow {
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = data.rows.get(ri) {
         let core_uid = data.core_uids.get(ri).copied().unwrap_or(0);
-        let rec_id = data.rec_ids.get(ri).copied().unwrap_or(0);
         // Read strategyid from all columns, even when hidden. Zero or missing means manual/no
         // strategy and suppresses the strategy section of the context menu.
         let strat_id = cols
@@ -69,21 +78,13 @@ pub(super) fn report_data_row(
             } else if cname == "core_name" {
                 cells.push(core_cell(ri, val, core_uid, view, p));
             } else if cname == "deleted" {
-                cells.push(deleted_cell(
-                    ri,
-                    val,
-                    core_uid,
-                    rec_id,
-                    delete_mode,
-                    pending,
-                    view,
-                ));
+                cells.push(deleted_cell(ri, val));
             } else {
                 cells.push(report_data_cell(cname, val, p));
             }
         }
     }
-    MoonDataRow::new(cells)
+    MoonDataRow::new(cells).selected(selected)
 }
 
 /// Build a full-cell clickable coin cell.
@@ -246,35 +247,20 @@ fn core_cell(
 
 /// The `deleted` soft-delete flag as a checkbox.
 ///
-/// In deletion mode, a replica row (`rec_id != 0`) renders an editable [`MoonCheckbox`] whose
-/// change records a pending edit through [`ReportPanel::set_row_deleted`]; `pending` overrides the
-/// database value so an uncommitted toggle shows immediately. Otherwise — outside the mode, or for
-/// a legacy row that has no `newrecid` and cannot be soft-deleted — the same checkbox renders
-/// `disabled`, so it shows the state without reading as an editable control.
-fn deleted_cell(
-    ri: usize,
-    val: &Value,
-    core_uid: u64,
-    rec_id: i64,
-    delete_mode: bool,
-    pending: &Rc<std::collections::HashMap<(u64, i64), bool>>,
-    view: &Entity<ReportPanel>,
-) -> MoonDataCell {
-    let orig = as_i64(val).unwrap_or(0) != 0;
-    let checked = pending.get(&(core_uid, rec_id)).copied().unwrap_or(orig);
-    let editable = delete_mode && rec_id != 0;
+/// The checkbox is display-only; row mutation belongs to the controlled bottom action bar.
+///
+/// Args:
+///     ri: Visible row index used to give the checkbox a stable element id.
+///     val: Database value whose nonzero integer state means deleted.
+///
+/// Returns:
+///     A disabled checkbox cell that communicates state without offering inline mutation.
+fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
+    let checked = as_i64(val).unwrap_or(0) != 0;
     let cb = MoonCheckbox::new(SharedString::from(format!("rep-del-{ri}")))
         .checked(checked)
         .size(MoonCheckboxSize::Compact)
-        .disabled(!editable)
-        .when(editable, |cb| {
-            let view = view.clone();
-            cb.on_change(move |on: &bool, _w, app| {
-                view.update(app, |t, c| {
-                    t.set_row_deleted(core_uid, rec_id, *on, orig, c)
-                });
-            })
-        });
+        .disabled(true);
     MoonDataCell::element(
         div()
             .w_full()
