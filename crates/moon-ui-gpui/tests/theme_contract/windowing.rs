@@ -316,7 +316,9 @@ fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
     // And the notify that follows the block must stay OUTSIDE it — suppressing persistence must
     // not also suppress the backend wake the rest of the app depends on.
     assert!(
-        !guarded.contains("b.flush_backend_notify(cx)"),
-        "the guard must cover persistence only, not the backend notify that follows it"
+        startup.contains("b.flush_backend_notify(cx)")
+            && !guarded.contains("b.flush_backend_notify(cx)"),
+        "the backend notify must exist and stay OUTSIDE the guard: suppressing persistence must \
+         not also suppress the wake the rest of the app runs on"
     );
 }

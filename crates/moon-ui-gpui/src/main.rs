@@ -302,10 +302,13 @@ struct Backend {
     ///
     /// Scope, stated precisely because it is narrower than "a run writes nothing": this gates the
     /// two DEBOUNCED flush sites in `startup.rs` — the coordinator tick and the quit hook. It does
-    /// NOT gate writes that bypass the dirty-flag mechanism: the report DB writer, the one-shot
-    /// chart-id remap that runs before this struct exists, `AppConfig::load`'s own migration save,
-    /// or panels that write straight through (`detects_view`, `news_tag_settings`, the Settings
-    /// window's snapshot save). Those are separate holes; closing them needs a different mechanism.
+    /// NOT gate anything that bypasses the dirty-flag mechanism: the report DB writer, `strat_db`,
+    /// `AppConfig::load`'s own uid save and schema-upgrade backup, `applog::purge_old`, the
+    /// one-shot chart-id remap that runs before this struct exists, the direct `config.save()` in
+    /// `shell/init.rs`, or panels that write straight through (`detects_view`,
+    /// `news_tag_settings`, the Settings window's snapshot save). `order-cancel-lag` in particular
+    /// places a real order that lands permanently in the developer's `reports.sqlite`. Those are
+    /// separate holes; closing them needs a different mechanism.
     persist_allowed: bool,
     /// Detached dock panels, recording panel identity, source group, and window geometry.
     /// Loaded at startup and saved after changes; ported from egui's `WindowLayout.detached`.
