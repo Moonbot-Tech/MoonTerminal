@@ -336,9 +336,17 @@ struct Backend {
     panel_detach_request: Vec<(String, String)>,
     /// Live detached panel windows, keyed by `(group, panel_name)`.
     ///
-    /// `detached::spawn` returns the handle and the detach path used to drop it, which left no way
-    /// to close a panel window from code — a round-trip check has to close what it opened. Entries
-    /// are removed when the window releases, which is the same edge that queues the repin.
+    /// `detached::spawn` returned the handle and every caller dropped it, which left no way to
+    /// close a panel window from code — a round-trip check has to close what it opened. The
+    /// insertion lives inside `spawn` itself, so all three detach routes fill it: the startup
+    /// restore, the dock's detach action and the panel toolbar button. Entries are removed when
+    /// the window releases, the same edge that queues the repin.
+    ///
+    /// Keyed by identity of the panel, not of the window: two live windows for one `(group,
+    /// panel)` would leave the map describing only the second, and the first's release would then
+    /// clear an entry that still has a window behind it. The dock's detach path cannot produce
+    /// that — it declines an already-detached panel — but the toolbar route has no such check, so
+    /// a reader should treat a missing entry as "no window to close", never as "no window exists".
     detached_panel_windows: HashMap<(String, String), WindowHandle<Root>>,
     /// Requests to return a chart tab to its strip after its detached window closes, as
     /// `(group, number, bucket)`. The group's `ChartTabs` consumes each request and reattaches it.
