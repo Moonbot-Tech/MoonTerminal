@@ -109,9 +109,7 @@ impl Render for OrdersPanel {
             .px_2()
             .py_1()
             .child(self.source_combo(&cores, cx))
-            .child(self.kind_combo(cx))
-            .child(self.columns_menu(cx))
-            .child(self.sort_menu(cx));
+            .child(self.kind_combo(cx));
         if view.only_current_market {
             controls = controls.child(
                 div()
@@ -120,6 +118,13 @@ impl Render for OrdersPanel {
                     .child(format!("· {}", t!("orders.only_current"))),
             );
         }
+        // Field selector and settings sit at the RIGHT edge of the bar, apart from the filters that
+        // change what the table shows: view configuration is a different job from filtering, and the
+        // same pairing sits on the right in the Screener and Assets bars.
+        let controls = controls
+            .child(div().flex_1())
+            .child(self.columns_menu(cx))
+            .child(self.sort_menu(cx));
 
         // Virtualized table using the reference HTML geometry.
         // Highlight one row per Main-open `(core, market)` pair; see `table::orders_table`.

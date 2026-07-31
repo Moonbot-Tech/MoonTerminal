@@ -273,7 +273,7 @@ impl ReportPanel {
                     .segment(moon_ui::MoonButtonSegment::new("⇩"))
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width_scaled(34.0)
+                    .trigger_width(design::glyph_btn_w(cx))
                     .menu_width_scaled(200.0)
                     .menu_size(MoonMenuSize::Compact)
                     .items(items),
@@ -320,7 +320,7 @@ impl ReportPanel {
                     .segment(moon_ui::MoonButtonSegment::new("▦"))
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
-                    .trigger_width_scaled(34.0)
+                    .trigger_width(design::glyph_btn_w(cx))
                     .menu_width_scaled(230.0)
                     .menu_max_height_ui(420.0)
                     .menu_size(MoonMenuSize::Compact)

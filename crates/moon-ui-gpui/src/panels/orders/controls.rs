@@ -102,7 +102,7 @@ impl OrdersPanel {
             .segment(moon_ui::MoonButtonSegment::new("▦"))
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(34.0)
+            .trigger_width(design::glyph_btn_w(cx))
             .menu_width_scaled(170.0)
             .menu_size(MoonMenuSize::Compact)
             .close_on_select(false);
@@ -154,108 +154,140 @@ impl OrdersPanel {
             .child(menu)
     }
 
-    /// Builds the gear-triggered dropdown for the current-market filter and ordering options.
+    /// Builds the settings button for the current-market filter and ordering options.
     ///
-    /// The menu combines a primary-sort radio group, newest/oldest ordering, and Main-on-top modes.
+    /// The trigger is the SVG gear used everywhere else in the terminal (the header core settings,
+    /// the toolbar), not a `⚙` text glyph: the UI font renders that glyph as a placeholder here.
+    /// MoonDropdown can only carry text in its trigger, so the menu opens through the shared
+    /// Root-owned context menu instead, which is also the repo rule for popups.
+    ///
+    /// The items are built inside the click handler so their checkmarks read the state at the
+    /// moment the menu opens rather than at the last repaint.
     pub(super) fn sort_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let cur = self.view;
-        let v = view.clone();
-        let mut menu = MoonDropdown::new("orders-sort")
-            .label("⚙")
-            .trigger_variant(MoonButtonVariant::Ghost)
-            .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(34.0)
-            .menu_width_scaled(220.0)
-            .menu_size(MoonMenuSize::Normal)
-            .item(
-                MoonMenuItem::with_key("m-onlycur", t!("orders.only_current").to_string())
-                    .checked(cur.only_current_market)
-                    .on_click(move |_, _, app| {
-                        Self::mutate(&v, app, |s| s.only_current_market = true)
+        MoonButton::new("orders-sort")
+            .leading_icon(moon_ui::MoonButtonIconSlot::new("icons/settings-2.svg"))
+            .variant(MoonButtonVariant::Ghost)
+            .size(MoonButtonSize::Action)
+            // Square, like the field selector beside it.
+            .width(design::glyph_btn_w(cx))
+            .tooltip(t!("orders.settings").to_string())
+            .on_click(move |ev: &ClickEvent, window, app| {
+                let items = Self::sort_menu_items(&view, app);
+                window.open_moon_context_menu(app, "orders-sort-menu", ev.position(), items, 220.0);
+            })
+            .render()
+    }
+
+    /// Build the settings menu items: the current-market filter, the primary-sort radio group,
+    /// newest/oldest ordering, and the Main-on-top modes.
+    ///
+    /// Every item CLOSES the menu before mutating. A Root-owned context menu does not dismiss
+    /// itself on select — unlike the dropdown this replaced — and it captures its items when it
+    /// opens, so a menu left standing would keep showing the checkmarks from before the click.
+    /// This is also why the shared `radio_items` helper is not used for the sort group: its
+    /// callback never sees the `Window` the dismissal needs.
+    fn sort_menu_items(view: &Entity<Self>, app: &mut App) -> Vec<MoonMenuItem> {
+        let cur = view.read(app).view;
+        // One item: check state, close, then apply the edit to the copyable view state.
+        let item =
+            |key: &'static str, label: String, checked: bool, edit: fn(&mut OrdersViewState)| {
+                let v = view.clone();
+                MoonMenuItem::with_key(key, label)
+                    .checked(checked)
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        Self::mutate(&v, app, edit);
+                    })
+            };
+        let mut items = vec![
+            item(
+                "m-onlycur",
+                t!("orders.only_current").to_string(),
+                cur.only_current_market,
+                |s| s.only_current_market = true,
+            ),
+            item(
+                "m-showall",
+                t!("orders.show_all").to_string(),
+                !cur.only_current_market,
+                |s| s.only_current_market = false,
+            ),
+            MoonMenuItem::separator(),
+        ];
+        // Primary sort: a mutually exclusive group, checked like the other radio menus.
+        for (variant, key, label) in [
+            (
+                PrimarySort::ProfitFirst,
+                "m-profit",
+                t!("orders.sort.profit").to_string(),
+            ),
+            (
+                PrimarySort::SellFirst,
+                "m-sell",
+                t!("orders.sort.sell").to_string(),
+            ),
+            (
+                PrimarySort::BuyFirst,
+                "m-buy",
+                t!("orders.sort.buy").to_string(),
+            ),
+            (
+                PrimarySort::Creation,
+                "m-creation",
+                t!("orders.sort.creation").to_string(),
+            ),
+        ] {
+            let v = view.clone();
+            items.push(
+                MoonMenuItem::with_key(key, label)
+                    .checked(cur.primary == variant)
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        Self::mutate(&v, app, |s| s.primary = variant);
                     }),
             );
-        let v = view.clone();
-        menu = menu
-            .item(
-                MoonMenuItem::with_key("m-showall", t!("orders.show_all").to_string())
-                    .checked(!cur.only_current_market)
-                    .on_click(move |_, _, app| {
-                        Self::mutate(&v, app, |s| s.only_current_market = false)
-                    }),
-            )
-            .item(MoonMenuItem::separator());
-        menu = menu.items(crate::panels::radio_items(
-            [
-                (
-                    PrimarySort::ProfitFirst,
-                    "m-profit".into(),
-                    t!("orders.sort.profit").to_string().into(),
-                ),
-                (
-                    PrimarySort::SellFirst,
-                    "m-sell".into(),
-                    t!("orders.sort.sell").to_string().into(),
-                ),
-                (
-                    PrimarySort::BuyFirst,
-                    "m-buy".into(),
-                    t!("orders.sort.buy").to_string().into(),
-                ),
-                (
-                    PrimarySort::Creation,
-                    "m-creation".into(),
-                    t!("orders.sort.creation").to_string().into(),
-                ),
-            ],
-            cur.primary,
-            crate::panels::RadioMark::Check,
-            {
-                let v = view.clone();
-                move |app, variant| Self::mutate(&v, app, |s| s.primary = variant)
-            },
+        }
+        items.push(MoonMenuItem::separator());
+        items.push(item(
+            "m-new",
+            t!("orders.sort.new").to_string(),
+            cur.newest_first,
+            |s| s.newest_first = true,
         ));
-        let v = view.clone();
-        menu = menu.item(MoonMenuItem::separator()).item(
-            MoonMenuItem::with_key("m-new", t!("orders.sort.new").to_string())
-                .checked(cur.newest_first)
-                .on_click(move |_, _, app| Self::mutate(&v, app, |s| s.newest_first = true)),
-        );
-        let v = view.clone();
-        menu = menu.item(
-            MoonMenuItem::with_key("m-old", t!("orders.sort.old").to_string())
-                .checked(!cur.newest_first)
-                .on_click(move |_, _, app| Self::mutate(&v, app, |s| s.newest_first = false)),
-        );
+        items.push(item(
+            "m-old",
+            t!("orders.sort.old").to_string(),
+            !cur.newest_first,
+            |s| s.newest_first = false,
+        ));
         // Main on top offers two mutually exclusive choices; clicking the active choice returns to
         // Off. Row highlighting is independent of this ordering mode.
-        let v = view.clone();
-        menu = menu.item(MoonMenuItem::separator()).item(
-            MoonMenuItem::with_key("m-main-all", t!("orders.sort.main_all").to_string())
-                .checked(cur.main_on_top == MainOnTop::AllTicker)
-                .on_click(move |_, _, app| {
-                    Self::mutate(&v, app, |s| {
-                        s.main_on_top = if s.main_on_top == MainOnTop::AllTicker {
-                            MainOnTop::Off
-                        } else {
-                            MainOnTop::AllTicker
-                        };
-                    })
-                }),
-        );
-        let v = view;
-        menu.item(
-            MoonMenuItem::with_key("m-main-hi", t!("orders.sort.main_hi").to_string())
-                .checked(cur.main_on_top == MainOnTop::Highlighted)
-                .on_click(move |_, _, app| {
-                    Self::mutate(&v, app, |s| {
-                        s.main_on_top = if s.main_on_top == MainOnTop::Highlighted {
-                            MainOnTop::Off
-                        } else {
-                            MainOnTop::Highlighted
-                        };
-                    })
-                }),
-        )
+        items.push(MoonMenuItem::separator());
+        items.push(item(
+            "m-main-all",
+            t!("orders.sort.main_all").to_string(),
+            cur.main_on_top == MainOnTop::AllTicker,
+            |s| {
+                s.main_on_top = if s.main_on_top == MainOnTop::AllTicker {
+                    MainOnTop::Off
+                } else {
+                    MainOnTop::AllTicker
+                };
+            },
+        ));
+        items.push(item(
+            "m-main-hi",
+            t!("orders.sort.main_hi").to_string(),
+            cur.main_on_top == MainOnTop::Highlighted,
+            |s| {
+                s.main_on_top = if s.main_on_top == MainOnTop::Highlighted {
+                    MainOnTop::Off
+                } else {
+                    MainOnTop::Highlighted
+                };
+            },
+        ));
+        items
     }
 }
