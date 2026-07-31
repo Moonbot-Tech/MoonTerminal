@@ -108,10 +108,8 @@ impl ReportPanel {
             state.set_sort(sort_key.clone(), !sort_desc);
             state.column_widths = saved_widths;
         });
-        // A column resize mutates table state; clamp visible widths to the viewport budget, then
-        // persist them through the shared storage.
+        // A column resize mutates table state; persist the exact user widths through shared storage.
         cx.observe(&table_state, |this, state, cx| {
-            this.clamp_table_widths(&state, cx);
             crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
         })
         .detach();
@@ -294,7 +292,6 @@ impl ReportPanel {
             widths_id,
             detached: false,
             standalone: false,
-            last_widths: std::collections::HashMap::new(),
             dock: None,
             focus: cx.focus_handle(),
         };
