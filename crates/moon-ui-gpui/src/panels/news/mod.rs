@@ -145,6 +145,8 @@ pub struct NewsView {
     /// for the WHOLE ring when a core first connects, so it would light every card at startup.
     /// Pruned to items still in the feed and still within [`FLASH`], so it cannot grow.
     flash: HashMap<String, Instant>,
+    /// Whether the [`crate::pulse`] repaint timer that fades the arrival tint is armed.
+    flash_timer_armed: bool,
     /// What the counters were last computed from: `(watermark, counters_on, merged)`. Cached so the
     /// per-frame badge path tests fields instead of hashing panel names in the settings maps, and
     /// so the observe hook can tell a badge-only change from a feed change.
@@ -187,6 +189,15 @@ impl NewsView {
                 if this.badge.0 == 0 && this.newest_ms > 0 {
                     this.mark_read(cx);
                 }
+                // Fade the arrival tint from a 10 Hz timer rather than a GPUI animation: an
+                // animation repaints the whole window at vblank for its full 2 s. See
+                // `crate::pulse`.
+                crate::pulse::arm(
+                    this,
+                    cx,
+                    |s| &mut s.flash_timer_armed,
+                    |s| s.flash.values().any(|at| at.elapsed() < FLASH),
+                );
                 cx.notify();
             } else if this.badge != this.badge_state(b) {
                 this.recount(b);
@@ -217,6 +228,7 @@ impl NewsView {
             cache_sig: None,
             cached: Rc::new(Vec::new()),
             flash: HashMap::new(),
+            flash_timer_armed: false,
             badge: (0, true, false),
             unread: unread::Counts::default(),
             unread_total: 0,

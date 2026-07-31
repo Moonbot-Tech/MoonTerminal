@@ -58,6 +58,27 @@ fn clamp_anchor(value: f32, min: f32, max: f32) -> f32 {
     }
 }
 
+/// How long a newly arrived chart carries its accent border flash.
+///
+/// Lives here, next to the code that draws and expires it, rather than in `chart_tabs`: the flash
+/// is an own-pass decoration now, and a duration split across two modules is exactly the drift this
+/// change exists to remove.
+const ARRIVAL_HIGHLIGHT: Duration = Duration::from_millis(2600);
+
+/// Present interval while the arrival flash runs.
+///
+/// Ten per second is not ten cheap frames: the fork ORs every canvas's present request together, so
+/// each one re-runs `prepare_gpu`, `prepare_text` and `draw` for EVERY canvas in the window. Cheap
+/// against a full GPUI view render, not cheap in absolute terms — do not raise this rate casually.
+///
+/// Shared with the News tint rather than redeclared:
+/// both are decorations that do not need the vblank rate, and two 100 ms constants in two modules
+/// is the drift this change exists to remove, not to re-create.
+const ARRIVAL_PULSE_TICK: Duration = crate::pulse::PULSE_TICK;
+
+/// Stroke width of the arrival border, in logical px before the DPI scale is applied.
+const ARRIVAL_BORDER_PX: f32 = 2.0;
+
 fn sync_readout_resolution(rects: &mut [ReadoutRect], res: [f32; 2]) {
     let w = res[0].max(1.0);
     let h = res[1].max(1.0);
@@ -197,6 +218,26 @@ impl RenderState {
         true
     }
 
+    /// Start (or clear) the arrival border flash for this chart.
+    ///
+    /// The stamp is all the own-pass needs: `frame` paces the flash and expires it from wall clock,
+    /// so the caller neither notifies nor keeps a timer. That is the whole point — a GPUI repaint
+    /// of the owning stack re-renders every chart panel in the tab.
+    pub(super) fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: [f32; 4]) -> bool {
+        // The colour is refreshed even when the stamp is unchanged: a theme switch mid-flash must
+        // not leave the border in the old accent for the rest of its 2.6 s.
+        let recolored = self.arrival_pulse_color != accent;
+        self.arrival_pulse_color = accent;
+        if self.arrival_pulse == at {
+            return recolored;
+        }
+        self.arrival_pulse = at;
+        self.last_arrival_present_at = None;
+        self.sync_readout_params();
+        self.needs_present = true;
+        true
+    }
+
     pub(super) fn set_firetest_force_present(&mut self, enabled: bool) -> bool {
         if self.firetest_force_present == enabled {
             return false;
@@ -276,11 +317,43 @@ impl RenderState {
         let tz_offset_sec = crate::chartdx::axes::local_offset_sec();
         let cursor = self.cursor;
         let slot_origin = self.slot_origin;
+        // Arrival flash phase, sampled once for every pane. Three flashes over `ARRIVAL_HIGHLIGHT`,
+        // the same curve the GPUI element used before this moved into the own-pass.
+        let arrival_alpha = self.arrival_pulse.and_then(|at| {
+            let elapsed = at.elapsed();
+            (elapsed < ARRIVAL_HIGHLIGHT).then(|| {
+                let delta = elapsed.as_secs_f32() / ARRIVAL_HIGHLIGHT.as_secs_f32();
+                (delta * std::f32::consts::PI * 3.0).sin().abs()
+            })
+        });
+        let arrival_color = self.arrival_pulse_color;
 
         for (idx, pr) in self.panes.iter_mut().enumerate() {
             pr.readout_rects.clear();
             if !pr.active {
                 continue;
+            }
+
+            // The arrival flash is one more instance in the readout batch — no new layer, no new
+            // draw call, no base-cache rebuild. Pushed FIRST so cursor plates and labels stay above
+            // it. A transparent fill leaves only the stroke.
+            if let Some(alpha) = arrival_alpha {
+                // Flush with the pane edge, NOT inset: `readout.hlsl` strokes the border on the
+                // inside of `dst`, so the rect is already the outer edge. The GPUI version needed a
+                // 1 px inset only because `overflow_hidden` clipped it — there is nothing to clip
+                // here, and an inset reads as the frame floating away from the sides.
+                let w = ARRIVAL_BORDER_PX * sf;
+                pr.readout_rects.push(ReadoutRect {
+                    dst: pr.pane_bounds,
+                    bg: [0.0, 0.0, 0.0, 0.0],
+                    border: [
+                        arrival_color[0],
+                        arrival_color[1],
+                        arrival_color[2],
+                        arrival_color[3] * alpha,
+                    ],
+                    m: [w, 1.0, 1.0, 0.0],
+                });
             }
 
             let pane_left = pr.pane_bounds[0] / sf;
@@ -423,6 +496,29 @@ impl RenderState {
         if self.firetest_force_present {
             wants_present = true;
         }
+        // Arrival flash: paced and ENDED here, from wall clock, with no timer and no notify.
+        //
+        // Clearing `arrival_pulse` on expiry is the load-bearing line: leave it set and this canvas
+        // asks for a present ten times a second forever, which reads as a mysterious idle floor and
+        // no test would catch it. The final tick after expiry still rebuilds the rects, and that is
+        // the frame which erases the border.
+        if let Some(at) = self.arrival_pulse {
+            if at.elapsed() >= ARRIVAL_HIGHLIGHT {
+                self.arrival_pulse = None;
+                self.last_arrival_present_at = None;
+                self.sync_readout_params();
+                wants_present = true;
+            } else if self
+                .last_arrival_present_at
+                .is_none_or(|last| now.duration_since(last) >= ARRIVAL_PULSE_TICK)
+            {
+                self.last_arrival_present_at = Some(now);
+                self.sync_readout_params();
+                crate::diag::bump(&crate::diag::CHART_ARRIVAL_PULSE);
+                wants_present = true;
+            }
+        }
+
         let cap_due = self
             .last_present_at
             .is_none_or(|last| now.duration_since(last) >= self.target_present_interval);

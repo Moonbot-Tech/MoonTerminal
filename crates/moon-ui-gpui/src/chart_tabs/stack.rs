@@ -20,7 +20,8 @@ pub(super) struct ChartStackEntry {
     pub core: CoreId,
     pub market: String,
     pub panel: Entity<ChartPanel>,
-    /// When the chart appeared in this slot, used for the `HIGHLIGHT` new-chart border pulse.
+    /// When the chart appeared in this slot. Handed to the panel's own pass, which draws the
+    /// new-chart border flash from it, and also used by Main's idle-close deadlines.
     pub arrived_at: Instant,
     /// Whether this slot is empty after its chart closed or expired by TTL but retains its position.
     ///
@@ -62,9 +63,6 @@ pub(super) enum CompareRole {
     Anchor,
     Follower,
 }
-
-/// Duration of the border pulse for a newly appeared chart.
-pub(super) const HIGHLIGHT: Duration = Duration::from_millis(2600);
 
 /// Stable-open-count delay before COMPRESS collapses retained empty slots and lets remaining charts
 /// expand into the released space. Any chart appearance or disappearance resets it; see
@@ -147,6 +145,14 @@ pub(super) fn chart_stack_card(
                         .right_0()
                         .bottom_0()
                         .overflow_hidden()
+                        // Do NOT wrap the panel in `AnyView::cached(size_full())` here. It looks
+                        // like the obvious barrier — it is what MoonUI's dock puts around every
+                        // panel — and it does cut the arrival flash's cost (chart_render during a
+                        // pulse fell 33/s to 11/s, measured). But it also drove shell_render and
+                        // orders_render from 5/s to 73/s during a mouse storm, all three counters
+                        // moving in lockstep, i.e. the whole window re-rendering per frame. That
+                        // trade is an order of magnitude the wrong way and FireTest fails on it.
+                        // Measured 2026-07-31; the mechanism was not chased down.
                         .child(panel),
                 ),
         )

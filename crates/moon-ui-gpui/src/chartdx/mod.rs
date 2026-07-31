@@ -544,6 +544,16 @@ struct RenderState {
     /// supplies it through `apply_compare` on each observation. `None` means no comparison or this
     /// chart is the anchor.
     compare_ref_price: Option<f32>,
+    /// When this chart arrived in a stack slot, driving the accent border flash. `None` once the
+    /// flash is over — clearing it is what STOPS the extra presents, so it is the load-bearing
+    /// half of this feature, not bookkeeping.
+    arrival_pulse: Option<Instant>,
+    /// Accent colour for the arrival flash, handed over with the stamp so the palette stays the
+    /// single source of truth and this layer never guesses a colour.
+    arrival_pulse_color: [f32; 4],
+    /// When the last arrival-flash frame was presented, pacing it to `ARRIVAL_PULSE_TICK`
+    /// independently of the 60 Hz present cap.
+    last_arrival_present_at: Option<Instant>,
     cursor_color: [f32; 4],
     cursor_thickness: f32,
     readout_bg: [f32; 4],

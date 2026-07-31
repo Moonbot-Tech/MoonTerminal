@@ -33,6 +33,7 @@ mod load_state;
 mod media;
 mod panels;
 mod persistence;
+mod pulse;
 mod screener;
 mod settings;
 mod shell;
