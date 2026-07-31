@@ -120,20 +120,25 @@ fn order_cancel_lag_script_is_a_narrow_order_only_run() {
 }
 
 #[test]
-fn the_chart_is_held_hot_for_every_stage_the_verdict_scores() {
+fn the_storms_and_their_baseline_are_all_equally_hot() {
+    // The comparison the verdict is built on only means something if the storms and the baseline
+    // they are measured against ran in the SAME present mode. `idle_floor` is scored too, but by
+    // absolute ceilings rather than by a delta, and it is cold BY DESIGN — so it is named here as
+    // an exception rather than left to look like an oversight.
     for stage in CHART_SMOKE {
-        let scored = matches!(
-            stage.phase,
-            Phase::Baseline | Phase::Storm | Phase::StaticTextStorm
-        );
-        if scored {
-            assert!(
+        match stage.phase {
+            Phase::Baseline | Phase::Storm | Phase::StaticTextStorm => assert!(
                 stage.present_pressure,
-                "{} is scored by the verdict, so it must run under forced present pressure: \
-                 comparing a storm against a chart that was not equally hot measures the market, \
-                 not the cursor",
+                "{} is compared against its baseline, so it must run under forced present \
+                 pressure: comparing a storm against a chart that was not equally hot measures \
+                 the market, not the cursor",
                 stage.name
-            );
+            ),
+            Phase::IdleFloor => assert!(
+                !stage.present_pressure,
+                "the idle floor exists to measure the app when nothing forces it to work"
+            ),
+            _ => {}
         }
     }
 }
