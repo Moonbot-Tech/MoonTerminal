@@ -391,6 +391,30 @@ impl SessionManager {
     /// A group corresponds to an OS window, so each status bar reports only its own group. The
     /// summary includes headless cores because they still have sessions; `show_window` controls
     /// only whether the window exists.
+    /// How many cores have not settled yet — still `Connecting`, or partway through an init
+    /// `Stage`. A session with no store entry at all counts as pending: it has not reported.
+    ///
+    /// "Settled" deliberately includes `Failed` and `Disconnected`. The question this answers is
+    /// "has the machine finished coming up", not "is every core healthy" — a core that will never
+    /// connect must not hold a caller forever. Callers that need a WORKING core must check for
+    /// `Ready` themselves.
+    ///
+    /// Exists for diagnostic runs, which otherwise sleep a fixed interval before measuring: that is
+    /// wrong in both directions, wasteful with one core and far too short with twenty.
+    pub fn cores_pending(&self) -> usize {
+        self.sessions
+            .iter()
+            .filter(|s| {
+                let st = self
+                    .store
+                    .core(s.id)
+                    .map(|d| d.status.clone())
+                    .unwrap_or(ConnStatus::Connecting);
+                matches!(st, ConnStatus::Connecting | ConnStatus::Stage(_))
+            })
+            .count()
+    }
+
     pub fn conn_summary_group(&self, group: &str) -> ConnSummary {
         let mut total = 0;
         let mut ready = 0;
