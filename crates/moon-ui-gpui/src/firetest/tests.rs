@@ -203,6 +203,10 @@ fn the_columns_match_the_run_they_replaced() {
     assert_eq!(
         deadlined,
         vec![
+            // `start` is the one deadline NOT inherited from the pre-table dispatcher: that version
+            // slept a fixed second and could not time out. This row waits on core state instead, so
+            // it needs an outer bound. Everything below is still the original run's.
+            ("start", "cores did not settle"),
             ("open_chart", "no active visible core/window to open chart"),
             (
                 "wait_chart_probe",
