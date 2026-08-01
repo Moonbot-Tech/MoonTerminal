@@ -53,8 +53,8 @@ fn fixture() -> (Vec<String>, ReportData) {
 
 /// Changing `selection.rs:ReportSelection::click` so a plain click keeps old rows, Ctrl cannot
 /// remove a row, Ctrl clears the set, or Shift toggles only its endpoint must fail the exact
-/// selected-key assertions. Those regressions would make the action bar target different trades
-/// from the highlighted block.
+/// selected-key assertions. Those regressions would make the totals-row commands target different
+/// trades from the highlighted block.
 #[test]
 fn plain_ctrl_and_shift_follow_the_visible_row_order() {
     let (_, data) = fixture();
@@ -82,6 +82,63 @@ fn plain_ctrl_and_shift_follow_the_visible_row_order() {
     assert!(selection.contains(data.row_keys[1]));
     assert!(selection.contains(data.row_keys[2]));
     assert!(selection.contains(data.row_keys[3]));
+}
+
+/// A second plain click on the sole selected row clears it — the users' way out of a selection
+/// without reaching for the totals-row commands. Implementing that as an unconditional toggle
+/// would break the second half: a plain click on ONE member of a multi-row selection must still
+/// collapse the set to that row, which is the only way back from a Shift range.
+#[test]
+fn a_repeated_plain_click_clears_only_a_single_row_selection() {
+    let (_, data) = fixture();
+    let mut selection = ReportSelection::default();
+
+    selection.click(data.row_keys[1], &data.row_keys, false, false);
+    selection.click(data.row_keys[1], &data.row_keys, false, false);
+    assert_eq!(selection.len(), 0, "the same row clicked twice deselects");
+    assert_eq!(
+        selection.current(),
+        None,
+        "the comment pane must empty with the selection"
+    );
+    // The anchor deliberately survives the clearing click, so a following Shift click still
+    // measures from the row last pointed at rather than starting a fresh single selection.
+    selection.click(data.row_keys[3], &data.row_keys, true, false);
+    assert_eq!(selection.len(), 3, "Shift still spans from the kept anchor");
+
+    selection.clear();
+
+    selection.click(data.row_keys[0], &data.row_keys, false, false);
+    selection.click(data.row_keys[2], &data.row_keys, true, false);
+    assert_eq!(selection.len(), 3, "Shift selects the range");
+    selection.click(data.row_keys[1], &data.row_keys, false, false);
+    assert_eq!(
+        selection.len(),
+        1,
+        "a plain click inside a range collapses to that row"
+    );
+    assert!(selection.contains(data.row_keys[1]));
+}
+
+/// A physical double-click reaches the panel as TWO row-select calls plus the table's double-click
+/// callback. Without `select_only` — or if it inherited the clearing branch — the gesture would end
+/// with nothing selected, which is what this replays.
+#[test]
+fn a_double_click_ends_with_the_row_selected() {
+    let (_, data) = fixture();
+    let mut selection = ReportSelection::default();
+
+    selection.click(data.row_keys[1], &data.row_keys, false, false);
+    selection.click(data.row_keys[1], &data.row_keys, false, false);
+    selection.select_only(data.row_keys[1]);
+
+    assert_eq!(selection.len(), 1);
+    assert!(selection.contains(data.row_keys[1]));
+    assert_eq!(
+        selection.current(),
+        data.row_keys[1],
+        "the comment pane follows the double-clicked row"
+    );
 }
 
 /// Changing `selection.rs:ReportSelection::select_all` to skip legacy rows, retain only the

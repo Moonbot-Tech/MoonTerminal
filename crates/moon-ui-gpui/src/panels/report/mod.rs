@@ -1,8 +1,8 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
 //! It displays closed trades from the local SQLite database, with core, coin, strategy and date
-//! filters, one merged scope field (side, order kind, deleted trades) plus column selection above
-//! the table and exact period totals below it. The
+//! filters, one merged scope field (side, order kind, deleted trades, comment pane) plus column
+//! selection above the table, the current row's comment and exact period totals below it. The
 //! generic table supports every displayable database column and header-click sorting. A writer
 //! generation counter in `Backend.reports` triggers throttled automatic refreshes.
 //!
@@ -12,6 +12,7 @@
 
 mod actions;
 mod columns;
+mod comment;
 mod controls;
 mod export;
 mod query;
@@ -279,6 +280,10 @@ pub struct ReportPanel {
     pub(super) kind: ReportKind,
     /// Show ONLY soft-deleted trades when set; hide them when clear (the default).
     pub(super) deleted_only: bool,
+    /// Whether the full-width comment pane is shown between the table and the totals. On by
+    /// default and persisted in `app_meta` per host — a docked tab and a detached window keep
+    /// separate answers, exactly as their column sets and widths do. A display choice, not a filter.
+    pub(super) show_comment: bool,
     /// Whether this Analytics-scoped panel excludes undated/non-positive close timestamps.
     closed_only: bool,
     /// Controlled multi-selection keyed by stable report row identity.

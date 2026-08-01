@@ -236,6 +236,12 @@ impl ReportPanel {
         })
         .detach();
 
+        // Never touched by the user means on: the pane is what makes a long comment readable.
+        // Seeded for the docked host; `mark_table_detached` re-reads the detached one.
+        let show_comment = conn
+            .as_ref()
+            .and_then(|c| db::load_comment_pane(c, false))
+            .unwrap_or(true);
         let mut this = Self {
             backend,
             group,
@@ -277,6 +283,7 @@ impl ReportPanel {
                 .map(|scope| ReportKind::from_filter(scope.emulator))
                 .unwrap_or(ReportKind::Real),
             deleted_only: false,
+            show_comment,
             closed_only: scope.is_some(),
             selection: ReportSelection::default(),
             needs_query: true,
@@ -428,6 +435,9 @@ impl ReportPanel {
     ///
     /// Reload widths and visible columns for detached mode so docked tabs and windows keep separate
     /// layouts, and enable the detached-only manual date controls.
+    ///
+    /// The comment pane follows the same split: it is a view preference of this table, so a window
+    /// keeps its own answer instead of inheriting the docked tab's.
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
         self.detached = true;
         self.widths_id = crate::persistence::table_persist::ctx_id("report-table-v2", true);
@@ -439,6 +449,11 @@ impl ReportPanel {
             c.notify();
         });
         self.apply_ctx_columns(cx);
+        self.show_comment = self
+            .conn
+            .as_ref()
+            .and_then(|c| db::load_comment_pane(c, true))
+            .unwrap_or(true);
         cx.notify();
     }
 

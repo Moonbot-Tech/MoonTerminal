@@ -32,6 +32,7 @@ impl ReportPanel {
         let view_sort = view.clone();
         let view_row = view.clone();
         let view_click = view.clone();
+        let view_double = view.clone();
         let view_select_all = view.clone();
         let backend = self.backend.clone();
         let table_state = self.table_state.clone();
@@ -78,6 +79,16 @@ impl ReportPanel {
             .on_select_row(move |row, window, app| {
                 let modifiers = window.modifiers();
                 view_click.update(app, |this, cx| this.select_report_row(row, modifiers, cx));
+            })
+            .on_double_click_row(move |row, window, app| {
+                // Only a PLAIN double-click needs the compensation. With Shift or Ctrl held the two
+                // clicks are a range or toggle gesture whose result must stand — forcing the row to
+                // be the whole selection there would silently collapse a range the user built.
+                let modifiers = window.modifiers();
+                if modifiers.shift || modifiers.secondary() {
+                    return;
+                }
+                view_double.update(app, |this, cx| this.keep_report_row_selected(row, cx));
             })
             .on_select_all_rows(move |_window, app| {
                 view_select_all.update(app, |this, cx| this.select_all_report_rows(cx));
@@ -334,12 +345,20 @@ impl Render for ReportPanel {
         // Exact totals over the full filtered period.
         // Without current data, never render +0.00 / 0 orders: those values are
         // indistinguishable from a genuinely empty period.
+        // The totals line doubles as the selection bar: while rows are selected it carries their
+        // commands on the right and takes the same accent tint the separate bar used to have.
+        // Wrapping keeps it usable in a narrow dock, where totals plus commands outgrow one line.
+        let selection_actions = self.selection_actions(p, cx);
         let mut totals = h_flex()
             .w_full()
+            .flex_wrap()
             .gap_2()
             .items_center()
             .px_2()
             .py_1()
+            .when(selection_actions.is_some(), |row| {
+                row.bg(rgba_from(p.accent, 0.08))
+            })
             .child(
                 div()
                     .text_size(design::t_body(cx))
@@ -371,15 +390,21 @@ impl Render for ReportPanel {
                             .text_color(rgb(p.text_soft))
                             .child(t!("report.orders_count", count = count).to_string()),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .justify_end()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_soft))
-                            .child(t!("report.shown_top", n = d.rows.len()).to_string()),
-                    )
+                    // The shown-rows note yields its right slot to the selection commands, which
+                    // ride their own `ml_auto` group instead: a flexible spacer would claim a whole
+                    // line of the wrapping row once the commands wrap onto one.
+                    .when(selection_actions.is_none(), |row| {
+                        row.child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .justify_end()
+                                .text_size(design::t_body(cx))
+                                .text_color(rgb(p.text_soft))
+                                .child(t!("report.shown_top", n = d.rows.len()).to_string()),
+                        )
+                    })
+                    .children(selection_actions)
             }
             None => {
                 let failed = matches!(self.data, LoadState::Failed(_));
@@ -388,6 +413,8 @@ impl Render for ReportPanel {
                 } else {
                     ("—".to_string(), p.text_soft)
                 };
+                // No commands here: a read that fails or has not landed clears the selection first
+                // (`query.rs`, the `Err` arm), so `selection_actions` is always `None` in this arm.
                 totals.child(div().font_bold().text_color(rgb(color)).child(text))
             }
         };
@@ -416,11 +443,24 @@ impl Render for ReportPanel {
             .child(filters)
             .child(div().w_full().h(px(1.0)).bg(border))
             .child(table_el)
+            // The comment of the current row, directly above the totals: full width, so a long
+            // comment wraps to as many lines as it needs instead of being truncated in its cell.
+            // It sits ABOVE the rule that closes the table, not below it, so showing it adds
+            // exactly its own height — the pane sizes itself in whole table rows, and a stray
+            // pixel of rule would put the table's unused tail back out of step.
+            // Only where a table exists to click: on a failed or not-ready read, or with every
+            // column hidden, the panel already carries its own note and the pane would be a strip
+            // that can never fill. A core whose schema has no `comment` column gets no pane at all
+            // rather than one that can only ever say "no comment".
+            .when(
+                self.show_comment
+                    && self.selection.current().is_some()
+                    && self.data.data().is_some()
+                    && !vis.is_empty()
+                    && self.cols.iter().any(|column| column == "comment"),
+                |this| this.child(self.comment_pane(p, cx)),
+            )
             .child(div().w_full().h(px(1.0)).bg(border))
-            .when(self.selection.len() > 0, |this| {
-                this.child(self.selection_bar(p, cx))
-                    .child(div().w_full().h(px(1.0)).bg(border))
-            })
             .child(totals);
         if self.standalone {
             root.child(

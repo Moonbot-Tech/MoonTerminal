@@ -112,11 +112,13 @@ impl ReportPanel {
             )
     }
 
-    /// Render the row-scope filter: direction, trade kind and the deleted-only switch in ONE field.
+    /// Render the row-scope field: direction, trade kind, the deleted-only switch and the comment
+    /// pane, in ONE dropdown.
     ///
-    /// The three used to be two dropdowns and a bare checkbox. They are independent filters, but
-    /// they are always read together as "which rows am I looking at", so they share one field split
-    /// by separators — the way the Orders settings menu groups its own options. The trigger
+    /// The first three used to be two dropdowns and a bare checkbox. They are independent filters,
+    /// but they are always read together as "which rows am I looking at", so they share one field
+    /// split by separators — the way the Orders settings menu groups its own options. The last
+    /// section is not a filter at all: it shows or hides the comment pane. The trigger
     /// summarises the state in short words (`Все/реал.`), adding the deleted segment only while
     /// that off-by-default filter is on.
     ///
@@ -207,6 +209,23 @@ impl ReportPanel {
                     deleted_view.update(app, |t, c| t.set_deleted_only(!t.deleted_only, c));
                 }),
         );
+        // The comment pane is a display choice, not a filter, so it sits in its own section and
+        // stays out of the trigger label — the pane itself is the visible state.
+        items.push(MoonMenuItem::separator());
+        let comment_view = cx.entity();
+        // Disabled once we KNOW the core's schema carries no comment column: the pane could never
+        // show anything there, and a check mark on a row that changes nothing reads as a bug. An
+        // empty schema means "not probed yet", not "no such column", so it leaves the row enabled.
+        let no_comment_column =
+            !self.cols.is_empty() && !self.cols.iter().any(|column| column == "comment");
+        items.push(
+            MoonMenuItem::with_key("rd-comment", t!("report.comment.show").to_string())
+                .checked(self.show_comment && !no_comment_column)
+                .disabled(no_comment_column)
+                .on_click(move |_, _, app| {
+                    comment_view.update(app, |t, c| t.toggle_comment_pane(c));
+                }),
+        );
         // The tooltip carries what the row labels cannot: that the deleted switch is exclusive
         // (off hides deleted trades, on shows ONLY them) rather than an "also show" checkbox.
         div()
@@ -222,9 +241,11 @@ impl ReportPanel {
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::Action)
                     .fit_trigger_width(102.0, 170.0)
-                    .menu_width_scaled(165.0)
+                    // Wide enough for the longest row in every locale — es
+                    // "Comentario de la operación" — or the menu ellipsises it.
+                    .menu_width_scaled(210.0)
                     .menu_size(MoonMenuSize::Compact)
-                    // Three independent filters in one field: keep the menu open so setting two of
+                    // Four independent switches in one field: keep the menu open so setting two of
                     // them does not cost two open/close cycles.
                     .close_on_select(false)
                     .items(items),
@@ -258,29 +279,41 @@ impl ReportPanel {
             .items(items)
     }
 
-    /// Build the responsive bottom action bar for the current row selection.
+    /// Build the selection commands for the totals line.
+    ///
+    /// They live in the totals row rather than a bar of their own: a bar that appears on the first
+    /// click pushed the table up under the cursor, and the totals line already ends in a
+    /// right-aligned slot (the "shown (top N)" note) that is idle exactly while rows are selected.
     ///
     /// Args:
-    ///     palette: Active Moon palette used for the contained selection surface.
+    ///     palette: Active Moon palette used for the count label.
     ///     cx: Panel context used to wire actions and count selected replicated targets.
     ///
     /// Returns:
-    ///     A wrapping action row suitable for narrow dock and wide standalone hosts.
-    pub(super) fn selection_bar(&self, palette: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    ///     The count plus its commands, or `None` when nothing is selected.
+    pub(super) fn selection_actions(
+        &self,
+        palette: MoonPalette,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
         let selected = self.selection.len();
+        if selected == 0 {
+            return None;
+        }
         let mutable = self.selection.mutable_count();
+        // `ml_auto` pins the group to the right edge of the totals row and, once that row wraps, to
+        // the right edge of its own line. It wraps internally too: a narrow side dock is narrower
+        // than count plus three buttons, and the dock clips overflow — an unwrapped group would put
+        // Delete past the edge instead of on a second line.
         let mut bar = h_flex()
-            .w_full()
+            .ml_auto()
             .flex_wrap()
+            .justify_end()
             .items_center()
             .gap_1()
-            .px_2()
-            .py_1()
-            .bg(rgba_from(palette.accent, 0.08))
             .child(
                 div()
-                    .flex_1()
-                    .min_w(design::ui_px(cx, 130.0))
+                    .flex_none()
                     .text_size(design::t_body(cx))
                     .font_bold()
                     .text_color(rgb(palette.text))
@@ -331,7 +364,7 @@ impl ReportPanel {
                 mutation.danger().render()
             });
         }
-        bar.into_any_element()
+        Some(bar.into_any_element())
     }
 
     /// Build the CSV/XLSX export menu for the visible or full schema.
