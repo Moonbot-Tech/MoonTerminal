@@ -48,6 +48,11 @@ impl ReportPanel {
 
     /// Render the searchable, virtualized strategy selector grouped by core.
     ///
+    /// The trigger and popup are asked to look like the `MoonDropdown` filters beside them:
+    /// `trigger_variant`/`trigger_size` give it the Soft button's fill, border, hover ramp and
+    /// geometry, and `menu_chrome` paints the popup on the menu surface with the check mark in the
+    /// leading column. Only the mono label stays a call-site choice, matching this row's dropdowns.
+    ///
     /// Args:
     ///     cx: Panel context used for responsive trigger and menu sizing.
     ///
@@ -60,26 +65,31 @@ impl ReportPanel {
             &t!("report.all_strategies"),
             |n| t!("report.strategies_n", n = n).to_string(),
         );
+        let palette = MoonPalette::active(cx);
         div()
             .w(design::font_w_px(cx, crate::controls::CORE_COMBO_TRIGGER_W))
             .child(
                 MoonCombobox::new(&self.strategy_select)
-                    .h(design::ui_px(cx, 26.0))
+                    .trigger_variant(MoonButtonVariant::Soft)
+                    .trigger_size(MoonButtonSize::Action)
+                    .menu_chrome(MoonComboboxMenuChrome::Menu)
+                    .font_family(design::mono())
                     .placeholder(t!("report.all_strategies").to_string())
                     .cleanable(false)
                     .search_placeholder(t!("report.search_strategies").to_string())
                     .appearance(true)
                     .menu_width(design::font_w_px(cx, 380.0))
                     .menu_max_h(design::ui_px(cx, 420.0))
-                    .render_trigger(move |_, _, cx| {
-                        let palette = MoonPalette::active(cx);
+                    .render_trigger(move |_, _, _| {
+                        // Centred label plus caret, the way a MoonDropdown button draws its
+                        // trigger: pushed apart by `justify_between` the same text reads as
+                        // left-aligned next to those buttons.
                         h_flex()
                             .w_full()
-                            .justify_between()
+                            .justify_center()
                             .gap_1()
                             .child(
                                 div()
-                                    .w_full()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .truncate()

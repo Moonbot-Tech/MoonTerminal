@@ -41,11 +41,11 @@ use gpui::*;
 use moon_ui::MoonWindowExt as _;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonCombobox, MoonComboboxEvent, MoonComboboxState, MoonDataCell,
-    MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonDataTableWidthPolicy,
-    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
-    MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone, MoonWindowFrame, Panel,
-    PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
+    MoonCheckboxSize, MoonCombobox, MoonComboboxEvent, MoonComboboxMenuChrome, MoonComboboxState,
+    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState,
+    MoonDataTableWidthPolicy, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
+    MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone,
+    MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
