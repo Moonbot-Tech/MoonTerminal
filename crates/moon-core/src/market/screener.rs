@@ -11,7 +11,7 @@
 //! provider it covers ALL exchange markets (`subscribe_all_trades` -> `TradeStorageScope::All`
 //! plus automatic candles), so these columns need no per-market subscriptions.
 
-use moonproto::MoonTime;
+use moonproto::{state::DerivedDeltaSnapshot, MoonTime};
 
 use crate::session::CoreId;
 
@@ -43,9 +43,10 @@ pub struct ScreenerRow {
     /// Exchange maximum order size in the quote currency (Moonbot Max.Order):
     /// `max_notional`, falling back to `max_qty * ask`. Zero means no exchange limit was provided.
     pub max_order: f64,
-    /// Percentage deltas. The 24h and 1h values are signed server values (`MarketDeltaState`,
-    /// matching Moonbot Coin1hDelta/Coin24hDelta); the 3h, 15m, 1m, and 72h values are derived
-    /// retained-history maxima: unsigned movement magnitudes matching the Moonbot table.
+    /// Unsigned retained-history movement magnitudes matching the Moonbot Screener table.
+    ///
+    /// Every period uses MoonProto's combined max/min range contract. Its production-compatible
+    /// 3h bucket covers roughly four hours, while 72h covers the available retained candle tail.
     pub d_24h: f64,
     pub d_3h: f64,
     pub d_1h: f64,
@@ -71,6 +72,25 @@ pub struct ScreenerRow {
     /// Open per-coin orders summed across supplied members. The UI overlay fills this from
     /// `CoreData.orders` because the market layer does not see orders.
     pub orders: u32,
+}
+
+impl ScreenerRow {
+    /// Apply one coherent retained-history delta snapshot to every Screener period.
+    ///
+    /// Args:
+    ///     deltas: Combined range deltas, or `None` before retained history is available.
+    ///
+    /// Returns:
+    ///     Nothing; all six delta fields are replaced, with missing history becoming neutral zero.
+    fn apply_range_deltas(&mut self, deltas: Option<DerivedDeltaSnapshot>) {
+        let deltas = deltas.unwrap_or_default();
+        self.d_24h = deltas.twenty_four_hours;
+        self.d_3h = deltas.three_hours;
+        self.d_1h = deltas.one_hour;
+        self.d_15m = deltas.fifteen_minutes;
+        self.d_1m = deltas.one_minute;
+        self.d_72h = deltas.seventy_two_hours;
+    }
 }
 
 impl MarketDataSource {
@@ -111,8 +131,6 @@ impl MarketDataSource {
                 } else {
                     m.max_qty() * m.price.ask
                 },
-                d_24h: m.delta_state.coin_24h_delta,
-                d_1h: m.delta_state.coin_1h_delta,
                 funding_pct: m.funding_rate * 100.0,
                 mark_delta_pct: (m.price.mark_price_found
                     && m.price.p_last > 0.0
@@ -122,15 +140,13 @@ impl MarketDataSource {
                 max_leverage: m.max_leverage,
                 ..ScreenerRow::default()
             });
-            if let Some(d) = snap.market_history_derived_snapshot_now(name) {
+            let derived = snap.market_history_derived_snapshot_now(name);
+            row.apply_range_deltas(derived.map(|snapshot| snapshot.deltas));
+            if let Some(d) = derived {
                 row.vol_1h = d.candle_volumes.one_hour;
                 row.vol_1m = d.trade_volumes.one_minute.total_value();
                 row.vol_3m = d.trade_volumes.three_minutes.total_value();
                 row.vol_5m = d.trade_volumes.five_minutes.total_value();
-                row.d_3h = d.deltas.three_hours;
-                row.d_15m = d.deltas.fifteen_minutes;
-                row.d_1m = d.deltas.one_minute;
-                row.d_72h = d.deltas.seventy_two_hours;
                 if let Some(c) = d.current_candle {
                     row.high_1h = f64::from(c.high());
                 }
@@ -162,3 +178,6 @@ impl MarketDataSource {
         rows
     }
 }
+
+#[cfg(test)]
+mod tests;
