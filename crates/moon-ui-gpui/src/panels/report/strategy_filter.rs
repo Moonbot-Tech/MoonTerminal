@@ -277,33 +277,44 @@ impl ReportStrategyDelegate {
     ///     query: Case-insensitive strategy/core substring query.
     ///
     /// Returns:
-    ///     Nothing; empty groups disappear and the global All row follows normal matching.
+    ///     Nothing; empty groups disappear, a surviving group keeps its core row, and the global
+    ///     All row follows normal matching.
     fn apply_search(&mut self, query: &str) {
         if query.is_empty() {
             self.show_all_rows();
             return;
         }
         let normalized_query = query.to_lowercase();
-        self.matched_groups = self
-            .catalog
-            .groups
-            .iter()
-            .enumerate()
-            .filter_map(|(source_section, group)| {
-                let source_rows = group
-                    .items
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(row, item)| {
-                        item.matches_normalized(&normalized_query).then_some(row)
+        self.matched_groups =
+            self.catalog
+                .groups
+                .iter()
+                .enumerate()
+                .filter_map(|(source_section, group)| {
+                    let mut source_rows = group
+                        .items
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(row, item)| {
+                            item.matches_normalized(&normalized_query).then_some(row)
+                        })
+                        .collect::<Vec<_>>();
+                    // The core row heads its group, so a query that matched only strategies must not
+                    // drop it: the survivors would be listed under no core at all, and the group toggle
+                    // would be unreachable exactly when the search narrowed things enough to want it.
+                    if source_rows.first().is_some_and(|row| *row != 0)
+                        && group.items.first().is_some_and(|item| {
+                            matches!(item.choice, ReportStrategyChoice::Core(_))
+                        })
+                    {
+                        source_rows.insert(0, 0);
+                    }
+                    (!source_rows.is_empty()).then_some(ReportStrategyMatchGroup {
+                        source_section,
+                        source_rows: Some(source_rows),
                     })
-                    .collect::<Vec<_>>();
-                (!source_rows.is_empty()).then_some(ReportStrategyMatchGroup {
-                    source_section,
-                    source_rows: Some(source_rows),
                 })
-            })
-            .collect();
+                .collect();
     }
 
     /// Map one filtered row to its immutable catalog index.
@@ -350,6 +361,72 @@ impl ReportStrategyDelegate {
             .available_by_core
             .get(&core_uid)
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// Return the exact members of one core that the current search leaves ON SCREEN.
+    ///
+    /// A group row acts on what the user can see: with a query narrowing a core to two strategies,
+    /// clicking its name must select those two, not the seven the core happens to own. Without a
+    /// query this is the whole available membership, so the unfiltered behaviour is unchanged.
+    ///
+    /// Args:
+    ///     section: VISIBLE section index of the group row.
+    ///     core_uid: Core whose members are wanted.
+    ///
+    /// Returns:
+    ///     Full-list indices of the visible, available exact rows of that core.
+    fn visible_core_indices(&self, section: usize, core_uid: u64) -> Vec<MoonComponentIndexPath> {
+        let Some(matched) = self.matched_groups.get(section) else {
+            return Vec::new();
+        };
+        let Some(source_rows) = matched.source_rows.as_ref() else {
+            return self.available_core_indices(core_uid).to_vec();
+        };
+        let Some(group) = self.catalog.groups.get(matched.source_section) else {
+            return Vec::new();
+        };
+        source_rows
+            .iter()
+            .filter_map(|row| {
+                let key = match group.items.get(*row)?.choice {
+                    ReportStrategyChoice::Exact(key) => key,
+                    ReportStrategyChoice::All | ReportStrategyChoice::Core(_) => return None,
+                };
+                (key.core_uid == core_uid && self.catalog.available.contains(&key))
+                    .then(|| MoonComponentIndexPath::new(*row).section(matched.source_section))
+            })
+            .collect()
+    }
+
+    /// Whether the visible section shows every row of its source group.
+    ///
+    /// Args:
+    ///     section: Visible section index.
+    ///
+    /// Returns:
+    ///     True when no query narrowed this section, so the cached per-core counts still apply.
+    fn section_is_unfiltered(&self, section: usize) -> bool {
+        self.matched_groups
+            .get(section)
+            .is_some_and(|matched| matched.source_rows.is_none())
+    }
+
+    /// Whether every exact key in `members` is currently selected.
+    ///
+    /// Args:
+    ///     members: Catalog indices of the rows under test.
+    ///
+    /// Returns:
+    ///     False for an empty set, so an empty group never reads as fully selected.
+    fn all_members_selected(&self, members: &[MoonComponentIndexPath]) -> bool {
+        !members.is_empty()
+            && members.iter().all(|index| {
+                self.catalog_item(*index)
+                    .is_some_and(|item| match item.choice {
+                        ReportStrategyChoice::Exact(key) => self.selected.contains(&key),
+                        ReportStrategyChoice::All | ReportStrategyChoice::Core(_) => false,
+                    })
+            })
     }
 
     /// Resolve semantic row interactivity from current availability and selection.
@@ -579,20 +656,38 @@ impl MoonSearchableListDelegate for ReportStrategyDelegate {
         self.choice_is_enabled(item.choice)
     }
 
-    /// Check global/core action rows from their exact child set.
+    /// Mark the core rows as group heads so MoonUI draws them like a menu's group row.
     ///
-    /// Cached exact membership and per-core counts keep every virtual row check constant-time.
+    /// The core name then sits flush left with a muted label while its strategies are indented
+    /// past the check column, which is exactly how the core selector's exchange rows read.
     ///
     /// Args:
-    ///     _: Visible index, widget snapshot, and application context are superseded by the
-    ///        delegate's synchronized exact-key cache.
+    ///     _: Visible index and application context unused by a purely semantic classification.
+    ///     item: Row being classified.
+    ///
+    /// Returns:
+    ///     Whether the row is a core-wide group row.
+    fn is_group_row(&self, _: MoonComponentIndexPath, item: &Self::Item, _: &App) -> bool {
+        matches!(item.choice, ReportStrategyChoice::Core(_))
+    }
+
+    /// Check global/core action rows from their exact child set.
+    ///
+    /// The unfiltered core check stays constant-time on the cached per-core counts. Under a query
+    /// the row answers for what it would toggle — the visible members — so the tick agrees with the
+    /// click that produced it.
+    ///
+    /// Args:
+    ///     index: Visible index, needed to resolve which rows the query left in this section.
     ///     item: Row whose checkbox state is requested.
+    ///     _: Widget snapshot and application context are superseded by the delegate's
+    ///        synchronized exact-key cache.
     ///
     /// Returns:
     ///     Whether the global, core-wide, or exact row is checked.
     fn is_item_checked(
         &self,
-        _: MoonComponentIndexPath,
+        index: MoonComponentIndexPath,
         item: &Self::Item,
         _: &[(MoonComponentIndexPath, Self::Item)],
         _: &App,
@@ -605,14 +700,18 @@ impl MoonSearchableListDelegate for ReportStrategyDelegate {
                         && self.selected_available == self.catalog.available.len())
             }
             ReportStrategyChoice::Core(core_uid) => {
-                let members = self.available_core_indices(core_uid);
-                !members.is_empty()
-                    && self
-                        .selected_available_by_core
-                        .get(&core_uid)
-                        .copied()
-                        .unwrap_or(0)
-                        == members.len()
+                if self.section_is_unfiltered(index.section) {
+                    let members = self.available_core_indices(core_uid);
+                    !members.is_empty()
+                        && self
+                            .selected_available_by_core
+                            .get(&core_uid)
+                            .copied()
+                            .unwrap_or(0)
+                            == members.len()
+                } else {
+                    self.all_members_selected(&self.visible_core_indices(index.section, core_uid))
+                }
             }
             ReportStrategyChoice::Exact(key) => self.selected.contains(&key),
         }
@@ -650,10 +749,13 @@ impl MoonSearchableListDelegate for ReportStrategyDelegate {
                     self.selected_available_by_core.clear();
                 }
                 ReportStrategyChoice::Core(core_uid) => {
-                    let member_indices = self.available_core_indices(core_uid).to_vec();
+                    // Act on what the row shows: under a query that is the matched subset, so
+                    // clicking a core name selects the strategies the search left on screen.
+                    let member_indices = self.visible_core_indices(index.section, core_uid);
                     if member_indices.is_empty() {
                         continue;
                     }
+                    let all_selected = self.all_members_selected(&member_indices);
                     let members = member_indices
                         .into_iter()
                         .filter_map(|member_index| {
@@ -664,12 +766,6 @@ impl MoonSearchableListDelegate for ReportStrategyDelegate {
                             Some((member_index, member, key))
                         })
                         .collect::<Vec<_>>();
-                    let all_selected = self
-                        .selected_available_by_core
-                        .get(&core_uid)
-                        .copied()
-                        .unwrap_or(0)
-                        == members.len();
                     if all_selected {
                         let member_keys = members
                             .iter()
@@ -723,16 +819,23 @@ pub(super) fn ordered_strategy_cores(
     CoreOrder::new(config).from_db(core_names)
 }
 
-/// Build the global All row plus one strategy section per core.
+/// Build the global All row plus one strategy section per core that has strategies.
+///
+/// The drop criterion is membership in this metadata snapshot: a core contributing no row at all
+/// has nothing to toggle — its core-wide row would render permanently disabled — so its whole
+/// section goes rather than listing a core name over an empty group. A core present ONLY through a
+/// stale choice retained by [`merge_strategy_metadata`] deliberately keeps its section, disabled
+/// core-wide row and all: that is what makes the stale choice removable.
 ///
 /// Args:
 ///     strategies: Exact strategy identities and display names.
 ///     ordered_cores: Database cores arranged by the canonical ordering policy.
-///     all_label: Localized global and core-wide All-strategies label.
+///     all_label: Localized global All-strategies label.
 ///     manual_label: Localized label for manual orders.
 ///
 /// Returns:
-///     A title-less global section followed by core sections with group and exact rows.
+///     The global All row, then one section per non-empty core: its name as the group-toggle row,
+///     followed by that core's exact strategies.
 pub(super) fn strategy_groups(
     strategies: &[ReportStrategy],
     ordered_cores: &[(u64, String)],
@@ -754,26 +857,25 @@ pub(super) fn strategy_groups(
             all_label,
         )],
     }];
-    groups.extend(ordered_cores.iter().map(|(core_uid, core_name)| {
+    groups.extend(ordered_cores.iter().filter_map(|(core_uid, core_name)| {
+        let core_strategies = strategies_by_core.get(core_uid)?;
+        // The core NAME is the group row, exactly as the core selector's exchange row is: clicking
+        // it toggles the whole group. A separate non-interactive title above an "All strategies"
+        // row would say the same thing twice, and only one of the two would be clickable.
         let mut items = vec![strategy_item(
             ReportStrategyChoice::Core(*core_uid),
-            all_label,
+            core_name,
             core_name,
         )];
-        if let Some(strategies) = strategies_by_core.get(core_uid) {
-            items.extend(strategies.iter().map(|strategy| {
-                let label = if strategy.key.strategy_id == 0 {
-                    manual_label
-                } else {
-                    strategy.name.as_str()
-                };
-                strategy_item(ReportStrategyChoice::Exact(strategy.key), label, core_name)
-            }));
-        }
-        ReportStrategyGroup {
-            title: Some(core_name.clone().into()),
-            items,
-        }
+        items.extend(core_strategies.iter().map(|strategy| {
+            let label = if strategy.key.strategy_id == 0 {
+                manual_label
+            } else {
+                strategy.name.as_str()
+            };
+            strategy_item(ReportStrategyChoice::Exact(strategy.key), label, core_name)
+        }));
+        Some(ReportStrategyGroup { title: None, items })
     }));
     groups
 }

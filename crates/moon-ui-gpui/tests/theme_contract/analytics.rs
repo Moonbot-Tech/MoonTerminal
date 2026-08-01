@@ -115,7 +115,13 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     let strategy_combo = braced_body(&report_controls, "pub(super) fn strategy_combo(");
     for needle in [
         "MoonCombobox::new(&self.strategy_select)",
-        ".h(design::ui_px(cx, 26.0))",
+        // A combobox paints itself as an input — its own fill, focus ring, label size and a height
+        // that ignores the Font slider's delta. Standing in a row of MoonDropdown filters it must
+        // ask MoonUI for the button look instead of re-deriving it here.
+        ".trigger_variant(MoonButtonVariant::Soft)",
+        ".trigger_size(MoonButtonSize::Action)",
+        ".menu_chrome(MoonComboboxMenuChrome::Menu)",
+        ".font_family(design::mono())",
         ".cleanable(false)",
         ".render_trigger(",
         "crate::controls::CORE_COMBO_TRIGGER_W",

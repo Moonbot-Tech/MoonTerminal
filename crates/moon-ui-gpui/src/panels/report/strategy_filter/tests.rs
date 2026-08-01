@@ -48,6 +48,134 @@ fn every_exact_item_matches_its_core_name() {
     );
 }
 
+/// Restoring the unconditional section per ordered core must fail this assertion: an empty core
+/// would list its name over a permanently disabled core-wide row. A core kept alive only by a
+/// retained stale selection must still appear, or that selection could never be removed.
+///
+/// Returns:
+///     Nothing; empty-core omission and stale-core retention are asserted.
+#[test]
+fn cores_without_strategies_contribute_no_section() {
+    let stale = strategy(2, -9, "DELETED");
+    let groups = strategy_groups(
+        &[strategy(1, -7, "BREAKOUT"), stale.clone()],
+        &[
+            (1, "CORE-A".to_string()),
+            (3, "CORE-EMPTY".to_string()),
+            (2, "CORE-STALE".to_string()),
+        ],
+        "All strategies",
+        "Manual orders",
+    );
+
+    assert_eq!(
+        groups
+            .iter()
+            .skip(1)
+            .map(|group| group.items[0].title().to_string())
+            .collect::<Vec<_>>(),
+        vec!["CORE-A".to_string(), "CORE-STALE".to_string()],
+        "each core contributes one section whose first row is the core-name group toggle"
+    );
+    let catalog = ReportStrategyDelegate::catalog(groups, HashSet::from([stale.key]));
+    assert_eq!(
+        catalog.selected_indices(Some(&HashSet::from([stale.key]))),
+        vec![MoonComponentIndexPath::new(1).section(2)],
+        "dropping a section renumbers the ones after it, so every index the widget receives must \
+         come from the same filtered groups — here the third ordered core reports as section 2"
+    );
+}
+
+/// Filtering the core row out by its own haystack must fail this assertion: a strategy-name query
+/// would list survivors under no core, and the group toggle would vanish exactly when the search
+/// narrowed the list enough to want it.
+///
+/// Returns:
+///     Nothing; a strategy-only match is asserted to keep its core row at the head of the section.
+#[test]
+fn a_strategy_match_keeps_its_core_row() {
+    let strategies = vec![strategy(1, -7, "BREAKOUT"), strategy(1, -8, "SCALP")];
+    let groups = strategy_groups(
+        &strategies,
+        &[(1, "CORE-A".to_string())],
+        "All strategies",
+        "Manual orders",
+    );
+    let catalog =
+        ReportStrategyDelegate::catalog(groups, strategies.iter().map(|item| item.key).collect());
+    let search = ReportStrategyDelegate::search_state();
+    search.replace("BREAKOUT".to_string());
+    let delegate = ReportStrategyDelegate::new(catalog, None, search);
+
+    assert_eq!(delegate.matched_groups.len(), 1);
+    assert_eq!(delegate.items_count(0), 2);
+    assert_eq!(
+        delegate
+            .item(MoonComponentIndexPath::new(0).section(0))
+            .map(|item| item.title().to_string()),
+        Some("CORE-A".to_string()),
+        "the core row heads the filtered section even though the query matched a strategy"
+    );
+    assert_eq!(
+        delegate
+            .item(MoonComponentIndexPath::new(1).section(0))
+            .map(|item| item.title().to_string()),
+        Some("BREAKOUT".to_string())
+    );
+}
+
+/// Toggling a core row from the FULL membership must fail this assertion: clicking a core name
+/// under a query would select strategies the search hid, so the count in the trigger would not
+/// match what the user was looking at.
+///
+/// Returns:
+///     Nothing; a filtered core toggle is asserted to cover exactly the visible rows.
+#[test]
+fn a_core_row_toggles_only_the_rows_the_search_left_visible() {
+    let strategies = vec![
+        strategy(1, -7, "MainShotL"),
+        strategy(1, -8, "MainShotS"),
+        strategy(1, -9, "real_Spread_L13"),
+    ];
+    let groups = strategy_groups(
+        &strategies,
+        &[(1, "CORE-A".to_string())],
+        "All strategies",
+        "Manual orders",
+    );
+    let catalog =
+        ReportStrategyDelegate::catalog(groups, strategies.iter().map(|item| item.key).collect());
+    let search = ReportStrategyDelegate::search_state();
+    search.replace("main".to_string());
+    let mut delegate = ReportStrategyDelegate::new(catalog, None, search);
+    let mut selection = Vec::new();
+
+    delegate.on_will_change(
+        &mut selection,
+        &[MoonSearchableListChange::Select {
+            index: MoonComponentIndexPath::new(0).section(0),
+        }],
+    );
+
+    assert_eq!(
+        delegate.selected,
+        HashSet::from([strategies[0].key, strategies[1].key]),
+        "the hidden third strategy must stay unselected"
+    );
+
+    delegate.on_will_change(
+        &mut selection,
+        &[MoonSearchableListChange::Deselect {
+            index: MoonComponentIndexPath::new(0).section(0),
+        }],
+    );
+
+    assert!(
+        delegate.selected.is_empty(),
+        "a second click on the same core row clears exactly what the first one set"
+    );
+}
+
 /// Applying default single-row changes to a Core action must fail here: it would store the action
 /// row instead of all exact children, so selecting strategies from several cores would not reach
 /// the Report query.
@@ -329,11 +457,10 @@ fn replacement_delegate_applies_retained_group_search() {
     assert_eq!(delegate.matched_groups.len(), 1);
     let matched = &delegate.matched_groups[0];
     assert_eq!(
-        delegate.catalog.groups[matched.source_section]
-            .title
-            .as_ref()
-            .map(SharedString::as_ref),
-        Some("CORE-B")
+        delegate.catalog.groups[matched.source_section].items[0]
+            .title()
+            .to_string(),
+        "CORE-B".to_string()
     );
     assert_eq!(delegate.items_count(0), 2);
 }
