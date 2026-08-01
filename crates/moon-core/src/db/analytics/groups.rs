@@ -7,7 +7,7 @@ use rusqlite::Connection;
 
 use super::super::metrics::{profit_factor, winrate};
 use super::super::read_fail::read_fail;
-use super::super::{ReadFail, ReadResult};
+use super::super::{QuoteCurrency, QuoteScope, ReadFail, ReadResult};
 use super::{unified_from, Query};
 
 /// Aggregate for a strategy-and-core or coin group.
@@ -35,6 +35,8 @@ pub struct GroupStat {
     pub raw_profit: f64,
     /// Average positive order spend in quote currency over the lens-neutral trade scope.
     pub avg_order: f64,
+    /// Homogeneity of the raw-money fields for this group.
+    pub quote: QuoteScope,
     pub wins: i64,
     /// Group win sum divided by its loss sum. Returns 99 when the win sum is positive
     /// and the loss sum is zero, or 0 when both sums are zero.
@@ -63,6 +65,9 @@ impl GroupStat {
     }
 
     /// Return average active-lens profit per trade, or zero for an empty group.
+    ///
+    /// Returns:
+    ///     Profit divided by trade count, or zero when the group is empty.
     pub fn avg(&self) -> f64 {
         if self.n > 0 {
             self.profit / self.n as f64
@@ -71,12 +76,18 @@ impl GroupStat {
         }
     }
 
-    /// Return raw total profit as a percentage of average positive order size, or zero without it.
+    /// Return raw total profit as a percentage of average positive order size.
+    ///
+    /// Mixed, unknown, empty, or non-positive order scopes return NaN so UI consumers cannot
+    /// mistake unavailable raw money for a real zero.
+    ///
+    /// Returns:
+    ///     Raw profit as a percentage of average order, or NaN when unavailable.
     pub fn profit_pct_of_avg_order(&self) -> f64 {
-        if self.avg_order > 0.0 {
+        if matches!(self.quote, QuoteScope::Single(_)) && self.avg_order > 0.0 {
             self.raw_profit / self.avg_order * 100.0
         } else {
-            0.0
+            f64::NAN
         }
     }
 }
@@ -272,7 +283,7 @@ pub(in crate::db) fn coin_groups_on(conn: &Connection, q: &Query) -> ReadResult<
 
 /// Build the lens-neutral source used by raw-profit and average-order enrichments.
 ///
-/// USDT mode needs no second source because the active aggregate can compute raw fields in the same
+/// Quote mode needs no second source because the active aggregate can compute raw fields in the same
 /// pass. Percent mode rebuilds without its positive-spend filter so the new columns do not change
 /// when the display lens changes.
 ///
@@ -282,11 +293,11 @@ pub(in crate::db) fn coin_groups_on(conn: &Connection, q: &Query) -> ReadResult<
 /// Returns:
 ///     Optional lens-neutral source needed only for Percent mode, or a classified read failure.
 pub(super) fn raw_source(conn: &Connection, q: &Query) -> ReadResult<Option<String>> {
-    if q.metric == crate::db::ProfitMetric::Usdt {
+    if q.metric == crate::db::ProfitMetric::Quote {
         return Ok(None);
     }
     let mut raw_query = q.clone();
-    raw_query.metric = crate::db::ProfitMetric::Usdt;
+    raw_query.metric = crate::db::ProfitMetric::Quote;
     unified_from(conn, &raw_query)?
         .ok_or(ReadFail::NotReady)
         .map(Some)
@@ -302,6 +313,8 @@ pub(super) fn raw_source(conn: &Connection, q: &Query) -> ReadResult<Option<Stri
 fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
     let wsum: f64 = r.get(9)?;
     let lsum: f64 = r.get(10)?;
+    let quote = group_quote_scope(r.get(18)?, r.get(19)?, r.get(20)?, r.get(21)?);
+    let comparable = matches!(quote, QuoteScope::Single(_));
     Ok(GroupStat {
         key: r.get(0)?,
         name: r.get(1)?,
@@ -321,9 +334,41 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
         // there can never disagree about what a list covers.
         bl: count_list(r.get::<_, Option<String>>(14)?),
         wl: count_list(r.get::<_, Option<String>>(15)?),
-        raw_profit: r.get(16)?,
-        avg_order: r.get(17)?,
+        raw_profit: if comparable { r.get(16)? } else { f64::NAN },
+        avg_order: if comparable { r.get(17)? } else { f64::NAN },
+        quote,
     })
+}
+
+/// Classify one group's raw quote fields from SQLite aggregate metadata.
+///
+/// Args:
+///     min: Minimum integral quote ordinal.
+///     max: Maximum integral quote ordinal.
+///     integral: Rows carrying an integral quote value.
+///     rows: Complete rows in the group.
+///
+/// Returns:
+///     Empty, one known quote, mixed known quotes, or unknown.
+fn group_quote_scope(min: Option<i64>, max: Option<i64>, integral: i64, rows: i64) -> QuoteScope {
+    if rows == 0 {
+        return QuoteScope::Empty;
+    }
+    if integral != rows {
+        return QuoteScope::Unknown;
+    }
+    match (min, max) {
+        (Some(min), Some(max)) if min == max => QuoteCurrency::from_report_ordinal(min)
+            .map(QuoteScope::Single)
+            .unwrap_or(QuoteScope::Unknown),
+        (Some(min), Some(max))
+            if QuoteCurrency::from_report_ordinal(min).is_some()
+                && QuoteCurrency::from_report_ordinal(max).is_some() =>
+        {
+            QuoteScope::Mixed
+        }
+        _ => QuoteScope::Unknown,
+    }
 }
 
 /// Distinct coins named by a raw `CoinsBlackList` / `CoinsWhiteList` field value.
@@ -366,7 +411,7 @@ fn strategy_name_expr(has_names: bool) -> String {
 /// Args:
 ///     conn: Open analytics read connection.
 ///     src: Active-lens filtered source used by existing metrics.
-///     raw_src: Optional USDT-lens source; absent when active USDT aggregation can reuse its pass.
+///     raw_src: Optional raw-quote source; absent when active quote aggregation can reuse its pass.
 ///     q: Filter and period supplying SQL parameters.
 ///     has_names: Whether strategy metadata enrichment is available.
 ///     by_strategy: Whether to group by strategy identity instead of coin.
@@ -504,13 +549,17 @@ pub(super) fn groups(
     // means the same data can name a different best strategy from one build to the next. The key
     // is unique per group, so this decides every tie. Tuning applies its own total comparators
     // whenever the user selects a table sort.
-    let (raw_cte, raw_join, raw_profit, avg_order) = if let Some(raw_src) = raw_src {
+    let (raw_cte, raw_join, raw_profit, avg_order, quote_stats) = if let Some(raw_src) = raw_src {
         (
             format!(
                 ", raw AS (
                      SELECT {key} AS k,
                             COALESCE(SUM(o.profitbtc), 0) AS raw_profit,
-                            COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order
+                            COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order,
+                            MIN(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_min,
+                            MAX(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_max,
+                            COUNT(CASE WHEN typeof(o.basecurrency) = 'integer' THEN 1 END) AS quote_integral,
+                            COUNT(*) AS quote_rows
                      FROM {raw_src}
                      GROUP BY k
                  )"
@@ -518,9 +567,16 @@ pub(super) fn groups(
             "LEFT JOIN raw ON raw.k IS a.k",
             "COALESCE(raw.raw_profit, 0)",
             "COALESCE(raw.avg_order, 0)",
+            "raw.quote_min, raw.quote_max, raw.quote_integral, raw.quote_rows",
         )
     } else {
-        (String::new(), "", "a.raw_profit", "a.avg_order")
+        (
+            String::new(),
+            "",
+            "a.raw_profit",
+            "a.avg_order",
+            "a.quote_min, a.quote_max, a.quote_integral, a.quote_rows",
+        )
     };
     let sql = format!(
         "WITH a AS (
@@ -536,7 +592,11 @@ pub(super) fn groups(
                     COALESCE(MAX(o.pnl),0) AS best,
                     COALESCE(MIN(o.pnl),0) AS worst,
                     COALESCE(SUM(o.profitbtc), 0) AS raw_profit,
-                    COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order
+                    COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order,
+                    MIN(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_min,
+                    MAX(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_max,
+                    COUNT(CASE WHEN typeof(o.basecurrency) = 'integer' THEN 1 END) AS quote_integral,
+                    COUNT(*) AS quote_rows
              FROM {src}
              GROUP BY k
          ){raw_cte}
@@ -544,7 +604,7 @@ pub(super) fn groups(
                 {alive},
                 a.n, a.profit, a.wins, a.wsum, a.lsum, a.best, a.worst,
                 {lastedit}, {blacklist}, {whitelist},
-                {raw_profit}, {avg_order}
+                {raw_profit}, {avg_order}, {quote_stats}
          FROM a {raw_join}
          ORDER BY a.profit DESC, a.k"
     );

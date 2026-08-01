@@ -1,3 +1,5 @@
+//! Summary, Strategies, and quote-scope analytics regression tests.
+
 use super::super::test_support::{
     build_replica, corrupt_leaf_page, remove_db, spread_rows, temp_db,
 };
@@ -35,7 +37,8 @@ fn single_day_uses_hourly_grid_and_kinds_reconcile() {
         ],
     );
 
-    let s = summary_on(&conn, &q(day, day + 86_400), false, false).expect("healthy DB reads");
+    let scoped = summary_on(&conn, &q(day, day + 86_400), false, false).expect("healthy DB reads");
+    let s = scoped.data().expect("single-quote summary is comparable");
     assert_eq!(s.bucket_secs, 3_600, "a day or less → hourly grid");
     // The grid steps by exactly an hour with no holes (empty hours are zero-filled —
     // a chart's X axis has to be continuous), and three of them hold the trades.
@@ -75,7 +78,11 @@ fn single_day_uses_hourly_grid_and_kinds_reconcile() {
     );
 
     // A longer period keeps the daily grid and computes no type split at all.
-    let wide = summary_on(&conn, &q(day - 86_400, day + 86_400), false, false).expect("reads");
+    let wide_scope =
+        summary_on(&conn, &q(day - 86_400, day + 86_400), false, false).expect("reads");
+    let wide = wide_scope
+        .data()
+        .expect("single-quote wide summary is comparable");
     assert_eq!(wide.bucket_secs, 86_400, "two days → daily grid");
     assert!(wide.kinds.is_empty(), "no type split on a long period");
 
@@ -99,8 +106,9 @@ fn healthy_summary_exact_values() {
         ],
     );
 
-    let s = summary_on(&conn, &q(day - 86_400, day + 86_400), false, true)
+    let scoped = summary_on(&conn, &q(day - 86_400, day + 86_400), false, true)
         .expect("healthy database must remain readable");
+    let s = scoped.data().expect("single-quote summary is comparable");
     assert_eq!(s.cur.n, 4);
     assert_eq!(s.cur.wins, 2);
     assert_eq!(s.cur.losses, 2);
@@ -120,9 +128,167 @@ fn healthy_summary_exact_values() {
     assert_eq!(s.best.len(), 4);
 
     // A genuinely empty period succeeds with zero counters.
-    let empty = summary_on(&conn, &q(day - 10 * 86_400, day - 9 * 86_400), false, false)
+    let empty_scope = summary_on(&conn, &q(day - 10 * 86_400, day - 9 * 86_400), false, false)
         .expect("an empty period is a successful read");
+    let empty = empty_scope.data().expect("empty scope retains empty data");
     assert_eq!(empty.cur.n, 0);
+
+    drop(conn);
+    remove_db(&path);
+}
+
+/// A homogeneous USDC period must carry USDC through the typed summary boundary.
+///
+/// Changing `analytics::scope_decision_on` back to the historical implicit-USDT assumption makes
+/// the unit assertion fail and would label valid USDC money as USDT in every consumer.
+#[test]
+fn homogeneous_usdc_summary_carries_its_exact_unit() {
+    let path = temp_db("usdc-unit");
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    let conn = build_replica(&path, &[(day + 60, 12.5, "BTCUSDC")]);
+    conn.execute("UPDATE orders_rep SET basecurrency = 8", [])
+        .expect("mark row as USDC");
+
+    let scoped = summary_on(&conn, &q(day, day + 86_400), false, false).expect("summary");
+    match scoped {
+        ProfitScope::Comparable {
+            unit: ProfitUnit::Quote(currency),
+            data,
+        } => {
+            assert_eq!(currency.ticker(), "USDC");
+            assert_eq!((data.cur.profit, data.cur.n), (12.5, 1));
+        }
+        other => panic!("USDC period must be comparable, got {other:?}"),
+    }
+
+    drop(conn);
+    remove_db(&path);
+}
+
+/// Mixed raw quote money is split, while the same rows remain comparable in Percent mode.
+///
+/// Removing the raw preflight from `analytics::summary_on` makes the raw branch expose a scalar
+/// 15.0 whose operands are USDT and USDC; applying that preflight to Percent breaks the second
+/// assertion even though per-trade percentages are dimensionless.
+#[test]
+fn mixed_quote_summary_splits_raw_money_but_keeps_percent() {
+    let path = temp_db("mixed-summary");
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    let conn = build_replica(
+        &path,
+        &[(day + 60, 10.0, "BTCUSDT"), (day + 120, 5.0, "ETHUSDC")],
+    );
+    conn.execute(
+        "UPDATE orders_rep SET basecurrency = 8 WHERE closedate = ?1",
+        [day + 120],
+    )
+    .expect("mark second row as USDC");
+
+    let raw = summary_on(&conn, &q(day, day + 86_400), false, false).expect("raw summary");
+    let split = raw.split().expect("mixed raw money must be split");
+    assert_eq!(split.orders, 2);
+    assert_eq!(split.totals.len(), 2);
+    assert!(
+        raw.data().is_none(),
+        "split scope must carry no scalar summary"
+    );
+
+    let mut percent_query = q(day, day + 86_400);
+    percent_query.metric = ProfitMetric::Percent;
+    let percent = summary_on(&conn, &percent_query, false, false).expect("percent summary");
+    assert!(matches!(
+        percent,
+        ProfitScope::Comparable {
+            unit: ProfitUnit::Percent,
+            ..
+        }
+    ));
+
+    drop(conn);
+    remove_db(&path);
+}
+
+/// The lightweight Strategies payload enforces the same boundary before building its groups.
+///
+/// Omitting the preflight from `analytics::strategy_base_on` would let the Strategies tab bypass
+/// the safe Summary path and expose cross-currency totals and tuner inputs after a tab switch.
+#[test]
+fn mixed_quote_strategy_base_never_bypasses_the_scope_boundary() {
+    let path = temp_db("mixed-strategy-base");
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    let conn = build_replica(
+        &path,
+        &[(day + 60, 10.0, "BTCUSDT"), (day + 120, 5.0, "ETHUSDC")],
+    );
+    conn.execute(
+        "UPDATE orders_rep SET basecurrency = 8 WHERE closedate = ?1",
+        [day + 120],
+    )
+    .expect("mark second row as USDC");
+
+    let raw = strategy_base_on(&conn, &q(day, day + 86_400), false).expect("raw base");
+    assert!(raw.data().is_none());
+    assert_eq!(raw.split().expect("mixed base must split").orders, 2);
+
+    let mut percent_query = q(day, day + 86_400);
+    percent_query.metric = ProfitMetric::Percent;
+    assert!(matches!(
+        strategy_base_on(&conn, &percent_query, false).expect("percent base"),
+        ProfitScope::Comparable {
+            unit: ProfitUnit::Percent,
+            ..
+        }
+    ));
+
+    drop(conn);
+    remove_db(&path);
+}
+
+/// Unknown quote identity quarantines raw money instead of guessing from the current core.
+///
+/// Treating NULL as USDT in `quote_breakdown_on` makes this become comparable and would silently
+/// assign the row's amount to a currency that is absent from its persisted report data.
+#[test]
+fn unknown_quote_summary_never_guesses_a_currency() {
+    let path = temp_db("unknown-summary");
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    let conn = build_replica(&path, &[(day + 60, 10.0, "BTC")]);
+    conn.execute("UPDATE orders_rep SET basecurrency = NULL", [])
+        .expect("remove quote identity");
+
+    let raw = summary_on(&conn, &q(day, day + 86_400), false, false).expect("raw summary");
+    let split = raw.split().expect("unknown raw money must be split");
+    assert_eq!((split.orders, split.unknown_orders), (1, 1));
+    assert!(split.totals.is_empty());
+
+    drop(conn);
+    remove_db(&path);
+}
+
+/// Previous-period money is comparable only when its quote matches the current period.
+///
+/// Dropping the independent previous-period quote check in `analytics::previous_stats` makes the
+/// USDC current KPI compare against a USDT scalar and produces a dimensionally invalid delta.
+#[test]
+fn summary_omits_previous_stats_when_quote_changes() {
+    let path = temp_db("previous-quote");
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    let conn = build_replica(
+        &path,
+        &[(day - 60, 4.0, "BTCUSDT"), (day + 60, 7.0, "BTCUSDC")],
+    );
+    conn.execute(
+        "UPDATE orders_rep SET basecurrency = 8 WHERE closedate >= ?1",
+        [day],
+    )
+    .expect("mark current row as USDC");
+
+    let scoped = summary_on(&conn, &q(day, day + 86_400), false, false).expect("summary");
+    let summary = scoped.data().expect("current USDC period is comparable");
+    assert!(
+        summary.prev.is_none(),
+        "USDT previous must not compare with USDC"
+    );
 
     drop(conn);
     remove_db(&path);
@@ -138,8 +304,11 @@ fn corrupt_replica_surfaces_error_not_empty() {
     let conn = build_replica(&path, &spread_rows(day, 2000));
 
     // Prove the fixture is healthy before introducing damage.
-    let before = summary_on(&conn, &q(day - 86_400, day + 10 * 86_400), false, false)
+    let before_scope = summary_on(&conn, &q(day - 86_400, day + 10 * 86_400), false, false)
         .expect("до порчи БД читается");
+    let before = before_scope
+        .data()
+        .expect("single-quote summary is comparable before corruption");
     assert_eq!(before.cur.n, 2000);
 
     // The scan must use the index whose leaf page is about to be damaged.
@@ -187,6 +356,9 @@ fn corrupt_replica_surfaces_error_not_empty() {
         ),
         Err(ReadFail::NotReady) => {
             panic!("порча не должна выглядеть как «реплика не готова»")
+        }
+        Err(ReadFail::IncomparableQuote) => {
+            panic!("a single-quote corruption fixture must not become a quote-scope error")
         }
         Ok(_) => unreachable!("уже проверено выше"),
     }

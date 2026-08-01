@@ -21,6 +21,7 @@ mod dates;
 pub mod integrity;
 pub mod maint;
 pub mod metrics;
+mod quote;
 pub(crate) mod read_fail;
 mod rep;
 mod report_read;
@@ -30,6 +31,7 @@ mod test_support;
 pub mod tuner;
 
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
+pub use quote::{ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal};
 pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use report_read::max_core_uid_in;

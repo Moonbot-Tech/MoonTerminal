@@ -43,9 +43,11 @@ use rust_i18n::t;
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use moon_core::db::analytics::{DayCell, Query, StrategyBase, Summary};
-use moon_core::db::{FailKind, ProfitMetric, ReadFail, SideFilter};
+use moon_core::db::{
+    FailKind, ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, SideFilter,
+};
 
-use crate::load_state::{LoadState, note_el};
+use crate::load_state::{LoadState, Note, note_el};
 use refresh::{BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh, visible_refresh};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
@@ -95,34 +97,162 @@ pub(crate) fn probe_select_spec() -> Option<&'static str> {
 /// Delay before showing the busy overlay, so quick recomputations do not flash the dimmer.
 const BUSY_OVERLAY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
-// Percent-vs-USDT profit unit for this frame's profit formatters.
+// Comparable profit unit for this frame's shared formatters.
 //
 // Set once from the active metric at the top of `AnalyticsView::render` and read by the shared
 // profit formatters (`summary::fmt_signed`, the calendar and tuner cells), so a "%" suffix
 // appears in percent mode without threading the metric through every signature. The window
 // renders on the UI thread, so a thread-local stays consistent within a frame.
 thread_local! {
-    static PNL_PCT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PNL_UNIT: std::cell::Cell<Option<ProfitUnit>> = const { std::cell::Cell::new(None) };
 }
 /// Record the active profit unit for this frame's formatters.
-pub(in crate::analytics) fn set_pnl_pct(on: bool) {
-    PNL_PCT.with(|c| c.set(on));
+///
+/// Args:
+///     unit: Comparable quote or Percent unit, or `None` outside scalar data.
+///
+/// Returns:
+///     Nothing.
+pub(in crate::analytics) fn set_pnl_unit(unit: Option<ProfitUnit>) {
+    PNL_UNIT.with(|cell| cell.set(unit));
 }
-/// Is the window rendering percent profit (report `Profit` column) rather than USDT?
+/// Is the window rendering percent profit rather than raw quote money?
+///
+/// Returns:
+///     `true` only when the active comparable unit is Percent.
 pub(in crate::analytics) fn pnl_is_pct() -> bool {
-    PNL_PCT.with(|c| c.get())
+    PNL_UNIT.with(|cell| matches!(cell.get(), Some(ProfitUnit::Percent)))
 }
-/// Unit suffix for a profit-metric figure: "%" in percent mode, empty in USDT mode.
+/// Unit suffix for a profit-metric figure: `%` in percent mode and empty for quote money.
+///
+/// Returns:
+///     Percent suffix or an empty quote-money suffix.
 pub(in crate::analytics) fn pnl_suffix() -> &'static str {
     if pnl_is_pct() { "%" } else { "" }
 }
 /// Standalone unit token for a label or axis caption that stands BESIDE a profit figure rather
-/// than riding on it: "USDT" in money mode, "%" in percent mode. A number already carries its own
-/// unit via `pnl_suffix`, so this is only for the surrounding label. Currency tickers are
+/// than riding on it: the exact quote ticker in money mode, `%` in percent mode. A number already
+/// carries its own unit via `pnl_suffix`, so this is only for the surrounding label. Tickers are
 /// language-neutral (see locales/README.md), so — like `pnl_suffix` — it lives in code, not the
 /// dictionary, and slots into a `%{unit}` placeholder.
+///
+/// Returns:
+///     Exact quote ticker, `%`, or an empty label outside comparable scalar data.
 pub(in crate::analytics) fn pnl_unit_label() -> &'static str {
-    if pnl_is_pct() { "%" } else { "USDT" }
+    PNL_UNIT.with(|cell| match cell.get() {
+        Some(ProfitUnit::Percent) => "%",
+        Some(ProfitUnit::Quote(currency)) => currency.ticker(),
+        None => "",
+    })
+}
+
+/// UI load state that preserves the database's profit-scope invariant.
+pub(in crate::analytics) enum ProfitLoadState<T> {
+    /// A request is in flight and no scalar unit has been verified yet.
+    Loading,
+    /// Comparable or legitimately empty scalar data and its optional exact unit.
+    Ready {
+        /// `None` belongs only to an empty query that has no currency to infer.
+        unit: Option<ProfitUnit>,
+        /// Current scalar payload.
+        data: Arc<T>,
+    },
+    /// Raw money is unsafe as one scalar; only per-quote totals are retained.
+    Split(QuoteBreakdown),
+    /// The report replica or required schema is not available yet.
+    NotReady,
+    /// A classified read failure with no stale scalar payload.
+    Failed(ReadFail),
+}
+
+impl<T> Default for ProfitLoadState<T> {
+    /// Begin with a fresh unitless loading state.
+    ///
+    /// Returns:
+    ///     Loading state without stale scalar data.
+    fn default() -> Self {
+        Self::Loading
+    }
+}
+
+impl<T> ProfitLoadState<T> {
+    /// Publish one typed database result without creating contradictory unit/split fields.
+    ///
+    /// Args:
+    ///     result: Comparable, empty, split-only, or failed database result.
+    ///
+    /// Returns:
+    ///     Nothing.
+    fn apply(&mut self, result: moon_core::db::ReadResult<ProfitScope<T>>) {
+        *self = match result {
+            Ok(ProfitScope::Comparable { unit, data }) => Self::Ready {
+                unit: Some(unit),
+                data: Arc::new(data),
+            },
+            Ok(ProfitScope::Empty(data)) => Self::Ready {
+                unit: None,
+                data: Arc::new(data),
+            },
+            Ok(ProfitScope::Split(totals)) => Self::Split(totals),
+            Err(ReadFail::NotReady) => Self::NotReady,
+            Err(error) => Self::Failed(error),
+        };
+    }
+
+    /// Borrow scalar data when the scope is comparable or legitimately empty.
+    ///
+    /// Returns:
+    ///     Current scalar payload, or `None` for loading, split, and failed states.
+    fn data(&self) -> Option<&Arc<T>> {
+        match self {
+            Self::Ready { data, .. } => Some(data),
+            Self::Loading | Self::Split(_) | Self::NotReady | Self::Failed(_) => None,
+        }
+    }
+
+    /// Return scalar data or the exact placeholder for the current load outcome.
+    ///
+    /// Args:
+    ///     empty: Predicate that classifies a successful scalar payload as empty.
+    ///
+    /// Returns:
+    ///     Ready scalar data or a loading, empty, unavailable, split, or failure note.
+    fn view(&self, empty: impl FnOnce(&T) -> bool) -> Result<&Arc<T>, Note> {
+        match self {
+            Self::Loading => Err(Note::Loading),
+            Self::Ready { data, .. } if empty(data) => Err(Note::Empty),
+            Self::Ready { data, .. } => Ok(data),
+            Self::Split(_) => Err(Note::IncomparableQuote),
+            Self::NotReady => Err(Note::NotReady),
+            Self::Failed(ReadFail::IncomparableQuote) => Err(Note::IncomparableQuote),
+            Self::Failed(error) => Err(Note::Failed {
+                msg: error.to_string().into(),
+                kind: error.kind().unwrap_or(FailKind::Other),
+            }),
+        }
+    }
+
+    /// Exact unit carried by the ready scalar payload.
+    ///
+    /// Returns:
+    ///     Quote currency or Percent, or `None` outside a comparable scope.
+    fn unit(&self) -> Option<ProfitUnit> {
+        match self {
+            Self::Ready { unit, .. } => *unit,
+            Self::Loading | Self::Split(_) | Self::NotReady | Self::Failed(_) => None,
+        }
+    }
+
+    /// Split totals retained for an incomparable raw-money scope.
+    ///
+    /// Returns:
+    ///     Per-quote totals only for the split state.
+    fn split(&self) -> Option<&QuoteBreakdown> {
+        match self {
+            Self::Split(totals) => Some(totals),
+            Self::Loading | Self::Ready { .. } | Self::NotReady | Self::Failed(_) => None,
+        }
+    }
 }
 
 /// Process-lifetime Analytics choices restored when its OS window is recreated.
@@ -191,14 +321,14 @@ pub struct AnalyticsView {
     side: SideFilter,
     /// `None` means all, `Some(false)` real, and `Some(true)` emulated.
     emu: Option<bool>,
-    /// Profit metric: absolute money (`Usdt`) or the report `Profit` column
+    /// Profit metric: absolute quote money (`Quote`) or the report `Profit` column
     /// (`Percent` = profit ÷ spent). Persisted in `layout.analytics_profit_percent`.
     metric: ProfitMetric,
     /// Background summary state with distinct loading, unavailable, ready, and
     /// failed outcomes so only a successful empty read appears empty.
-    pub(super) data: LoadState<Summary>,
+    pub(in crate::analytics) data: ProfitLoadState<Summary>,
     /// Compact strategy-list and coin-universe base, separate from the expensive Summary.
-    pub(super) strategy_data: LoadState<StrategyBase>,
+    pub(in crate::analytics) strategy_data: ProfitLoadState<StrategyBase>,
     /// Period currently represented by `strategy_data`.
     strategy_data_period: Period,
     /// Whether the compact Strategies base predates the latest report generation.
@@ -280,7 +410,7 @@ pub struct AnalyticsView {
     /// `tuner::list::ensure_visible` owns it.
     strat_visible: Option<tuner::VisibleRows>,
     /// Calendar tab: cells (PnL, trades, and wins) for the loaded range; Day mode uses hourly cells.
-    pub(super) cal_days: LoadState<Vec<DayCell>>,
+    pub(in crate::analytics) cal_days: ProfitLoadState<Vec<DayCell>>,
     cal_seq: u64,
     /// Whether the series is stale for the current scope or report generation.
     cal_dirty: bool,
@@ -396,11 +526,11 @@ impl AnalyticsView {
         // profit-descending default used before this preference existed.
         let saved_strat_sort =
             tuner::restore_strat_sort(backend.read(cx).layout.analytics_strat_sort.clone());
-        // Profit metric from the previous run (default USDT).
+        // Profit metric from the previous run (default raw quote money).
         let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
             ProfitMetric::Percent
         } else {
-            ProfitMetric::Usdt
+            ProfitMetric::Quote
         };
         // KPI matrix collapse state from the previous run (default expanded).
         let saved_kpi_collapsed = backend.read(cx).layout.analytics_kpi_collapsed;
@@ -472,8 +602,8 @@ impl AnalyticsView {
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
             metric: saved_metric,
-            data: LoadState::default(),
-            strategy_data: LoadState::default(),
+            data: ProfitLoadState::default(),
+            strategy_data: ProfitLoadState::default(),
             strategy_data_period: saved_strat_period.unwrap_or(Period::CurMonth),
             strategy_dirty: true,
             undated: None,
@@ -498,7 +628,7 @@ impl AnalyticsView {
             strat_cols: saved_strat_cols,
             strat_core_w: None,
             strat_visible: None,
-            cal_days: LoadState::default(),
+            cal_days: ProfitLoadState::default(),
             cal_seq: 0,
             cal_dirty: true,
             cal_mode: saved_mode,
@@ -883,7 +1013,9 @@ impl AnalyticsView {
     fn reload_summary(&mut self, after_report: bool, show_overlay: bool, cx: &mut Context<Self>) {
         // Mark the request at its start so an error from another period cannot
         // remain under the current period label.
-        self.data.begin();
+        // Quote identity belongs to the request scope. Retaining stale scalar data would render
+        // it briefly under the new metric/core filters before the exact unit is known.
+        self.data = ProfitLoadState::default();
         // Drop every chart hover: the bars/columns under the cursor are about to be
         // replaced (and on a single-day period the right card swaps its whole element
         // tree), so they never fire `hovered = false` and a stale index would re-open a
@@ -962,7 +1094,8 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
-        self.strategy_data.begin();
+        // Do not carry scalar groups across a scope whose quote identity has not been verified.
+        self.strategy_data = ProfitLoadState::default();
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
         let report_req = self.current_report_generation();
@@ -1024,7 +1157,8 @@ impl AnalyticsView {
                     data_error.is_some(),
                     undated_error.is_some(),
                     cores_error.is_some(),
-                ) && !probe_took_over
+                ) && this.strategy_data.split().is_none()
+                    && !probe_took_over
                     && chain_visible_axis
                     && this.tab == Tab::Strategies
                 {
@@ -1218,8 +1352,15 @@ impl AnalyticsView {
         }
     }
 
-    /// Switch the profit metric (USDT ⇔ percent). Every figure and the tuner sweep are
-    /// computed under it, so the switch persists and reloads — it is not a display-only toggle.
+    /// Switch between raw quote money and percent. Every figure and tuner sweep is computed under
+    /// the selected lens, so the switch persists and reloads rather than only changing labels.
+    ///
+    /// Args:
+    ///     metric: New raw-quote or Percent lens.
+    ///     cx: Analytics view context used to persist and reload.
+    ///
+    /// Returns:
+    ///     Nothing.
     fn set_metric(&mut self, metric: ProfitMetric, cx: &mut Context<Self>) {
         if self.metric == metric {
             return;
@@ -1270,19 +1411,38 @@ impl Focusable for AnalyticsView {
 }
 
 impl Render for AnalyticsView {
+    /// Render the active Analytics tab with quote-safe scope state and shared chrome.
+    ///
+    /// Args:
+    ///     window: Owning window used for responsive chrome width.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Complete Analytics surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        // Arm the profit formatters for this frame: "%" suffix in percent mode, none in USDT.
-        set_pnl_pct(self.metric == ProfitMetric::Percent);
+        let (unit, split) = match self.tab {
+            Tab::Summary => (self.data.unit(), self.data.split().cloned()),
+            Tab::Strategies => (
+                self.strategy_data.unit(),
+                self.strategy_data.split().cloned(),
+            ),
+            Tab::Calendar => (self.cal_days.unit(), self.cal_days.split().cloned()),
+        };
+        // Arm shared formatters with the exact comparable unit published by the active tab.
+        set_pnl_unit(unit);
         let chrome_width = match window.window_bounds() {
             WindowBounds::Windowed(b)
             | WindowBounds::Maximized(b)
             | WindowBounds::Fullscreen(b) => f32::from(b.size.width),
         };
-        let body = match self.tab {
-            Tab::Summary => self.summary_tab(p, cx),
-            Tab::Strategies => self.strategies_tab(p, window, cx),
-            Tab::Calendar => self.calendar_tab(p, cx),
+        let body = match split {
+            Some(totals) => quote_split_note(&totals, p, cx),
+            None => match self.tab {
+                Tab::Summary => self.summary_tab(p, cx),
+                Tab::Strategies => self.strategies_tab(p, window, cx),
+                Tab::Calendar => self.calendar_tab(p, cx),
+            },
         };
         // Tabs divide their own height, pinning bottom bars to the window and scrolling content
         // internally, so there is no outer scroll.
@@ -1400,6 +1560,92 @@ impl Render for AnalyticsView {
                     .hit_overlay(),
             )
     }
+}
+
+/// Render the safe replacement for raw analytics over mixed or unknown quote currencies.
+///
+/// Args:
+///     totals: Known quote buckets and unknown row count for the active scope.
+///     p: Active MoonUI palette.
+///     cx: Analytics render context.
+///
+/// Returns:
+///     A centered, wrapping explanation with split totals and recovery guidance.
+fn quote_split_note(
+    totals: &QuoteBreakdown,
+    p: MoonPalette,
+    cx: &Context<AnalyticsView>,
+) -> AnyElement {
+    let mut chips = h_flex().flex_wrap().justify_center().gap_2();
+    for total in &totals.totals {
+        let color = if total.profit > 0.0 {
+            p.green
+        } else if total.profit < 0.0 {
+            p.red
+        } else {
+            p.text_soft
+        };
+        chips = chips.child(
+            div()
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(moon(p.table_head))
+                .text_color(moon(color))
+                .child(quote_total_text(*total)),
+        );
+    }
+    if totals.unknown_orders > 0 {
+        chips = chips.child(
+            div()
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .bg(moon(p.table_head))
+                .text_color(moon(p.orange))
+                .child(t!("analytics.quote_unknown_orders", n = totals.unknown_orders).to_string()),
+        );
+    }
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .p_6()
+        .child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(moon(p.orange))
+                .child(t!("analytics.quote_split_title").to_string()),
+        )
+        .child(
+            div()
+                .max_w(design::font_w_px(cx, 700.0))
+                .text_center()
+                .text_color(moon(p.text_soft))
+                .child(t!("analytics.quote_split_detail").to_string()),
+        )
+        .child(chips)
+        .child(
+            div()
+                .text_color(moon(p.text_muted))
+                .child(t!("analytics.quote_split_orders", n = totals.orders).to_string()),
+        )
+        .into_any_element()
+}
+
+/// Format one exact quote total with enough precision for crypto-denominated reports.
+///
+/// Args:
+///     total: Known quote aggregate.
+///
+/// Returns:
+///     Signed compact amount followed by its ticker.
+fn quote_total_text(total: moon_core::db::QuoteTotal) -> String {
+    let amount =
+        moon_core::util::fmt::compact(total.profit.abs(), total.currency.display_decimals());
+    let sign = if total.profit >= 0.0 { "+" } else { "-" };
+    format!("{sign}{amount} {}", total.currency.ticker())
 }
 
 fn analytics_header(p: MoonPalette, cx: &App) -> impl IntoElement {

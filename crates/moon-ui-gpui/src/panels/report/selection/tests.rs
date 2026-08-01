@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use gpui::SharedString;
+use moon_core::db;
 use moon_ui::MoonDataTableState;
 use rusqlite::types::Value;
 
@@ -46,7 +47,10 @@ fn fixture() -> (Vec<String>, ReportData) {
             rows,
             core_uids,
             row_keys: keys,
-            totals: (0.0, 4),
+            totals: db::QuoteBreakdown {
+                orders: 4,
+                ..Default::default()
+            },
         },
     )
 }

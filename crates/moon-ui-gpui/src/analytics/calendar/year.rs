@@ -10,7 +10,7 @@ use moon_ui::{MoonPalette, MoonScrollableElement, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::super::summary::{fmt_signed, sign_color};
+use super::super::summary::{fmt_signed, fmt_signed_unit, sign_color};
 use super::{date_of, now_ym, split_i18n};
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -58,6 +58,18 @@ impl AnalyticsView {
             .into_any_element()
     }
 
+    /// Render one year row and its twelve month cells.
+    ///
+    /// Args:
+    ///     y: Rendered year.
+    ///     cy: Current UTC year.
+    ///     cm: Current UTC month.
+    ///     agg: Month aggregates keyed by year and month.
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     One complete year block.
     fn year_block(
         &self,
         y: i32,
@@ -98,7 +110,7 @@ impl AnalyticsView {
                         div()
                             .text_size(design::t_body(cx))
                             .text_color(moon(sign_color(p, year_total)))
-                            .child(fmt_signed(year_total)),
+                            .child(fmt_signed_unit(year_total)),
                     ),
             )
             .child(grid)

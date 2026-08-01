@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use super::read_fail::read_fail;
 use super::rep;
-use super::{read_sources_res, table_columns_res, ReadResult, ReadSource};
+use super::{read_sources_res, table_columns_res, QuoteBreakdown, ReadResult, ReadSource};
 
 /// Columns and ordering displayed in the Reports window; the window owns titles and widths.
 ///
@@ -99,16 +99,16 @@ pub enum SideFilter {
 
 /// Which quantity every profit figure in the Analytics window is measured in.
 ///
-/// `Usdt` sums the raw `profitbtc` (absolute money in the pair quote currency, as before).
+/// `Quote` uses raw `profitbtc` only when every contributing row has one known quote.
 /// `Percent` measures each trade as `profitbtc / spentbtc * 100` — the exact formula of the
 /// MoonBot report's `Profit` column: return on the capital spent, independent of order size.
 /// The choice is a per-`Query` lens, applied once in the source projection (see
 /// `analytics::unified_from`), so every aggregation and the tuner sweep read the same metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProfitMetric {
-    /// Absolute money — the historical behaviour and the `ProfitUSDT` report column.
+    /// Absolute money in one exact quote currency.
     #[default]
-    Usdt,
+    Quote,
     /// Return on spent capital in percent — the report's `Profit` column.
     Percent,
 }
@@ -427,7 +427,7 @@ fn append_strategy_filter(
 /// Aggregate profit and order count over the complete filter, not only the top N.
 ///
 /// Returns `Failed` when source discovery or any aggregate query fails; only a
-/// successful empty result returns `(0.0, 0)`. The open connection means this
+/// successful empty result returns an empty breakdown. The open connection means this
 /// function cannot return `NotReady`.
 ///
 /// Args:
@@ -435,13 +435,13 @@ fn append_strategy_filter(
 ///     f: Complete Report filter.
 ///
 /// Returns:
-///     Exact profit sum and row count across all sources.
+///     Exact known-currency buckets plus unknown and complete row counts.
 ///
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
-pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<(f64, i64)> {
+pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<QuoteBreakdown> {
     const CTX: &str = "отчёты: query_totals";
-    let (mut sum, mut count) = (0.0f64, 0i64);
+    let mut groups = Vec::new();
     let has_strategy_names = f
         .strategies
         .as_ref()
@@ -454,17 +454,26 @@ pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<(f64, i64
         } else {
             "0.0"
         };
-        let sql = format!("SELECT {profit}, COUNT(*) FROM {} r{where_sql}", src.table);
+        let (quote, group_by) =
+            super::quote::trusted_quote_group("r.basecurrency", src.cols.contains("basecurrency"));
+        let sql = format!(
+            "SELECT {quote}, {profit}, COUNT(*) FROM {} r{where_sql}{group_by}",
+            src.table
+        );
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        let (s, c) = conn
-            .query_row(&sql, refs.as_slice(), |r| {
-                Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)?))
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+        let rows = stmt
+            .query_map(refs.as_slice(), |r| {
+                let raw = r.get::<_, Value>(0)?;
+                let ordinal = super::quote::report_ordinal_from_value(&raw);
+                Ok((ordinal, r.get::<_, f64>(1)?, r.get::<_, i64>(2)?))
             })
             .map_err(|e| read_fail(CTX, e))?;
-        sum += s;
-        count += c;
+        for row in rows {
+            groups.push(row.map_err(|e| read_fail(CTX, e))?);
+        }
     }
-    Ok((sum, count))
+    Ok(QuoteBreakdown::from_groups(groups))
 }
 
 /// Return the top `limit` reports for the filter and sort using all display columns.

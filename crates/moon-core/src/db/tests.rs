@@ -1,3 +1,5 @@
+//! Reports-replica storage and transitional-reader regression tests.
+
 use super::*;
 use rusqlite::types::Value;
 use std::cell::Cell;
@@ -534,12 +536,12 @@ fn union_reader_and_legacy_drop() {
     conn.execute_batch(
         "CREATE TABLE closed_sell_reports (
             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
-            coin TEXT, profitbtc REAL, closedate INTEGER,
+            coin TEXT, profitbtc REAL, closedate INTEGER, basecurrency INTEGER,
             created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
             PRIMARY KEY (core_uid, db_id));
          INSERT INTO closed_sell_reports
-            (core_uid, core_name, db_id, coin, profitbtc, closedate, created_ms, updated_ms)
-         VALUES (1, 'BB1', 42, 'BTCUSDT', 0.5, 1780000000, 0, 0);",
+            (core_uid, core_name, db_id, coin, profitbtc, closedate, basecurrency, created_ms, updated_ms)
+         VALUES (1, 'BB1', 42, 'BTCUSDT', 0.5, 1780000000, 1, 0, 0);",
     )
     .unwrap();
 
@@ -551,12 +553,14 @@ fn union_reader_and_legacy_drop() {
         "ALTER TABLE orders_rep ADD COLUMN profitbtc REAL",
         "ALTER TABLE orders_rep ADD COLUMN closedate INTEGER",
         "ALTER TABLE orders_rep ADD COLUMN id INTEGER",
+        "ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER",
     ] {
         conn.execute(ddl, []).unwrap();
     }
     conn.execute(
-        "INSERT INTO orders_rep (core_uid, core_name, newrecid, coin, profitbtc, closedate, id)
-         VALUES (2, 'Rep', 7, 'ETHUSDT', 1.5, 1780000100, 99)",
+        "INSERT INTO orders_rep
+            (core_uid, core_name, newrecid, coin, profitbtc, closedate, id, basecurrency)
+         VALUES (2, 'Rep', 7, 'ETHUSDT', 1.5, 1780000100, 99, 1)",
         [],
     )
     .unwrap();
@@ -574,9 +578,13 @@ fn union_reader_and_legacy_drop() {
     let legacy_row = t.core_uids.iter().position(|u| *u == 1).unwrap();
     assert_eq!(t.rows[legacy_row][id_ix], Value::Integer(42));
 
-    let (profit, count) = query_totals(&conn, &ReportFilter::default()).expect("итоги читаются");
-    assert_eq!(count, 2);
-    assert!((profit - 2.0).abs() < 1e-9);
+    let totals = query_totals(&conn, &ReportFilter::default()).expect("итоги читаются");
+    assert_eq!(totals.orders, 2);
+    assert_eq!(totals.unknown_orders, 0);
+    assert_eq!(totals.totals.len(), 1);
+    assert_eq!(totals.totals[0].currency.ticker(), "USDT");
+    assert_eq!(totals.totals[0].profit, 2.0);
+    assert_eq!(totals.totals[0].orders, 2);
 
     // SyncComplete for core 1 purges its legacy rows; the empty table is then dropped.
     rep::apply_sync_complete(&conn, &mut st, 1).unwrap();
@@ -665,9 +673,8 @@ fn corrupt_replica_fails_report_totals_instead_of_zeroing() {
         emulator: Some(false),
         ..Default::default()
     };
-    let (profit, count) = query_totals(&conn, &filter).expect("до порчи итоги читаются");
-    assert_eq!(count, 2000);
-    assert!(profit.is_finite());
+    let totals = query_totals(&conn, &filter).expect("до порчи итоги читаются");
+    assert_eq!(totals.orders, 2000);
 
     test_support::corrupt_leaf_page(conn, &path, "orders_rep");
     let conn = Connection::open(&path).expect("битая БД всё ещё открывается");
@@ -696,12 +703,12 @@ fn deleted_filter_default_hides_and_only_mode_inverts() {
     conn.execute_batch(
         "CREATE TABLE closed_sell_reports (
             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, db_id INTEGER NOT NULL,
-            coin TEXT, profitbtc REAL, closedate INTEGER,
+            coin TEXT, profitbtc REAL, closedate INTEGER, basecurrency INTEGER,
             created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
             PRIMARY KEY (core_uid, db_id));
          INSERT INTO closed_sell_reports
-            (core_uid, core_name, db_id, coin, profitbtc, closedate, created_ms, updated_ms)
-         VALUES (1, 'Legacy', 1, 'LEGACY', 1.0, 1780000000, 0, 0);",
+            (core_uid, core_name, db_id, coin, profitbtc, closedate, basecurrency, created_ms, updated_ms)
+         VALUES (1, 'Legacy', 1, 'LEGACY', 1.0, 1780000000, 1, 0, 0);",
     )
     .unwrap();
 
@@ -713,10 +720,12 @@ fn deleted_filter_default_hides_and_only_mode_inverts() {
          ALTER TABLE orders_rep ADD COLUMN profitbtc REAL;
          ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
          ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;
-         INSERT INTO orders_rep (core_uid, core_name, newrecid, coin, profitbtc, closedate, deleted)
-         VALUES (2, 'Rep', 1, 'KEPT',   10.0, 1780000100, 0),
-                (2, 'Rep', 2, 'GONE',  -50.0, 1780000200, 1),
-                (2, 'Rep', 3, 'NULLD',  2.0, 1780000300, NULL);",
+         ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;
+         INSERT INTO orders_rep
+            (core_uid, core_name, newrecid, coin, profitbtc, closedate, deleted, basecurrency)
+         VALUES (2, 'Rep', 1, 'KEPT',   10.0, 1780000100, 0, 1),
+                (2, 'Rep', 2, 'GONE',  -50.0, 1780000200, 1, 1),
+                (2, 'Rep', 3, 'NULLD',  2.0, 1780000300, NULL, 1);",
     )
     .unwrap();
 
@@ -738,9 +747,12 @@ fn deleted_filter_default_hides_and_only_mode_inverts() {
     // Default: the soft-deleted row is gone from rows and totals alike.
     let visible = ReportFilter::default();
     assert_eq!(coins(&visible), ["KEPT", "LEGACY", "NULLD"]);
-    let (profit, count) = query_totals(&conn, &visible).expect("итоги читаются");
-    assert_eq!(count, 3);
-    assert!((profit - 13.0).abs() < 1e-9, "profit={profit}");
+    let totals = query_totals(&conn, &visible).expect("итоги читаются");
+    assert_eq!(totals.orders, 3);
+    assert_eq!(totals.totals.len(), 1);
+    assert_eq!(totals.totals[0].currency.ticker(), "USDT");
+    assert_eq!(totals.totals[0].profit, 13.0);
+    assert_eq!(totals.totals[0].orders, 3);
 
     // Deleted-only: exactly the soft-deleted row; the legacy source yields nothing.
     let only = ReportFilter {
@@ -748,9 +760,12 @@ fn deleted_filter_default_hides_and_only_mode_inverts() {
         ..Default::default()
     };
     assert_eq!(coins(&only), ["GONE"]);
-    let (profit, count) = query_totals(&conn, &only).expect("итоги читаются");
-    assert_eq!(count, 1);
-    assert!((profit + 50.0).abs() < 1e-9, "profit={profit}");
+    let totals = query_totals(&conn, &only).expect("итоги читаются");
+    assert_eq!(totals.orders, 1);
+    assert_eq!(totals.totals.len(), 1);
+    assert_eq!(totals.totals[0].currency.ticker(), "USDT");
+    assert_eq!(totals.totals[0].profit, -50.0);
+    assert_eq!(totals.totals[0].orders, 1);
 }
 
 /// Protects `max_core_uid`: it must fold BOTH report schemas, and a source whose table does not

@@ -63,6 +63,9 @@ impl<T> LoadState<T> {
     }
 
     /// Fold a completed read into the state.
+    ///
+    /// Args:
+    ///     r: Successful payload or classified replica outcome.
     pub(crate) fn apply(&mut self, r: Result<T, ReadFail>) {
         *self = match r {
             Ok(v) => LoadState::Ready(Arc::new(v)),
@@ -76,6 +79,12 @@ impl<T> LoadState<T> {
     ///
     /// This fold is total so a caller cannot observe neither data nor a
     /// placeholder for any representable state.
+    ///
+    /// Args:
+    ///     empty: Predicate that classifies a successful payload as empty.
+    ///
+    /// Returns:
+    ///     Renderable data or the exact placeholder state.
     pub(crate) fn view(&self, empty: impl FnOnce(&T) -> bool) -> Result<&Arc<T>, Note> {
         match self {
             LoadState::Loading { stale: None } => Err(Note::Loading),
@@ -87,9 +96,10 @@ impl<T> LoadState<T> {
                 }
             }
             LoadState::NotReady => Err(Note::NotReady),
+            LoadState::Failed(ReadFail::IncomparableQuote) => Err(Note::IncomparableQuote),
             // `apply` routes `NotReady` to its own state, so a `Failed` here
-            // always carries a kind; `Other` is the conservative stand-in
-            // because it is the one that promises the user nothing.
+            // always carries a database kind; `Other` is the conservative
+            // stand-in because it is the one that promises the user nothing.
             LoadState::Failed(e) => Err(Note::Failed {
                 msg: e.to_string().into(),
                 kind: e.kind().unwrap_or(FailKind::Other),
@@ -104,6 +114,8 @@ pub(crate) enum Note {
     Loading,
     /// The replica or required schema is unavailable.
     NotReady,
+    /// Raw-money analytics cannot form one scalar because quote identity is mixed or unknown.
+    IncomparableQuote,
     /// A read failure with its originating error message. `kind` picks the guidance:
     /// only contention is worth retrying and only corruption is known to be
     /// permanent, so an I/O error must promise neither.
@@ -121,6 +133,16 @@ pub(crate) enum Note {
 /// caller that asked `view` to classify emptiness. A panel that renders its own
 /// empty state (the Report table keeps its header chrome and its own text)
 /// simply never asks — see `panels::report`.
+///
+/// Args:
+///     id: Stable MoonAlert element identifier.
+///     note: Classified placeholder outcome.
+///     pad: Unscaled outer padding.
+///     p: Active MoonUI palette.
+///     cx: Application context used for typography scaling.
+///
+/// Returns:
+///     Muted placeholder or classified database-error alert.
 pub(crate) fn note_el(
     id: &'static str,
     note: Note,
@@ -132,6 +154,9 @@ pub(crate) fn note_el(
         Note::Loading => return muted(t!("common.loading").to_string(), pad, p, cx),
         Note::Empty => return muted(t!("common.empty_period").to_string(), pad, p, cx),
         Note::NotReady => return muted(t!("common.db_not_ready").to_string(), pad, p, cx),
+        Note::IncomparableQuote => {
+            return muted(t!("common.incomparable_quote").to_string(), pad, p, cx);
+        }
         Note::Failed { msg, kind } => (msg, kind),
     };
     // Say only what is true of this failure: corruption requires repair,
@@ -169,3 +194,6 @@ fn muted(text: String, pad: f32, p: MoonPalette, cx: &App) -> AnyElement {
         .child(text)
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;

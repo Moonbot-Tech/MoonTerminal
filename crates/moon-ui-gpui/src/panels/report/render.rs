@@ -367,28 +367,32 @@ impl Render for ReportPanel {
             );
         totals = match self.data.data() {
             Some(d) => {
-                let (sum, count) = d.totals;
-                let sum_col = if sum > 0.0 {
-                    p.green
-                } else if sum < 0.0 {
-                    p.red
-                } else {
-                    p.text_soft
-                };
-                totals
-                    .child(
-                        // The total is in the pair's quote currency, usually USDT,
-                        // so use two decimals and a neutral dollar marker.
+                for total in &d.totals.totals {
+                    let sum_col = if total.profit > 0.0 {
+                        p.green
+                    } else if total.profit < 0.0 {
+                        p.red
+                    } else {
+                        p.text_soft
+                    };
+                    totals = totals.child(
                         div()
                             .font_bold()
                             .text_color(rgb(sum_col))
-                            .child(format!("{sum:+.2} $")),
-                    )
+                            .child(report_quote_total_text(*total)),
+                    );
+                }
+                if d.totals.unknown_orders > 0 {
+                    totals = totals.child(div().font_bold().text_color(rgb(p.orange)).child(
+                        t!("report.unknown_quote_orders", n = d.totals.unknown_orders).to_string(),
+                    ));
+                }
+                totals
                     .child(
                         div()
                             .text_size(design::t_body(cx))
                             .text_color(rgb(p.text_soft))
-                            .child(t!("report.orders_count", count = count).to_string()),
+                            .child(t!("report.orders_count", count = d.totals.orders).to_string()),
                     )
                     // The shown-rows note yields its right slot to the selection commands, which
                     // ride their own `ml_auto` group instead: a flexible spacer would claim a whole
@@ -474,4 +478,18 @@ impl Render for ReportPanel {
             root
         }
     }
+}
+
+/// Format one Report footer total with precision appropriate to its quote currency.
+///
+/// Args:
+///     total: Known-currency aggregate to display.
+///
+/// Returns:
+///     Signed compact amount followed by the exact quote ticker.
+fn report_quote_total_text(total: db::QuoteTotal) -> String {
+    let amount =
+        moon_core::util::fmt::compact(total.profit.abs(), total.currency.display_decimals());
+    let sign = if total.profit >= 0.0 { "+" } else { "-" };
+    format!("{sign}{amount} {}", total.currency.ticker())
 }

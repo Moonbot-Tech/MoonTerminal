@@ -21,8 +21,8 @@ pub(super) struct ReportData {
     /// Stable semantic identity parallel to `rows`; malformed legacy rows without `id` are `None`
     /// and remain unselectable rather than receiving an index-based identity that can drift.
     pub(super) row_keys: Vec<Option<selection::ReportRowKey>>,
-    /// Exact `(profit sum, order count)` over the full filter, not the displayed top N.
-    pub(super) totals: (f64, i64),
+    /// Exact per-quote totals over the full filter, not the displayed top N.
+    pub(super) totals: db::QuoteBreakdown,
 }
 
 /// One completed background batch with optional selector-metadata refresh.

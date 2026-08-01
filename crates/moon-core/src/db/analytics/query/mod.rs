@@ -1,8 +1,9 @@
 //! Selection filters and the unified report source (`Query`, `unified_from`).
 
+use rusqlite::types::Value;
 use rusqlite::Connection;
 
-use super::super::{ProfitMetric, ReadResult, SideFilter};
+use super::super::{ProfitMetric, QuoteBreakdown, ReadResult, SideFilter};
 
 /// Selection filters shared by all Analytics tabs.
 #[derive(Clone, Debug, Default)]
@@ -25,7 +26,7 @@ pub struct Query {
     /// and that Save writes to. Scoping to the clicked row alone was the bug where
     /// "plan vs fact" compared one strategy while N were selected.
     pub strategies: Vec<(i64, Option<u64>)>,
-    /// Which quantity every profit figure is measured in: absolute money (`Usdt`) or
+    /// Which quantity every profit figure is measured in: absolute quote money (`Quote`) or
     /// return on spent capital (`Percent`, the report's `Profit` column). Applied once in
     /// [`unified_from`]'s projected `pnl` column, so every reader below shares the choice.
     pub metric: ProfitMetric,
@@ -136,7 +137,59 @@ const UNIFIED_COLS: &[&str] = &[
     "strategyid",
     "emulator",
     "spentbtc",
+    "basecurrency",
 ];
+
+/// Read safe raw-money totals for one Analytics query scope.
+///
+/// This query intentionally ignores the active profit lens: split totals always
+/// use raw `profitbtc`, while the same period, core, side, emulator, and strategy
+/// predicates as the analytical source keep the scope exact.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     q: Fully resolved Analytics query with concrete period bounds.
+///
+/// Returns:
+///     Known quote buckets plus unknown and complete row counts.
+pub(in crate::db) fn quote_breakdown_on(
+    conn: &Connection,
+    q: &Query,
+) -> ReadResult<QuoteBreakdown> {
+    const CTX: &str = "analytics: quote breakdown";
+    let has_names = strategies_attached(conn);
+    let mut groups = Vec::new();
+    for src in super::super::read_sources_res(conn)? {
+        if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
+            continue;
+        }
+        let sid = effective_sid_expr("r", &src.cols, has_names);
+        let where_sql = q.where_sql(&src.cols, &sid);
+        let (quote, group_by) = super::super::quote::trusted_quote_group(
+            "r.basecurrency",
+            src.cols.contains("basecurrency"),
+        );
+        let sql = format!(
+            "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0.0), COUNT(*) \
+             FROM {} r WHERE {where_sql}{group_by}",
+            src.table
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| super::super::read_fail::read_fail(CTX, e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![q.from, q.to], |row| {
+                let ordinal =
+                    super::super::quote::report_ordinal_from_value(&row.get::<_, Value>(0)?);
+                Ok((ordinal, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?))
+            })
+            .map_err(|e| super::super::read_fail::read_fail(CTX, e))?;
+        for row in rows {
+            groups.push(row.map_err(|e| super::super::read_fail::read_fail(CTX, e))?);
+        }
+    }
+    Ok(QuoteBreakdown::from_groups(groups))
+}
 
 /// A row's strategy id, with LIQUIDATION rows attributed to the strategy named in them.
 ///
@@ -225,6 +278,13 @@ pub(in crate::db) fn effective_sid_expr(
 /// Missing columns project as NULL. `Ok(None)` means no source has received the
 /// required schema; a failed schema probe remains an error because opening a
 /// database does not validate its schema b-tree.
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Period, filters, and profit metric projected into each source branch.
+///
+/// Returns:
+///     Unified filtered source SQL, `None` when no source is ready, or a classified failure.
 pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<String>> {
     let cols: Vec<&str> = UNIFIED_COLS
         .iter()
@@ -283,7 +343,7 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
             .collect::<Vec<_>>()
             .join(", ");
         // The active profit metric, projected ONCE here as `pnl` so every aggregation below and
-        // the tuner sweep read one column. `Usdt` is the raw money; `Percent` is the report's
+        // the tuner sweep read one column. `Quote` is raw money; `Percent` is the report's
         // `Profit` column (profit ÷ spent × 100 = return on spent capital). The `spentbtc > 0`
         // filter appended below (percent mode) guarantees the ratio is finite and non-NULL, so
         // COUNT, SUM, wins, streaks and the top list all describe the SAME set of trades. Sign is

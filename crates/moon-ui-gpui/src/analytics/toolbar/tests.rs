@@ -6,15 +6,31 @@
 
 use std::collections::HashSet;
 
-use moon_core::db::ReadFail;
 use moon_core::db::analytics::UndatedCloses;
+use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
 use super::super::AnalyticsSessionState;
 use super::{UndatedBanner, sole_core_name, undated_banner_state};
 
 /// Some undated trades, with money attached.
+///
+/// Args:
+///     n: Trade and bucket order count.
+///
+/// Returns:
+///     USDT undated totals wrapped as a loaded optional value.
 fn found(n: i64) -> Option<UndatedCloses> {
-    Some(UndatedCloses { n, profit: -12.5 })
+    Some(UndatedCloses {
+        totals: QuoteBreakdown {
+            totals: vec![QuoteTotal {
+                currency: QuoteCurrency::from_report_ordinal(1).expect("USDT report ordinal"),
+                profit: -12.5,
+                orders: n,
+            }],
+            unknown_orders: 0,
+            orders: n,
+        },
+    })
 }
 
 /// Nothing known yet, and a clean zero, both mean silence — not an empty band.

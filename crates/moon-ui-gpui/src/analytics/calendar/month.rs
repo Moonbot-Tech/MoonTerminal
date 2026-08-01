@@ -11,7 +11,7 @@ use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::super::summary::{fmt_signed, sign_color};
+use super::super::summary::{fmt_signed, fmt_signed_unit, sign_color};
 use super::{date_of, days_in_month, month_start, split_i18n, today_start};
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -125,7 +125,7 @@ impl AnalyticsView {
                 cx,
                 t!("analytics.cal.kpi_profit").to_string(),
                 moon(sign_color(p, profit)),
-                fmt_signed(profit),
+                fmt_signed_unit(profit),
                 dp(profit, pp),
                 false,
             ))

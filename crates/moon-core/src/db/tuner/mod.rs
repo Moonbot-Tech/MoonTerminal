@@ -200,7 +200,7 @@ pub struct VarStats {
     /// Average win and absolute average loss.
     pub avg_win: f64,
     pub avg_loss: f64,
-    /// Average entry size (`spentbtc`; our quote currency is USDT).
+    /// Average entry size in the group's exact persisted quote currency (`spentbtc`).
     pub avg_spent: f64,
     pub max_dd: f64,
 }
@@ -230,6 +230,15 @@ pub struct FilterTunerData {
 }
 
 /// Read the By-filter KPI and histogram from one SQLite snapshot.
+///
+/// Args:
+///     q: Shared report scope and profit metric.
+///     variants: Ordered baseline and threshold counterfactuals.
+///     field: Whitelisted field rendered by the histogram.
+///     buckets: Requested approximate histogram bucket count.
+///
+/// Returns:
+///     Independently classified KPI and histogram results from one validated source.
 pub fn filter_tuner_data(
     q: &Query,
     variants: &[Variant],
@@ -238,9 +247,18 @@ pub fn filter_tuner_data(
 ) -> FilterTunerData {
     let compound = super::open_reader().and_then(|conn| {
         super::with_read_snapshot(&conn, |snapshot| {
+            let (query, source) = match tuner_source_on(snapshot, q) {
+                Ok(source) => source,
+                Err(error) => {
+                    return Ok(FilterTunerData {
+                        stats: Err(error.clone()),
+                        histogram: Err(error),
+                    });
+                }
+            };
             Ok(FilterTunerData {
-                stats: variant_stats_on(snapshot, q, variants),
-                histogram: histogram_on(snapshot, q, field, buckets),
+                stats: variant_stats_from_source(snapshot, &query, &source, variants),
+                histogram: histogram_from_source(snapshot, &query, &source, field, buckets),
             })
         })
     });
@@ -264,14 +282,24 @@ pub fn filter_tuner_data(
 pub fn time_tuner_data(q: &Query, variants: &[Variant]) -> TimeTunerData {
     let compound = super::open_reader().and_then(|conn| {
         super::with_read_snapshot(&conn, |snapshot| {
-            let slider = time::slider_profiles_on(snapshot, q);
+            let (query, source) = match tuner_source_on(snapshot, q) {
+                Ok(source) => source,
+                Err(error) => {
+                    return Ok(TimeTunerData {
+                        profiles: Err(error.clone()),
+                        stats: Err(error.clone()),
+                        slider: Err(error),
+                    });
+                }
+            };
+            let slider = time::slider_profiles_from_source(snapshot, &query, &source);
             let profiles = slider
                 .as_ref()
                 .map(|profiles| vec![profiles.entry_hours])
                 .map_err(Clone::clone);
             Ok(TimeTunerData {
                 profiles,
-                stats: variant_stats_on(snapshot, q, variants),
+                stats: variant_stats_from_source(snapshot, &query, &source, variants),
                 slider,
             })
         })
@@ -339,27 +367,63 @@ pub fn coin_tuner_data(
 ///     q: Report scope and period.
 ///
 /// Returns:
-///     The floored query and `FROM` source, or `NotReady` when no source can answer.
+///     The floored query and `FROM` source, `IncomparableQuote` for unsafe raw money, or
+///     `NotReady` when no source can answer.
 fn tuner_source_on(conn: &Connection, q: &Query) -> ReadResult<(Query, String)> {
     let mut q = q.clone();
     q.floor_all_history();
+    if q.metric == crate::db::ProfitMetric::Quote
+        && matches!(
+            crate::db::analytics::quote_breakdown_on(conn, &q)?.scope(),
+            crate::db::QuoteScope::Mixed | crate::db::QuoteScope::Unknown
+        )
+    {
+        return Err(ReadFail::IncomparableQuote);
+    }
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
     Ok((q, src))
 }
 
-/// Open a reader and build the unified tuner source for `q`, applying the tuner's all-history
-/// floor (`from = 1`, the same floor `coin_groups`/`strategies_for_coins` use so the coin
-/// table and the KPI matrix cover one period). `NotReady` when no source carries the required
-/// schema. Returns the connection, the floored query, and the `FROM` source string.
+/// Run quote preflight and row materialization inside one pinned tuner snapshot.
 ///
-/// The plain-reader preamble shared by every non-snapshot tuner scan; `variant_stats` pins a
-/// WAL snapshot of its own instead and does not use this.
-pub(super) fn open_tuner_source(q: &Query) -> ReadResult<(Connection, Query, String)> {
+/// Args:
+///     conn: Open report reader used to create the snapshot.
+///     q: Report scope and period before the tuner all-history floor.
+///     read: Row materializer that must finish before the snapshot is released.
+///
+/// Returns:
+///     Materialized input for CPU-only optimization, or a classified read failure.
+fn tuner_read_on<T>(
+    conn: &Connection,
+    q: &Query,
+    read: impl FnOnce(&Connection, &Query, &str) -> ReadResult<T>,
+) -> ReadResult<T> {
+    super::with_read_snapshot(conn, |snapshot| {
+        let (q, src) = tuner_source_on(snapshot, q)?;
+        read(snapshot, &q, &src)
+    })
+}
+
+/// Open a reader and materialize tuner rows in the same snapshot as quote preflight.
+///
+/// The snapshot ends when `read` returns, before the caller performs CPU-heavy optimization.
+/// This prevents a report commit from adding another quote between scope validation and the
+/// scan without holding a read transaction for the search itself.
+///
+/// Args:
+///     q: Report scope and period before the tuner all-history floor.
+///     read: Row materializer executed inside the pinned snapshot.
+///
+/// Returns:
+///     Materialized tuner input, `NotReady`, `IncomparableQuote`, or a classified read failure.
+pub(super) fn read_tuner_rows<T>(
+    q: &Query,
+    read: impl FnOnce(&Connection, &Query, &str) -> ReadResult<T>,
+) -> ReadResult<T> {
     let conn = super::open_reader()?;
-    let (q, src) = tuner_source_on(&conn, q)?;
-    Ok((conn, q, src))
+    tuner_read_on(&conn, q, read)
 }
 
 /// Scan one field into `(value, pnl)` pairs over the period, dropping NULL and non-finite
@@ -466,9 +530,28 @@ fn variant_stats_on(
     variants: &[Variant],
 ) -> ReadResult<Vec<VarStats>> {
     let (q, src) = tuner_source_on(conn, q)?;
+    variant_stats_from_source(conn, &q, &src, variants)
+}
+
+/// Compute variant KPIs from a source already validated in the same snapshot.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     q: Floored tuner query used by `src`.
+///     src: Unified source whose quote scope was already validated.
+///     variants: Ordered baseline and counterfactual definitions.
+///
+/// Returns:
+///     KPI values in input order or a classified row-scan failure.
+fn variant_stats_from_source(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    variants: &[Variant],
+) -> ReadResult<Vec<VarStats>> {
     variants
         .iter()
-        .map(|variant| one_variant(conn, &src, &q, variant))
+        .map(|variant| one_variant(conn, src, q, variant))
         .collect()
 }
 
@@ -545,6 +628,15 @@ pub fn histogram(q: &Query, field: &str, want: usize) -> ReadResult<Vec<HistBuck
 }
 
 /// Build histogram buckets on an existing connection or compound snapshot.
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Report scope and profit metric.
+///     field: Whitelisted report field to bucket.
+///     want: Requested approximate bucket count.
+///
+/// Returns:
+///     Histogram buckets or a classified read failure.
 fn histogram_on(
     conn: &Connection,
     q: &Query,
@@ -556,7 +648,31 @@ fn histogram_on(
         return Ok(Vec::new());
     }
     let (q, src) = tuner_source_on(conn, q)?;
-    let mut pairs = scan_field_pairs(conn, &q, &src, field, "tuner: histogram")?;
+    histogram_from_source(conn, &q, &src, field, want)
+}
+
+/// Build histogram buckets from a source already validated in the same snapshot.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     q: Floored tuner query used by `src`.
+///     src: Unified source whose quote scope was already validated.
+///     field: Whitelisted report field to bucket.
+///     want: Requested approximate bucket count.
+///
+/// Returns:
+///     Histogram buckets or a classified row-scan failure.
+fn histogram_from_source(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    field: &str,
+    want: usize,
+) -> ReadResult<Vec<HistBucket>> {
+    if !FIELDS.iter().any(|spec| spec.col == field) {
+        return Ok(Vec::new());
+    }
+    let mut pairs = scan_field_pairs(conn, q, src, field, "tuner: histogram")?;
     if pairs.is_empty() {
         return Ok(Vec::new());
     }
@@ -653,6 +769,16 @@ pub(super) fn round_pair_outward(from: f64, to: f64, lo: f64, hi: f64) -> (f64, 
 /// beats the baseline.
 /// `NotReady` means the replica or required schema is absent; `Failed` means
 /// opening or scanning it failed.
+///
+/// Args:
+///     q: Report scope and profit metric.
+///     field: Whitelisted report field to optimize.
+///     min_n: Minimum trades retained by a candidate range.
+///     edges: Quantile search resolution.
+///     round: Whether accepted bounds are rounded outward.
+///
+/// Returns:
+///     Best improving range, no suggestion, or a classified read failure.
 pub fn suggest_field(
     q: &Query,
     field: &str,
@@ -664,8 +790,9 @@ pub fn suggest_field(
         // Programmer error (unknown field), not a read failure.
         return Ok(None);
     }
-    let (conn, q, src) = open_tuner_source(q)?;
-    let mut vals = scan_field_pairs(&conn, &q, &src, field, "tuner: suggest_field")?;
+    let mut vals = read_tuner_rows(q, |conn, q, src| {
+        scan_field_pairs(conn, q, src, field, "tuner: suggest_field")
+    })?;
     // The outer result reports read status; the inner option reports whether a
     // threshold improves on the baseline.
     Ok(best_range(&mut vals, min_n.max(1) as usize, edges, round))

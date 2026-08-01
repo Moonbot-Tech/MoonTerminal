@@ -149,35 +149,80 @@ pub(super) const COL_WORST: MetricCol = MetricCol {
     sort: |g| g.worst,
 };
 
-/// Format active-lens profit with an explicit dollar suffix only in the USDT lens.
+/// Format active-lens profit with its exact quote ticker in the raw-money lens.
 ///
 /// Args:
 ///     group: Aggregate whose active-lens profit should be displayed.
 ///
 /// Returns:
-///     Signed profit with `$` in USDT mode, `%` in percent mode, or a bare em dash for a
-///     non-finite value.
+///     Signed profit with an exact ticker in quote mode, `%` in percent mode, or an em dash
+///     when raw money is not comparable.
 fn tuner_profit_text(group: &GroupStat) -> String {
-    let text = fmt_signed(group.profit);
-    if super::super::pnl_is_pct() || !group.profit.is_finite() {
-        text
-    } else {
-        format!("{text}$")
+    if super::super::pnl_is_pct() {
+        return fmt_signed(group.profit);
+    }
+    match group.quote {
+        moon_core::db::QuoteScope::Single(currency) if group.profit.is_finite() => {
+            format!(
+                "{} {}",
+                signed_quote_amount(group.profit, currency),
+                currency.ticker()
+            )
+        }
+        moon_core::db::QuoteScope::Empty
+        | moon_core::db::QuoteScope::Single(_)
+        | moon_core::db::QuoteScope::Mixed
+        | moon_core::db::QuoteScope::Unknown => "—".to_string(),
     }
 }
 
-/// Format the lens-neutral average order with an explicit dollar suffix.
+/// Format the lens-neutral average order with its exact quote ticker.
 ///
 /// Args:
 ///     group: Aggregate whose average positive order spend should be displayed.
 ///
 /// Returns:
-///     Grouped USDT amount followed immediately by `$`, or a bare em dash for a non-finite value.
+///     Quote amount and ticker, or an em dash for mixed, unknown, or non-finite data.
 fn tuner_avg_order_text(group: &GroupStat) -> String {
-    if group.avg_order.is_finite() {
-        format!("{}$", moon_core::util::fmt::usd_grouped(group.avg_order))
+    match group.quote {
+        moon_core::db::QuoteScope::Single(currency) if group.avg_order.is_finite() => format!(
+            "{} {}",
+            quote_amount(group.avg_order, currency),
+            currency.ticker()
+        ),
+        moon_core::db::QuoteScope::Empty
+        | moon_core::db::QuoteScope::Single(_)
+        | moon_core::db::QuoteScope::Mixed
+        | moon_core::db::QuoteScope::Unknown => "—".to_string(),
+    }
+}
+
+/// Format a signed raw quote amount without its ticker.
+///
+/// Args:
+///     value: Signed quote amount.
+///     currency: Currency controlling display precision.
+///
+/// Returns:
+///     Compact signed amount.
+fn signed_quote_amount(value: f64, currency: moon_core::db::QuoteCurrency) -> String {
+    let sign = if value >= 0.0 { "+" } else { "-" };
+    format!("{sign}{}", quote_amount(value.abs(), currency))
+}
+
+/// Format an unsigned quote amount with stablecoin or crypto precision.
+///
+/// Args:
+///     value: Non-negative quote amount.
+///     currency: Currency controlling display precision.
+///
+/// Returns:
+///     Readable amount without a ticker.
+fn quote_amount(value: f64, currency: moon_core::db::QuoteCurrency) -> String {
+    if currency.display_decimals() == 2 {
+        moon_core::util::fmt::usd_grouped(value)
     } else {
-        "—".to_string()
+        moon_core::util::fmt::compact(value, currency.display_decimals())
     }
 }
 

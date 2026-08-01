@@ -146,6 +146,13 @@ pub(in crate::analytics::tuner) fn partial_sort<T>(
 ///
 /// The list-membership and aliveness fallbacks preserve visible rows when the strategies replica
 /// does not provide enough information to evaluate those filters.
+///
+/// Args:
+///     all: Complete strategy group set.
+///     key: Search, filters, sort, and visible-head limit.
+///
+/// Returns:
+///     Stable display-order indices into `all`.
 pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &VisibleKey) -> Vec<usize> {
     let q = key.search_lower.as_str();
     // Type and name are always known from the report groups, so apply them before filters that
@@ -194,10 +201,19 @@ pub(in crate::analytics) fn filter_sort_indices(all: &[GroupStat], key: &Visible
         if let Some(col) = METRIC_COLS.iter().find(|c| c.key == sort_key) {
             let f = col.sort;
             partial_sort(&mut out, |a, b| {
-                let o = f(&all[*a])
-                    .partial_cmp(&f(&all[*b]))
-                    .unwrap_or(Ordering::Equal);
-                let o = if desc { o.reverse() } else { o };
+                let (left, right) = (f(&all[*a]), f(&all[*b]));
+                // Mixed/unknown quote groups publish NaN for raw-money columns. Keep those
+                // unavailable rows at the bottom in BOTH directions instead of letting the
+                // key tie-break scatter them through valid comparable values.
+                let o = match (left.is_finite(), right.is_finite()) {
+                    (false, false) => Ordering::Equal,
+                    (false, true) => Ordering::Greater,
+                    (true, false) => Ordering::Less,
+                    (true, true) => {
+                        let numeric = left.partial_cmp(&right).unwrap_or(Ordering::Equal);
+                        if desc { numeric.reverse() } else { numeric }
+                    }
+                };
                 o.then_with(|| all[*a].key.cmp(&all[*b].key))
             });
         } else {

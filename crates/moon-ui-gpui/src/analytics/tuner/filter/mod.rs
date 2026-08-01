@@ -740,6 +740,13 @@ impl AnalyticsView {
     /// at the same moment, not somewhere the user has to scroll to. Nothing is drawn until a
     /// search has produced an answer — an untouched grid has nothing to report — and editing any
     /// bound retires the suggestion, taking this with it.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Fit/holdout summary when a completed suggestion has something to disclose.
     fn split_summary(&self, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
         let state::SuggestState::Done {
             split: Some(split), ..
@@ -777,7 +784,7 @@ impl AnalyticsView {
                         // winrate to one decimal as the strategy table shows it, profit factor
                         // and drawdown through the shared dimensionless one. Only the headline
                         // profit carries the unit — the line has to survive truncation on a
-                        // narrow dock, and repeating "USDT" inside it spends that width twice.
+                        // narrow dock, and repeating the quote ticker inside it spends that width twice.
                         .child(
                             t!(
                                 "analytics.tuner.split_stats",

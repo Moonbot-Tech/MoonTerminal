@@ -42,6 +42,13 @@ pub(super) fn rep_init(conn: &Connection) -> super::rep::RepState {
 ///
 /// Each row is `(closedate, profitbtc, coin)`; `buydate` trails `closedate` by
 /// five minutes and every row belongs to core 1, strategy 7, non-emulator.
+///
+/// Args:
+///     path: Temporary SQLite database path.
+///     rows: Independent close-time, profit, and market fixture rows.
+///
+/// Returns:
+///     Open seeded replica connection with quote identity set to USDT.
 pub(super) fn build_replica(path: &Path, rows: &[(i64, f64, &str)]) -> Connection {
     let conn = Connection::open(path).unwrap();
     super::init_db(&conn).unwrap();
@@ -57,7 +64,8 @@ pub(super) fn build_replica(path: &Path, rows: &[(i64, f64, &str)]) -> Connectio
              ALTER TABLE orders_rep ADD COLUMN strategyid INTEGER;
              ALTER TABLE orders_rep ADD COLUMN isshort INTEGER;
              ALTER TABLE orders_rep ADD COLUMN emulator INTEGER;
-             ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;",
+             ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;",
     )
     .unwrap();
     rep_init(&conn);
@@ -65,8 +73,9 @@ pub(super) fn build_replica(path: &Path, rows: &[(i64, f64, &str)]) -> Connectio
     let mut stmt = conn
         .prepare(
             "INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, buydate,
-                    profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted)
-                 VALUES (1, 'CORE-A', ?1, ?2, ?2 - 300, ?3, 100.0, ?4, 7, 0, 0, 0)",
+                    profitbtc, spentbtc, coin, strategyid, isshort, emulator, deleted,
+                    basecurrency)
+                 VALUES (1, 'CORE-A', ?1, ?2, ?2 - 300, ?3, 100.0, ?4, 7, 0, 0, 0, 1)",
         )
         .unwrap();
     for (i, (close, profit, coin)) in rows.iter().enumerate() {

@@ -187,6 +187,10 @@ report.orders_count:
   ru: "ордеров: %{count}"
   en: "orders: %{count}"
   es: "órdenes: %{count}"
+report.unknown_quote_orders:
+  ru: "валюта неизвестна: %{n}"
+  en: "unknown quote: %{n}"
+  es: "moneda desconocida: %{n}"
 report.shown_top:
   ru: "показано (топ): %{n}"
   en: "shown (top): %{n}"

@@ -368,6 +368,7 @@ pub(super) fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>
             Some(1) => (t!("report.cell.emu").to_string(), Some(p.text_soft)),
             _ => (String::new(), None),
         },
+        "basecurrency" => (basecurrency_text(v), None),
         "profitbtc" | "gainedbtc" | "profitpct" => {
             let n = as_f64(v);
             let color = match n {
@@ -390,6 +391,19 @@ pub(super) fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>
         }
         _ => (cell_display_text(v), None),
     }
+}
+
+/// Format a persisted MoonBot base-currency ordinal as its exact quote ticker.
+///
+/// Args:
+///     value: Runtime Report value carrying the persisted ordinal.
+///
+/// Returns:
+///     Known quote ticker, or the original cell text when the identity is untrusted.
+fn basecurrency_text(value: &Value) -> String {
+    moon_core::db::QuoteCurrency::from_report_value(value)
+        .map(|currency| currency.ticker().to_string())
+        .unwrap_or_else(|| cell_display_text(value))
 }
 
 fn as_i64(v: &Value) -> Option<i64> {

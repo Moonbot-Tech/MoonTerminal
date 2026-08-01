@@ -1,7 +1,9 @@
+//! Time-window parsing, profiling, and automatic schedule suggestions.
+
 use rusqlite::Connection;
 
 use super::{
-    best_range, improvement_margin, open_tuner_source, scan_time_rows, tuner_source_on,
+    best_range, improvement_margin, read_tuner_rows, scan_time_rows, tuner_source_on,
     visit_time_rows, HourStat, Query, ReadResult,
 };
 
@@ -87,6 +89,9 @@ pub struct TimeAxes {
 
 impl TimeAxes {
     /// Is there anything at all to search (otherwise the whole read is pointless).
+    ///
+    /// Returns:
+    ///     `true` when no time axis is enabled.
     pub fn is_empty(&self) -> bool {
         !self.week && !self.day && !self.hour
     }
@@ -100,6 +105,16 @@ impl TimeAxes {
 /// improve on the unrestricted sample. Using `OPEN_TS`, the UTC weekday is
 /// `(((OPEN_TS/86400)+4)%7+6)%7` (0=Mon..6=Sun), and the minute is
 /// `(OPEN_TS%86400)/60`.
+///
+/// Args:
+///     q: Report scope and profit metric.
+///     min_n: Minimum trades retained by a schedule candidate.
+///     edges: Search resolution for continuous time windows.
+///     round: Whether accepted boundaries are rounded outward.
+///     axes: Enabled and pinned schedule axes.
+///
+/// Returns:
+///     Best schedule changes or a classified read failure.
 pub fn suggest_time(
     q: &Query,
     min_n: i64,
@@ -112,8 +127,9 @@ pub fn suggest_time(
     if axes.is_empty() {
         return Ok(TimeSuggest::default());
     }
-    let (conn, q, src) = open_tuner_source(q)?;
-    let trades = scan_time_rows(&conn, &q, &src, "tuner: suggest_time")?;
+    let trades = read_tuner_rows(q, |conn, q, src| {
+        scan_time_rows(conn, q, src, "tuner: suggest_time")
+    })?;
     Ok(time_suggest_from_rows(&trades, min_n, edges, round, axes))
 }
 
@@ -286,11 +302,28 @@ pub fn slider_profiles(q: &Query) -> ReadResult<SliderProfiles> {
 ///     Three color profiles or a classified read failure.
 pub(super) fn slider_profiles_on(conn: &Connection, q: &Query) -> ReadResult<SliderProfiles> {
     let (q, src) = tuner_source_on(conn, q)?;
+    slider_profiles_from_source(conn, &q, &src)
+}
+
+/// Calculate slider profiles from a source already validated in the same snapshot.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     q: Floored tuner query used by `src`.
+///     src: Unified source whose quote scope was already validated.
+///
+/// Returns:
+///     Three color profiles or a classified row-scan failure.
+pub(super) fn slider_profiles_from_source(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+) -> ReadResult<SliderProfiles> {
     let mut accumulator = SliderProfileAccumulator::new();
     visit_time_rows(
         conn,
-        &q,
-        &src,
+        q,
+        src,
         "tuner: slider_profiles",
         |weekday, minute, profit| accumulator.push(weekday, minute, profit),
     )?;

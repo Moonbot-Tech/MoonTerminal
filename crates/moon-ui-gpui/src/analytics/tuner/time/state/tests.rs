@@ -16,17 +16,19 @@ fn scope_change_retires_profile_and_suggestion_requests() {
     assert!(state.dirty);
 }
 
-/// `time/state.rs:TimeTunerState::mark_report_stale` must not advance request generations;
-/// adding the scope invalidation there discards every long scan under continuous report commits.
+/// `time/state.rs:TimeTunerState::mark_report_stale` retires suggestions but keeps profile state.
+///
+/// Removing the suggestion-generation bump lets an optimizer pinned before a report commit write
+/// a stale schedule into saveable v1 fields after the report inputs have changed.
 #[test]
-fn report_change_keeps_consistent_snapshot_in_flight() {
+fn report_change_retires_suggestion_but_keeps_profile_generation() {
     let mut state = TimeTunerState::load();
     let (seq, sugg_seq) = (state.seq, state.sugg_seq);
 
     state.mark_report_stale();
 
     assert_eq!(state.seq, seq);
-    assert_eq!(state.sugg_seq, sugg_seq);
+    assert_ne!(state.sugg_seq, sugg_seq);
     assert!(state.dirty);
 }
 

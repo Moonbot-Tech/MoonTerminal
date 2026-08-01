@@ -32,9 +32,15 @@ pub(in crate::analytics) fn fmt_signed_plain(v: f64) -> String {
 }
 
 /// Format a compact signed PROFIT, carrying the active metric's unit: "%" in percent mode
-/// (the report `Profit` column), nothing in USDT mode. Every profit figure on the window goes
+/// (the report `Profit` column), nothing in quote-money mode. Every profit figure on the window goes
 /// through here, so the unit follows the toolbar switch everywhere at once. The em dash for a
 /// non-finite value is never given a unit.
+///
+/// Args:
+///     v: Profit value in the active comparable unit.
+///
+/// Returns:
+///     Signed compact value with `%` only in Percent mode, or an em dash.
 pub(super) fn fmt_signed(v: f64) -> String {
     let s = fmt_signed_plain(v);
     if s == "—" {
@@ -45,15 +51,26 @@ pub(super) fn fmt_signed(v: f64) -> String {
 }
 
 /// Signed profit carrying the FULL unit for prose (the insights sentences): "+15.34%" in percent
-/// mode, "+15.34 USDT" in money mode. [`fmt_signed`] leaves a money figure unitless because its
-/// column header or KPI label supplies the "USDT" — a free-standing sentence has no such label, so
-/// the word rides along here. A non-finite value stays a bare em dash.
-fn fmt_signed_unit(v: f64) -> String {
+/// mode, "+15.34 USDC" in a USDC scope. [`fmt_signed`] leaves a money figure unitless because its
+/// surrounding label supplies the exact quote ticker; a free-standing sentence has no such label,
+/// so the ticker rides along here. A non-finite value stays a bare em dash.
+///
+/// Args:
+///     v: Profit value in the active comparable unit.
+///
+/// Returns:
+///     Signed compact value with exact ticker or `%`, or an em dash.
+pub(super) fn fmt_signed_unit(v: f64) -> String {
     let s = fmt_signed(v);
     if s == "—" || super::pnl_is_pct() {
         s
     } else {
-        format!("{s} USDT")
+        let unit = super::pnl_unit_label();
+        if unit.is_empty() {
+            s
+        } else {
+            format!("{s} {unit}")
+        }
     }
 }
 

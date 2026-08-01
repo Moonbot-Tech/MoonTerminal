@@ -12,9 +12,10 @@ use moon_core::db::tuner::threshold_search::{
     EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
 };
 
-/// `filter/state.rs:TunerState::mark_report_stale` must not add the draft resets or request
-/// generation bumps from `invalidate`; the former clears edits and the latter starves a long
-/// filter scan while new trades keep arriving.
+/// `filter/state.rs:TunerState::mark_report_stale` preserves drafts but retires suggestions.
+///
+/// Removing its suggestion-generation bump lets an optimizer pinned before a report commit write
+/// stale bounds into v1 after the commit, where they become saveable for the new report state.
 #[test]
 fn report_staleness_preserves_filter_drafts() {
     let mut state = TunerState::load(None, None, None, None, None, false);
@@ -35,7 +36,7 @@ fn report_staleness_preserves_filter_drafts() {
     );
     assert_eq!(state.seq, seq);
     assert_eq!(state.hist_seq, hist_seq);
-    assert_eq!(state.sugg_seq, sugg_seq);
+    assert_ne!(state.sugg_seq, sugg_seq);
     assert_eq!(
         state.dialog_seq, dialog_seq,
         "report data cannot invalidate a pending Save dialog"
