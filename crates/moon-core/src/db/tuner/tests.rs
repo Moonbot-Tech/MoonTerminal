@@ -1,4 +1,85 @@
+//! Filter-tuner query, snapshot, and predicate regression tests.
+
 use super::*;
+
+/// Raw tuner scans reject mixed quotes before optimization, while Percent scans remain valid.
+///
+/// Removing the guard from `tuner_source_on` lets threshold and variant optimizers rank a scalar
+/// whose operands are USDT and USDC. Applying the same guard to Percent breaks the second branch.
+#[test]
+fn mixed_quote_tuner_rejects_raw_money_but_accepts_percent() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(
+            closedate INTEGER, core_uid INTEGER, profitbtc REAL, spentbtc REAL,
+            basecurrency INTEGER
+         );
+         INSERT INTO orders_rep VALUES (100, 1, 10.0, 100.0, 1);
+         INSERT INTO orders_rep VALUES (200, 1, 5.0, 100.0, 8);",
+    )
+    .expect("mixed quote fixture");
+    let raw = Query {
+        from: 1,
+        to: 300,
+        ..Default::default()
+    };
+
+    assert!(matches!(
+        tuner_source_on(&conn, &raw),
+        Err(ReadFail::IncomparableQuote)
+    ));
+
+    let percent = Query {
+        metric: crate::db::ProfitMetric::Percent,
+        ..raw
+    };
+    assert!(tuner_source_on(&conn, &percent).is_ok());
+}
+
+/// Quote preflight and tuner row materialization observe one WAL snapshot.
+///
+/// Replacing `tuner_read_on`'s `with_read_snapshot` call with a direct callback lets the second
+/// query observe the USDC commit below after preflight accepted the original USDT-only scope.
+#[test]
+fn tuner_materialization_cannot_cross_the_quote_preflight_snapshot() {
+    let path = super::super::test_support::temp_db("tuner-quote-snapshot");
+    let writer = Connection::open(&path).expect("open writer");
+    writer
+        .execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE orders_rep(
+                closedate INTEGER, core_uid INTEGER, profitbtc REAL, spentbtc REAL,
+                basecurrency INTEGER
+             );
+             INSERT INTO orders_rep VALUES (100, 1, 10.0, 100.0, 1);",
+        )
+        .expect("seed WAL fixture");
+    let reader = Connection::open(&path).expect("open reader");
+    let query = Query {
+        from: 1,
+        to: 300,
+        ..Default::default()
+    };
+
+    let rows = tuner_read_on(&reader, &query, |snapshot, query, source| {
+        writer
+            .execute("INSERT INTO orders_rep VALUES (200, 1, 5.0, 100.0, 8)", [])
+            .expect("commit USDC row after quote preflight");
+        snapshot
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {source}"),
+                rusqlite::params![query.from, query.to],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| read_fail("test: tuner snapshot materialization", error))
+    })
+    .expect("materialize pinned tuner rows");
+
+    assert_eq!(rows, 1);
+    drop(reader);
+    drop(writer);
+    super::super::test_support::remove_db(&path);
+}
 
 #[test]
 fn variant_where_whitelists_fields() {

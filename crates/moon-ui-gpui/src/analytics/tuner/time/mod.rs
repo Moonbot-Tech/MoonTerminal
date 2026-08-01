@@ -334,8 +334,18 @@ impl AnalyticsView {
 /// Height of a column's bar area (px before font scaling); the bar grows from the center by ≤ half.
 const BAR_H: f32 = 108.0;
 
-/// A single hour column: value (+PnL$) · trade count · vertical bar from the center · hour.
+/// A single hour column: exact-unit PnL, trade count, center-origin bar, and hour.
 /// Bar up = profit (green), down = loss (orange); length ∝ |PnL| / maximum.
+///
+/// Args:
+///     h: UTC hour index.
+///     stat: Hour aggregate in the active comparable unit.
+///     max: Largest absolute profit across the rendered profile.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     One complete hour column.
 fn hour_column(
     h: usize,
     stat: HourStat,
@@ -353,15 +363,12 @@ fn hour_column(
     // Loss = orange (same as sign_color and the "Summary" bars), NOT red.
     let bar_color = if profit > 0.0 { p.green } else { p.orange };
     let value = if has {
-        format!(
-            "{}{}",
-            fmt_signed(profit),
-            if crate::analytics::pnl_is_pct() {
-                ""
-            } else {
-                "$"
-            }
-        )
+        let formatted = fmt_signed(profit);
+        if crate::analytics::pnl_is_pct() {
+            formatted
+        } else {
+            format!("{} {}", formatted, crate::analytics::pnl_unit_label())
+        }
     } else {
         "—".to_string()
     };

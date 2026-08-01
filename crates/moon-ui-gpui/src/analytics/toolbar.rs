@@ -11,10 +11,9 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::{AnalyticsView, Period, Tab};
+use super::{AnalyticsView, Period, ProfitLoadState, Tab};
 use crate::design;
 use crate::design::moon;
-use crate::load_state::LoadState;
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::integrity::Integrity;
 use moon_core::db::report_recovery::RecoveryNotice;
@@ -25,7 +24,7 @@ const SIDE_TRIGGER_W: f32 = 69.0;
 /// Unscaled width of the Analytics trade-kind-selector trigger.
 const KIND_TRIGGER_W: f32 = 102.0;
 /// Unscaled width of the Analytics profit-metric-selector trigger.
-const METRIC_TRIGGER_W: f32 = 78.0;
+const METRIC_TRIGGER_W: f32 = 116.0;
 /// Unscaled horizontal spacing between neighboring toolbar controls.
 const TOOLBAR_GAP: f32 = 6.0;
 
@@ -91,6 +90,14 @@ pub(super) fn sole_core_name<'a>(
 /// A read FAILURE outranks everything, collapsing included — a query that did not run cannot
 /// be summarised as a count, and hiding it behind a one-liner would let a broken replica read
 /// as a small tidy footnote.
+///
+/// Args:
+///     error: Classified failure of the undated-row read.
+///     undated: Successfully loaded safe per-quote totals.
+///     expanded: Whether the user opened the detailed strip.
+///
+/// Returns:
+///     Exact hidden, collapsed, expanded, or failure presentation state.
 pub(super) fn undated_banner_state(
     error: Option<&ReadFail>,
     undated: Option<UndatedCloses>,
@@ -106,14 +113,32 @@ pub(super) fn undated_banner_state(
         return UndatedBanner::None;
     }
     if !expanded {
-        return UndatedBanner::Collapsed(t!("analytics.undated_collapsed", n = u.n).to_string());
+        return UndatedBanner::Collapsed(
+            t!("analytics.undated_collapsed", n = u.totals.orders).to_string(),
+        );
+    }
+    let mut amounts = u
+        .totals
+        .totals
+        .iter()
+        .copied()
+        .map(super::quote_total_text)
+        .collect::<Vec<_>>();
+    if u.totals.unknown_orders > 0 {
+        amounts.push(
+            t!(
+                "analytics.quote_unknown_orders",
+                n = u.totals.unknown_orders
+            )
+            .to_string(),
+        );
     }
     UndatedBanner::Full(
         t!("analytics.undated_title").to_string(),
         t!(
             "analytics.undated_detail",
-            n = u.n,
-            pnl = format!("{:+.2}", u.profit)
+            n = u.totals.orders,
+            totals = amounts.join(" · ")
         )
         .to_string(),
     )
@@ -260,20 +285,36 @@ impl AnalyticsView {
         row.child(filters)
     }
 
-    /// Profit metric combo (USDT / Profit %): switches every figure and the tuner sweep
+    /// Profit metric combo (quote money / Profit %): switches every figure and the tuner sweep
     /// between absolute money and the report's `Profit` column (profit ÷ spent).
+    ///
+    /// Args:
+    ///     cx: Analytics view context used for menu actions.
+    ///
+    /// Returns:
+    ///     Metric dropdown element labeled with the exact current unit when known.
     fn metric_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let active_unit = match self.tab {
+            Tab::Summary => self.data.unit(),
+            Tab::Strategies => self.strategy_data.unit(),
+            Tab::Calendar => self.cal_days.unit(),
+        };
         let cur = match self.metric {
-            ProfitMetric::Usdt => t!("analytics.metric.usdt"),
-            ProfitMetric::Percent => t!("analytics.metric.pct"),
+            ProfitMetric::Quote => match active_unit {
+                Some(moon_core::db::ProfitUnit::Quote(currency)) => currency.ticker().to_string(),
+                Some(moon_core::db::ProfitUnit::Percent) | None => {
+                    t!("analytics.metric.quote").to_string()
+                }
+            },
+            ProfitMetric::Percent => t!("analytics.metric.pct").to_string(),
         };
         let view = cx.entity();
         let items = crate::panels::radio_items(
             [
                 (
-                    ProfitMetric::Usdt,
-                    "am-usd".into(),
-                    t!("analytics.metric.usdt").to_string().into(),
+                    ProfitMetric::Quote,
+                    "am-quote".into(),
+                    t!("analytics.metric.quote").to_string().into(),
                 ),
                 (
                     ProfitMetric::Percent,
@@ -571,6 +612,13 @@ impl AnalyticsView {
     /// empty band under its period bar. The count and the money are already scoped by the
     /// window's own filters, so the sentence describes exactly the rows the figures beside it
     /// were computed from, minus the ones that could not be.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Notice strip only when a count or read failure exists.
     pub(super) fn notice_strip(
         &self,
         p: MoonPalette,
@@ -578,7 +626,7 @@ impl AnalyticsView {
     ) -> Option<impl IntoElement + use<>> {
         let undated = undated_banner_state(
             self.undated_error.as_ref(),
-            self.undated,
+            self.undated.clone(),
             self.undated_expanded,
         );
         let row = h_flex()
@@ -660,6 +708,13 @@ impl AnalyticsView {
     ///
     /// Summary and Tuning retain independent periods, so selection and count both read from the
     /// currently visible tab.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Period controls and exact scoped trade count.
     pub(super) fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let mut seg = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
         // Highlight follows the ACTIVE tab's period (Summary/Tuning are independent).
@@ -686,26 +741,49 @@ impl AnalyticsView {
         seg = seg
             .child(self.date_field(false, p, cx))
             .child(self.date_field(true, p, cx));
+        // Split scopes carry the real count outside the deliberately empty scalar payload.
+        let split_orders = match self.tab {
+            Tab::Summary => self.data.split(),
+            Tab::Strategies => self.strategy_data.split(),
+            Tab::Calendar => self.cal_days.split(),
+        }
+        .map(|totals| totals.orders);
         // Keep read failure distinct from both an empty count and loading.
-        let (counter, counter_failed) = match self.tab {
-            Tab::Strategies => match &self.strategy_data {
-                LoadState::Loading { .. } => ("…".to_string(), false),
-                LoadState::Ready(data) => (
-                    t!("analytics.trades_count", n = data.trades).to_string(),
-                    false,
-                ),
-                LoadState::NotReady => (String::new(), false),
-                LoadState::Failed(_) => (t!("common.db_read_failed_short").to_string(), true),
-            },
-            _ => match &self.data {
-                LoadState::Loading { .. } => ("…".to_string(), false),
-                LoadState::Ready(data) => (
-                    t!("analytics.trades_count", n = data.cur.n).to_string(),
-                    false,
-                ),
-                LoadState::NotReady => (String::new(), false),
-                LoadState::Failed(_) => (t!("common.db_read_failed_short").to_string(), true),
-            },
+        let (counter, counter_failed) = if let Some(orders) = split_orders {
+            (t!("analytics.trades_count", n = orders).to_string(), false)
+        } else {
+            match self.tab {
+                Tab::Strategies => match &self.strategy_data {
+                    ProfitLoadState::Loading => ("…".to_string(), false),
+                    ProfitLoadState::Ready { data, .. } => (
+                        t!("analytics.trades_count", n = data.trades).to_string(),
+                        false,
+                    ),
+                    ProfitLoadState::Split(totals) => (
+                        t!("analytics.trades_count", n = totals.orders).to_string(),
+                        false,
+                    ),
+                    ProfitLoadState::NotReady => (String::new(), false),
+                    ProfitLoadState::Failed(_) => {
+                        (t!("common.db_read_failed_short").to_string(), true)
+                    }
+                },
+                _ => match &self.data {
+                    ProfitLoadState::Loading => ("…".to_string(), false),
+                    ProfitLoadState::Ready { data, .. } => (
+                        t!("analytics.trades_count", n = data.cur.n).to_string(),
+                        false,
+                    ),
+                    ProfitLoadState::Split(totals) => (
+                        t!("analytics.trades_count", n = totals.orders).to_string(),
+                        false,
+                    ),
+                    ProfitLoadState::NotReady => (String::new(), false),
+                    ProfitLoadState::Failed(_) => {
+                        (t!("common.db_read_failed_short").to_string(), true)
+                    }
+                },
+            }
         };
         h_flex()
             .flex_none()

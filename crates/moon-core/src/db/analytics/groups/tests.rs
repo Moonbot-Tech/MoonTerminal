@@ -43,12 +43,15 @@ type Trade = (i64, &'static str, &'static str, i64, f64);
 ///   must find nothing;
 /// - strategy 0 — manual orders;
 /// - strategies 12 and 13 — equal profit sums, so the ordering of a tie is compared too.
+///
+/// Returns:
+///     Seeded report and strategy schemas covering enrichment edge cases.
 fn fixture() -> Connection {
     let c = Connection::open_in_memory().expect("memory db");
     c.execute_batch(
         "CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, coin TEXT,
              isshort INTEGER, buydate INTEGER, closedate INTEGER, profitbtc REAL,
-             strategyid INTEGER, emulator INTEGER, spentbtc REAL);
+             strategyid INTEGER, emulator INTEGER, spentbtc REAL, basecurrency INTEGER);
          ATTACH ':memory:' AS strat;
          CREATE TABLE strat.strategies (core_uid INTEGER, strategy_id INTEGER,
              name TEXT, deleted INTEGER, checked INTEGER);
@@ -73,8 +76,8 @@ fn fixture() -> Connection {
         let close = 1_000 + i as i64;
         c.execute(
             "INSERT INTO orders_rep (core_uid, core_name, coin, isshort, buydate, closedate,
-                 profitbtc, strategyid, emulator, spentbtc)
-             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, 0, 100.0)",
+                 profitbtc, strategyid, emulator, spentbtc, basecurrency)
+             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, 0, 100.0, 1)",
             rusqlite::params![core, core_name, coin, close - 60, close, pnl, sid],
         )
         .expect("insert trade");
@@ -154,6 +157,14 @@ fn fixture() -> Connection {
 /// Both forms include the `, 1` tie-break so this comparison isolates enrichment placement rather
 /// than query-plan-dependent ordering. [`equally_profitable_groups_are_ordered_by_key`] pins the
 /// ordering contract separately.
+///
+/// Args:
+///     src: Unified report source SQL.
+///     has_names: Whether strategy-name enrichment is enabled.
+///     by_strategy: Whether rows are grouped by strategy rather than coin.
+///
+/// Returns:
+///     Independent reference aggregation statement.
 fn reference_sql(src: &str, has_names: bool, by_strategy: bool) -> String {
     let field = |name: &str| {
         if has_names {
@@ -223,7 +234,11 @@ fn reference_sql(src: &str, has_names: bool, by_strategy: bool) -> String {
                 COALESCE(MAX(o.pnl),0), COALESCE(MIN(o.pnl),0),
                 {lastedit}, {blacklist}, {whitelist},
                 COALESCE(SUM(o.profitbtc), 0),
-                COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0)
+                COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0),
+                MIN(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END),
+                MAX(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END),
+                COUNT(CASE WHEN typeof(o.basecurrency) = 'integer' THEN 1 END),
+                COUNT(*)
          FROM {src}
          GROUP BY k ORDER BY 8 DESC, 1"
     )
@@ -298,8 +313,8 @@ fn an_unattributable_trade_fails_the_same_way_in_both_forms() {
     let c = fixture();
     c.execute(
         "INSERT INTO orders_rep (core_uid, core_name, coin, isshort, buydate, closedate,
-             profitbtc, strategyid, emulator, spentbtc)
-         VALUES (1, 'alpha', 'BTC', 0, 900, 960, 2.0, NULL, 0, 100.0)",
+             profitbtc, strategyid, emulator, spentbtc, basecurrency)
+         VALUES (1, 'alpha', 'BTC', 0, 900, 960, 2.0, NULL, 0, 100.0, 1)",
         [],
     )
     .expect("insert unattributed trade");
@@ -338,7 +353,7 @@ fn groups_enrichment_cost_against_a_large_replica() {
     c.execute_batch(
         "CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, coin TEXT,
              isshort INTEGER, buydate INTEGER, closedate INTEGER, profitbtc REAL,
-             strategyid INTEGER, emulator INTEGER, spentbtc REAL);
+             strategyid INTEGER, emulator INTEGER, spentbtc REAL, basecurrency INTEGER);
          ATTACH ':memory:' AS strat;
          CREATE TABLE strat.strategies (core_uid INTEGER, strategy_id INTEGER,
              name TEXT, deleted INTEGER, checked INTEGER);
@@ -356,8 +371,8 @@ fn groups_enrichment_cost_against_a_large_replica() {
             let core = i % CORES;
             tx.execute(
                 "INSERT INTO orders_rep (core_uid, core_name, coin, isshort, buydate, closedate,
-                     profitbtc, strategyid, emulator, spentbtc)
-                 VALUES (?1, 'core', 'BTC', 0, ?2, ?3, ?4, ?5, 0, 100.0)",
+                     profitbtc, strategyid, emulator, spentbtc, basecurrency)
+                 VALUES (?1, 'core', 'BTC', 0, ?2, ?3, ?4, ?5, 0, 100.0, 1)",
                 rusqlite::params![core, i, i + 60, (i % 17) as f64 - 8.0, sid],
             )
             .expect("trade");
@@ -529,12 +544,12 @@ fn raw_strategy_metrics_are_independent_of_the_profit_lens() {
     )
     .expect("vary order sizes");
 
-    let mut usdt_query = q();
-    usdt_query.metric = ProfitMetric::Usdt;
-    let usdt_src = unified_from(&c, &usdt_query)
-        .expect("USDT source")
+    let mut quote_query = q();
+    quote_query.metric = ProfitMetric::Quote;
+    let quote_src = unified_from(&c, &quote_query)
+        .expect("raw quote source")
         .expect("replica");
-    let usdt = groups(&c, &usdt_src, None, &usdt_query, true, true).expect("USDT groups");
+    let quote = groups(&c, &quote_src, None, &quote_query, true, true).expect("raw quote groups");
 
     let mut percent_query = q();
     percent_query.metric = ProfitMetric::Percent;
@@ -547,18 +562,60 @@ fn raw_strategy_metrics_are_independent_of_the_profit_lens() {
     let percent = groups(&c, &percent_src, Some(&raw_src), &percent_query, true, true)
         .expect("percent groups");
 
-    let usdt = usdt
+    let quote = quote
         .iter()
         .find(|group| group.key == "7@1")
-        .expect("USDT strategy 7");
+        .expect("raw quote strategy 7");
     let percent = percent
         .iter()
         .find(|group| group.key == "7@1")
         .expect("percent strategy 7");
-    assert_eq!(usdt.raw_profit, 6.0);
-    assert_eq!(usdt.avg_order, 100.0);
-    assert_eq!(usdt.profit_pct_of_avg_order(), 6.0);
-    assert_eq!(percent.raw_profit, usdt.raw_profit);
-    assert_eq!(percent.avg_order, usdt.avg_order);
+    assert_eq!(quote.raw_profit, 6.0);
+    assert_eq!(quote.avg_order, 100.0);
+    assert_eq!(quote.profit_pct_of_avg_order(), 6.0);
+    assert_eq!(percent.raw_profit, quote.raw_profit);
+    assert_eq!(percent.avg_order, quote.avg_order);
     assert_eq!(percent.profit_pct_of_avg_order(), 6.0);
+}
+
+/// A mixed-quote group keeps dimensionless metrics but suppresses every raw-money derivative.
+///
+/// Removing the per-group quote metadata from `analytics::groups` makes strategy 7 expose its
+/// cross-currency raw profit, average order, and derived Profit %, even when the whole Analytics
+/// view is in the safe Percent lens.
+#[test]
+fn mixed_quote_group_suppresses_raw_money_fields() {
+    let c = fixture();
+    c.execute(
+        "UPDATE orders_rep SET basecurrency = 8
+         WHERE core_uid = 1 AND strategyid = 7 AND coin = 'ETH'",
+        [],
+    )
+    .expect("make strategy 7 mixed quote");
+    let mut query = q();
+    query.metric = ProfitMetric::Percent;
+    let percent_src = unified_from(&c, &query)
+        .expect("percent source")
+        .expect("replica");
+    let raw_src = raw_source(&c, &query)
+        .expect("raw source")
+        .expect("percent lens needs raw source");
+
+    let groups =
+        groups(&c, &percent_src, Some(&raw_src), &query, true, true).expect("percent groups");
+    let mixed = groups
+        .iter()
+        .find(|group| group.key == "7@1")
+        .expect("strategy 7");
+    assert_eq!(mixed.quote, QuoteScope::Mixed);
+    assert!(mixed.raw_profit.is_nan());
+    assert!(mixed.avg_order.is_nan());
+    assert!(mixed.profit_pct_of_avg_order().is_nan());
+
+    let single = groups
+        .iter()
+        .find(|group| group.key == "7@2")
+        .expect("strategy 7 on the other core");
+    assert!(matches!(single.quote, QuoteScope::Single(_)));
+    assert!(single.raw_profit.is_finite());
 }

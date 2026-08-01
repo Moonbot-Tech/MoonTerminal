@@ -11,14 +11,16 @@
 //! database, results use the numeric id.
 //!
 //! Period bounds are UTC Unix seconds with an exclusive `to`. Queries include
-//! only closed, non-deleted trades (`closedate > 0`, `deleted = 0`). Profit is
-//! `profitbtc`, denominated in the pair quote currency (USDT here).
+//! only closed, non-deleted trades (`closedate > 0`, `deleted = 0`). Raw profit is
+//! `profitbtc`, denominated in each persisted row's pair quote currency.
 
 use rusqlite::Connection;
 
 use super::metrics::{profit_factor, winrate};
 use super::read_fail::read_fail;
-use super::{ReadFail, ReadResult};
+use super::{
+    ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, QuoteScope, ReadFail, ReadResult,
+};
 
 mod calendar;
 mod groups;
@@ -34,7 +36,7 @@ pub(in crate::db) use groups::{coin_groups_on, strategies_for_coins_on};
 use groups::{groups, kind_stats, top_trades};
 use query::WHERE_UNDATED;
 pub(in crate::db) use query::{
-    attach_strategies, effective_sid_expr, strategies_attached, unified_from,
+    attach_strategies, effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from,
 };
 
 /// Period totals: counters and metrics computed from the trade sequence ordered by
@@ -122,22 +124,22 @@ pub struct Summary {
     pub to: i64,
 }
 
-/// Closed trades the core never dated, and the money they carry.
+/// Closed trades the core never dated, split safely by quote currency.
 ///
 /// Every analytics figure is computed under [`WHERE_PERIOD`], which ends in `closedate > 0`.
 /// So these rows are in NO period — not even "all history" — and their profit is simply
-/// absent from every number this window shows. On a real replica that was 370 trades and
-/// -434 USDT: closed for certain (they carry a sell price and a sell reason) and invisible
-/// everywhere.
+/// absent from every number this window shows. One measured USDT replica had 370 such trades
+/// carrying -434 USDT: closed for certain (they carry a sell price and a sell reason) and
+/// invisible everywhere.
 ///
 /// This is a CORE-side omission, not a replica bug: `db::rep::open_row_ids` already reports
 /// such rows back for re-checking and they stay undated regardless. The terminal cannot
 /// invent the missing timestamp — the only honest thing it can do is say how much is missing,
 /// which is what this returns.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct UndatedCloses {
-    pub n: i64,
-    pub profit: f64,
+    /// Raw-money totals and complete row count for undated closes.
+    pub totals: QuoteBreakdown,
 }
 
 /// Independently classified data rendered from one report snapshot.
@@ -153,7 +155,7 @@ pub struct AnalyticsRead<T> {
 /// Calendar payload and its always-visible metadata from one report snapshot.
 pub struct CalendarRead {
     /// Visible Calendar cells and optional comparison aggregate.
-    pub period: ReadResult<CalendarPeriod>,
+    pub period: ReadResult<ProfitScope<CalendarPeriod>>,
     /// Closed rows excluded from every dated Calendar cell.
     pub undated: ReadResult<UndatedCloses>,
     /// Optional throttled core-selector refresh.
@@ -177,21 +179,37 @@ pub struct StrategyBase {
 
 impl UndatedCloses {
     /// Nothing to report — the usual case, and the one the UI must stay silent about.
+    ///
+    /// Returns:
+    ///     `true` when no undated closed rows exist in the selected scope.
     pub fn is_empty(&self) -> bool {
-        self.n == 0
+        self.totals.orders == 0
     }
 }
 
 /// Count them under the CURRENT filters but outside any period — see [`UndatedCloses`].
+///
+/// Args:
+///     q: Active Analytics filters; period bounds are intentionally replaced.
+///
+/// Returns:
+///     Safe per-quote undated totals or a classified read failure.
 pub fn undated_closes(q: &Query) -> ReadResult<UndatedCloses> {
     let conn = super::open_reader()?;
     super::with_read_snapshot(&conn, |snapshot| undated_closes_on(snapshot, q))
 }
 
 /// Count undated closes on an existing report snapshot.
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Active Analytics filters; period bounds are intentionally replaced.
+///
+/// Returns:
+///     Safe per-quote undated totals or a classified read failure.
 fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> {
     const CTX: &str = "analytics: trades with no close date";
-    let mut out = UndatedCloses::default();
+    let mut groups = Vec::new();
     for src in super::read_sources_res(conn)? {
         // A source without these columns cannot hold such a row, and asking would fail the
         // whole statement rather than contribute zero.
@@ -202,18 +220,30 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
         // and which strategy they belong to changes nothing about that count. (The caller
         // passes no strategy scope either, so the expression is never consulted.)
         let sid = effective_sid_expr("r", &src.cols, false);
+        let (quote, group_by) =
+            super::quote::trusted_quote_group("r.basecurrency", src.cols.contains("basecurrency"));
         let sql = format!(
-            "SELECT COUNT(*), COALESCE(SUM(r.profitbtc), 0) FROM {} r WHERE {}",
+            "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0), COUNT(*) \
+             FROM {} r WHERE {}{group_by}",
             src.table,
             q.where_with(WHERE_UNDATED, &src.cols, &sid)
         );
-        let (n, profit): (i64, f64) = conn
-            .query_row(&sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let ordinal = super::quote::report_ordinal_from_value(
+                    &row.get::<_, rusqlite::types::Value>(0)?,
+                );
+                Ok((ordinal, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?))
+            })
             .map_err(|e| read_fail(CTX, e))?;
-        out.n += n;
-        out.profit += profit;
+        for row in rows {
+            groups.push(row.map_err(|e| read_fail(CTX, e))?);
+        }
     }
-    Ok(out)
+    Ok(UndatedCloses {
+        totals: QuoteBreakdown::from_groups(groups),
+    })
 }
 
 /// Read Summary and its undated-close warning from one committed snapshot.
@@ -224,7 +254,7 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
 ///
 /// Returns:
 ///     Independently classified visible results from one snapshot.
-pub fn summary_data(q: &Query, read_cores: bool) -> AnalyticsRead<Summary> {
+pub fn summary_data(q: &Query, read_cores: bool) -> AnalyticsRead<ProfitScope<Summary>> {
     let compound = super::open_reader().and_then(|conn| {
         let has_strat_names = strategies_attached(&conn);
         super::with_read_snapshot(&conn, |snapshot| {
@@ -253,7 +283,7 @@ pub fn summary_data(q: &Query, read_cores: bool) -> AnalyticsRead<Summary> {
 ///
 /// Returns:
 ///     Independently classified visible results from one snapshot.
-pub fn strategy_base_data(q: &Query, read_cores: bool) -> AnalyticsRead<StrategyBase> {
+pub fn strategy_base_data(q: &Query, read_cores: bool) -> AnalyticsRead<ProfitScope<StrategyBase>> {
     let compound = super::open_reader().and_then(|conn| {
         let has_strat_names = strategies_attached(&conn);
         super::with_read_snapshot(&conn, |snapshot| {
@@ -309,16 +339,74 @@ pub fn calendar_data(
     }
 }
 
+/// Preflight result that prevents unsafe raw-money analytics from carrying scalar data.
+enum ScopeDecision {
+    /// Scalar values share this explicit unit.
+    Comparable(ProfitUnit),
+    /// The query has no rows and therefore no quote to infer.
+    Empty,
+    /// Raw money is mixed or unknown and only split/count totals are safe.
+    Split(QuoteBreakdown),
+}
+
+/// Resolve whether one query can produce comparable scalar profit values.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     q: Query with concrete period bounds.
+///
+/// Returns:
+///     Percent comparability, one exact quote, a legitimate empty scope, or split totals.
+fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> {
+    if q.metric == ProfitMetric::Percent {
+        return Ok(ScopeDecision::Comparable(ProfitUnit::Percent));
+    }
+    let totals = quote_breakdown_on(conn, q)?;
+    Ok(match totals.scope() {
+        QuoteScope::Empty => ScopeDecision::Empty,
+        QuoteScope::Single(currency) => ScopeDecision::Comparable(ProfitUnit::Quote(currency)),
+        QuoteScope::Mixed | QuoteScope::Unknown => ScopeDecision::Split(totals),
+    })
+}
+
+/// Attach a preflight decision to a completed scalar payload.
+///
+/// Args:
+///     decision: Previously resolved comparability state.
+///     data: Scalar payload built only for comparable or empty scopes.
+///
+/// Returns:
+///     A typed Analytics payload; split decisions retain no scalar data.
+fn scoped<T>(decision: ScopeDecision, data: T) -> ProfitScope<T> {
+    match decision {
+        ScopeDecision::Comparable(unit) => ProfitScope::Comparable { unit, data },
+        ScopeDecision::Empty => ProfitScope::Empty(data),
+        ScopeDecision::Split(totals) => ProfitScope::Split(totals),
+    }
+}
+
 /// Build the Strategies base without the Summary-only series and rankings.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     q: Active report filters and period.
+///     has_strat_names: Whether the optional strategy-name database is readable.
+///
+/// Returns:
+///     Comparable or empty strategy data, split totals, or a classified read failure.
 fn strategy_base_on(
     conn: &Connection,
     q: &Query,
     has_strat_names: bool,
-) -> ReadResult<StrategyBase> {
+) -> ReadResult<ProfitScope<StrategyBase>> {
     let mut q = q.clone();
     if q.from < 0 {
         q.from = min_closedate(conn)?;
     }
+    let decision = match scope_decision_on(conn, &q)? {
+        ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
+        decision => decision,
+    };
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
@@ -328,7 +416,7 @@ fn strategy_base_on(
         groups(conn, &src, raw_src.as_deref(), &q, enabled, true)
     })?;
     let trades = strategies.iter().map(|strategy| strategy.n).sum();
-    Ok(StrategyBase {
+    let data = StrategyBase {
         strategies,
         trades,
         coins: with_name_fallback(&mut names, |enabled| {
@@ -336,7 +424,8 @@ fn strategy_base_on(
         })?,
         from: q.from,
         to: q.to,
-    })
+    };
+    Ok(scoped(decision, data))
 }
 
 /// Aggregate the selected period and filters without collapsing read failures.
@@ -345,7 +434,13 @@ fn strategy_base_on(
 /// `Failed` when a required current-period filesystem or SQLite read fails. A
 /// failed comparison scan leaves `Summary::prev` absent. A successful empty
 /// period has zero current-period counters.
-pub fn summary(q: &Query) -> ReadResult<Summary> {
+///
+/// Args:
+///     q: Active Analytics filters, period, and profit metric.
+///
+/// Returns:
+///     Comparable or empty Summary data, split totals, or a classified read failure.
+pub fn summary(q: &Query) -> ReadResult<ProfitScope<Summary>> {
     let conn = super::open_reader()?;
     // `open_reader` has already attached it (a second ATTACH under the same alias fails).
     let has_strat_names = strategies_attached(&conn);
@@ -363,16 +458,29 @@ pub fn summary(q: &Query) -> ReadResult<Summary> {
 /// strategies database. `read_cores` skips the throttled selector scan for
 /// compound UI reads. Missing required source schema returns `NotReady`; schema,
 /// query, and row failures return `Failed`.
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Active Analytics filters, period, and profit metric.
+///     has_strat_names: Whether the optional strategy-name database is readable.
+///     read_cores: Whether to include the core selector scan.
+///
+/// Returns:
+///     Comparable or empty Summary data, split totals, or a classified read failure.
 pub(super) fn summary_on(
     conn: &Connection,
     q: &Query,
     has_strat_names: bool,
     read_cores: bool,
-) -> ReadResult<Summary> {
+) -> ReadResult<ProfitScope<Summary>> {
     let mut q = q.clone();
     if q.from < 0 {
         q.from = min_closedate(conn)?;
     }
+    let decision = match scope_decision_on(conn, &q)? {
+        ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
+        decision => decision,
+    };
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
@@ -395,9 +503,7 @@ pub(super) fn summary_on(
     let (cur, days, hours) = scan_period(conn, &src, q.from, q.to, bucket)?;
     // The comparison is best-effort because it must not hide a readable current
     // period; see `Summary::prev`.
-    let prev = scan_period(conn, &src, q.from - len, q.from, bucket)
-        .map(|(st, _, _)| st)
-        .ok();
+    let prev = previous_stats(conn, &src, &q, len, bucket, &decision);
 
     let best_hour = hours
         .iter()
@@ -411,7 +517,7 @@ pub(super) fn summary_on(
     // remaining aggregations of THIS summary.
     let mut names = has_strat_names;
     let raw_src = groups::raw_source(conn, &q)?;
-    Ok(Summary {
+    let data = Summary {
         cur,
         prev,
         bucket_secs: bucket,
@@ -440,7 +546,48 @@ pub(super) fn summary_on(
         },
         from: q.from,
         to: q.to,
-    })
+    };
+    Ok(scoped(decision, data))
+}
+
+/// Read a comparison period only when its unit is compatible with the current period.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     src: Unified source for the current query filters.
+///     q: Current query.
+///     len: Current period length in seconds.
+///     bucket: Series bucket size.
+///     current: Current-period comparability decision.
+///
+/// Returns:
+///     Comparable previous stats, or `None` when the read fails or quote identity differs.
+fn previous_stats(
+    conn: &Connection,
+    src: &str,
+    q: &Query,
+    len: i64,
+    bucket: i64,
+    current: &ScopeDecision,
+) -> Option<PeriodStats> {
+    if q.metric == ProfitMetric::Quote {
+        let mut previous = q.clone();
+        previous.from = q.from - len;
+        previous.to = q.from;
+        let same_quote = matches!(
+            (current, scope_decision_on(conn, &previous).ok()?),
+            (
+                ScopeDecision::Comparable(ProfitUnit::Quote(current_quote)),
+                ScopeDecision::Comparable(ProfitUnit::Quote(previous_quote))
+            ) if *current_quote == previous_quote
+        );
+        if !same_quote {
+            return None;
+        }
+    }
+    scan_period(conn, src, q.from - len, q.from, bucket)
+        .map(|(stats, _, _)| stats)
+        .ok()
 }
 
 /// Run a query that may join the ATTACHed strategies DB, retrying WITHOUT names

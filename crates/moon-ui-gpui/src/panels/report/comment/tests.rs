@@ -1,5 +1,6 @@
 //! Regression tests for the Report comment pane's row resolution.
 
+use moon_core::db;
 use rusqlite::types::Value;
 
 use super::current_comment;
@@ -38,7 +39,10 @@ fn fixture() -> (Vec<String>, ReportData) {
             rows,
             core_uids,
             row_keys,
-            totals: (0.0, 3),
+            totals: db::QuoteBreakdown {
+                orders: 3,
+                ..Default::default()
+            },
         },
     )
 }

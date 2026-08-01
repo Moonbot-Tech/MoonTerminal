@@ -1,6 +1,10 @@
+//! Report column formatting and persisted quote-identity regression tests.
+
 // Explicit imports on purpose: the parent re-exports `gpui::*`, whose `test` would
 // shadow the built-in attribute and make `#[test]` expand recursively.
-use super::{cell_display_text, header_for, is_numeric_report_column, value_to_string};
+use super::{
+    basecurrency_text, cell_display_text, header_for, is_numeric_report_column, value_to_string,
+};
 use rusqlite::types::Value;
 
 /// A generic text cell uses the shared flattener and trims its edges.
@@ -31,4 +35,19 @@ fn non_text_values_are_untouched() {
 fn profit_percent_has_a_readable_numeric_column_contract() {
     assert_eq!(header_for("profitpct"), "profit %");
     assert!(is_numeric_report_column("profitpct"));
+}
+
+/// Persisted quote ordinals must display as exact tickers rather than opaque integers.
+///
+/// Removing `columns.rs:basecurrency_text` makes a USDC report row show `8`, hiding the identity
+/// that makes its profit and totals meaningfully different from USDT.
+#[test]
+fn basecurrency_column_decodes_known_quote_ordinals() {
+    assert_eq!(basecurrency_text(&Value::Integer(8)), "USDC");
+    assert_eq!(basecurrency_text(&Value::Integer(0)), "BTC");
+    assert_eq!(
+        basecurrency_text(&Value::Integer(26)),
+        "26",
+        "unknown persisted ordinals must not be guessed"
+    );
 }

@@ -24,6 +24,8 @@ pub use search::{heavy_search_supported, HEAVY_SEARCH_MIN_CORES};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use rusqlite::Connection;
+
 use super::{FieldClass, FIELDS};
 use crate::db::analytics::Query;
 use crate::db::metrics::Tally;
@@ -597,8 +599,26 @@ const SCAN_CANCEL_EVERY: usize = 4096;
 ///     unreadable cell aborts the calculation; NULL deliberately maps to `0.0`, a read error
 ///     does not.
 fn scan(q: &Query, handle: &SearchHandle) -> ReadResult<Option<Sample>> {
+    super::read_tuner_rows(q, |conn, q, src| scan_on(conn, q, src, handle))
+}
+
+/// Materialize one threshold-search sample inside the quote-preflight snapshot.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     q: Floored tuner query used by the unified source.
+///     src: Unified report source built from the same snapshot.
+///     handle: Cancellation state sampled during the scan.
+///
+/// Returns:
+///     The complete sample, `None` when cancelled, or a classified read failure.
+fn scan_on(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+    handle: &SearchHandle,
+) -> ReadResult<Option<Sample>> {
     const CTX: &str = "tuner: threshold_search";
-    let (conn, q, src) = super::open_tuner_source(q)?;
     let nf = FIELDS.len();
     let cols = FIELDS
         .iter()

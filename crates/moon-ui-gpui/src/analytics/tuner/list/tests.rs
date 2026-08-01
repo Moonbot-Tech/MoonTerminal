@@ -174,3 +174,26 @@ fn saved_strategy_sort_restores_only_real_columns() {
         "a valid saved key and its ascending direction must survive"
     );
 }
+
+/// Unavailable mixed-quote money remains below comparable rows in both sort directions.
+///
+/// Reverting `list::filter_sort_indices` to `NaN => Equal` lets the key tie-break scatter mixed
+/// quote rows through real Avg order values, so the visible sort no longer matches the column.
+#[test]
+fn unavailable_money_sorts_after_comparable_values() {
+    let mut unavailable = g("A unavailable", "K", Some(2), 0, 0.0);
+    unavailable.avg_order = f64::NAN;
+    let mut low = g("B low", "K", Some(2), 0, 0.0);
+    low.avg_order = 10.0;
+    let mut high = g("C high", "K", Some(2), 0, 0.0);
+    high.avg_order = 20.0;
+    let all = vec![unavailable, low, high];
+
+    let mut descending = key();
+    descending.sort = Some(("analytics.col.avg_order".to_string(), true));
+    assert_eq!(filter_sort_indices(&all, &descending), vec![2, 1, 0]);
+
+    let mut ascending = key();
+    ascending.sort = Some(("analytics.col.avg_order".to_string(), false));
+    assert_eq!(filter_sort_indices(&all, &ascending), vec![1, 2, 0]);
+}

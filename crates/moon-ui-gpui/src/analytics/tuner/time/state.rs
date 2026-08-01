@@ -117,15 +117,16 @@ impl TimeTunerState {
         self.dirty = true;
     }
 
-    /// Mark report-derived results stale without retiring an in-flight consistent snapshot.
+    /// Mark report-derived results stale and retire an in-flight automatic suggestion.
     ///
-    /// A report commit does not change the selected strategy or the user's schedule draft. The
-    /// active request may therefore publish its pinned SQLite snapshot, while `dirty` guarantees
-    /// the generation gate schedules a trailing catch-up.
+    /// A report commit does not change the selected strategy or the user's schedule draft. It does
+    /// change the optimizer input, so a pinned suggestion must not publish into saveable v1 fields;
+    /// `dirty` schedules the replacement profile after catch-up.
     ///
     /// The method has no return value.
     pub(in crate::analytics) fn mark_report_stale(&mut self) {
         self.dirty = true;
+        self.invalidate_suggest();
     }
 
     /// Apply raw strategy schedule fields while distinguishing a failed read from empty values.

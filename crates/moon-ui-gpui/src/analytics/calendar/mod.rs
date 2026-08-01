@@ -20,12 +20,12 @@ use gpui::*;
 use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::AnalyticsView;
+use super::{AnalyticsView, ProfitLoadState};
 use crate::design;
 use crate::design::moon;
 use crate::load_state::{LoadState, note_el};
-use moon_core::db::ReadResult;
 use moon_core::db::analytics::{CalendarPeriod, DayCell, Query};
+use moon_core::db::{ProfitScope, ProfitUnit, ReadResult};
 
 /// Store one consistent Calendar period result without collapsing classified read failures.
 ///
@@ -38,15 +38,28 @@ use moon_core::db::analytics::{CalendarPeriod, DayCell, Query};
 /// Returns:
 ///     `true` when the shared period read failed.
 fn apply_calendar_results(
-    days: &mut LoadState<Vec<DayCell>>,
+    days: &mut ProfitLoadState<Vec<DayCell>>,
     previous: &mut LoadState<Option<(f64, i64, i64)>>,
-    period_result: ReadResult<CalendarPeriod>,
+    period_result: ReadResult<ProfitScope<CalendarPeriod>>,
     has_previous: bool,
 ) -> bool {
     match period_result {
-        Ok(period) => {
-            days.apply(Ok(period.current));
+        Ok(ProfitScope::Comparable { unit, data: period }) => {
+            days.apply(Ok(ProfitScope::Comparable {
+                unit,
+                data: period.current,
+            }));
             previous.apply(Ok(period.previous));
+            false
+        }
+        Ok(ProfitScope::Empty(period)) => {
+            days.apply(Ok(ProfitScope::Empty(period.current)));
+            previous.apply(Ok(period.previous));
+            false
+        }
+        Ok(ProfitScope::Split(totals)) => {
+            days.apply(Ok(ProfitScope::Split(totals)));
+            previous.apply(Ok(None));
             false
         }
         Err(error) => {
@@ -292,6 +305,14 @@ impl AnalyticsView {
 
     // ── Nav bar (like Summary's period bar: px10 py8) ────────────────────────
 
+    /// Render Calendar mode, period navigation, exact quote badge, and title.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Calendar navigation bar element.
     fn cal_nav(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let (y, m) = self.cal_ym;
         let months = split_i18n(t!("analytics.heat.months").to_string());
@@ -369,6 +390,21 @@ impl AnalyticsView {
                 next_off,
             ))
             .child(div().flex_1())
+            .children(self.cal_days.unit().and_then(|unit| {
+                match unit {
+                    ProfitUnit::Quote(currency) => Some(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .bg(moon(p.table_head))
+                            .text_size(design::t_caption(cx))
+                            .text_color(moon(p.text_soft))
+                            .child(currency.ticker()),
+                    ),
+                    ProfitUnit::Percent => None,
+                }
+            }))
             .child(
                 div()
                     .text_size(design::t_title(cx))
@@ -460,8 +496,10 @@ impl AnalyticsView {
         }
         self.acknowledge_report_refresh();
         self.cal_dirty = false;
-        self.cal_days.begin();
-        self.cal_prev.begin();
+        // Calendar quote identity can change with its period. Old scalar cells must not render
+        // beneath the new navigation label while the replacement scope is still unverified.
+        self.cal_days = ProfitLoadState::default();
+        self.cal_prev = LoadState::default();
         self.cal_seq = self.cal_seq.wrapping_add(1);
         let req = self.cal_seq;
         let report_req = self.current_report_generation();

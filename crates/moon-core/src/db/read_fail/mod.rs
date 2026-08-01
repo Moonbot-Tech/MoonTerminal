@@ -7,6 +7,8 @@
 //! `NotReady` means the replica genuinely has nothing to say yet (file absent,
 //! core schema not delivered). `Failed` means filesystem or SQLite access
 //! failed; `kind` carries enough detail for failure-specific UI guidance.
+//! `IncomparableQuote` is a healthy safety boundary for raw-money scopes whose
+//! persisted currency identity is mixed or unknown.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,29 +33,41 @@ pub enum ReadFail {
     /// Nothing to read yet: no replica file, or no source carries the columns
     /// required by the caller. The UI presents this as "not synced yet".
     NotReady,
+    /// Raw quote money cannot be compared because the query is mixed or unknown.
+    IncomparableQuote,
     /// Filesystem or SQLite access failed. `msg` is pre-formatted for display;
     /// the origin already logged the failure.
     Failed { kind: FailKind, msg: Arc<str> },
 }
 
 impl ReadFail {
-    /// Failure granularity, or `None` for the not-ready sentinel.
+    /// Failure granularity, or `None` for non-database outcomes.
     ///
     /// The UI picks its guidance from this: contention is worth retrying,
     /// corruption requires repair, and `Other` promises neither outcome.
+    ///
+    /// Returns:
+    ///     Database failure kind, or `None` for healthy non-database outcomes.
     pub fn kind(&self) -> Option<FailKind> {
         match self {
-            ReadFail::NotReady => None,
+            ReadFail::NotReady | ReadFail::IncomparableQuote => None,
             ReadFail::Failed { kind, .. } => Some(*kind),
         }
     }
 }
 
 impl std::fmt::Display for ReadFail {
-    /// Render the originating failure message or the not-ready sentinel text.
+    /// Render the originating failure message or non-database outcome text.
+    ///
+    /// Args:
+    ///     f: Destination formatter.
+    ///
+    /// Returns:
+    ///     Formatter result after writing the stable diagnostic text.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ReadFail::NotReady => f.write_str("replica not ready"),
+            ReadFail::IncomparableQuote => f.write_str("quote currency is mixed or unknown"),
             ReadFail::Failed { msg, .. } => f.write_str(msg),
         }
     }

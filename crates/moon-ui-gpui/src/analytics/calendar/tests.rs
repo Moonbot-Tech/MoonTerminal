@@ -5,7 +5,7 @@ use std::sync::Arc;
 use moon_core::db::analytics::DayCell;
 use moon_core::db::{FailKind, ReadFail};
 
-use super::apply_calendar_results;
+use super::{ProfitLoadState, apply_calendar_results};
 use crate::load_state::{LoadState, Note};
 
 /// `calendar/mod.rs:apply_calendar_results` must apply both `ReadFail` values to their
@@ -17,15 +17,11 @@ fn current_and_previous_failures_remain_visible() {
         kind: FailKind::Corrupt,
         msg: Arc::from("broken calendar"),
     };
-    let mut days = LoadState::<Vec<DayCell>>::default();
+    let mut days = ProfitLoadState::<Vec<DayCell>>::default();
     let mut previous = LoadState::<Option<(f64, i64, i64)>>::default();
 
-    assert!(apply_calendar_results(
-        &mut days,
-        &mut previous,
-        Err(failure()),
-        true,
-    ));
+    let failed = apply_calendar_results(&mut days, &mut previous, Err(failure()), true);
+    assert!(failed);
 
     assert!(matches!(
         days.view(|_| false),

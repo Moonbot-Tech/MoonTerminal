@@ -13,7 +13,7 @@ use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::super::summary::{fmt_signed, sign_color};
+use super::super::summary::{fmt_signed_unit, sign_color};
 use super::{date_of, day_window, split_i18n};
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -69,6 +69,19 @@ impl AnalyticsView {
             .into_any_element()
     }
 
+    /// Render the Day KPI strip with exact-unit current and previous aggregates.
+    ///
+    /// Args:
+    ///     profit: Current-day profit in the active unit.
+    ///     trades: Current-day trade count.
+    ///     wins: Current-day winning trades.
+    ///     prev: Previous-day profit, trades, and wins.
+    ///     has_prev: Whether the comparison day is available.
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     Complete KPI row element.
     #[allow(clippy::too_many_arguments)]
     fn day_kpi(
         &self,
@@ -105,7 +118,7 @@ impl AnalyticsView {
                 cx,
                 t!("analytics.cal.kpi_profit_day").to_string(),
                 moon(sign_color(p, profit)),
-                fmt_signed(profit),
+                fmt_signed_unit(profit),
                 dp(profit, pp),
                 false,
             ))
@@ -206,15 +219,11 @@ impl AnalyticsView {
                         .text_size(design::t_caption(cx))
                         .whitespace_nowrap()
                         .text_color(moon(sign_color(p, avg)))
-                        .child(format!(
-                            "{}{}",
-                            compact(avg, 1),
-                            if crate::analytics::pnl_is_pct() {
-                                "%"
-                            } else {
-                                "$"
-                            }
-                        )),
+                        .child(if crate::analytics::pnl_is_pct() {
+                            format!("{}%", compact(avg, 1))
+                        } else {
+                            format!("{} {}", compact(avg, 1), crate::analytics::pnl_unit_label())
+                        }),
                 );
             }
             head = head.child(hc);

@@ -50,6 +50,17 @@ impl VarLabel {
 /// `collapsed` folds the matrix to its two top rows (trades + profit), keeping the column
 /// headings — the caret in the title bar toggles it, for short screens where the fields grid
 /// below would not otherwise fit.
+///
+/// Args:
+///     stats: Classified Fact-versus-variant load state.
+///     scope: Active strategy or selection caption.
+///     var_labels: Ordered headings after the Fact column.
+///     collapsed: Whether only trades and profit are visible.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Complete KPI matrix card or its classified placeholder.
 pub(super) fn kpi_matrix_card(
     stats: &LoadState<Vec<VarStats>>,
     scope: String,
@@ -86,7 +97,7 @@ pub(super) fn kpi_matrix_card(
         }
     };
     // How a cell's number reads: an integer count, a profit value (carries the active
-    // USDT/percent unit), or a dimensionless ratio (profit factor, winrate) that must NOT
+    // exact quote/percent unit), or a dimensionless ratio (profit factor, winrate) that must NOT
     // pick up the "%" suffix in percent mode.
     #[derive(Clone, Copy)]
     enum Cell {

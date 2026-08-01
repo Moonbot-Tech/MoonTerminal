@@ -1,17 +1,28 @@
+//! Calendar aggregation and quote-scope regression tests.
+
 use super::*;
 use rusqlite::Connection;
 
 /// In-memory `orders_rep` with closedate, core_uid, and profitbtc; `unified_from` builds
 /// its branch from the columns that EXIST.
+///
+/// Args:
+///     rows: Close time, core id, and raw profit fixtures.
+///
+/// Returns:
+///     Seeded USDT report connection.
 fn seed(rows: &[(i64, i64, f64)]) -> Connection {
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch(
-        "CREATE TABLE orders_rep(closedate INTEGER, core_uid INTEGER, profitbtc REAL);",
+        "CREATE TABLE orders_rep(
+            closedate INTEGER, core_uid INTEGER, profitbtc REAL, basecurrency INTEGER
+         );",
     )
     .unwrap();
     for (d, uid, p) in rows {
         c.execute(
-            "INSERT INTO orders_rep(closedate, core_uid, profitbtc) VALUES (?1, ?2, ?3)",
+            "INSERT INTO orders_rep(closedate, core_uid, profitbtc, basecurrency)
+             VALUES (?1, ?2, ?3, 1)",
             rusqlite::params![d, uid, p],
         )
         .unwrap();
@@ -20,15 +31,26 @@ fn seed(rows: &[(i64, i64, f64)]) -> Connection {
 }
 
 /// `orders_rep` carrying `spentbtc` too, so the Percent metric can form `profit / spent`.
+///
+/// Args:
+///     rows: Close time, core id, raw profit, and spend fixtures.
+///
+/// Returns:
+///     Seeded USDT report connection.
 fn seed_spent(rows: &[(i64, i64, f64, f64)]) -> Connection {
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch(
-        "CREATE TABLE orders_rep(closedate INTEGER, core_uid INTEGER, profitbtc REAL, spentbtc REAL);",
+        "CREATE TABLE orders_rep(
+            closedate INTEGER, core_uid INTEGER, profitbtc REAL, spentbtc REAL,
+            basecurrency INTEGER
+         );",
     )
     .unwrap();
     for (d, uid, p, s) in rows {
         c.execute(
-            "INSERT INTO orders_rep(closedate, core_uid, profitbtc, spentbtc) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO orders_rep(
+                closedate, core_uid, profitbtc, spentbtc, basecurrency
+             ) VALUES (?1, ?2, ?3, ?4, 1)",
             rusqlite::params![d, uid, p, s],
         )
         .unwrap();
@@ -113,7 +135,10 @@ fn calendar_period_keeps_current_and_comparison_scopes_distinct() {
         ..Default::default()
     };
 
-    let period = calendar_period_from(&c, &current, Some(&previous), false).unwrap();
+    let period_scope = calendar_period_from(&c, &current, Some(&previous), false).unwrap();
+    let period = period_scope
+        .data()
+        .expect("single-quote Calendar periods are comparable");
 
     assert_eq!(period.current.len(), 1);
     assert_eq!(
@@ -125,6 +150,79 @@ fn calendar_period_keeps_current_and_comparison_scopes_distinct() {
         (9.0, 2, 2)
     );
     assert_eq!(period.previous, Some((-5.0, 1, 0)));
+}
+
+/// Calendar raw money uses the same split boundary as Summary, without blocking Percent mode.
+///
+/// Removing the preflight in `calendar_period_from` exposes a scalar 15.0 across USDT and USDC;
+/// applying the raw-money rule to Percent would incorrectly hide valid dimensionless returns.
+#[test]
+fn mixed_quote_calendar_splits_raw_money_but_keeps_percent() {
+    let c = seed_spent(&[(D0 + 100, 1, 10.0, 100.0), (D0 + 200, 1, 5.0, 100.0)]);
+    c.execute(
+        "UPDATE orders_rep SET basecurrency = 8 WHERE closedate = ?1",
+        [D0 + 200],
+    )
+    .expect("mark second row as USDC");
+    let raw_query = Query {
+        from: D0,
+        to: D0 + 86_400,
+        ..Default::default()
+    };
+
+    let raw = calendar_period_from(&c, &raw_query, None, false).expect("raw Calendar");
+    let split = raw.split().expect("mixed Calendar money must be split");
+    assert_eq!((split.orders, split.totals.len()), (2, 2));
+    assert!(raw.data().is_none());
+
+    let percent = calendar_period_from(
+        &c,
+        &Query {
+            metric: crate::db::ProfitMetric::Percent,
+            ..raw_query
+        },
+        None,
+        false,
+    )
+    .expect("percent Calendar");
+    assert!(matches!(
+        percent,
+        ProfitScope::Comparable {
+            unit: ProfitUnit::Percent,
+            ..
+        }
+    ));
+}
+
+/// Calendar comparison data is omitted when the previous period has another quote.
+///
+/// Reusing only the current period's quote decision in `calendar_period_from` makes this expose
+/// the previous USDT aggregate beside the current USDC aggregate as though their delta were valid.
+#[test]
+fn calendar_omits_previous_when_quote_changes() {
+    let c = seed(&[(D0 - 100, 1, 4.0), (D0 + 100, 1, 7.0)]);
+    c.execute(
+        "UPDATE orders_rep SET basecurrency = 8 WHERE closedate >= ?1",
+        [D0],
+    )
+    .expect("mark current row as USDC");
+    let current = Query {
+        from: D0,
+        to: D0 + 86_400,
+        ..Default::default()
+    };
+    let previous = Query {
+        from: D0 - 86_400,
+        to: D0,
+        ..Default::default()
+    };
+
+    let scoped = calendar_period_from(&c, &current, Some(&previous), false).expect("Calendar");
+    let period = scoped.data().expect("current USDC Calendar is comparable");
+    assert!(
+        period.previous.is_none(),
+        "USDT previous must not compare with USDC"
+    );
 }
 
 #[test]
@@ -153,6 +251,10 @@ fn percent_metric_is_profit_over_spent() {
     assert_eq!((pct[0].trades, pct[0].wins), (2, 1));
 }
 
+/// Percent aggregation excludes a zero-spent row instead of inventing a zero-percent trade.
+///
+/// Removing the positive-spent predicate from the Percent source makes the independent trade
+/// count include the second fixture row and skews Calendar win rate.
 #[test]
 fn percent_metric_excludes_zero_spent() {
     // A trade with no spent has no percent, so in percent mode it is EXCLUDED entirely — never
@@ -173,7 +275,7 @@ fn percent_metric_excludes_zero_spent() {
     assert!((pct[0].profit - 5.0).abs() < 1e-9, "pct={}", pct[0].profit);
     assert_eq!((pct[0].trades, pct[0].wins), (1, 1));
 
-    // In USDT mode the same zero-spent row is still counted (no spent filter there).
+    // In raw quote mode the same zero-spent row is still counted (no spent filter there).
     let usd = calendar_cells_from(
         &c,
         &Query {

@@ -255,7 +255,7 @@ pub struct WindowLayout {
     /// hand-editable field must never make one malformed value discard the complete layout.
     #[serde(default, deserialize_with = "de_lenient")]
     pub analytics_strat_sort: Option<(String, bool)>,
-    /// Analytics profit metric: `false` = absolute USDT (default, and every existing config),
+    /// Analytics profit metric: `false` = raw quote money (default for existing configs),
     /// `true` = percent (the report `Profit` column, profit ÷ spent). A per-window display
     /// lens, so it lives here rather than being reset each session.
     #[serde(default)]

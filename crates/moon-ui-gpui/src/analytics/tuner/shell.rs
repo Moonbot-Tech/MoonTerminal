@@ -366,6 +366,12 @@ impl AnalyticsView {
     /// One line describing what the "By filter" search is doing, with the colour to draw it in.
     ///
     /// An empty string is the idle state: the row simply shows nothing rather than a placeholder.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///
+    /// Returns:
+    ///     Localized status text and its palette color.
     fn filter_search_status(&self, p: MoonPalette) -> (String, u32) {
         match &self.tuner.sugg {
             SuggestState::Idle => (String::new(), p.text_muted),
@@ -426,6 +432,9 @@ impl AnalyticsView {
                 t!("common.db_not_ready").to_string(),
                 design::danger_color(p),
             ),
+            SuggestState::Failed(ReadFail::IncomparableQuote) => {
+                (t!("common.incomparable_quote").to_string(), p.orange)
+            }
             SuggestState::Failed(e) => (
                 format!("{}: {e}", t!("analytics.tuner.sugg_failed")),
                 design::danger_color(p),

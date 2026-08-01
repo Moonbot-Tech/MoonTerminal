@@ -7,6 +7,49 @@ use super::{
     distinct_strategies, query_reports, query_totals, ReportFilter, ReportStrategyKey, SideFilter,
 };
 
+/// Plausible regression: replacing the grouped `basecurrency` selector in
+/// `report_read::query_totals` with one global SUM must fail the separate USDT/USDC/BTC
+/// assertions and would show users a fictitious cross-currency profit. Grouping the raw column
+/// instead of its storage-class-guarded projection also merges malformed REAL 1.0 into USDT.
+#[test]
+fn totals_split_known_quotes_and_quarantine_unknown_money() {
+    let conn = Connection::open_in_memory().expect("open report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER NOT NULL,
+            core_name TEXT NOT NULL,
+            newrecid INTEGER NOT NULL,
+            profitbtc REAL,
+            basecurrency,
+            PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep
+            (core_uid, core_name, newrecid, profitbtc, basecurrency)
+         VALUES
+            (1, 'A', 1, 10.0, 1),
+            (1, 'A', 2, -2.0, 1),
+            (2, 'B', 3, 3.5, 8),
+            (3, 'C', 4, 0.00000125, 0),
+            (4, 'D', 5, 999999.0, NULL),
+            (4, 'D', 6, 888888.0, 26),
+            (4, 'D', 7, 777777.0, 'USDT'),
+            (5, 'E', 8, 666666.0, 1.0);",
+    )
+    .expect("seed mixed report totals");
+
+    let totals = query_totals(&conn, &ReportFilter::default()).expect("query split totals");
+
+    assert_eq!(totals.orders, 8);
+    assert_eq!(totals.unknown_orders, 4);
+    assert_eq!(totals.totals.len(), 3);
+    assert_eq!(totals.totals[0].currency.ticker(), "BTC");
+    assert_eq!(totals.totals[0].profit, 0.00000125);
+    assert_eq!(totals.totals[1].currency.ticker(), "USDT");
+    assert_eq!(totals.totals[1].profit, 8.0);
+    assert_eq!(totals.totals[2].currency.ticker(), "USDC");
+    assert_eq!(totals.totals[2].profit, 3.5);
+}
+
 /// Build two typed cores with the same signed strategy id plus an unidentifiable legacy row.
 ///
 /// Returns:
@@ -30,28 +73,29 @@ fn strategy_fixture() -> Connection {
          ALTER TABLE orders_rep ADD COLUMN emulator INTEGER;
          ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
          ALTER TABLE orders_rep ADD COLUMN signaltype TEXT;
+         ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;
          INSERT INTO orders_rep
              (core_uid, core_name, newrecid, closedate, profitbtc, coin, strategyid, deleted,
-              isshort, emulator, channelname, signaltype)
+              isshort, emulator, channelname, signaltype, basecurrency)
          VALUES
-             (1, 'CORE-A', 1, 100, 10.0, 'WRONG-CORE', -7, 0, 0, 0, '', ''),
-             (2, 'CORE-B', 1, 200, 20.0, 'EXPECTED', -7, 0, 0, 0, '', ''),
-             (2, 'CORE-B', 2, 300, 30.0, 'WRONG-STRATEGY', 8, 0, 0, 0, '', ''),
+             (1, 'CORE-A', 1, 100, 10.0, 'WRONG-CORE', -7, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 1, 200, 20.0, 'EXPECTED', -7, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 2, 300, 30.0, 'WRONG-STRATEGY', 8, 0, 0, 0, '', '', 1),
              (2, 'CORE-B', 3, 250, -5.0, 'ATTRIBUTED', 0, 0, 0, 0,
-              'LIQUIDATION', 'OWNER ( Kind )'),
-             (2, 'CORE-B', 4, 0, 90.0, 'UNDATED', -7, 0, 0, 0, '', ''),
+              'LIQUIDATION', 'OWNER ( Kind )', 1),
+             (2, 'CORE-B', 4, 0, 90.0, 'UNDATED', -7, 0, 0, 0, '', '', 1),
              (2, 'CORE-B', 5, 350, -9.0, 'ONLY-ATTRIBUTED', 0, 0, 0, 0,
-              'LIQUIDATION', 'ONLY-LIQ ( Kind )'),
-             (2, 'CORE-B', 6, 360, 6.0, 'NULL-MANUAL', NULL, 0, 0, 0, '', ''),
-             (2, 'CORE-B', 101, 220, 1.0, 'MATCH', 101, 0, 0, 0, '', ''),
-             (3, 'CORE-C', 102, 220, 1.0, 'MATCH', 102, 0, 0, 0, '', ''),
-             (2, 'CORE-B', 103, 189, 1.0, 'MATCH', 103, 0, 0, 0, '', ''),
-             (2, 'CORE-B', 104, 311, 1.0, 'MATCH', 104, 0, 0, 0, '', ''),
-             (2, 'CORE-B', 105, 220, 1.0, 'OTHER', 105, 0, 0, 0, '', ''),
-             (2, 'CORE-B', 106, 220, 1.0, 'MATCH', 106, 0, 1, 0, '', ''),
-             (2, 'CORE-B', 107, 220, 1.0, 'MATCH', 107, 0, 0, 1, '', ''),
-             (2, 'CORE-B', 108, 220, 1.0, 'MATCH', 108, 1, 0, 0, '', ''),
-             (2, 'CORE-B', 109, 0, 1.0, 'OPEN-MATCH', 109, 0, 0, 0, '', '');
+              'LIQUIDATION', 'ONLY-LIQ ( Kind )', 1),
+             (2, 'CORE-B', 6, 360, 6.0, 'NULL-MANUAL', NULL, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 101, 220, 1.0, 'MATCH', 101, 0, 0, 0, '', '', 1),
+             (3, 'CORE-C', 102, 220, 1.0, 'MATCH', 102, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 103, 189, 1.0, 'MATCH', 103, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 104, 311, 1.0, 'MATCH', 104, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 105, 220, 1.0, 'OTHER', 105, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 106, 220, 1.0, 'MATCH', 106, 0, 1, 0, '', '', 1),
+             (2, 'CORE-B', 107, 220, 1.0, 'MATCH', 107, 0, 0, 1, '', '', 1),
+             (2, 'CORE-B', 108, 220, 1.0, 'MATCH', 108, 1, 0, 0, '', '', 1),
+             (2, 'CORE-B', 109, 0, 1.0, 'OPEN-MATCH', 109, 0, 0, 0, '', '', 1);
          CREATE TABLE closed_sell_reports (
              core_uid INTEGER NOT NULL,
              core_name TEXT NOT NULL,
@@ -112,10 +156,13 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
     assert_eq!(table.rows.len(), 2);
     assert_eq!(table.rows[0][coin], Value::Text("EXPECTED".to_string()));
     assert_eq!(table.rows[1][coin], Value::Text("ATTRIBUTED".to_string()));
-    assert_eq!(
-        query_totals(&conn, &filter).expect("query filtered totals"),
-        (15.0, 2)
-    );
+    let totals = query_totals(&conn, &filter).expect("query filtered totals");
+    assert_eq!(totals.orders, 2);
+    assert_eq!(totals.unknown_orders, 0);
+    assert_eq!(totals.totals.len(), 1);
+    assert_eq!(totals.totals[0].currency.ticker(), "USDT");
+    assert_eq!(totals.totals[0].profit, 15.0);
+    assert_eq!(totals.totals[0].orders, 2);
     let choice = distinct_strategies(&conn, &ReportFilter::default())
         .expect("load strategy choices")
         .into_iter()
@@ -268,10 +315,13 @@ fn multiple_and_explicit_empty_strategy_filters_remain_exact() {
             Value::Text("WRONG-STRATEGY".to_string()),
         ]
     );
-    assert_eq!(
-        query_totals(&conn, &multiple).expect("query multiple-strategy totals"),
-        (40.0, 2)
-    );
+    let totals = query_totals(&conn, &multiple).expect("query multiple-strategy totals");
+    assert_eq!(totals.orders, 2);
+    assert_eq!(totals.unknown_orders, 0);
+    assert_eq!(totals.totals.len(), 1);
+    assert_eq!(totals.totals[0].currency.ticker(), "USDT");
+    assert_eq!(totals.totals[0].profit, 40.0);
+    assert_eq!(totals.totals[0].orders, 2);
 
     let empty = ReportFilter {
         strategies: Some(Vec::new()),
@@ -281,10 +331,9 @@ fn multiple_and_explicit_empty_strategy_filters_remain_exact() {
         .expect("query explicit empty strategy set")
         .rows
         .is_empty());
-    assert_eq!(
-        query_totals(&conn, &empty).expect("query explicit empty totals"),
-        (0.0, 0)
-    );
+    let empty_totals = query_totals(&conn, &empty).expect("query explicit empty totals");
+    assert_eq!(empty_totals.orders, 0);
+    assert!(empty_totals.totals.is_empty());
 }
 
 /// Returning early from `report_read:append_strategy_filter` for a multi-key complete selector
@@ -327,7 +376,7 @@ fn complete_explicit_strategy_universe_excludes_unidentifiable_sources() {
 ///
 /// Breakage this pins: ordering the source by raw `profitbtc` or deriving the percentage only
 /// after `query_reports` applies its source-local LIMIT. The returned top trade would then be the
-/// larger dollar profit instead of the larger return on spent capital.
+/// larger quote-denominated profit instead of the larger return on spent capital.
 #[test]
 fn profit_percent_is_derived_and_source_sorted_before_limit() {
     let conn = Connection::open_in_memory().expect("open report database");

@@ -35,6 +35,10 @@ common.db_not_ready:
   ru: "База отчётов ещё не синхронизирована."
   en: "The reports database is not synced yet."
   es: "La base de datos de informes aún no está sincronizada."
+common.incomparable_quote:
+  ru: "В выбранных сделках разные или неизвестные quote-валюты. Выберите одну валюту или переключитесь на Profit %."
+  en: "The selected trades have mixed or unknown quote currencies. Select one currency or switch to Profit %."
+  es: "Las operaciones seleccionadas tienen monedas de cotización mixtas o desconocidas. Seleccione una moneda o cambie a Profit %."
 common.exchange_unknown:
   ru: "Биржа не определена"
   en: "Exchange not identified"

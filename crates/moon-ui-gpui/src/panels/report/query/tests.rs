@@ -135,7 +135,9 @@ fn report_query_window_contains_five_hundred_rows() {
 
     assert_eq!(table.rows.len(), 500);
     assert_eq!(
-        db::query_totals(&conn, &ReportFilter::default()).unwrap().1,
+        db::query_totals(&conn, &ReportFilter::default())
+            .unwrap()
+            .orders,
         505
     );
 }
