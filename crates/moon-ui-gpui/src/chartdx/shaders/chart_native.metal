@@ -136,12 +136,12 @@ fragment float4 blit_fragment(BgOut in [[stage_in]],
     return tex.sample(samp, in.uv);
 }
 
-struct GridOut { float4 position [[position]]; float2 px; };
+struct GridOut { float4 position [[position]]; };
 
 vertex GridOut grid_vertex(uint vid [[vertex_id]], constant GridParams& gp [[buffer(0)]]) {
     float2 c = CORNERS_01[vid];
     float2 px = gp.bounds.xy + c * gp.bounds.zw;
-    return { to_clip(px, gp.resolution), px };
+    return { to_clip(px, gp.resolution) };
 }
 
 fragment float4 grid_fragment(GridOut in [[stage_in]], constant GridParams& gp [[buffer(0)]]) {
@@ -149,12 +149,19 @@ fragment float4 grid_fragment(GridOut in [[stage_in]], constant GridParams& gp [
     float3 bg = gp.bg.rgb;
     float3 grid_col = mix(bg, gp.grid_col.rgb, saturate(gp.grid_alpha));
     bool hit = false;
+    // Fragment-stage position is rasterizer-generated, so both quad triangles use identical
+    // pixel coordinates at their diagonal seam.
+    float2 fragment_px = in.position.xy;
     float step_x = gp.bounds.z / max(gp.n_vert, 1.0);
-    float local_x = in.px.x - gp.bounds.x;
-    if (abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX) hit = true;
+    float local_x = fragment_px.x - gp.bounds.x;
+    float line_x = gp.bounds.x + round(local_x / step_x) * step_x;
+    float snapped_x = floor(line_x) + 0.5;
+    if (abs(fragment_px.x - snapped_x) < GRID_LINE_HALF_PX) hit = true;
     float step_y = gp.bounds.w / max(gp.n_horiz, 1.0);
-    float local_y = in.px.y - gp.bounds.y;
-    if (abs(local_y - round(local_y / step_y) * step_y) < GRID_LINE_HALF_PX) hit = true;
+    float local_y = fragment_px.y - gp.bounds.y;
+    float line_y = gp.bounds.y + round(local_y / step_y) * step_y;
+    float snapped_y = floor(line_y) + 0.5;
+    if (abs(fragment_px.y - snapped_y) < GRID_LINE_HALF_PX) hit = true;
     float alpha = hit ? 1.0 : saturate(gp.bg_alpha);
     return float4(hit ? grid_col : bg, alpha);
 }

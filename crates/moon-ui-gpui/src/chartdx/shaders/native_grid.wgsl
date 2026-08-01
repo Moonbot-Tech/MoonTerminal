@@ -26,7 +26,6 @@ const GRID_LINE_HALF_PX: f32 = 0.5;
 
 struct GridOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) px: vec2<f32>,
 };
 
 @vertex
@@ -35,7 +34,6 @@ fn grid_vertex(@builtin(vertex_index) vid: u32) -> GridOut {
     let px = gp.bounds.xy + c * gp.bounds.zw;
     var out: GridOut;
     out.pos = to_clip(px, gp.resolution);
-    out.px = px;
     return out;
 }
 
@@ -44,14 +42,21 @@ fn grid_fragment(in: GridOut) -> @location(0) vec4<f32> {
     let bg = gp.bg.rgb;
     let grid_col = mix(bg, gp.grid_col.rgb, clamp(gp.grid_alpha, 0.0, 1.0));
     var hit = false;
+    // Fragment-stage position is rasterizer-generated, so both quad triangles use identical
+    // pixel coordinates at their diagonal seam.
+    let fragment_px = in.pos.xy;
     let step_x = gp.bounds.z / max(gp.n_vert, 1.0);
-    let local_x = in.px.x - gp.bounds.x;
-    if abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX {
+    let local_x = fragment_px.x - gp.bounds.x;
+    let line_x = gp.bounds.x + round(local_x / step_x) * step_x;
+    let snapped_x = floor(line_x) + 0.5;
+    if abs(fragment_px.x - snapped_x) < GRID_LINE_HALF_PX {
         hit = true;
     }
     let step_y = gp.bounds.w / max(gp.n_horiz, 1.0);
-    let local_y = in.px.y - gp.bounds.y;
-    if abs(local_y - round(local_y / step_y) * step_y) < GRID_LINE_HALF_PX {
+    let local_y = fragment_px.y - gp.bounds.y;
+    let line_y = gp.bounds.y + round(local_y / step_y) * step_y;
+    let snapped_y = floor(line_y) + 0.5;
+    if abs(fragment_px.y - snapped_y) < GRID_LINE_HALF_PX {
         hit = true;
     }
     let alpha = select(clamp(gp.bg_alpha, 0.0, 1.0), 1.0, hit);
