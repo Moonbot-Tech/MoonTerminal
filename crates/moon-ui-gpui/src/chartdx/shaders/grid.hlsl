@@ -20,7 +20,6 @@ cbuffer GridParams : register(b0) {
 
 struct GridOut {
     float4 pos : SV_Position;
-    float2 px  : TEXCOORD0; // screen pixels
 };
 
 static const float GRID_LINE_HALF_PX = 0.5;
@@ -37,7 +36,6 @@ GridOut grid_vertex(uint vid : SV_VertexID) {
                         1.0 - p.y / g_resolution.y * 2.0);
     GridOut o;
     o.pos = float4(ndc, 0.0, 1.0);
-    o.px = p;
     return o;
 }
 
@@ -53,18 +51,25 @@ float4 grid_fragment(GridOut i) : SV_Target {
     float3 bg = g_bg.rgb;
     float3 grid_col = lerp(bg, g_grid_col.rgb, saturate(g_grid_alpha));
     bool hit = false; // NB: `line` is a reserved HLSL word (geometry primitive).
+    // Fragment-stage SV_Position is rasterizer-generated. Using a vertex varying here makes the
+    // two triangles disagree at their diagonal seam due to interpolation precision.
+    float2 fragment_px = i.pos.xy;
 
     // Vertical lines: fixed width divisions (static and independent of time).
     float step_x = g_bounds.z / max(g_n_vert, 1.0);
-    float local_x = i.px.x - g_bounds.x;
-    if (abs(local_x - round(local_x / step_x) * step_x) < GRID_LINE_HALF_PX) {
+    float local_x = fragment_px.x - g_bounds.x;
+    float line_x = g_bounds.x + round(local_x / step_x) * step_x;
+    float snapped_x = floor(line_x) + 0.5;
+    if (abs(fragment_px.x - snapped_x) < GRID_LINE_HALF_PX) {
         hit = true;
     }
 
     // Horizontal lines: fixed height divisions (static and independent of price).
     float step_y = g_bounds.w / max(g_n_horiz, 1.0);
-    float local_y = i.px.y - g_bounds.y;
-    if (abs(local_y - round(local_y / step_y) * step_y) < GRID_LINE_HALF_PX) {
+    float local_y = fragment_px.y - g_bounds.y;
+    float line_y = g_bounds.y + round(local_y / step_y) * step_y;
+    float snapped_y = floor(line_y) + 0.5;
+    if (abs(fragment_px.y - snapped_y) < GRID_LINE_HALF_PX) {
         hit = true;
     }
 
