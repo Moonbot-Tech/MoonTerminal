@@ -20,7 +20,7 @@ impl ReportPanel {
     ///
     /// The table element with caller-controlled multi-row selection.
     pub(super) fn table_el(
-        &self,
+        &mut self,
         data: Arc<ReportData>,
         vis: &[usize],
         p: MoonPalette,
@@ -36,7 +36,9 @@ impl ReportPanel {
         let backend = self.backend.clone();
         let table_state = self.table_state.clone();
         let row_cols = self.cols.clone();
-        let cols = columns::report_columns(&self.cols, vis);
+        self.natural_widths
+            .refresh(&self.cols, &data.rows, vis, p, cx);
+        let cols = columns::report_columns(&self.cols, vis, &self.natural_widths.widths);
         let selection = self.selection.clone();
         // With no explicit filter, the coin menu may act on every core currently
         // known to the report selector.
@@ -404,7 +406,12 @@ impl Render for ReportPanel {
             .font_family(design::mono())
             .bg(rgb(p.table_body))
             .when(self.standalone, |this| {
-                this.child(window::report_header(p, &self.table_state, cx))
+                this.child(window::report_header(
+                    p,
+                    &self.table_state,
+                    window::report_title(&self.sel_cores, &self.cores),
+                    cx,
+                ))
             })
             // Keep the popup dismiss layer below the filters in z-order; see `coin_dismiss`.
             .children(coin_dismiss)

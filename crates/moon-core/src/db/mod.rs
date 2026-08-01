@@ -698,26 +698,59 @@ pub fn save_sort(conn: &Connection, key: &str, desc: bool) {
     let _ = meta_set(conn, "sort_desc", if desc { "1" } else { "0" });
 }
 
-/// Load the saved comma-separated set of visible report columns, or `None` if never saved.
+/// Load visible Report columns, migrating the legacy key to include Profit % once.
+///
+/// Args:
+///     conn: Open report metadata connection.
+///
+/// Returns:
+///     Current or migrated column names, or `None` when no preference exists.
 pub fn load_visible(conn: &Connection) -> Option<Vec<String>> {
-    let csv: String = conn
+    let current: Option<String> = conn
         .query_row(
-            "SELECT value FROM app_meta WHERE key='report_visible'",
+            "SELECT value FROM app_meta WHERE key='report_visible_v2'",
             [],
             |r| r.get(0),
         )
-        .ok()?;
-    Some(
-        csv.split(',')
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect(),
-    )
+        .ok();
+    let legacy: Option<String> = current
+        .is_none()
+        .then(|| {
+            conn.query_row(
+                "SELECT value FROM app_meta WHERE key='report_visible'",
+                [],
+                |r| r.get(0),
+            )
+            .ok()
+        })
+        .flatten();
+    let mut columns: Vec<String> = current
+        .as_ref()
+        .or(legacy.as_ref())?
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if current.is_none()
+        && !columns
+            .iter()
+            .any(|column| column == report_read::PROFIT_PERCENT_COLUMN)
+    {
+        columns.push(report_read::PROFIT_PERCENT_COLUMN.to_string());
+    }
+    Some(columns)
 }
 
-/// Save the visible report-column names as a comma-separated set.
+/// Save visible Report columns under the current schema key.
+///
+/// Args:
+///     conn: Open report metadata connection.
+///     cols: Runtime column names in display order.
+///
+/// Returns:
+///     Nothing; metadata write failures remain non-fatal like the other Report preferences.
 pub fn save_visible(conn: &Connection, cols: &[&str]) {
-    let _ = meta_set(conn, "report_visible", &cols.join(","));
+    let _ = meta_set(conn, "report_visible_v2", &cols.join(","));
 }
 
 /// Report read source: a table, its columns, and a legacy flag.

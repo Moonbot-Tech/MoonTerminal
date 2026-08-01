@@ -1,8 +1,9 @@
 //! Regression tests for Report strategy-catalog refresh scope.
 
-use moon_core::db::{ReportFilter, ReportStrategyKey, SideFilter};
+use moon_core::db::{self, ReportFilter, ReportStrategyKey, SideFilter};
+use rusqlite::Connection;
 
-use super::{strategy_catalog_scope, strategy_metadata_request};
+use super::{MAX_REPORT_ROWS, strategy_catalog_scope, strategy_metadata_request};
 
 /// Build one fully populated filter for scope-comparison tests.
 ///
@@ -98,4 +99,43 @@ fn every_catalog_predicate_and_periodic_tick_refreshes() {
         );
     }
     assert!(strategy_metadata_request(&filter, Some(&published), true).is_some());
+}
+
+/// The Report query window includes rows 101 through 500 while retaining a deterministic top-N.
+///
+/// Breakage this pins: restoring `query::MAX_REPORT_ROWS` to 100. The panel would again report only
+/// 100 visible orders even though the shared Analytics/Report limit is 500.
+#[test]
+fn report_query_window_contains_five_hundred_rows() {
+    let conn = Connection::open_in_memory().expect("open Report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL,
+             core_name TEXT NOT NULL,
+             newrecid INTEGER NOT NULL,
+             closedate INTEGER,
+             profitbtc REAL,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         WITH RECURSIVE rows(n) AS (
+             VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 505
+         )
+         INSERT INTO orders_rep(core_uid, core_name, newrecid, closedate, profitbtc)
+         SELECT 1, 'CORE-A', n, n, 1.0 FROM rows;",
+    )
+    .expect("seed 505 reports");
+    let table = db::query_reports(
+        &conn,
+        &ReportFilter::default(),
+        "closedate",
+        true,
+        MAX_REPORT_ROWS,
+    )
+    .expect("query Report window");
+
+    assert_eq!(table.rows.len(), 500);
+    assert_eq!(
+        db::query_totals(&conn, &ReportFilter::default()).unwrap().1,
+        505
+    );
 }

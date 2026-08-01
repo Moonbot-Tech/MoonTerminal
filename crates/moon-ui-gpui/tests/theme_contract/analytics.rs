@@ -31,6 +31,19 @@ fn report_table_uses_scrollable_preserved_widths() {
     );
 }
 
+/// Reusing the old Report persistence context must fail this assertion; a saved standalone `:win`
+/// column set would otherwise override the migrated defaults and keep Profit % invisible.
+#[test]
+fn report_layout_uses_the_versioned_context_for_dock_and_window() {
+    let state = read_src("panels/report/state.rs");
+    assert_eq!(
+        state.matches("ctx_id(\"report-table-v2\"").count(),
+        2,
+        "both dock and standalone contexts must move together"
+    );
+    assert!(!state.contains("ctx_id(\"report-table\""));
+}
+
 /// Strategy rows must keep both navigation paths and the Report filter in the wrapping controls.
 ///
 /// Removing `.children(strategy_button)` is a plausible compile-clean edit that would hide the

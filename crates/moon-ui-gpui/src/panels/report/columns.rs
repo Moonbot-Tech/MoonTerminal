@@ -6,12 +6,28 @@ use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use rust_i18n::t;
 
 /// Build sortable table descriptors for visible indices in the cached schema.
-pub(super) fn report_columns(cols: &[String], vis: &[usize]) -> Vec<MoonDataTableColumn> {
+///
+/// Args:
+///     cols: Complete runtime Report schema.
+///     vis: Visible source-column indices in render order.
+///     natural_widths: Content-derived bases keyed by column name.
+///
+/// Returns:
+///     Sortable descriptors aligned and sized for the current result.
+pub(super) fn report_columns(
+    cols: &[String],
+    vis: &[usize],
+    natural_widths: &std::collections::HashMap<String, f32>,
+) -> Vec<MoonDataTableColumn> {
     vis.iter()
         .map(|&i| {
             let col = cols[i].as_str();
-            let column = MoonDataTableColumn::new(col.to_string(), header_for(col), width_for(col))
-                .sortable(true);
+            let width = natural_widths
+                .get(col)
+                .copied()
+                .unwrap_or_else(|| width_for(col));
+            let column =
+                MoonDataTableColumn::new(col.to_string(), header_for(col), width).sortable(true);
             if is_numeric_report_column(col) {
                 column.right()
             } else {
@@ -290,6 +306,7 @@ fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {
     MoonDataCell::element(inner)
 }
 
+/// Return whether a Report column uses right-aligned numeric presentation.
 fn is_numeric_report_column(col: &str) -> bool {
     matches!(
         col,
@@ -300,6 +317,7 @@ fn is_numeric_report_column(col: &str) -> bool {
             | "spentbtc"
             | "gainedbtc"
             | "profitbtc"
+            | "profitpct"
             | "lev"
             | "id"
             | "newrecid"
@@ -312,7 +330,15 @@ fn is_numeric_report_column(col: &str) -> bool {
 ///
 /// Generic text values are trimmed and folded to one line. Report exports bypass this
 /// presentation formatting and use raw database values.
-fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
+///
+/// Args:
+///     col: Runtime Report column key.
+///     v: Database value to format.
+///     p: Active palette used for signed coloring.
+///
+/// Returns:
+///     Display text and optional text color.
+pub(super) fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
     match col {
         "buydate" | "closedate" | "sellsetdate" | "last_update_at" => {
             (as_i64(v).map(db::fmt_unix).unwrap_or_default(), None)
@@ -326,7 +352,7 @@ fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
             Some(1) => (t!("report.cell.emu").to_string(), Some(p.text_soft)),
             _ => (String::new(), None),
         },
-        "profitbtc" | "gainedbtc" => {
+        "profitbtc" | "gainedbtc" | "profitpct" => {
             let n = as_f64(v);
             let color = match n {
                 Some(x) if x > 0.0 => Some(p.green),
@@ -335,7 +361,16 @@ fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
             };
             // Profit cells use two decimals without a currency marker; the
             // totals row owns the marker for the aggregate.
-            (n.map(|x| format!("{x:+.2}")).unwrap_or_default(), color)
+            let text = n
+                .map(|x| {
+                    if col == "profitpct" {
+                        format!("{x:+.2}%")
+                    } else {
+                        format!("{x:+.2}")
+                    }
+                })
+                .unwrap_or_default();
+            (text, color)
         }
         _ => (cell_display_text(v), None),
     }
@@ -389,6 +424,7 @@ fn cell_display_text(v: &Value) -> String {
 pub(super) fn header_for(col: &str) -> String {
     match col {
         "profitbtc" => "profit".to_string(),
+        "profitpct" => "profit %".to_string(),
         "spentbtc" => "spent".to_string(),
         "gainedbtc" => "gained".to_string(),
         _ => col.to_string(),
@@ -403,7 +439,7 @@ pub(super) fn width_for(col: &str) -> f32 {
         "sellreason" => 170.0,
         "channelname" | "signaltype" | "fname" | "exorderid" => 110.0,
         "core_name" | "coin" => 88.0,
-        "profitbtc" | "gainedbtc" | "spentbtc" => 96.0,
+        "profitbtc" | "profitpct" | "gainedbtc" | "spentbtc" => 96.0,
         "lev" | "isshort" | "emulator" => 52.0,
         _ => 82.0,
     }

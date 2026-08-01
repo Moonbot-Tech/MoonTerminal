@@ -699,6 +699,14 @@ analytics.col.profit:
   ru: "Профит"
   en: "Profit"
   es: "Beneficio"
+analytics.col.avg_order:
+  ru: "Ср. ордер"
+  en: "Avg order"
+  es: "Orden prom."
+analytics.col.profit_pct:
+  ru: "Profit %"
+  en: "Profit %"
+  es: "Profit %"
 
 analytics.insights:
   ru: "Инсайты"

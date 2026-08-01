@@ -28,6 +28,7 @@ pub const DISPLAY_COLUMNS: &[&str] = &[
     "spentbtc",
     "gainedbtc",
     "profitbtc",
+    "profitpct",
     "lev",
     "strategyid",
     "source",
@@ -63,6 +64,9 @@ pub const DISPLAY_COLUMNS: &[&str] = &[
     "takeprofitlag",
     "last_update_at",
 ];
+
+/// Synthetic report column containing per-trade return on positive spent capital.
+pub const PROFIT_PERCENT_COLUMN: &str = "profitpct";
 
 /// Query result containing column names and generic value rows for every column.
 ///
@@ -175,7 +179,12 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
     have.extend(legacy);
     let mut out: Vec<String> = DISPLAY_COLUMNS
         .iter()
-        .filter(|c| have.contains(**c))
+        .filter(|c| {
+            have.contains(**c)
+                || (**c == PROFIT_PERCENT_COLUMN
+                    && have.contains("profitbtc")
+                    && have.contains("spentbtc"))
+        })
         .map(|c| (*c).to_string())
         .collect();
     let mut extra: Vec<String> = have
@@ -190,10 +199,23 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
 
 /// Project a source onto the shared `cols`: preserve its own columns, map legacy
 /// `db_id` to `id`, and emit NULL for absent columns.
+///
+/// Args:
+///     src: Physical report source and its discovered schema.
+///     cols: Shared runtime display columns to project in order.
+///
+/// Returns:
+///     Comma-separated SQL projection for the aliased source.
 fn source_select(src: &ReadSource, cols: &[String]) -> String {
     cols.iter()
         .map(|c| {
-            if src.legacy && c == "id" && src.cols.contains("db_id") {
+            if c == PROFIT_PERCENT_COLUMN {
+                if src.cols.contains("profitbtc") && src.cols.contains("spentbtc") {
+                    "CASE WHEN r.\"spentbtc\" > 0 THEN r.\"profitbtc\" / r.\"spentbtc\" * 100.0 END AS \"profitpct\"".to_string()
+                } else {
+                    "NULL AS \"profitpct\"".to_string()
+                }
+            } else if src.legacy && c == "id" && src.cols.contains("db_id") {
                 "db_id AS \"id\"".to_string()
             } else if src.cols.contains(c) {
                 format!("\"{c}\"")
@@ -236,6 +258,31 @@ fn sort_column(cols: &[String], key: &str) -> String {
         "closedate".to_string()
     } else {
         "newrecid".to_string()
+    }
+}
+
+/// Return the source-local SQL expression for a validated report sort column.
+///
+/// Synthetic columns need their defining expression here because every source is truncated before
+/// the Rust merge. Sorting only after that truncation would return the wrong global top rows.
+///
+/// Args:
+///     src: Physical source whose schema determines sort availability.
+///     col: Validated runtime sort-column key.
+///
+/// Returns:
+///     SQL expression when the source can sort by the column, otherwise `None`.
+fn source_sort_expression(src: &ReadSource, col: &str) -> Option<String> {
+    if col == PROFIT_PERCENT_COLUMN {
+        return (src.cols.contains("profitbtc") && src.cols.contains("spentbtc")).then(|| {
+            "CASE WHEN r.\"spentbtc\" > 0 THEN r.\"profitbtc\" / r.\"spentbtc\" * 100.0 END"
+                .to_string()
+        });
+    }
+    if src.cols.contains(col) || (src.legacy && col == "id") {
+        Some(format!("\"{col}\""))
+    } else {
+        None
     }
 }
 
@@ -472,9 +519,9 @@ pub fn query_reports(
         };
         // Sort in SQL only if the source has the column. The legacy `id` alias is
         // visible to ORDER BY; otherwise source order is irrelevant because the merge reorders it.
-        let sortable = src.cols.contains(&col) || (src.legacy && col == "id");
-        let order = if sortable {
-            format!("\"{col}\" IS NULL, \"{col}\" {dir}")
+        let sort_expression = source_sort_expression(&src, &col);
+        let order = if let Some(expression) = sort_expression {
+            format!("({expression}) IS NULL, {expression} {dir}")
         } else {
             "1".to_string()
         };

@@ -213,7 +213,7 @@ impl ReportPanel {
     ///     cx: Panel context used to read the event-time result and repaint the action bar.
     ///
     /// Returns:
-    ///     Nothing. The current table is capped by the report query's top-100 contract.
+    ///     Nothing. The current table is capped by the report query's top-500 contract.
     pub(super) fn select_all_report_rows(&mut self, cx: &mut Context<Self>) {
         let Some(data) = self.data.data() else {
             return;

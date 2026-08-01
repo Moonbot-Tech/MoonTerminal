@@ -216,10 +216,13 @@ pub(super) fn ordered_visible_indices(
         .filter(|(_, column)| visible.contains(column.as_str()))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    MoonDataTable::ordered_columns(columns::report_columns(cols, &source_indices), state)
-        .iter()
-        .filter_map(|column| cols.iter().position(|name| name == column.key.as_ref()))
-        .collect()
+    MoonDataTable::ordered_columns(
+        columns::report_columns(cols, &source_indices, &std::collections::HashMap::new()),
+        state,
+    )
+    .iter()
+    .filter_map(|column| cols.iter().position(|name| name == column.key.as_ref()))
+    .collect()
 }
 
 /// Build spreadsheet-friendly TSV for selected rows in current visual order.

@@ -322,14 +322,18 @@ fn strategy_base_on(
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
+    let raw_src = groups::raw_source(conn, &q)?;
     let mut names = has_strat_names;
-    let strategies =
-        with_name_fallback(&mut names, |enabled| groups(conn, &src, &q, enabled, true))?;
+    let strategies = with_name_fallback(&mut names, |enabled| {
+        groups(conn, &src, raw_src.as_deref(), &q, enabled, true)
+    })?;
     let trades = strategies.iter().map(|strategy| strategy.n).sum();
     Ok(StrategyBase {
         strategies,
         trades,
-        coins: with_name_fallback(&mut names, |enabled| groups(conn, &src, &q, enabled, false))?,
+        coins: with_name_fallback(&mut names, |enabled| {
+            groups(conn, &src, raw_src.as_deref(), &q, enabled, false)
+        })?,
         from: q.from,
         to: q.to,
     })
@@ -406,6 +410,7 @@ pub(super) fn summary_on(
     // Shared latch: the first name-related failure turns enrichment off for the
     // remaining aggregations of THIS summary.
     let mut names = has_strat_names;
+    let raw_src = groups::raw_source(conn, &q)?;
     Ok(Summary {
         cur,
         prev,
@@ -414,8 +419,12 @@ pub(super) fn summary_on(
         core_days,
         best: with_name_fallback(&mut names, |n| top_trades(conn, &src, &q, n, true))?,
         worst: with_name_fallback(&mut names, |n| top_trades(conn, &src, &q, n, false))?,
-        strategies: with_name_fallback(&mut names, |n| groups(conn, &src, &q, n, true))?,
-        coins: with_name_fallback(&mut names, |n| groups(conn, &src, &q, n, false))?,
+        strategies: with_name_fallback(&mut names, |n| {
+            groups(conn, &src, raw_src.as_deref(), &q, n, true)
+        })?,
+        coins: with_name_fallback(&mut names, |n| {
+            groups(conn, &src, raw_src.as_deref(), &q, n, false)
+        })?,
         best_hour,
         // Only for a day or less — on a longer period the daily chart works and this
         // aggregation's per-row subquery would be paid for nothing.

@@ -244,6 +244,37 @@ fn strategy_sort_survives_restart_without_endangering_layout() {
     }
 }
 
+/// Current strategy-column masks survive a restart without making `layout.toml` fragile.
+///
+/// Breakage this pins: removing `de_lenient` from `analytics_strat_cols_modes2`. A malformed
+/// hand-edited mask would reject the complete layout and discard the neighbouring period.
+#[test]
+fn current_strategy_column_masks_cannot_discard_the_saved_layout() {
+    let saved = WindowLayout {
+        analytics_strat_cols_modes2: Some(StratColsByMode {
+            filter: 3,
+            coins: 7,
+            time: 11,
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load");
+    let masks = decoded
+        .analytics_strat_cols_modes2
+        .expect("current masks survive");
+    assert_eq!((masks.filter, masks.coins, masks.time), (3, 7, 11));
+
+    for written in ["17", "true", "[1, 2]", "{ filter = \"bad\" }"] {
+        let doc = format!(
+            "analytics_period = \"p-cur-month\"\nanalytics_strat_cols_modes2 = {written}\n"
+        );
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+    }
+}
+
 /// The composition switch must survive a round trip and a hand-edited value.
 ///
 /// `layout.toml` is one schema-less document holding every window's geometry, so the hazard is

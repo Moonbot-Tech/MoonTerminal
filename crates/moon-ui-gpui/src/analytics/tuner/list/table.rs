@@ -111,7 +111,7 @@ impl AnalyticsView {
                         .surface(false)
                         .border(false)
                         .radius(0.0)
-                        .scrollbar_visibility(MoonScrollbarVisibility::Hover)
+                        .scrollbar_visibility(MoonScrollbarVisibility::Always)
                         .into_any_element(),
                         total,
                         shown,
@@ -391,6 +391,7 @@ fn strategy_row(
                 // The view may already be gone; a dropped window is not an error here.
                 let _ = weak.update(app, |this, cx| match intent {
                     super::RowClick::OpenReport => {
+                        this.select_for_report(&key, &name, cx);
                         this.open_strategy_report(&key, name, window, cx);
                     }
                     super::RowClick::Range => this.select_range(key, name, cx),

@@ -2,7 +2,7 @@
 
 use gpui::{Bounds, point, px, size};
 
-use super::{initial_report_bounds, restored_report_bounds};
+use super::{initial_report_bounds, report_title, restored_report_bounds};
 use moon_core::config::GeomRect;
 
 /// Restoring the old 1240x720 constants must fail this assertion and recreate the cramped window
@@ -121,4 +121,21 @@ fn report_rejects_unusable_saved_dimensions() {
     assert_eq!(f32::from(bounds.origin.y), 24.0);
     assert_eq!(f32::from(bounds.size.width), 1640.0);
     assert_eq!(f32::from(bounds.size.height), 1032.0);
+}
+
+/// Dropping the sole-core suffix in `report::window::report_title` must fail the middle assertion;
+/// appending it for implicit All or multi-select must fail the surrounding assertions.
+#[test]
+fn report_title_names_only_an_explicit_sole_core() {
+    let cores = vec![(1, "CORE-A".to_string()), (2, "CORE-B".to_string())];
+    assert_eq!(report_title(&Default::default(), &cores), "Report");
+    assert_eq!(
+        report_title(&[2].into_iter().collect(), &cores),
+        "Report — CORE-B"
+    );
+    assert_eq!(
+        report_title(&[1, 2].into_iter().collect(), &cores),
+        "Report"
+    );
+    assert_eq!(report_title(&[99].into_iter().collect(), &cores), "Report");
 }

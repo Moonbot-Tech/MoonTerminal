@@ -73,7 +73,7 @@ pub(in crate::analytics::tuner) struct RowsCache {
     key: RowsKey,
     pub(in crate::analytics::tuner) rows: Vec<CoinRow>,
     pub(in crate::analytics::tuner) counts: CoinCounts,
-    /// Rows BEFORE the `MAX_ROWS` cut — the "showing 300 of N" label reads this.
+    /// Rows before the `MAX_ROWS` cut; the shown/total label reads this complete count.
     pub(in crate::analytics::tuner) total: usize,
 }
 
@@ -218,7 +218,7 @@ fn sort_rows(state: &CoinsState, rows: &mut [CoinRow]) {
     // Both comparators close with the coin name, which is unique per row. Without that the
     // order is only partial, and `partial_sort` resolves a tie through `select_nth_unstable_by`
     // — free to reorder equal rows AND to pick arbitrarily among them for the drawn head, so
-    // tied coins could swap places or drop out of the visible 300 between two renders of the
+    // tied coins could swap places or drop out of the visible head between two renders of the
     // same data. Ties are the common case here: `trades` is a small integer.
     if let Some(col) = super::super::COIN_COLS.iter().find(|c| c.key == key) {
         let f = col.sort;

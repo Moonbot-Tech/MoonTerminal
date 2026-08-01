@@ -8,7 +8,7 @@ use super::*;
 /// data set, so they remain exact regardless of this limit. Writer generations can request repeated
 /// background reads, coalesced by the panel's five-second throttle; keeping the row cap small avoids
 /// repeatedly materializing very large result sets.
-const MAX_REPORT_ROWS: usize = 100;
+pub(super) const MAX_REPORT_ROWS: usize = 500;
 
 /// Rows and exact period totals from one completed report read.
 ///
@@ -298,6 +298,7 @@ impl ReportPanel {
                             let cols_changed = *this.cols != cols;
                             this.cols = Rc::new(cols);
                             this.data.apply(Ok(data));
+                            this.natural_widths.clear();
                             // Complete the width map when schema membership changes
                             // so new columns stay stable while neighbors resize. A
                             // double-click reset intentionally removes one entry.

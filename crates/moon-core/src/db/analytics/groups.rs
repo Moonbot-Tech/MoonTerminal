@@ -31,6 +31,10 @@ pub struct GroupStat {
     pub alive: Option<i64>,
     pub n: i64,
     pub profit: f64,
+    /// Raw quote-currency profit, independent of the active Analytics profit lens.
+    pub raw_profit: f64,
+    /// Average positive order spend in quote currency over the lens-neutral trade scope.
+    pub avg_order: f64,
     pub wins: i64,
     /// Group win sum divided by its loss sum. Returns 99 when the win sum is positive
     /// and the loss sum is zero, or 0 when both sums are zero.
@@ -53,13 +57,24 @@ pub struct GroupStat {
 }
 
 impl GroupStat {
+    /// Return the group's winning-trade share as a percentage.
     pub fn winrate(&self) -> f64 {
         winrate(self.wins, self.n)
     }
 
+    /// Return average active-lens profit per trade, or zero for an empty group.
     pub fn avg(&self) -> f64 {
         if self.n > 0 {
             self.profit / self.n as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Return raw total profit as a percentage of average positive order size, or zero without it.
+    pub fn profit_pct_of_avg_order(&self) -> f64 {
+        if self.avg_order > 0.0 {
+            self.raw_profit / self.avg_order * 100.0
         } else {
             0.0
         }
@@ -251,10 +266,39 @@ pub(in crate::db) fn coin_groups_on(conn: &Connection, q: &Query) -> ReadResult<
     let Some(src) = unified_from(conn, &q)? else {
         return Err(ReadFail::NotReady);
     };
-    groups(conn, &src, &q, false, false)
+    let raw_src = raw_source(conn, &q)?;
+    groups(conn, &src, raw_src.as_deref(), &q, false, false)
 }
 
-/// Decode one aggregate row ordered as key, labels, counts, profit, and extrema.
+/// Build the lens-neutral source used by raw-profit and average-order enrichments.
+///
+/// USDT mode needs no second source because the active aggregate can compute raw fields in the same
+/// pass. Percent mode rebuilds without its positive-spend filter so the new columns do not change
+/// when the display lens changes.
+///
+/// Args:
+///     conn: Open analytics read connection.
+///     q: Active filtered Analytics query.
+/// Returns:
+///     Optional lens-neutral source needed only for Percent mode, or a classified read failure.
+pub(super) fn raw_source(conn: &Connection, q: &Query) -> ReadResult<Option<String>> {
+    if q.metric == crate::db::ProfitMetric::Usdt {
+        return Ok(None);
+    }
+    let mut raw_query = q.clone();
+    raw_query.metric = crate::db::ProfitMetric::Usdt;
+    unified_from(conn, &raw_query)?
+        .ok_or(ReadFail::NotReady)
+        .map(Some)
+}
+
+/// Decode one aggregate row ordered as key, labels, active metrics, and raw enrichments.
+///
+/// Args:
+///     r: SQLite row matching the aggregate SELECT layout.
+///
+/// Returns:
+///     Fully decoded group aggregate or a SQLite conversion error.
 fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
     let wsum: f64 = r.get(9)?;
     let lsum: f64 = r.get(10)?;
@@ -277,6 +321,8 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
         // there can never disagree about what a list covers.
         bl: count_list(r.get::<_, Option<String>>(14)?),
         wl: count_list(r.get::<_, Option<String>>(15)?),
+        raw_profit: r.get(16)?,
+        avg_order: r.get(17)?,
     })
 }
 
@@ -316,9 +362,21 @@ fn strategy_name_expr(has_names: bool) -> String {
 /// Group the period by strategy id or coin, sorted by descending profit.
 ///
 /// Any query or aggregate-row failure aborts the complete grouping.
+///
+/// Args:
+///     conn: Open analytics read connection.
+///     src: Active-lens filtered source used by existing metrics.
+///     raw_src: Optional USDT-lens source; absent when active USDT aggregation can reuse its pass.
+///     q: Filter and period supplying SQL parameters.
+///     has_names: Whether strategy metadata enrichment is available.
+///     by_strategy: Whether to group by strategy identity instead of coin.
+///
+/// Returns:
+///     Ordered group aggregates or a classified read failure.
 pub(super) fn groups(
     conn: &Connection,
     src: &str,
+    raw_src: Option<&str>,
     q: &Query,
     has_names: bool,
     by_strategy: bool,
@@ -446,6 +504,24 @@ pub(super) fn groups(
     // means the same data can name a different best strategy from one build to the next. The key
     // is unique per group, so this decides every tie. Tuning applies its own total comparators
     // whenever the user selects a table sort.
+    let (raw_cte, raw_join, raw_profit, avg_order) = if let Some(raw_src) = raw_src {
+        (
+            format!(
+                ", raw AS (
+                     SELECT {key} AS k,
+                            COALESCE(SUM(o.profitbtc), 0) AS raw_profit,
+                            COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order
+                     FROM {raw_src}
+                     GROUP BY k
+                 )"
+            ),
+            "LEFT JOIN raw ON raw.k IS a.k",
+            "COALESCE(raw.raw_profit, 0)",
+            "COALESCE(raw.avg_order, 0)",
+        )
+    } else {
+        (String::new(), "", "a.raw_profit", "a.avg_order")
+    };
     let sql = format!(
         "WITH a AS (
              SELECT {key} AS k,
@@ -458,15 +534,18 @@ pub(super) fn groups(
                     COALESCE(SUM(CASE WHEN o.pnl > 0 THEN o.pnl END),0) AS wsum,
                     COALESCE(SUM(CASE WHEN o.pnl <= 0 THEN -o.pnl END),0) AS lsum,
                     COALESCE(MAX(o.pnl),0) AS best,
-                    COALESCE(MIN(o.pnl),0) AS worst
+                    COALESCE(MIN(o.pnl),0) AS worst,
+                    COALESCE(SUM(o.profitbtc), 0) AS raw_profit,
+                    COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order
              FROM {src}
              GROUP BY k
-         )
+         ){raw_cte}
          SELECT a.k, {name}, {kind}, a.core_name, a.cores_n,
                 {alive},
                 a.n, a.profit, a.wins, a.wsum, a.lsum, a.best, a.worst,
-                {lastedit}, {blacklist}, {whitelist}
-         FROM a
+                {lastedit}, {blacklist}, {whitelist},
+                {raw_profit}, {avg_order}
+         FROM a {raw_join}
          ORDER BY a.profit DESC, a.k"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
