@@ -30,6 +30,16 @@ pub(crate) fn ms_axis_scale(max_ms: u16) -> f32 {
     (f32::from(max_ms) * 1.15 / 50.0).ceil().max(1.0) * 50.0
 }
 
+/// Localized word for one trade-direction filter value, shared by every panel that offers the
+/// filter (the Report scope field, the Analytics toolbar) so the three read identically.
+pub(crate) fn side_label(side: moon_core::db::SideFilter) -> String {
+    match side {
+        moon_core::db::SideFilter::All => rust_i18n::t!("report.filter.all").to_string(),
+        moon_core::db::SideFilter::Long => rust_i18n::t!("report.side.long").to_string(),
+        moon_core::db::SideFilter::Short => rust_i18n::t!("report.side.short").to_string(),
+    }
+}
+
 /// Selection decoration for a mutually exclusive menu item. `Check` applies the menu item's checked
 /// state, while `Highlight` applies its selected state; callers choose the style explicitly.
 #[derive(Clone, Copy)]

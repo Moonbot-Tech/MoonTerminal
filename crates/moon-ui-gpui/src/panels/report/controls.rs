@@ -4,6 +4,17 @@ use super::columns::header_for;
 use super::*;
 use rust_i18n::t;
 
+/// Compact word for the trade-kind filter inside the scope trigger.
+///
+/// Abbreviated ("реал." for "Реальные") so the two-part summary fits the field width.
+fn kind_short(kind: ReportKind) -> String {
+    match kind {
+        ReportKind::All => t!("report.kind.all_short").to_string(),
+        ReportKind::Real => t!("report.kind.real_short").to_string(),
+        ReportKind::Emu => t!("report.kind.emu_short").to_string(),
+    }
+}
+
 impl ReportPanel {
     /// Render the shared multi-select core combo.
     ///
@@ -101,20 +112,45 @@ impl ReportPanel {
             )
     }
 
-    /// Render the direction filter: all, Long, or Short.
-    pub(super) fn side_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cur = match self.side {
-            SideFilter::All => t!("report.filter.all").to_string(),
-            SideFilter::Long => t!("report.side.long").to_string(),
-            SideFilter::Short => t!("report.side.short").to_string(),
-        };
-        let view = cx.entity();
-        let items = crate::panels::radio_items(
+    /// Render the row-scope filter: direction, trade kind and the deleted-only switch in ONE field.
+    ///
+    /// The three used to be two dropdowns and a bare checkbox. They are independent filters, but
+    /// they are always read together as "which rows am I looking at", so they share one field split
+    /// by separators — the way the Orders settings menu groups its own options. The trigger
+    /// summarises the state in short words (`Все/реал.`), adding the deleted segment only while
+    /// that off-by-default filter is on.
+    ///
+    /// Width is the old kind dropdown's 102 as a MINIMUM, not a fixed size: a fixed 102 fits ~12
+    /// mono characters, so the three-part deleted-only label would be ellipsised in every locale —
+    /// hiding the one filter that has no other indicator left in the toolbar. `fit_trigger_width`
+    /// keeps the field at 102 for the everyday two-part label and lets it grow for the rare one.
+    pub(super) fn scope_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        // With both lists on "all" the pair would read as the same word twice ("Все/все"); one word
+        // says exactly as much.
+        // Built by appending onto the first word: this runs on every render of the panel, so the
+        // segments are pushed in place instead of allocating a fresh String per join.
+        let mut label =
+            if matches!(self.side, SideFilter::All) && matches!(self.kind, ReportKind::All) {
+                t!("report.filter.all").to_string()
+            } else {
+                let mut label = crate::panels::side_label(self.side);
+                label.push('/');
+                label.push_str(&kind_short(self.kind));
+                label
+            };
+        if self.deleted_only {
+            label.push('/');
+            label.push_str(&t!("report.filter.deleted_short"));
+        }
+        // Each group labels its "all" row distinctly: two bare "Все" rows in one menu would read as
+        // the same option twice.
+        let side_view = cx.entity();
+        let mut items = crate::panels::radio_items(
             [
                 (
                     SideFilter::All,
                     "rs-all".into(),
-                    t!("report.filter.all").to_string().into(),
+                    t!("report.filter.all_sides").to_string().into(),
                 ),
                 (
                     SideFilter::Long,
@@ -128,36 +164,19 @@ impl ReportPanel {
                 ),
             ],
             self.side,
-            crate::panels::RadioMark::Highlight,
+            crate::panels::RadioMark::Check,
             move |app, side| {
-                view.update(app, |t, c| t.set_side(side, c));
+                side_view.update(app, |t, c| t.set_side(side, c));
             },
         );
-        MoonDropdown::new("rep-side")
-            .label(cur)
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(69.0)
-            .menu_width_scaled(120.0)
-            .menu_size(MoonMenuSize::Compact)
-            .items(items)
-    }
-
-    /// Render the trade-kind filter: all, real, or emulated.
-    pub(super) fn kind_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cur = match self.kind {
-            ReportKind::All => t!("report.kind.all"),
-            ReportKind::Real => t!("report.kind.real"),
-            ReportKind::Emu => t!("report.kind.emu"),
-        };
-        let view = cx.entity();
-        let items = crate::panels::radio_items(
+        items.push(MoonMenuItem::separator());
+        let kind_view = cx.entity();
+        items.extend(crate::panels::radio_items(
             [
                 (
                     ReportKind::All,
                     "rk-all".into(),
-                    t!("report.kind.all").to_string().into(),
+                    t!("report.kind.all_kinds").to_string().into(),
                 ),
                 (
                     ReportKind::Real,
@@ -173,18 +192,43 @@ impl ReportPanel {
             self.kind,
             crate::panels::RadioMark::Check,
             move |app, k| {
-                view.update(app, |t, c| t.set_kind(k, c));
+                kind_view.update(app, |t, c| t.set_kind(k, c));
             },
+        ));
+        // Soft-deleted trades: off (the default) hides them, on shows ONLY them. The toggle reads
+        // the live flag instead of a render-time copy, so it cannot invert a value the user changed
+        // from elsewhere between this render and the click.
+        items.push(MoonMenuItem::separator());
+        let deleted_view = cx.entity();
+        items.push(
+            MoonMenuItem::with_key("rd-deleted", t!("report.filter.deleted").to_string())
+                .checked(self.deleted_only)
+                .on_click(move |_, _, app| {
+                    deleted_view.update(app, |t, c| t.set_deleted_only(!t.deleted_only, c));
+                }),
         );
-        MoonDropdown::new("rep-kind")
-            .label(cur)
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(102.0)
-            .menu_width_scaled(138.0)
-            .menu_size(MoonMenuSize::Compact)
-            .items(items)
+        // The tooltip carries what the row labels cannot: that the deleted switch is exclusive
+        // (off hides deleted trades, on shows ONLY them) rather than an "also show" checkbox.
+        div()
+            .id("rep-scope-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.filter.scope_tip").to_string()))
+                    .into()
+            })
+            .child(
+                MoonDropdown::new("rep-scope")
+                    .label(label)
+                    .trigger_caret(true)
+                    .trigger_variant(MoonButtonVariant::Soft)
+                    .trigger_size(MoonButtonSize::Action)
+                    .fit_trigger_width(102.0, 170.0)
+                    .menu_width_scaled(165.0)
+                    .menu_size(MoonMenuSize::Compact)
+                    // Three independent filters in one field: keep the menu open so setting two of
+                    // them does not cost two open/close cycles.
+                    .close_on_select(false)
+                    .items(items),
+            )
     }
 
     /// Render the report-period filter using Moonbot-compatible presets.
@@ -212,19 +256,6 @@ impl ReportPanel {
             .menu_width_scaled(130.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
-    }
-
-    /// Bare checkbox filtering soft-deleted trades: unchecked (the default) hides them,
-    /// checked shows ONLY them.
-    ///
-    /// No label — the tooltip carries the explanation, matching the glyph buttons beside it.
-    pub(super) fn deleted_check(&self, cx: &Context<Self>) -> impl IntoElement {
-        crate::panels::icon_checkbox(
-            "rep-deleted",
-            t!("report.filter.deleted_tip").to_string(),
-            self.deleted_only,
-            cx.listener(|t, on: &bool, _w, cx| t.set_deleted_only(*on, cx)),
-        )
     }
 
     /// Build the responsive bottom action bar for the current row selection.

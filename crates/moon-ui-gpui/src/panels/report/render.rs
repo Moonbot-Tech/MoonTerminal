@@ -262,11 +262,10 @@ impl Render for ReportPanel {
                     .child(t!("report.filter.coin").to_string()),
             )
             .child(coin_field)
-            .child(self.side_combo(cx))
+            .child(self.scope_combo(cx))
             .child(self.period_combo(cx))
-            .child(self.kind_combo(cx))
             // Show manual From/To dates only in detached windows. Docked tabs rely on period presets
-            // to keep the core, coin, side, period, order-kind, deleted, and column controls compact.
+            // to keep the core, coin, scope (side/kind/deleted), period and column controls compact.
             .when(self.detached, |f| {
                 f.child(
                     div()
@@ -291,7 +290,6 @@ impl Render for ReportPanel {
                         .child(MoonInput::new("rep-to").state(&self.to).small()),
                 )
             })
-            .child(self.deleted_check(cx))
             // Export and the field selector sit at the RIGHT edge, away from the filters. The row
             // wraps, so they ride in their own `ml_auto` group instead of behind a `flex_1` spacer:
             // a flexible spacer inside a wrapping row would claim a whole line of its own once the

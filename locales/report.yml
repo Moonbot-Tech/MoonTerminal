@@ -59,12 +59,29 @@ report.filter.date_ph:
   ru: "ГГГГ-ММ-ДД"
   en: "YYYY-MM-DD"
   es: "AAAA-MM-DD"
-# Bare checkbox between the order-kind combo and export. Off (default) hides trades
-# soft-deleted in the core's report; on shows ONLY them. Export follows the same filter.
-report.filter.deleted_tip:
-  ru: "Только удалённые из отчёта сделки. Выкл — удалённые скрыты."
-  en: "Only trades deleted from the report. Off — deleted trades are hidden."
-  es: "Solo operaciones eliminadas del informe. Desactivado: se ocultan."
+# Last row of the merged scope field. Off (default) hides trades soft-deleted in the core's
+# report; on shows ONLY them. Export follows the same filter.
+report.filter.deleted:
+  ru: "Только удалённые"
+  en: "Deleted only"
+  es: "Solo eliminadas"
+# Tooltip of the merged scope field. It states the deleted switch's exclusive semantics, which the
+# row label alone cannot: off hides soft-deleted trades, on shows ONLY them.
+report.filter.scope_tip:
+  ru: "Сторона, тип сделок и удалённые. «Только удалённые» выкл — удалённые скрыты, вкл — показаны только они."
+  en: "Direction, trade kind and deleted trades. “Deleted only” off — deleted trades are hidden; on — only they are shown."
+  es: "Lado, tipo de operaciones y eliminadas. «Solo eliminadas» desactivado: se ocultan; activado: solo se muestran ellas."
+# Abbreviation appended to the scope trigger while the row above is on.
+report.filter.deleted_short:
+  ru: "удал."
+  en: "del."
+  es: "elim."
+# First row of the scope field's direction group. Named "all sides" rather than a bare "all" so it
+# does not read as the same option as the kind group's own first row.
+report.filter.all_sides:
+  ru: "Все стороны"
+  en: "All sides"
+  es: "Todos los lados"
 # Error toast when a soft-delete/restore could not be sent (the core is offline or gone). The
 # affected rows stay selected so nothing is silently lost.
 report.delete_send_failed:
@@ -206,11 +223,16 @@ report.all_cores:
   ru: "Все ядра"
   en: "All cores"
   es: "Todos los núcleos"
-# Order-type list field, matching orders.kind.*.
+# Order-type list field, matching orders.kind.*. `report.kind.all` is the Analytics toolbar wording;
+# the Report scope field uses `all_kinds` so its row differs from the direction group's "all".
 report.kind.all:
   ru: "Все"
   en: "All"
   es: "Todas"
+report.kind.all_kinds:
+  ru: "Все типы"
+  en: "All kinds"
+  es: "Todos los tipos"
 report.kind.real:
   ru: "Реальные"
   en: "Real"
@@ -219,3 +241,16 @@ report.kind.emu:
   ru: "Эмуляторные"
   en: "Emulator"
   es: "Emulador"
+# Abbreviations for the scope trigger — the full words do not fit the field ("Все/реал.").
+report.kind.all_short:
+  ru: "все"
+  en: "all"
+  es: "todas"
+report.kind.real_short:
+  ru: "реал."
+  en: "real"
+  es: "real"
+report.kind.emu_short:
+  ru: "эмул."
+  en: "emu"
+  es: "emu"
