@@ -15,4 +15,5 @@ pub(super) mod order_cancel;
 pub(super) mod perf;
 pub(super) mod price_scale;
 pub(super) mod root_overlay;
+pub(super) mod startup;
 pub(super) mod tool_windows;

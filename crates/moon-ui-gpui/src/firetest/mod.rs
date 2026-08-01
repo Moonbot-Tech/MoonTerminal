@@ -61,6 +61,10 @@ pub(crate) struct Runtime {
     /// so nothing can report a stage the cursor disagrees with.
     cursor: usize,
     phase_since: Instant,
+    /// When the first core session registered, which is when waiting for them to settle can begin.
+    /// `None` until one appears — an empty session list at startup means "nobody has reported yet",
+    /// not "nothing to wait for", and reading it as the latter skips the wait entirely.
+    cores_seen_at: Option<Instant>,
     probe: Option<ChartProbe>,
     /// How much app the idle window was measured against. `None` until that stage records it.
     bench: Option<bench::BenchShape>,
@@ -99,6 +103,7 @@ impl Runtime {
             plan,
             cursor: 0,
             phase_since: now,
+            cores_seen_at: None,
             probe: None,
             bench: None,
             samples: Vec::new(),

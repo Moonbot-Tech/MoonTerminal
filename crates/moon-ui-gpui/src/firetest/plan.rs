@@ -25,6 +25,11 @@ use super::stages;
 
 /// Grace period before the run touches the app, so startup finishes first.
 const START_DELAY: Duration = Duration::from_millis(1000);
+
+/// Outer backstop for the settle wait. The stage itself gives up on a core-scaled budget and
+/// proceeds, so this only fires if that logic stops working — it is a guard on the guard, not the
+/// number that decides when a run starts.
+const START_SETTLE_MAX: Duration = Duration::from_secs(120);
 /// How long the freshly opened live chart is left alone before measuring anything.
 const SETTLE: Duration = Duration::from_millis(5000);
 /// Length of the cursor-free high-present baseline the storm is compared against.
@@ -216,7 +221,9 @@ impl StageDef {
 
 /// Let the app finish starting before anything is asked of it.
 const WAIT_STARTUP: StageDef =
-    StageDef::new(Phase::WaitStartup, "start", |_, _, _| StageStep::Next).dwell(START_DELAY);
+    StageDef::new(Phase::WaitStartup, "start", stages::startup::await_cores)
+        .dwell(START_DELAY)
+        .deadline(START_SETTLE_MAX, "cores did not settle");
 
 /// Put a real live chart on screen; every later stage measures against it.
 const WAIT_OPEN: StageDef = StageDef::new(Phase::WaitOpen, "open_chart", stages::chart::open_chart)
