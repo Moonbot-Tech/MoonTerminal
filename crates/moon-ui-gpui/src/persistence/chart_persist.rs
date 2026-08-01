@@ -172,7 +172,7 @@ pub struct ChartTabSpec {
     #[serde(default)]
     pub candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Detached-window time-axis X scale in pixels per millisecond, synchronized there with
-    /// Shift+middle-click. None inherits the group scale or the 60-second default.
+    /// Shift+middle-click. None inherits the group scale or the built-in chart default.
     #[serde(default)]
     pub x_ppm: Option<f32>,
 }

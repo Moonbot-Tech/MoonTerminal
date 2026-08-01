@@ -31,9 +31,9 @@ hotkeys.builtin.wheel_pan:
   en: "[Shift or Alt + Wheel] moves the chart left/right"
   es: "[Shift o Alt + Rueda] mueve el gráfico a izquierda/derecha"
 hotkeys.builtin.esc_close:
-  ru: "[Esc] закрыть чарт, который сейчас в фулскрине Main (режим рисования не выключает)"
-  en: "[Esc] close the chart currently fullscreen in Main (does not exit draw mode)"
-  es: "[Esc] cerrar el gráfico en pantalla completa de Main (no sale del modo dibujo)"
+  ru: "[Esc] закрыть активный чарт Main (режим рисования не выключает)"
+  en: "[Esc] close the active Main chart (does not exit draw mode)"
+  es: "[Esc] cerrar el gráfico activo de Main (no sale del modo dibujo)"
 hotkeys.builtin.reset_windows:
   ru: "[Ctrl+Shift+F10] сброс позиций всех окон на экран"
   en: "[Ctrl+Shift+F10] reset all window positions onscreen"

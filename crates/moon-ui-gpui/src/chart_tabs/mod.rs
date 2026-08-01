@@ -112,7 +112,7 @@ pub struct ChartTabs {
     last_switch_charts_rev: u64,
     /// Last observed `close_all_charts_rev`; a larger revision closes the Main stack.
     last_close_all_charts_rev: u64,
-    /// Last observed `close_active_chart_rev`; a larger revision closes the fullscreen chart.
+    /// Last observed `close_active_chart_rev`; a larger revision closes Main's active chart.
     last_close_active_chart_rev: u64,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in this window applies the scale to all
     /// its stacks and persists `layout.chart_x_ppm_by_group`, exactly once.
@@ -821,8 +821,14 @@ impl ChartTabs {
         });
     }
 
-    /// Close only Main's fullscreen chart on a larger `close_active_chart_rev` for this group.
-    /// This is a no-op outside fullscreen mode and does not alter drawing mode.
+    /// Close Main's active chart on a larger `close_active_chart_rev` for this group.
+    /// This works in fullscreen and tiled-stack presentation and does not alter drawing mode.
+    ///
+    /// Args:
+    ///     cx: Tab context used to read the addressed revision and update Main.
+    ///
+    /// Returns:
+    ///     Nothing; unrelated or already-observed revisions are ignored.
     fn sync_close_active_chart(&mut self, cx: &mut Context<Self>) {
         let (rev, ours) = {
             let b = self.backend.read(cx);
@@ -837,7 +843,7 @@ impl ChartTabs {
         self.last_close_active_chart_rev = rev;
         if ours {
             self.main.update(cx, |s, scx| {
-                s.close_active_fullscreen(scx);
+                s.close_active(scx);
             });
         }
     }

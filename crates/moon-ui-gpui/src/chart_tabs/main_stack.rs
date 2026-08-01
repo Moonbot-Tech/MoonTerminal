@@ -48,7 +48,7 @@ pub(crate) struct MainChartStack {
     liquidations_enabled: Option<bool>,
     /// Candle and trade display settings for the tab; `None` uses the global default.
     candle_view: Option<moon_core::market::CandleViewCfg>,
-    /// Window X scale in px/ms, synchronized with Shift+middle-click; `None` is the 60-second default.
+    /// Window X scale in px/ms, synchronized with Shift+middle-click; `None` uses the built-in default.
     /// New charts inherit it, and synchronization applies it to every chart.
     x_ppm: Option<f32>,
     /// Per-window control-zone fill visibility; `None` defaults to enabled.
@@ -78,6 +78,56 @@ pub(crate) struct MainChartStack {
     /// It ticks at about 1 Hz while configured and charts exist, then rearms itself.
     idle_timer_armed: bool,
     scroll: MoonVirtualListScrollHandle,
+}
+
+/// Select one chart for Escape and update Main presentation state for the remaining chart count.
+///
+/// Args:
+///     active: Current active index, updated to the chart replacing the removed slot.
+///     show_stack: Current presentation mode, updated to stack when charts remain.
+///     chart_count: Number of charts before removal.
+///
+/// Returns:
+///     Index to remove, or `None` when the stack is empty.
+fn take_active_close_index(
+    active: &mut Option<usize>,
+    show_stack: &mut bool,
+    chart_count: usize,
+) -> Option<usize> {
+    if chart_count == 0 {
+        *active = None;
+        *show_stack = false;
+        return None;
+    }
+    let index = active.filter(|&i| i < chart_count).unwrap_or(0);
+    let remaining = chart_count - 1;
+    *active = (remaining > 0).then_some(index.min(remaining.saturating_sub(1)));
+    *show_stack = remaining > 0;
+    Some(index)
+}
+
+/// Resolve an active index after entries were reordered while preserving the active identity.
+///
+/// Args:
+///     item_count: Number of entries after reordering.
+///     active_key: Stable identity of the entry that was active before reordering.
+///     fallback: Previous numeric index used only when the identity disappeared.
+///     matches: Predicate that checks whether an index still owns the active identity.
+///
+/// Returns:
+///     Remapped active index, a bounded fallback, or `None` for an empty stack.
+fn remap_active_index<T>(
+    item_count: usize,
+    active_key: Option<&T>,
+    fallback: Option<usize>,
+    mut matches: impl FnMut(usize, &T) -> bool,
+) -> Option<usize> {
+    if item_count == 0 {
+        return None;
+    }
+    active_key
+        .and_then(|key| (0..item_count).find(|&ix| matches(ix, key)))
+        .or_else(|| Some(fallback.unwrap_or(0).min(item_count - 1)))
 }
 
 impl MainChartStack {
@@ -216,17 +266,39 @@ impl MainChartStack {
         panel
     }
 
-    /// Synchronize comparison mode as in `AddChartStack`, consuming lock clicks and applying the
-    /// shared Y range and flags. Returns true when the anchor or order changed and the stack must notify.
+    /// Synchronize comparison mode while preserving the active market across anchor reordering.
+    ///
+    /// Args:
+    ///     cx: Stack context used to consume comparison requests and update panels.
+    ///
+    /// Returns:
+    ///     Whether the comparison anchor, broom state, or chart order changed.
     fn sync_compare(&mut self, cx: &mut Context<Self>) -> bool {
-        sync_compare(
+        let previous_active = self.active;
+        let active_key = previous_active
+            .and_then(|ix| self.charts.get(ix))
+            .map(|entry| (entry.core, entry.market.clone()));
+        let changed = sync_compare(
             &mut self.charts,
             &mut self.compare_anchor,
             &mut self.compare_y,
             &mut self.compare_orderbook_only,
             self.layout_orientation,
             cx,
-        )
+        );
+        if changed {
+            self.active = remap_active_index(
+                self.charts.len(),
+                active_key.as_ref(),
+                previous_active,
+                |ix, key| {
+                    self.charts
+                        .get(ix)
+                        .is_some_and(|entry| entry.core == key.0 && entry.market == key.1)
+                },
+            );
+        }
+        changed
     }
 
     /// Move fullscreen focus to the next chart cyclically for the `switch_charts` hotkey.
@@ -288,23 +360,31 @@ impl MainChartStack {
         cx.notify();
     }
 
+    /// Remove panels whose own panes are empty while preserving the active market identity.
+    ///
+    /// Args:
+    ///     cx: Application context used to inspect child-panel state.
+    ///
+    /// Returns:
+    ///     Whether at least one empty panel was removed.
     fn prune_empty(&mut self, cx: &App) -> bool {
-        let active_key = self
-            .active
+        let previous_active = self.active;
+        let active_key = previous_active
             .and_then(|ix| self.charts.get(ix))
             .map(|entry| (entry.core, entry.market.clone()));
         let changed = retain_nonempty_panels(&mut self.charts, cx);
-        if self.charts.is_empty() {
-            self.active = None;
+        self.active = remap_active_index(
+            self.charts.len(),
+            active_key.as_ref(),
+            previous_active,
+            |ix, key| {
+                self.charts
+                    .get(ix)
+                    .is_some_and(|entry| entry.core == key.0 && entry.market == key.1)
+            },
+        );
+        if self.active.is_none() {
             self.show_stack = false;
-        } else {
-            self.active = active_key
-                .and_then(|(core, market)| {
-                    self.charts
-                        .iter()
-                        .position(|entry| entry.core == core && entry.market == market)
-                })
-                .or_else(|| Some(self.active.unwrap_or(0).min(self.charts.len() - 1)));
         }
         changed
     }
@@ -335,21 +415,38 @@ impl MainChartStack {
         .detach();
     }
 
-    /// Close only the chart currently shown fullscreen for the built-in Escape action.
-    /// This works only in fullscreen mode (`!show_stack` with an active chart); Escape does nothing
-    /// in the tiled stack. Remaining charts return to stack view. Returns whether a chart closed.
-    pub(crate) fn close_active_fullscreen(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.show_stack {
-            return false;
-        }
-        let Some(idx) = self.active.filter(|&i| i < self.charts.len()) else {
+    /// Close the active Main chart for Escape in either fullscreen or tiled-stack presentation.
+    /// Remaining charts return to stack view with the chart that replaced the removed slot active.
+    ///
+    /// Args:
+    ///     cx: Stack context used to close the panel and publish the new visible/open state.
+    ///
+    /// Returns:
+    ///     Whether a chart closed.
+    pub(crate) fn close_active(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(idx) =
+            take_active_close_index(&mut self.active, &mut self.show_stack, self.charts.len())
+        else {
             return false;
         };
         let entry = self.charts.remove(idx);
         entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
-        self.active = None;
-        // Show remaining charts as a stack because the closed chart can no longer own fullscreen.
-        self.show_stack = !self.charts.is_empty();
+        let had_compare_anchor = self.compare_anchor.is_some();
+        if self
+            .compare_anchor
+            .as_ref()
+            .is_some_and(|key| key.0 == entry.core && key.1 == entry.market)
+        {
+            self.compare_anchor = None;
+            self.compare_orderbook_only = false;
+            self.compare_y = None;
+        }
+        if had_compare_anchor {
+            // Refresh comparison peers and clear any locks left by a removed anchor.
+            self.sync_compare(cx);
+        }
+        self.sync_visibility(cx);
+        self.sync_backend_open_markets(cx);
         cx.notify();
         true
     }
@@ -877,6 +974,9 @@ impl MainChartStack {
         tile
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 impl Render for MainChartStack {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

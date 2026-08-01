@@ -708,7 +708,7 @@ struct ChartDataState {
     /// engine panels. They may be a per-tab override or the `layout.candle_view` fallback.
     candle_view: moon_core::market::CandleViewCfg,
     /// Saved X scale in pixels per millisecond from Shift+middle-click sync. NEW panels start with it
-    /// instead of the 60-second default; `None` uses that default.
+    /// instead of the built-in time-window default; `None` uses that default.
     default_x_ppm: Option<f32>,
     /// Prospective selected F1-F6 manual order size in USD for the cursor crosshair label.
     /// `ChartPanel::render`, which has Backend access, sets it. `None` means no size or rate.

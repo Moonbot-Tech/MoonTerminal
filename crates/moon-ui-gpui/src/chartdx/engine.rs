@@ -478,7 +478,7 @@ impl ChartEngine {
         true
     }
 
-    /// Stores the X scale for new panes in pixels per millisecond. None uses the 60-second default.
+    /// Stores the X scale for new panes in pixels per millisecond. None uses the built-in default.
     pub fn set_default_x_ppm(&mut self, ppm: Option<f32>) {
         self.data.borrow_mut().default_x_ppm = ppm;
     }

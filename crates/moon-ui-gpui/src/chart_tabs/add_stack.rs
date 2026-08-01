@@ -46,7 +46,7 @@ pub(crate) struct AddChartStack {
     liquidations_enabled: Option<bool>,
     /// Tab candle/trade display settings (`None` = global default).
     candle_view: Option<moon_core::market::CandleViewCfg>,
-    /// Window X scale (px/ms, synchronized with Shift+middle-click; `None` = 60-second default).
+    /// Window X scale (px/ms, synchronized with Shift+middle-click; `None` = built-in default).
     /// New charts inherit it, and synchronization applies it to all charts.
     x_ppm: Option<f32>,
     /// Whether to show the management-zone fill (per window). `None` = enabled by default.

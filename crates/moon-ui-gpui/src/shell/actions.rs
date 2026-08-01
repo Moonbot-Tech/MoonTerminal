@@ -125,6 +125,13 @@ impl Shell {
     /// market and active trading core. NewLong and NewShort are exceptions routed through the
     /// globally hovered chart. Scaling uses the group's revision mechanism rather than `apply`.
     /// Stop propagation only when the resolved action reports that it was handled.
+    ///
+    /// Args:
+    ///     ev: Key-down event to resolve against built-in and configured shortcuts.
+    ///     cx: Shell context used to route the resolved action.
+    ///
+    /// Returns:
+    ///     Nothing; handled actions stop event propagation.
     pub(super) fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         use crate::hotkeys::HotkeyAction;
         let action = {
@@ -199,12 +206,15 @@ impl Shell {
                 });
                 true
             }
-            // Built-in Escape closes only this group's fullscreen Main chart. As in Moonbot, it
-            // leaves drawing mode enabled and does not close the group or detached window.
+            // Built-in Escape closes this group's active Main chart in either presentation. As in
+            // Moonbot, it leaves drawing mode enabled and does not close the group or detached window.
             HotkeyAction::CloseActiveChart => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.close_active_chart_group = Some(group.clone());
                     b.close_active_chart_rev = b.close_active_chart_rev.wrapping_add(1);
+                    // ChartTabs consumes this revision through its Backend observer. Without an
+                    // explicit notification, Escape waits for an unrelated market-data repaint.
+                    bcx.notify();
                 });
                 true
             }
