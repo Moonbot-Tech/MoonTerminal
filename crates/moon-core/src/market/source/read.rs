@@ -269,7 +269,8 @@ impl MarketDataSource {
     ///
     /// MoonProto's `MarketDeltaState` defines `coin_1h_delta` and `coin_24h_delta` as deviations
     /// from retained averages, matching MoonBot's Coin1hDelta semantics. This feeds the header
-    /// ticker and a future screener. `None` means the provider, snapshot, or market is unavailable.
+    /// ticker; the Screener uses unsigned retained-range deltas instead. `None` means the provider,
+    /// snapshot, or market is unavailable.
     pub fn market_ticker(&self, core: CoreId, market: &str) -> Option<MarketTickerReadout> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");

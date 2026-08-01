@@ -140,8 +140,7 @@ fn num_key(e: &Entry, key: &str) -> f64 {
     }
 }
 
-/// Signed-percentage cell shared by the delta columns, so the same value cannot render one way
-/// in `d1h` and another in `d24h`.
+/// Signed-percentage cell for values whose direction is semantically meaningful.
 ///
 /// A value rounding to zero renders unsigned and muted: a raw `{:+.1}` prints "-0.0%" for any
 /// small negative, which reads as a decline that is not there.
@@ -179,8 +178,8 @@ pub(super) fn screener_row(
     cols: &[&ColDef],
 ) -> MoonDataRow {
     let r = &e.row;
-    // Derived deltas omit a forced plus sign but retain negative classification. Shared rounding
-    // keeps their zero case consistent with the explicitly signed columns beside them.
+    // Every Screener delta is an unsigned retained-range magnitude. One formatter keeps all six
+    // periods free of a misleading forced sign while preserving the shared zero rounding.
     let delta_cell = |v: f64| pct_cell(fmt::pct(v, 1));
     let vol_cell = |v: f64| {
         if v > 0.0 {
@@ -208,9 +207,9 @@ pub(super) fn screener_row(
                 }
             }
             "maxord" => vol_cell(r.max_order),
-            "d24h" => signed_pct_cell(r.d_24h),
+            "d24h" => delta_cell(r.d_24h),
             "d3h" => delta_cell(r.d_3h),
-            "d1h" => signed_pct_cell(r.d_1h),
+            "d1h" => delta_cell(r.d_1h),
             "d15m" => delta_cell(r.d_15m),
             "d1m" => delta_cell(r.d_1m),
             "d72h" => delta_cell(r.d_72h),
