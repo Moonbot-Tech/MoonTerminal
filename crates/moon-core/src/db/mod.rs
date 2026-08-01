@@ -698,6 +698,50 @@ pub fn save_sort(conn: &Connection, key: &str, desc: bool) {
     let _ = meta_set(conn, "sort_desc", if desc { "1" } else { "0" });
 }
 
+/// Storage key for the Report comment pane in one host.
+///
+/// The `:dock` / `:win` split MIRRORS `table_persist::ctx_id` in the UI crate, which keeps the
+/// Report's visible columns and widths apart for a docked tab and a detached window. This
+/// preference belongs to the same table, so it follows the same rule; the suffix is spelled out
+/// here because `moon-core` cannot reach that helper.
+fn comment_pane_key(detached: bool) -> &'static str {
+    if detached {
+        "report_comment_pane:win"
+    } else {
+        "report_comment_pane:dock"
+    }
+}
+
+/// Load whether the Report shows the comment pane under its table, for one host.
+///
+/// Args:
+///     conn: Open report metadata connection.
+///     detached: Whether the caller is a detached or standalone Report window.
+///
+/// Returns:
+///     The stored preference, or `None` when this host has never changed it. A value written by a
+///     newer build, or a hand-edited row, counts as anything other than `"0"` being on — the pane
+///     is a display choice, so an unreadable preference must not hide data.
+pub fn load_comment_pane(conn: &Connection, detached: bool) -> Option<bool> {
+    let value: String = conn
+        .query_row(
+            "SELECT value FROM app_meta WHERE key=?1",
+            [comment_pane_key(detached)],
+            |r| r.get(0),
+        )
+        .ok()?;
+    Some(value != "0")
+}
+
+/// Store whether the Report shows the comment pane under its table, for one host.
+pub fn save_comment_pane(conn: &Connection, detached: bool, shown: bool) {
+    let _ = meta_set(
+        conn,
+        comment_pane_key(detached),
+        if shown { "1" } else { "0" },
+    );
+}
+
 /// Load visible Report columns, migrating the legacy key to include Profit % once.
 ///
 /// Args:

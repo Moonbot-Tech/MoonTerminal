@@ -22,6 +22,11 @@ pub(super) enum ReportRowKey {
 pub(super) struct ReportSelection {
     selected: HashSet<ReportRowKey>,
     anchor: Option<ReportRowKey>,
+    /// Row of the LAST click in any mode, which the comment pane describes.
+    ///
+    /// Distinct from `anchor`: a Shift range deliberately keeps its anchor at the range base so the
+    /// next Shift click re-measures from there, but the row the user just pointed at is the far end.
+    last_clicked: Option<ReportRowKey>,
 }
 
 impl ReportSelection {
@@ -45,7 +50,8 @@ impl ReportSelection {
     ///     secondary: Whether Ctrl on Windows/Linux or Command on macOS was held.
     ///
     /// Returns:
-    ///     Nothing. Shift takes precedence over the secondary modifier.
+    ///     Nothing. Shift takes precedence over the secondary modifier, and a plain click that
+    ///     lands on the sole selected row clears the selection instead of re-selecting it.
     pub(super) fn click(
         &mut self,
         clicked: Option<ReportRowKey>,
@@ -56,6 +62,7 @@ impl ReportSelection {
         let Some(clicked) = clicked else {
             return;
         };
+        self.last_clicked = Some(clicked);
         if shift {
             let span = self.anchor.and_then(|anchor| {
                 let from = order.iter().position(|key| *key == Some(anchor))?;
@@ -77,10 +84,40 @@ impl ReportSelection {
             if !self.selected.insert(clicked) {
                 self.selected.remove(&clicked);
             }
-        } else {
-            self.selected.clear();
+            return;
+        }
+        // A plain click on the row that IS the entire selection clears it: clicking the same row
+        // twice reads as undoing that selection. With anything else selected the click still
+        // collapses the set to the clicked row — that is the standard table behaviour and the only
+        // way back from a Shift range to a single row. The anchor is NOT cleared with the set — it
+        // was just moved to this row above — so a following Shift click still measures from here.
+        let only_this = self.selected.len() == 1 && self.selected.contains(&clicked);
+        self.selected.clear();
+        if !only_this {
             self.selected.insert(clicked);
         }
+    }
+
+    /// Select exactly one row, whatever was selected before.
+    ///
+    /// Unlike a plain [`Self::click`], this never clears: it exists for the second half of a
+    /// physical double-click. MoonDataTable invokes the row-select callback on BOTH clicks and
+    /// gives it no click count, so the deselecting second click has to be undone from the table's
+    /// own authoritative double-click callback rather than guessed at from timing.
+    ///
+    /// Args:
+    ///     clicked: Stable identity of the double-clicked row, or `None` for an invalid row.
+    ///
+    /// Returns:
+    ///     Nothing. The anchor follows the row, as it does for a plain click.
+    pub(super) fn select_only(&mut self, clicked: Option<ReportRowKey>) {
+        let Some(clicked) = clicked else {
+            return;
+        };
+        self.anchor = Some(clicked);
+        self.last_clicked = Some(clicked);
+        self.selected.clear();
+        self.selected.insert(clicked);
     }
 
     /// Remove selections no longer present in a newly published query result.
@@ -96,6 +133,9 @@ impl ReportSelection {
         if self.anchor.is_some_and(|key| !visible.contains(&key)) {
             self.anchor = None;
         }
+        if self.last_clicked.is_some_and(|key| !visible.contains(&key)) {
+            self.last_clicked = None;
+        }
     }
 
     /// Clear every selected row and the Shift anchor.
@@ -105,6 +145,7 @@ impl ReportSelection {
     pub(super) fn clear(&mut self) {
         self.selected.clear();
         self.anchor = None;
+        self.last_clicked = None;
     }
 
     /// Return whether one stable row is selected.
@@ -116,6 +157,16 @@ impl ReportSelection {
     ///     `true` only when a concrete identity belongs to the controlled set.
     pub(super) fn contains(&self, key: Option<ReportRowKey>) -> bool {
         key.is_some_and(|key| self.selected.contains(&key))
+    }
+
+    /// Return the row the user last clicked, while it is still selected.
+    ///
+    /// Returns:
+    ///     The last-clicked identity, or `None` once it has been deselected or has left the result.
+    ///     The membership check matters for Ctrl-click: it clears the row but keeps it as the
+    ///     anchor for a following Shift range.
+    pub(super) fn current(&self) -> Option<ReportRowKey> {
+        self.last_clicked.filter(|key| self.selected.contains(key))
     }
 
     /// Return the number of selected rows.

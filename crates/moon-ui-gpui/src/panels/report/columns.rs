@@ -130,7 +130,16 @@ fn coin_cell(
         // Inherit font styling from the cell's MoonUI cascade.
         .text_color(rgb(MoonTone::Accent.color(p)))
         .child(coin.clone())
-        .on_click(move |_, _window, app| {
+        .on_click(move |_, window, app| {
+            // A Shift or Ctrl click is a selection gesture wherever it lands, so let those bubble
+            // to the row handler. A plain click opens the chart and stops there: otherwise it would
+            // also reach the row handler, where clicking the sole selected row deselects it.
+            // Stopped before the empty check, so a blank coin cell behaves like a filled one.
+            let modifiers = window.modifiers();
+            if modifiers.shift || modifiers.secondary() {
+                return;
+            }
+            app.stop_propagation();
             if coin.is_empty() {
                 return;
             }
@@ -255,7 +264,14 @@ fn core_cell(
         .cursor_pointer()
         .text_color(rgb(MoonTone::Muted.color(p)))
         .child(name)
-        .on_click(move |_, _window, app| {
+        .on_click(move |_, window, app| {
+            // Filtering to the core is the whole gesture; see the coin cell above for why a plain
+            // click must not also reach the row handler, and why a modified one must.
+            let modifiers = window.modifiers();
+            if modifiers.shift || modifiers.secondary() {
+                return;
+            }
+            app.stop_propagation();
             view.update(app, |t, c| t.filter_to_core(core_uid, c));
         });
     MoonDataCell::element(el)
@@ -263,7 +279,7 @@ fn core_cell(
 
 /// The `deleted` soft-delete flag as a checkbox.
 ///
-/// The checkbox is display-only; row mutation belongs to the controlled bottom action bar.
+/// The checkbox is display-only; row mutation belongs to the controlled commands in the totals row.
 ///
 /// Args:
 ///     ri: Visible row index used to give the checkbox a stable element id.

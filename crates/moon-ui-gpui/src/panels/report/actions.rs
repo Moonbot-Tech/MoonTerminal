@@ -164,6 +164,21 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
+    /// Show or hide the full-width comment pane and remember the choice.
+    ///
+    /// Args:
+    ///     cx: Panel context used to persist the flag and repaint.
+    ///
+    /// Returns:
+    ///     Nothing. This is a display toggle: it changes no filter and triggers no query.
+    pub(super) fn toggle_comment_pane(&mut self, cx: &mut Context<Self>) {
+        self.show_comment = !self.show_comment;
+        if let Some(conn) = &self.conn {
+            db::save_comment_pane(conn, self.detached, self.show_comment);
+        }
+        cx.notify();
+    }
+
     /// Toggle between active and deleted-only report rows.
     ///
     /// Args:
@@ -171,7 +186,7 @@ impl ReportPanel {
     ///     cx: Panel context used to clear stale selection and request the query.
     ///
     /// Returns:
-    ///     Nothing. Selection is cleared before the action bar can change to the opposite command.
+    ///     Nothing. Selection is cleared before the totals-row commands can flip to the opposite one.
     pub(super) fn set_deleted_only(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.deleted_only != on {
             self.deleted_only = on;
@@ -185,10 +200,11 @@ impl ReportPanel {
     /// Args:
     ///     row: Current visible row index.
     ///     modifiers: Native modifier snapshot from the owning window.
-    ///     cx: Panel context used to repaint the selection and action bar.
+    ///     cx: Panel context used to repaint the selection and its totals-row commands.
     ///
     /// Returns:
-    ///     Nothing. Shift takes precedence over Ctrl/Command.
+    ///     Nothing. Shift takes precedence over Ctrl/Command, and a plain click on the row that is
+    ///     already the whole selection clears it — see [`ReportSelection::click`].
     pub(super) fn select_report_row(
         &mut self,
         row: usize,
@@ -207,10 +223,29 @@ impl ReportPanel {
         cx.notify();
     }
 
+    /// Keep the double-clicked row selected.
+    ///
+    /// The table calls the row-select handler on both clicks of a double-click, so the second one
+    /// hits the "click the sole selected row to deselect it" path and would leave a double-click
+    /// with nothing selected. This runs after it, from the table's own double-click callback, and
+    /// only for an unmodified double-click — the caller filters Shift and Ctrl out.
+    ///
+    /// Args:
+    ///     row: Current visible row index.
+    ///     cx: Panel context used to repaint the selection and its totals-row commands.
+    pub(super) fn keep_report_row_selected(&mut self, row: usize, cx: &mut Context<Self>) {
+        let Some(data) = self.data.data() else {
+            return;
+        };
+        self.selection
+            .select_only(data.row_keys.get(row).copied().flatten());
+        cx.notify();
+    }
+
     /// Select every stable row in the current filtered and sorted Report table.
     ///
     /// Args:
-    ///     cx: Panel context used to read the event-time result and repaint the action bar.
+    ///     cx: Panel context used to read the event-time result and repaint the totals-row commands.
     ///
     /// Returns:
     ///     Nothing. The current table is capped by the report query's top-500 contract.

@@ -65,12 +65,25 @@ report.filter.deleted:
   ru: "Только удалённые"
   en: "Deleted only"
   es: "Solo eliminadas"
+# Full-width comment pane between the table and the totals: `show` is its row in the scope field.
+# The pane carries no caption and no placeholder — the comment uses the panel's whole width, and
+# with no row selected the strip is simply empty.
+report.comment.show:
+  ru: "Комментарий сделки"
+  en: "Trade comment"
+  es: "Comentario de la operación"
+# Shown when a trade IS selected and its comment is empty. With no trade selected the pane stays
+# blank instead — the two states must not read alike.
+report.comment.empty:
+  ru: "без комментария"
+  en: "no comment"
+  es: "sin comentario"
 # Tooltip of the merged scope field. It states the deleted switch's exclusive semantics, which the
 # row label alone cannot: off hides soft-deleted trades, on shows ONLY them.
 report.filter.scope_tip:
-  ru: "Сторона, тип сделок и удалённые. «Только удалённые» выкл — удалённые скрыты, вкл — показаны только они."
-  en: "Direction, trade kind and deleted trades. “Deleted only” off — deleted trades are hidden; on — only they are shown."
-  es: "Lado, tipo de operaciones y eliminadas. «Solo eliminadas» desactivado: se ocultan; activado: solo se muestran ellas."
+  ru: "Сторона, тип сделок, удалённые и показ комментария. «Только удалённые» выкл — удалённые скрыты, вкл — показаны только они."
+  en: "Direction, trade kind, deleted trades and the comment pane. “Deleted only” off — deleted trades are hidden; on — only they are shown."
+  es: "Lado, tipo de operaciones, eliminadas y el panel de comentarios. «Solo eliminadas» desactivado: se ocultan; activado: solo se muestran ellas."
 # Abbreviation appended to the scope trigger while the row above is on.
 report.filter.deleted_short:
   ru: "удал."
@@ -88,7 +101,7 @@ report.delete_send_failed:
   ru: "Не удалось отправить изменение: ядро недоступно. Строки остались выбранными."
   en: "Could not send the change: the core is unavailable. Rows remain selected."
   es: "No se pudo enviar el cambio: el núcleo no está disponible. Las filas siguen seleccionadas."
-# Bottom action bar shown only while report rows are selected.
+# Selection commands shown in the totals row only while report rows are selected.
 report.selection.count:
   ru: "Выбрано: %{n}"
   en: "Selected: %{n}"
