@@ -1,25 +1,66 @@
+//! Regression coverage for chart view initialization, navigation, and scale behavior.
+
 use super::{ChartView, MANUAL_HOLD_MS};
 
-fn default_window_sec(width: f32, present_hz: f32) -> f32 {
-    let px_per_ms = ChartView::phase_clean_default_px_per_ms(width, present_hz);
-    width / px_per_ms / 1000.0
+/// Return how much live history remains left of the future margin after default initialization.
+///
+/// Args:
+///     width: Plot width in logical pixels.
+///     present_hz: Display refresh rate used for phase cleaning.
+///
+/// Returns:
+///     Historical duration in milliseconds from the left edge through the live timestamp.
+fn default_history_ms(width: f32, present_hz: f32) -> f32 {
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(width, present_hz, None);
+    view.resume_live(0.0);
+    let (left, _) = view.visible_x(width);
+    -left
 }
 
+/// Changing `view.rs:DEFAULT_WINDOW_MS` to six viewport hours must fail: the future margin would
+/// leave the user with less than six hours of live history.
 #[test]
-fn default_time_window_snaps_to_phase_clean_values_around_60s() {
-    let cases = [
-        (1000.0, 66.66667),
-        (1280.0, 64.0),
-        (1920.0, 64.0),
-        (2560.0, 42.66667),
-    ];
-    for (width, expected) in cases {
-        let actual = default_window_sec(width, 60.0);
+fn default_live_window_keeps_at_least_six_hours_of_history() {
+    const SIX_HOURS_MS: f32 = 6.0 * 60.0 * 60.0 * 1000.0;
+    const MAX_PHASE_OVERSHOOT_MS: f32 = 2.0 * 60.0 * 1000.0;
+    for (width, present_hz) in [
+        (1000.0, 60.0),
+        (1280.0, 120.0),
+        (1920.0, 144.0),
+        (2560.0, 60.0),
+        (40.300_01, 30.0),
+    ] {
+        let actual = default_history_ms(width, present_hz);
         assert!(
-            (actual - expected).abs() < 0.01,
-            "width={width}: got {actual}, expected {expected}"
+            actual >= SIX_HOURS_MS,
+            "width={width}, hz={present_hz}: history {actual} ms is shorter than six hours"
+        );
+        assert!(
+            actual <= SIX_HOURS_MS + MAX_PHASE_OVERSHOOT_MS,
+            "width={width}, hz={present_hz}: phase overshoot is unexpectedly large ({actual} ms)"
         );
     }
+}
+
+/// Restoring the half-pixel shrink threshold in `view.rs:ensure_default_window` must fail;
+/// otherwise a default-mode resize can silently reduce live history below six hours.
+#[test]
+fn a_subpixel_default_resize_keeps_at_least_six_hours_of_history() {
+    const SIX_HOURS_MS: f32 = 6.0 * 60.0 * 60.0 * 1000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(500.0, 30.0, None);
+    view.resume_live(0.0);
+
+    let resized_width = 499.51;
+    view.ensure_default_window(resized_width, 30.0, None);
+    let (left, _) = view.visible_x(resized_width);
+
+    assert!(
+        -left >= SIX_HOURS_MS,
+        "subpixel resize left only {} ms of history",
+        -left
+    );
 }
 
 #[test]
@@ -37,21 +78,92 @@ fn x_pan_detaches_immediately_even_inside_live_snap_zone() {
     assert!(view.follow);
 }
 
+/// Replacing `view.rs:zoom_x_at`'s width-based ceiling with the widened default scale must fail;
+/// otherwise users can no longer zoom from the six-hour overview down to the 30-second floor.
 #[test]
 fn zoom_in_is_clamped_to_min_window_30s() {
     let now = 100_000.0;
+    let width = 1000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(width, 60.0, None);
+
+    for _ in 0..20 {
+        view.zoom_x_at(2.0, width, width * 0.5, now);
+    }
+
+    let (_, window_ms) = view.visible_x(width);
+    assert!(
+        (window_ms - 30_000.0).abs() < 1.0,
+        "minimum window was {window_ms} ms"
+    );
+    assert!(view.follow);
+}
+
+/// Removing the `default_ppm` initialization branch in `view.rs:ensure_default_window` must fail;
+/// otherwise a saved Shift+middle-click scale is overwritten by the six-hour built-in default.
+#[test]
+fn a_saved_x_scale_wins_during_initialization_and_explicit_reset() {
+    let width = 1200.0;
+    let saved_ppm = width / 180_000.0;
+    let mut view = ChartView::new(0.0);
+
+    view.ensure_default_window(width, 60.0, Some(saved_ppm));
+    assert!((view.px_per_ms - saved_ppm).abs() < 1e-9);
+
+    view.zoom_x_at(2.0, width, width * 0.5, 100_000.0);
+    assert!((view.px_per_ms - saved_ppm).abs() >= 1e-9);
+    view.reset_default_window_on_next_prepare();
+    view.ensure_default_window(width, 60.0, Some(saved_ppm));
+    assert!((view.px_per_ms - saved_ppm).abs() < 1e-9);
+}
+
+/// Making `view.rs:reset_default_window_on_next_prepare` a no-op must fail; otherwise reset leaves
+/// a manually zoomed chart in place instead of restoring the built-in six-hour-history default.
+#[test]
+fn explicit_reset_without_a_saved_scale_restores_six_hours_of_history() {
+    const SIX_HOURS_MS: f32 = 6.0 * 60.0 * 60.0 * 1000.0;
+    let width = 1000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(width, 60.0, None);
+    view.zoom_x_at(2.0, width, width * 0.5, 0.0);
+
+    view.reset_default_window_on_next_prepare();
+    view.ensure_default_window(width, 60.0, None);
+    view.resume_live(0.0);
+    let (left, _) = view.visible_x(width);
+
+    assert!(-left >= SIX_HOURS_MS, "reset left only {} ms", -left);
+}
+
+/// Removing the manual-scale guard in `view.rs:ensure_default_window` must fail; otherwise resizing
+/// after a wheel zoom silently replaces the user's chosen X scale with the six-hour default.
+#[test]
+fn a_manual_zoom_survives_later_default_window_preparation() {
     let mut view = ChartView::new(0.0);
     view.ensure_default_window(1000.0, 60.0, None);
-    let default_px_per_ms = view.px_per_ms;
+    view.zoom_x_at(2.0, 1000.0, 500.0, 100_000.0);
+    let manual_ppm = view.px_per_ms;
 
-    // One zoom-in step (×2) from the default (60 s) is allowed down to 30 s = 2× px/ms (Item 7).
-    view.zoom_x_at(2.0, 1000.0, 500.0, now);
-    assert!((view.px_per_ms - default_px_per_ms * 2.0).abs() < 1e-9);
-    assert!(view.follow);
+    view.ensure_default_window(1600.0, 120.0, None);
 
-    // Further zoom-in is capped at 30 s and cannot go deeper.
-    view.zoom_x_at(2.0, 1000.0, 500.0, now);
-    assert!((view.px_per_ms - default_px_per_ms * 2.0).abs() < 1e-9);
+    assert!((view.px_per_ms - manual_ppm).abs() < 1e-9);
+}
+
+/// Resetting `right_time_ms` inside `view.rs:ensure_default_window` must fail; otherwise preparing
+/// a panned chart jumps the user back to the live edge before the normal hold timer expires.
+#[test]
+fn a_manual_pan_position_survives_default_window_preparation() {
+    let now = 100_000_000.0;
+    let mut view = ChartView::new(0.0);
+    view.ensure_default_window(1000.0, 60.0, None);
+    view.resume_live(now);
+    view.pan_x_px(100.0, now, 1000.0);
+    let panned_right = view.right_time_ms;
+
+    view.ensure_default_window(1600.0, 120.0, None);
+
+    assert_eq!(view.right_time_ms, panned_right);
+    assert!(!view.follow);
 }
 
 #[test]
@@ -71,6 +183,8 @@ fn pan_then_hold_auto_returns_to_live() {
     assert!(view.follow);
 }
 
+/// Raising `view.rs:MIN_PX_PER_MS` above the maximum-window scale must fail these assertions;
+/// otherwise deep zoom makes the camera and live edge drift away from the order-book boundary.
 #[test]
 fn deep_zoom_out_keeps_live_edge_anchored() {
     // Regression: at maximum zoom-out, the chart drifted left of the order book. Below the
@@ -82,22 +196,22 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     view.ensure_default_window(area, 60.0, None);
     view.resume_live(now);
 
-    // Zoom out until clamped (min ppm = area / MAX_WINDOW_MS ≈ 4e-8 < 1e-6).
+    // Zoom out until clamped (min ppm = area / MAX_WINDOW_MS, about 4e-8 < 1e-6).
     for _ in 0..40 {
         view.zoom_x_at(0.5, area, area * 0.5, now);
     }
     let lo = area / super::MAX_WINDOW_MS;
     assert!(
         (view.px_per_ms - lo).abs() <= lo * 1e-3,
-        "ppm {} не дошёл до клампа {}",
+        "ppm {} did not reach clamp {}",
         view.px_per_ms,
         lo
     );
     assert!(
         view.px_per_ms < 1e-6,
-        "тест должен покрывать зону ниже старого флора"
+        "test must cover values below the historical floor"
     );
-    assert!(view.follow, "зум в live не должен срывать follow");
+    assert!(view.follow, "live zoom must preserve follow");
 
     // The old floor does NOT cap the window: it equals area/ppm (365 days), not area/1e-6.
     view.follow_edge(now, now);
@@ -105,7 +219,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     let expected_window = area / view.px_per_ms;
     assert!(
         (window_ms - expected_window).abs() <= expected_window * 1e-3,
-        "окно {} != area/ppm {}",
+        "window {} != area/ppm {}",
         window_ms,
         expected_window
     );
@@ -114,7 +228,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     let expected_x = area * (1.0 - view.right_margin_frac);
     assert!(
         (x_now - expected_x).abs() <= area * 0.01,
-        "live-край на {} px, ожидался {} px",
+        "live edge is at {} px, expected {} px",
         x_now,
         expected_x
     );
@@ -127,7 +241,7 @@ fn deep_zoom_out_keeps_live_edge_anchored() {
     let (left_after, _) = view.visible_x(area);
     assert!(
         (left_after - left_before).abs() <= window_ms * 1e-3,
-        "дрейф левого края на упоре зума: {} → {}",
+        "left edge drifted at the zoom limit: {} -> {}",
         left_before,
         left_after
     );
@@ -185,7 +299,7 @@ fn vertical_panning_does_not_change_the_reported_scale() {
     let after = view.visible_scale_percent().expect("scale after the pan");
     assert!(
         (after - before).abs() < 1e-3,
-        "panning changed the reported scale: {before} → {after}"
+        "panning changed the reported scale: {before} -> {after}"
     );
     // And the old formula really would have: the centre now sits at half the price.
     assert!(
@@ -214,7 +328,7 @@ fn a_frozen_view_reports_a_frozen_scale_while_the_price_moves() {
         .expect("scale after the price ran");
     assert!(
         (after - before).abs() < 1e-3,
-        "the frozen view's scale followed the live price: {before} → {after}"
+        "the frozen view's scale followed the live price: {before} -> {after}"
     );
 }
 
@@ -269,6 +383,6 @@ fn a_selected_step_survives_the_next_frame() {
     let next_frame = view.render_range;
     assert!(
         (next_frame - after_click).abs() / after_click < 0.05,
-        "the step's range was rewritten by the next frame: {after_click} → {next_frame}"
+        "the step's range was rewritten by the next frame: {after_click} -> {next_frame}"
     );
 }

@@ -622,7 +622,7 @@ impl ChartPanel {
     }
 
     /// Sets the default time-axis scale for new panes, supplied by the owning stack. `None` selects
-    /// the 60-second default.
+    /// the built-in time-window default.
     pub fn set_default_x_ppm(&mut self, ppm: Option<f32>) {
         self.chart.set_default_x_ppm(ppm);
     }

@@ -206,10 +206,10 @@ struct Backend {
     /// Global close-all-charts request revision for the built-in Shift+Esc binding.
     /// Every `ChartTabs` closes its Main stack when this grows; any window may increment it.
     close_all_charts_rev: u64,
-    /// Window group whose Main stack should close its fullscreen chart for the built-in Esc binding.
+    /// Window group whose Main stack should close its active chart for the built-in Esc binding.
     close_active_chart_group: Option<String>,
-    /// Fullscreen-chart close-request revision, incremented on Esc.
-    /// The addressed group's `ChartTabs` closes only its current fullscreen Main chart when this grows.
+    /// Active-chart close-request revision, incremented on Esc.
+    /// The addressed group's `ChartTabs` closes its active Main chart when this grows.
     close_active_chart_rev: u64,
     /// Toolbar live-follow state: `true` tracks the present; `false` pauses the view.
     follow: bool,

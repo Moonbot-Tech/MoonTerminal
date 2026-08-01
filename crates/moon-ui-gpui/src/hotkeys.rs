@@ -76,7 +76,7 @@ pub enum HotkeyAction {
     FigDelete,
     /// Toggle the selected figure's chart alert.
     FigAlert,
-    /// Close the group window's fullscreen Main chart with the built-in plain Escape binding.
+    /// Close the group window's active Main chart with the built-in plain Escape binding.
     ///
     /// Matching Moonbot, Escape closes the chart without disabling drawing mode. The group-window
     /// caller executes this action; detached chart windows leave it unhandled.

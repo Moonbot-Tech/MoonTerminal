@@ -307,8 +307,8 @@ pub struct WindowLayout {
     // (see `detect_view::DetectViewFile`); the old layout.toml key is simply ignored.
     /// Chart X time scale (pixels per millisecond) BY GROUP WINDOW: [Shift+middle click] on a chart
     /// synchronizes and saves the scale for charts in ITS OWN window; new charts in that window
-    /// inherit it. No entry = 60-second default. Detached windows store their own value in the
-    /// tab specification (charts.json).
+    /// inherit it. No entry uses the built-in chart default. Detached windows store their own value
+    /// in the tab specification (charts.json).
     #[serde(default)]
     pub chart_x_ppm_by_group: HashMap<String, f32>,
     /// Generic table-column width persistence: `table id → (column key → width in pixels)`.

@@ -53,8 +53,12 @@ pub const MIN_PX_PER_MS: f32 = 1e-9;
 /// book's span guard learned.
 const MIN_RANGE_FRAC: f32 = 1e-6;
 
-/// Default visible window used to select a pixel-smooth live scale.
-const DEFAULT_WINDOW_MS: f32 = 60_000.0;
+/// Live history visible left of the current timestamp in the built-in chart default.
+const DEFAULT_HISTORY_MS: f32 = 6.0 * 60.0 * 60.0 * 1000.0;
+/// Fraction of the default viewport reserved to the right of the current timestamp.
+const DEFAULT_RIGHT_MARGIN_FRAC: f32 = 0.10;
+/// Full default viewport required to retain the history after reserving the future margin.
+const DEFAULT_WINDOW_MS: f32 = DEFAULT_HISTORY_MS / (1.0 - DEFAULT_RIGHT_MARGIN_FRAC);
 /// Minimum visible window at maximum zoom-in (previously limited to the default 60 s).
 const MIN_WINDOW_MS: f32 = 30_000.0;
 /// How long to keep manual X mode after the last pan before automatically returning to live.
@@ -125,13 +129,21 @@ pub struct ChartView {
 }
 
 impl ChartView {
+    /// Construct a live chart view whose X scale is fitted on its first prepared frame.
+    ///
+    /// Args:
+    ///     epoch_ms: Fixed Unix-millisecond time origin for chart geometry.
+    ///
+    /// Returns:
+    ///     A view with built-in scale defaults and live following enabled.
     pub fn new(epoch_ms: f64) -> Self {
         Self {
             epoch_ms,
             px_per_ms: 0.05, // Approximately 20 seconds visible across 1000 px.
             right_time_ms: epoch_ms,
             follow: true,
-            right_margin_frac: 0.10, // "Future" area on the right, as in moonweb (xRange*0.9).
+            // "Future" area on the right, as in moonweb (xRange*0.9).
+            right_margin_frac: DEFAULT_RIGHT_MARGIN_FRAC,
             center_price: 0.0,
             price_range: 1.0,
             auto_price: true,
@@ -152,23 +164,47 @@ impl ChartView {
         }
     }
 
+    /// Return a phase-clean default X scale whose visible window is never shorter than the target.
+    ///
+    /// Args:
+    ///     area_w: Plot width in logical pixels.
+    ///     present_hz: Current display refresh estimate.
+    ///
+    /// Returns:
+    ///     Pixels per millisecond, rounded outward to whole pixels per frame or frames per pixel.
     fn phase_clean_default_px_per_ms(area_w: f32, present_hz: f32) -> f32 {
+        let area_w = area_w.max(1.0);
         let dt_ms = 1000.0 / present_hz.max(1.0);
-        let s0 = area_w.max(1.0) * dt_ms / DEFAULT_WINDOW_MS;
+        let s0 = area_w * dt_ms / DEFAULT_WINDOW_MS;
         let shift_px = if s0 >= 1.0 {
-            s0.round().max(1.0)
+            s0.floor().max(1.0)
         } else {
-            let n = (1.0 / s0.max(1e-9)).round().max(1.0);
+            let n = (1.0 / s0.max(1e-9)).ceil().max(1.0);
             1.0 / n
         };
-        (shift_px / dt_ms).max(1e-9)
+        let target_scale = area_w / DEFAULT_WINDOW_MS;
+        let mut scale = (shift_px / dt_ms).max(1e-9).min(target_scale);
+        // Division can round the reconstructed f32 window a few milliseconds below the target.
+        // Move one positive finite scale ULP outward when that happens.
+        if area_w / scale < DEFAULT_WINDOW_MS {
+            scale = f32::from_bits(scale.to_bits().saturating_sub(1));
+        }
+        scale
     }
 
-    /// Fits the default time window to the nearest phase-clean point around 60 s:
+    /// Fits the default time window to a phase-clean point with at least six hours of live history:
     /// an integer number of px/frame or 1 px every N frames. Recalculated only while
     /// the scale remains default/reset-to-live, on the first frame, resize, or present change.
     /// `default_ppm` is the saved user X scale ([Shift+MMB] sync): a new chart starts
-    /// with it instead of the phase-clean 60-second default.
+    /// with it instead of the built-in six-hour-history default.
+    ///
+    /// Args:
+    ///     area_w: Plot width in logical pixels.
+    ///     present_hz: Current display refresh estimate.
+    ///     default_ppm: Optional saved X scale that overrides the built-in default on initialization.
+    ///
+    /// Returns:
+    ///     Nothing; the view is updated only while its default initialization is pending.
     pub fn ensure_default_window(
         &mut self,
         area_w: f32,
@@ -180,7 +216,10 @@ impl ChartView {
         }
         let present_hz = present_hz.max(1.0);
         let default_px_per_ms = Self::phase_clean_default_px_per_ms(area_w, present_hz);
-        let area_changed = (area_w - self.last_phase_area_w).abs() >= 0.5;
+        let area_delta = area_w - self.last_phase_area_w;
+        // Every shrink matters for the six-hour lower bound; sub-pixel growth can safely retain
+        // the previous scale because it only increases the visible history.
+        let area_changed = area_delta < 0.0 || area_delta >= 0.5;
         let present_changed = (present_hz - self.last_phase_present_hz).abs() >= 0.5;
         let phase_changed = area_changed || present_changed;
         if phase_changed || self.x_init_pending {
@@ -435,6 +474,15 @@ impl ChartView {
 
     /// Zooms X. In live mode, preserves the live anchor (as in WebGame/Moonbot); in manual
     /// X view, preserves the time under the cursor and may re-anchor to live after a discrete step.
+    ///
+    /// Args:
+    ///     factor: Multiplicative zoom step.
+    ///     area_w: Plot width in logical pixels.
+    ///     cursor_x: Cursor coordinate within the plot.
+    ///     now_ms: Current Unix time in milliseconds.
+    ///
+    /// Returns:
+    ///     Nothing; the X scale and anchor are updated in place.
     pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64) {
         let was_follow = self.follow;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
@@ -447,14 +495,9 @@ impl ChartView {
         } else {
             0.0005
         };
-        // Allow zoom-in beyond the default (60 s) down to MIN_WINDOW_MS (30 s): use the
-        // phase-clean default multiplied by DEFAULT/MIN = 2×. Otherwise the maximum was 1 min (Item 7).
-        let hi = (if self.phase_default_px_per_ms > 0.0 {
-            self.phase_default_px_per_ms
-        } else {
-            Self::phase_clean_default_px_per_ms(area_w, 60.0)
-        } * (DEFAULT_WINDOW_MS / MIN_WINDOW_MS))
-            .max(lo);
+        // Manual zoom remains independent of the much wider built-in default and reaches the same
+        // 30-second minimum window at every plot width.
+        let hi = (area_w.max(1.0) / MIN_WINDOW_MS).max(lo);
         self.px_per_ms = next.clamp(lo, hi);
         self.x_default_scale = (self.px_per_ms - self.phase_default_px_per_ms).abs() <= 1e-9;
         if was_follow {
