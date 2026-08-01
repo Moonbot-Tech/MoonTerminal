@@ -10,7 +10,7 @@
 //! that makes the two disagree.
 
 use super::*;
-use crate::db::SideFilter;
+use crate::db::{ProfitMetric, SideFilter};
 
 /// The report scope every case here uses: all cores, all history, no filters.
 fn q() -> Query {
@@ -221,7 +221,9 @@ fn reference_sql(src: &str, has_names: bool, by_strategy: bool) -> String {
                 COALESCE(SUM(CASE WHEN o.pnl > 0 THEN o.pnl END),0),
                 COALESCE(SUM(CASE WHEN o.pnl <= 0 THEN -o.pnl END),0),
                 COALESCE(MAX(o.pnl),0), COALESCE(MIN(o.pnl),0),
-                {lastedit}, {blacklist}, {whitelist}
+                {lastedit}, {blacklist}, {whitelist},
+                COALESCE(SUM(o.profitbtc), 0),
+                COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0)
          FROM {src}
          GROUP BY k ORDER BY 8 DESC, 1"
     )
@@ -268,7 +270,7 @@ fn lifting_enrichment_out_of_the_aggregate_preserves_every_group() {
         for has_names in [true, false] {
             let label = format!("by_strategy={by_strategy} has_names={has_names}");
             let old = run(&c, &reference_sql(&src, has_names, by_strategy), &q);
-            let new = groups(&c, &src, &q, has_names, by_strategy).expect("new groups");
+            let new = groups(&c, &src, None, &q, has_names, by_strategy).expect("new groups");
             assert!(!old.is_empty(), "{label}: the fixture must produce groups");
             assert_same(&label, &old, &new);
         }
@@ -305,7 +307,7 @@ fn an_unattributable_trade_fails_the_same_way_in_both_forms() {
     let q = q();
     let src = unified_from(&c, &q).expect("source").expect("replica");
     let old = try_run(&c, &reference_sql(&src, true, true), &q);
-    let new = groups(&c, &src, &q, true, true);
+    let new = groups(&c, &src, None, &q, true, true);
     assert!(
         old.is_err(),
         "the pre-change form decoded a NULL key as an error"
@@ -396,7 +398,7 @@ fn groups_enrichment_cost_against_a_large_replica() {
     let old_took = started.elapsed();
 
     let started = std::time::Instant::now();
-    let new = groups(&c, &src, &q, true, true).expect("groups");
+    let new = groups(&c, &src, None, &q, true, true).expect("groups");
     let new_took = started.elapsed();
 
     println!(
@@ -418,7 +420,7 @@ fn equally_profitable_groups_are_ordered_by_key() {
     let c = fixture();
     let q = q();
     let src = unified_from(&c, &q).expect("source").expect("replica");
-    let out = groups(&c, &src, &q, true, true).expect("groups");
+    let out = groups(&c, &src, None, &q, true, true).expect("groups");
     let tied: Vec<&str> = out
         .iter()
         .filter(|g| g.profit == 6.0)
@@ -441,7 +443,7 @@ fn a_strategy_without_a_current_version_keeps_its_status() {
     let c = fixture();
     let q = q();
     let src = unified_from(&c, &q).expect("source").expect("replica");
-    let out = groups(&c, &src, &q, true, true).expect("groups");
+    let out = groups(&c, &src, None, &q, true, true).expect("groups");
     let nine = out
         .iter()
         .find(|g| g.key == "9@1")
@@ -464,7 +466,7 @@ fn a_deleted_strategy_reports_status_but_no_lists() {
     let c = fixture();
     let q = q();
     let src = unified_from(&c, &q).expect("source").expect("replica");
-    let out = groups(&c, &src, &q, true, true).expect("groups");
+    let out = groups(&c, &src, None, &q, true, true).expect("groups");
     let eight = out.iter().find(|g| g.key == "8@1").expect("strategy 8");
     assert_eq!(eight.alive, Some(0), "deleted");
     assert_eq!(
@@ -487,7 +489,7 @@ fn a_strategy_missing_from_the_head_table_falls_back_to_its_id() {
     let c = fixture();
     let q = q();
     let src = unified_from(&c, &q).expect("source").expect("replica");
-    let out = groups(&c, &src, &q, true, true).expect("groups");
+    let out = groups(&c, &src, None, &q, true, true).expect("groups");
     let ten = out.iter().find(|g| g.key == "10@1").expect("strategy 10");
     assert_eq!(ten.name, "10");
     assert_eq!(ten.alive, Some(0));
@@ -504,10 +506,59 @@ fn coin_lists_are_counted_by_distinct_token() {
     let c = fixture();
     let q = q();
     let src = unified_from(&c, &q).expect("source").expect("replica");
-    let out = groups(&c, &src, &q, true, true).expect("groups");
+    let out = groups(&c, &src, None, &q, true, true).expect("groups");
     let seven = out.iter().find(|g| g.key == "7@1").expect("strategy 7");
     assert_eq!(seven.bl, 2, "BTC, btc_rp and ETH name two distinct coins");
     assert_eq!(seven.wl, 1);
     assert_eq!(seven.cores_n, 1, "the key splits per core");
     assert_eq!(seven.n, 2, "both of core 1's trades land in one group");
+}
+
+/// Raw profit and average order stay identical when the active Analytics lens changes.
+///
+/// Breakage this pins: deriving these fields from the active Percent source in
+/// `analytics::groups`. That source removes non-positive-spend trades and would make the visible
+/// Avg order / Profit % columns change when the user only switches the global profit lens.
+#[test]
+fn raw_strategy_metrics_are_independent_of_the_profit_lens() {
+    let c = fixture();
+    c.execute(
+        "UPDATE orders_rep SET spentbtc = CASE closedate WHEN 1000 THEN 100.0 ELSE 0.0 END
+         WHERE core_uid = 1 AND strategyid = 7",
+        [],
+    )
+    .expect("vary order sizes");
+
+    let mut usdt_query = q();
+    usdt_query.metric = ProfitMetric::Usdt;
+    let usdt_src = unified_from(&c, &usdt_query)
+        .expect("USDT source")
+        .expect("replica");
+    let usdt = groups(&c, &usdt_src, None, &usdt_query, true, true).expect("USDT groups");
+
+    let mut percent_query = q();
+    percent_query.metric = ProfitMetric::Percent;
+    let percent_src = unified_from(&c, &percent_query)
+        .expect("percent source")
+        .expect("replica");
+    let raw_src = raw_source(&c, &percent_query)
+        .expect("raw source")
+        .expect("percent lens needs raw source");
+    let percent = groups(&c, &percent_src, Some(&raw_src), &percent_query, true, true)
+        .expect("percent groups");
+
+    let usdt = usdt
+        .iter()
+        .find(|group| group.key == "7@1")
+        .expect("USDT strategy 7");
+    let percent = percent
+        .iter()
+        .find(|group| group.key == "7@1")
+        .expect("percent strategy 7");
+    assert_eq!(usdt.raw_profit, 6.0);
+    assert_eq!(usdt.avg_order, 100.0);
+    assert_eq!(usdt.profit_pct_of_avg_order(), 6.0);
+    assert_eq!(percent.raw_profit, usdt.raw_profit);
+    assert_eq!(percent.avg_order, usdt.avg_order);
+    assert_eq!(percent.profit_pct_of_avg_order(), 6.0);
 }

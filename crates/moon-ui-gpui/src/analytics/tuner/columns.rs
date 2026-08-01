@@ -56,11 +56,33 @@ pub(super) const COL_TRADES: MetricCol = MetricCol {
 };
 pub(super) const COL_PROFIT: MetricCol = MetricCol {
     key: "analytics.col.profit",
-    w: 84.0,
-    min_w: 62.0,
-    text: |g| fmt_signed(g.profit),
+    w: 96.0,
+    min_w: 74.0,
+    text: tuner_profit_text,
     signed: Some(|g| g.profit),
     sort: |g| g.profit,
+};
+/// Average positive order spend in quote currency over the lens-neutral strategy scope.
+pub(super) const COL_AVG_ORDER: MetricCol = MetricCol {
+    key: "analytics.col.avg_order",
+    w: 96.0,
+    min_w: 74.0,
+    text: tuner_avg_order_text,
+    signed: None,
+    sort: |g| g.avg_order,
+};
+/// Raw total strategy profit as a percentage of its average positive order size.
+pub(super) const COL_PROFIT_PCT: MetricCol = MetricCol {
+    key: "analytics.col.profit_pct",
+    w: 78.0,
+    min_w: 58.0,
+    text: |g| {
+        moon_core::util::fmt::signed_pct(g.profit_pct_of_avg_order(), 1)
+            .map(|(text, _)| text)
+            .unwrap_or_default()
+    },
+    signed: Some(|g| g.profit_pct_of_avg_order()),
+    sort: |g| g.profit_pct_of_avg_order(),
 };
 pub(super) const COL_AVG: MetricCol = MetricCol {
     key: "analytics.kpi.avg_short",
@@ -127,6 +149,38 @@ pub(super) const COL_WORST: MetricCol = MetricCol {
     sort: |g| g.worst,
 };
 
+/// Format active-lens profit with an explicit dollar suffix only in the USDT lens.
+///
+/// Args:
+///     group: Aggregate whose active-lens profit should be displayed.
+///
+/// Returns:
+///     Signed profit with `$` in USDT mode, `%` in percent mode, or a bare em dash for a
+///     non-finite value.
+fn tuner_profit_text(group: &GroupStat) -> String {
+    let text = fmt_signed(group.profit);
+    if super::super::pnl_is_pct() || !group.profit.is_finite() {
+        text
+    } else {
+        format!("{text}$")
+    }
+}
+
+/// Format the lens-neutral average order with an explicit dollar suffix.
+///
+/// Args:
+///     group: Aggregate whose average positive order spend should be displayed.
+///
+/// Returns:
+///     Grouped USDT amount followed immediately by `$`, or a bare em dash for a non-finite value.
+fn tuner_avg_order_text(group: &GroupStat) -> String {
+    if group.avg_order.is_finite() {
+        format!("{}$", moon_core::util::fmt::usd_grouped(group.avg_order))
+    } else {
+        "—".to_string()
+    }
+}
+
 /// Click a sortable column heading: the first click sorts descending, clicking the column that
 /// is already the key flips it to ascending.
 ///
@@ -187,3 +241,8 @@ fn num_cell(scale: f32, col: &MetricCol, text: String, color: u32) -> impl IntoE
         .text_color(moon(color))
         .child(text)
 }
+
+// Explicit imports, never `use super::*`: the parent imports `gpui::*`, whose own `test`
+// shadows the built-in attribute and makes `#[test]` expand recursively.
+#[cfg(test)]
+mod tests;

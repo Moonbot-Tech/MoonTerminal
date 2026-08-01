@@ -99,7 +99,7 @@ impl ReportPanel {
             .as_ref()
             .and_then(db::load_sort)
             .unwrap_or_else(|| ("buydate".to_string(), true));
-        let widths_id = crate::persistence::table_persist::ctx_id("report-table", false);
+        let widths_id = crate::persistence::table_persist::ctx_id("report-table-v2", false);
         let mut saved_widths =
             crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         complete_widths(&mut saved_widths, &init_cols);
@@ -289,6 +289,7 @@ impl ReportPanel {
             visible,
             table_state,
             widths_id,
+            natural_widths: NaturalWidthsCache::default(),
             detached: false,
             standalone: false,
             dock: None,
@@ -429,7 +430,7 @@ impl ReportPanel {
     /// layouts, and enable the detached-only manual date controls.
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
         self.detached = true;
-        self.widths_id = crate::persistence::table_persist::ctx_id("report-table", true);
+        self.widths_id = crate::persistence::table_persist::ctx_id("report-table-v2", true);
         let mut saved =
             crate::persistence::table_persist::saved(self.backend.read(cx), &self.widths_id);
         complete_widths(&mut saved, &self.cols);

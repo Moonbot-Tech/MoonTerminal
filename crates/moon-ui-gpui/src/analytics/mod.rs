@@ -411,16 +411,11 @@ impl AnalyticsView {
         // carried over instead of reset; absent entirely, each axis takes its own default.
         let saved_strat_cols = {
             let layout = &backend.read(cx).layout;
-            layout.analytics_strat_cols_modes.unwrap_or_else(|| {
-                let seed = layout.analytics_strat_cols2;
-                let mut by_mode = moon_core::config::layout::StratColsByMode::default();
-                // Each axis through its OWN accessor and its OWN default, so this seeding
-                // cannot disagree with what the selector reads back.
-                for mode in tuner::STRAT_MODES {
-                    *mode.cols_slot(&mut by_mode) = seed.unwrap_or(mode.default_cols());
-                }
-                by_mode
-            })
+            tuner::restore_strat_columns(
+                layout.analytics_strat_cols_modes2,
+                layout.analytics_strat_cols_modes,
+                layout.analytics_strat_cols2,
+            )
         };
         // Calendar mode from the previous run, defaulting to Month.
         let saved_mode = backend

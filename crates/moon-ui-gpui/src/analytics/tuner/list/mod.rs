@@ -78,7 +78,7 @@ impl StratListFilter {
 
 /// Show at most this many groups (the replica can hold thousands of names; the tail beyond
 /// the top by |profit| carries little information, and the DOM is not infinitely stretchy).
-pub(in crate::analytics::tuner) const MAX_ROWS: usize = 300;
+pub(in crate::analytics::tuner) const MAX_ROWS: usize = 500;
 
 /// Restore a saved strategy-list sort only when its stable key still names a real column.
 ///
@@ -281,7 +281,7 @@ impl AnalyticsView {
         *mode.cols_slot(&mut self.strat_cols) = cols;
         let all = self.strat_cols;
         self.backend.update(cx, |b, _| {
-            b.layout.analytics_strat_cols_modes = Some(all);
+            b.layout.analytics_strat_cols_modes2 = Some(all);
             b.layout_dirty = true;
         });
         cx.notify();

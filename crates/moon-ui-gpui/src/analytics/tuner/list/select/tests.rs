@@ -5,7 +5,6 @@
 
 use moon_core::db::analytics::GroupStat;
 
-use super::super::MAX_ROWS;
 use super::{
     RangeOutcome, RowClick, drawn_order, inclusive_report_bounds, range_extras, row_click_intent,
 };
@@ -170,14 +169,15 @@ fn a_filtered_out_anchor_yields_no_range() {
 /// selection that were never rendered — write targets the user can neither see nor untick.
 #[test]
 fn drawn_order_stops_at_the_rows_the_list_actually_drew() {
-    let all: Vec<GroupStat> = (0..MAX_ROWS + 5).map(|i| g(&format!("s{i}"))).collect();
+    let all: Vec<GroupStat> = (0..505).map(|i| g(&format!("s{i}"))).collect();
     let visible: Vec<usize> = (0..all.len()).collect();
 
     let order = drawn_order(&all, &visible);
 
-    assert_eq!(order.len(), MAX_ROWS);
+    assert_eq!(order.len(), 500);
+    assert_eq!(order.last().map(|row| row.0.as_str()), Some("s499@1"));
     assert_eq!(
-        range_extras(Some("s0@1"), &format!("s{}@1", MAX_ROWS), &order),
+        range_extras(Some("s0@1"), "s500@1", &order),
         RangeOutcome::SingleSelect,
         "a row past the drawn window is not a valid range end"
     );

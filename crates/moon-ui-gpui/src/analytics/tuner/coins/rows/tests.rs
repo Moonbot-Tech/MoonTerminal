@@ -65,3 +65,18 @@ fn untraded_coins_still_get_a_row() {
         "and must keep the one above it"
     );
 }
+
+/// Restoring a 300-row cut or truncating before recording `total` must fail these assertions;
+/// otherwise the coin surface would disagree with the shared 500-row Tuning limit and its label.
+#[test]
+fn coin_result_window_keeps_five_hundred_of_the_complete_total() {
+    let base: Vec<GroupStat> = (0..505)
+        .map(|index| coin(&format!("COIN{index:03}"), 1))
+        .collect();
+    let mut state = CoinsState::default();
+
+    let model = rows_for(&mut state, &base, &base);
+
+    assert_eq!(model.rows.len(), 500);
+    assert_eq!(model.total, 505);
+}

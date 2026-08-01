@@ -101,6 +101,7 @@ fn restored_report_bounds(
 /// Args:
 ///     p: Active MoonUI palette.
 ///     table_state: Retained table state reset by the header action.
+///     title: Localized Report title with an optional sole-core suffix.
 ///     cx: Application context used for responsive sizing.
 ///
 /// Returns:
@@ -108,6 +109,7 @@ fn restored_report_bounds(
 pub(super) fn report_header(
     p: MoonPalette,
     table_state: &Entity<MoonDataTableState>,
+    title: String,
     cx: &App,
 ) -> impl IntoElement {
     h_flex()
@@ -125,10 +127,7 @@ pub(super) fn report_header(
         .bg(rgb(p.shell_high))
         .child(
             MoonWindowFrame::tool("report-titlebar-title", 0.0)
-                .title_cluster(
-                    crate::persistence::panel_meta::panel_title("Report").to_string(),
-                    cx,
-                )
+                .title_cluster(title, cx)
                 .h_full()
                 .flex_1()
                 .min_w_0(),
@@ -145,6 +144,33 @@ pub(super) fn report_header(
                     .visual_controls(cx),
             )
         })
+}
+
+/// Build the standalone visual title, appending a resolved sole selected core.
+///
+/// Empty selection means all cores and therefore never implies a sole choice, even when only one
+/// core is currently connected. Multi-selection and stale unresolved identities keep the base
+/// title unchanged.
+///
+/// Args:
+///     selected: Explicitly selected core identities; empty means All.
+///     cores: Resolved core identities and display names.
+///
+/// Returns:
+///     Localized base title with the resolved sole-core suffix when applicable.
+pub(super) fn report_title(
+    selected: &std::collections::HashSet<u64>,
+    cores: &[(u64, String)],
+) -> String {
+    let base = crate::persistence::panel_meta::panel_title("Report").to_string();
+    if selected.len() != 1 {
+        return base;
+    }
+    let uid = selected.iter().next().copied();
+    cores
+        .iter()
+        .find(|(core_uid, _)| Some(*core_uid) == uid)
+        .map_or(base.clone(), |(_, name)| format!("{base} — {name}"))
 }
 
 /// Open or retarget the singleton standalone Report window to one Analytics strategy.

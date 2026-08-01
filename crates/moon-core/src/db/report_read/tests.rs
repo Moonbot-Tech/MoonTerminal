@@ -322,3 +322,87 @@ fn complete_explicit_strategy_universe_excludes_unidentifiable_sources() {
         "a complete explicit checkbox set must still exclude sources without strategy identity"
     );
 }
+
+/// Per-trade Profit % is derived safely and sorted before each source's top-N truncation.
+///
+/// Breakage this pins: ordering the source by raw `profitbtc` or deriving the percentage only
+/// after `query_reports` applies its source-local LIMIT. The returned top trade would then be the
+/// larger dollar profit instead of the larger return on spent capital.
+#[test]
+fn profit_percent_is_derived_and_source_sorted_before_limit() {
+    let conn = Connection::open_in_memory().expect("open report database");
+    super::super::init_db(&conn).expect("initialize report database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL,
+             core_name TEXT NOT NULL,
+             newrecid INTEGER NOT NULL,
+             closedate INTEGER,
+             profitbtc REAL,
+             spentbtc REAL,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 'CORE-A', 1, 100, 20.0, 2000.0),
+             (1, 'CORE-A', 2, 200, 10.0, 100.0),
+             (1, 'CORE-A', 3, 300, -5.0, 0.0);",
+    )
+    .expect("seed report rows");
+    super::super::test_support::rep_init(&conn);
+
+    let table = query_reports(
+        &conn,
+        &ReportFilter::default(),
+        super::PROFIT_PERCENT_COLUMN,
+        true,
+        2,
+    )
+    .expect("query by Profit percent");
+    let percent = table
+        .cols
+        .iter()
+        .position(|column| column == super::PROFIT_PERCENT_COLUMN)
+        .expect("synthetic Profit percent column");
+    let record = table
+        .cols
+        .iter()
+        .position(|column| column == "id")
+        .unwrap_or_else(|| {
+            table
+                .cols
+                .iter()
+                .position(|column| column == "closedate")
+                .expect("stable row identity")
+        });
+
+    assert_eq!(table.rows[0][percent], Value::Real(10.0));
+    assert_eq!(table.rows[1][percent], Value::Real(1.0));
+    assert_eq!(table.rows[0][record], Value::Integer(200));
+    assert!(table.rows.iter().all(|row| row[percent] != Value::Null));
+}
+
+/// A legacy visibility preference gains Profit % once, while a current preference may hide it.
+///
+/// Breakage this pins: continuing to read only `report_visible`, which either leaves the new
+/// column hidden forever or re-adds it after the user deliberately disables it.
+#[test]
+fn report_visibility_migrates_profit_percent_only_once() {
+    let conn = Connection::open_in_memory().expect("open metadata database");
+    super::super::init_db(&conn).expect("initialize metadata database");
+    conn.execute(
+        "INSERT INTO app_meta(key, value) VALUES ('report_visible', 'coin,profitbtc')",
+        [],
+    )
+    .expect("seed legacy visibility");
+    assert_eq!(
+        super::super::load_visible(&conn).expect("migrated visibility"),
+        vec!["coin", "profitbtc", super::PROFIT_PERCENT_COLUMN]
+    );
+
+    super::super::save_visible(&conn, &["coin", "profitbtc"]);
+    assert_eq!(
+        super::super::load_visible(&conn).expect("current visibility"),
+        vec!["coin", "profitbtc"],
+        "the current key respects a deliberate hide"
+    );
+}

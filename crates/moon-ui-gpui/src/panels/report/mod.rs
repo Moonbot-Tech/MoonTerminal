@@ -29,7 +29,7 @@ use strategy_filter::{
     exact_strategy_selection, merge_strategy_metadata, normalized_strategy_filter_keys,
     ordered_strategy_cores, strategy_choice_indices, strategy_groups, strategy_selection_summary,
 };
-use widths::complete_widths;
+use widths::{NaturalWidthsCache, complete_widths};
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -213,6 +213,7 @@ const DEFAULT_VISIBLE: &[&str] = &[
     "buyprice",
     "sellprice",
     "profitbtc",
+    "profitpct",
     "lev",
     "sellreason",
     "comment",
@@ -302,8 +303,10 @@ pub struct ReportPanel {
     /// default, `app_meta`, or per-context set.
     pub(super) visible: HashSet<String>,
     table_state: Entity<MoonDataTableState>,
-    /// Context-qualified width-storage ID, `report-table:dock` or `report-table:win`.
+    /// Versioned context-qualified width-storage ID for docked or detached Report layouts.
     widths_id: String,
+    /// Content-derived base widths cached until report data or font scale changes.
+    natural_widths: NaturalWidthsCache,
     /// Whether the panel is detached; docked tabs omit manual date fields for a compact filter row.
     detached: bool,
     /// Whether this panel owns the dedicated standalone Report tool window and its title bar.

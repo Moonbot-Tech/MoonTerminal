@@ -241,9 +241,14 @@ pub struct WindowLayout {
     /// in the list opens unchecked, so a newly added one cannot join a search unannounced.
     #[serde(default, deserialize_with = "de_lenient")]
     pub analytics_tuner_fields: Option<Vec<String>>,
-    /// Visible columns of the Tuning strategy list, per axis. None = the UI's own defaults.
+    /// Previous visible-column masks, superseded by `analytics_strat_cols_modes2`.
+    ///
+    /// Retained only as a migration seed so historical choices keep their semantic fields.
     #[serde(default)]
     pub analytics_strat_cols_modes: Option<StratColsByMode>,
+    /// Versioned strategy-list masks whose bit layout includes Avg order and Profit %.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_strat_cols_modes2: Option<StratColsByMode>,
     /// Strategy-list sort as `(stable column key, descending)`.
     ///
     /// `None` means the UI's profit-descending default. Read leniently because this

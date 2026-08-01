@@ -33,6 +33,7 @@ mod shared;
 mod shell;
 /// … and the subset plus visibility bits that belong to the strategy list itself.
 mod strat_columns;
+pub(in crate::analytics) use strat_columns::restore_strat_columns;
 
 // ————— one folder per axis —————
 /// "By coin": the coin table, its row cache, its loads and its working coin lists.
@@ -387,6 +388,34 @@ impl AnalyticsView {
         } else {
             self.sel_extra.clear();
             self.set_sel_strategy(Some((key, name)), cx);
+        }
+    }
+
+    /// Ensure a strategy opened by double-click remains visibly selected behind its Report.
+    ///
+    /// Native double-click delivery includes an initial single click, which can toggle the sole
+    /// anchor off. Existing anchor or extra membership is left untouched; only an absent clicked
+    /// row becomes the sole anchor.
+    ///
+    /// Args:
+    ///     key: Exact strategy/core key opened by the double-click.
+    ///     name: Display label retained with a restored anchor.
+    ///     cx: Analytics context used to refresh a changed scope.
+    ///
+    /// Returns:
+    ///     Nothing; selection changes only when the clicked row is currently absent.
+    fn select_for_report(&mut self, key: &str, name: &str, cx: &mut Context<Self>) {
+        let selected = self
+            .sel_strategy
+            .as_ref()
+            .is_some_and(|(selected_key, _)| selected_key == key)
+            || self
+                .sel_extra
+                .iter()
+                .any(|(selected_key, _)| selected_key == key);
+        if !selected {
+            self.sel_extra.clear();
+            self.set_sel_strategy(Some((key.to_string(), name.to_string())), cx);
         }
     }
 

@@ -78,6 +78,36 @@ fn the_tuning_strategy_list_stays_virtualized() {
     );
 }
 
+/// Changing the strategy list back to hover-only scrolling must fail this assertion; the user must
+/// be able to see the vertical position and scrollbar affordance without first finding it.
+#[test]
+fn the_strategy_scrollbar_is_always_visible() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let card = braced_body(&table, "fn strat_list_card(");
+    assert!(
+        card.contains(".scrollbar_visibility(MoonScrollbarVisibility::Always)"),
+        "the strategy virtual list must expose its scrollbar continuously"
+    );
+}
+
+/// Removing or moving `select_for_report` after `open_strategy_report` must fail this assertion;
+/// otherwise the first native click can toggle the highlight off behind the standalone Report.
+#[test]
+fn double_click_restores_selection_before_opening_the_report() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let row = braced_body(&table, "fn strategy_row(");
+    let select = row
+        .find("this.select_for_report(&key, &name, cx)")
+        .expect("double-click must preserve the clicked selection");
+    let open = row
+        .find("this.open_strategy_report(&key, name, window, cx)")
+        .expect("double-click must open the scoped Report");
+    assert!(
+        select < open,
+        "selection must be restored before the window opens"
+    );
+}
+
 /// The Tuning coin table stays virtualized and reaches the view weakly.
 ///
 /// Replacing `MoonVirtualList` with eager `v_flex().children(rows)`, or wrapping the card in
