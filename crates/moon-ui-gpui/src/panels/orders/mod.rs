@@ -28,10 +28,9 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonButton, MoonButtonSize, MoonButtonVariant, MoonContextMenuWindowExt as _,
-    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState,
-    MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette, MoonTone, MoonWindowExt as _, Panel,
-    PanelEvent, PanelInfo, PanelState, h_flex, v_flex,
+    DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
+    MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonMenuItem, MoonMenuSize, MoonPalette,
+    MoonTone, Panel, PanelEvent, PanelInfo, PanelState, h_flex, v_flex,
 };
 
 use rust_i18n::t;

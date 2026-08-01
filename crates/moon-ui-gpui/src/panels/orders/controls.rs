@@ -154,51 +154,51 @@ impl OrdersPanel {
             .child(menu)
     }
 
-    /// Builds the settings button for the current-market filter and ordering options.
+    /// Build the settings dropdown for the current-market filter and ordering options.
     ///
-    /// The trigger is the SVG gear used everywhere else in the terminal (the header core settings,
-    /// the toolbar), not a `⚙` text glyph: the UI font renders that glyph as a placeholder here.
-    /// MoonDropdown can only carry text in its trigger, so the menu opens through the shared
-    /// Root-owned context menu instead, which is also the repo rule for popups.
+    /// The MoonDropdown trigger uses the same SVG gear and square width as neighboring toolbar
+    /// controls. Its standard selection lifecycle owns anchoring, dismissal, and fresh checkmarks
+    /// on the repaint caused by each view-state mutation.
     ///
-    /// The items are built inside the click handler so their checkmarks read the state at the
-    /// moment the menu opens rather than at the last repaint.
+    /// Args:
+    ///     cx: Panel context used to build current-state menu items and callbacks.
+    ///
+    /// Returns:
+    ///     A tooltip host containing the configured settings dropdown.
     pub(super) fn sort_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        MoonButton::new("orders-sort")
-            .leading_icon(moon_ui::MoonButtonIconSlot::new("icons/settings-2.svg"))
-            .variant(MoonButtonVariant::Ghost)
-            .size(MoonButtonSize::Action)
-            // Square, like the field selector beside it.
-            .width(design::glyph_btn_w(cx))
-            .tooltip(t!("orders.settings").to_string())
-            .on_click(move |ev: &ClickEvent, window, app| {
-                let items = Self::sort_menu_items(&view, app);
-                window.open_moon_context_menu(app, "orders-sort-menu", ev.position(), items, 220.0);
+        let menu = MoonDropdown::new("orders-sort")
+            .trigger_icon("icons/settings-2.svg")
+            .trigger_variant(MoonButtonVariant::Ghost)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width(design::glyph_btn_w(cx))
+            .menu_width(220.0)
+            .items(Self::sort_menu_items(&view, self.view));
+        div()
+            .id("orders-sort-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("orders.settings").to_string()))
+                    .into()
             })
-            .render()
+            .child(menu)
     }
 
-    /// Build the settings menu items: the current-market filter, the primary-sort radio group,
-    /// newest/oldest ordering, and the Main-on-top modes.
+    /// Build current-state settings rows for the standard dropdown selection lifecycle.
     ///
-    /// Every item CLOSES the menu before mutating. A Root-owned context menu does not dismiss
-    /// itself on select — unlike the dropdown this replaced — and it captures its items when it
-    /// opens, so a menu left standing would keep showing the checkmarks from before the click.
-    /// This is also why the shared `radio_items` helper is not used for the sort group: its
-    /// callback never sees the `Window` the dismissal needs.
-    fn sort_menu_items(view: &Entity<Self>, app: &mut App) -> Vec<MoonMenuItem> {
-        let cur = view.read(app).view;
-        // One item: check state, close, then apply the edit to the copyable view state.
+    /// Args:
+    ///     view: Orders panel entity mutated by item callbacks.
+    ///     cur: Copy of the view state whose values determine selection marks.
+    ///
+    /// Returns:
+    ///     Menu rows for market scope, primary sort, age order, and Main-on-top mode.
+    fn sort_menu_items(view: &Entity<Self>, cur: OrdersViewState) -> Vec<MoonMenuItem> {
+        // Build paired boolean choices with the same mutation path as the radio group below.
         let item =
             |key: &'static str, label: String, checked: bool, edit: fn(&mut OrdersViewState)| {
                 let v = view.clone();
                 MoonMenuItem::with_key(key, label)
                     .checked(checked)
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        Self::mutate(&v, app, edit);
-                    })
+                    .on_click(move |_, _, app| Self::mutate(&v, app, edit))
             };
         let mut items = vec![
             item(
@@ -215,39 +215,35 @@ impl OrdersPanel {
             ),
             MoonMenuItem::separator(),
         ];
-        // Primary sort: a mutually exclusive group, checked like the other radio menus.
-        for (variant, key, label) in [
-            (
-                PrimarySort::ProfitFirst,
-                "m-profit",
-                t!("orders.sort.profit").to_string(),
-            ),
-            (
-                PrimarySort::SellFirst,
-                "m-sell",
-                t!("orders.sort.sell").to_string(),
-            ),
-            (
-                PrimarySort::BuyFirst,
-                "m-buy",
-                t!("orders.sort.buy").to_string(),
-            ),
-            (
-                PrimarySort::Creation,
-                "m-creation",
-                t!("orders.sort.creation").to_string(),
-            ),
-        ] {
-            let v = view.clone();
-            items.push(
-                MoonMenuItem::with_key(key, label)
-                    .checked(cur.primary == variant)
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        Self::mutate(&v, app, |s| s.primary = variant);
-                    }),
-            );
-        }
+        // Primary sort uses the shared mutually exclusive dropdown-row helper.
+        let sort_view = view.clone();
+        items.extend(crate::panels::radio_items(
+            [
+                (
+                    PrimarySort::ProfitFirst,
+                    "m-profit".into(),
+                    t!("orders.sort.profit").to_string().into(),
+                ),
+                (
+                    PrimarySort::SellFirst,
+                    "m-sell".into(),
+                    t!("orders.sort.sell").to_string().into(),
+                ),
+                (
+                    PrimarySort::BuyFirst,
+                    "m-buy".into(),
+                    t!("orders.sort.buy").to_string().into(),
+                ),
+                (
+                    PrimarySort::Creation,
+                    "m-creation".into(),
+                    t!("orders.sort.creation").to_string().into(),
+                ),
+            ],
+            cur.primary,
+            crate::panels::RadioMark::Check,
+            move |app, primary| Self::mutate(&sort_view, app, |state| state.primary = primary),
+        ));
         items.push(MoonMenuItem::separator());
         items.push(item(
             "m-new",
