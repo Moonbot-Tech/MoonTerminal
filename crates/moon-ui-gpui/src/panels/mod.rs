@@ -34,7 +34,7 @@ pub(crate) mod tab_menu;
 
 pub(crate) use common::{
     POPUP_GROUP_INSET, RadioMark, RenderGate, data_table_host, detach_button, icon_checkbox, num,
-    popup_close_button, popup_group, popup_group_inset_px, popup_title, radio_items,
+    popup_close_button, popup_group, popup_group_inset_px, popup_title, radio_items, side_label,
 };
 pub(crate) use order_edit::open_order_edit;
 

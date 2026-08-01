@@ -1,8 +1,8 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
-//! It displays closed trades from the local SQLite database, with core, coin, side, date,
-//! strategy, order-kind, and deleted-trades filters plus column selection above the table and
-//! exact period totals below it. The
+//! It displays closed trades from the local SQLite database, with core, coin, strategy and date
+//! filters, one merged scope field (side, order kind, deleted trades) plus column selection above
+//! the table and exact period totals below it. The
 //! generic table supports every displayable database column and header-click sorting. A writer
 //! generation counter in `Backend.reports` triggers throttled automatic refreshes.
 //!

@@ -336,13 +336,10 @@ impl AnalyticsView {
         )
     }
 
-    /// Side combo (All/Long/Short) — as in the Report.
+    /// Side combo (All/Long/Short). Analytics keeps it a field of its own; the Report folds the
+    /// same choice into its merged scope field.
     fn side_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let cur = match self.side {
-            SideFilter::All => t!("report.filter.all").to_string(),
-            SideFilter::Long => t!("report.side.long").to_string(),
-            SideFilter::Short => t!("report.side.short").to_string(),
-        };
+        let cur = crate::panels::side_label(self.side);
         let view = cx.entity();
         let items = crate::panels::radio_items(
             [
