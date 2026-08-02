@@ -12,6 +12,17 @@ use crate::design;
 
 pub(crate) const APP_ID: &str = "MoonTerminal";
 
+/// Close every window in `handles`, ignoring the ones already gone.
+///
+/// `WindowHandle::update` returns `Err` for a window that has been removed, which is the normal
+/// outcome for an OS-owned child whose owner closed first — a teardown enumerates what it means to
+/// close and does not care which of them the platform got to first.
+pub(crate) fn close_all(handles: Vec<WindowHandle<moon_ui::Root>>, cx: &mut App) {
+    for h in handles {
+        let _ = h.update(cx, |_, window, _| window.remove_window());
+    }
+}
+
 /// Group icons from `assets/icons/<id>.png`, embedded in the executable by the build script's
 /// `embed_group_icons` step. Each index is a `GroupConfig.icon` ID, so icons require no runtime
 /// filesystem path in either development or deployed builds.

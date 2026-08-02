@@ -550,18 +550,32 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         return (Vec::new(), true);
                     }
                     // Otherwise close detached charts belonging to this group only.
-                    let close: Vec<WindowHandle<Root>> = b
+                    let mut close: Vec<WindowHandle<Root>> = b
                         .detached_chart_windows
                         .iter()
                         .filter(|(g, _)| *g == group)
                         .map(|(_, h)| *h)
                         .collect();
                     b.detached_chart_windows.retain(|(g, _)| *g != group);
+                    // Their queued repins go too, for the same reason as the panels' below: no
+                    // `ChartTabs` for this group survives to drain them, so they would wait for a
+                    // future window of the same name and be replayed against it.
+                    b.chart_repin_request.retain(|(g, _, _)| *g != group);
+                    // The group's detached PANEL windows are OS-owned by the window that just closed
+                    // and die with it. `take_windows` unregisters them first, so their release
+                    // cannot queue a repin into a dock that no longer exists — such a request would
+                    // sit in the queue until some later window for this group name replays it and
+                    // deletes the panel's `DetachedSpec` out of context. The specs stay, so
+                    // reopening the group — or the next launch — restores the panels detached.
+                    close.extend(detached::take_windows(b, |g| g == group));
+                    detached::prune_requests(b, |g| g == group);
                     (close, false)
                 } else {
-                    // A detached chart window (or another window) closed; remove it from tracking.
-                    b.detached_chart_windows
-                        .retain(|(_, h)| h.window_id() != closed_id);
+                    // A detached chart window (or another window) closed. Its registry entry is
+                    // NOT removed here: that registry is the authority for "this window may repin",
+                    // and the host itself clears its entry on release, on the same edge that queues
+                    // the repin. Removing it here would make a user-driven close look like a
+                    // deliberate teardown and silently drop the tab instead of returning it.
                     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
                     {
                         if b.debug_window
@@ -570,14 +584,23 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         {
                             b.debug_window = None;
                         }
+                        // A debug chart window is the one exception to the rule above: its host is
+                        // `DebugChartHost`, which has no release hook to clear the entry itself, so
+                        // this branch must do it or the registry grows every time one is closed.
+                        let was_debug_chart = b
+                            .debug_chart_windows
+                            .iter()
+                            .any(|h| h.window_id() == closed_id);
                         b.debug_chart_windows.retain(|h| h.window_id() != closed_id);
+                        if was_debug_chart {
+                            b.detached_chart_windows
+                                .retain(|(_, h)| h.window_id() != closed_id);
+                        }
                     }
                     (Vec::new(), false)
                 }
             });
-            for h in to_close {
-                h.update(app, |_, window, _| window.remove_window()).ok();
-            }
+            crate::window::windowing::close_all(to_close, app);
             if quit {
                 app.quit();
             }
@@ -873,70 +896,33 @@ pub(crate) fn run() -> anyhow::Result<()> {
             );
         }
 
-        // Restore detached-panel windows. Each panel is already absent from its dock because
-        // detaching removed it and dock_persist saved the dock without it. This ports egui's
-        // detached-window restoration at startup.
+        // Detached-panel WINDOWS are not opened here: each group window opened above reclaims its
+        // own detached panels through `detached::respawn_all`, the single restore route shared with
+        // the Settings paths and the show-group button. A second loop here would race it — its
+        // deferred body flushes inside the first `open_window` that follows, before that window has
+        // registered itself, and both loops would then open a window for every spec.
         //
-        // DEDUPLICATE against docks: docks.json and detached.json are written independently with
-        // debouncing, so a detached record may become stale after repinning a panel followed by a
-        // quick exit. Such a panel used to be restored TWICE, both as a dock tab and as a separate
-        // window. Do not spawn a panel already present in its group's restorable dock; remove its spec.
-        let (specs, docked) = {
+        // What startup DOES own is repairing the file: docks.json and detached.json are written
+        // independently with debouncing, so a spec can go stale after repinning a panel followed by
+        // a quick exit. `respawn_all` declines to open such a panel because the dock will restore
+        // it, but only startup knows the record itself should be dropped rather than kept waiting.
+        let stale: Vec<(String, String)> = {
             let b = backend.read(cx);
-            let mut docked: std::collections::HashSet<(String, String)> =
-                std::collections::HashSet::new();
-            fn collect(node: &moon_ui::PanelState, out: &mut Vec<String>) {
-                if matches!(node.info, moon_ui::PanelInfo::Panel(_)) && !node.panel_name.is_empty()
-                {
-                    out.push(node.panel_name.clone());
-                }
-                for c in &node.children {
-                    collect(c, out);
-                }
-            }
-            for (group, state) in &b.dock_states {
-                // A dock with a mismatched version is ignored at startup (shell/init.rs), so its
-                // panels will NOT be restored and must not participate in deduplication.
-                if !dock_persist::is_compatible_version(state.version) {
-                    continue;
-                }
-                let mut names = Vec::new();
-                collect(&state.center, &mut names);
-                for d in [&state.left_dock, &state.right_dock, &state.bottom_dock]
-                    .into_iter()
-                    .flatten()
-                {
-                    collect(&d.panel, &mut names);
-                }
-                for n in names {
-                    docked.insert((group.clone(), n));
-                }
-            }
-            (b.detached.clone(), docked)
+            let docked = dock_persist::docked_panels(&b.dock_states);
+            b.detached
+                .iter()
+                .filter(|s| docked.contains(&s.key_ref()))
+                .map(|s| s.key())
+                .collect()
         };
-        let mut dropped_stale = false;
-        for spec in &specs {
-            if docked.contains(&(spec.group.clone(), spec.panel.clone())) {
+        if !stale.is_empty() {
+            for (group, panel) in &stale {
                 log::warn!(
-                    "skip detached restore: панель уже в доке (протухшая запись) group={} panel={}",
-                    spec.group,
-                    spec.panel
-                );
-                dropped_stale = true;
-                continue;
-            }
-            if let Err(err) = detached::spawn(cx, &backend, spec, None) {
-                log::warn!(
-                    "restore detached panel failed group={} panel={}: {err:#}",
-                    spec.group,
-                    spec.panel
+                    "drop detached record: панель уже в доке (протухшая запись) group={group} panel={panel}"
                 );
             }
-        }
-        if dropped_stale {
             backend.update(cx, |b, _| {
-                b.detached
-                    .retain(|s| !docked.contains(&(s.group.clone(), s.panel.clone())));
+                b.detached.retain(|s| !stale.contains(&s.key()));
                 b.detached_dirty = true;
             });
         }

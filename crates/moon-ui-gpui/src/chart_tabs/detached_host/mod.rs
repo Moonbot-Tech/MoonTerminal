@@ -31,6 +31,16 @@ pub(super) struct DetachedChartHost {
     group: String,
     num: u32,
     bucket: ChartBucket,
+    /// This window's own id, compared against `Backend.detached_chart_windows` on release.
+    ///
+    /// A release means "the user closed this window" only while that registry still lists THIS
+    /// window. Every deliberate teardown — a settings rebuild, a reconcile dropping a group, a
+    /// group window closing, the debug harness — unregisters first, so its releases stay silent: a
+    /// repin nobody asked for would return the tab to the strip and, through `drain_chart_repin`'s
+    /// `upsert_spec`, undo the detachment in `charts.json` and re-create specs a rebuild pruned.
+    /// Registry identity rather than a queue clear, because effect ordering cannot be relied on —
+    /// GPUI dedups `Effect::Notify`, so an unrelated earlier notify can run the observers first.
+    window_id: WindowId,
     /// Whether `observe_window_bounds` may persist geometry.
     ///
     /// A restored window starts false because GPUI auto-placement on a non-primary DPI can report a
@@ -89,6 +99,7 @@ impl DetachedChartHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let window_id = window.window_handle().window_id();
         // Persist geometry from causal bounds events to charts.json for restoration in the same place.
         cx.observe_window_bounds(window, |this, window, cx| {
             this.persist_geometry(window, cx);
@@ -126,6 +137,15 @@ impl DetachedChartHost {
         let (g, n, c) = (group.clone(), num, bucket.clone());
         cx.on_release(move |this, app| {
             this.backend.update(app, |b, cx| {
+                let mine = b
+                    .detached_chart_windows
+                    .iter()
+                    .any(|(_, h)| h.window_id() == this.window_id);
+                if !mine {
+                    return;
+                }
+                b.detached_chart_windows
+                    .retain(|(_, h)| h.window_id() != this.window_id);
                 b.chart_repin_request.push((g.clone(), n, c.clone()));
                 cx.notify();
             });
@@ -291,6 +311,7 @@ impl DetachedChartHost {
             group,
             num,
             bucket,
+            window_id,
             persist_armed: !restored,
             restore_size,
             taskbar_hide_ticks: 8,

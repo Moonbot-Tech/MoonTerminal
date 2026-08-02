@@ -276,6 +276,12 @@ pub fn detach_button(
         .label("⧉")
         .tooltip(rust_i18n::t!("dock.detach_hint").to_string())
         .on_click(move |_, window, app| {
+            // Decline an already-detached panel, as the dock's own detach route does, before
+            // building the spec: a second window for one `(group, panel)` takes over the handle map
+            // and orphans the first, which can then never repin.
+            if backend.read(app).is_detached(&group, name) {
+                return;
+            }
             let spec =
                 DetachedSpec::with_saved_geom(&backend, app, group.clone(), name.to_string());
             if let Err(err) =
@@ -292,11 +298,7 @@ pub fn detach_button(
             }
             // Record the specification after the successful spawn and optional dock removal.
             backend.update(app, |b, _| {
-                if !b
-                    .detached
-                    .iter()
-                    .any(|s| s.group == spec.group && s.panel == spec.panel)
-                {
+                if !b.is_detached(&spec.group, &spec.panel) {
                     b.detached.push(spec);
                     b.detached_dirty = true;
                 }
