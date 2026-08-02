@@ -66,9 +66,10 @@ use moon_chart::paint::now_unix_ms;
 use moon_chart::view::Rect;
 use moon_core::config::{ChartTheme, OrdersStyle};
 use moon_core::data::PriceLinePoint;
-use moon_core::market::{ChartHistoryBuffers, ChartHistoryCursor, MarketDataSource};
+use moon_core::market::{ChartHistoryBuffers, ChartHistoryCursor, MarketDataSource, MarketLabel};
 use moon_core::session::order_lines::LineKind;
 use moon_core::session::{CoreId, SessionManager};
+use moon_core::symbol::Exchange;
 #[cfg(windows)]
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11RasterizerState, ID3D11RenderTargetView,
@@ -232,8 +233,20 @@ struct PaneRender {
     core: Option<CoreId>,
     market: String,
     /// Core name for the chart corner label, resolved from `SessionManager` during order sync.
-    /// The ticker is derived on demand from `market` through `symbol::display_pair` and is not stored.
     core_name: String,
+    /// Ticker for that same caption (`BEAT-USDT`), resolved from the core's catalog in
+    /// `sync_from_market_source` and cached here.
+    ///
+    /// Cached rather than derived while drawing: the caption is drawn every frame, and resolving
+    /// it takes the market-source lock and reads a snapshot. Deriving it from `market` alone
+    /// cannot name a Hyperliquid spot index (`@156`) or tell two COIN-M expiries apart.
+    ticker: String,
+    /// Provider+generation+meta key the cached `ticker` was resolved at; see the retry in
+    /// `sync_from_market_source`.
+    ticker_catalog_key: u64,
+    /// Whether `ticker` has been resolved at all. An empty string cannot say this: a market with
+    /// no label resolves to one, and the pane would take the source lock again every sync.
+    ticker_resolved: bool,
     /// Measured logical-pixel width of the widest corner-label row. `prepare_text` measures it and
     /// `sync_readout_params` builds the translucent backing plate. Zero means no label.
     caption_w: f32,
@@ -384,6 +397,9 @@ impl PaneRender {
             core: None,
             market: String::new(),
             core_name: String::new(),
+            ticker: String::new(),
+            ticker_catalog_key: 0,
+            ticker_resolved: false,
             caption_w: 0.0,
             caption_delta_w: 0.0,
             caption_delta_h: 0.0,

@@ -6,6 +6,7 @@ fn test_order_with_buy_trace() -> OrderRow {
         market: "BTCUSDT".into(),
         market_display: "BTCUSDT".into(),
         coin: "BTC".into(),
+        quote: "USDT".into(),
         is_short: false,
         size: 0.01,
         remaining_size: 0.01,

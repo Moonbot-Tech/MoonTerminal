@@ -46,8 +46,18 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                     div()
                         .text_color(moon(p.accent))
                         .font_weight(FontWeight::SEMIBOLD)
-                        // Match chart pair formatting, for example `BTC_USDT` to `BTC-USDT`.
-                        .child(symbol::display_pair(&r.market_display)),
+                        // Coin and quote as the CORE names them, resolved by the feed; matches the
+                        // chart caption's `BTC-USDT` shape. The DISPLAY coin, without the contract
+                        // tail the core's token carries — a dialog header reads `BTC-USD`, not the
+                        // internal `BTC_RP`.
+                        .child({
+                            let coin = moon_core::symbol::strip_contract_suffix(&r.coin);
+                            if r.quote.is_empty() {
+                                coin.to_string()
+                            } else {
+                                format!("{coin}-{}", r.quote)
+                            }
+                        }),
                 ))
                 .child(info_kv(
                     p,

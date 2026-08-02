@@ -16,7 +16,7 @@ use moon_core::session::CoreId;
 impl ChartTabs {
     /// Search results for the current query. Add tabs search within their bucket; Main and custom
     /// tabs search the whole group because a custom tab can collect coins from different cores.
-    pub(super) fn coin_results(&self, cx: &App) -> Vec<(CoreId, String, String)> {
+    pub(super) fn coin_results(&self, cx: &App) -> Vec<crate::controls::coin_search::CoinHit> {
         let bucket = match &self.active {
             Tab::Main | Tab::Custom(..) => None,
             Tab::Add(_, b) => Some(b.clone()),
@@ -133,12 +133,25 @@ impl ChartTabs {
         market: String,
         cx: &mut Context<Self>,
     ) {
-        let label = moon_core::symbol::coin_of_market(&market).to_string();
-        // If a tab already has this coin's name, switch to it.
+        // The tab is named after the coin as the CORE names it, so a Hyperliquid spot index does
+        // not become a tab called `@156`. The DISPLAY spelling, without a contract tail: a tab is
+        // per coin, and its charts may well be several expiries of it.
+        let label = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .market_label(core, &market)
+            .display_coin()
+            .to_string();
+        // If a tab already has this coin's name, switch to it. Compared through the shared match
+        // key so a tab saved under an older spelling still counts as the same coin instead of
+        // silently gaining a duplicate.
+        let key = moon_core::symbol::coin_match_key(&label);
         if let Some((n, b)) = self
             .custom
             .iter()
-            .find(|(n, _, _)| self.custom_label(*n) == label)
+            .find(|(n, _, _)| moon_core::symbol::coin_match_key(&self.custom_label(*n)) == key)
             .map(|(n, b, _)| (*n, b.clone()))
         {
             self.active = Tab::Custom(n, b);

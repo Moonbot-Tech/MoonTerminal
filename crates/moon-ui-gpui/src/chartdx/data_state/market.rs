@@ -166,6 +166,40 @@ impl ChartDataState {
             let history_to = view_time0 + window_ms + history_prefetch;
             let scan_price = device_lost || cam_px != pr.scan_cam_px;
             let source_revs = source.market_revisions(pane.core, &pane.market);
+            // The corner caption's ticker, resolved HERE rather than while drawing: the draw runs
+            // per frame and this takes the source lock and a snapshot.
+            //
+            // The retry key mixes ONLY provider, generation and meta — deliberately not
+            // `combined_signature()`, which also folds `history` and `book`. Those bump on every
+            // trade and every book tick, so keying on them would re-resolve the label on every
+            // sync of a live market: the source lock and a snapshot clone back in the hot loop,
+            // which is what moving this out of the draw was for. `meta` alone is not enough
+            // either: its counters are per provider and `set_provider_map` drops them wholesale,
+            // so a provider election could hand back the number the pane already cached.
+            let catalog_key = source_revs.map(|revs| {
+                let mut key = mix_sig(0xcbf29ce4_84222325u64, revs.provider);
+                key = mix_sig(key, revs.generation);
+                mix_sig(key, revs.meta)
+            });
+            if !pr.ticker_resolved || catalog_key.is_some_and(|key| pr.ticker_catalog_key != key) {
+                // No provider yet: read what the NAME supports so the caption is never blank, and
+                // stay unresolved so the catalog still gets its turn.
+                let ticker = match catalog_key {
+                    Some(key) => {
+                        pr.ticker_catalog_key = key;
+                        pr.ticker_resolved = true;
+                        source.market_label(pane.core, &pane.market).pair()
+                    }
+                    None => MarketLabel::from_name(&pane.market, Exchange::Unknown).pair(),
+                };
+                if pr.ticker != ticker {
+                    pr.ticker = ticker;
+                    // The caption is part of the frame, so a corrected ticker has to reach one:
+                    // without this it waits for an unrelated repaint, which on a quiet market can
+                    // be a long time.
+                    pixels_changed = true;
+                }
+            }
             let source_generation = source_revs.map(|revs| revs.generation).unwrap_or(0);
             let source_generation_changed = source_generation != pr.source_generation;
             let mut history_source_sig = 0xcbf29ce4_84222325u64;

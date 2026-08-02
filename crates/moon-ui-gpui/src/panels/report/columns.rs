@@ -168,9 +168,11 @@ fn coin_cell(
                 let (market, coin_base, core_name, strat_name) = {
                     let b = backend_menu.read(app);
                     let market = resolve_market(b, core_uid, &coin_menu);
-                    let exchange = b.session.market_source().exchange_of(core_uid);
-                    let coin_base =
-                        moon_core::symbol::coin_of_market_on(&market, exchange).to_string();
+                    let coin_base = b
+                        .session
+                        .market_source()
+                        .market_label(core_uid, &market)
+                        .coin;
                     let core_name = b
                         .session
                         .sessions()

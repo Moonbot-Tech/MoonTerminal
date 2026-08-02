@@ -24,7 +24,7 @@ pub use candles::{CandleViewCfg, ChartCandle};
 pub use screener::ScreenerRow;
 pub use source::{
     CandleReadParams, ChartHistoryBuffers, ChartHistoryCursor, ChartHistoryRead, DetectSnapshot,
-    LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
+    LatestPriceError, MarketDataSource, MarketLabel, MarketRevisions, MarketTickerReadout,
 };
 
 /// Shared market buffer owned by moon-core, not by a GPUI entity. Live feeds only wake

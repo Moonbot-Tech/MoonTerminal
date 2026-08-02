@@ -27,7 +27,7 @@ impl RenderState {
                 view,
                 epoch_ms,
                 core_name,
-                market,
+                ticker,
                 orderbook_enabled,
                 price_axis_pos,
                 time_axis_visible,
@@ -39,7 +39,7 @@ impl RenderState {
                     pr.view,
                     pr.epoch_ms,
                     pr.core_name.clone(),
-                    pr.market.clone(),
+                    pr.ticker.clone(),
                     pr.orderbook_enabled,
                     pr.price_axis_pos,
                     pr.time_axis_visible,
@@ -95,7 +95,6 @@ impl RenderState {
                     self.draw_text(ctx, &core_name, cap_x, cap_y, 1.0, 0.0, caption_fg)?;
                     lines += 1;
                 }
-                let ticker = moon_core::symbol::display_pair(&market);
                 if !ticker.is_empty() {
                     cap_w = cap_w.max(self.measure_text(ctx, &ticker).width.as_f32());
                     self.draw_text(ctx, &ticker, cap_x, cap_y + LINE_H, 1.0, 0.0, caption_fg)?;

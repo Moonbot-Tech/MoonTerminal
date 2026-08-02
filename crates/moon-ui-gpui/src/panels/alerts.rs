@@ -39,6 +39,9 @@ struct Row {
     core: CoreId,
     core_name: String,
     market: String,
+    /// Coin as the CORE names it, resolved once when the row is built. The column is headed
+    /// "coin", and the raw market name overflows its cell on any exchange that spells one out.
+    coin: String,
     figure: String,
     price: f64,
     time_ms: i64,
@@ -128,16 +131,55 @@ impl AlertsPanel {
             }
         }
         self.alert_strategies = strategies;
-        let mut rows: Vec<Row> = b
+        // Collect the alerts first, releasing the `figures` borrow before touching the market
+        // source: one lock at a time, and no borrow held across another subsystem's lock.
+        let alerts: Vec<(CoreId, String, moon_core::figures::Figure)> = b
             .figures
             .borrow()
             .all_alerts()
             .filter(|(core, _, _)| names.contains_key(core))
-            .filter(|(_, market, _)| filter.is_empty() || market.to_uppercase().contains(&filter))
-            .map(|(core, market, f)| Row {
+            .map(|(core, market, f)| (core, market.to_string(), f.clone()))
+            .collect();
+        // One lock and one snapshot per core, not per row.
+        let ms = b.session.market_source();
+        let mut coins: HashMap<(CoreId, String), String> = HashMap::new();
+        for core in names.keys().copied() {
+            let markets: Vec<&str> = alerts
+                .iter()
+                .filter(|(c, ..)| *c == core)
+                .map(|(_, m, _)| m.as_str())
+                .collect();
+            if markets.is_empty() {
+                continue;
+            }
+            for (market, label) in markets.iter().zip(ms.market_labels(core, &markets)) {
+                coins.insert(
+                    (core, (*market).to_string()),
+                    label.display_coin().to_string(),
+                );
+            }
+        }
+        let mut rows: Vec<Row> = alerts
+            .into_iter()
+            .map(|(core, market, f)| {
+                let coin = coins
+                    .get(&(core, market.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                (core, market, f, coin)
+            })
+            // Filter on the COIN as well as the raw name: the user types `sol`, and on an
+            // exchange whose market is `@156` the raw name would never match it.
+            .filter(|(_, market, _, coin)| {
+                filter.is_empty()
+                    || market.to_uppercase().contains(&filter)
+                    || coin.to_uppercase().contains(&filter)
+            })
+            .map(|(core, market, f, coin)| Row {
                 core,
                 core_name: names.get(&core).cloned().unwrap_or_default(),
-                market: market.to_string(),
+                market,
+                coin,
                 figure: figure_label(&f.kind),
                 price: f.kind.anchor_price(),
                 time_ms: f.created_ms,
@@ -201,9 +243,7 @@ impl AlertsPanel {
                 .w(px(70.0))
                 .cursor_pointer()
                 .text_color(moon(p.accent))
-                // The column is headed "coin", so show the coin: the raw market name overflows a
-                // 70px cell on any exchange that spells it out (`BEAT-USDT-SWAP`).
-                .child(moon_core::symbol::coin_of_market(&r.market).to_string())
+                .child(r.coin.clone())
                 .on_click(move |_, _w, app| {
                     backend_open.update(app, |b, bcx| {
                         b.open_on_main((core, open_market.clone()), true);

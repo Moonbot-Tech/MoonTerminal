@@ -201,6 +201,7 @@ impl Render for ReportPanel {
             };
             let view = cx.entity();
             let coin_input = self.coin.clone();
+            let backend_pick = self.backend.clone();
             crate::controls::coin_search::render_popup(
                 "rep-coin-search",
                 results,
@@ -208,11 +209,23 @@ impl Render for ReportPanel {
                 false,
                 p,
                 cx,
-                move |_core, market, window, app| {
-                    // The filter is textual, so use the market base, for example `BTCUSDT` to `BTC`.
-                    // Core is selected separately. Update the mirror before `set_value` so the
-                    // resulting Change event does not reopen the popup.
-                    let base = moon_core::symbol::coin_of_market(&market).to_string();
+                move |core, market, window, app| {
+                    // The filter is textual and runs as SQL `coin LIKE` against the token the CORE
+                    // wrote into the report, so the coin has to be the core's own spelling —
+                    // `SOL_RP`, not a reading of the market name. Core is selected separately.
+                    // Update the mirror before `set_value` so the resulting Change event does not
+                    // reopen the popup.
+                    // The DISPLAY coin, without a contract tail: the filter is a substring match,
+                    // so `SOL` still finds the core's `SOL_RP` and `SOL_0925` rows while the
+                    // qualified token would exclude every other expiry — and `_` is a
+                    // single-character wildcard in the `coin LIKE` this feeds.
+                    let base = backend_pick
+                        .read(app)
+                        .session
+                        .market_source()
+                        .market_label(core, &market)
+                        .display_coin()
+                        .to_string();
                     view.update(app, |this, cx| {
                         this.coin_query = base.clone();
                         this.coin_popup_open = false;

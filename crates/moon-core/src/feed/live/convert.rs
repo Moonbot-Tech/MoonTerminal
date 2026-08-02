@@ -342,13 +342,17 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             // The classic spelling is only ever needed for an indexed name, so an ordinary market
             // does not pay for a String it would discard.
             let classic = indexed.then(|| m.market_name_mb_classic.clone());
-            (classic, coin.to_string())
+            (
+                classic,
+                coin.to_string(),
+                m.base_currency.trim().to_ascii_uppercase(),
+            )
         })
     });
     let market_display = if indexed {
         catalog
             .as_ref()
-            .and_then(|(classic, _)| classic.clone())
+            .and_then(|(classic, ..)| classic.clone())
             .filter(|s| !s.is_empty() && !s.starts_with('@'))
             .unwrap_or_else(|| o.market_name.clone())
     } else {
@@ -641,15 +645,27 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // (`@206`) carries no coin at all while the classic display spelling (`UENAUSDT`) does. With
     // no catalog entry there is no classic spelling either, so an index falls back to itself:
     // nothing outside the catalog can say which coin `@206` is.
-    let coin = match catalog {
-        Some((_, coin)) if !coin.is_empty() => coin,
+    let (coin, quote) = match catalog {
+        Some((_, coin, quote)) if !coin.is_empty() => {
+            // A COIN-M contract reports no base currency, so its quote comes from the name
+            // (`BTCUSD_PERP` → `USD`); otherwise the order dialog would show a bare coin.
+            let quote = if quote.is_empty() {
+                crate::symbol::parse::split_market(&o.market_name, exchange_of(snap))
+                    .quote
+                    .to_ascii_uppercase()
+            } else {
+                quote
+            };
+            (coin, quote)
+        }
         _ => {
             let parts = crate::symbol::parse::split_market(&o.market_name, exchange_of(snap));
-            if parts.is_index() {
+            let coin = if parts.is_index() {
                 crate::symbol::coin_of_market(&market_display).to_string()
             } else {
                 parts.base.to_string()
-            }
+            };
+            (coin, parts.quote.to_ascii_uppercase())
         }
     };
     OrderRow {
@@ -657,6 +673,7 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         market: o.market_name.clone(),
         market_display,
         coin,
+        quote,
         is_short: o.is_short,
         size,
         remaining_size,

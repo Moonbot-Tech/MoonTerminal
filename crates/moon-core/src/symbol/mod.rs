@@ -40,25 +40,6 @@ pub fn is_usd_stable(currency: &str) -> bool {
     )
 }
 
-/// Full ticker for a chart label: `BTCUSDT` → `BTC-USDT`. HIP-3 (`xyz:BIRD`) → `BIRD`
-/// because the DEX prefix and implicit USDC quote are hidden. If the quote is unrecognized,
-/// displays the coin without its DEX prefix.
-///
-/// A dated contract keeps its date (`BTCUSDT-07AUG26` → `BTC-USDT-07AUG26`): two expiries of the
-/// same pair are different instruments and must not share a label. A perpetual has no tail, so
-/// `BTC-USDT-SWAP` and `BTCUSDT` both read `BTC-USDT`.
-pub fn display_pair(market: &str) -> String {
-    let parts = split_market(market, Exchange::Unknown);
-    if parts.quote.is_empty() {
-        return parts.base.to_string();
-    }
-    let pair = format!("{}-{}", parts.base, parts.quote.to_ascii_uppercase());
-    match parts.contract {
-        Some(contract) => format!("{pair}-{contract}"),
-        None => pair,
-    }
-}
-
 /// The CANONICAL market coin for blacklists, matching, and ticker display: strips the DEX
 /// prefix, then the quote suffix. `xyz:BIRD` → `BIRD`, `BIRDUSDC` → `BIRD`,
 /// `ADAUSDT` → `ADA`, `BEAT-USDT-SWAP` → `BEAT`.
