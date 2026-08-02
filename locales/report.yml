@@ -203,6 +203,18 @@ report.valuation_unavailable:
   ru: "нет исторического курса: %{n}"
   en: "historical rate unavailable: %{n}"
   es: "tasa histórica no disponible: %{n}"
+report.valuation_retrying:
+  ru: "пересчёт: повторная попытка"
+  en: "valuation: retrying"
+  es: "valoración: reintentando"
+report.valuation_stalled:
+  ru: "пересчёт остановился"
+  en: "valuation stalled"
+  es: "valoración detenida"
+report.valuation_stalled_tip:
+  ru: "Пересчёт в USDT не продвигается уже %{minutes} мин. Этап: %{stage}. Причина: %{kind}. [%{codes}] %{detail}"
+  en: "USDT valuation has made no progress for %{minutes} min. Stage: %{stage}. Cause: %{kind}. [%{codes}] %{detail}"
+  es: "La valoración en USDT no avanza desde hace %{minutes} min. Etapa: %{stage}. Causa: %{kind}. [%{codes}] %{detail}"
 report.shown_top:
   ru: "показано (топ): %{n}"
   en: "shown (top): %{n}"

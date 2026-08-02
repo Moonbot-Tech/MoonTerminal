@@ -71,6 +71,12 @@ impl ReportPanel {
             .valuation
             .as_ref()
             .map(|valuation| valuation.generation.clone());
+        let (last_status_rev, valuation_status) = backend
+            .read(cx)
+            .valuation
+            .as_ref()
+            .map(|valuation| valuation.seed_status())
+            .unwrap_or_default();
         // Keep this connection for panel metadata. Startup core/schema probes
         // are deliberately lossy because the fallible background batch below
         // owns user-visible read errors.
@@ -252,6 +258,21 @@ impl ReportPanel {
                 this.last_gen = current;
                 this.requery_on_generation(cx);
             }
+            // Health is polled beside the data generation but never triggers a query: a stall
+            // changes no rows, and re-running the report on each visible health transition would
+            // turn a broken provider into needless full-table scans.
+            let mut last = this.last_status_rev;
+            let refreshed = this
+                .backend
+                .read(cx)
+                .valuation
+                .as_ref()
+                .and_then(|valuation| valuation.status_if_changed(&mut last));
+            if let Some(status) = refreshed {
+                this.last_status_rev = last;
+                this.valuation_status = status;
+                cx.notify();
+            }
         })
         .detach();
 
@@ -266,7 +287,9 @@ impl ReportPanel {
             group,
             generation,
             valuation_generation,
+            valuation_status,
             last_gen,
+            last_status_rev,
             conn,
             cores,
             strategies,

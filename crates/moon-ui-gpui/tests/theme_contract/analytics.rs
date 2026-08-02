@@ -829,3 +829,81 @@ fn calendar_hover_is_element_state_not_view_state() {
         "cal_cell must attach its highlight after the date_only gate, not to the shared chain"
     );
 }
+
+/// The report footer must learn that valuation is stuck from the WORKER, not from row counts.
+///
+/// Breakage: a cleanup deleting the `valuation_status` plumbing and deriving "stuck" from
+/// `coverage.valued_orders` standing still. A count cannot tell a slow backfill apart from a worker
+/// retrying an unreachable provider forever, so the panel would show a frozen ratio with no
+/// explanation.
+///
+/// Scoped to the whole `panels/report` directory rather than to `render.rs`, so moving the
+/// footer's fact assembly into a sibling module does not falsify it.
+#[test]
+fn the_report_footer_reads_stall_from_worker_health_not_row_counts() {
+    let mut sources = Vec::new();
+    rust_sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("panels")
+            .join("report"),
+        &mut sources,
+    );
+    let text = sources
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+                .replace("\r\n", "\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for anchor in [
+        // The handle owns the revision-then-snapshot read order; reading the two fields by hand
+        // here is what would reintroduce the swallowed-transition race.
+        "valuation.seed_status()",
+        "valuation.status_if_changed(",
+        "valuation_health::stall_facts(",
+        "is_retrying()",
+        "report.valuation_stalled",
+        "report.valuation_retrying",
+    ] {
+        assert!(
+            text.contains(anchor),
+            "the report footer must render worker health through {anchor}"
+        );
+    }
+
+    // A health change carries no rows: routing it into the query path would re-run the report on
+    // UI-visible transitions from a provider that is failing anyway.
+    let state = read_src("panels/report/state.rs");
+    let poll = braced_body(&state, "if let Some(status) = refreshed");
+    assert!(
+        !poll.contains("requery") && !poll.contains("needs_query"),
+        "a valuation health change must not trigger a report query"
+    );
+}
+
+/// The stall chip must not be gated on the shape of the rows currently in view.
+///
+/// Breakage: moving the `valuation_health_chip` call inside the
+/// `QuoteScope::Mixed | QuoteScope::Unknown` branch. A stuck worker is a property of the worker,
+/// not of the filter: under a routine single-currency filter that branch never runs, so no surface
+/// anywhere would report a worker that had been stuck for hours.
+#[test]
+fn the_valuation_stall_chip_is_not_gated_on_quote_scope() {
+    let render = read_src("panels/report/render.rs");
+    assert!(
+        render.contains("self.valuation_health_chip(p, cx)"),
+        "the footer must render the health chip"
+    );
+    let scoped = braced_body(
+        &render,
+        "if matches!(\n                    d.totals.scope(),",
+    );
+    assert!(
+        !scoped.contains("valuation_health_chip"),
+        "the health chip must sit outside the mixed/unknown quote-scope branch"
+    );
+}

@@ -1058,6 +1058,42 @@ analytics.quote_valuation_unavailable:
   ru: "нет исторического курса: %{n}"
   en: "historical rate unavailable: %{n}"
   es: "tasa histórica no disponible: %{n}"
+analytics.quote_valuation_stalled:
+  ru: "пересчёт остановился (%{stage}/%{kind}, %{minutes} мин)"
+  en: "valuation stalled (%{stage}/%{kind}, %{minutes} min)"
+  es: "valoración detenida (%{stage}/%{kind}, %{minutes} min)"
+valuation.stage.cache_recovery:
+  ru: "восстановление кэша"
+  en: "cache recovery"
+  es: "recuperación de caché"
+valuation.stage.reconcile:
+  ru: "обход истории"
+  en: "history sweep"
+  es: "recorrido del histórico"
+valuation.stage.outbox:
+  ru: "новые сделки"
+  en: "new trades"
+  es: "nuevas operaciones"
+valuation.stage.deferred_minute:
+  ru: "ожидание закрытия минуты"
+  en: "waiting for the minute to close"
+  es: "esperando el cierre del minuto"
+valuation.kind.provider:
+  ru: "биржа не отдаёт курс"
+  en: "the exchange is not returning a rate"
+  es: "el exchange no devuelve la tasa"
+valuation.kind.report_read:
+  ru: "не читается база отчётов"
+  en: "the report database cannot be read"
+  es: "no se puede leer la base de informes"
+valuation.kind.cache_write:
+  ru: "не пишется кэш пересчёта"
+  en: "the valuation cache cannot be written"
+  es: "no se puede escribir la caché de valoración"
+valuation.kind.cache_unhealthy:
+  ru: "кэш пересчёта повреждён"
+  en: "the valuation cache is damaged"
+  es: "la caché de valoración está dañada"
 analytics.quote_split_orders:
   ru: "сделок в выбранной области: %{n}"
   en: "trades in the selected scope: %{n}"

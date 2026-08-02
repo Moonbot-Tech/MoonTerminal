@@ -5,7 +5,31 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use super::{ReportRevisionDecision, ReportRevisionGate, consume_report_commit};
+use super::{ReportRevisionDecision, ReportRevisionGate, TickEdges, consume_report_commit};
+
+/// Build one tick's edges from the four flags, in declaration order.
+///
+/// Args:
+///     immediate_report: Live report data committed.
+///     background_report: Historical catch-up data committed.
+///     valuation: The valuation worker published committed values.
+///     valuation_status: Published valuation health changed shape.
+///
+/// Returns:
+///     Edges for one coordination tick.
+fn edges(
+    immediate_report: bool,
+    background_report: bool,
+    valuation: bool,
+    valuation_status: bool,
+) -> TickEdges {
+    TickEdges {
+        immediate_report,
+        background_report,
+        valuation,
+        valuation_status,
+    }
+}
 
 /// `startup.rs:consume_report_commit` must invoke the dedicated report-revision notification for
 /// a set edge; removing that call leaves an open Analytics window stale until an unrelated UI wake.
@@ -34,15 +58,24 @@ fn valuation_revision_is_coalesced_and_published_at_the_boundary() {
     let mut gate = ReportRevisionGate::new(start);
 
     assert_eq!(
-        gate.observe(false, false, true, start + Duration::from_secs(1)),
+        gate.observe(
+            edges(false, false, true, false),
+            start + Duration::from_secs(1)
+        ),
         ReportRevisionDecision::default()
     );
     assert_eq!(
-        gate.observe(false, false, true, start + Duration::from_secs(59)),
+        gate.observe(
+            edges(false, false, true, false),
+            start + Duration::from_secs(59)
+        ),
         ReportRevisionDecision::default()
     );
     assert_eq!(
-        gate.observe(false, false, false, start + Duration::from_secs(60)),
+        gate.observe(
+            edges(false, false, false, false),
+            start + Duration::from_secs(60)
+        ),
         ReportRevisionDecision {
             notify: true,
             wake_valuation: false,
@@ -50,11 +83,17 @@ fn valuation_revision_is_coalesced_and_published_at_the_boundary() {
     );
 
     assert_eq!(
-        gate.observe(false, false, true, start + Duration::from_secs(61)),
+        gate.observe(
+            edges(false, false, true, false),
+            start + Duration::from_secs(61)
+        ),
         ReportRevisionDecision::default()
     );
     assert_eq!(
-        gate.observe(false, false, false, start + Duration::from_secs(120)),
+        gate.observe(
+            edges(false, false, false, false),
+            start + Duration::from_secs(120)
+        ),
         ReportRevisionDecision {
             notify: true,
             wake_valuation: false,
@@ -71,22 +110,34 @@ fn report_revision_publishes_immediately_and_absorbs_pending_valuation() {
     let mut gate = ReportRevisionGate::new(start);
 
     assert_eq!(
-        gate.observe(false, false, true, start + Duration::from_secs(1)),
+        gate.observe(
+            edges(false, false, true, false),
+            start + Duration::from_secs(1)
+        ),
         ReportRevisionDecision::default()
     );
     assert_eq!(
-        gate.observe(true, true, true, start + Duration::from_secs(2)),
+        gate.observe(
+            edges(true, true, true, false),
+            start + Duration::from_secs(2)
+        ),
         ReportRevisionDecision {
             notify: true,
             wake_valuation: true,
         }
     );
     assert_eq!(
-        gate.observe(false, false, false, start + Duration::from_secs(62)),
+        gate.observe(
+            edges(false, false, false, false),
+            start + Duration::from_secs(62)
+        ),
         ReportRevisionDecision::default()
     );
     assert_eq!(
-        gate.observe(true, false, false, start + Duration::from_secs(63)),
+        gate.observe(
+            edges(true, false, false, false),
+            start + Duration::from_secs(63)
+        ),
         ReportRevisionDecision {
             notify: true,
             wake_valuation: true,
@@ -103,18 +154,58 @@ fn background_report_wakes_valuation_without_immediate_ui_refresh() {
     let mut gate = ReportRevisionGate::new(start);
 
     assert_eq!(
-        gate.observe(false, true, false, start + Duration::from_secs(1)),
+        gate.observe(
+            edges(false, true, false, false),
+            start + Duration::from_secs(1)
+        ),
         ReportRevisionDecision {
             notify: false,
             wake_valuation: true,
         }
     );
     assert_eq!(
-        gate.observe(false, false, false, start + Duration::from_secs(60)),
+        gate.observe(
+            edges(false, false, false, false),
+            start + Duration::from_secs(60)
+        ),
         ReportRevisionDecision {
             notify: true,
             wake_valuation: false,
         }
+    );
+}
+
+/// `startup.rs:ReportRevisionGate::observe` must publish a valuation HEALTH change even when no
+/// rows committed, and must not treat it as a report commit.
+///
+/// Breakage: dropping `edges.valuation_status` from the `background_pending` expression. A
+/// stalled worker commits nothing by definition, so the revision would never be published and the
+/// report footer's stall chip could not appear until an unrelated report write happened to arrive
+/// — which on an idle terminal is never. Folding it into `report_committed` instead would also
+/// unpark the worker for a UI-only health transition that has no new valuation work.
+#[test]
+fn a_health_change_alone_still_reaches_a_revision() {
+    let start = Instant::now();
+    let mut gate = ReportRevisionGate::new(start);
+
+    assert_eq!(
+        gate.observe(
+            edges(false, false, false, true),
+            start + Duration::from_secs(1)
+        ),
+        ReportRevisionDecision::default(),
+        "a health change never wakes the worker"
+    );
+    assert_eq!(
+        gate.observe(
+            edges(false, false, false, false),
+            start + Duration::from_secs(60)
+        ),
+        ReportRevisionDecision {
+            notify: true,
+            wake_valuation: false,
+        },
+        "and is published at the next boundary"
     );
 }
 
@@ -157,12 +248,17 @@ fn report_revision_decision_stays_wired_to_the_coordination_loop() {
         &source,
         "consume_report_commit(coord_report_background_dirty.as_deref()",
     );
+    let status = position(
+        &source,
+        "consume_report_commit(coord_valuation_status_dirty.as_deref()",
+    );
     let observe = position(&source, "let revision = report_revision_gate.observe(");
     let wake = position(&source, "if revision.wake_valuation {");
     let notify = position(&source, "if revision.notify {");
 
     assert!(immediate < background);
-    assert!(background < observe);
+    assert!(background < status);
+    assert!(status < observe);
     assert!(observe < wake);
     assert!(wake < notify);
     assert!(source[wake..notify].contains("valuation.wake();"));
