@@ -359,6 +359,26 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     }
 }
 
+/// The metric popup must fit its localized items without widening the compact active-unit trigger.
+///
+/// Restoring the fixed 120px menu clips the Russian `PnL` label, while replacing the trigger width
+/// with the fitted menu width needlessly consumes the responsive Analytics toolbar.
+#[test]
+fn analytics_metric_menu_fits_its_localized_labels() {
+    let toolbar = read_src("analytics/toolbar.rs");
+    let metric_combo = braced_body(&toolbar, "fn metric_combo(");
+
+    assert!(
+        metric_combo.contains(".trigger_width_scaled(METRIC_TRIGGER_W)")
+            && metric_combo.contains(".fit_menu_width(120.0, 240.0)"),
+        "the metric dropdown must keep a compact trigger and fit the popup to its localized items"
+    );
+    assert!(
+        !metric_combo.contains(".menu_width_scaled(120.0)"),
+        "the clipped fixed-width metric popup must not return"
+    );
+}
+
 /// Protects the process boundary of Analytics UI memory.
 ///
 /// The plausible edit is rebuilding `AnalyticsView` from hard-coded defaults or moving its
@@ -521,6 +541,92 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
     assert!(
         analytics.contains("this.reload_axis_after_report(this.strat_mode, show_overlay, cx);"),
         "the Strategy base-to-axis chain must retain the original manual/background overlay policy"
+    );
+}
+
+/// `analytics/mod.rs:reload_strategy_base` must retain the current Strategies snapshot while an
+/// automatic report refresh is in flight or briefly fails; restoring an unconditional reset,
+/// applying an automatic failure, or swapping either caller's `after_report` polarity makes the
+/// list, quote selector, and trade count blink through Loading/error after a live trade or leaves
+/// old-scope values visible after a manual filter change.
+#[test]
+fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
+    let analytics = read_src("analytics/mod.rs");
+    let reload = braced_body(&analytics, "fn reload_strategy_base(");
+    let automatic = braced_body(&analytics, "fn refresh_visible_report_data(");
+    let manual = braced_body(&analytics, "fn reload(&mut self, cx: &mut Context<Self>)");
+    let reset = "self.strategy_data = ProfitLoadState::default();";
+
+    assert_eq!(
+        reload.matches(reset).count(),
+        1,
+        "reload_strategy_base must have exactly one strategy snapshot reset"
+    );
+    assert!(
+        reload.contains(&format!(
+            "if !after_report {{\n            {reset}\n        }}"
+        )),
+        "only an explicit scope reload may clear the visible Strategies snapshot"
+    );
+    assert!(
+        automatic.contains("self.reload_strategy_base(true, true, show_overlay, cx);"),
+        "automatic report refresh must request same-scope snapshot preservation"
+    );
+    assert!(
+        manual.contains("self.reload_strategy_base(false, true, true, cx)"),
+        "manual scope refresh must retire values from the previous scope"
+    );
+    let automatic_result = chain_between(
+        reload,
+        "if !after_report || data_error.is_none() {",
+        "this.strategy_dirty = refresh::report_result_is_stale(",
+        "automatic strategy result publication",
+    );
+    assert!(
+        automatic_result.contains("this.strategy_data.apply(data);")
+            && automatic_result.contains("this.strat_core_w = None;")
+            && automatic_result.contains("this.strat_visible = None;"),
+        "an automatic read failure must preserve the complete visible strategy snapshot"
+    );
+}
+
+/// Automatic Report refresh must never start its heavy query from a generation callback, timer,
+/// constructor, or in-flight completion. Reintroducing `this.schedule_requery(cx)` in the timer or
+/// completion restores the exact five-second terminal freeze while a separate Analytics window is
+/// being scrolled. The focused OS-window render is the sole automatic query-start boundary.
+#[test]
+fn hidden_report_never_starts_its_five_second_query() {
+    let query = read_src("panels/report/query.rs");
+    let render = read_src("panels/report/render.rs");
+    let state = read_src("panels/report/state.rs");
+    let generation = braced_body(&query, "pub(super) fn requery_on_generation(");
+    let schedule = braced_body(&query, "pub(super) fn schedule_requery(");
+    let report_render = braced_body(&render, "fn render(&mut self, window:");
+    let constructor = braced_body(&state, "pub(crate) fn new_with_scope(");
+
+    assert!(
+        generation.contains("self.generation_refresh.observe(since)")
+            && generation.contains("this.generation_refresh.timer_fired(timer_token)")
+            && !generation.contains("request_requery(cx)")
+            && !generation.contains("schedule_requery(cx)"),
+        "generation and timer paths may publish only a bounded wake edge"
+    );
+    assert!(
+        !query.contains("this.schedule_requery(cx);")
+            && schedule.contains("self.generation_refresh.query_started();")
+            && schedule.contains("if this.needs_query {")
+            && schedule.contains("cx.notify();\n                        return;"),
+        "in-flight completion must preserve pending catch-up without restarting hidden work"
+    );
+    assert!(
+        !constructor.contains("schedule_requery(cx)"),
+        "a hidden Report constructor must defer its initial query to active render"
+    );
+    let active = braced_body(report_render, "if window.is_window_active()");
+    assert!(
+        active.contains("self.generation_refresh.take_due()")
+            && active.contains("self.schedule_requery(cx);"),
+        "active Report render must consume one due edge and start pending work"
     );
 }
 

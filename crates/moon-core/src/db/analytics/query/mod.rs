@@ -49,7 +49,27 @@ impl Query {
     /// column would fail the entire SELECT). Placeholders ?1/?2 are from/to; cores, side,
     /// and emulator are integer literals from configuration, so injection is impossible.
     pub(super) fn where_sql(&self, cols: &std::collections::HashSet<String>, sid: &str) -> String {
-        self.where_with(WHERE_PERIOD, cols, sid)
+        self.where_with_alias(WHERE_PERIOD, cols, sid, None)
+    }
+
+    /// Build the standard filter with every physical report column qualified by one row alias.
+    ///
+    /// Args:
+    ///     cols: Columns available on the physical source.
+    ///     sid: Effective strategy-id expression, already qualified when needed.
+    ///     alias: SQL alias of the physical report table.
+    ///
+    /// Returns:
+    ///     Filter safe to append after valuation joins carrying overlapping column names.
+    fn where_sql_qualified(
+        &self,
+        cols: &std::collections::HashSet<String>,
+        sid: &str,
+        alias: &str,
+    ) -> String {
+        let period =
+            format!("{alias}.closedate >= ?1 AND {alias}.closedate < ?2 AND {alias}.closedate > 0");
+        self.where_with_alias(&period, cols, sid, Some(alias))
     }
 
     /// The same filters under a DIFFERENT row predicate.
@@ -69,10 +89,34 @@ impl Query {
         cols: &std::collections::HashSet<String>,
         sid: &str,
     ) -> String {
+        self.where_with_alias(period, cols, sid, None)
+    }
+
+    /// Assemble shared row filters with optional physical-column qualification.
+    ///
+    /// Args:
+    ///     period: Caller-supplied period predicate.
+    ///     cols: Columns available on the physical source.
+    ///     sid: Effective strategy-id expression.
+    ///     alias: Optional table alias used for every ordinary report column.
+    ///
+    /// Returns:
+    ///     Complete period, deletion, core, side, emulator, and strategy predicate.
+    fn where_with_alias(
+        &self,
+        period: &str,
+        cols: &std::collections::HashSet<String>,
+        sid: &str,
+        alias: Option<&str>,
+    ) -> String {
         let has = |n: &str| cols.contains(n);
+        let column = |name: &str| match alias {
+            Some(alias) => format!("{alias}.{name}"),
+            None => name.to_string(),
+        };
         let mut w = String::from(period);
         if has("deleted") {
-            w.push_str(" AND COALESCE(deleted,0) = 0");
+            w.push_str(&format!(" AND COALESCE({},0) = 0", column("deleted")));
         }
         if !self.cores.is_empty() {
             let list = self
@@ -81,20 +125,24 @@ impl Query {
                 .map(|c| (*c as i64).to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            w.push_str(&format!(" AND core_uid IN ({list})"));
+            w.push_str(&format!(" AND {} IN ({list})", column("core_uid")));
         }
         if has("isshort") {
             match self.side {
                 SideFilter::All => {}
-                SideFilter::Long => w.push_str(" AND COALESCE(isshort,0) = 0"),
-                SideFilter::Short => w.push_str(" AND COALESCE(isshort,0) = 1"),
+                SideFilter::Long => {
+                    w.push_str(&format!(" AND COALESCE({},0) = 0", column("isshort")))
+                }
+                SideFilter::Short => {
+                    w.push_str(&format!(" AND COALESCE({},0) = 1", column("isshort")))
+                }
             }
         }
         if has("emulator") {
             match self.emulator {
                 None => {}
-                Some(false) => w.push_str(" AND COALESCE(emulator,0) = 0"),
-                Some(true) => w.push_str(" AND COALESCE(emulator,0) = 1"),
+                Some(false) => w.push_str(&format!(" AND COALESCE({},0) = 0", column("emulator"))),
+                Some(true) => w.push_str(&format!(" AND COALESCE({},0) = 1", column("emulator"))),
             }
         }
         // Scope of the SELECTED strategies: rows matching any of the (strategy × its core)
@@ -106,7 +154,11 @@ impl Query {
                     .iter()
                     .map(|(want, core)| match core {
                         Some(c) => {
-                            format!("(COALESCE({sid},0) = {want} AND core_uid = {})", *c as i64)
+                            format!(
+                                "(COALESCE({sid},0) = {want} AND {} = {})",
+                                column("core_uid"),
+                                *c as i64
+                            )
                         }
                         None => format!("COALESCE({sid},0) = {want}"),
                     })
@@ -140,6 +192,17 @@ const UNIFIED_COLS: &[&str] = &[
     "basecurrency",
 ];
 
+/// Money projection resolved by quote coverage before one analytical scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::db) enum ProjectionMode {
+    /// Preserve native report money for comparable scopes and lens-neutral subgroup scans.
+    Native,
+    /// Replace profit, spend, quote identity, and active PnL with historical USDT values.
+    Usdt,
+    /// Use per-trade return on spent capital without historical FX.
+    Percent,
+}
+
 /// Read safe raw-money totals for one Analytics query scope.
 ///
 /// This query intentionally ignores the active profit lens: split totals always
@@ -151,44 +214,120 @@ const UNIFIED_COLS: &[&str] = &[
 ///     q: Fully resolved Analytics query with concrete period bounds.
 ///
 /// Returns:
-///     Known quote buckets plus unknown and complete row counts.
+///     Known quote buckets, unknown and complete row counts, and optional complete USDT coverage.
+///
+/// Errors:
+///     Returns a classified report read failure when source discovery or either aggregate pass
+///     cannot complete.
 pub(in crate::db) fn quote_breakdown_on(
     conn: &Connection,
     q: &Query,
 ) -> ReadResult<QuoteBreakdown> {
-    const CTX: &str = "analytics: quote breakdown";
+    let sources = super::super::read_sources_res(conn)?;
+    let valuation_attached = super::super::valuation::is_attached(conn);
+    match quote_breakdown_attempt(conn, q, &sources, valuation_attached) {
+        Ok(totals) => Ok(totals),
+        Err(error)
+            if valuation_attached
+                && super::super::valuation::prove_derived_corruption(conn, &error) =>
+        {
+            let _ = conn.execute(
+                &format!("DETACH DATABASE {}", super::super::valuation::SCHEMA),
+                [],
+            );
+            quote_breakdown_attempt(conn, q, &sources, false).map_err(|retry_error| {
+                super::super::read_fail::read_fail(
+                    "analytics: quote breakdown native retry",
+                    retry_error,
+                )
+            })
+        }
+        // The guard above already performed schema attribution for this exact error.
+        Err(error) => Err(super::super::read_fail::read_fail(
+            "analytics: quote breakdown",
+            error,
+        )),
+    }
+}
+
+/// Execute one complete Analytics quote-total pass with fresh accumulators.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     q: Fully resolved Analytics query.
+///     sources: Physical report sources discovered from `main`.
+///     include_valuation: Whether to join the attached derived valuation cache.
+///
+/// Returns:
+///     Exact quote totals, optionally carrying complete USDT coverage.
+///
+/// Errors:
+///     Returns the underlying SQLite error from any physical-source aggregate.
+fn quote_breakdown_attempt(
+    conn: &Connection,
+    q: &Query,
+    sources: &[super::super::ReadSource],
+    include_valuation: bool,
+) -> rusqlite::Result<QuoteBreakdown> {
     let has_names = strategies_attached(conn);
     let mut groups = Vec::new();
-    for src in super::super::read_sources_res(conn)? {
+    let mut coverage = super::super::valuation::CoverageAggregate::default();
+    for src in sources {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
             continue;
         }
         let sid = effective_sid_expr("r", &src.cols, has_names);
         let where_sql = q.where_sql(&src.cols, &sid);
+        let coverage_where_sql = q.where_sql_qualified(&src.cols, &sid, "r");
         let (quote, group_by) = super::super::quote::trusted_quote_group(
             "r.basecurrency",
             src.cols.contains("basecurrency"),
         );
+        let valuation = include_valuation.then(|| {
+            let source = if src.legacy {
+                super::super::valuation::TradeSource::Legacy
+            } else {
+                super::super::valuation::TradeSource::Typed
+            };
+            super::super::valuation::coverage_sql("r", &src.cols, source)
+        });
+        let joins = valuation
+            .as_ref()
+            .map(|parts| parts.joins.as_str())
+            .unwrap_or("");
+        let coverage_columns = valuation
+            .as_ref()
+            .map(|parts| format!(", {}", parts.aggregate_columns()))
+            .unwrap_or_default();
+        let active_where = if valuation.is_some() {
+            &coverage_where_sql
+        } else {
+            &where_sql
+        };
         let sql = format!(
-            "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0.0), COUNT(*) \
-             FROM {} r WHERE {where_sql}{group_by}",
-            src.table
+            "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0.0), COUNT(*){coverage_columns} \
+             FROM {} r{joins} WHERE {active_where}{group_by}",
+            src.table,
         );
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| super::super::read_fail::read_fail(CTX, e))?;
-        let rows = stmt
-            .query_map(rusqlite::params![q.from, q.to], |row| {
-                let ordinal =
-                    super::super::quote::report_ordinal_from_value(&row.get::<_, Value>(0)?);
-                Ok((ordinal, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?))
-            })
-            .map_err(|e| super::super::read_fail::read_fail(CTX, e))?;
-        for row in rows {
-            groups.push(row.map_err(|e| super::super::read_fail::read_fail(CTX, e))?);
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params![q.from, q.to])?;
+        while let Some(row) = rows.next()? {
+            let raw = row.get::<_, Value>(0)?;
+            let ordinal = super::super::quote::report_ordinal_from_value(&raw);
+            let profit = row.get::<_, f64>(1)?;
+            let orders = row.get::<_, i64>(2)?;
+            groups.push((ordinal, profit, orders));
+            if valuation.is_some() {
+                coverage.add_row(row, 3)?;
+            }
         }
     }
-    Ok(QuoteBreakdown::from_groups(groups))
+    let totals = QuoteBreakdown::from_groups(groups);
+    Ok(if include_valuation {
+        totals.with_valuation(coverage.finish())
+    } else {
+        totals
+    })
 }
 
 /// A row's strategy id, with LIQUIDATION rows attributed to the strategy named in them.
@@ -286,6 +425,28 @@ pub(in crate::db) fn effective_sid_expr(
 /// Returns:
 ///     Unified filtered source SQL, `None` when no source is ready, or a classified failure.
 pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Option<String>> {
+    let mode = if q.metric == ProfitMetric::Percent {
+        ProjectionMode::Percent
+    } else {
+        ProjectionMode::Native
+    };
+    unified_from_mode(conn, q, mode)
+}
+
+/// Build the unified source under one previously resolved money projection.
+///
+/// Args:
+///     conn: Existing report reader or pinned snapshot.
+///     q: Period and row filters.
+///     mode: Native, historical USDT, or percent projection established by preflight.
+///
+/// Returns:
+///     Unified filtered source SQL, no ready source, or a classified read failure.
+pub(in crate::db) fn unified_from_mode(
+    conn: &Connection,
+    q: &Query,
+    mode: ProjectionMode,
+) -> ReadResult<Option<String>> {
     let cols: Vec<&str> = UNIFIED_COLS
         .iter()
         .copied()
@@ -311,7 +472,7 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
     let has_names = strategies_attached(conn);
     // Percent mode measures each trade as profit ÷ spent, so a trade without a positive
     // `spentbtc` has no percent at all.
-    let pct = q.metric == ProfitMetric::Percent;
+    let pct = mode == ProjectionMode::Percent;
     let mut branches = Vec::new();
     for src in super::super::read_sources_res(conn)? {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
@@ -327,6 +488,18 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
         // OUTER row explicitly. Unqualified `core_uid` inside it would bind to `strat.strategies`
         // and silently match every strategy of that name on any core.
         let sid = effective_sid_expr("r", &src.cols, has_names);
+        let source = if src.legacy {
+            super::super::valuation::TradeSource::Legacy
+        } else {
+            super::super::valuation::TradeSource::Typed
+        };
+        let valuation = if mode == ProjectionMode::Usdt {
+            Some(super::super::valuation::coverage_sql(
+                "r", &src.cols, source,
+            ))
+        } else {
+            None
+        };
         let proj = cols
             .iter()
             .map(|c| {
@@ -334,6 +507,24 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
                     // The attributed value is published UNDER THE ORIGINAL NAME, so every
                     // query outside this source keeps reading `o.strategyid` and gets it.
                     format!("{sid} AS \"strategyid\"")
+                } else if mode == ProjectionMode::Usdt && *c == "profitbtc" {
+                    format!(
+                        "{} AS \"profitbtc\"",
+                        valuation
+                            .as_ref()
+                            .expect("USDT projection has coverage SQL")
+                            .profit_usdt
+                    )
+                } else if mode == ProjectionMode::Usdt && *c == "spentbtc" {
+                    format!(
+                        "{} AS \"spentbtc\"",
+                        valuation
+                            .as_ref()
+                            .expect("USDT projection has coverage SQL")
+                            .spent_usdt
+                    )
+                } else if mode == ProjectionMode::Usdt && *c == "basecurrency" {
+                    "1 AS \"basecurrency\"".to_string()
                 } else if src.cols.contains(*c) {
                     format!("r.\"{c}\"")
                 } else {
@@ -349,17 +540,30 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
         // COUNT, SUM, wins, streaks and the top list all describe the SAME set of trades. Sign is
         // preserved (spent > 0), so win/loss, profit factor and best/worst stay correct on `pnl`.
         let pnl = if pct {
-            "r.\"profitbtc\" / r.\"spentbtc\" * 100.0 AS \"pnl\""
+            "r.\"profitbtc\" / r.\"spentbtc\" * 100.0 AS \"pnl\"".to_string()
+        } else if let Some(parts) = &valuation {
+            format!("{} AS \"pnl\"", parts.profit_usdt)
         } else {
-            "r.\"profitbtc\" AS \"pnl\""
+            "r.\"profitbtc\" AS \"pnl\"".to_string()
         };
-        let mut where_sql = q.where_sql(&src.cols, &sid);
+        let mut where_sql = if valuation.is_some() {
+            q.where_sql_qualified(&src.cols, &sid, "r")
+        } else {
+            q.where_sql(&src.cols, &sid)
+        };
         if pct {
             where_sql.push_str(" AND spentbtc > 0");
         }
+        if let Some(parts) = &valuation {
+            where_sql.push_str(&format!(" AND ({})", parts.valued));
+        }
+        let joins = valuation
+            .as_ref()
+            .map(|parts| parts.joins.as_str())
+            .unwrap_or("");
         branches.push(format!(
-            "SELECT {proj}, {pnl} FROM {} r WHERE {where_sql}",
-            src.table
+            "SELECT {proj}, {pnl} FROM {} r{joins} WHERE {where_sql}",
+            src.table,
         ));
     }
     if branches.is_empty() {

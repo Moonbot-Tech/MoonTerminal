@@ -197,32 +197,34 @@ fn tuner_avg_order_text(group: &GroupStat) -> String {
     }
 }
 
-/// Format a signed raw quote amount without its ticker.
+/// Format a signed raw quote amount at its currency's display precision.
 ///
 /// Args:
 ///     value: Signed quote amount.
 ///     currency: Currency controlling display precision.
 ///
 /// Returns:
-///     Compact signed amount.
+///     Signed amount with stable fiat decimals or compact crypto precision.
 fn signed_quote_amount(value: f64, currency: moon_core::db::QuoteCurrency) -> String {
     let sign = if value >= 0.0 { "+" } else { "-" };
     format!("{sign}{}", quote_amount(value.abs(), currency))
 }
 
-/// Format an unsigned quote amount with stablecoin or crypto precision.
+/// Format an unsigned quote amount with grouped thousands and currency-aware precision.
 ///
 /// Args:
 ///     value: Non-negative quote amount.
 ///     currency: Currency controlling display precision.
 ///
 /// Returns:
-///     Readable amount without a ticker.
+///     Readable amount without a ticker. Fiat and stable quotes retain exactly two decimals;
+///     crypto quotes retain up to eight meaningful decimals without width-padding zeros.
 fn quote_amount(value: f64, currency: moon_core::db::QuoteCurrency) -> String {
-    if currency.display_decimals() == 2 {
-        moon_core::util::fmt::usd_grouped(value)
+    let decimals = currency.display_decimals();
+    if decimals == 2 {
+        moon_core::util::fmt::group_decimal(&format!("{value:.2}"))
     } else {
-        moon_core::util::fmt::compact(value, currency.display_decimals())
+        moon_core::util::fmt::compact(value, decimals)
     }
 }
 

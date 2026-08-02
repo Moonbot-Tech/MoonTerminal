@@ -10,11 +10,9 @@
 
 use rusqlite::Connection;
 
-use super::analytics::{
-    coin_groups_on, strategies_for_coins_on, unified_from, GroupStat, HourStat, Query,
-};
+use super::analytics::{coin_groups_on, strategies_for_coins_on, GroupStat, HourStat, Query};
 use super::metrics::{improvement_margin, winrate, Tally};
-use super::read_fail::read_fail;
+use super::read_fail::read_fail_on;
 use super::{ReadFail, ReadResult};
 
 mod fields;
@@ -372,15 +370,8 @@ pub fn coin_tuner_data(
 fn tuner_source_on(conn: &Connection, q: &Query) -> ReadResult<(Query, String)> {
     let mut q = q.clone();
     q.floor_all_history();
-    if q.metric == crate::db::ProfitMetric::Quote
-        && matches!(
-            crate::db::analytics::quote_breakdown_on(conn, &q)?.scope(),
-            crate::db::QuoteScope::Mixed | crate::db::QuoteScope::Unknown
-        )
-    {
-        return Err(ReadFail::IncomparableQuote);
-    }
-    let Some(src) = unified_from(conn, &q)? else {
+    let projection = crate::db::analytics::projection_mode_on(conn, &q)?;
+    let Some(src) = crate::db::analytics::unified_from_mode(conn, &q, projection)? else {
         return Err(ReadFail::NotReady);
     };
     Ok((q, src))
@@ -441,15 +432,15 @@ fn scan_field_pairs(
         "SELECT o.\"{field}\", COALESCE(o.pnl,0)
          FROM {src} WHERE o.\"{field}\" IS NOT NULL"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(ctx, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, ctx, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
         })
-        .map_err(|e| read_fail(ctx, e))?;
+        .map_err(|e| read_fail_on(conn, ctx, e))?;
     let mut out: Vec<(f64, f64)> = Vec::new();
     for row in rows {
-        let pair = row.map_err(|e| read_fail(ctx, e))?;
+        let pair = row.map_err(|e| read_fail_on(conn, ctx, e))?;
         if pair.0.is_finite() {
             out.push(pair);
         }
@@ -488,7 +479,7 @@ fn visit_time_rows(
                 COALESCE(o.pnl, 0)
          FROM {src}"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(ctx, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, ctx, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((
@@ -497,9 +488,9 @@ fn visit_time_rows(
                 r.get::<_, f64>(2)?,
             ))
         })
-        .map_err(|e| read_fail(ctx, e))?;
+        .map_err(|e| read_fail_on(conn, ctx, e))?;
     for row in rows {
-        let (weekday, minute, profit) = row.map_err(|e| read_fail(ctx, e))?;
+        let (weekday, minute, profit) = row.map_err(|e| read_fail_on(conn, ctx, e))?;
         visit(weekday, minute, profit);
     }
     Ok(())
@@ -571,19 +562,19 @@ fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResu
          FROM {src} WHERE 1=1{wh}
          ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     // The ORDER BY above is what makes the shared tally's drawdown meaningful: it measures the
     // cumulative curve, so it only describes this variant if the trades arrive chronologically.
     let mut tally = Tally::default();
     let mut spent = 0.0f64;
     for row in rows {
         // profit/spent are the whole point of the variant KPI — never skip.
-        let (profit, sp) = row.map_err(|e| read_fail(CTX, e))?;
+        let (profit, sp) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
         tally.push(profit);
         spent += sp;
     }

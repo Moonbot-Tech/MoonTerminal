@@ -36,7 +36,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonAlert, MoonBackgroundPolicy, MoonCalendarEvent, MoonCalendarState, MoonDate,
-    MoonInputState, MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonInputState, MoonPalette, MoonVirtualListScrollHandle, MoonWindowFrame, Root, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -293,6 +294,8 @@ pub struct AnalyticsView {
     backend: Entity<Backend>,
     /// Report-writer generation observed only while this window exists.
     report_generation: Option<Arc<AtomicU64>>,
+    /// Historical-valuation generation observed beside report commits.
+    valuation_generation: Option<Arc<AtomicU64>>,
     /// Debounce/max-wait state for automatic report-driven refreshes.
     report_refresh: RefreshGate,
     /// Bounded automatic Busy retries for the active contention episode.
@@ -409,6 +412,8 @@ pub struct AnalyticsView {
     /// explicitly clears the cache to protect against allocator address reuse.
     /// `tuner::list::ensure_visible` owns it.
     strat_visible: Option<tuner::VisibleRows>,
+    /// Retained strategy-list scroll state reused by every virtual-list render.
+    strat_scroll: MoonVirtualListScrollHandle,
     /// Calendar tab: cells (PnL, trades, and wins) for the loaded range; Day mode uses hourly cells.
     pub(in crate::analytics) cal_days: ProfitLoadState<Vec<DayCell>>,
     cal_seq: u64,
@@ -491,10 +496,21 @@ impl AnalyticsView {
             .reports
             .as_ref()
             .map(|reports| reports.generation.clone());
+        let valuation_generation = backend
+            .read(cx)
+            .valuation
+            .as_ref()
+            .map(|valuation| valuation.generation.clone());
         let initial_report_generation = report_generation
             .as_ref()
             .map(|generation| generation.load(Ordering::Relaxed))
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .wrapping_add(
+                valuation_generation
+                    .as_ref()
+                    .map(|generation| generation.load(Ordering::Relaxed))
+                    .unwrap_or(0),
+            );
         let report_revision = backend.read(cx).report_revision.clone();
         cx.observe(&report_revision, |this, _revision, cx| {
             this.observe_report_generation(cx);
@@ -586,6 +602,7 @@ impl AnalyticsView {
         let mut this = Self {
             backend,
             report_generation,
+            valuation_generation,
             report_refresh: RefreshGate::new(initial_report_generation, std::time::Instant::now()),
             report_busy_retries: BusyRetryBudget::default(),
             tab: if probe { Tab::Strategies } else { session.tab },
@@ -628,6 +645,7 @@ impl AnalyticsView {
             strat_cols: saved_strat_cols,
             strat_core_w: None,
             strat_visible: None,
+            strat_scroll: MoonVirtualListScrollHandle::new(),
             cal_days: ProfitLoadState::default(),
             cal_seq: 0,
             cal_dirty: true,
@@ -669,15 +687,22 @@ impl AnalyticsView {
         this
     }
 
-    /// Return the latest report generation visible to this Analytics window.
+    /// Return the latest report-derived generation visible to this Analytics window.
     ///
     /// Returns:
-    ///     The writer generation, or zero when the report database is unavailable.
+    ///     Wrapping sum of report and valuation generations.
     fn current_report_generation(&self) -> u64 {
-        self.report_generation
+        let reports = self
+            .report_generation
             .as_ref()
             .map(|generation| generation.load(Ordering::Relaxed))
-            .unwrap_or(0)
+            .unwrap_or(0);
+        let valuation = self
+            .valuation_generation
+            .as_ref()
+            .map(|generation| generation.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        reports.wrapping_add(valuation)
     }
 
     /// Mark report-derived caches stale and schedule a load-shed automatic refresh.
@@ -1083,7 +1108,8 @@ impl AnalyticsView {
     /// Reload the compact Strategies base and optionally continue with its visible axis.
     ///
     /// Args:
-    ///     after_report: Whether to preserve report-style catch-up and retry semantics.
+    ///     after_report: Whether to preserve the visible snapshot while loading and on read
+    ///         failure, and to use report-style catch-up and retry semantics.
     ///     chain_visible_axis: Whether a successful base read should continue into the active axis.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to run and publish the shared background query.
@@ -1094,8 +1120,12 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
-        // Do not carry scalar groups across a scope whose quote identity has not been verified.
-        self.strategy_data = ProfitLoadState::default();
+        // Manual scope changes must not show values from the old scope. An automatic report
+        // refresh keeps the current snapshot until its replacement lands, so the strategy list,
+        // quote selector, and trade count do not blink through Loading after every live trade.
+        if !after_report {
+            self.strategy_data = ProfitLoadState::default();
+        }
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
         let report_req = self.current_report_generation();
@@ -1138,19 +1168,24 @@ impl AnalyticsView {
                     this.last_cores_at = Some(std::time::Instant::now());
                     this.core_refresh_needed = false;
                 }
-                this.strategy_data.apply(data);
+                // A same-scope automatic failure must leave the last ready snapshot visible while
+                // the retry gate settles. Manual scope changes have already retired the old data,
+                // so they publish the classified failure instead of showing stale values.
+                if !after_report || data_error.is_none() {
+                    this.strategy_data.apply(data);
+                    this.strat_core_w = None;
+                    // Both caches describe the group set that was just replaced. The memo's key
+                    // also carries that set's address, but an address is only unique among LIVE
+                    // allocations: a failed load drops the old buffer and a later successful one
+                    // can be handed the same address back, which unchanged filters would then
+                    // accept as "same data". Dropping the memo here is what closes that.
+                    this.strat_visible = None;
+                }
                 this.strategy_dirty = refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),
                     data_error.is_some() || undated_error.is_some() || cores_error.is_some(),
                 );
-                this.strat_core_w = None;
-                // Both caches describe the group set that was just replaced. The memo's key
-                // also carries that set's address, but an address is only unique among LIVE
-                // allocations: a failed load drops the old buffer and a later successful one
-                // can be handed the same address back, which unchanged filters would then
-                // accept as "same data". Dropping the memo here is what closes that.
-                this.strat_visible = None;
                 this.apply_undated_result(undated, after_report);
                 let probe_took_over = probe_selects_strategy() && this.probe_select_first(cx);
                 if refresh::strategy_base_allows_axis(
@@ -1606,6 +1641,27 @@ fn quote_split_note(
                 .child(t!("analytics.quote_unknown_orders", n = totals.unknown_orders).to_string()),
         );
     }
+    let coverage_note = totals.valuation.and_then(|coverage| {
+        (coverage.eligible_orders > 0).then(|| {
+            let mut text = t!(
+                "analytics.quote_valuation_progress",
+                ready = coverage.valued_orders,
+                total = coverage.eligible_orders
+            )
+            .to_string();
+            if coverage.unavailable_orders > 0 {
+                text.push_str(" · ");
+                text.push_str(
+                    &t!(
+                        "analytics.quote_valuation_unavailable",
+                        n = coverage.unavailable_orders
+                    )
+                    .to_string(),
+                );
+            }
+            text
+        })
+    });
     v_flex()
         .size_full()
         .items_center()
@@ -1623,9 +1679,22 @@ fn quote_split_note(
                 .max_w(design::font_w_px(cx, 700.0))
                 .text_center()
                 .text_color(moon(p.text_soft))
-                .child(t!("analytics.quote_split_detail").to_string()),
+                .child(
+                    if totals.unknown_orders > 0 {
+                        t!("analytics.quote_unknown_detail")
+                    } else {
+                        t!("analytics.quote_split_detail")
+                    }
+                    .to_string(),
+                ),
         )
         .child(chips)
+        .children(coverage_note.map(|note| {
+            div()
+                .text_color(moon(p.orange))
+                .child(note)
+                .into_any_element()
+        }))
         .child(
             div()
                 .text_color(moon(p.text_muted))

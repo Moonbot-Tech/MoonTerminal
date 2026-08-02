@@ -34,6 +34,14 @@ fn strat_row_h(cx: &App) -> f32 {
 
 impl AnalyticsView {
     /// The list card: header (title + modes + counter), filter bar, its own scroll.
+    ///
+    /// Args:
+    ///     p: Runtime palette used by the card and row renderer.
+    ///     window: Analytics window used by retained controls and row actions.
+    ///     cx: View context used to read state and build the virtual row factory.
+    ///
+    /// Returns:
+    ///     The complete strategy-list card with retained vertical scroll state.
     pub(in crate::analytics::tuner) fn strat_list_card(
         &mut self,
         p: MoonPalette,
@@ -108,6 +116,7 @@ impl AnalyticsView {
                                     .unwrap_or_else(|| div().into_any_element())
                             },
                         )
+                        .track_scroll(&self.strat_scroll)
                         .surface(false)
                         .border(false)
                         .radius(0.0)

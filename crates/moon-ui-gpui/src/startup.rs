@@ -20,6 +20,91 @@ use crate::persistence::{chart_persist, dock_persist};
 use crate::window::detached;
 use crate::{Backend, UiSessionState, diag, firetest};
 
+/// Minimum spacing between background report-data UI revision publications.
+const BACKGROUND_REVISION_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Side effects selected for one report/valuation coordination tick.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ReportRevisionDecision {
+    /// Whether report-data observers must receive a revision notification.
+    notify: bool,
+    /// Whether any committed report change must wake the valuation worker.
+    wake_valuation: bool,
+}
+
+/// Coalesce background report data without delaying live report commits or valuation work.
+struct ReportRevisionGate {
+    /// Whether a catch-up or valuation change still needs a UI revision publication.
+    background_pending: bool,
+    /// Time of the latest revision publication, including report-driven publications.
+    last_published_at: Instant,
+}
+
+impl ReportRevisionGate {
+    /// Create a clean gate aligned with application startup.
+    ///
+    /// Args:
+    ///     now: Initial publication baseline.
+    ///
+    /// Returns:
+    ///     A gate with no pending background revision.
+    fn new(now: Instant) -> Self {
+        Self {
+            background_pending: false,
+            last_published_at: now,
+        }
+    }
+
+    /// Select the report-revision side effects for one coordination tick.
+    ///
+    /// An immediate report commit publishes at once and covers every background generation visible
+    /// in that notification. Catch-up report pages and valuation work remain pending until the
+    /// one-minute boundary, while every report commit still wakes valuation processing at once.
+    ///
+    /// Args:
+    ///     immediate_report_committed: Whether live report data committed this tick.
+    ///     background_report_committed: Whether historical report data committed this tick.
+    ///     valuation_committed: Whether the valuation worker published a committed edge this tick.
+    ///     now: Current coordination time.
+    ///
+    /// Returns:
+    ///     The notification and valuation-wake side effects for this tick.
+    fn observe(
+        &mut self,
+        immediate_report_committed: bool,
+        background_report_committed: bool,
+        valuation_committed: bool,
+        now: Instant,
+    ) -> ReportRevisionDecision {
+        let report_committed = immediate_report_committed || background_report_committed;
+        self.background_pending |= background_report_committed || valuation_committed;
+        if immediate_report_committed {
+            self.background_pending = false;
+            self.last_published_at = now;
+            return ReportRevisionDecision {
+                notify: true,
+                wake_valuation: report_committed,
+            };
+        }
+
+        if self.background_pending
+            && now.saturating_duration_since(self.last_published_at) >= BACKGROUND_REVISION_INTERVAL
+        {
+            self.background_pending = false;
+            self.last_published_at = now;
+            return ReportRevisionDecision {
+                notify: true,
+                wake_valuation: report_committed,
+            };
+        }
+
+        ReportRevisionDecision {
+            notify: false,
+            wake_valuation: report_committed,
+        }
+    }
+}
+
 /// Consume one coalesced post-commit edge and notify report-data observers.
 ///
 /// Args:
@@ -255,10 +340,21 @@ pub(crate) fn run() -> anyhow::Result<()> {
 
         // Start the report writer. The session receives its `tx` for typed `Event::Report`
         // replication, while Backend retains `generation` for report-derived views. The
-        // one-bit signal is only a causal edge after commit; generation remains the source of
-        // truth, and an already-set bit safely coalesces a catch-up burst.
+        // The two one-bit signals distinguish immediate live data from coalesced catch-up data.
+        // Generation remains the source of truth, and already-set bits safely coalesce bursts.
         let reports = report_write_permit.and_then(moon_core::db::spawn_writer);
-        let report_dirty = reports.as_ref().map(|reports| reports.commit_dirty.clone());
+        let report_immediate_dirty = reports
+            .as_ref()
+            .map(|reports| reports.immediate_commit_dirty.clone());
+        let report_background_dirty = reports
+            .as_ref()
+            .map(|reports| reports.background_commit_dirty.clone());
+        let valuation = reports
+            .as_ref()
+            .and_then(|reports| moon_core::db::valuation::spawn_worker(reports.tx.clone()));
+        let valuation_dirty = valuation
+            .as_ref()
+            .map(|valuation| valuation.commit_dirty.clone());
         let report_revision = cx.new(|_| crate::ReportRevision);
         // Check the complete replica once because individual reads only detect
         // damage on pages reached by their query.
@@ -274,6 +370,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             ),
             epoch,
             reports,
+            valuation,
             report_revision: report_revision.clone(),
             metrics: Metrics::new(),
             snap: MetricsSnapshot::default(),
@@ -581,20 +678,43 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let coord_backend = backend.clone();
         let coord_cfg = cfg.clone();
         let coord_layout = layout.clone();
-        let coord_report_dirty = report_dirty;
+        let coord_report_immediate_dirty = report_immediate_dirty;
+        let coord_report_background_dirty = report_background_dirty;
+        let coord_valuation_dirty = valuation_dirty;
         let coord_report_revision = report_revision;
         cx.spawn(async move |cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
+            let mut report_revision_gate = ReportRevisionGate::new(Instant::now());
             let mut last_report = Instant::now();
             // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
             let mut last_assets_rev_sum: u64 = 0;
             loop {
                 executor.timer(Duration::from_millis(100)).await;
                 cx.update(|cx| {
-                    consume_report_commit(coord_report_dirty.as_deref(), || {
-                        coord_report_revision.update(cx, |_, cx| cx.notify());
+                    let mut immediate_report_committed = false;
+                    consume_report_commit(coord_report_immediate_dirty.as_deref(), || {
+                        immediate_report_committed = true;
                     });
+                    let mut background_report_committed = false;
+                    consume_report_commit(coord_report_background_dirty.as_deref(), || {
+                        background_report_committed = true;
+                    });
+                    let mut valuation_committed = false;
+                    consume_report_commit(coord_valuation_dirty.as_deref(), || {
+                        valuation_committed = true;
+                    });
+                    let revision = report_revision_gate.observe(
+                        immediate_report_committed,
+                        background_report_committed,
+                        valuation_committed,
+                        Instant::now(),
+                    );
                     let (show_reqs, open_debug_10) = coord_backend.update(cx, |b, cx| {
+                        if revision.wake_valuation {
+                            if let Some(valuation) = &b.valuation {
+                                valuation.wake();
+                            }
+                        }
                         b.maybe_diag_open_first_market(cx);
                         b.refresh_header_ticker_default(false);
                         b.sync_open_markets_if_due();
@@ -662,6 +782,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         let open_debug_10 = false;
                         (reqs, open_debug_10)
                     });
+                    if revision.notify {
+                        coord_report_revision.update(cx, |_, cx| cx.notify());
+                    }
 
                     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
                     if open_debug_10 {

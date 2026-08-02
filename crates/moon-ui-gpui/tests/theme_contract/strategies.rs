@@ -98,9 +98,10 @@ fn a_revealed_strategy_is_expanded_and_scrolled_into_view() {
     );
 }
 
-/// `startup.rs` must notify the dedicated report revision entity rather than the
-/// global Backend; restoring `mark_backend_dirty` repaints every shell for each
-/// report burst and makes Report/Analytics wake fan-out scale with window count.
+/// `startup.rs` must feed both report commit classes through the dedicated revision gate rather
+/// than the global Backend; restoring `mark_backend_dirty` repaints every shell for each report
+/// burst, while bypassing the gate makes historical catch-up rescan Report and Analytics every
+/// five to ten seconds.
 #[test]
 fn report_commits_use_a_dedicated_revision_channel() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -115,16 +116,21 @@ fn report_commits_use_a_dedicated_revision_channel() {
         "report-derived consumers must observe only the dedicated revision entity"
     );
     let commit_block = startup
-        .split("consume_report_commit(coord_report_dirty.as_deref()")
+        .split("consume_report_commit(coord_report_immediate_dirty.as_deref()")
         .nth(1)
-        .expect("startup must consume the committed-report edge");
+        .expect("startup must consume the immediate report edge");
     let commit_block = commit_block
         .split("b.maybe_diag_open_first_market")
         .next()
         .unwrap();
     assert!(
+        commit_block.contains("consume_report_commit(coord_report_background_dirty.as_deref()")
+            && commit_block.contains("let revision = report_revision_gate.observe("),
+        "both report commit classes must enter the shared revision gate"
+    );
+    assert!(
         !commit_block.contains("mark_backend_dirty"),
-        "a report commit must not notify the global Backend entity"
+        "report commits must not notify the global Backend entity"
     );
 }
 

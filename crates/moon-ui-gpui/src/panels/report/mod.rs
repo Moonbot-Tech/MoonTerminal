@@ -225,6 +225,8 @@ pub struct ReportPanel {
     pub(super) backend: Entity<Backend>,
     pub(super) group: String,
     generation: Option<Arc<AtomicU64>>,
+    /// Historical-valuation generation combined with report commits for refresh detection.
+    valuation_generation: Option<Arc<AtomicU64>>,
     last_gen: u64,
 
     conn: Option<Connection>,
@@ -296,8 +298,8 @@ pub struct ReportPanel {
     /// The writer advances its generation after writes; without coalescing, a large database could
     /// be rescanned at the same high event frequency.
     last_query_start: Option<std::time::Instant>,
-    /// Whether a trailing generation-refresh timer is already waiting out the throttle interval.
-    throttle_armed: bool,
+    /// Durable generation refresh state; only an active-window render consumes its due edge.
+    generation_refresh: query::GenerationRefreshGate,
     /// Time when periodic selector metadata was last published.
     last_metadata_at: Option<std::time::Instant>,
     /// Canonical non-strategy filter scope of the last successfully published strategy catalog.

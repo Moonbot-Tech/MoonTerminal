@@ -181,6 +181,15 @@ impl Render for ReportPanel {
     /// Returns:
     ///     The complete Report surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Automatic report work is allowed only in the focused OS window. The main Report tab may
+        // remain the front dock tab behind a separate Analytics window; starting its five-second
+        // query there would compete with Strategy Tuning while nobody can see the Report result.
+        if window.is_window_active() {
+            if self.generation_refresh.take_due() {
+                self.needs_query = true;
+            }
+            self.schedule_requery(cx);
+        }
         self.flush_strategy_select_sync(window, cx);
         let p = MoonPalette::active(cx);
         let border = rgb(p.border);
@@ -387,6 +396,46 @@ impl Render for ReportPanel {
                         t!("report.unknown_quote_orders", n = d.totals.unknown_orders).to_string(),
                     ));
                 }
+                if matches!(
+                    d.totals.scope(),
+                    db::QuoteScope::Mixed | db::QuoteScope::Unknown
+                ) {
+                    if let Some(usdt) = d.totals.unified_usdt() {
+                        totals = totals.child(
+                            div()
+                                .font_bold()
+                                .text_color(rgb(if usdt.profit >= 0.0 { p.green } else { p.red }))
+                                .child(
+                                    t!("report.valuation_total", amount = signed_usdt(usdt.profit))
+                                        .to_string(),
+                                ),
+                        );
+                    } else if let Some(coverage) = d.totals.valuation {
+                        if coverage.eligible_orders > 0 {
+                            totals = totals.child(
+                                div().text_color(rgb(p.orange)).child(
+                                    t!(
+                                        "report.valuation_progress",
+                                        ready = coverage.valued_orders,
+                                        total = coverage.eligible_orders
+                                    )
+                                    .to_string(),
+                                ),
+                            );
+                        }
+                        if coverage.unavailable_orders > 0 {
+                            totals = totals.child(
+                                div().text_color(rgb(p.orange)).child(
+                                    t!(
+                                        "report.valuation_unavailable",
+                                        n = coverage.unavailable_orders
+                                    )
+                                    .to_string(),
+                                ),
+                            );
+                        }
+                    }
+                }
                 totals
                     .child(
                         div()
@@ -492,4 +541,17 @@ fn report_quote_total_text(total: db::QuoteTotal) -> String {
         moon_core::util::fmt::compact(total.profit.abs(), total.currency.display_decimals());
     let sign = if total.profit >= 0.0 { "+" } else { "-" };
     format!("{sign}{amount} {}", total.currency.ticker())
+}
+
+/// Format a signed historical USDT value for the Report footer.
+///
+/// Args:
+///     value: Complete historical USDT profit.
+///
+/// Returns:
+///     Signed compact amount without a currency suffix.
+fn signed_usdt(value: f64) -> String {
+    let amount = moon_core::util::fmt::compact(value.abs(), 2);
+    let sign = if value >= 0.0 { "+" } else { "-" };
+    format!("{sign}{amount}")
 }

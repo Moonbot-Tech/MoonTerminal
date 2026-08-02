@@ -3,7 +3,7 @@
 use super::super::test_support::{
     build_replica, corrupt_leaf_page, remove_db, spread_rows, temp_db,
 };
-use super::super::SideFilter;
+use super::super::{QuoteCurrency, SideFilter};
 use super::*;
 
 /// Build the minimal real-trade query used by analytics regression tests.
@@ -206,6 +206,214 @@ fn mixed_quote_summary_splits_raw_money_but_keeps_percent() {
 
     drop(conn);
     remove_db(&path);
+}
+
+/// `analytics/query/mod.rs:unified_from_mode` must project a fully covered mixed scope through
+/// historical USDT values; using native `profitbtc` would publish 15.0 instead of the independently
+/// calculated 14.995 USDT, while exposing coverage before every row is ready would publish partial
+/// history as a complete scalar.
+#[test]
+fn mixed_quote_summary_becomes_usdt_only_after_complete_coverage() {
+    let _health = super::super::valuation::test_health_guard();
+    let path = temp_db("mixed-valued-summary");
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    let conn = build_replica(
+        &path,
+        &[
+            (day - 60, 7.0, "PREVIOUSUSDT"),
+            (day + 60, 10.0, "BTCUSDT"),
+            (day + 120, 5.0, "ETHUSDC"),
+        ],
+    );
+    conn.execute(
+        "UPDATE orders_rep SET basecurrency = 8 WHERE closedate = ?1",
+        [day + 120],
+    )
+    .expect("mark second row as USDC");
+    conn.execute_batch(
+        "ATTACH ':memory:' AS valuation;
+         CREATE TABLE valuation.rates (
+             algorithm_version INTEGER, quote_ordinal INTEGER, minute_utc INTEGER,
+             status INTEGER, rate_usdt REAL, provider TEXT, symbol TEXT,
+             orientation INTEGER, candle_open_ms INTEGER, candle_close_ms INTEGER,
+             fetched_at_ms INTEGER,
+             PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
+         );
+         CREATE TABLE valuation.trade_values (
+             source_kind INTEGER, core_uid INTEGER, row_id INTEGER,
+             algorithm_version INTEGER, closedate INTEGER, quote_ordinal INTEGER,
+             profit_quote REAL, spent_quote REAL, rate_minute_utc INTEGER,
+             rate_usdt REAL, profit_usdt REAL, spent_usdt REAL, valued_at_ms INTEGER,
+             PRIMARY KEY (source_kind, core_uid, row_id)
+         );",
+    )
+    .expect("attach empty valuation cache");
+
+    let partial =
+        summary_on(&conn, &q(day, day + 86_400), false, false).expect("partial coverage reads");
+    let partial_totals = partial.split().expect("partial mixed scope remains split");
+    assert_eq!(
+        partial_totals
+            .valuation
+            .expect("coverage is attached")
+            .valued_orders,
+        1,
+        "the USDT row is identity-valued before USDC is prepared"
+    );
+
+    conn.execute(
+        "INSERT INTO valuation.trade_values (
+             source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
+             profit_quote, spent_quote, rate_minute_utc, rate_usdt,
+             profit_usdt, spent_usdt, valued_at_ms
+         )
+         SELECT 0, core_uid, newrecid, ?1, closedate, basecurrency,
+                profitbtc, spentbtc, (closedate/60)*60, 0.999,
+                profitbtc*0.999, spentbtc*0.999, 1780001000000
+         FROM orders_rep WHERE basecurrency=8",
+        [super::super::valuation::ALGORITHM_VERSION],
+    )
+    .expect("prepare exact USDC valuation");
+
+    let current_query = q(day, day + 86_400);
+    let decision = scope_decision_on(&conn, &current_query).expect("resolve current projection");
+    let projection = decision.projection().expect("complete mixed projection");
+    let source = unified_from_mode(&conn, &current_query, projection)
+        .expect("build current USDT source")
+        .expect("report source exists");
+    let previous_rows = conn
+        .query_row(
+            "SELECT COUNT(*) FROM orders_rep
+             WHERE closedate>=?1 AND closedate<?2 AND basecurrency=1 AND emulator=0",
+            rusqlite::params![day - 86_400, day],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count raw previous rows");
+    assert_eq!(previous_rows, 1);
+    let direct_previous = scan_period(&conn, &source, day - 86_400, day, 3_600)
+        .expect("scan compatible previous period")
+        .0;
+    assert_eq!(
+        (direct_previous.profit, direct_previous.n),
+        (7.0, 1),
+        "USDT projection must retain identity-valued previous rows: {source}"
+    );
+
+    let complete =
+        summary_on(&conn, &q(day, day + 86_400), false, true).expect("complete coverage reads");
+    match complete {
+        ProfitScope::Comparable {
+            unit: ProfitUnit::Quote(currency),
+            data,
+        } => {
+            assert_eq!(currency, QuoteCurrency::usdt());
+            assert!(
+                (data.cur.profit - 14.995).abs() < 1e-9,
+                "profit={}",
+                data.cur.profit
+            );
+            assert_eq!(data.cur.n, 2);
+            let previous = data
+                .prev
+                .expect("single-USDT comparison remains expressible in current USDT");
+            assert_eq!((previous.profit, previous.n), (7.0, 1));
+        }
+        other => panic!("complete mixed scope must be USDT-comparable, got {other:?}"),
+    }
+
+    conn.execute(
+        "UPDATE orders_rep SET profitbtc=6.0 WHERE basecurrency=8",
+        [],
+    )
+    .expect("replace report inputs under the same row identity");
+    let stale =
+        summary_on(&conn, &q(day, day + 86_400), false, false).expect("same-key update reads");
+    assert!(
+        stale.split().is_some(),
+        "a prepared value with stale profit inputs must stop being comparable immediately"
+    );
+
+    drop(conn);
+    remove_db(&path);
+}
+
+/// Reusing per-source Analytics accumulators after attached valuation corruption would duplicate
+/// the already-scanned typed row; the native retry must rebuild the whole quote breakdown from an
+/// empty state and must not classify the healthy report main database as damaged.
+#[test]
+fn quote_breakdown_restarts_whole_scan_after_valuation_corruption() {
+    let _health = super::super::valuation::test_health_guard();
+    let _integrity = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
+    let dir = std::env::temp_dir().join(format!(
+        "moonterminal-analytics-valuation-retry-{}-{}",
+        std::process::id(),
+        crate::util::now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&dir).expect("create Analytics retry fixture");
+    let valuation_path = dir.join("valuation.sqlite");
+    let store = super::super::valuation::open_store(&valuation_path)
+        .expect("open Analytics valuation fixture");
+    let transaction = store
+        .unchecked_transaction()
+        .expect("begin Analytics valuation seed");
+    for row_id in 0..2_000i64 {
+        transaction
+            .execute(
+                "INSERT INTO trade_values (
+                     source_kind, core_uid, row_id, algorithm_version, closedate,
+                     quote_ordinal, profit_quote, spent_quote, rate_minute_utc,
+                     rate_usdt, profit_usdt, spent_usdt, valued_at_ms
+                 ) VALUES (1, 1, ?1, 1, 1700000000, 8, 20.0, 100.0, 1699999980,
+                           1.0, 20.0, 100.0, 1700000100000)",
+                [row_id],
+            )
+            .expect("seed Analytics prepared value");
+    }
+    transaction
+        .commit()
+        .expect("commit Analytics prepared values");
+
+    let conn = rusqlite::Connection::open_in_memory().expect("open Analytics report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, profitbtc REAL
+         );
+         INSERT INTO orders_rep VALUES (1, 1, 1700000000, 10.0);
+         CREATE TABLE closed_sell_reports (
+             core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, spentbtc REAL
+         );
+         INSERT INTO closed_sell_reports VALUES (1, 1, 1700000000, 8, 20.0, 100.0);",
+    )
+    .expect("seed Analytics physical sources");
+    let attach = format!(
+        "ATTACH DATABASE '{}' AS valuation",
+        valuation_path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''")
+    );
+    conn.execute(&attach, [])
+        .expect("attach Analytics valuation");
+    assert!(super::super::valuation::is_attached(&conn));
+    corrupt_leaf_page(store, &valuation_path, "sqlite_autoindex_trade_values_1");
+
+    let totals = quote_breakdown_on(&conn, &q(1_699_999_000, 1_700_001_000))
+        .expect("fall back to complete native Analytics totals");
+    assert_eq!(totals.orders, 2);
+    assert_eq!(totals.unknown_orders, 1);
+    assert_eq!(totals.totals.len(), 1);
+    assert_eq!(totals.totals[0].currency.ticker(), "USDC");
+    assert_eq!(totals.totals[0].orders, 1);
+    assert_eq!(totals.totals[0].profit, 20.0);
+    assert!(totals.valuation.is_none());
+    assert!(!super::super::integrity::writes_blocked());
+
+    drop(conn);
+    super::super::integrity::reset_test_state();
+    std::fs::remove_dir_all(dir).expect("remove Analytics retry fixture");
 }
 
 /// The lightweight Strategies payload enforces the same boundary before building its groups.

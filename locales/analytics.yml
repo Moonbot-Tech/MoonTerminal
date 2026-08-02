@@ -1043,9 +1043,21 @@ analytics.quote_split_title:
   en: "PnL in different currencies cannot be added"
   es: "El PnL en monedas distintas no se puede sumar"
 analytics.quote_split_detail:
-  ru: "Выберите одно ядро с общей quote-валютой или переключитесь на Profit %. Историческая конвертация и текущие курсы здесь намеренно не применяются."
-  en: "Select one core with a common quote currency or switch to Profit %. Historical conversion and current rates are intentionally not applied here."
-  es: "Seleccione un núcleo con una moneda de cotización común o cambie a Profit %. Aquí no se aplican conversión histórica ni tasas actuales."
+  ru: "Исторический пересчёт по минутным spot-курсам ещё не завершён для всех сделок. Пока доступны исходные итоги по валютам; можно также переключиться на Profit %."
+  en: "Historical valuation from minute spot rates is not complete for every trade yet. Native currency totals remain available; you can also switch to Profit %."
+  es: "La valoración histórica con tasas spot por minuto aún no está completa para todas las operaciones. Los totales por moneda nativa siguen disponibles; también puede cambiar a Profit %."
+analytics.quote_unknown_detail:
+  ru: "У части сделок не сохранена валюта пары, поэтому их денежный PnL нельзя безопасно пересчитать. Доступны исходные известные валюты и Profit %."
+  en: "Some trades have no persisted quote currency, so their monetary PnL cannot be valued safely. Known native totals and Profit % remain available."
+  es: "Algunas operaciones no tienen una moneda de cotización guardada, por lo que su PnL monetario no puede valorarse con seguridad. Siguen disponibles los totales nativos conocidos y Profit %."
+analytics.quote_valuation_progress:
+  ru: "пересчитано в USDT: %{ready}/%{total}"
+  en: "valued in USDT: %{ready}/%{total}"
+  es: "valoradas en USDT: %{ready}/%{total}"
+analytics.quote_valuation_unavailable:
+  ru: "нет исторического курса: %{n}"
+  en: "historical rate unavailable: %{n}"
+  es: "tasa histórica no disponible: %{n}"
 analytics.quote_split_orders:
   ru: "сделок в выбранной области: %{n}"
   en: "trades in the selected scope: %{n}"

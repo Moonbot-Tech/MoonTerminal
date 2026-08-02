@@ -55,6 +55,14 @@ pub(crate) fn trusted_quote_group(column: &str, available: bool) -> (String, Str
 pub struct QuoteCurrency(u8);
 
 impl QuoteCurrency {
+    /// Exact USDT quote identity used for fully converted mixed scopes.
+    ///
+    /// Returns:
+    ///     Persisted USDT currency identity.
+    pub const fn usdt() -> Self {
+        Self(1)
+    }
+
     /// Decode a raw SQLite report value into a known quote currency.
     ///
     /// Args:
@@ -135,6 +143,28 @@ pub struct QuoteTotal {
     pub orders: i64,
 }
 
+/// Complete unified USDT aggregate available only after every eligible row is valued.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UsdtTotal {
+    /// Historical USDT profit over the complete known-currency scope.
+    pub profit: f64,
+    /// Historical USDT spend when every source row supplied a numeric spend.
+    pub spent: Option<f64>,
+}
+
+/// Historical valuation progress for one exact report filter.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ValuationCoverage {
+    /// Rows with a known persisted quote currency.
+    pub eligible_orders: i64,
+    /// Eligible rows whose current inputs have a matching prepared valuation.
+    pub valued_orders: i64,
+    /// Eligible rows whose canonical direct/inverse routes are permanently absent.
+    pub unavailable_orders: i64,
+    /// Complete USDT aggregate; never contains a partial sum.
+    pub usdt: Option<UsdtTotal>,
+}
+
 /// Safe raw-money totals split by quote currency.
 ///
 /// Unknown rows retain only their count. Their amounts are deliberately not
@@ -147,6 +177,8 @@ pub struct QuoteBreakdown {
     pub unknown_orders: i64,
     /// Complete row count, including unknown-currency rows.
     pub orders: i64,
+    /// Optional historical USDT coverage from the attached valuation cache.
+    pub valuation: Option<ValuationCoverage>,
 }
 
 impl QuoteBreakdown {
@@ -180,6 +212,28 @@ impl QuoteBreakdown {
             })
             .collect();
         out
+    }
+
+    /// Attach historical valuation coverage computed over the exact same read snapshot.
+    ///
+    /// Args:
+    ///     coverage: Eligible, valued, unavailable, and complete-only USDT aggregate.
+    ///
+    /// Returns:
+    ///     This native breakdown carrying the supplied coverage.
+    pub fn with_valuation(mut self, coverage: ValuationCoverage) -> Self {
+        self.valuation = Some(coverage);
+        self
+    }
+
+    /// Return a complete unified USDT total only when no row has unknown quote identity.
+    ///
+    /// Returns:
+    ///     Complete historical USDT money, or `None` for partial/unknown scopes.
+    pub fn unified_usdt(&self) -> Option<UsdtTotal> {
+        (self.unknown_orders == 0)
+            .then_some(self.valuation.and_then(|coverage| coverage.usdt))
+            .flatten()
     }
 
     /// Classify whether raw-money values are comparable as one scalar.

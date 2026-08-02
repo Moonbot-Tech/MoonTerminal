@@ -71,7 +71,7 @@ fn tuner_materialization_cannot_cross_the_quote_preflight_snapshot() {
                 rusqlite::params![query.from, query.to],
                 |row| row.get::<_, i64>(0),
             )
-            .map_err(|error| read_fail("test: tuner snapshot materialization", error))
+            .map_err(|error| read_fail_on(snapshot, "test: tuner snapshot materialization", error))
     })
     .expect("materialize pinned tuner rows");
 

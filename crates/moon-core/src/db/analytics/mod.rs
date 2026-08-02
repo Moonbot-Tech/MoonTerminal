@@ -17,7 +17,7 @@
 use rusqlite::Connection;
 
 use super::metrics::{profit_factor, winrate};
-use super::read_fail::read_fail;
+use super::read_fail::read_fail_on;
 use super::{
     ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, QuoteScope, ReadFail, ReadResult,
 };
@@ -34,10 +34,12 @@ pub use query::Query;
 
 pub(in crate::db) use groups::{coin_groups_on, strategies_for_coins_on};
 use groups::{groups, kind_stats, top_trades};
+use query::ProjectionMode;
 use query::WHERE_UNDATED;
 pub(in crate::db) use query::{
     attach_strategies, effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from,
 };
+pub(in crate::db) use query::{unified_from_mode, ProjectionMode as ResolvedProjectionMode};
 
 /// Period totals: counters and metrics computed from the trade sequence ordered by
 /// `closedate`, including profit factor, maximum drawdown, streaks, and duration.
@@ -228,7 +230,7 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
             src.table,
             q.where_with(WHERE_UNDATED, &src.cols, &sid)
         );
-        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
         let rows = stmt
             .query_map([], |row| {
                 let ordinal = super::quote::report_ordinal_from_value(
@@ -236,9 +238,9 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
                 );
                 Ok((ordinal, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?))
             })
-            .map_err(|e| read_fail(CTX, e))?;
+            .map_err(|e| read_fail_on(conn, CTX, e))?;
         for row in rows {
-            groups.push(row.map_err(|e| read_fail(CTX, e))?);
+            groups.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
         }
     }
     Ok(UndatedCloses {
@@ -342,9 +344,17 @@ pub fn calendar_data(
 /// Preflight result that prevents unsafe raw-money analytics from carrying scalar data.
 enum ScopeDecision {
     /// Scalar values share this explicit unit.
-    Comparable(ProfitUnit),
+    Comparable {
+        /// Exact unit published to UI consumers.
+        unit: ProfitUnit,
+        /// Row-level money projection used by every SQL consumer.
+        projection: ProjectionMode,
+    },
     /// The query has no rows and therefore no quote to infer.
-    Empty,
+    Empty {
+        /// Projection retained for empty-source query construction.
+        projection: ProjectionMode,
+    },
     /// Raw money is mixed or unknown and only split/count totals are safe.
     Split(QuoteBreakdown),
 }
@@ -356,17 +366,94 @@ enum ScopeDecision {
 ///     q: Query with concrete period bounds.
 ///
 /// Returns:
-///     Percent comparability, one exact quote, a legitimate empty scope, or split totals.
+///     Percent comparability, one exact quote, fully valued mixed USDT, a legitimate empty scope,
+///     or split totals.
+///
+/// Errors:
+///     Returns a classified report read failure when quote or valuation preflight cannot complete.
 fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> {
     if q.metric == ProfitMetric::Percent {
-        return Ok(ScopeDecision::Comparable(ProfitUnit::Percent));
+        return Ok(ScopeDecision::Comparable {
+            unit: ProfitUnit::Percent,
+            projection: ProjectionMode::Percent,
+        });
     }
     let totals = quote_breakdown_on(conn, q)?;
     Ok(match totals.scope() {
-        QuoteScope::Empty => ScopeDecision::Empty,
-        QuoteScope::Single(currency) => ScopeDecision::Comparable(ProfitUnit::Quote(currency)),
+        QuoteScope::Empty => ScopeDecision::Empty {
+            projection: ProjectionMode::Native,
+        },
+        QuoteScope::Single(currency) => ScopeDecision::Comparable {
+            unit: ProfitUnit::Quote(currency),
+            projection: ProjectionMode::Native,
+        },
+        QuoteScope::Mixed if totals.unified_usdt().is_some() => ScopeDecision::Comparable {
+            unit: ProfitUnit::Quote(crate::db::QuoteCurrency::usdt()),
+            projection: ProjectionMode::Usdt,
+        },
         QuoteScope::Mixed | QuoteScope::Unknown => ScopeDecision::Split(totals),
     })
+}
+
+/// Resolve one query to a safe row-level projection for non-`ProfitScope` consumers.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     q: Concrete Analytics query.
+///
+/// Returns:
+///     Native, historical USDT, or percent projection.
+///
+/// Errors:
+///     Returns `IncomparableQuote` for partial or unknown raw-money scopes, or propagates a
+///     classified report read failure from quote and valuation preflight.
+pub(in crate::db) fn projection_mode_on(
+    conn: &Connection,
+    q: &Query,
+) -> ReadResult<ResolvedProjectionMode> {
+    scope_decision_on(conn, q)?
+        .projection()
+        .ok_or(ReadFail::IncomparableQuote)
+}
+
+/// Resolve lens-neutral group money without hiding safe native single-quote subgroups.
+///
+/// A completely valued mixed scope uses USDT. Partial or unknown overall scopes remain native so
+/// individual homogeneous groups can still publish exact raw quote columns in Percent mode.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     q: Concrete query whose metric is ignored.
+///
+/// Returns:
+///     Historical USDT for fully valued mixed known scopes, native money otherwise.
+///
+/// Errors:
+///     Returns a classified report read failure when quote or valuation preflight cannot complete.
+fn raw_money_projection_on(conn: &Connection, q: &Query) -> ReadResult<ProjectionMode> {
+    let mut raw = q.clone();
+    raw.metric = ProfitMetric::Quote;
+    let totals = quote_breakdown_on(conn, &raw)?;
+    Ok(
+        if matches!(totals.scope(), QuoteScope::Mixed) && totals.unified_usdt().is_some() {
+            ProjectionMode::Usdt
+        } else {
+            ProjectionMode::Native
+        },
+    )
+}
+
+impl ScopeDecision {
+    /// Projection established by this comparable or empty preflight.
+    ///
+    /// Returns:
+    ///     Native, historical USDT, or percent mode; split scopes return no projection.
+    fn projection(&self) -> Option<ProjectionMode> {
+        match self {
+            Self::Comparable { projection, .. } | Self::Empty { projection } => Some(*projection),
+            Self::Split(_) => None,
+        }
+    }
 }
 
 /// Attach a preflight decision to a completed scalar payload.
@@ -379,8 +466,8 @@ fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> 
 ///     A typed Analytics payload; split decisions retain no scalar data.
 fn scoped<T>(decision: ScopeDecision, data: T) -> ProfitScope<T> {
     match decision {
-        ScopeDecision::Comparable(unit) => ProfitScope::Comparable { unit, data },
-        ScopeDecision::Empty => ProfitScope::Empty(data),
+        ScopeDecision::Comparable { unit, .. } => ProfitScope::Comparable { unit, data },
+        ScopeDecision::Empty { .. } => ProfitScope::Empty(data),
         ScopeDecision::Split(totals) => ProfitScope::Split(totals),
     }
 }
@@ -407,7 +494,10 @@ fn strategy_base_on(
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
         decision => decision,
     };
-    let Some(src) = unified_from(conn, &q)? else {
+    let projection = decision
+        .projection()
+        .expect("split decisions return before source construction");
+    let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Err(ReadFail::NotReady);
     };
     let raw_src = groups::raw_source(conn, &q)?;
@@ -481,7 +571,10 @@ pub(super) fn summary_on(
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
         decision => decision,
     };
-    let Some(src) = unified_from(conn, &q)? else {
+    let projection = decision
+        .projection()
+        .expect("split decisions return before source construction");
+    let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Err(ReadFail::NotReady);
     };
     let len = (q.to - q.from).max(1);
@@ -574,14 +667,27 @@ fn previous_stats(
         let mut previous = q.clone();
         previous.from = q.from - len;
         previous.to = q.from;
-        let same_quote = matches!(
-            (current, scope_decision_on(conn, &previous).ok()?),
-            (
-                ScopeDecision::Comparable(ProfitUnit::Quote(current_quote)),
-                ScopeDecision::Comparable(ProfitUnit::Quote(previous_quote))
-            ) if *current_quote == previous_quote
-        );
-        if !same_quote {
+        let compatible = match current {
+            ScopeDecision::Comparable {
+                unit: ProfitUnit::Quote(current_quote),
+                projection: ProjectionMode::Native,
+            } => matches!(
+                scope_decision_on(conn, &previous).ok()?,
+                ScopeDecision::Comparable {
+                    unit: ProfitUnit::Quote(previous_quote),
+                    projection: ProjectionMode::Native,
+                } if *current_quote == previous_quote
+            ),
+            ScopeDecision::Comparable {
+                unit: ProfitUnit::Quote(current_quote),
+                projection: ProjectionMode::Usdt,
+            } if *current_quote == crate::db::QuoteCurrency::usdt() => {
+                let totals = quote_breakdown_on(conn, &previous).ok()?;
+                totals.unknown_orders == 0 && totals.unified_usdt().is_some()
+            }
+            _ => false,
+        };
+        if !compatible {
             return None;
         }
     }
@@ -634,7 +740,7 @@ fn min_closedate(conn: &Connection) -> ReadResult<i64> {
         );
         let got: Option<i64> = conn
             .query_row(&sql, [], |r| r.get::<_, Option<i64>>(0))
-            .map_err(|e| read_fail(CTX, e))?;
+            .map_err(|e| read_fail_on(conn, CTX, e))?;
         if let Some(v) = got {
             min = min.min(v);
         }
@@ -662,7 +768,7 @@ fn scan_period(
         "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.pnl, 0)
          FROM {src} ORDER BY o.closedate"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![from, to], |r| {
             Ok((
@@ -671,7 +777,7 @@ fn scan_period(
                 r.get::<_, f64>(2)?,
             ))
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
 
     let (mut wsum, mut lsum) = (0.0f64, 0.0f64);
     let (mut cum, mut peak) = (0.0f64, 0.0f64);
@@ -680,7 +786,7 @@ fn scan_period(
     for row in rows {
         // Every column here moves a number, so no row is skippable: dropping
         // one would silently understate n / profit / pf / max_dd.
-        let (close, buy, profit) = row.map_err(|e| read_fail(CTX, e))?;
+        let (close, buy, profit) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
         st.n += 1;
         st.profit += profit;
         dur_ms_total += (close - buy).max(0);
@@ -767,7 +873,7 @@ fn core_series(
                 COALESCE(o.pnl,0)
          FROM {src}"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             // core_uid as Option: `unified_from` projects NULL for a source that has no
@@ -780,12 +886,12 @@ fn core_series(
                 r.get::<_, f64>(3)?,
             ))
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut map: std::collections::HashMap<u64, (String, Vec<f64>, Vec<i64>)> =
         std::collections::HashMap::new();
     for row in rows {
         // core_uid / closedate / profitbtc all move numbers here.
-        let (uid, name, close, profit) = row.map_err(|e| read_fail(CTX, e))?;
+        let (uid, name, close, profit) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
         let idx = (((close - t0) / bucket).max(0) as usize).min(nb - 1);
         let e = map
             .entry(uid)

@@ -334,7 +334,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
             .trigger_width_scaled(METRIC_TRIGGER_W)
-            .menu_width_scaled(120.0)
+            .fit_menu_width(120.0, 240.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }

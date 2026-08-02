@@ -32,6 +32,19 @@ const REPORTS_DB_FILE_NAMES: [&str; 3] =
 /// Name of the directory containing preserved damaged report replicas.
 const DAMAGED_REPORTS_DIR_NAME: &str = "damaged-reports";
 
+/// File names that form the complete historical-valuation SQLite set.
+const VALUATION_DB_FILE_NAMES: [&str; 3] = [
+    "valuation.sqlite",
+    "valuation.sqlite-wal",
+    "valuation.sqlite-shm",
+];
+
+/// Directory containing quarantined derived valuation caches.
+const DAMAGED_VALUATION_DIR_NAME: &str = "damaged-valuation";
+
+/// Stable staging directory used to resume an interrupted valuation retirement.
+const VALUATION_RECOVERY_PENDING_NAME: &str = "pending";
+
 /// Coordination database used only for the process-lifetime reports lease.
 const REPORTS_LEASE_DB_NAME: &str = "reports-recovery-lock.sqlite";
 
@@ -298,6 +311,59 @@ pub fn report_recovery_finalized_path(snapshot: &Path) -> PathBuf {
 /// SQLite database for the local kline cache (see `market::kline_cache`), separate from reports.
 pub fn klines_db_path() -> PathBuf {
     db_dir().join("klines.sqlite")
+}
+
+/// SQLite database for historical quote-to-USDT rates and prepared report valuations.
+///
+/// The file is deliberately separate from `reports.sqlite`: reports are a recoverable replica,
+/// while historical rates are expensive immutable public data that should survive a replica reset.
+///
+/// Returns:
+///     Canonical historical-valuation database path.
+pub fn valuation_db_path() -> PathBuf {
+    db_dir().join(VALUATION_DB_FILE_NAMES[0])
+}
+
+/// Main, WAL, and SHM paths that together form the historical-valuation cache.
+///
+/// Returns:
+///     Canonical valuation paths in main, WAL, and SHM order.
+pub fn valuation_db_files() -> [PathBuf; 3] {
+    let dir = db_dir();
+    VALUATION_DB_FILE_NAMES.map(|name| dir.join(name))
+}
+
+/// Root directory containing quarantined historical-valuation cache families.
+///
+/// Returns:
+///     Canonical damaged-valuation directory.
+pub fn damaged_valuation_dir() -> PathBuf {
+    db_dir().join(DAMAGED_VALUATION_DIR_NAME)
+}
+
+/// Stable staging directory for crash-consistent valuation-cache retirement.
+///
+/// Returns:
+///     Pending directory resumed before a replacement cache may be created.
+pub fn valuation_recovery_pending_dir() -> PathBuf {
+    damaged_valuation_dir().join(VALUATION_RECOVERY_PENDING_NAME)
+}
+
+/// Build one completed valuation-cache quarantine path below a caller-supplied root.
+///
+/// Args:
+///     root: Canonical damage root or isolated fixture equivalent.
+///     timestamp_ms: Wall-clock retirement time in Unix milliseconds.
+///     process_id: Process identity disambiguating equal timestamps.
+///
+/// Returns:
+///     Unique completed-retirement directory below `root`.
+pub(crate) fn valuation_recovery_archive_in(
+    root: &Path,
+    timestamp_ms: i64,
+    process_id: u32,
+) -> PathBuf {
+    root.join(format!("valuation-{timestamp_ms}-{process_id}"))
 }
 
 /// SQLite database for strategies and their versions (`strat_db`). DELIBERATELY separate from

@@ -123,6 +123,34 @@ pub(crate) fn read_fail(ctx: &'static str, error: rusqlite::Error) -> ReadFail {
     }
 }
 
+/// Classify a report-reader failure while isolating proven attached-cache corruption.
+///
+/// A `SQLITE_CORRUPT` code does not name the damaged schema. This boundary suppresses the reports
+/// latch only after independent checks prove `main` healthy and `valuation` damaged. Any
+/// inconclusive result delegates to [`read_fail`] and remains fail-closed.
+///
+/// Args:
+///     conn: Report reader that executed the failing statement.
+///     ctx: Static operation label for diagnostics and throttling.
+///     error: SQLite failure to classify.
+///
+/// Returns:
+///     Ordinary report failure, or a non-corruption failure while the derived cache rebuilds.
+pub(crate) fn read_fail_on(
+    conn: &rusqlite::Connection,
+    ctx: &'static str,
+    error: rusqlite::Error,
+) -> ReadFail {
+    if super::valuation::prove_derived_corruption(conn, &error) {
+        log_throttled(ctx, FailKind::Other, &error);
+        return ReadFail::Failed {
+            kind: FailKind::Other,
+            msg: Arc::from(format!("historical valuation cache is rebuilding: {error}")),
+        };
+    }
+    read_fail(ctx, error)
+}
+
 /// Map a SQLite error onto the granularity the UI branches on.
 ///
 /// NOTE: corruption reaching us as an extended I/O code (`SQLITE_IOERR_*`)

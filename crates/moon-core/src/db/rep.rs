@@ -69,6 +69,14 @@ pub enum DbMsg {
         core_uid: u64,
         done: ReportSyncComplete,
     },
+    /// Acknowledge valuation outbox rows after their derived values committed.
+    ///
+    /// This internal message returns through the sole report writer so the valuation worker never
+    /// opens a second write connection to `reports.sqlite`.
+    ValuationAck {
+        /// Highest contiguous outbox sequence safely reflected in `valuation.sqlite`.
+        through_seq: i64,
+    },
 }
 
 /// Value exposed to the feed thread as `ReportTx`: a writer channel and start cursors.
