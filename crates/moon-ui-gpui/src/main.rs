@@ -40,6 +40,7 @@ mod shell;
 mod startup;
 mod strategies;
 mod ui_session;
+mod valuation_health;
 mod window;
 
 pub(crate) use startup::install_moon_theme_for_config;

@@ -3,6 +3,58 @@
 use super::*;
 
 impl ReportPanel {
+    /// Footer chip stating that historical valuation is retrying or has stopped making progress.
+    ///
+    /// Read from the worker's published health rather than from the valued-row counts beside it: a
+    /// count cannot distinguish a slow backfill from a worker retrying one unreachable provider
+    /// forever, which is the whole question this chip answers.
+    ///
+    /// # Arguments
+    ///
+    /// * `p` - Active MoonUI palette.
+    /// * `cx` - Panel context supplying the current text scale.
+    ///
+    /// # Returns
+    ///
+    /// A chip while the worker reports trouble, or `None` while it is healthy.
+    fn valuation_health_chip(&self, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
+        let now_ms = moon_core::util::now_unix_ms_i64();
+        if let Some(facts) = valuation_health::stall_facts(&self.valuation_status, now_ms) {
+            // The chip states the cause in words; the machine codes ride in the tooltip, where a
+            // user can quote them into a bug report without them leaking into a translated line.
+            let tip = t!(
+                "report.valuation_stalled_tip",
+                stage = facts.stage,
+                kind = facts.kind,
+                codes = facts.codes,
+                minutes = facts.minutes,
+                detail = facts.detail
+            )
+            .to_string();
+            return Some(
+                div()
+                    .id("report-valuation-stalled")
+                    .text_size(design::t_body(cx))
+                    .font_bold()
+                    .text_color(rgb(p.red))
+                    .child(t!("report.valuation_stalled").to_string())
+                    .tooltip(move |_window, cx| {
+                        cx.new(|_| MoonTooltipView::new(tip.clone())).into()
+                    })
+                    .into_any_element(),
+            );
+        }
+        // A short failing run is how an ordinary rate-limit backoff looks, so it is stated quietly
+        // rather than in the alarm colour the stall gets.
+        self.valuation_status.is_retrying().then(|| {
+            div()
+                .text_size(design::t_body(cx))
+                .text_color(rgb(p.text_soft))
+                .child(t!("report.valuation_retrying").to_string())
+                .into_any_element()
+        })
+    }
+
     /// Render the report table from currently renderable data.
     ///
     /// `vis` indexes [`Self::cols`]. Empty rows keep the header and show the
@@ -448,6 +500,12 @@ impl Render for ReportPanel {
                             );
                         }
                     }
+                }
+                // Deliberately outside every quote-scope and coverage branch. A stuck worker is a
+                // property of the worker, not of the rows on screen: gating it on the data shape
+                // would hide it behind a routine single-currency filter, which is most of the time.
+                if let Some(chip) = self.valuation_health_chip(p, cx) {
+                    totals = totals.child(chip);
                 }
                 totals
                     .child(

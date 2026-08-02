@@ -46,7 +46,8 @@ use moon_ui::{
     MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState,
     MoonDataTableWidthPolicy, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
     MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone,
-    MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
+    MoonTooltipView, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex,
+    rgba_from, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -54,7 +55,9 @@ use rust_i18n::t;
 
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
+use crate::valuation_health;
 use crate::{Backend, design};
+use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{
     self, ReadResult, ReportFilter, ReportStrategy, ReportStrategyKey, SideFilter,
 };
@@ -227,7 +230,12 @@ pub struct ReportPanel {
     generation: Option<Arc<AtomicU64>>,
     /// Historical-valuation generation combined with report commits for refresh detection.
     valuation_generation: Option<Arc<AtomicU64>>,
+    /// Latest published worker health, refreshed only when its revision moves. Polled separately
+    /// from the data generation because a stalled worker commits no rows at all.
+    valuation_status: ValuationStatus,
     last_gen: u64,
+    /// Health revision already folded into `valuation_status`.
+    last_status_rev: u64,
 
     conn: Option<Connection>,
     pub(super) cores: Vec<(u64, String)>,

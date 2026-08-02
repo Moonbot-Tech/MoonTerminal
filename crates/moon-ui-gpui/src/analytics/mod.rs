@@ -42,8 +42,10 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::design::{moon, moon_alpha};
+use crate::valuation_health;
 use crate::{Backend, design};
 use moon_core::db::analytics::{DayCell, Query, StrategyBase, Summary};
+use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{
     FailKind, ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, SideFilter,
 };
@@ -296,6 +298,11 @@ pub struct AnalyticsView {
     report_generation: Option<Arc<AtomicU64>>,
     /// Historical-valuation generation observed beside report commits.
     valuation_generation: Option<Arc<AtomicU64>>,
+    /// Latest published worker health, refreshed only when its revision moves. Polled separately
+    /// from the data generation because a stalled worker commits no rows at all.
+    valuation_status: ValuationStatus,
+    /// Health revision already folded into `valuation_status`.
+    last_valuation_status_rev: u64,
     /// Debounce/max-wait state for automatic report-driven refreshes.
     report_refresh: RefreshGate,
     /// Bounded automatic Busy retries for the active contention episode.
@@ -501,6 +508,12 @@ impl AnalyticsView {
             .valuation
             .as_ref()
             .map(|valuation| valuation.generation.clone());
+        let (last_valuation_status_rev, valuation_status) = backend
+            .read(cx)
+            .valuation
+            .as_ref()
+            .map(|valuation| valuation.seed_status())
+            .unwrap_or_default();
         let initial_report_generation = report_generation
             .as_ref()
             .map(|generation| generation.load(Ordering::Relaxed))
@@ -603,6 +616,8 @@ impl AnalyticsView {
             backend,
             report_generation,
             valuation_generation,
+            valuation_status,
+            last_valuation_status_rev,
             report_refresh: RefreshGate::new(initial_report_generation, std::time::Instant::now()),
             report_busy_retries: BusyRetryBudget::default(),
             tab: if probe { Tab::Strategies } else { session.tab },
@@ -705,11 +720,36 @@ impl AnalyticsView {
         reports.wrapping_add(valuation)
     }
 
+    /// Refresh published valuation health, without marking any report-derived result stale.
+    ///
+    /// Health is deliberately kept out of `current_report_generation`: a stall changes no rows, and
+    /// feeding it to the refresh gate would reload every Analytics surface on health-only
+    /// transitions from a provider that is failing anyway.
+    ///
+    /// Args:
+    ///     cx: Analytics window context notified only when the published health moved.
+    fn observe_valuation_health(&mut self, cx: &mut Context<Self>) {
+        let mut last = self.last_valuation_status_rev;
+        let refreshed = self
+            .backend
+            .read(cx)
+            .valuation
+            .as_ref()
+            .and_then(|valuation| valuation.status_if_changed(&mut last));
+        let Some(status) = refreshed else {
+            return;
+        };
+        self.last_valuation_status_rev = last;
+        self.valuation_status = status;
+        cx.notify();
+    }
+
     /// Mark report-derived caches stale and schedule a load-shed automatic refresh.
     ///
     /// Args:
     ///     cx: GPUI context used to schedule or start the refresh.
     fn observe_report_generation(&mut self, cx: &mut Context<Self>) {
+        self.observe_valuation_health(cx);
         let generation = self.current_report_generation();
         if !self
             .report_refresh
@@ -1472,7 +1512,7 @@ impl Render for AnalyticsView {
             | WindowBounds::Fullscreen(b) => f32::from(b.size.width),
         };
         let body = match split {
-            Some(totals) => quote_split_note(&totals, p, cx),
+            Some(totals) => quote_split_note(&totals, &self.valuation_status, p, cx),
             None => match self.tab {
                 Tab::Summary => self.summary_tab(p, cx),
                 Tab::Strategies => self.strategies_tab(p, window, cx),
@@ -1601,6 +1641,7 @@ impl Render for AnalyticsView {
 ///
 /// Args:
 ///     totals: Known quote buckets and unknown row count for the active scope.
+///     status: Published valuation worker health, explaining a coverage figure that stopped moving.
 ///     p: Active MoonUI palette.
 ///     cx: Analytics render context.
 ///
@@ -1608,6 +1649,7 @@ impl Render for AnalyticsView {
 ///     A centered, wrapping explanation with split totals and recovery guidance.
 fn quote_split_note(
     totals: &QuoteBreakdown,
+    status: &ValuationStatus,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -1655,6 +1697,21 @@ fn quote_split_note(
                     &t!(
                         "analytics.quote_valuation_unavailable",
                         n = coverage.unavailable_orders
+                    )
+                    .to_string(),
+                );
+            }
+            // Without this the ratio above simply stops moving, which reads as a slow backfill
+            // however long it has actually been stuck.
+            let stalled = valuation_health::stall_facts(status, moon_core::util::now_unix_ms_i64());
+            if let Some(facts) = stalled {
+                text.push_str(" · ");
+                text.push_str(
+                    &t!(
+                        "analytics.quote_valuation_stalled",
+                        stage = facts.stage,
+                        kind = facts.kind,
+                        minutes = facts.minutes
                     )
                     .to_string(),
                 );

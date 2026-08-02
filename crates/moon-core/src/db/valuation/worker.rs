@@ -2,17 +2,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::Duration;
 
 use rusqlite::Connection;
 
+use super::health::{
+    self, FailureKind, FaultCause, ValuationFault, ValuationStage, ValuationStatus,
+};
 use super::provider::{resolve_rate, resolve_rate_batch, FetchFailure};
 use super::{
     CachedRate, HttpSpotRateSource, OutboxAction, OutboxEvent, SpotRateSource, TradeInput,
     TradeSource,
 };
 use crate::db::{DbMsg, ReadFail, ReadResult, ReportTx};
+use crate::util::now_unix_ms_i64;
 
 /// Number of report rows reconciled before publishing progress and yielding to durable outbox work.
 const RECONCILE_BATCH: usize = 256;
@@ -53,6 +57,15 @@ pub struct ValuationHandle {
     pub generation: Arc<AtomicU64>,
     /// Coalescing UI wake edge set after prepared values or coverage state commit.
     pub commit_dirty: Arc<AtomicBool>,
+    /// Monotonic counter bumped only when published worker health changes shape.
+    ///
+    /// Separate from `generation` because a stalled worker commits no data: a surface polling the
+    /// data generation alone can never learn that nothing is coming.
+    pub status_revision: Arc<AtomicU64>,
+    /// Coalescing UI wake edge set beside every `status_revision` bump.
+    pub status_dirty: Arc<AtomicBool>,
+    /// Latest health snapshot published before the corresponding revision bump.
+    status: Arc<RwLock<ValuationStatus>>,
     thread: std::thread::Thread,
 }
 
@@ -60,6 +73,85 @@ impl ValuationHandle {
     /// Wake the worker after a committed report outbox change.
     pub fn wake(&self) {
         self.thread.unpark();
+    }
+
+    /// Take the first health snapshot together with the revision it belongs to.
+    ///
+    /// The two reads are ordered revision-then-snapshot, mirroring the worker's
+    /// snapshot-then-revision publish order. Reversed, a publication landing between them would
+    /// pair the OLD health with the NEW revision, and every later poll would see matching counters
+    /// and keep serving the stale value. That ordering is why callers seed through this method
+    /// instead of reading the two fields themselves.
+    ///
+    /// Returns:
+    ///     Revision to poll against, and the health published at or before it.
+    pub fn seed_status(&self) -> (u64, ValuationStatus) {
+        let revision = self.status_revision.load(Ordering::Relaxed);
+        (revision, self.read_status())
+    }
+
+    /// Take a fresh snapshot only when the published revision moved.
+    ///
+    /// Reading the snapshot takes a lock, so callers poll the counter — the same
+    /// poll-a-revision-counter contract every panel in this application follows — and pay for the
+    /// lock only on a real transition, never per frame.
+    ///
+    /// Args:
+    ///     last: Revision this caller has already applied; updated in place when it moves.
+    ///
+    /// Returns:
+    ///     New health, or `None` while nothing changed.
+    pub fn status_if_changed(&self, last: &mut u64) -> Option<ValuationStatus> {
+        let revision = self.status_revision.load(Ordering::Relaxed);
+        if revision == *last {
+            return None;
+        }
+        *last = revision;
+        Some(self.read_status())
+    }
+
+    /// Clone the published health.
+    ///
+    /// Returns:
+    ///     Current health, recovered from the lock even if another holder panicked.
+    fn read_status(&self) -> ValuationStatus {
+        match self.status.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
+/// Channel the worker publishes health through.
+struct StatusSink {
+    /// Latest published health.
+    status: Arc<RwLock<ValuationStatus>>,
+    /// Monotonic counter observed by UI polls.
+    revision: Arc<AtomicU64>,
+    /// Coalescing UI wake edge.
+    dirty: Arc<AtomicBool>,
+    /// Signature of the last publication, so unchanged turns publish nothing.
+    published: u64,
+}
+
+impl StatusSink {
+    /// Publish health when the facts the UI renders changed.
+    ///
+    /// Args:
+    ///     status: Current worker health.
+    ///     now_ms: Current wall-clock time in Unix milliseconds.
+    fn publish(&mut self, status: &ValuationStatus, now_ms: i64) {
+        let signature = status.signature(now_ms);
+        if signature == self.published {
+            return;
+        }
+        self.published = signature;
+        match self.status.write() {
+            Ok(mut guard) => *guard = status.clone(),
+            Err(poisoned) => *poisoned.into_inner() = status.clone(),
+        }
+        self.revision.fetch_add(1, Ordering::AcqRel);
+        self.dirty.store(true, Ordering::Release);
     }
 }
 
@@ -69,17 +161,57 @@ enum PrepareResult {
     Complete { changed: bool },
     /// The row belongs to the still-open current UTC minute.
     Deferred,
-    /// A transient provider failure requires a later retry without acknowledging outbox work.
-    Retry(String),
+    /// A classified provider, report-read, or cache failure requires a later retry.
+    Retry(FaultCause),
 }
 
-/// Transient prefetch failure carrying any cache progress committed before the failure.
+/// Classified prefetch failure carrying any cache progress committed before the failure.
 #[derive(Debug)]
 struct PrefetchError {
-    /// Failure description retained for retry logging.
-    message: String,
+    /// Classified failure retained for retry logging and publication.
+    fault: FaultCause,
     /// Whether an earlier operation in the same prefetch batch changed durable coverage.
     changed: bool,
+}
+
+/// Wait between polls while the report replica has not been created yet.
+const REPLICA_POLL: Duration = Duration::from_secs(5);
+
+/// What one stage turn accomplished.
+///
+/// Shared by all three work-stage attempts so an unavailable report replica has one outcome
+/// wherever a stage reads it: healthy startup state, but not progress by that stage. Treating it as
+/// progress would clear an unresolved failing run — a provider outage would be retracted by the
+/// replica going missing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StageTurn {
+    /// The stage did its work; `more` requests another worker-loop turn without parking.
+    Ran { more: bool },
+    /// Reconciliation reached the keyset tail of both physical sources.
+    Drained,
+    /// The report replica does not exist yet, which is a healthy startup state, not a failure.
+    AwaitingReplica,
+}
+
+impl StageTurn {
+    /// Whether this turn counts as the stage making progress.
+    ///
+    /// Returns:
+    ///     `false` only while the stage could not access the report replica.
+    const fn is_progress(self) -> bool {
+        !matches!(self, Self::AwaitingReplica)
+    }
+}
+
+/// Classify one report-replica read failure.
+///
+/// Args:
+///     error: Classified read failure from the report reader.
+///
+/// Returns:
+///     Stage-less cause carrying the diagnostic text.
+fn report_fault(error: ReadFail) -> FaultCause {
+    FaultCause::new(FailureKind::ReportRead, error.to_string())
 }
 
 /// Exclusive descending reconciliation cursor: `(closedate, core_uid, row_id)`.
@@ -193,8 +325,17 @@ fn spawn_worker_with_source(
     };
     let generation = Arc::new(AtomicU64::new(0));
     let commit_dirty = Arc::new(AtomicBool::new(false));
+    let status = Arc::new(RwLock::new(ValuationStatus::default()));
+    let status_revision = Arc::new(AtomicU64::new(0));
+    let status_dirty = Arc::new(AtomicBool::new(false));
     let thread_generation = generation.clone();
     let thread_dirty = commit_dirty.clone();
+    let sink = StatusSink {
+        status: status.clone(),
+        revision: status_revision.clone(),
+        dirty: status_dirty.clone(),
+        published: ValuationStatus::default().signature(0),
+    };
     let join = std::thread::Builder::new()
         .name("report-valuation".to_string())
         .spawn(move || {
@@ -203,6 +344,7 @@ fn spawn_worker_with_source(
                 source,
                 thread_generation,
                 thread_dirty,
+                sink,
                 initial_store,
             );
         });
@@ -219,6 +361,9 @@ fn spawn_worker_with_source(
     Some(ValuationHandle {
         generation,
         commit_dirty,
+        status_revision,
+        status_dirty,
+        status,
         thread,
     })
 }
@@ -230,106 +375,303 @@ fn spawn_worker_with_source(
 ///     source: Historical closed-candle boundary.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
+///     sink: Channel publishing worker health to the UI.
 ///     initial_store: Startup-validated cache, or `None` when background recovery must retry.
 fn run_worker(
     report_tx: ReportTx,
     source: Arc<dyn SpotRateSource>,
     generation: Arc<AtomicU64>,
     dirty: Arc<AtomicBool>,
+    mut sink: StatusSink,
     initial_store: Option<Connection>,
 ) {
     let mut store = initial_store;
     let mut deferred: BTreeMap<(i64, i64, i64), TradeInput> = BTreeMap::new();
     let mut reconciliation = Some(ReconcileState::new());
     let mut pending_ack = None;
+    let mut status = ValuationStatus::default();
     'worker: loop {
+        let now_ms = now_unix_ms_i64();
         if store.is_none() || !super::cache_is_healthy() {
             drop(store.take());
+            // Deliberately NOT gated by `ValuationStatus::wait_for` through `attempt`.
+            // `wake_for_recovery` unparks this thread when corruption is detected; refusing the
+            // recovery attempt would make that wake wait out a backoff of up to five minutes. The
+            // growing park below paces a cache that keeps failing to open.
             match super::open_canonical_store() {
                 Ok(recovered) => {
                     store = Some(recovered);
                     reset_after_recovery(&mut deferred, &mut reconciliation, &mut pending_ack);
+                    // Clear only cache-caused runs; provider and report-read failures remain valid
+                    // after the derived cache is replaced.
+                    status.record_recovery();
+                    sink.publish(&status, now_ms);
                     publish(&generation, &dirty);
                     log::info!("valuation: derived cache is healthy; full reconciliation resumed");
                 }
                 Err(error) => {
-                    log::warn!("valuation: cache recovery paused: {error}");
-                    std::thread::park_timeout(Duration::from_secs(30));
+                    let delay = note_failure(
+                        &mut status,
+                        &mut sink,
+                        FaultCause::new(FailureKind::CacheUnhealthy, error.to_string())
+                            .at(ValuationStage::CacheRecovery),
+                        now_ms,
+                    );
+                    std::thread::park_timeout(until_stall(&status, delay, now_unix_ms_i64()));
                     continue;
                 }
             }
         }
         let store_ref = store.as_ref().expect("valuation store recovered above");
         let mut retry_after = None;
-        if let Some(state) = &mut reconciliation {
-            match reconcile_step(
-                store_ref,
-                source.as_ref(),
-                &generation,
-                &dirty,
-                &mut deferred,
-                state,
-            ) {
-                Ok(true) => reconciliation = None,
-                Ok(false) => {}
-                Err(error) => {
-                    log::warn!("valuation: startup reconciliation paused: {error}");
-                    if !super::cache_is_healthy() {
-                        continue 'worker;
-                    }
-                    retry_after = Some(Duration::from_secs(30));
-                }
-            }
+        let reconciled = match &mut reconciliation {
+            Some(state) => attempt(
+                &mut status,
+                &mut sink,
+                ValuationStage::Reconcile,
+                now_ms,
+                &mut retry_after,
+                || {
+                    reconcile_step(
+                        store_ref,
+                        source.as_ref(),
+                        &generation,
+                        &dirty,
+                        &mut deferred,
+                        state,
+                    )
+                },
+            ),
+            None => Attempt::Resting,
+        };
+        match reconciled {
+            Attempt::CacheLost => continue 'worker,
+            Attempt::Done(StageTurn::Drained) => reconciliation = None,
+            _ => {}
         }
-        match consume_outbox(
-            store_ref,
-            source.as_ref(),
-            &report_tx,
-            &generation,
-            &dirty,
-            &mut deferred,
-            &mut pending_ack,
+        match attempt(
+            &mut status,
+            &mut sink,
+            ValuationStage::Outbox,
+            now_ms,
+            &mut retry_after,
+            || {
+                consume_outbox(
+                    store_ref,
+                    source.as_ref(),
+                    &report_tx,
+                    &generation,
+                    &dirty,
+                    &mut deferred,
+                    &mut pending_ack,
+                )
+            },
         ) {
-            Ok(more) if more && retry_after.is_none() => continue,
-            Ok(_) => {}
-            Err(error) => {
-                log::warn!("valuation: durable outbox paused: {error}");
-                if !super::cache_is_healthy() {
-                    continue 'worker;
-                }
-                retry_after = Some(Duration::from_secs(30));
-            }
+            Attempt::CacheLost => continue 'worker,
+            // Deliberately NOT conditioned on `retry_after`: every stage guards its own backoff, so
+            // draining a full outbox batch cannot re-run a stage that is resting. Gating this on
+            // another stage's wait would throttle live report changes to one 512-event batch per
+            // backoff, up to five minutes apart.
+            Attempt::Done(StageTurn::Ran { more: true }) => continue,
+            _ => {}
         }
         if current_minute_closed_any(&deferred) {
-            match process_deferred(
-                store_ref,
-                source.as_ref(),
-                &generation,
-                &dirty,
-                &mut deferred,
+            match attempt(
+                &mut status,
+                &mut sink,
+                ValuationStage::DeferredMinute,
+                now_ms,
+                &mut retry_after,
+                || {
+                    process_deferred(
+                        store_ref,
+                        source.as_ref(),
+                        &generation,
+                        &dirty,
+                        &mut deferred,
+                    )
+                },
             ) {
-                Ok(true) => continue,
-                Ok(false) => {}
-                Err(error) => {
-                    log::warn!("valuation: deferred minute paused: {error}");
-                    if !super::cache_is_healthy() {
-                        continue 'worker;
-                    }
-                    retry_after = Some(Duration::from_secs(30));
-                }
+                Attempt::CacheLost => continue 'worker,
+                Attempt::Done(StageTurn::Ran { more: true }) => continue,
+                _ => {}
             }
+        } else {
+            // Nothing is due for this stage. An outbox delete, core rescan or legacy purge can drop
+            // exactly the rows a failing run was retrying, and a run kept open for work that no
+            // longer exists would report a stall that nothing could ever clear.
+            record_progress(
+                &mut status,
+                &mut sink,
+                ValuationStage::DeferredMinute,
+                now_ms,
+            );
         }
+        let settled = now_unix_ms_i64();
+        sink.publish(&status, settled);
         let delay = retry_after.unwrap_or_else(|| {
-            if reconciliation.is_some() {
-                Duration::from_millis(25)
-            } else if pending_ack.is_some() {
+            if reconciliation.is_some() || pending_ack.is_some() {
                 Duration::from_millis(25)
             } else {
                 delay_to_next_minute()
             }
         });
-        std::thread::park_timeout(delay);
+        std::thread::park_timeout(until_stall(&status, delay, settled));
     }
+}
+
+/// What one gated stage attempt did.
+enum Attempt {
+    /// The stage is inside its backoff and was not run.
+    Resting,
+    /// The stage was attempted and reported its own outcome.
+    Done(StageTurn),
+    /// The stage failed; its run is recorded and its backoff selected.
+    Failed,
+    /// The failure proved the derived cache damaged, so recovery owns it and this stage does not.
+    CacheLost,
+}
+
+/// Run one stage under its own backoff, recording its health and selecting the next wait.
+///
+/// The three work stages share this scaffold so the backoff gate, unavailable-replica handling,
+/// progress/failure publication, cache-health check before fault recording, and selection of the
+/// shortest wait are written once. Stage-specific work and reactions to completed outcomes stay at
+/// the call sites.
+///
+/// Args:
+///     status: Worker health being tracked.
+///     sink: Channel publishing health to the UI.
+///     stage: Stage to attempt.
+///     now_ms: Current wall-clock time in Unix milliseconds.
+///     retry_after: Earliest wait selected so far this turn, narrowed in place.
+///     run: The stage's own work.
+///
+/// Returns:
+///     Whether the stage rested, completed with its own outcome, failed, or lost the cache.
+fn attempt(
+    status: &mut ValuationStatus,
+    sink: &mut StatusSink,
+    stage: ValuationStage,
+    now_ms: i64,
+    retry_after: &mut Option<Duration>,
+    run: impl FnOnce() -> Result<StageTurn, FaultCause>,
+) -> Attempt {
+    let wait = status.wait_for(stage, now_ms);
+    if !wait.is_zero() {
+        *retry_after = shorter(*retry_after, wait);
+        return Attempt::Resting;
+    }
+    match run() {
+        Ok(turn) => {
+            // A turn the stage could not act on is not progress: clearing an unresolved provider
+            // outage because the report replica went missing would retract a reported stall.
+            if turn.is_progress() {
+                record_progress(status, sink, stage, now_ms);
+            } else {
+                *retry_after = shorter(*retry_after, REPLICA_POLL);
+            }
+            Attempt::Done(turn)
+        }
+        Err(cause) => {
+            // Order matters: a read against the attached cache can PROVE the cache damaged, and
+            // that failure belongs to the recovery stage. Recording it here first would open a run
+            // whose kind names the wrong subsystem and which then outlives the repair as the
+            // oldest stall.
+            if !super::cache_is_healthy() {
+                return Attempt::CacheLost;
+            }
+            let delay = note_failure(status, sink, cause.at(stage), now_ms);
+            *retry_after = shorter(*retry_after, delay);
+            Attempt::Failed
+        }
+    }
+}
+
+/// Shorten a park so a run that is only waiting out the clock still publishes when it stalls.
+///
+/// A backoff can extend past the pending stall deadline, so without this the worker would sleep
+/// straight through the moment its own definition of "stalled" became true and the surfaces would
+/// keep saying "retrying" after that stopped being the honest word.
+///
+/// Args:
+///     status: Current worker health.
+///     delay: Park the loop selected on its own.
+///     now_ms: Current wall-clock time in Unix milliseconds.
+///
+/// Returns:
+///     The shorter of the requested park and the wait to the next stall deadline.
+fn until_stall(status: &ValuationStatus, delay: Duration, now_ms: i64) -> Duration {
+    match status.next_stall_ms(now_ms) {
+        Some(deadline) => delay.min(Duration::from_millis(
+            deadline.saturating_sub(now_ms).max(1) as u64,
+        )),
+        None => delay,
+    }
+}
+
+/// Keep the earliest of two outstanding waits so no eligible stage oversleeps.
+///
+/// Args:
+///     current: Wait already selected this turn, if any.
+///     candidate: Wait requested by another stage.
+///
+/// Returns:
+///     The shorter of the two.
+fn shorter(current: Option<Duration>, candidate: Duration) -> Option<Duration> {
+    Some(current.map_or(candidate, |current| current.min(candidate)))
+}
+
+/// Record that one stage completed a turn, publishing only if that cleared a failing run.
+///
+/// A turn that changed nothing still counts as progress: reconciliation can find that every row is
+/// already valued, and treating that quiet result as absent progress would report a healthy worker
+/// as stuck.
+///
+/// Args:
+///     status: Worker health being tracked.
+///     sink: Channel publishing health to the UI.
+///     stage: Stage that completed a turn or has no work due.
+///     now_ms: Current wall-clock time in Unix milliseconds.
+fn record_progress(
+    status: &mut ValuationStatus,
+    sink: &mut StatusSink,
+    stage: ValuationStage,
+    now_ms: i64,
+) {
+    if status.record_progress(stage) {
+        sink.publish(status, now_ms);
+    }
+}
+
+/// Record one stage failure, log it at a thinning cadence, and publish any transition.
+///
+/// Args:
+///     status: Worker health being tracked.
+///     sink: Channel publishing health to the UI.
+///     fault: Classified failure carrying its stage.
+///     now_ms: Current wall-clock time in Unix milliseconds.
+///
+/// Returns:
+///     Backoff before that stage may be attempted again.
+fn note_failure(
+    status: &mut ValuationStatus,
+    sink: &mut StatusSink,
+    fault: ValuationFault,
+    now_ms: i64,
+) -> Duration {
+    let stage = fault.stage;
+    let delay = status.record_failure(fault, now_ms);
+    let health = status.stage(stage);
+    if let Some(fault) = &health.fault {
+        health::log_fault(
+            fault,
+            health.consecutive_failures,
+            health.failing_for_ms(now_ms),
+        );
+    }
+    sink.publish(status, now_ms);
+    delay
 }
 
 /// Reconcile one persisted report-row keyset batch without blocking durable live changes.
@@ -357,7 +699,7 @@ fn run_worker(
 ///     state: Source and keyset cursor advanced only after a complete batch.
 ///
 /// Returns:
-///     Whether both physical report sources reached their keyset tails.
+///     Whether the sources drained, advanced, or are still waiting for the report replica.
 fn reconcile_step(
     store: &Connection,
     source: &dyn SpotRateSource,
@@ -365,13 +707,17 @@ fn reconcile_step(
     dirty: &AtomicBool,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     state: &mut ReconcileState,
-) -> Result<bool, String> {
+) -> Result<StageTurn, FaultCause> {
     let sources = [TradeSource::Typed, TradeSource::Legacy];
     while state.source_index < sources.len() {
         let trade_source = sources[state.source_index];
-        let conn = crate::db::open_reader().map_err(|error| error.to_string())?;
+        let conn = match crate::db::open_reader() {
+            Ok(conn) => conn,
+            Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
+            Err(error) => return Err(report_fault(error)),
+        };
         let inputs = reconciliation_batch(&conn, trade_source, state.after, RECONCILE_BATCH)
-            .map_err(|error| error.to_string())?;
+            .map_err(report_fault)?;
         if inputs.is_empty() {
             state.source_index += 1;
             state.after = None;
@@ -408,9 +754,9 @@ fn reconcile_step(
                 .last()
                 .map(|input| (input.closedate, input.core_uid, input.row_id));
         }
-        return Ok(false);
+        return Ok(StageTurn::Ran { more: true });
     }
-    Ok(true)
+    Ok(StageTurn::Drained)
 }
 
 /// Consume one contiguous report outbox prefix and acknowledge it only after valuation commits.
@@ -425,7 +771,7 @@ fn reconcile_step(
 ///     pending_ack: Highest sequence sent to the report writer but not yet observed deleted.
 ///
 /// Returns:
-///     Whether another full outbox batch may already be waiting.
+///     Whether another full outbox batch may already be waiting, or that the replica is absent.
 fn consume_outbox(
     store: &Connection,
     source: &dyn SpotRateSource,
@@ -434,23 +780,23 @@ fn consume_outbox(
     dirty: &AtomicBool,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
     pending_ack: &mut Option<i64>,
-) -> Result<bool, String> {
+) -> Result<StageTurn, FaultCause> {
     let conn = match crate::db::open_reader() {
         Ok(conn) => conn,
-        Err(ReadFail::NotReady) => return Ok(false),
-        Err(error) => return Err(error.to_string()),
+        Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
+        Err(error) => return Err(report_fault(error)),
     };
-    let batch = super::read_outbox(&conn, OUTBOX_BATCH).map_err(|error| error.to_string())?;
+    let batch = super::read_outbox(&conn, OUTBOX_BATCH).map_err(report_fault)?;
     let batch_was_full = batch.len() == OUTBOX_BATCH;
     let events = unacknowledged_events(&batch, pending_ack);
     if events.is_empty() {
-        return Ok(false);
+        return Ok(StageTurn::Ran { more: false });
     }
     let mut row_inputs = Vec::new();
     for event in events {
         if event.action == OutboxAction::Row {
             if let Some(input) = load_trade(&conn, event.source, event.core_uid, event.row_id)
-                .map_err(|error| error.to_string())?
+                .map_err(report_fault)?
             {
                 row_inputs.push(input);
             }
@@ -490,7 +836,9 @@ fn consume_outbox(
     if changed {
         publish(generation, dirty);
     }
-    Ok(batch_was_full)
+    Ok(StageTurn::Ran {
+        more: batch_was_full,
+    })
 }
 
 /// Apply one durable report event to the prepared valuation store.
@@ -522,7 +870,7 @@ fn process_event(
                     result => result,
                 },
                 Ok(None) => delete_trade(store, event.source, event.core_uid, event.row_id),
-                Err(error) => PrepareResult::Retry(error.to_string()),
+                Err(error) => PrepareResult::Retry(report_fault(error)),
             }
         }
         OutboxAction::Delete => {
@@ -567,11 +915,11 @@ fn prepare_trade(
         Ok(None) => {
             match resolve_rate(source, input.quote_ordinal, currency.ticker(), minute_utc) {
                 Ok(rate) => {
-                    if rate.candle_close_ms >= now_unix_ms() {
+                    if rate.candle_close_ms >= now_unix_ms_i64() {
                         return PrepareResult::Deferred;
                     }
-                    if let Err(error) = super::store_rate(store, &rate, now_unix_ms()) {
-                        return PrepareResult::Retry(super::store_error(error));
+                    if let Err(error) = super::store_rate(store, &rate, now_unix_ms_i64()) {
+                        return PrepareResult::Retry(super::store_fault(error));
                     }
                     rate
                 }
@@ -580,26 +928,28 @@ fn prepare_trade(
                         store,
                         input.quote_ordinal,
                         minute_utc,
-                        now_unix_ms(),
+                        now_unix_ms_i64(),
                     ) {
                         Ok(changed) => changed > 0,
-                        Err(error) => return PrepareResult::Retry(super::store_error(error)),
+                        Err(error) => return PrepareResult::Retry(super::store_fault(error)),
                     };
                     return merge_change(
                         delete_trade(store, input.source, input.core_uid, input.row_id),
                         rate_changed,
                     );
                 }
-                Err(FetchFailure::Transient(error)) => return PrepareResult::Retry(error),
+                Err(FetchFailure::Transient(error)) => {
+                    return PrepareResult::Retry(FaultCause::new(FailureKind::Provider, error));
+                }
             }
         }
-        Err(error) => return PrepareResult::Retry(super::store_error(error)),
+        Err(error) => return PrepareResult::Retry(super::store_fault(error)),
     };
-    match super::store_trade_value(store, input, &rate, now_unix_ms()) {
+    match super::store_trade_value(store, input, &rate, now_unix_ms_i64()) {
         Ok(changed) => PrepareResult::Complete {
             changed: changed > 0,
         },
-        Err(error) => PrepareResult::Retry(super::store_error(error)),
+        Err(error) => PrepareResult::Retry(super::store_fault(error)),
     }
 }
 
@@ -644,7 +994,7 @@ fn prefetch_rates(
             }
             Err(error) => {
                 return Err(PrefetchError {
-                    message: super::store_error(error),
+                    fault: super::store_fault(error),
                     changed,
                 });
             }
@@ -663,13 +1013,16 @@ fn prefetch_rates(
                 end += 1;
             }
             let batch = resolve_rate_batch(source, quote_ordinal, ticker, &minutes[start..end]);
-            let fetched_at = now_unix_ms();
+            let fetched_at = now_unix_ms_i64();
             for rate in &batch.ready {
                 if rate.candle_close_ms >= fetched_at {
                     return Err(PrefetchError {
-                        message: format!(
-                            "{} {} returned an unclosed minute {}",
-                            rate.provider, rate.symbol, rate.minute_utc
+                        fault: FaultCause::new(
+                            FailureKind::Provider,
+                            format!(
+                                "{} {} returned an unclosed minute {}",
+                                rate.provider, rate.symbol, rate.minute_utc
+                            ),
                         ),
                         changed,
                     });
@@ -678,7 +1031,7 @@ fn prefetch_rates(
                     Ok(stored) => changed |= stored > 0,
                     Err(error) => {
                         return Err(PrefetchError {
-                            message: super::store_error(error),
+                            fault: super::store_fault(error),
                             changed,
                         });
                     }
@@ -686,7 +1039,7 @@ fn prefetch_rates(
             }
             if let Some(error) = batch.transient {
                 return Err(PrefetchError {
-                    message: error,
+                    fault: FaultCause::new(FailureKind::Provider, error),
                     changed,
                 });
             }
@@ -695,7 +1048,7 @@ fn prefetch_rates(
                     Ok(stored) => changed |= stored > 0,
                     Err(error) => {
                         return Err(PrefetchError {
-                            message: super::store_error(error),
+                            fault: super::store_fault(error),
                             changed,
                         });
                     }
@@ -715,19 +1068,19 @@ fn prefetch_rates(
 ///     dirty: Coalescing UI wake edge.
 ///
 /// Returns:
-///     Completed change flag, or the retry description after publishing earlier progress.
+///     Completed change flag, or the classified cause after publishing earlier progress.
 fn settle_prefetch(
     result: Result<bool, PrefetchError>,
     generation: &AtomicU64,
     dirty: &AtomicBool,
-) -> Result<bool, String> {
+) -> Result<bool, FaultCause> {
     match result {
         Ok(changed) => Ok(changed),
         Err(error) => {
             if error.changed {
                 publish(generation, dirty);
             }
-            Err(error.message)
+            Err(error.fault)
         }
     }
 }
@@ -964,7 +1317,7 @@ fn delete_trade(
         Ok(changed) => PrepareResult::Complete {
             changed: changed > 0,
         },
-        Err(error) => PrepareResult::Retry(super::store_error(error)),
+        Err(error) => PrepareResult::Retry(super::store_fault(error)),
     }
 }
 
@@ -985,7 +1338,7 @@ fn delete_partition(store: &Connection, source: TradeSource, core_uid: i64) -> P
         Ok(changed) => PrepareResult::Complete {
             changed: changed > 0,
         },
-        Err(error) => PrepareResult::Retry(super::store_error(error)),
+        Err(error) => PrepareResult::Retry(super::store_fault(error)),
     }
 }
 
@@ -999,14 +1352,14 @@ fn delete_partition(store: &Connection, source: TradeSource, core_uid: i64) -> P
 ///     deferred: Current-minute rows retained by identity.
 ///
 /// Returns:
-///     Whether any eligible row was processed, or a transient failure.
+///     Completed stage turn indicating whether to loop immediately, or a classified failure.
 fn process_deferred(
     store: &Connection,
     source: &dyn SpotRateSource,
     generation: &AtomicU64,
     dirty: &AtomicBool,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
-) -> Result<bool, String> {
+) -> Result<StageTurn, FaultCause> {
     let current = current_minute_utc();
     let keys = deferred
         .iter()
@@ -1041,7 +1394,9 @@ fn process_deferred(
     if changed {
         publish(generation, dirty);
     }
-    Ok(!keys.is_empty())
+    Ok(StageTurn::Ran {
+        more: !keys.is_empty(),
+    })
 }
 
 /// Whether any retained row's candle minute has closed.
@@ -1084,19 +1439,7 @@ fn publish(generation: &AtomicU64, dirty: &AtomicBool) {
 /// Returns:
 ///     Wall-clock minute boundary.
 fn current_minute_utc() -> i64 {
-    now_unix_ms().div_euclid(60_000) * 60
-}
-
-/// Current wall-clock time in Unix milliseconds.
-///
-/// Returns:
-///     Saturating signed timestamp.
-fn now_unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(i64::MAX as u128) as i64
+    now_unix_ms_i64().div_euclid(60_000) * 60
 }
 
 /// Delay anchored to the next UTC minute boundary plus a small close-publication margin.
@@ -1104,7 +1447,7 @@ fn now_unix_ms() -> i64 {
 /// Returns:
 ///     Positive wait duration that does not drift from process start.
 fn delay_to_next_minute() -> Duration {
-    let now = now_unix_ms();
+    let now = now_unix_ms_i64();
     let next = (now.div_euclid(60_000) + 1) * 60_000 + 250;
     Duration::from_millis(next.saturating_sub(now).max(1) as u64)
 }

@@ -5,12 +5,15 @@
 //! stored input with the current report row, so an upsert under the same report identity cannot
 //! publish a stale conversion while the worker is catching up.
 
+mod health;
 mod provider;
 mod worker;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use health::{FailureKind, FaultCause};
+pub use health::{StageHealth, ValuationFault, ValuationStage, ValuationStatus};
 pub(crate) use provider::{HttpSpotRateSource, SpotRateSource};
 pub use worker::{spawn_worker, ValuationHandle};
 
@@ -1018,18 +1021,25 @@ pub(crate) fn open_canonical_store() -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// Convert a direct cache operation failure and disable attachment on proven corruption.
+/// Classify a direct cache operation failure and disable attachment on proven corruption.
+///
+/// Proven corruption is reported as [`FailureKind::CacheUnhealthy`] rather than a write failure
+/// because the two need different responses: an ordinary write error is worth retrying against the
+/// same file, while a damaged cache is only cleared by the recovery stage rebuilding it.
 ///
 /// Args:
 ///     error: SQLite failure from the canonical valuation writer.
 ///
 /// Returns:
-///     Displayable retry diagnostic.
-pub(crate) fn store_error(error: rusqlite::Error) -> String {
-    if is_corruption(&error) {
+///     Stage-less classified cause carrying the diagnostic text.
+pub(crate) fn store_fault(error: rusqlite::Error) -> FaultCause {
+    let kind = if is_corruption(&error) {
         mark_unhealthy(&error);
-    }
-    error.to_string()
+        FailureKind::CacheUnhealthy
+    } else {
+        FailureKind::CacheWrite
+    };
+    FaultCause::new(kind, error.to_string())
 }
 
 /// Open and initialize the historical valuation store.

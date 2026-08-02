@@ -56,6 +56,180 @@ impl SpotRateSource for MissingSource {
     }
 }
 
+/// Build a status sink over fresh handles, mirroring what `spawn_worker_with_source` publishes.
+///
+/// Returns:
+///     The sink plus the health slot, revision counter, and wake edge a `ValuationHandle` exposes.
+fn status_sink() -> (
+    StatusSink,
+    Arc<RwLock<ValuationStatus>>,
+    Arc<AtomicU64>,
+    Arc<AtomicBool>,
+) {
+    let status = Arc::new(RwLock::new(ValuationStatus::default()));
+    let revision = Arc::new(AtomicU64::new(0));
+    let dirty = Arc::new(AtomicBool::new(false));
+    let sink = StatusSink {
+        status: status.clone(),
+        revision: revision.clone(),
+        dirty: dirty.clone(),
+        published: ValuationStatus::default().signature(0),
+    };
+    (sink, status, revision, dirty)
+}
+
+/// A failing run must reach the handle, and a retry that changes nothing must not wake the UI.
+///
+/// Breakage: `worker.rs:note_failure` bumping `sink.revision` unconditionally instead of through
+/// `StatusSink::publish`'s signature comparison. A permanently unreachable provider retries for as
+/// long as the terminal runs, so the report panel and the Analytics window would take a fresh
+/// status snapshot and repaint every 30 seconds forever for a chip whose text never changes.
+#[test]
+fn a_failing_run_publishes_once_per_transition_and_not_per_retry() {
+    let (mut sink, status, revision, dirty) = status_sink();
+    let mut health = ValuationStatus::default();
+    let start = 1_700_000_000_000;
+
+    note_failure(
+        &mut health,
+        &mut sink,
+        FaultCause::new(FailureKind::Provider, "binance HTTP 429").at(ValuationStage::Reconcile),
+        start,
+    );
+    assert_eq!(revision.load(Ordering::Acquire), 1);
+    assert!(dirty.load(Ordering::Acquire));
+    let published = status.read().expect("read published health").clone();
+    let fault = published
+        .stage(ValuationStage::Reconcile)
+        .fault
+        .as_ref()
+        .expect("the failing stage keeps its fault")
+        .clone();
+    assert_eq!(fault.stage, ValuationStage::Reconcile);
+    assert_eq!(fault.kind.code(), "provider");
+
+    note_failure(
+        &mut health,
+        &mut sink,
+        FaultCause::new(FailureKind::Provider, "binance HTTP 429").at(ValuationStage::Reconcile),
+        start + 30_000,
+    );
+    assert_eq!(
+        revision.load(Ordering::Acquire),
+        1,
+        "a retry repeating the same cause is not a transition"
+    );
+}
+
+/// Progress on one stage must publish, and must leave another stage's failing run untouched.
+///
+/// Breakage: `worker.rs:run_worker` calling `record_progress` for a fixed stage rather than the one
+/// whose turn just completed. The deferred-minute stage is marked healthy whenever nothing is due,
+/// so stamping its progress onto `Reconcile` would repeatedly clear a permanently stuck
+/// reconciliation and the footer could never report it.
+#[test]
+fn progress_publishes_and_is_scoped_to_its_own_stage() {
+    let (mut sink, status, revision, _dirty) = status_sink();
+    let mut health = ValuationStatus::default();
+    let start = 1_700_000_000_000;
+
+    for attempt in 0..3 {
+        note_failure(
+            &mut health,
+            &mut sink,
+            FaultCause::new(FailureKind::CacheWrite, "disk is full").at(ValuationStage::Reconcile),
+            start + attempt * 100_000,
+        );
+    }
+    let stalled_at = start + 300_000;
+    assert!(health.stalled(stalled_at).is_some());
+
+    record_progress(
+        &mut health,
+        &mut sink,
+        ValuationStage::DeferredMinute,
+        stalled_at,
+    );
+    assert!(
+        status
+            .read()
+            .expect("read published health")
+            .stalled(stalled_at)
+            .is_some(),
+        "an unrelated healthy stage must not clear the published stall"
+    );
+
+    let before = revision.load(Ordering::Acquire);
+    record_progress(
+        &mut health,
+        &mut sink,
+        ValuationStage::Reconcile,
+        stalled_at,
+    );
+    assert!(revision.load(Ordering::Acquire) > before);
+    assert!(!status.read().expect("read published health").is_retrying());
+}
+
+/// A turn the stage could not act on must not clear an unresolved failing run.
+///
+/// Breakage: `worker.rs:attempt` calling `record_progress` for every `Ok` instead of gating on
+/// `StageTurn::is_progress`. `reports.sqlite` being absent is a healthy startup state that the
+/// reconcile or outbox stage can report, so a provider outage the user is already being warned
+/// about would be silently retracted when either stage found the replica missing — and the retry
+/// counter would restart from one when it became available.
+#[test]
+fn a_turn_with_nothing_to_do_leaves_an_open_failing_run_alone() {
+    let (mut sink, status, revision, _dirty) = status_sink();
+    let mut health = ValuationStatus::default();
+    let now = 1_700_000_000_000;
+    let mut retry_after = None;
+
+    note_failure(
+        &mut health,
+        &mut sink,
+        FaultCause::new(FailureKind::Provider, "binance HTTP 503").at(ValuationStage::Reconcile),
+        now,
+    );
+    let published = revision.load(Ordering::Acquire);
+
+    // Far enough past the backoff that the stage is eligible, so the gate cannot mask the result.
+    let later = now + 60_000;
+    let outcome = attempt(
+        &mut health,
+        &mut sink,
+        ValuationStage::Reconcile,
+        later,
+        &mut retry_after,
+        || Ok(StageTurn::AwaitingReplica),
+    );
+
+    assert!(matches!(outcome, Attempt::Done(StageTurn::AwaitingReplica)));
+    assert_eq!(
+        health.stage(ValuationStage::Reconcile).consecutive_failures,
+        1,
+        "an absent replica says nothing about the provider that failed"
+    );
+    assert_eq!(
+        retry_after,
+        Some(REPLICA_POLL),
+        "it still has to wait, or the loop spins on the missing replica"
+    );
+    assert_eq!(
+        revision.load(Ordering::Acquire),
+        published,
+        "and nothing new was published"
+    );
+    assert!(
+        status
+            .read()
+            .expect("read published health")
+            .stage(ValuationStage::Reconcile)
+            .fault
+            .is_some(),
+        "the published fault is still the provider one"
+    );
+}
+
 /// Store one prepared row for partition and hard-delete assertions.
 ///
 /// Args:
@@ -254,14 +428,20 @@ fn partial_prefetch_failure_publishes_committed_progress() {
 
     let result = settle_prefetch(
         Err(PrefetchError {
-            message: "later route timed out".to_string(),
+            fault: FaultCause::new(FailureKind::Provider, "later route timed out"),
             changed: true,
         }),
         &generation,
         &dirty,
     );
 
-    assert_eq!(result, Err("later route timed out".to_string()));
+    assert_eq!(
+        result,
+        Err(FaultCause::new(
+            FailureKind::Provider,
+            "later route timed out"
+        ))
+    );
     assert_eq!(generation.load(Ordering::Acquire), 8);
     assert!(dirty.load(Ordering::Acquire));
 }

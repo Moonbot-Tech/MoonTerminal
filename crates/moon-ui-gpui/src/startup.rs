@@ -32,6 +32,23 @@ struct ReportRevisionDecision {
     wake_valuation: bool,
 }
 
+/// The commit edges observed in one coordination tick.
+///
+/// A struct rather than four positional `bool`s: they share a type but have different publication
+/// and wake semantics. Swapping a health edge with a report-commit edge would compile while making
+/// a UI-only health transition unpark the valuation worker.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TickEdges {
+    /// Live report data committed this tick.
+    immediate_report: bool,
+    /// Historical catch-up report data committed this tick.
+    background_report: bool,
+    /// The valuation worker published committed values this tick.
+    valuation: bool,
+    /// Published valuation health changed shape this tick.
+    valuation_status: bool,
+}
+
 /// Coalesce background report data without delaying live report commits or valuation work.
 struct ReportRevisionGate {
     /// Whether a catch-up or valuation change still needs a UI revision publication.
@@ -58,27 +75,25 @@ impl ReportRevisionGate {
     /// Select the report-revision side effects for one coordination tick.
     ///
     /// An immediate report commit publishes at once and covers every background generation visible
-    /// in that notification. Catch-up report pages and valuation work remain pending until the
-    /// one-minute boundary, while every report commit still wakes valuation processing at once.
+    /// in that notification. Catch-up report pages, valuation work, and valuation health changes
+    /// remain pending until the one-minute boundary, while every report commit still wakes
+    /// valuation processing at once. A stall is minutes old before it is reportable, so deferring
+    /// its publication by up to a minute costs nothing the user can perceive.
     ///
     /// Args:
-    ///     immediate_report_committed: Whether live report data committed this tick.
-    ///     background_report_committed: Whether historical report data committed this tick.
-    ///     valuation_committed: Whether the valuation worker published a committed edge this tick.
+    ///     edges: Commit and health edges consumed this tick.
     ///     now: Current coordination time.
     ///
     /// Returns:
     ///     The notification and valuation-wake side effects for this tick.
-    fn observe(
-        &mut self,
-        immediate_report_committed: bool,
-        background_report_committed: bool,
-        valuation_committed: bool,
-        now: Instant,
-    ) -> ReportRevisionDecision {
-        let report_committed = immediate_report_committed || background_report_committed;
-        self.background_pending |= background_report_committed || valuation_committed;
-        if immediate_report_committed {
+    fn observe(&mut self, edges: TickEdges, now: Instant) -> ReportRevisionDecision {
+        let report_committed = edges.immediate_report || edges.background_report;
+        // A health change carries no rows, so it never counts as a report commit and never wakes
+        // the worker; it only has to reach the next revision publication, which is what makes a
+        // stall visible to surfaces that would otherwise poll the data generation forever.
+        self.background_pending |=
+            edges.background_report || edges.valuation || edges.valuation_status;
+        if edges.immediate_report {
             self.background_pending = false;
             self.last_published_at = now;
             return ReportRevisionDecision {
@@ -350,6 +365,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let valuation_dirty = valuation
             .as_ref()
             .map(|valuation| valuation.commit_dirty.clone());
+        let valuation_status_dirty = valuation
+            .as_ref()
+            .map(|valuation| valuation.status_dirty.clone());
         let report_revision = cx.new(|_| crate::ReportRevision);
         // Check the complete replica once because individual reads only detect
         // damage on pages reached by their query.
@@ -676,6 +694,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let coord_report_immediate_dirty = report_immediate_dirty;
         let coord_report_background_dirty = report_background_dirty;
         let coord_valuation_dirty = valuation_dirty;
+        let coord_valuation_status_dirty = valuation_status_dirty;
         let coord_report_revision = report_revision;
         cx.spawn(async move |cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -686,24 +705,20 @@ pub(crate) fn run() -> anyhow::Result<()> {
             loop {
                 executor.timer(Duration::from_millis(100)).await;
                 cx.update(|cx| {
-                    let mut immediate_report_committed = false;
+                    let mut edges = TickEdges::default();
                     consume_report_commit(coord_report_immediate_dirty.as_deref(), || {
-                        immediate_report_committed = true;
+                        edges.immediate_report = true;
                     });
-                    let mut background_report_committed = false;
                     consume_report_commit(coord_report_background_dirty.as_deref(), || {
-                        background_report_committed = true;
+                        edges.background_report = true;
                     });
-                    let mut valuation_committed = false;
                     consume_report_commit(coord_valuation_dirty.as_deref(), || {
-                        valuation_committed = true;
+                        edges.valuation = true;
                     });
-                    let revision = report_revision_gate.observe(
-                        immediate_report_committed,
-                        background_report_committed,
-                        valuation_committed,
-                        Instant::now(),
-                    );
+                    consume_report_commit(coord_valuation_status_dirty.as_deref(), || {
+                        edges.valuation_status = true;
+                    });
+                    let revision = report_revision_gate.observe(edges, Instant::now());
                     let (show_reqs, open_debug_10) = coord_backend.update(cx, |b, cx| {
                         if revision.wake_valuation {
                             if let Some(valuation) = &b.valuation {
