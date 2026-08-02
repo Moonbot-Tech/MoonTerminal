@@ -341,15 +341,20 @@ struct Backend {
     ///
     /// `detached::spawn` returned the handle and every caller dropped it, which left no way to
     /// close a panel window from code — a round-trip check has to close what it opened. The
-    /// insertion lives inside `spawn` itself, so all three detach routes fill it: the startup
-    /// restore, the dock's detach action and the panel toolbar button. Entries are removed when
-    /// the window releases, the same edge that queues the repin.
+    /// insertion lives inside `spawn` itself, so every route fills it: the startup restore, the
+    /// dock's detach action, the panel toolbar button, and the settings-driven reopen after a
+    /// group-window rebuild.
+    ///
+    /// This map is also the AUTHORITY for "this window may repin". A release repins only while the
+    /// entry still names that same window, so code that tears a window down on purpose removes the
+    /// entry first and the release stays silent — otherwise a window rebuild would return every
+    /// detached panel to its dock and delete its `DetachedSpec`. Entries therefore disappear on two
+    /// edges, not one: a user-driven release, and a deliberate teardown.
     ///
     /// Keyed by identity of the panel, not of the window: two live windows for one `(group,
-    /// panel)` would leave the map describing only the second, and the first's release would then
-    /// clear an entry that still has a window behind it. The dock's detach path cannot produce
-    /// that — it declines an already-detached panel — but the toolbar route has no such check, so
-    /// a reader should treat a missing entry as "no window to close", never as "no window exists".
+    /// panel)` leave the map describing only the second, and the first is then inert — it can no
+    /// longer repin. Both detach routes decline an already-detached panel, so a reader should treat
+    /// a missing entry as "no window to close", never as "no window exists".
     detached_panel_windows: HashMap<(String, String), WindowHandle<Root>>,
     /// Requests to return a chart tab to its strip after its detached window closes, as
     /// `(group, number, bucket)`. The group's `ChartTabs` consumes each request and reattaches it.

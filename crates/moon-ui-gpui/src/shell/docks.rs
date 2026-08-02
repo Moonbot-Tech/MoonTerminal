@@ -113,20 +113,15 @@ impl Shell {
                 if !detached::supports_panel(&panel_name) {
                     return;
                 }
+                if backend.read(app).is_detached(&group, &panel_name) {
+                    return;
+                }
                 let spec = detached::DetachedSpec::with_saved_geom(
                     &backend,
                     app,
                     group.clone(),
                     panel_name.clone(),
                 );
-                if backend
-                    .read(app)
-                    .detached
-                    .iter()
-                    .any(|s| s.group == spec.group && s.panel == spec.panel)
-                {
-                    return;
-                }
                 // Capture placement before removal so restoration can return to the same location.
                 // A split leaf records a split slot; a tab records its index. These stores are
                 // mutually exclusive, so recording one clears the other; `None` changes neither.

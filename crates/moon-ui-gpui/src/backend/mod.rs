@@ -607,6 +607,24 @@ impl Backend {
             .any(|session| session.id == core && session.group == group)
     }
 
+    /// Return whether this panel is currently recorded as detached from `group`.
+    ///
+    /// The question every detach route asks before opening a window: a panel already pulled out
+    /// must not be detached twice, or the second window takes over `detached_panel_windows` and
+    /// leaves the first unable to repin.
+    ///
+    /// Args:
+    ///     group: Window group the panel would be detached from.
+    ///     panel: Stable panel name shared by `DetachedSpec` and the dock.
+    ///
+    /// Returns:
+    ///     `true` while a `DetachedSpec` for this pair exists.
+    pub(crate) fn is_detached(&self, group: &str, panel: &str) -> bool {
+        self.detached
+            .iter()
+            .any(|spec| spec.group == group && spec.panel == panel)
+    }
+
     /// Seed the group's runtime Main target without replacing a durable manual selection.
     ///
     /// Construction publishes restored Main state once after startup. Treating that baseline as a

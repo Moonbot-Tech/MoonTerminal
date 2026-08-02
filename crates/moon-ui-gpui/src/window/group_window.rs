@@ -119,5 +119,13 @@ pub(crate) fn spawn_group_window(
         backend.update(cx, |bk, _| {
             bk.group_windows.insert(group, handle);
         });
+        // A group window owns the detached panel windows of its group: they are OS-owned children
+        // and died with the previous one, while their `DetachedSpec`s survived and the restored
+        // dock does NOT contain those panels. Reclaiming them here rather than at the call sites is
+        // what keeps every route whole — startup, the Settings rebuild and reconcile, and the
+        // Settings "show group" button, which is reached by no other restore path. The reopen is
+        // deferred and skips panels that already have a window, so the routes that also restore
+        // panels themselves cannot produce a duplicate.
+        crate::window::detached::respawn_all(backend, cx);
     }
 }

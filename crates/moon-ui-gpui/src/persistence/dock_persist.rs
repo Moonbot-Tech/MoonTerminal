@@ -8,7 +8,7 @@
 //! `group -> DockAreaState` map is stored at [`paths::docks_path`], currently `cfg/docks.json`
 //! under the platform data directory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::*;
@@ -51,6 +51,39 @@ pub(crate) fn is_compatible_version(version: Option<usize>) -> bool {
 
 /// Map each group name to its serialized `DockArea` state.
 pub type DockMap = HashMap<String, DockAreaState>;
+
+/// Collect every `(group, panel_name)` that a restorable dock layout would put back in a dock.
+///
+/// This is the authority for "the panel is already in the dock", used to keep a stale
+/// `DetachedSpec` from opening a second copy of a panel the dock will restore anyway —
+/// `docks.json` and `detached.json` are debounced independently and can disagree after a repin
+/// followed by a quick exit. A layout whose version no longer restores (see
+/// [`is_compatible_version`]) contributes nothing: its panels will not appear, so they cannot
+/// collide.
+pub(crate) fn docked_panels(map: &DockMap) -> HashSet<(&str, &str)> {
+    fn collect<'a>(node: &'a PanelState, group: &'a str, out: &mut HashSet<(&'a str, &'a str)>) {
+        if matches!(node.info, PanelInfo::Panel(_)) && !node.panel_name.is_empty() {
+            out.insert((group, node.panel_name.as_str()));
+        }
+        for c in &node.children {
+            collect(c, group, out);
+        }
+    }
+    let mut docked = HashSet::new();
+    for (group, state) in map {
+        if !is_compatible_version(state.version) {
+            continue;
+        }
+        collect(&state.center, group, &mut docked);
+        for d in [&state.left_dock, &state.right_dock, &state.bottom_dock]
+            .into_iter()
+            .flatten()
+        {
+            collect(&d.panel, group, &mut docked);
+        }
+    }
+    docked
+}
 
 /// Load all dock layouts from `docks.json`.
 ///
