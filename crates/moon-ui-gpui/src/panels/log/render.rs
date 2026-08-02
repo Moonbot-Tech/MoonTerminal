@@ -227,52 +227,18 @@ fn categorize(lower: &str) -> Cat {
     }
 }
 
-const QUOTES: [&str; 6] = ["USDT", "USDC", "BUSD", "PERP", "USDe", "USD"];
-
 fn is_tick(b: u8) -> bool {
     b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
 }
 
-/// Extract the base coin from a market-shaped token:
+/// Extract the base coin from a market-shaped token, or `None` for an ordinary word.
 ///
-/// - spot or perpetual with a quote suffix: `SPKUSDT`, `SPK-USDT`, or `SPK_USDT` becomes `SPK`;
-/// - quote prefix: `USDT-SPK` or `USDT_SPK` becomes `SPK`;
-/// - dated delivery contract: `BTC_0626` or `ETH-240628` becomes `BTC` or `ETH`.
-///
-/// Return `None` for other shapes. At least one uppercase letter is required so a date such as
-/// `2026-06-30` is not mistaken for a ticker.
+/// The shapes and the quote table live in `moon_core::symbol`, which is the single place that
+/// knows how each exchange spells a market; this panel only decides WHERE to look. It used to
+/// carry its own copy of both, which is how the panel and the Orders table came to disagree about
+/// OKX names.
 fn market_base(w: &str) -> Option<String> {
-    if w.len() < 4 || !w.bytes().any(|b| b.is_ascii_uppercase()) {
-        return None;
-    }
-    for q in QUOTES {
-        // Quote suffix: <BASE><QUOTE>, <BASE>-<QUOTE>, or <BASE>_<QUOTE>.
-        if w.len() > q.len() && w.ends_with(q) {
-            let base = w[..w.len() - q.len()].trim_end_matches(['-', '_']);
-            if base.len() >= 3 && base.bytes().any(|b| b.is_ascii_uppercase()) {
-                return Some(base.to_string());
-            }
-        }
-        // Quote prefix: <QUOTE>-<BASE> or <QUOTE>_<BASE>.
-        if w.len() > q.len() + 1 && w.starts_with(q) {
-            let after = &w[q.len()..];
-            if let Some(base) = after.strip_prefix('-').or_else(|| after.strip_prefix('_')) {
-                if base.len() >= 3 && base.bytes().any(|b| b.is_ascii_uppercase()) {
-                    return Some(base.to_string());
-                }
-            }
-        }
-    }
-    // Delivery or quarterly contract: base prefix, separator, then a numeric suffix.
-    if let Some(pos) = w.rfind(['_', '-']) {
-        let (base, tail) = (&w[..pos], &w[pos + 1..]);
-        let base_ok = base.len() >= 3 && base.bytes().any(|b| b.is_ascii_uppercase());
-        let tail_ok = (2..=8).contains(&tail.len()) && tail.bytes().all(|b| b.is_ascii_digit());
-        if base_ok && tail_ok {
-            return Some(base.to_string());
-        }
-    }
-    None
+    moon_core::symbol::parse::market_in_text(w).map(str::to_string)
 }
 
 /// Collect coin bases that appear in market-shaped tokens anywhere in the buffer.

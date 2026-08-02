@@ -1,7 +1,7 @@
 //! Feed: the boundary between a core and the UI. One backend thread per core sends `FeedMsg`
 //! to the UI. The UI never calls moonproto directly. Live mode is the only mode.
 
-mod assets;
+pub(crate) mod assets;
 pub mod live;
 pub mod news;
 pub mod news_marks;

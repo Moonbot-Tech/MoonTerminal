@@ -16,6 +16,7 @@ mod support;
 
 mod analytics;
 mod chart;
+mod naming;
 mod shell;
 mod strategies;
 mod theme;

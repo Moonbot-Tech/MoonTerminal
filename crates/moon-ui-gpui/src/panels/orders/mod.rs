@@ -41,13 +41,11 @@ use crate::design;
 use crate::panels::{RenderGate, num};
 use moon_core::feed::OrderRow;
 use moon_core::session::CoreId;
-// Used by `table.rs` through `use super::*`, though not directly by this module.
-use moon_core::symbol;
 
 /// One order-table row associated with its source core, ported from `OrderEntry`.
 ///
-/// No quote asset is stored here; the token cell strips it from the displayed market name with
-/// `symbol` helpers.
+/// No quote asset is stored here; the token cell renders `OrderRow::coin`, which the feed resolved
+/// with the core's own exchange rules.
 #[derive(Clone)]
 pub(super) struct OrderEntry {
     pub(super) core: CoreId,

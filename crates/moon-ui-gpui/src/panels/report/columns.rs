@@ -162,13 +162,15 @@ fn coin_cell(
                     return;
                 }
                 app.stop_propagation();
-                let market = {
+                // One borrow for everything this menu needs. The token it writes into the coin
+                // blacklists is read with the core's own exchange rules, because the core matches
+                // it against that core's `market_currency`.
+                let (market, coin_base, core_name, strat_name) = {
                     let b = backend_menu.read(app);
-                    resolve_market(b, core_uid, &coin_menu)
-                };
-                let coin_base = moon_core::symbol::coin_of_market(&market).to_string();
-                let (core_name, strat_name) = {
-                    let b = backend_menu.read(app);
+                    let market = resolve_market(b, core_uid, &coin_menu);
+                    let exchange = b.session.market_source().exchange_of(core_uid);
+                    let coin_base =
+                        moon_core::symbol::coin_of_market_on(&market, exchange).to_string();
                     let core_name = b
                         .session
                         .sessions()
@@ -183,7 +185,7 @@ fn coin_cell(
                             .and_then(|cd| cd.strategies.iter().find(|s| s.id == sid))
                             .map(|s| s.name.clone())
                     });
-                    (core_name, strat_name)
+                    (market, coin_base, core_name, strat_name)
                 };
                 let ctx = CoinMenuCtx {
                     core: core_uid,
@@ -207,26 +209,32 @@ fn coin_cell(
 /// Build a market candidate for the core from the DB `coin` value.
 ///
 /// Supports both historical formats: a base (`M`) and an already complete market (`MUSDT`).
-/// A base receives the core quote. When the market universe is nonempty, the candidate is
-/// validated and may be replaced by a market with the same base; an empty universe leaves the
-/// candidate unverified.
+/// A base is spelled into a market by `symbol::parse::market_names_for`, which knows each
+/// exchange's form; this used to concatenate coin and quote by hand and therefore proposed a
+/// market that exists on no Gate, OKX or Hyperliquid core. When the market universe is nonempty,
+/// the candidate is validated and may be replaced by a market with the same base; an empty
+/// universe leaves the candidate unverified.
 fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
+    let exchange = b.session.market_source().exchange_of(core);
     let quote = b
         .config
         .servers
         .iter()
         .find(|s| s.id == core)
-        .map(|s| moon_core::symbol::resolve_quote(&s.market))
+        .map(|s| moon_core::symbol::resolve_quote_on(&s.market, exchange))
         .unwrap_or_default();
-    let upper = coin.to_ascii_uppercase();
-    // Treat a value ending in the core quote or carrying a HIP-3 DEX prefix (`xyz:BIRD`) as a
-    // complete market. HL/HIP-3 names must not receive a quote suffix.
-    let already_full = moon_core::symbol::is_hip3(coin)
-        || (!quote.is_empty() && upper.len() > quote.len() && upper.ends_with(&quote));
+    // A complete market is one carrying a HIP-3 DEX prefix or THIS CORE'S quote. Deliberately not
+    // "carries any recognized quote": a coin whose own name ends in one — `WBTC`, `STETH`,
+    // `PYUSD` — would then be taken for a finished market and never get its quote appended.
+    let parsed = moon_core::symbol::parse::split_market(coin, exchange);
+    let already_full =
+        parsed.dex.is_some() || (!quote.is_empty() && parsed.quote.eq_ignore_ascii_case(&quote));
     let candidate = if already_full || quote.is_empty() {
         coin.to_string()
     } else {
-        format!("{coin}{quote}")
+        moon_core::symbol::parse::market_names_for(coin, &quote, exchange)
+            .next()
+            .unwrap_or_else(|| coin.to_string())
     };
     // An empty universe returns the candidate without verification. Otherwise accept an exact
     // candidate match or fall back to a market with the same base, including prefixed markets
@@ -235,11 +243,22 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
     if universe.is_empty() || universe.iter().any(|m| m == &candidate) {
         return candidate;
     }
-    universe
-        .iter()
-        .find(|m| moon_core::symbol::coin_of_market(m).eq_ignore_ascii_case(coin))
-        .cloned()
-        .unwrap_or(candidate)
+    // Prefer the perpetual over a dated contract of the same coin: the report row names a coin,
+    // not an expiry, and picking whichever expiry the search ranked first opens a chart the trade
+    // never happened on.
+    // One pass, remembering a dated match as the fallback.
+    let mut dated_match = None;
+    for name in &universe {
+        let parts = moon_core::symbol::parse::split_market(name, exchange);
+        if !parts.base.eq_ignore_ascii_case(coin) {
+            continue;
+        }
+        if !parts.is_dated() {
+            return name.clone();
+        }
+        dated_match.get_or_insert_with(|| name.clone());
+    }
+    dated_match.unwrap_or(candidate)
 }
 
 /// Build a full-cell core cell with the shared muted tone.
