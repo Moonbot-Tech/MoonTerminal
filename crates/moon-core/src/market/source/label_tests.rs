@@ -4,7 +4,7 @@
 //! from the connected exchanges), not invented — the whole point of this type is that the core's
 //! spelling is not derivable from the market name.
 
-use super::MarketLabel;
+use super::{pick_market_for_coin, MarketLabel};
 use crate::symbol::Exchange;
 
 /// A catalog-sourced label, as `market_labels` builds one.
@@ -70,6 +70,65 @@ fn name_fallback_carries_the_expiry() {
     let index = MarketLabel::from_name("@206", Exchange::Hyperliquid);
     assert_eq!(index.coin, "@206");
     assert_eq!(index.quote, "");
+}
+
+/// `(market name, its catalog label)` as the caller builds it from `market_labels`.
+fn listed(name: &str, coin: &str, quote: &str) -> (String, MarketLabel) {
+    (name.to_string(), catalog(coin, quote))
+}
+
+/// The reported case: the report stores the core's folded token while the market is spelled in
+/// full, so a name-based comparison finds nothing and the coin opens an empty chart.
+#[test]
+fn a_folded_token_finds_its_market() {
+    let universe = [
+        listed("1000RATSUSDT", "1kRATS", "USDT"),
+        listed("BTCUSDT", "BTC", "USDT"),
+    ];
+    assert_eq!(
+        pick_market_for_coin(&universe, "1kRATS"),
+        Some("1000RATSUSDT")
+    );
+    // The market's own name is NOT the coin, and must not be matched as one.
+    assert_eq!(pick_market_for_coin(&universe, "1000RATS"), None);
+}
+
+/// A bare coin reaches the contract-qualified market through the folded key.
+#[test]
+fn a_bare_coin_reaches_a_contract_market() {
+    let universe = [listed("AAVEUSD_PERP", "AAVE_RP", "USD")];
+    assert_eq!(
+        pick_market_for_coin(&universe, "AAVE"),
+        Some("AAVEUSD_PERP")
+    );
+    assert_eq!(
+        pick_market_for_coin(&universe, "AAVE_RP"),
+        Some("AAVEUSD_PERP")
+    );
+}
+
+/// A coin names an instrument family, so the undated contract wins however the search ranked them.
+#[test]
+fn the_undated_contract_wins() {
+    let universe = [
+        listed("BTCUSD_260925", "BTC_0925", "USD"),
+        listed("BTCUSD_PERP", "BTC_RP", "USD"),
+    ];
+    assert_eq!(pick_market_for_coin(&universe, "BTC"), Some("BTCUSD_PERP"));
+    // Asking for one expiry by its exact token still gets that expiry.
+    assert_eq!(
+        pick_market_for_coin(&universe, "BTC_0925"),
+        Some("BTCUSD_260925")
+    );
+}
+
+/// A coin no candidate carries yields nothing rather than the first row, which would open a chart
+/// on a market the trade never happened on.
+#[test]
+fn an_absent_coin_picks_nothing() {
+    let universe = [listed("BTCUSDT", "BTC", "USDT")];
+    assert_eq!(pick_market_for_coin(&universe, "ETH"), None);
+    assert_eq!(pick_market_for_coin(&[], "BTC"), None);
 }
 
 /// The empty label a caller gets for an unknown core must render as nothing, not as a stray dash.

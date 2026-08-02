@@ -238,29 +238,27 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
             .next()
             .unwrap_or_else(|| coin.to_string())
     };
-    // An empty universe returns the candidate without verification. Otherwise accept an exact
-    // candidate match or fall back to a market with the same base, including prefixed markets
-    // and DEX perpetuals.
-    let universe = b.session.market_source().search_markets(core, coin, 32);
-    if universe.is_empty() || universe.iter().any(|m| m == &candidate) {
+    // An empty universe returns the candidate without verification.
+    let ms = b.session.market_source();
+    let universe = ms.search_markets(core, coin, 32);
+    if universe.is_empty() {
         return candidate;
     }
-    // Prefer the perpetual over a dated contract of the same coin: the report row names a coin,
-    // not an expiry, and picking whichever expiry the search ranked first opens a chart the trade
-    // never happened on.
-    // One pass, remembering a dated match as the fallback.
-    let mut dated_match = None;
-    for name in &universe {
-        let parts = moon_core::symbol::parse::split_market(name, exchange);
-        if !parts.base.eq_ignore_ascii_case(coin) {
-            continue;
-        }
-        if !parts.is_dated() {
-            return name.clone();
-        }
-        dated_match.get_or_insert_with(|| name.clone());
+    // Ask the CATALOG which of these markets is this coin. The report stores the core's own
+    // token, and for a folded one — `1kRATS` for the market `1000RATSUSDT` — no reading of the
+    // market name can connect the two, so this used to fall through to a spelled candidate that
+    // exists nowhere and opened an empty chart.
+    let refs: Vec<&str> = universe.iter().map(String::as_str).collect();
+    let labelled: Vec<(String, moon_core::market::MarketLabel)> = universe
+        .iter()
+        .cloned()
+        .zip(ms.market_labels(core, &refs))
+        .collect();
+    if let Some(name) = moon_core::market::pick_market_for_coin(&labelled, coin) {
+        return name.to_string();
     }
-    dated_match.unwrap_or(candidate)
+    // The historical format where the stored value is already a full market name.
+    candidate
 }
 
 /// Build a full-cell core cell with the shared muted tone.

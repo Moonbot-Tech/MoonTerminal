@@ -450,22 +450,59 @@ impl MarketLabel {
         } else {
             format!("{base}-{}", self.quote)
         };
-        // The tail spelled inside the catalog token (`_0925`), or the one the name carried.
-        let from_token = self
-            .coin
-            .get(base.len()..)
-            .map(|t| t.trim_start_matches('_'));
-        let tail = from_token
-            .filter(|t| !t.is_empty())
-            .or(self.contract.as_deref())
-            // `RP` is Moonbot's perpetual marker, not an expiry.
-            .filter(|t| !t.eq_ignore_ascii_case("RP"));
-        if let Some(tail) = tail {
+        if let Some(expiry) = self.expiry() {
             out.push('-');
-            out.push_str(tail);
+            out.push_str(expiry);
         }
         out
     }
+
+    /// The EXPIRY this market carries, if any: `BTC_0925` → `0925`, a name-sourced `07AUG26`.
+    ///
+    /// `None` for a perpetual. Moonbot marks one with an `_RP` tail, which is a contract KIND and
+    /// not a date — reading it as an expiry is what made the market picker prefer a quarterly
+    /// over the perpetual.
+    pub fn expiry(&self) -> Option<&str> {
+        let base = self.display_coin();
+        self.coin
+            .get(base.len()..)
+            .map(|tail| tail.trim_start_matches('_'))
+            .filter(|tail| !tail.is_empty())
+            .or(self.contract.as_deref())
+            .filter(|tail| !tail.eq_ignore_ascii_case("RP"))
+    }
+}
+
+/// Pick the market a COIN belongs to, from candidates already labelled by the core's catalog.
+///
+/// The question "which market is `1kRATS`?" cannot be answered from market names: the market is
+/// spelled `1000RATSUSDT` and only the catalog knows the core folds it to `1kRATS`. Comparing a
+/// name reading against a coin the core wrote — a report row, a coin list — silently finds
+/// nothing and leaves the caller inventing a market that does not exist.
+///
+/// Exact token first, then the folded [`MarketLabel::match_key`] so a bare `AAVE` still reaches
+/// the COIN-M market the core calls `AAVE_RP`. Within each pass an undated contract wins: a coin
+/// names an instrument family, not an expiry.
+pub fn pick_market_for_coin<'a>(
+    candidates: &'a [(String, MarketLabel)],
+    coin: &str,
+) -> Option<&'a str> {
+    let wanted_key = crate::symbol::coin_match_key(coin);
+    let pick = |matches: &dyn Fn(&MarketLabel) -> bool| -> Option<&'a str> {
+        let mut dated = None;
+        for (name, label) in candidates {
+            if !matches(label) {
+                continue;
+            }
+            if label.expiry().is_none() {
+                return Some(name.as_str());
+            }
+            dated.get_or_insert(name.as_str());
+        }
+        dated
+    };
+    pick(&|label: &MarketLabel| label.coin.eq_ignore_ascii_case(coin))
+        .or_else(|| pick(&|label: &MarketLabel| label.match_key() == wanted_key))
 }
 
 impl MarketDataSourceInner {
