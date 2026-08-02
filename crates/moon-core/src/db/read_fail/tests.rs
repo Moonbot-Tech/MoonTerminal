@@ -71,6 +71,11 @@ fn unproven_corruption_remains_fail_closed() {
 /// Repeated instances of the same failure are suppressed within the window.
 #[test]
 fn repeated_failures_are_throttled() {
+    // `read_fail` on a corruption code reaches `integrity::record_corruption`, which sets the
+    // process-global `WRITES_BLOCKED` latch. Without this guard those 51 calls can flip it while an
+    // unrelated test asserts the latch is clear.
+    let _state = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
     let make = || {
         rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error {

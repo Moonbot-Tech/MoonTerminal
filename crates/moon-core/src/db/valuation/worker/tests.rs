@@ -415,3 +415,177 @@ fn in_flight_ack_filters_the_same_durable_prefix() {
     assert_eq!(unacknowledged_events(&next, &mut pending_ack), &next);
     assert_eq!(pending_ack, None);
 }
+
+/// Minimal attached report fixture for reconciliation-walk tests.
+///
+/// Args:
+///     rows: `(core_uid, newrecid, closedate)` tuples inserted in the given order.
+///
+/// Returns:
+///     Fixture directory and an in-memory report connection with an attached valuation cache.
+fn report_fixture(rows: &[(i64, i64, i64)]) -> (std::path::PathBuf, Connection) {
+    let dir = std::env::temp_dir().join(format!(
+        "moonterminal-reconcile-order-{}-{}",
+        std::process::id(),
+        crate::util::now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&dir).expect("create reconciliation order fixture directory");
+    let path = dir.join("valuation.sqlite");
+    drop(super::super::open_store(&path).expect("open valuation fixture"));
+    let reports = Connection::open_in_memory().expect("open report fixture");
+    reports
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER, newrecid INTEGER, closedate INTEGER,
+                 basecurrency INTEGER, profitbtc REAL, spentbtc REAL
+             );",
+        )
+        .expect("create report fixture");
+    for (core_uid, row_id, closedate) in rows {
+        reports
+            .execute(
+                "INSERT INTO orders_rep VALUES (?1, ?2, ?3, 1, 1.0, 10.0)",
+                rusqlite::params![core_uid, row_id, closedate],
+            )
+            .expect("seed report fixture row");
+    }
+    // Attach through the production helper so the fixture exercises the same read-only URI and
+    // validation path the app uses, rather than a connection shape production never creates.
+    assert!(
+        super::super::attach_store(&reports, &path).expect("attach valuation fixture"),
+        "fixture cache must attach"
+    );
+    (dir, reports)
+}
+
+/// Restoring the ascending `ORDER BY r.core_uid, r.{id_column}` in
+/// `worker.rs:reconciliation_batch` would value the oldest trades of the lowest-numbered core
+/// first, so a user watching today's report waits out the entire history before their rows carry a
+/// USDT value — the 47-minute, 539k-row backfill this ordering exists to avoid.
+#[test]
+fn reconciliation_values_the_newest_trades_before_older_ones() {
+    let _health = super::super::test_health_guard();
+    // Deliberately adversarial: the NEWEST trade belongs to the HIGHEST core uid, so an ascending
+    // core-ordered walk would return it last rather than first.
+    let (dir, reports) = report_fixture(&[
+        (1, 10, 1_700_000_060),
+        (1, 11, 1_700_000_120),
+        (22, 100, 1_700_009_000),
+        (22, 101, 1_700_008_000),
+        (7, 55, 1_700_005_000),
+    ]);
+
+    let batch = reconciliation_batch(&reports, TradeSource::Typed, None, 256)
+        .expect("scan newest-first reconciliation");
+
+    let order = batch
+        .iter()
+        .map(|input| (input.core_uid, input.row_id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec![(22, 100), (22, 101), (7, 55), (1, 11), (1, 10)],
+        "batch must descend by closedate regardless of core uid"
+    );
+    drop(reports);
+    std::fs::remove_dir_all(&dir).expect("remove reconciliation order fixture directory");
+}
+
+/// Dropping `core_uid`/`row_id` from the descending keyset in `worker.rs:reconciliation_batch`
+/// would leave the cursor unable to separate rows that share a `closedate`: the walk either
+/// re-reads a tied group forever or steps over its remainder. Both are silent — the first spins the
+/// worker, the second permanently leaves those trades unvalued.
+#[test]
+fn reconciliation_visits_every_row_once_when_close_dates_tie() {
+    let _health = super::super::test_health_guard();
+    // Five rows share one closedate across three cores; two more sit on either side of it.
+    let seeded = [
+        (1, 10, 1_700_000_500),
+        (3, 20, 1_700_000_400),
+        (3, 21, 1_700_000_400),
+        (9, 30, 1_700_000_400),
+        (9, 31, 1_700_000_400),
+        (2, 40, 1_700_000_400),
+        (5, 50, 1_700_000_300),
+    ];
+    let (dir, reports) = report_fixture(&seeded);
+
+    // Batch size 2 forces the cursor to resume inside the tied group.
+    let mut cursor = None;
+    let mut visited = Vec::new();
+    // Bounded on purpose: a lost tie-break must fail this test, never hang the suite.
+    let max_turns = seeded.len() * 2 + 4;
+    for turn in 0..=max_turns {
+        assert!(
+            turn < max_turns,
+            "reconciliation cursor failed to terminate"
+        );
+        let batch = reconciliation_batch(&reports, TradeSource::Typed, cursor, 2)
+            .expect("scan tied reconciliation batch");
+        if batch.is_empty() {
+            break;
+        }
+        cursor = batch
+            .last()
+            .map(|input| (input.closedate, input.core_uid, input.row_id));
+        visited.extend(batch.iter().map(|input| (input.core_uid, input.row_id)));
+    }
+
+    let mut seen = visited;
+    seen.sort_unstable();
+    let mut expected = seeded
+        .iter()
+        .map(|(core_uid, row_id, _)| (*core_uid, *row_id))
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    // Comparing sorted vectors (not sets) catches a duplicate visit as well as a missing one.
+    assert_eq!(
+        seen, expected,
+        "every seeded row must be visited exactly once"
+    );
+    drop(reports);
+    std::fs::remove_dir_all(&dir).expect("remove reconciliation order fixture directory");
+}
+
+/// Lowering `worker.rs:reconciliation_batch`'s `(i64::MAX, i64::MAX, i64::MAX)` seed to any value
+/// at or below a real key — the plausible shape being a leftover ascending `(-1, -1, -1)` — makes a
+/// restart resume below the newest rows instead of above them. Trades that arrived while the app
+/// was closed then stay unvalued until the whole remaining backlog drains, which is the very wait
+/// the descending walk exists to remove.
+#[test]
+fn a_restart_covers_trades_that_arrived_above_the_previous_cursor() {
+    let _health = super::super::test_health_guard();
+    let (dir, reports) = report_fixture(&[
+        (1, 10, 1_700_000_100),
+        (1, 11, 1_700_000_200),
+        (1, 12, 1_700_000_300),
+    ]);
+    // Walk down to the oldest row, as a long backfill would.
+    let cursor = Some((1_700_000_200, 1, 11));
+    let tail = reconciliation_batch(&reports, TradeSource::Typed, cursor, 256)
+        .expect("scan reconciliation tail");
+    assert_eq!(
+        tail.iter().map(|i| i.row_id).collect::<Vec<_>>(),
+        vec![10],
+        "a descended cursor must only see older rows"
+    );
+
+    // A newer trade lands while the cursor sits in history.
+    reports
+        .execute(
+            "INSERT INTO orders_rep VALUES (4, 99, ?1, 1, 1.0, 10.0)",
+            rusqlite::params![1_700_000_900_i64],
+        )
+        .expect("insert a newer trade");
+
+    let resumed =
+        reconciliation_batch(&reports, TradeSource::Typed, None, 256).expect("scan after restart");
+
+    assert_eq!(
+        resumed.first().map(|input| (input.core_uid, input.row_id)),
+        Some((4, 99)),
+        "a restart must start at the newest row, not the previous cursor"
+    );
+    drop(reports);
+    std::fs::remove_dir_all(&dir).expect("remove reconciliation order fixture directory");
+}

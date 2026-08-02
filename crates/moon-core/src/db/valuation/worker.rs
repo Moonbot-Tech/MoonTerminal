@@ -82,14 +82,22 @@ struct PrefetchError {
     changed: bool,
 }
 
+/// Exclusive descending reconciliation cursor: `(closedate, core_uid, row_id)`.
+///
+/// Named because the `deferred` map next door keys on a structurally identical `(i64, i64, i64)`
+/// meaning `(source_code, core_uid, row_id)`. A Rust alias is transparent, so this does NOT stop
+/// one being passed for the other — it only names the field order at each site so the swap is
+/// visible while reading. Make it a newtype if that stops being enough.
+type ReconcileCursor = (i64, i64, i64);
+
 /// Incremental startup reconciliation cursor shared across worker-loop turns.
 struct ReconcileState {
     source_index: usize,
-    after: Option<(i64, i64)>,
+    after: Option<ReconcileCursor>,
 }
 
 impl ReconcileState {
-    /// Start at the typed source before its first key.
+    /// Start at the typed source above its newest key.
     ///
     /// Returns:
     ///     Fresh incremental reconciliation cursor.
@@ -326,6 +334,20 @@ fn run_worker(
 
 /// Reconcile one persisted report-row keyset batch without blocking durable live changes.
 ///
+/// Each source is walked newest trade first (see [`reconciliation_batch`]), but the two sources
+/// stay sequenced rather than merged by date, so newest-first holds PER SOURCE and not per user.
+///
+/// Known unserved case: legacy rows are purged per core on that core's `SyncComplete`
+/// (`rep::purge_legacy`), so a core that has not finished its typed sync still keeps ALL of its
+/// rows — today's included — in the legacy table. That core's newest trades are valued only after
+/// the entire typed backlog drains, which is the same wait this ordering exists to remove. The
+/// sequencing is accepted because legacy-only cores are transitional and shrinking, not because
+/// the legacy table holds nothing recent.
+///
+/// Revisit when that stops being cheap — observably, when the legacy source still returns rows
+/// whose `closedate` is recent. Merging the two sources by date is the fix and costs a merged
+/// keyset over two heterogeneous key shapes, which is why it is not done here.
+///
 /// Args:
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
@@ -376,10 +398,15 @@ fn reconcile_step(
         if changed {
             publish(generation, dirty);
         }
-        state.after = inputs.last().map(|input| (input.core_uid, input.row_id));
+        // A short batch means this source is drained: advance to the next one and start it above
+        // its newest row. Otherwise the cursor follows the batch's last (oldest) row.
         if inputs.len() < RECONCILE_BATCH {
             state.source_index += 1;
             state.after = None;
+        } else {
+            state.after = inputs
+                .last()
+                .map(|input| (input.closedate, input.core_uid, input.row_id));
         }
         return Ok(false);
     }
@@ -773,20 +800,38 @@ fn load_trade(
     .map_err(|error| super::read_fail::read_fail_on(conn, "valuation: load report row", error))
 }
 
-/// Read one keyset batch whose prepared inputs are absent or stale.
+/// Read one keyset batch whose prepared inputs are absent or stale, newest trade first.
+///
+/// The walk descends `closedate` because a report window shows recent trades: valuing the newest
+/// rows first covers what the user is looking at within the first batches, instead of after the
+/// whole history. `closedate` is not unique, so the cursor carries `core_uid` and the row id as
+/// tie-breaks — a date-only cursor would either skip the rest of a tied group or re-read it
+/// forever.
+///
+/// Time-clustered batches also collapse provider traffic: `prefetch_rates` requests one inclusive
+/// minute range per quote, so rows sharing nearby minutes need roughly one request per quote per
+/// batch, where a single core's consecutive row ids spanned weeks and cost dozens.
+///
+/// This ordering DEPENDS on `rep::REP_INDEXES`' `idx_rep_closedate`; the legacy table uses
+/// `idx_csr_closedate`. Each index lets the planner seek by `closedate` and block-sort only the
+/// `core_uid`/row-id ties; without the source's index, the statement requires a full sort per
+/// batch because its primary-key and core indexes do not lead with `closedate`. `ensure_indexes`
+/// creates the typed index as soon as that column exists, while database initialization creates
+/// the legacy index whenever the legacy table exists. A typed replica still waiting for the
+/// `closedate` column has no rows eligible for this query.
 ///
 /// Args:
 ///     conn: Report reader with `valuation.sqlite` attached.
 ///     source: Typed or legacy physical source.
-///     after: Exclusive `(core_uid,row_id)` cursor.
+///     after: Exclusive descending cursor; `None` starts above the newest row.
 ///     limit: Maximum mismatched rows to return.
 ///
 /// Returns:
-///     Current complete inputs requiring preparation.
+///     Current complete inputs requiring preparation, ordered newest first.
 fn reconciliation_batch(
     conn: &Connection,
     source: TradeSource,
-    after: Option<(i64, i64)>,
+    after: Option<ReconcileCursor>,
     limit: usize,
 ) -> ReadResult<Vec<TradeInput>> {
     let Some((table, columns, id_column)) = source_layout(conn, source)? else {
@@ -805,7 +850,13 @@ fn reconciliation_batch(
     } else {
         "v.spent_quote IS NULL"
     };
-    let (after_core, after_row) = after.unwrap_or((-1, -1));
+    // Seeded above every real key so the first batch starts at the newest row. The comparison is
+    // strict, so the one key it cannot admit is a row holding `i64::MAX` in ALL THREE columns at
+    // once; `closedate` is a Unix second and `core_uid`/`row_id` are allocated counters, so that
+    // combination cannot occur. A row at `closedate == i64::MAX` alone is still admitted, through
+    // the `core_uid` and row-id comparisons — which is why narrowing this cursor to `closedate`
+    // alone would drop it. The `closedate>0` guard below plays no part in any of this.
+    let (after_close, after_core, after_row) = after.unwrap_or((i64::MAX, i64::MAX, i64::MAX));
     let sql = format!(
         "SELECT r.core_uid, r.{id_column}, r.closedate, r.basecurrency, r.profitbtc, {spent}
          FROM {table} r
@@ -824,9 +875,9 @@ fn reconciliation_batch(
            AND typeof(r.closedate)='integer' AND r.closedate>0
            AND typeof(r.basecurrency)='integer' AND r.basecurrency BETWEEN 0 AND 20
            AND typeof(r.profitbtc) IN ('integer','real')
-           AND (r.core_uid>?1 OR (r.core_uid=?1 AND r.{id_column}>?2))
+           AND (r.closedate, r.core_uid, r.{id_column}) < (?1, ?2, ?3)
            AND v.row_id IS NULL AND mr.minute_utc IS NULL
-         ORDER BY r.core_uid, r.{id_column} LIMIT ?3",
+         ORDER BY r.closedate DESC, r.core_uid DESC, r.{id_column} DESC LIMIT ?4",
         source_kind = source.code(),
         algorithm_version = super::ALGORITHM_VERSION,
     );
@@ -835,7 +886,7 @@ fn reconciliation_batch(
     })?;
     let rows = stmt
         .query_map(
-            rusqlite::params![after_core, after_row, limit as i64],
+            rusqlite::params![after_close, after_core, after_row, limit as i64],
             |row| {
                 Ok(TradeInput {
                     source,
