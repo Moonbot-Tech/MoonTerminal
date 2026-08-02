@@ -44,7 +44,6 @@ pub fn install_native_handler() {
 unsafe extern "system" fn native_exception_filter(
     info: *const windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
 ) -> i32 {
-    use std::io::Write;
     // `EXCEPTION_CONTINUE_SEARCH` resumes normal `UnhandledExceptionFilter` processing after the
     // log instead of attempting to continue execution at the faulting instruction.
     const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
@@ -86,18 +85,12 @@ unsafe extern "system" fn native_exception_filter(
     // the handler is executing. It does not unwind from the saved `ContextRecord`; available PDBs
     // symbolize the captured frames in the same way as the panic hook.
     let bt = std::backtrace::Backtrace::force_capture();
-    let line = format!("NATIVE CRASH: {body}\n--- backtrace ---\n{bt}\n--- end ---");
 
-    // Use direct file I/O because the faulting thread may already hold the global logger's lock.
-    // `panic.log` is the same working-directory-relative file used by the Rust panic hook.
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("panic.log")
-    {
-        let _ = writeln!(f, "{line}");
-        let _ = f.flush();
-    }
+    // Writes the file directly, without the global logger: the faulting thread may already hold its
+    // lock. Same sink as the Rust panic hook, which is why it lives in `applog`.
+    moon_core::applog::panic_log(&format!(
+        "NATIVE CRASH: {body}\n--- backtrace ---\n{bt}\n--- end ---"
+    ));
 
     EXCEPTION_CONTINUE_SEARCH
 }

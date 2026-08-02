@@ -136,7 +136,13 @@ pub(super) fn run(
     let port = endpoint.port;
     let host = address.to_string();
     let _ = tx.send(FeedMsg::Endpoint(endpoint));
-    log::info!("live connect {host}:{port} market={}", server.market);
+    // Name the core, never its address: the endpoint still reaches the UI through `FeedMsg::
+    // Endpoint` for Core Status, but a log file is shared far more casually than a screen is.
+    log::info!(
+        "live connect core={} market={} transport={transport:?}",
+        server.name,
+        server.market
+    );
 
     let client_cfg = ClientConfig::new(host, port, info.keys.master_key, info.keys.mac_key)
         .with_transport_mode(transport)
@@ -185,10 +191,15 @@ pub(super) fn run(
             };
             match client.reports().sync(req) {
                 Ok(_) => log::info!(
-                    "отчёты: core={} sync запрошен (from_rec_id={from})",
-                    server.uid
+                    "отчёты: core={} «{}» sync запрошен (from_rec_id={from})",
+                    server.uid,
+                    server.name
                 ),
-                Err(e) => log::warn!("отчёты: core={} sync не запустился: {e:?}", server.uid),
+                Err(e) => log::warn!(
+                    "отчёты: core={} «{}» sync не запустился: {e:?}",
+                    server.uid,
+                    server.name
+                ),
             }
             // Open rows may have closed or been deleted offline BELOW the cursor. Register them
             // for checking; the library retains the set and repeats it on hard reconnect, and the
@@ -196,7 +207,11 @@ pub(super) fn run(
             let open = sink.open_rows(server.uid);
             if !open.is_empty() {
                 if let Err(e) = client.reports().check_open_rows(&open) {
-                    log::warn!("отчёты: core={} check_open_rows не ушёл: {e:?}", server.uid);
+                    log::warn!(
+                        "отчёты: core={} «{}» check_open_rows не ушёл: {e:?}",
+                        server.uid,
+                        server.name
+                    );
                 }
             }
         }
@@ -283,7 +298,7 @@ pub(super) fn run(
                     let id = ExchangeId::with_dex(code.stable_id(), dex);
                     log::info!(
                         "core {} identity: exchange_code={} dex_name={:?} -> {:?}",
-                        server.id,
+                        crate::feed::core_label(server.id),
                         code.stable_id(),
                         dex,
                         id
@@ -354,17 +369,23 @@ pub(super) fn run(
                 if let Err(error) = client.settings().request_kernel_license_state() {
                     log::warn!(
                         "core {} request kernel license state failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
                 // Request the complete ClientSettings snapshot (TP/SL/sell/...). The core sends
                 // LevManage/RuntimeState after connection itself, so only refresh settings here.
                 if let Err(error) = client.settings().refresh() {
-                    log::warn!("core {} request client settings failed: {error}", server.id);
+                    log::warn!(
+                        "core {} request client settings failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
                 // Account hedge mode for the toolbar toggle.
                 if let Err(error) = client.account().refresh_hedge_mode() {
-                    log::warn!("core {} request hedge mode failed: {error}", server.id);
+                    log::warn!(
+                        "core {} request hedge mode failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
                 // Balances are NOT re-pushed on a reconnect: moonproto skips init, so the
                 // retained snapshot keeps feeding pre-outage figures while the status is already
@@ -376,7 +397,7 @@ pub(super) fn run(
                 if let Err(error) = client.balances().refresh() {
                     log::warn!(
                         "core {} post-connect balance refresh failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
                 account_reconciliation.mark_balance_attempt(Instant::now());
@@ -386,7 +407,7 @@ pub(super) fn run(
                     if let Err(error) = client.chart_alerts().request_snapshot() {
                         log::warn!(
                             "core {} request chart alerts snapshot failed: {error}",
-                            server.id
+                            crate::feed::core_label(server.id)
                         );
                     }
                 }
@@ -443,11 +464,14 @@ pub(super) fn run(
                     balance_refresh_log_until = Some(Instant::now() + Duration::from_secs(5));
                     log::info!(
                         "core {} balance repair requested (account order change)",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
                 Err(error) => {
-                    log::warn!("core {} balance refresh request failed: {error}", server.id)
+                    log::warn!(
+                        "core {} balance refresh request failed: {error}",
+                        crate::feed::core_label(server.id)
+                    )
                 }
             }
             account_reconciliation.mark_balance_attempt(account_now);
@@ -464,7 +488,7 @@ pub(super) fn run(
             {
                 log::warn!(
                     "core {} spot wallet refresh request failed: {error}",
-                    server.id
+                    crate::feed::core_label(server.id)
                 );
             }
             account_reconciliation.mark_spot_wallet_attempt(account_now);
@@ -488,7 +512,7 @@ pub(super) fn run(
                         moonproto::ChartAlertEvent::Upserted(obj) => {
                             log::info!(
                                 "core {} chart alert upserted: {} uid={} blob[{}]={}",
-                                server.id,
+                                crate::feed::core_label(server.id),
                                 obj.market_name,
                                 obj.obj_uid,
                                 obj.blob.len(),
@@ -508,7 +532,7 @@ pub(super) fn run(
                         } => {
                             log::info!(
                                 "core {} chart alert deleted: {} uid={}",
-                                server.id,
+                                crate::feed::core_label(server.id),
                                 market_name,
                                 obj_uid
                             );
@@ -523,7 +547,7 @@ pub(super) fn run(
                     if !e.success {
                         log::warn!(
                             "core {} engine action failed: {:?} code={} msg={}",
-                            server.id,
+                            crate::feed::core_label(server.id),
                             e.kind,
                             e.error_code,
                             e.error_msg
@@ -537,7 +561,7 @@ pub(super) fn run(
                 }) => {
                     log::debug!(
                         "core {} candles snapshot ready: markets {}/{} candles {}/{}",
-                        server.id,
+                        crate::feed::core_label(server.id),
                         summary.retained_markets,
                         summary.received_markets,
                         summary.retained_candles,
@@ -548,7 +572,10 @@ pub(super) fn run(
                     error,
                     ..
                 }) => {
-                    log::warn!("core {} candles snapshot failed: {error}", server.id);
+                    log::warn!(
+                        "core {} candles snapshot failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
                 // A failed CoinCard request for deep chart history used to fall into `_ => {}`
                 // SILENTLY, so candles "did not arrive" without any trace in the log.
@@ -560,7 +587,7 @@ pub(super) fn run(
                 }) => {
                     log::warn!(
                         "core {} coin-card {market} {kind:?} failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
                 // Diagnostic window after our balance refresh for phantom Assets entries. Response
@@ -569,7 +596,10 @@ pub(super) fn run(
                 // continuously.
                 Event::Balance(bev) => {
                     if balance_refresh_log_until.is_some_and(|t| Instant::now() < t) {
-                        log::info!("core {} balance event after refresh: {bev:?}", server.id);
+                        log::info!(
+                            "core {} balance event after refresh: {bev:?}",
+                            crate::feed::core_label(server.id)
+                        );
                     }
                 }
                 // News/tags feed is consumed below via `news_snapshot_from_proto` reading the
@@ -740,13 +770,17 @@ pub(super) fn run(
                     Event::ServerLog(l) if want_log => {
                         let ms = l.unix_millis();
                         let recv_ms = now_ms_i64();
+                        // Core text is foreign input and can name the machine it runs on. The file
+                        // writer redacts on its own; this call covers the UI copy below, which does
+                        // not pass through it.
+                        let msg = crate::applog::redact::addresses(&l.msg);
                         // Write to disk immediately through the buffer; split time into date and clock.
                         let (date, hms) = crate::applog::split_unix_ms(ms);
-                        log_writer.write(&date, &hms, "INFO", "", &l.msg);
+                        log_writer.write(&date, &hms, "INFO", "", &msg);
                         logs.push(CoreLogLine {
                             time_ms: ms,
                             recv_ms,
-                            msg: l.msg.clone(),
+                            msg: msg.into_owned(),
                         });
                     }
                     Event::Detect(d)
@@ -811,8 +845,9 @@ pub(super) fn run(
                                     change: change.clone(),
                                 }),
                                 ReportEvent::SyncStarted { request, .. } => log::info!(
-                                    "отчёты: core={} sync начат (from_rec_id={})",
+                                    "отчёты: core={} «{}» sync начат (from_rec_id={})",
                                     server.uid,
+                                    server.name,
                                     request.from_rec_id,
                                 ),
                                 // Catch-up page: the writer applies it in a transaction and
@@ -832,18 +867,21 @@ pub(super) fn run(
                                     });
                                 }
                                 ReportEvent::OpenRowsCheckStarted { rec_ids } => log::info!(
-                                    "отчёты: core={} проверка открытых строк начата ({} шт)",
+                                    "отчёты: core={} «{}» проверка открытых строк начата ({} шт)",
                                     server.uid,
+                                    server.name,
                                     rec_ids.len(),
                                 ),
                                 ReportEvent::OpenRowsCheckComplete { rec_ids } => log::info!(
-                                    "отчёты: core={} проверка открытых строк завершена ({} шт)",
+                                    "отчёты: core={} «{}» проверка открытых строк завершена ({} шт)",
                                     server.uid,
+                                    server.name,
                                     rec_ids.len(),
                                 ),
                                 ReportEvent::SchemaRejected { reason } => log::error!(
-                                    "отчёты: core={} схема отвергнута: {reason}",
+                                    "отчёты: core={} «{}» схема отвергнута: {reason}",
                                     server.uid,
+                                    server.name,
                                 ),
                             }
                         }
@@ -870,8 +908,9 @@ pub(super) fn run(
                             );
                         }
                         log::warn!(
-                            "отчёты(diag): core={} пакет отвергнут: cmd={cmd:?} len={len}{extra}",
+                            "отчёты(diag): core={} «{}» пакет отвергнут: cmd={cmd:?} len={len}{extra}",
                             server.uid,
+                            server.name,
                         );
                     }
                     _ => {}

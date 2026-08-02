@@ -270,7 +270,10 @@ impl AssetsView {
         this.apply_ctx_columns(cx);
         for core in &cores {
             if let Err(error) = this.backend.read(cx).session.refresh_transfer_assets(*core) {
-                log::warn!("assets initial refresh failed for core {core}: {error}");
+                log::warn!(
+                    "assets initial refresh failed for core {}: {error}",
+                    moon_core::feed::core_label(*core)
+                );
             }
         }
         let backend_for_initial_cache = this.backend.clone();

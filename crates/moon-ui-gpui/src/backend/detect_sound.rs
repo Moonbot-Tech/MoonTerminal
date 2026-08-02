@@ -62,11 +62,15 @@ impl Backend {
                 });
             self.last_detect_seq.insert(core, cur_max);
             if let Some(name) = sound {
-                moon_core::detect_diag::line(&format!("[sound] core={core} play={name}"));
+                moon_core::detect_diag::line(&format!(
+                    "[sound] core={} play={name}",
+                    moon_core::feed::core_label(core)
+                ));
                 crate::media::sound::play(&name);
             } else {
                 moon_core::detect_diag::line(&format!(
-                    "[sound] core={core} silent: {} new detects, среди них нет is_alert/SoundAlert",
+                    "[sound] core={} silent: {} new detects, среди них нет is_alert/SoundAlert",
+                    moon_core::feed::core_label(core),
                     cur_max.saturating_sub(last)
                 ));
             }

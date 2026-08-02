@@ -325,7 +325,10 @@ impl AssetsView {
                         if let Err(error) =
                             this.backend.read(cx).session.refresh_transfer_assets(core)
                         {
-                            log::warn!("assets refresh failed for core {core}: {error}");
+                            log::warn!(
+                                "assets refresh failed for core {}: {error}",
+                                moon_core::feed::core_label(core)
+                            );
                             window
                                 .push_notification(MoonNotification::error(error.to_string()), cx);
                         }
@@ -742,7 +745,10 @@ fn actions_cell(
                 .variant(MoonButtonVariant::Soft)
                 .on_click(move |_, _w, _app| {
                     // Placeholder for a future order-settings window.
-                    log::info!("assets: order button (stub) core={core} market={market}");
+                    log::info!(
+                        "assets: order button (stub) core={} market={market}",
+                        moon_core::feed::core_label(core)
+                    );
                 })
                 .render(),
         );

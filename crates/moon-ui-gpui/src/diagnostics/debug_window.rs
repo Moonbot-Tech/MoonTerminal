@@ -545,7 +545,10 @@ pub(crate) fn spawn_debug_chart_windows(cx: &mut App, backend: Entity<Backend>) 
         log::warn!("debug charts: no live sessions/markets; cannot open charts");
         return;
     };
-    log::info!("debug charts: opening 10 windows for core={core} market={market}");
+    log::info!(
+        "debug charts: opening 10 windows for core={} market={market}",
+        moon_core::feed::core_label(core)
+    );
 
     let mut opened = Vec::new();
     for i in 0..10 {

@@ -154,11 +154,15 @@ impl ClientSettingsSequence {
                     match client.settings().send(next.clone()) {
                         Ok(()) => {
                             self.observe_send_success(&next, mutation_count);
-                            log::info!("core {server_id} serialized client settings sent");
+                            log::info!(
+                                "core {} serialized client settings sent",
+                                crate::feed::core_label(server_id)
+                            );
                         }
                         Err(error) => {
                             log::warn!(
-                                "core {server_id} serialized client settings failed: {error}"
+                                "core {} serialized client settings failed: {error}",
+                                crate::feed::core_label(server_id)
                             );
                         }
                     }

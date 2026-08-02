@@ -209,7 +209,10 @@ fn rebuild_sync(
         let changed = build(&mut full, schema, now);
         if changed > 0 {
             let _ = client.strategies().sync_local_strategies(full);
-            log::info!("core {server_id} {action} {changed} strategies");
+            log::info!(
+                "core {} {action} {changed} strategies",
+                crate::feed::core_label(server_id)
+            );
         }
     }
 }
@@ -249,32 +252,41 @@ pub(super) fn drain_commands(
                     if let Err(error) = client.strategies().set_checked(*id, *checked) {
                         log::warn!(
                             "core {} set strategy {id} checked={checked} failed: {error}",
-                            server.id
+                            crate::feed::core_label(server.id)
                         );
                     }
                 }
                 if !checks.is_empty() {
                     if let Err(error) = client.strategies().send_checked_delta() {
-                        log::warn!("core {} send checked delta failed: {error}", server.id);
+                        log::warn!(
+                            "core {} send checked delta failed: {error}",
+                            crate::feed::core_label(server.id)
+                        );
                     }
                 }
                 // 2. Start or stop checked strategies (a separate engine command).
                 match start_stop {
                     Some(true) => {
                         if let Err(error) = client.strategies().start() {
-                            log::warn!("core {} start strategies failed: {error}", server.id);
+                            log::warn!(
+                                "core {} start strategies failed: {error}",
+                                crate::feed::core_label(server.id)
+                            );
                         }
                     }
                     Some(false) => {
                         if let Err(error) = client.strategies().stop() {
-                            log::warn!("core {} stop strategies failed: {error}", server.id);
+                            log::warn!(
+                                "core {} stop strategies failed: {error}",
+                                crate::feed::core_label(server.id)
+                            );
                         }
                     }
                     None => {}
                 }
                 log::info!(
                     "core {} strategies action: checks={} start_stop={:?}",
-                    server.id,
+                    crate::feed::core_label(server.id),
                     checks.len(),
                     start_stop
                 );
@@ -331,16 +343,28 @@ pub(super) fn drain_commands(
                 // `TStratDelete(strategy_id=id, folder_path="")` deletes one strategy.
                 // The UI enforces the "unchecked only" rule before sending the command.
                 if let Err(error) = client.strategies().delete(id, "") {
-                    log::warn!("core {} delete strategy {id} failed: {error}", server.id);
+                    log::warn!(
+                        "core {} delete strategy {id} failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
-                log::info!("core {} delete strategy {id}", server.id);
+                log::info!(
+                    "core {} delete strategy {id}",
+                    crate::feed::core_label(server.id)
+                );
             }
             Ok(CoreCmd::DeleteFolder { path }) => {
                 // `TStratDelete(strategy_id=0, folder_path=path)` deletes an entire folder.
                 if let Err(error) = client.strategies().delete(0, path.as_str()) {
-                    log::warn!("core {} delete folder {path} failed: {error}", server.id);
+                    log::warn!(
+                        "core {} delete folder {path} failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
-                log::info!("core {} delete folder {path}", server.id);
+                log::info!(
+                    "core {} delete folder {path}",
+                    crate::feed::core_label(server.id)
+                );
             }
             Ok(CoreCmd::CreateStrategies { specs }) => {
                 // New ids are assigned inside `rebuild_sync` (max + 1), so mark an edit to any id.
@@ -444,41 +468,59 @@ pub(super) fn drain_commands(
                 ) {
                     log::warn!(
                         "core {} transfer {qty} {asset} {from:?}->{to:?} failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
                 // Request a fresh list after the transfer so the UI sees the new balances.
                 if let Err(error) = client.balances().refresh_transfer_assets() {
-                    log::warn!("core {} refresh transfer assets failed: {error}", server.id);
+                    log::warn!(
+                        "core {} refresh transfer assets failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
-                log::info!("core {} transfer {qty} {asset} {from:?}->{to:?}", server.id);
+                log::info!(
+                    "core {} transfer {qty} {asset} {from:?}->{to:?}",
+                    crate::feed::core_label(server.id)
+                );
             }
             Ok(CoreCmd::RefreshTransferAssets) => {
                 if let Err(error) = client.balances().refresh_transfer_assets() {
-                    log::warn!("core {} refresh transfer assets failed: {error}", server.id);
+                    log::warn!(
+                        "core {} refresh transfer assets failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
                 // Also request a fresh balance snapshot as a manual nudge against phantom Assets
                 // entries (a sold coin that remains stuck). Clicking the core in the window is the
                 // user's request to reread balances. This is cheap: it queries the core, not the
                 // exchange.
                 if let Err(error) = client.balances().refresh() {
-                    log::warn!("core {} balance refresh request failed: {error}", server.id);
+                    log::warn!(
+                        "core {} balance refresh request failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 } else {
                     log::info!(
                         "core {} balance refresh requested (assets click)",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
             }
             Ok(CoreCmd::ConvertDust) => {
                 // Convert small balances to BNB through the Engine API; this is irreversible.
                 if let Err(error) = client.balances().convert_dust_bnb() {
-                    log::warn!("core {} convert dust failed: {error}", server.id);
+                    log::warn!(
+                        "core {} convert dust failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
                 if let Err(error) = client.balances().refresh_transfer_assets() {
-                    log::warn!("core {} refresh transfer assets failed: {error}", server.id);
+                    log::warn!(
+                        "core {} refresh transfer assets failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 }
-                log::info!("core {} convert dust", server.id);
+                log::info!("core {} convert dust", crate::feed::core_label(server.id));
             }
             Ok(CoreCmd::ChartAlertUpsert {
                 market,
@@ -488,12 +530,12 @@ pub(super) fn drain_commands(
                 if let Err(error) = client.chart_alerts().upsert(market.clone(), obj_uid, blob) {
                     log::warn!(
                         "core {} chart alert upsert {market} uid={obj_uid} failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 } else {
                     log::info!(
                         "core {} chart alert upsert {market} uid={obj_uid}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
             }
@@ -501,12 +543,12 @@ pub(super) fn drain_commands(
                 if let Err(error) = client.chart_alerts().delete(market.clone(), obj_uid) {
                     log::warn!(
                         "core {} chart alert delete {market} uid={obj_uid} failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 } else {
                     log::info!(
                         "core {} chart alert delete {market} uid={obj_uid}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
             }
@@ -566,10 +608,13 @@ pub(super) fn drain_commands(
                 {
                     Ok(n) => log::info!(
                         "core {} set report rows deleted={deleted} -> {n} батч(ей)",
-                        server.id
+                        crate::feed::core_label(server.id)
                     ),
                     Err(error) => {
-                        log::warn!("core {} set_rows_deleted failed: {error}", server.id)
+                        log::warn!(
+                            "core {} set_rows_deleted failed: {error}",
+                            crate::feed::core_label(server.id)
+                        )
                     }
                 }
             }
@@ -613,14 +658,20 @@ pub(super) fn drain_commands(
                     Some(mut lev) => {
                         apply_lev_manage_edit(&mut lev, edit);
                         if let Err(error) = client.settings().manage_leverage(&lev) {
-                            log::warn!("core {} manage leverage failed: {error}", server.id);
+                            log::warn!(
+                                "core {} manage leverage failed: {error}",
+                                crate::feed::core_label(server.id)
+                            );
                         } else {
-                            log::info!("core {} lev edit {edit:?} sent", server.id);
+                            log::info!(
+                                "core {} lev edit {edit:?} sent",
+                                crate::feed::core_label(server.id)
+                            );
                         }
                     }
                     None => log::warn!(
                         "core {} edit lev manage ignored: no snapshot yet",
-                        server.id
+                        crate::feed::core_label(server.id)
                     ),
                 }
             }
@@ -628,9 +679,15 @@ pub(super) fn drain_commands(
                 // This performs a REAL exchange action through the Engine API. Ignore the ticket;
                 // the result arrives in a HedgeModeUpdated event that updates the store.
                 match client.account().set_hedge_mode(on) {
-                    Ok(_ticket) => log::info!("core {} set hedge mode -> {on}", server.id),
+                    Ok(_ticket) => log::info!(
+                        "core {} set hedge mode -> {on}",
+                        crate::feed::core_label(server.id)
+                    ),
                     Err(error) => {
-                        log::warn!("core {} set hedge mode -> {on} failed: {error}", server.id)
+                        log::warn!(
+                            "core {} set hedge mode -> {on} failed: {error}",
+                            crate::feed::core_label(server.id)
+                        )
                     }
                 }
             }
@@ -640,20 +697,29 @@ pub(super) fn drain_commands(
                 // the leverage map in Assets.
                 match client.account().set_leverage(&market, leverage) {
                     Ok(_ticket) => {
-                        log::info!("core {} set leverage {market} -> {leverage}x", server.id)
+                        log::info!(
+                            "core {} set leverage {market} -> {leverage}x",
+                            crate::feed::core_label(server.id)
+                        )
                     }
                     Err(error) => log::warn!(
                         "core {} set leverage {market} -> {leverage}x failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     ),
                 }
             }
             Ok(CoreCmd::RestartNow) => {
                 // Start or restart the runtime; the result reaches the store via RuntimeStateUpdated.
                 if let Err(error) = client.settings().restart_now() {
-                    log::warn!("core {} restart_now failed: {error}", server.id);
+                    log::warn!(
+                        "core {} restart_now failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 } else {
-                    log::info!("core {} restart_now sent", server.id);
+                    log::info!(
+                        "core {} restart_now sent",
+                        crate::feed::core_label(server.id)
+                    );
                 }
             }
             Ok(CoreCmd::ResetProfit(kind)) => {
@@ -664,18 +730,30 @@ pub(super) fn drain_commands(
                     crate::feed::ResetProfitKind::All => moonproto::ResetProfitKind::AllProfit,
                 };
                 if let Err(error) = client.settings().reset_profit(proto_kind) {
-                    log::warn!("core {} reset_profit({kind:?}) failed: {error}", server.id);
+                    log::warn!(
+                        "core {} reset_profit({kind:?}) failed: {error}",
+                        crate::feed::core_label(server.id)
+                    );
                 } else {
-                    log::info!("core {} reset_profit({kind:?}) sent", server.id);
+                    log::info!(
+                        "core {} reset_profit({kind:?}) sent",
+                        crate::feed::core_label(server.id)
+                    );
                 }
             }
             Ok(CoreCmd::CancelAllOrders) => {
                 // This performs a REAL exchange action. Ignore the ticket; the result arrives in
                 // an order snapshot.
                 match client.account().cancel_all_orders() {
-                    Ok(_ticket) => log::info!("core {} cancel_all_orders sent", server.id),
+                    Ok(_ticket) => log::info!(
+                        "core {} cancel_all_orders sent",
+                        crate::feed::core_label(server.id)
+                    ),
                     Err(error) => {
-                        log::warn!("core {} cancel_all_orders failed: {error}", server.id)
+                        log::warn!(
+                            "core {} cancel_all_orders failed: {error}",
+                            crate::feed::core_label(server.id)
+                        )
                     }
                 }
             }
@@ -689,7 +767,7 @@ pub(super) fn drain_commands(
                 {
                     log::warn!(
                         "core {} set exclude blacklisted delta failed: {error}",
-                        server.id
+                        crate::feed::core_label(server.id)
                     );
                 }
             }

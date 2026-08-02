@@ -308,7 +308,10 @@ impl MarketDataSource {
                 if market_diag_enabled()
                     && market_diag_due(format!("no-provider:{core}:{market}"), MARKET_DIAG_FLOOR)
                 {
-                    market_diag(format!("refresh core={core} market={market}: no provider"));
+                    market_diag(format!(
+                        "refresh core={} market={market}: no provider",
+                        crate::feed::core_label(core)
+                    ));
                 }
                 return false;
             };
@@ -317,7 +320,9 @@ impl MarketDataSource {
                     && market_diag_due(format!("no-client:{provider}:{market}"), MARKET_DIAG_FLOOR)
                 {
                     market_diag(format!(
-                        "refresh core={core} provider={provider} market={market}: no client"
+                        "refresh core={} provider={} market={market}: no client",
+                        crate::feed::core_label(core),
+                        crate::feed::core_label(provider)
                     ));
                 }
                 return false;
@@ -343,7 +348,9 @@ impl MarketDataSource {
                 )
             {
                 market_diag(format!(
-                    "refresh core={core} provider={provider} market={market}: no snapshot"
+                    "refresh core={} provider={} market={market}: no snapshot",
+                    crate::feed::core_label(core),
+                    crate::feed::core_label(provider)
                 ));
             }
             return false;
@@ -439,10 +446,12 @@ impl MarketDataSource {
             {
                 let price_known = snapshot.markets().price(market).is_some();
                 market_diag(format!(
-                    "refresh core={core} provider={provider} market={market}: no store view \
+                    "refresh core={} provider={} market={market}: no store view \
                      kind={orderbook_kind:?} used_kind={book_kind_used:?} \
                      price_known={price_known} book_dirty_rev={book_dirty_revision} \
                      book_due={book_due} snapshot_book={has_book_snapshot} pulled_book={:?}",
+                    crate::feed::core_label(core),
+                    crate::feed::core_label(provider),
                     book_update.as_ref().map(|b| (b.bids.len(), b.asks.len()))
                 ));
             }
@@ -464,11 +473,13 @@ impl MarketDataSource {
                 .unwrap_or(0);
             let price_known = snapshot.markets().price(market).is_some();
             market_diag(format!(
-                "refresh core={core} provider={provider} market={market}: changed={changed} \
+                "refresh core={} provider={} market={market}: changed={changed} \
                  kind={orderbook_kind:?} used_kind={book_kind_used:?} price_known={price_known} \
                  book_dirty_rev={book_dirty_revision} book_due={book_due} \
                  snapshot_book={has_book_snapshot} pulled_book={pulled_book_shape:?} \
                  view_book_len={book_len}",
+                crate::feed::core_label(core),
+                crate::feed::core_label(provider),
             ));
         }
         changed
