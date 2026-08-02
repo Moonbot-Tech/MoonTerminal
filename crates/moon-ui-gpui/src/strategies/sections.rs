@@ -3,7 +3,16 @@
 use super::*;
 
 impl StrategiesView {
-    pub(super) fn sections_panel(&self, store: &CoreStore, cx: &Context<Self>) -> AnyElement {
+    /// Renders schema sections using dependency values shared with the parameters panel.
+    ///
+    /// The caller computes `values` once per frame because building them normalizes every selected
+    /// field and schema field name.
+    pub(super) fn sections_panel(
+        &self,
+        store: &CoreStore,
+        values: &Values,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
         let mut col = v_flex()
@@ -122,13 +131,11 @@ impl StrategiesView {
                 .into_any_element();
         }
 
-        let values = selected_values(self, store);
-
         // Show active sections first and inactive sections second, preserving schema order within each.
         let mut order: Vec<(usize, bool)> = sections
             .iter()
             .enumerate()
-            .map(|(i, sec)| (i, section_active(&self.rules, &values, sec)))
+            .map(|(i, sec)| (i, section_active(&self.rules, values, sec)))
             .collect();
         order.sort_by_key(|(_, active)| !active);
 

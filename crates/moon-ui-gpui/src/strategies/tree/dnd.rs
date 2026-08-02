@@ -232,20 +232,16 @@ impl StrategiesView {
         cx.notify();
     }
 
-    /// Returns drag IDs for a strategy row.
+    /// Returns the ids of every selected strategy in one core, the payload its selected rows drag.
     ///
-    /// If the row belongs to the selection, include the entire selection from its core; otherwise
-    /// include only that row.
-    pub(super) fn drag_ids_for(&self, core: CoreId, id: u64) -> Vec<u64> {
-        if self.sel.contains(&(core, id)) {
-            self.sel
-                .iter()
-                .filter(|(c, _)| *c == core)
-                .map(|(_, i)| *i)
-                .collect()
-        } else {
-            vec![id]
-        }
+    /// Building this shared payload once per core keeps large multi-selections linear in the
+    /// number of selected strategies.
+    pub(super) fn drag_ids_for_core(&self, core: CoreId) -> std::rc::Rc<[u64]> {
+        self.sel
+            .iter()
+            .filter(|(c, _)| *c == core)
+            .map(|(_, i)| *i)
+            .collect()
     }
 }
 

@@ -1,4 +1,4 @@
-//! Strategies window, ported from egui's `src/strategies/*` and `window/strategies_window.rs`.
+//! Strategies window for inspecting and editing each connected core's strategies.
 //! The separate OS window contains tree, versions, schema-section, and parameter panels. Its
 //! core/folder/strategy tree supports search, filters, staged checkboxes, and start/stop Apply;
 //! schema sections dim inactive entries, while parameter rows support read-only, YES/NO, and long
@@ -37,8 +37,8 @@ use moon_ui::{
     MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonDropdown,
     MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone, MoonTreeItem, MoonTreeState,
-    MoonWindowFrame, Root, h_flex, v_flex,
+    MoonTextArea, MoonTextAreaEvent, MoonTextAreaState, MoonTone, MoonTreeEvent, MoonTreeItem,
+    MoonTreeState, MoonWindowFrame, Root, h_flex, v_flex,
 };
 
 use crate::design::{moon, moon_alpha};
@@ -54,7 +54,7 @@ use rules::{Rules, Values};
 pub type Key = (CoreId, u64);
 type FieldEditKey = (CoreId, u64, String);
 
-/// Strategies-window state, porting egui's `StrategiesState` and four-panel renderer.
+/// State and renderer for the four-panel Strategies window.
 pub struct StrategiesView {
     backend: Entity<Backend>,
     /// Search input whose value is synchronized into the filter.
@@ -82,7 +82,7 @@ pub struct StrategiesView {
     /// Previous frame's flat visible-strategy order used for Shift ranges.
     flat_order: Vec<Key>,
     /// MoonTree state for flattening, virtualization, expansion, and drag-and-drop hitboxes.
-    /// Selection and staging remain above; `TreeState` only renders and exposes decorator hitboxes.
+    /// Selection and staging remain above; `MoonTreeState` only renders and exposes decorator hitboxes.
     tree_state: Entity<MoonTreeState>,
     /// Selected section index within the strategy kind's schema.
     /// Preserved across strategy changes and reset only when it falls outside the new range.
@@ -129,6 +129,16 @@ pub struct StrategiesView {
     pending_select: Option<(CoreId, String)>,
     /// Signature of strategy and schema data that materially changes the window.
     last_sig: u64,
+    /// Signature of the tree shape last pushed into [`MoonTreeState`]: node ids, labels, folder
+    /// flags, expansion, and whether a search is active.
+    ///
+    /// Re-pushing identical items incurs two deep clones of the item forest inside MoonTree because
+    /// `set_items` and `set_expanded` each rebuild its flattened entries. `None` forces the next
+    /// frame to push unconditionally.
+    ///
+    /// Only the SHAPE is cached. Row contents (`NodeData`: selection, staging, checkboxes, order
+    /// counts, drag payloads) are rebuilt every frame regardless, so nothing here can render stale.
+    last_tree_shape: Option<u64>,
     /// Whether the parameters panel hides dependency-inactive fields.
     only_active_params: bool,
     /// A key `sync_pending_select` resolved off-frame, waiting for render to scroll to it.
@@ -140,6 +150,7 @@ pub struct StrategiesView {
 }
 
 impl Render for StrategiesView {
+    /// Renders the window and uses a structural signature to avoid redundant MoonTree pushes.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Drain navigation from an order-line context menu or Orders Strat click before building
         // the tree so filter, expansion, and selection changes appear in this frame.
@@ -165,21 +176,30 @@ impl Render for StrategiesView {
         };
         self.flat_order = build.flat;
         let searching = build.searching;
-        self.tree_state.update(cx, |st, c| {
-            st.set_items(build.items, c);
-            st.set_force_expanded(searching, c);
-            st.set_expanded(build.expanded_ids, c);
-            // Navigate by temporarily selecting the MoonTree item to obtain its index and scroll
-            // to it, then clear that selection because `sel` renders the highlight.
-            if let Some((core, id)) = goto {
+        // Push the forest into MoonTree only when its shape actually changed.
+        let shape = tree::moon::shape_sig(&build.items, &build.expanded_ids, searching);
+        if self.last_tree_shape != Some(shape) {
+            self.last_tree_shape = Some(shape);
+            self.tree_state.update(cx, |st, c| {
+                st.set_items(build.items, c);
+                st.set_force_expanded(searching, c);
+                st.set_expanded(build.expanded_ids, c);
+            });
+        }
+        // Navigate by temporarily selecting the MoonTree item to obtain its index and scroll to
+        // it, then clear that selection because `sel` renders the highlight. Independent of the
+        // push above: an unchanged shape means MoonTree already holds the forest to resolve
+        // against, and the reveal path expanded the target's core and folder chain before this.
+        if let Some((core, id)) = goto {
+            self.tree_state.update(cx, |st, c| {
                 let item = MoonTreeItem::new(tree::moon::id_strat(core, id), "");
                 st.set_selected_item(Some(&item), c);
                 if let Some(ix) = st.selected_index() {
                     st.scroll_to_item(ix, ScrollStrategy::Center);
                 }
                 st.set_selected_item(None, c);
-            }
-        });
+            });
+        }
         let node_data = std::rc::Rc::new(build.node_data);
 
         // Prepare the Versions panel and deleted-strategy cache before borrowing the store because
@@ -188,10 +208,12 @@ impl Render for StrategiesView {
         let versions = self.versions_panel(cx);
         let (tree, sections, params_model) = {
             let store = self.backend.read(cx).session.store();
+            // Both panels read the same dependency values; build them once.
+            let values = selected_values(self, store);
             (
                 self.tree_panel(store, &cores, node_data, cx),
-                self.sections_panel(store, cx),
-                self.params_model(store),
+                self.sections_panel(store, &values, cx),
+                self.params_model(store, values),
             )
         };
         let params = self.params_panel(params_model, window, cx);

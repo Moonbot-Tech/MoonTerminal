@@ -129,6 +129,22 @@ impl StrategiesView {
             .unwrap_or_default()
     }
 
+    /// Returns whether anything is selected and whether every selected row is disabled.
+    ///
+    /// The rendering path computes these booleans directly so it does not clone the selected rows
+    /// and their fields on every frame.
+    pub(super) fn selection_summary(&self, store: &CoreStore) -> (bool, bool) {
+        let mut any = false;
+        let mut all_off = true;
+        for (c, id) in selected_keys(self) {
+            if let Some(r) = row(store, c, id) {
+                any = true;
+                all_off &= !r.checked;
+            }
+        }
+        (any, all_off)
+    }
+
     /// Returns owned copies of selected rows with their cores for clipboard and validation use.
     pub(super) fn selection_rows(&self, store: &CoreStore) -> Vec<(CoreId, StrategyRow)> {
         selected_keys(self)
@@ -220,7 +236,7 @@ impl StrategiesView {
             // the entire folder and its contents.
             let no_sel = {
                 let store = self.backend.read(cx).session.store();
-                self.selection_rows(store).is_empty()
+                !self.selection_summary(store).0
             };
             if no_sel {
                 if let Some((core, path)) = self.selected_folder.clone() {
@@ -249,9 +265,7 @@ impl StrategiesView {
 
     /// Builds selection and clipboard action buttons for the lower action panel.
     pub(super) fn selection_toolbar(&self, store: &CoreStore, cx: &Context<Self>) -> AnyElement {
-        let rows = self.selection_rows(store);
-        let has_sel = !rows.is_empty();
-        let all_off = rows.iter().all(|(_, r)| !r.checked);
+        let (has_sel, all_off) = self.selection_summary(store);
         let can_paste = self.clipboard.is_some();
         // Use a fixed-width left group: Copy and Paste each fill half of the first row, while
         // Delete spans the row below through `MoonButton::full_width()`.

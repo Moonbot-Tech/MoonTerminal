@@ -1,14 +1,14 @@
-//! Pure helpers for the Strategies window, ported from `strategies/mod.rs`: selection and
-//! multi-selection, schema intersections, field values and edits, memo/formula classification,
-//! and folder-tree construction. These functions perform UI-independent calculations over
-//! `StrategiesView` and `CoreStore`; rendering methods live in [`super`].
+//! Pure helpers for Strategies-window selection, schema intersections, field values and edits,
+//! memo/formula classification, folder-tree construction, and folder counts. These functions
+//! perform UI-independent calculations over `StrategiesView` and `CoreStore`; rendering methods
+//! live in [`super`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use moon_core::feed::{SchemaField, SchemaFieldUi, SchemaSection, StrategyRow};
 use moon_core::session::{CoreId, CoreStore};
 
-use super::filter::StrategyFilter;
+use super::filter::PreparedFilter;
 use super::rules::{Rules, Values};
 use super::tree::ops::path_segments;
 use super::{Key, StrategiesView};
@@ -93,13 +93,18 @@ pub(super) fn common_fields(st: &StrategiesView, store: &CoreStore) -> Option<Ha
     if keys.len() <= 1 {
         return None;
     }
+    // Selections are usually many strategies of ONE kind, and each `kind_field_set` call lowercases
+    // every field name in that kind's schema. Resolve each kind once instead of once per row.
+    let mut by_kind: HashMap<(CoreId, u8), HashSet<String>> = HashMap::new();
     let mut acc: Option<HashSet<String>> = None;
     for (c, id) in keys {
         let Some(r) = row(store, c, id) else { continue };
-        let set = kind_field_set(store, c, r.kind_ordinal);
+        let set = by_kind
+            .entry((c, r.kind_ordinal))
+            .or_insert_with(|| kind_field_set(store, c, r.kind_ordinal));
         acc = Some(match acc {
-            None => set,
-            Some(a) => a.intersection(&set).cloned().collect(),
+            None => set.clone(),
+            Some(a) => a.intersection(set).cloned().collect(),
         });
     }
     acc
@@ -372,30 +377,74 @@ pub(super) fn ensure_folder(root: &mut FolderNode, parts: &[String]) {
     }
 }
 
-/// Count active and total strategies below `prefix` after applying kind and direction filters.
-pub(super) fn folder_counts(
-    strategies: &[StrategyRow],
-    filter: &StrategyFilter,
-    prefix: &[String],
-) -> (usize, usize) {
-    let mut active = 0;
-    let mut total = 0;
-    for r in strategies {
-        if !filter.counts(r) {
-            continue;
+/// Active and total strategy counts for every folder prefix of one core.
+///
+/// The accumulator keeps tree construction linear in the number of strategies: each strategy
+/// contributes once to every prefix of its path, including the folder that directly contains it.
+///
+/// The key is the slash-joined prefix — the same string [`super::tree::moon`] uses for folder ids
+/// and for the `expanded_folders` set — so these counts inherit the tree's own path aliasing and
+/// introduce none of their own.
+#[derive(Default)]
+pub(super) struct FolderCounts {
+    by_path: HashMap<String, (usize, usize)>,
+    root: (usize, usize),
+    /// Set for a core whose folders are not built, so no per-folder entry is worth allocating.
+    totals_only: bool,
+}
+
+impl FolderCounts {
+    /// Counts only the core total, for a collapsed core whose folder rows are never built.
+    /// [`Self::for_path`] reports nothing in this mode and must not be consulted.
+    pub(super) fn totals_only() -> Self {
+        Self {
+            totals_only: true,
+            ..Self::default()
         }
-        let parts: Vec<&str> = path_segments(&r.folder_path).collect();
-        if parts.len() >= prefix.len()
-            && prefix
-                .iter()
-                .zip(parts.iter())
-                .all(|(a, b)| a.as_str() == *b)
-        {
-            total += 1;
-            if r.checked {
-                active += 1;
+    }
+
+    /// Adds one strategy to its own folder and to every ancestor folder.
+    ///
+    /// The filter gate lives here rather than at the call site so a caller cannot accidentally
+    /// count rows the captions must exclude. Only kind and direction gate a count: search text and
+    /// `only_active` hide rows from the tree without changing any folder's `active/total`.
+    pub(super) fn add(&mut self, row: &StrategyRow, filter: &PreparedFilter) {
+        if !filter.counts(row) {
+            return;
+        }
+        let hit = usize::from(row.checked);
+        self.root.0 += hit;
+        self.root.1 += 1;
+        if self.totals_only {
+            return;
+        }
+        let mut key = String::new();
+        for seg in path_segments(&row.folder_path) {
+            if !key.is_empty() {
+                key.push('/');
+            }
+            key.push_str(seg);
+            // Look up before inserting so a repeat visit to a known folder does not clone the key.
+            if let Some(e) = self.by_path.get_mut(&key) {
+                e.0 += hit;
+                e.1 += 1;
+            } else {
+                self.by_path.insert(key.clone(), (hit, 1));
             }
         }
     }
-    (active, total)
+
+    /// Returns `(active, total)` at or below a folder, or `(0, 0)` for a folder holding no
+    /// strategies — the case of a UI-only folder created before its first strategy.
+    pub(super) fn for_path(&self, path: &str) -> (usize, usize) {
+        self.by_path.get(path).copied().unwrap_or((0, 0))
+    }
+
+    /// Returns `(active, total)` over every counted strategy, which is the core's own caption.
+    pub(super) fn root(&self) -> (usize, usize) {
+        self.root
+    }
 }
+
+#[cfg(test)]
+mod tests;

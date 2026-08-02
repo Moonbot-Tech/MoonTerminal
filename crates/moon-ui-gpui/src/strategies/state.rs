@@ -1,4 +1,4 @@
-//! [StrategiesView] construction, the change-signature, and the event/focus impls.
+//! [`StrategiesView`] construction, change detection, and event/focus integration.
 
 use super::*;
 
@@ -17,6 +17,7 @@ fn strategies_sig(b: &Backend) -> u64 {
 }
 
 impl StrategiesView {
+    /// Creates the Strategies view and subscribes it to search, tree, backend, and window events.
     pub(super) fn new(
         backend: Entity<Backend>,
         window: &mut Window,
@@ -39,6 +40,16 @@ impl StrategiesView {
         .detach();
 
         let initial_sig = strategies_sig(backend.read(cx));
+
+        let tree_state = cx.new(|cx| MoonTreeState::new(cx));
+        // MoonTree can mutate expansion from keyboard input, but `expanded_cores` and
+        // `expanded_folders` remain authoritative. Invalidating the cached shape makes the next
+        // frame restore that window-owned expansion without requiring unconditional tree pushes.
+        cx.subscribe(&tree_state, |this, _state, _ev: &MoonTreeEvent, cx| {
+            this.last_tree_shape = None;
+            cx.notify();
+        })
+        .detach();
 
         // Redraw for new strategy or schema snapshots. When explicitly enabled by
         // `MOON_STRATEGY_RULES_HOT_RELOAD`, rules reload on the file-mtime timer below; observing
@@ -111,7 +122,7 @@ impl StrategiesView {
             expanded_deleted: HashSet::new(),
             anchor: None,
             flat_order: Vec::new(),
-            tree_state: cx.new(|cx| MoonTreeState::new(cx)),
+            tree_state,
             selected_section: 0,
             staged: HashMap::new(),
             field_edits: HashMap::new(),
@@ -131,6 +142,7 @@ impl StrategiesView {
             op_input_init: String::new(),
             pending_select: None,
             last_sig: initial_sig,
+            last_tree_shape: None,
             // Hide dependency-inactive parameters by default.
             only_active_params: true,
             pending_scroll: None,
