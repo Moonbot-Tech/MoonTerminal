@@ -9,8 +9,8 @@ use super::{read_sources_res, table_columns_res, QuoteBreakdown, ReadResult, Rea
 
 /// Columns and ordering displayed in the Reports window; the window owns titles and widths.
 ///
-/// `core_uid` and `newrecid` are hidden service columns. `id` is the server row id
-/// formerly represented by the legacy `db_id`.
+/// `core_uid` and `newrecid` are hidden service columns. `id` is the shared display key for the
+/// typed source's `id` and the legacy source's `db_id`.
 pub const DISPLAY_COLUMNS: &[&str] = &[
     "buydate",
     "closedate",
@@ -29,6 +29,9 @@ pub const DISPLAY_COLUMNS: &[&str] = &[
     "gainedbtc",
     "profitbtc",
     "profitpct",
+    "valuation_profit_usdt",
+    "valuation_rate",
+    "valuation_rate_source",
     "lev",
     "strategyid",
     "source",
@@ -67,6 +70,60 @@ pub const DISPLAY_COLUMNS: &[&str] = &[
 
 /// Synthetic report column containing per-trade return on positive spent capital.
 pub const PROFIT_PERCENT_COLUMN: &str = "profitpct";
+
+/// Synthetic report column carrying one trade's profit converted to USDT.
+pub const VALUATION_PROFIT_COLUMN: &str = "valuation_profit_usdt";
+
+/// Synthetic report column carrying the USDT rate applied to one trade.
+pub const VALUATION_RATE_COLUMN: &str = "valuation_rate";
+
+/// Synthetic report column naming where that rate came from.
+pub const VALUATION_SOURCE_COLUMN: &str = "valuation_rate_source";
+
+/// Report columns introduced after the `v2` visible-column schema.
+///
+/// A saved visible-column set is explicit, so schema generations that include these columns must
+/// restore them when reading an earlier set. Both [`crate::db::load_visible`] and the per-context
+/// window-layout migration read this list, which keeps the two persisted stores aligned.
+pub const COLUMNS_ADDED_SINCE_V2: &[&str] = &[VALUATION_PROFIT_COLUMN];
+
+/// One Report column computed by a SQL expression rather than read from a source table.
+struct Synthetic {
+    /// Runtime column key, also used as the raw export header.
+    name: &'static str,
+    /// Report columns the expression reads. A source missing any of them cannot compute it.
+    inputs: &'static [&'static str],
+}
+
+/// Every synthetic Report column, and everything that distinguishes one from a stored column.
+///
+/// One entry per column, and one [`synthetic_expression`] serving BOTH the projection and the
+/// `ORDER BY`, so a column cannot ship half-wired. That failure mode is silent and expensive: each
+/// physical source is truncated by `LIMIT` before the Rust merge, so a column that could project
+/// but not sort would return the wrong global top rows with no error anywhere.
+const SYNTHETIC: &[Synthetic] = &[
+    Synthetic {
+        name: PROFIT_PERCENT_COLUMN,
+        inputs: &["profitbtc", "spentbtc"],
+    },
+    Synthetic {
+        name: VALUATION_PROFIT_COLUMN,
+        inputs: super::valuation::REQUIRED_TRADE_INPUTS,
+    },
+    Synthetic {
+        name: VALUATION_RATE_COLUMN,
+        inputs: super::valuation::REQUIRED_TRADE_INPUTS,
+    },
+    Synthetic {
+        name: VALUATION_SOURCE_COLUMN,
+        inputs: super::valuation::REQUIRED_TRADE_INPUTS,
+    },
+];
+
+/// Look one column up in the synthetic table.
+fn synthetic(col: &str) -> Option<&'static Synthetic> {
+    SYNTHETIC.iter().find(|entry| entry.name == col)
+}
 
 /// Query result containing column names and generic value rows for every column.
 ///
@@ -177,13 +234,16 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
         have.insert("id".to_string());
     }
     have.extend(legacy);
+    // A synthetic column is offered on the REPORT schema alone, never on `valuation::is_attached`:
+    // gating it on the derived cache would churn the column set — and with it every saved width and
+    // visibility keyed to it — each time that cache detaches. An unattached cache renders empty
+    // cells instead.
     let mut out: Vec<String> = DISPLAY_COLUMNS
         .iter()
         .filter(|c| {
             have.contains(**c)
-                || (**c == PROFIT_PERCENT_COLUMN
-                    && have.contains("profitbtc")
-                    && have.contains("spentbtc"))
+                || synthetic(c)
+                    .is_some_and(|entry| entry.inputs.iter().all(|name| have.contains(*name)))
         })
         .map(|c| (*c).to_string())
         .collect();
@@ -197,28 +257,68 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
     Ok(out)
 }
 
+/// Build one synthetic column's SQL against one physical source.
+///
+/// The single definition behind both the projection and the `ORDER BY`, so the two cannot disagree
+/// about what a column means or about whether this source can produce it.
+///
+/// Args:
+///     entry: Synthetic column being built.
+///     src: Physical source whose schema decides availability.
+///     valuation: Derived-cache fragments, absent when that cache is not joined.
+///
+/// Returns:
+///     The expression, or `None` when this source cannot compute the column.
+fn synthetic_expression(
+    entry: &Synthetic,
+    src: &ReadSource,
+    valuation: Option<&super::valuation::CoverageSql>,
+) -> Option<String> {
+    if !entry.inputs.iter().all(|name| src.cols.contains(*name)) {
+        return None;
+    }
+    Some(match entry.name {
+        PROFIT_PERCENT_COLUMN => {
+            "CASE WHEN r.\"spentbtc\" > 0 THEN r.\"profitbtc\" / r.\"spentbtc\" * 100.0 END"
+                .to_string()
+        }
+        // A cache-free retry has no `v` or `ra` aliases, so the expression must vanish with the
+        // joins that back it.
+        VALUATION_PROFIT_COLUMN => valuation?.profit_usdt.clone(),
+        VALUATION_RATE_COLUMN => valuation?.per_row.rate.clone(),
+        VALUATION_SOURCE_COLUMN => valuation?.per_row.source.clone(),
+        _ => return None,
+    })
+}
+
 /// Project a source onto the shared `cols`: preserve its own columns, map legacy
 /// `db_id` to `id`, and emit NULL for absent columns.
+///
+/// Every reference is qualified with the source alias because the valuation joins bring their own
+/// `closedate`, `core_uid` and `status` columns into scope; an unqualified name would be ambiguous.
 ///
 /// Args:
 ///     src: Physical report source and its discovered schema.
 ///     cols: Shared runtime display columns to project in order.
+///     valuation: Derived-cache fragments when that cache is joined.
 ///
 /// Returns:
 ///     Comma-separated SQL projection for the aliased source.
-fn source_select(src: &ReadSource, cols: &[String]) -> String {
+fn source_select(
+    src: &ReadSource,
+    cols: &[String],
+    valuation: Option<&super::valuation::CoverageSql>,
+) -> String {
     cols.iter()
         .map(|c| {
-            if c == PROFIT_PERCENT_COLUMN {
-                if src.cols.contains("profitbtc") && src.cols.contains("spentbtc") {
-                    "CASE WHEN r.\"spentbtc\" > 0 THEN r.\"profitbtc\" / r.\"spentbtc\" * 100.0 END AS \"profitpct\"".to_string()
-                } else {
-                    "NULL AS \"profitpct\"".to_string()
-                }
+            if let Some(entry) = synthetic(c) {
+                let sql = synthetic_expression(entry, src, valuation)
+                    .unwrap_or_else(|| "NULL".to_string());
+                format!("{sql} AS \"{c}\"")
             } else if src.legacy && c == "id" && src.cols.contains("db_id") {
-                "db_id AS \"id\"".to_string()
+                "r.\"db_id\" AS \"id\"".to_string()
             } else if src.cols.contains(c) {
-                format!("\"{c}\"")
+                format!("r.\"{c}\"")
             } else {
                 format!("NULL AS \"{c}\"")
             }
@@ -269,18 +369,22 @@ fn sort_column(cols: &[String], key: &str) -> String {
 /// Args:
 ///     src: Physical source whose schema determines sort availability.
 ///     col: Validated runtime sort-column key.
+///     valuation: Derived-cache fragments when that cache is joined.
 ///
 /// Returns:
 ///     SQL expression when the source can sort by the column, otherwise `None`.
-fn source_sort_expression(src: &ReadSource, col: &str) -> Option<String> {
-    if col == PROFIT_PERCENT_COLUMN {
-        return (src.cols.contains("profitbtc") && src.cols.contains("spentbtc")).then(|| {
-            "CASE WHEN r.\"spentbtc\" > 0 THEN r.\"profitbtc\" / r.\"spentbtc\" * 100.0 END"
-                .to_string()
-        });
+fn source_sort_expression(
+    src: &ReadSource,
+    col: &str,
+    valuation: Option<&super::valuation::CoverageSql>,
+) -> Option<String> {
+    if let Some(entry) = synthetic(col) {
+        return synthetic_expression(entry, src, valuation);
     }
-    if src.cols.contains(col) || (src.legacy && col == "id") {
-        Some(format!("\"{col}\""))
+    if src.cols.contains(col) {
+        Some(format!("r.\"{col}\""))
+    } else if src.legacy && col == "id" && src.cols.contains("db_id") {
+        Some("r.\"db_id\"".to_string())
     } else {
         None
     }
@@ -442,19 +546,50 @@ fn append_strategy_filter(
 ///     Returns `Failed` for source, SQL, or row conversion errors.
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<QuoteBreakdown> {
     let sources = read_sources_res(conn)?;
-    let valuation_attached = super::valuation::is_attached(conn);
-    match query_totals_attempt(conn, f, &sources, valuation_attached) {
-        Ok(totals) => Ok(totals),
-        Err(error)
-            if valuation_attached && super::valuation::prove_derived_corruption(conn, &error) =>
-        {
+    with_valuation_fallback(
+        conn,
+        "reports: query_totals",
+        "reports: query_totals native retry",
+        |include_valuation| query_totals_attempt(conn, f, &sources, include_valuation),
+    )
+}
+
+/// Run one read that may touch the derived valuation cache, retrying without it when it is corrupt.
+///
+/// The derived cache is disposable; the report replica is not. A corrupt `valuation.sqlite` must
+/// therefore cost the USDT columns and nothing else — never the rows, and never the export that
+/// re-runs the same read. Both Report reads that join it share this one dance so neither can drift
+/// into failing closed on a cache the user never asked for.
+///
+/// Args:
+///     conn: Open report reader or snapshot.
+///     ctx: Log context for a failure the derived cache cannot explain.
+///     retry_ctx: Log context for a failure of the cache-free retry. Separate rather than derived
+///         because `read_fail` classifies against a `&'static str`, which no runtime concatenation
+///         can produce.
+///     attempt: One complete pass, told whether the valuation cache may be joined.
+///
+/// Returns:
+///     The result of whichever pass succeeded.
+///
+/// Errors:
+///     Returns `Failed` when the first pass fails for any reason other than proven derived
+///     corruption, and when the cache-free retry fails in turn.
+fn with_valuation_fallback<T>(
+    conn: &Connection,
+    ctx: &'static str,
+    retry_ctx: &'static str,
+    attempt: impl Fn(bool) -> rusqlite::Result<T>,
+) -> ReadResult<T> {
+    let attached = super::valuation::is_attached(conn);
+    match attempt(attached) {
+        Ok(value) => Ok(value),
+        Err(error) if attached && super::valuation::prove_derived_corruption(conn, &error) => {
             let _ = conn.execute(&format!("DETACH DATABASE {}", super::valuation::SCHEMA), []);
-            query_totals_attempt(conn, f, &sources, false).map_err(|retry_error| {
-                super::read_fail::read_fail("reports: query_totals native retry", retry_error)
-            })
+            attempt(false).map_err(|retry_error| read_fail(retry_ctx, retry_error))
         }
         // The guard above already performed schema attribution for this exact error.
-        Err(error) => Err(super::read_fail::read_fail("reports: query_totals", error)),
+        Err(error) => Err(read_fail(ctx, error)),
     }
 }
 
@@ -536,6 +671,125 @@ fn query_totals_attempt(
     })
 }
 
+/// Everything one Report row pass needs except whether the derived cache may be joined.
+///
+/// Held together so the retry after a corrupt cache reruns the SAME request, differing in exactly
+/// the one flag the corruption bears on.
+struct ReportPass<'a> {
+    /// Complete Report filter.
+    filter: &'a ReportFilter,
+    /// Shared runtime display columns, resolved once for both attempts.
+    cols: &'a [String],
+    /// Validated runtime sort-column key.
+    sort_col: &'a str,
+    /// Whether to sort descending.
+    desc: bool,
+    /// Maximum merged rows.
+    limit: usize,
+    /// Physical report sources discovered from `main`.
+    sources: &'a [ReadSource],
+    /// Whether liquidation attribution metadata is readable.
+    has_strategy_names: bool,
+}
+
+/// Execute one complete Report row pass and return its merged, truncated rows.
+///
+/// Each entry is `(core_uid, rec_id, data)`; `rec_id` is the replica `newrecid`, or 0 for a legacy
+/// row that has none.
+///
+/// Args:
+///     conn: Open report reader or snapshot.
+///     pass: The request, identical across both attempts.
+///     include_valuation: Whether to join the attached derived valuation cache.
+///
+/// Returns:
+///     Globally sorted rows, truncated to the requested limit.
+///
+/// Errors:
+///     Returns the underlying SQLite error from any physical-source query.
+fn query_reports_attempt(
+    conn: &Connection,
+    pass: &ReportPass,
+    include_valuation: bool,
+) -> rusqlite::Result<Vec<(u64, i64, Vec<Value>)>> {
+    let dir = if pass.desc { "DESC" } else { "ASC" };
+    let sort_ix = pass.cols.iter().position(|c| c == pass.sort_col);
+    // Query the top N from EACH source separately so indexes work, then merge below.
+    let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
+    for src in pass.sources {
+        let (where_sql, mut params) = build_where(pass.filter, &src.cols, pass.has_strategy_names);
+        let valuation = include_valuation.then(|| {
+            let source = if src.legacy {
+                super::valuation::TradeSource::Legacy
+            } else {
+                super::valuation::TradeSource::Typed
+            };
+            super::valuation::coverage_sql("r", &src.cols, source)
+        });
+        let joins = valuation
+            .as_ref()
+            .map(|parts| parts.per_row.joins.as_str())
+            .unwrap_or("");
+        let select = source_select(src, pass.cols, valuation.as_ref());
+        // `newrecid` is a real column only on the typed replica; a legacy source projects 0, which
+        // marks its rows as not soft-deletable (0 is never a real rec id).
+        let rec_id_select = if src.cols.contains("newrecid") {
+            "r.newrecid"
+        } else {
+            "0"
+        };
+        // Sort in SQL only if this source can express the column; otherwise source order is
+        // irrelevant, because the merge below reorders everything anyway.
+        let order = match source_sort_expression(src, pass.sort_col, valuation.as_ref()) {
+            Some(expression) => format!("({expression}) IS NULL, {expression} {dir}"),
+            None => "1".to_string(),
+        };
+        let sql = format!(
+            "SELECT r.core_uid, {rec_id_select}, {select} FROM {} r{joins}{where_sql} ORDER BY {order} LIMIT ?",
+            src.table
+        );
+        params.push(Box::new(pass.limit as i64));
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let n = pass.cols.len();
+        let mapped = stmt.query_map(refs.as_slice(), |r| {
+            let core_uid = r.get::<_, i64>(0)? as u64;
+            let rec_id = r.get::<_, i64>(1)?;
+            let mut v = Vec::with_capacity(n);
+            for i in 0..n {
+                v.push(r.get::<_, Value>(i + 2)?);
+            }
+            Ok((core_uid, rec_id, v))
+        })?;
+        // Every row is a trade the user is entitled to see, and the same rows
+        // are what the export writes — so no row error is skippable here.
+        for row in mapped {
+            merged.push(row?);
+        }
+    }
+
+    // Merge with NULL always last, like `{col} IS NULL` in SQL, then apply direction.
+    merged.sort_by(|a, b| {
+        let va = sort_ix.and_then(|i| a.2.get(i)).unwrap_or(&Value::Null);
+        let vb = sort_ix.and_then(|i| b.2.get(i)).unwrap_or(&Value::Null);
+        match (matches!(va, Value::Null), matches!(vb, Value::Null)) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => {
+                let o = cmp_values(va, vb);
+                if pass.desc {
+                    o.reverse()
+                } else {
+                    o
+                }
+            }
+        }
+    });
+    merged.truncate(pass.limit);
+    Ok(merged)
+}
+
 /// Return the top `limit` reports for the filter and sort using all display columns.
 ///
 /// Source, schema, query, and row-conversion errors map to `Failed`; no partial
@@ -561,84 +815,33 @@ pub fn query_reports(
     desc: bool,
     limit: usize,
 ) -> ReadResult<ReportTable> {
-    const CTX: &str = "отчёты: query_reports";
     let cols = display_columns(conn)?;
     let col = sort_column(&cols, sort_key);
-    let sort_ix = cols.iter().position(|c| *c == col);
-    let dir = if desc { "DESC" } else { "ASC" };
+    let sources = read_sources_res(conn)?;
     let has_strategy_names = f
         .strategies
         .as_ref()
         .is_some_and(|strategies| !strategies.is_empty())
         && super::analytics::strategies_attached(conn);
-
-    // Query the top N from EACH source separately so indexes work, then merge below.
-    // Each entry is `(core_uid, rec_id, data)`; `rec_id` is the replica `newrecid` or 0 for a
-    // legacy row that has none.
-    let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
-    for src in read_sources_res(conn)? {
-        let (where_sql, mut params) = build_where(f, &src.cols, has_strategy_names);
-        let select = source_select(&src, &cols);
-        // `newrecid` is a real column only on the typed replica; a legacy source projects 0, which
-        // marks its rows as not soft-deletable (0 is never a real rec id).
-        let rec_id_select = if src.cols.contains("newrecid") {
-            "newrecid"
-        } else {
-            "0"
+    // The column set is deliberately resolved ONCE, outside the retry: both attempts must project
+    // the same `cols`, or a cache-free retry would desynchronise `cols` from `rows`.
+    let merged = {
+        let pass = ReportPass {
+            filter: f,
+            cols: &cols,
+            sort_col: &col,
+            desc,
+            limit,
+            sources: &sources,
+            has_strategy_names,
         };
-        // Sort in SQL only if the source has the column. The legacy `id` alias is
-        // visible to ORDER BY; otherwise source order is irrelevant because the merge reorders it.
-        let sort_expression = source_sort_expression(&src, &col);
-        let order = if let Some(expression) = sort_expression {
-            format!("({expression}) IS NULL, {expression} {dir}")
-        } else {
-            "1".to_string()
-        };
-        let sql = format!(
-            "SELECT r.core_uid, {rec_id_select}, {select} FROM {} r{where_sql} ORDER BY {order} LIMIT ?",
-            src.table
-        );
-        params.push(Box::new(limit as i64));
-        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
-        let n = cols.len();
-        let mapped = stmt
-            .query_map(refs.as_slice(), |r| {
-                let core_uid = r.get::<_, i64>(0)? as u64;
-                let rec_id = r.get::<_, i64>(1)?;
-                let mut v = Vec::with_capacity(n);
-                for i in 0..n {
-                    v.push(r.get::<_, Value>(i + 2)?);
-                }
-                Ok((core_uid, rec_id, v))
-            })
-            .map_err(|e| read_fail(CTX, e))?;
-        // Every row is a trade the user is entitled to see, and the same rows
-        // are what the export writes — so no row error is skippable here.
-        for row in mapped {
-            merged.push(row.map_err(|e| read_fail(CTX, e))?);
-        }
-    }
-
-    // Merge with NULL always last, like `{col} IS NULL` in SQL, then apply direction.
-    merged.sort_by(|a, b| {
-        let va = sort_ix.and_then(|i| a.2.get(i)).unwrap_or(&Value::Null);
-        let vb = sort_ix.and_then(|i| b.2.get(i)).unwrap_or(&Value::Null);
-        match (matches!(va, Value::Null), matches!(vb, Value::Null)) {
-            (true, true) => std::cmp::Ordering::Equal,
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            _ => {
-                let o = cmp_values(va, vb);
-                if desc {
-                    o.reverse()
-                } else {
-                    o
-                }
-            }
-        }
-    });
-    merged.truncate(limit);
+        with_valuation_fallback(
+            conn,
+            "отчёты: query_reports",
+            "отчёты: query_reports native retry",
+            |include_valuation| query_reports_attempt(conn, &pass, include_valuation),
+        )?
+    };
 
     let mut rows = Vec::with_capacity(merged.len());
     let mut core_uids = Vec::with_capacity(merged.len());

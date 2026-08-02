@@ -108,7 +108,12 @@ fn width_bounds(column: &str) -> (f32, f32) {
         "channelname" | "signaltype" | "fname" | "exorderid" => (90.0, 240.0),
         "core_name" => (88.0, 260.0),
         "coin" => (72.0, 140.0),
-        "profitbtc" | "profitpct" | "gainedbtc" | "spentbtc" => (78.0, 130.0),
+        "profitbtc" | "profitpct" | "gainedbtc" | "spentbtc" | "valuation_profit_usdt" => {
+            (78.0, 130.0)
+        }
+        // A rate needs more room than a profit: eight significant digits, no thousands grouping.
+        "valuation_rate" => (86.0, 150.0),
+        "valuation_rate_source" => (100.0, 220.0),
         "lev" | "isshort" | "emulator" => (52.0, 90.0),
         _ => (68.0, 180.0),
     }

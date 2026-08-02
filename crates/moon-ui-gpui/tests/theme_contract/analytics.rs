@@ -44,6 +44,49 @@ fn report_layout_uses_the_versioned_context_for_dock_and_window() {
     assert!(!state.contains("ctx_id(\"report-table\""));
 }
 
+/// A Report column added later must be migrated into the PER-CONTEXT visible sets, not only into
+/// the `app_meta` seed.
+///
+/// `apply_ctx_columns` replaces the seeded set wholesale wherever a `:dock` or `:win` entry exists,
+/// so a migration that touches `app_meta` alone reaches exactly the users who never arranged their
+/// columns — and misses everyone who did, the person who asked for the column first among them.
+///
+/// Its completion marker must live in the window layout beside the sets it rewrites — see
+/// `WindowLayout::report_columns_migration` for why the two stores may not be split.
+///
+/// Breakage: deleting the `migrate_ctx_visible` call as redundant with `db::load_visible`, or
+/// moving its counter back into `app_meta`, where the two stores can disagree.
+#[test]
+fn report_columns_added_later_migrate_the_per_context_sets() {
+    let state = read_src("panels/report/state.rs");
+    let construction = braced_body(&state, "pub(crate) fn new_with_scope(");
+    let migration = construction
+        .find("migrate_ctx_visible(")
+        .expect("panel construction must migrate the per-context column sets");
+    let applied = construction
+        .find("apply_ctx_columns(")
+        .expect("panel construction must still apply the per-context column sets");
+    assert!(
+        migration < applied,
+        "the migration must run before the set it migrates is read"
+    );
+    let guard = braced_body(&state, "fn migrate_ctx_visible(");
+    assert!(
+        guard.contains("layout.report_columns_migration")
+            && !guard.contains("columns_migration(conn"),
+        "the one-shot marker must live in the same document as the sets it guards"
+    );
+    let marked = guard
+        .find("layout.report_columns_migration = Some(")
+        .expect("the migration must record its own completion");
+    assert!(
+        guard
+            .find("migrate_visible_sets(")
+            .is_some_and(|at| at < marked),
+        "the sets must be rewritten before the migration marks itself done"
+    );
+}
+
 /// Strategy rows must keep both navigation paths and the Report filter in the wrapping controls.
 ///
 /// Removing `.children(strategy_button)` is a plausible compile-clean edit that would hide the

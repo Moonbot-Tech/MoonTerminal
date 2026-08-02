@@ -26,6 +26,21 @@ pub fn ctx_id(base: &str, detached: bool) -> String {
     format!("{base}:{}", if detached { "win" } else { "dock" })
 }
 
+/// Recover the table id shared by every context of one [`ctx_id`].
+///
+/// The inverse of the function above, kept beside it so a caller holding one context id can reach
+/// its siblings without re-spelling the base literal or re-deriving the separator.
+///
+/// Args:
+///     ctx_id: Any context-qualified table id.
+///
+/// Returns:
+///     Everything before the final colon, or `None` when the input has no colon. The context
+///     suffix is intentionally not validated so callers can migrate all sibling contexts.
+pub fn base_of(ctx_id: &str) -> Option<&str> {
+    ctx_id.rsplit_once(':').map(|(base, _)| base)
+}
+
 /// Builds a toolbar button that resets every column width in `state` to automatic fill.
 ///
 /// This is the button equivalent of Shift+double-clicking a divider. `id` must uniquely identify

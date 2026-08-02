@@ -353,6 +353,8 @@ fn is_numeric_report_column(col: &str) -> bool {
             | "gainedbtc"
             | "profitbtc"
             | "profitpct"
+            | "valuation_profit_usdt"
+            | "valuation_rate"
             | "lev"
             | "id"
             | "newrecid"
@@ -388,7 +390,10 @@ pub(super) fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>
             _ => (String::new(), None),
         },
         "basecurrency" => (basecurrency_text(v), None),
-        "profitbtc" | "gainedbtc" | "profitpct" => {
+        // `valuation_rate` deliberately has no arm: applied rates span roughly 1e5 (BTC) down to
+        // 1e-2 (IDR), and the generic numeric path already answers that with eight significant
+        // digits, where the two decimals the profit cells use would flatten most rates to `0.00`.
+        "profitbtc" | "gainedbtc" | "profitpct" | "valuation_profit_usdt" => {
             let n = as_f64(v);
             let color = match n {
                 Some(x) if x > 0.0 => Some(p.green),
@@ -476,6 +481,9 @@ pub(super) fn header_for(col: &str) -> String {
         "profitpct" => "profit %".to_string(),
         "spentbtc" => "spent".to_string(),
         "gainedbtc" => "gained".to_string(),
+        "valuation_profit_usdt" => "profit USDT".to_string(),
+        "valuation_rate" => "rate".to_string(),
+        "valuation_rate_source" => "rate src".to_string(),
         _ => col.to_string(),
     }
 }
@@ -488,7 +496,13 @@ pub(super) fn width_for(col: &str) -> f32 {
         "sellreason" => 170.0,
         "channelname" | "signaltype" | "fname" | "exorderid" => 110.0,
         "core_name" | "coin" => 88.0,
-        "profitbtc" | "profitpct" | "gainedbtc" | "spentbtc" => 96.0,
+        "profitbtc"
+        | "profitpct"
+        | "gainedbtc"
+        | "spentbtc"
+        | "valuation_profit_usdt"
+        | "valuation_rate" => 96.0,
+        "valuation_rate_source" => 130.0,
         "lev" | "isshort" | "emulator" => 52.0,
         _ => 82.0,
     }

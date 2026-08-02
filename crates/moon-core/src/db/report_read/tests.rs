@@ -566,7 +566,13 @@ fn report_visibility_migrates_profit_percent_only_once() {
     .expect("seed legacy visibility");
     assert_eq!(
         super::super::load_visible(&conn).expect("migrated visibility"),
-        vec!["coin", "profitbtc", super::PROFIT_PERCENT_COLUMN]
+        vec![
+            "coin",
+            "profitbtc",
+            super::PROFIT_PERCENT_COLUMN,
+            super::VALUATION_PROFIT_COLUMN
+        ],
+        "the oldest key predates both later columns and must restore them in order"
     );
 
     super::super::save_visible(&conn, &["coin", "profitbtc"]);
@@ -575,4 +581,408 @@ fn report_visibility_migrates_profit_percent_only_once() {
         vec!["coin", "profitbtc"],
         "the current key respects a deliberate hide"
     );
+}
+
+/// A `v2` set predates the USDT profit column, so reading one must restore it — exactly once, and
+/// never again after the user has saved a set that deliberately omits it.
+///
+/// Breakage: shipping `valuation_profit_usdt` without adding a `report_visible_v3` step, so the
+/// column is invisible to every user who has ever opened the Columns menu — the developer who
+/// asked for it first among them. Or letting the migration key off column membership rather than
+/// the schema key, which would re-add the column on every load and make hiding it impossible.
+#[test]
+fn report_visibility_restores_the_usdt_profit_column_from_a_v2_set() {
+    let conn = Connection::open_in_memory().expect("open metadata database");
+    super::super::init_db(&conn).expect("initialize metadata database");
+    conn.execute(
+        "INSERT INTO app_meta(key, value) VALUES ('report_visible_v2', 'coin,profitbtc,profitpct')",
+        [],
+    )
+    .expect("seed a v2 visibility set");
+
+    assert_eq!(
+        super::super::load_visible(&conn).expect("migrated visibility"),
+        vec![
+            "coin",
+            "profitbtc",
+            super::PROFIT_PERCENT_COLUMN,
+            super::VALUATION_PROFIT_COLUMN
+        ]
+    );
+
+    super::super::save_visible(&conn, &["coin", "profitbtc"]);
+    assert_eq!(
+        super::super::load_visible(&conn).expect("current visibility"),
+        vec!["coin", "profitbtc"],
+        "a v3 set is authoritative, so hiding the new column sticks"
+    );
+}
+
+/// Create a private directory for one per-row valuation fixture.
+fn per_row_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "moonterminal-report-per-row-{tag}-{}-{}",
+        std::process::id(),
+        crate::util::now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&dir).expect("create per-row fixture directory");
+    dir
+}
+
+/// Seed a report replica with a prepared trade, an identity trade, an uncovered trade, and two
+/// legacy trades whose natural order disagrees with their converted profit.
+///
+/// The typed table deliberately carries a `status` column: the valuation joins bring their own
+/// `status`, `closedate` and `core_uid` into scope, so an unqualified projection would stop
+/// compiling as SQL rather than merely returning the wrong number.
+///
+/// Returns:
+///     Open report connection, before the derived cache is attached.
+fn seed_per_row_report() -> Connection {
+    let conn = Connection::open_in_memory().expect("open per-row report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, buydate INTEGER, profitbtc REAL, spentbtc REAL,
+             basecurrency INTEGER, coin TEXT, status INTEGER,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 'A', 1, 1700000000, 1699999700, 20.0, 100.0, 8, 'ETHUSDC', 3),
+             (1, 'A', 2, 1700000060, 1699999760, 7.5, 50.0, 1, 'BTCUSDT', 3),
+             (1, 'A', 3, 1700000120, 1699999820, -1.0, 10.0, 8, 'SOLUSDC', 3);
+         CREATE TABLE closed_sell_reports (
+             core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, spentbtc REAL, coin TEXT
+         );
+         INSERT INTO closed_sell_reports VALUES
+             (1, 2, 1700000700, 8, 2.0, 20.0, 'ADAUSDC'),
+             (1, 1, 1700000600, 8, 400.0, 4000.0, 'XRPUSDC');",
+    )
+    .expect("seed per-row report sources");
+    conn
+}
+
+/// Seed the derived cache matching [`seed_per_row_report`].
+///
+/// The rate is a deliberately unrealistic 0.5 USDT per USDC so every converted figure is exactly
+/// half its native one — an arithmetic relation the test can check rather than a number it has to
+/// take on trust.
+///
+/// Args:
+///     path: Valuation store path inside the fixture directory.
+///
+/// Returns:
+///     Open valuation store, so a caller may damage it.
+fn seed_per_row_valuation(path: &std::path::Path) -> Connection {
+    let store = super::super::valuation::open_store(path).expect("open per-row valuation fixture");
+    store
+        .execute_batch(
+            "INSERT INTO trade_values (
+                 source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
+                 profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt, spent_usdt,
+                 valued_at_ms
+             ) VALUES
+                 (0, 1, 1, 1, 1700000000, 8, 20.0, 100.0, 1699999980, 0.5, 10.0, 50.0, 1700000100000),
+                 (1, 1, 1, 1, 1700000600, 8, 400.0, 4000.0, 1699999980, 0.5, 200.0, 2000.0, 1700000100000),
+                 (1, 1, 2, 1, 1700000700, 8, 2.0, 20.0, 1699999980, 0.5, 1.0, 10.0, 1700000100000);
+             INSERT INTO rates (
+                 algorithm_version, quote_ordinal, minute_utc, status, rate_usdt,
+                 provider, symbol, orientation, candle_open_ms, candle_close_ms, fetched_at_ms
+             ) VALUES (1, 8, 1699999980, 0, 0.5, 'binance', 'USDCUSDT', 0,
+                       1699999980000, 1700000039999, 1700000100000);",
+        )
+        .expect("seed prepared values and their rate provenance");
+    store
+}
+
+/// Attach a valuation store to a report connection under the reader-facing schema name.
+fn attach_valuation(conn: &Connection, path: &std::path::Path) {
+    let sql = format!(
+        "ATTACH DATABASE '{}' AS {}",
+        path.to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''"),
+        super::super::valuation::SCHEMA,
+    );
+    conn.execute(&sql, []).expect("attach valuation fixture");
+}
+
+/// Read one report cell by runtime column name.
+fn cell<'a>(table: &'a super::ReportTable, row: usize, column: &str) -> &'a Value {
+    let index = table
+        .cols
+        .iter()
+        .position(|name| name == column)
+        .unwrap_or_else(|| panic!("column {column} is present in the runtime schema"));
+    &table.rows[row][index]
+}
+
+/// Read one report cell as a number.
+fn number(table: &super::ReportTable, row: usize, column: &str) -> Option<f64> {
+    match cell(table, row, column) {
+        Value::Real(value) => Some(*value),
+        Value::Integer(value) => Some(*value as f64),
+        _ => None,
+    }
+}
+
+/// Read one report cell as text.
+fn text(table: &super::ReportTable, row: usize, column: &str) -> Option<String> {
+    match cell(table, row, column) {
+        Value::Text(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+/// A prepared row reports its converted profit, the rate that produced it, and where that rate
+/// came from; an identity row answers from the trade itself; an unvalued row stays blank.
+///
+/// The rate provenance is the part no existing join could supply: `coverage_sql`'s `mr` join
+/// matches `status=1`, the permanent-miss partition, which by construction holds no rate at all.
+///
+/// Breakage: reading provenance through `mr` instead of the added `status=0` join, which blanks
+/// the source column on every valued row. Breakage: dropping the identity arm from any of the three
+/// expressions and treating a NULL provider as "not valued", which blanks that column for USDT
+/// trades — the majority. Breakage: emitting the projection unqualified once the valuation joins
+/// are in the `FROM`, which makes `status` ambiguous and fails the whole read. Breakage: handing
+/// the row query the AGGREGATE join set, whose `mr` alias serves the coverage counters and leaves
+/// the `ra` this projection names undefined.
+#[test]
+fn per_row_columns_report_converted_profit_and_rate_provenance() {
+    let _health = super::super::valuation::test_health_guard();
+    let dir = per_row_dir("values");
+    let valuation_path = dir.join("valuation.sqlite");
+    drop(seed_per_row_valuation(&valuation_path));
+
+    let conn = seed_per_row_report();
+    attach_valuation(&conn, &valuation_path);
+    let table = query_reports(&conn, &ReportFilter::default(), "closedate", false, 100)
+        .expect("read rows with the derived cache attached");
+
+    let coins: Vec<Option<String>> = (0..table.rows.len())
+        .map(|row| text(&table, row, "coin"))
+        .collect();
+    let row_of = |coin: &str| {
+        coins
+            .iter()
+            .position(|name| name.as_deref() == Some(coin))
+            .unwrap_or_else(|| panic!("fixture row {coin} is present"))
+    };
+
+    let prepared = row_of("ETHUSDC");
+    let profit = number(&table, prepared, super::VALUATION_PROFIT_COLUMN)
+        .expect("a prepared row carries a converted profit");
+    let rate =
+        number(&table, prepared, super::VALUATION_RATE_COLUMN).expect("and the rate applied to it");
+    let native = number(&table, prepared, "profitbtc").expect("beside its native profit");
+    assert_ne!(
+        rate, 1.0,
+        "a prepared row must report the CACHED rate; rate 1.0 would mean it fell into the \
+         identity arm and the relation below would hold for the wrong reason"
+    );
+    assert_eq!(
+        profit,
+        native * rate,
+        "the converted profit must be the native profit at the reported rate"
+    );
+    assert_eq!(
+        text(&table, prepared, super::VALUATION_SOURCE_COLUMN).as_deref(),
+        Some("binance USDCUSDT"),
+        "provenance names the provider and market that produced the rate"
+    );
+
+    let identity = row_of("BTCUSDT");
+    assert_eq!(
+        number(&table, identity, super::VALUATION_PROFIT_COLUMN),
+        number(&table, identity, "profitbtc"),
+        "a USDT trade is already valued and needs no cached rate"
+    );
+    assert_eq!(
+        number(&table, identity, super::VALUATION_RATE_COLUMN),
+        Some(1.0)
+    );
+    assert_eq!(
+        text(&table, identity, super::VALUATION_SOURCE_COLUMN).as_deref(),
+        Some("identity")
+    );
+
+    let uncovered = row_of("SOLUSDC");
+    for column in [
+        super::VALUATION_PROFIT_COLUMN,
+        super::VALUATION_RATE_COLUMN,
+        super::VALUATION_SOURCE_COLUMN,
+    ] {
+        assert!(
+            matches!(cell(&table, uncovered, column), Value::Null),
+            "an unvalued row must stay blank in {column} rather than invent a figure"
+        );
+    }
+
+    drop(conn);
+    std::fs::remove_dir_all(&dir).expect("remove per-row fixture directory");
+}
+
+/// Sorting by a synthetic valuation column must return the true global maximum, not each source's
+/// arbitrary first row.
+///
+/// Every physical source is truncated by `LIMIT` before the Rust merge, so a column that projects
+/// but cannot sort degrades that source's `ORDER BY` to the constant `1` — silently, with no error.
+/// The legacy fixture rows are stored in the opposite order to their converted profit precisely so
+/// that the constant ordering picks the wrong one.
+///
+/// Breakage: adding a synthetic column to `source_select` and forgetting `source_sort_expression`,
+/// which returns 10.0 (the typed source's best) as the global maximum instead of 200.0.
+#[test]
+fn sorting_by_converted_profit_crosses_both_physical_sources() {
+    let _health = super::super::valuation::test_health_guard();
+    let dir = per_row_dir("sort");
+    let valuation_path = dir.join("valuation.sqlite");
+    drop(seed_per_row_valuation(&valuation_path));
+
+    let conn = seed_per_row_report();
+    attach_valuation(&conn, &valuation_path);
+    let table = query_reports(
+        &conn,
+        &ReportFilter::default(),
+        super::VALUATION_PROFIT_COLUMN,
+        true,
+        1,
+    )
+    .expect("sort across both sources by converted profit");
+
+    assert_eq!(table.rows.len(), 1);
+    assert_eq!(
+        number(&table, 0, super::VALUATION_PROFIT_COLUMN),
+        Some(200.0)
+    );
+    assert_eq!(text(&table, 0, "coin").as_deref(), Some("XRPUSDC"));
+
+    drop(conn);
+    std::fs::remove_dir_all(&dir).expect("remove per-row fixture directory");
+}
+
+/// Every synthetic column must be expressible for BOTH projection and sorting on a source that
+/// carries the inputs.
+///
+/// Breakage: the next synthetic column wired into `source_select` only. That half-wiring produces
+/// no error and no warning — just a wrong top-N — so this structural check is the only thing
+/// standing between it and a release.
+#[test]
+fn every_synthetic_column_can_both_project_and_sort() {
+    let columns: std::collections::HashSet<String> = [
+        "core_uid",
+        "newrecid",
+        "closedate",
+        "basecurrency",
+        "profitbtc",
+        "spentbtc",
+    ]
+    .iter()
+    .map(|name| (*name).to_string())
+    .collect();
+    let source = super::super::ReadSource {
+        table: "orders_rep",
+        cols: columns.clone(),
+        legacy: false,
+    };
+    let valuation = super::super::valuation::coverage_sql(
+        "r",
+        &columns,
+        super::super::valuation::TradeSource::Typed,
+    );
+
+    assert!(
+        !super::SYNTHETIC.is_empty(),
+        "the registry must not be empty, or this test asserts nothing at all"
+    );
+    for entry in super::SYNTHETIC {
+        let column = entry.name;
+        let names = vec![column.to_string()];
+        let select = super::source_select(&source, &names, Some(&valuation));
+        assert!(
+            !select.starts_with("NULL"),
+            "{column} must project an expression on a full-schema source"
+        );
+        // No expression means `query_reports_attempt` falls back to the constant `1`, which drops
+        // this source's ordering entirely and hands the merge an arbitrary top-N.
+        super::source_sort_expression(&source, column, Some(&valuation))
+            .unwrap_or_else(|| panic!("{column} must be sortable on a full-schema source"));
+        assert!(
+            super::super::DISPLAY_COLUMNS.contains(&column),
+            "{column} is registered but never offered, so nothing can ever render it"
+        );
+    }
+}
+
+/// A corrupt derived cache must cost the USDT columns and nothing else.
+///
+/// `query_reports` is the read behind both the table and the export, so failing it closed would
+/// blank the panel and refuse the export over a cache the user never asked for — while the report
+/// replica itself is perfectly healthy. The retry must also keep the SAME column list, or the
+/// panel's `cols` would desynchronise from its `rows`.
+///
+/// Breakage: adding the valuation join to `query_reports` without routing it through
+/// `with_valuation_fallback`, which turns every row read into `Failed`. Breakage: gating
+/// `display_columns` on `valuation::is_attached`, which changes the column set between the two
+/// attempts.
+#[test]
+fn corrupt_derived_cache_blanks_the_usdt_columns_not_the_rows() {
+    let _health = super::super::valuation::test_health_guard();
+    let _integrity = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
+    let dir = per_row_dir("corrupt");
+    let valuation_path = dir.join("valuation.sqlite");
+    let store = seed_per_row_valuation(&valuation_path);
+    // Enough rows that the damaged leaf sits away from the header, so the failure happens when a
+    // query reaches that page rather than when the file opens.
+    let transaction = store.unchecked_transaction().expect("begin bulk seed");
+    for row_id in 100..2_100i64 {
+        transaction
+            .execute(
+                "INSERT INTO trade_values (
+                     source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
+                     profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt,
+                     spent_usdt, valued_at_ms
+                 ) VALUES (0, 1, ?1, 1, 1700000000, 8, 20.0, 100.0, 1699999980,
+                           0.5, 10.0, 50.0, 1700000100000)",
+                [row_id],
+            )
+            .expect("seed filler prepared value");
+    }
+    transaction.commit().expect("commit filler rows");
+
+    let conn = seed_per_row_report();
+    attach_valuation(&conn, &valuation_path);
+    super::super::valuation::is_attached(&conn);
+    super::super::test_support::corrupt_leaf_page(
+        store,
+        &valuation_path,
+        "sqlite_autoindex_trade_values_1",
+    );
+
+    let table = query_reports(&conn, &ReportFilter::default(), "closedate", false, 100)
+        .expect("rows survive a corrupt derived cache");
+    assert_eq!(table.rows.len(), 5, "every fixture row is still returned");
+    assert!(
+        table
+            .cols
+            .iter()
+            .any(|name| name == super::VALUATION_PROFIT_COLUMN),
+        "the column set is resolved from the report schema and does not change on retry"
+    );
+    for row in 0..table.rows.len() {
+        assert!(
+            matches!(
+                cell(&table, row, super::VALUATION_PROFIT_COLUMN),
+                Value::Null
+            ),
+            "a cache that cannot be read supplies no conversion"
+        );
+    }
+    assert!(!super::super::integrity::writes_blocked());
+
+    drop(conn);
+    super::super::integrity::reset_test_state();
+    std::fs::remove_dir_all(&dir).expect("remove per-row fixture directory");
 }

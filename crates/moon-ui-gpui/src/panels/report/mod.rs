@@ -218,6 +218,7 @@ const DEFAULT_VISIBLE: &[&str] = &[
     "sellprice",
     "profitbtc",
     "profitpct",
+    "valuation_profit_usdt",
     "lev",
     "sellreason",
     "comment",
