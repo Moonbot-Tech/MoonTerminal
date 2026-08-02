@@ -23,6 +23,73 @@ fn upsert_strategy_choice(
     }
 }
 
+/// Highest one-shot Report column migration this build knows how to apply.
+const REPORT_COLUMNS_MIGRATION: u32 = 1;
+
+/// Append every column added since the `v2` schema to each saved per-context set under `prefix`.
+///
+/// The column list is `db::COLUMNS_ADDED_SINCE_V2`, shared with the `app_meta` half of the same
+/// repair, so the two stores cannot restore different sets. Pure, so the decision is testable
+/// without a window: the caller owns the guard and the write.
+///
+/// Args:
+///     sets: Every table's stored visible-column set, keyed by context id.
+///     prefix: Context-id prefix selecting the one table to migrate.
+///
+/// Returns:
+///     Nothing; `sets` is rewritten in place.
+pub(super) fn migrate_visible_sets(
+    sets: &mut std::collections::HashMap<String, Vec<String>>,
+    prefix: &str,
+) {
+    for (id, keys) in sets.iter_mut() {
+        // An empty stored set is not a user choice — `save_ctx_columns` refuses to write one — so
+        // leave it alone rather than turning it into a one-column table.
+        if !id.starts_with(prefix) || keys.is_empty() {
+            continue;
+        }
+        for column in db::COLUMNS_ADDED_SINCE_V2 {
+            if !keys.iter().any(|key| key == column) {
+                keys.push((*column).to_string());
+            }
+        }
+    }
+}
+
+/// Restore those columns into every saved per-context visible set of one table, exactly once.
+///
+/// `db::load_visible` carries the same migration for the `app_meta` seed, but a per-context set
+/// OVERRIDES that seed wherever one exists — so without this half, the only users who never see a
+/// new column are the ones who care enough about columns to have arranged them.
+///
+/// The completion marker lives in the window layout beside the sets it guards, for the reason
+/// given on `WindowLayout::report_columns_migration`. The layout is marked dirty unconditionally:
+/// the marker must reach disk even when no stored set needed rewriting, or this reruns forever.
+///
+/// Args:
+///     backend: Shared application backend owning the window layout.
+///     ctx_id: Any context id of the table to migrate; every context of it is covered.
+///     cx: Application context used to update the layout.
+///
+/// Returns:
+///     Nothing.
+fn migrate_ctx_visible(backend: &Entity<Backend>, ctx_id: &str, cx: &mut App) {
+    // The base id is recovered rather than spelled out: `theme_contract` pins how many places that
+    // literal may appear, and a third copy is exactly the drift that pin exists to catch.
+    let Some(base) = crate::persistence::table_persist::base_of(ctx_id) else {
+        return;
+    };
+    let prefix = format!("{base}:");
+    backend.update(cx, |backend, _| {
+        if backend.layout.report_columns_migration.unwrap_or(0) >= REPORT_COLUMNS_MIGRATION {
+            return;
+        }
+        migrate_visible_sets(&mut backend.layout.table_visible_columns, &prefix);
+        backend.layout.report_columns_migration = Some(REPORT_COLUMNS_MIGRATION);
+        backend.layout_dirty = true;
+    });
+}
+
 impl ReportPanel {
     /// Create a regular docked or detachable Report panel with its default filters.
     ///
@@ -117,6 +184,7 @@ impl ReportPanel {
             .and_then(db::load_sort)
             .unwrap_or_else(|| ("buydate".to_string(), true));
         let widths_id = crate::persistence::table_persist::ctx_id("report-table-v2", false);
+        migrate_ctx_visible(&backend, &widths_id, cx);
         let mut saved_widths =
             crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         complete_widths(&mut saved_widths, &init_cols);

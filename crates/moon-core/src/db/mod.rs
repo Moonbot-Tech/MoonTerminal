@@ -42,7 +42,8 @@ pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
     display_columns, distinct_cores, distinct_strategies, max_core_uid, query_reports,
     query_totals, ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable,
-    SideFilter, DISPLAY_COLUMNS,
+    SideFilter, COLUMNS_ADDED_SINCE_V2, DISPLAY_COLUMNS, VALUATION_PROFIT_COLUMN,
+    VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN,
 };
 
 use read_fail::read_fail;
@@ -874,7 +875,21 @@ pub fn save_comment_pane(conn: &Connection, detached: bool, shown: bool) {
     );
 }
 
-/// Load visible Report columns, migrating the legacy key to include Profit % once.
+/// The key a save writes. Named rather than indexed, so appending a row cannot redirect the save.
+const VISIBLE_KEY_CURRENT: &str = "report_visible_v3";
+
+/// Every `app_meta` visible-column key with the columns introduced by its schema, newest first.
+///
+/// Saved sets are explicit, so reading a key also restores the columns declared by every newer
+/// row encountered before it. Keeping each column on one schema row prevents the restoration
+/// rules for older keys from drifting apart.
+const VISIBLE_KEYS: &[(&str, &[&str])] = &[
+    (VISIBLE_KEY_CURRENT, report_read::COLUMNS_ADDED_SINCE_V2),
+    ("report_visible_v2", &[report_read::PROFIT_PERCENT_COLUMN]),
+    ("report_visible", &[]),
+];
+
+/// Load visible Report columns, restoring any column added since the saved set was written.
 ///
 /// Args:
 ///     conn: Open report metadata connection.
@@ -882,37 +897,32 @@ pub fn save_comment_pane(conn: &Connection, detached: bool, shown: bool) {
 /// Returns:
 ///     Current or migrated column names, or `None` when no preference exists.
 pub fn load_visible(conn: &Connection) -> Option<Vec<String>> {
-    let current: Option<String> = conn
-        .query_row(
-            "SELECT value FROM app_meta WHERE key='report_visible_v2'",
-            [],
-            |r| r.get(0),
-        )
-        .ok();
-    let legacy: Option<String> = current
-        .is_none()
-        .then(|| {
-            conn.query_row(
-                "SELECT value FROM app_meta WHERE key='report_visible'",
-                [],
-                |r| r.get(0),
-            )
-            .ok()
-        })
-        .flatten();
-    let mut columns: Vec<String> = current
-        .as_ref()
-        .or(legacy.as_ref())?
+    // Newest key first; everything passed on the way down was introduced after the key that
+    // answers, and so is missing from the set it holds.
+    let mut introduced_since: Vec<&str> = Vec::new();
+    let stored = VISIBLE_KEYS.iter().find_map(|(key, introduced_by)| {
+        let found = conn
+            .query_row("SELECT value FROM app_meta WHERE key=?1", [*key], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok();
+        if found.is_none() {
+            introduced_since.extend_from_slice(introduced_by);
+        }
+        found
+    })?;
+    let mut columns: Vec<String> = stored
         .split(',')
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect();
-    if current.is_none()
-        && !columns
-            .iter()
-            .any(|column| column == report_read::PROFIT_PERCENT_COLUMN)
-    {
-        columns.push(report_read::PROFIT_PERCENT_COLUMN.to_string());
+    // Collected newest-schema-first; restore them oldest-first so the recovered set reads in the
+    // order the columns were actually introduced.
+    introduced_since.reverse();
+    for column in introduced_since {
+        if !columns.iter().any(|saved| saved == column) {
+            columns.push(column.to_string());
+        }
     }
     Some(columns)
 }
@@ -926,7 +936,7 @@ pub fn load_visible(conn: &Connection) -> Option<Vec<String>> {
 /// Returns:
 ///     Nothing; metadata write failures remain non-fatal like the other Report preferences.
 pub fn save_visible(conn: &Connection, cols: &[&str]) {
-    let _ = meta_set(conn, "report_visible_v2", &cols.join(","));
+    let _ = meta_set(conn, VISIBLE_KEY_CURRENT, &cols.join(","));
 }
 
 /// Report read source: a table, its columns, and a legacy flag.

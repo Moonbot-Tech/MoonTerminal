@@ -82,9 +82,30 @@ pub(super) fn test_health_guard() -> TestHealthGuard {
     TestHealthGuard { _lock: guard }
 }
 
-/// SQL fragments that join current report inputs to matching prepared valuations.
+/// SQL fragments used only by the per-row Report reader.
+///
+/// Aggregates never need these: they sum [`CoverageSql::profit_usdt`] instead. A row-level reader
+/// wants the applied rate and its provenance beside the converted profit, so a user can check one
+/// trade rather than trust a total.
+pub(crate) struct PerRowSql {
+    /// The `v` prepared-value join followed by the `ra` ready-rate provenance join.
+    ///
+    /// The row reader needs provenance but never counts permanent misses, so it omits the `mr`
+    /// join used by [`CoverageSql::joins`]. The joins are complete and dependency-ordered because
+    /// `ra` reads `v.rate_minute_utc`.
+    pub joins: String,
+    /// USDT paid for one quote unit, `1.0` on an identity row.
+    pub rate: String,
+    /// Human-readable provenance of that rate, NULL while the row is uncovered.
+    pub source: String,
+}
+
+/// SQL fragments for aggregate valuation coverage and per-row Report values.
 pub(crate) struct CoverageSql {
-    /// `LEFT JOIN` clauses for prepared values and permanent rate misses.
+    /// The aggregate reader's `v` prepared-value and `mr` permanent-miss joins.
+    ///
+    /// The `mr` alias supplies the `unavailable` count; rate provenance is unused here and remains
+    /// exclusive to [`PerRowSql::joins`].
     pub joins: String,
     /// One for every row carrying a known quote identity.
     pub eligible: String,
@@ -93,9 +114,14 @@ pub(crate) struct CoverageSql {
     /// One only for a cached permanent route/candle miss without a prepared value.
     pub unavailable: String,
     /// Complete-row USDT profit expression, NULL while uncovered.
+    ///
+    /// Also the row-level converted profit: ONE expression, so a row and the total it belongs to
+    /// can never disagree about the same number.
     pub profit_usdt: String,
     /// Complete-row USDT spend expression, NULL when absent or uncovered.
     pub spent_usdt: String,
+    /// Row-level projections and the joins that back them.
+    pub per_row: PerRowSql,
 }
 
 impl CoverageSql {
@@ -295,18 +321,61 @@ pub(crate) fn coverage_sql(
         "CASE WHEN {identity} THEN {spent_value}
               WHEN {prepared} THEN v.spent_usdt END"
     );
+    // An identity row stores no `rates` row at all — `resolve_rate_batch` synthesizes the USDT
+    // identity in memory — so every per-row expression must answer for it before consulting the
+    // cache. Treating a NULL provider as "not valued" would blank the column on most trades.
+    let rate = format!("CASE WHEN {identity} THEN 1.0 WHEN {prepared} THEN v.rate_usdt END");
+    // `status=0` is the ready-rate partition. The `mr` join above deliberately matches `status=1`,
+    // the permanent-miss partition, so it can never supply provenance for a valued row. Without a
+    // quote column there is nothing to join on, and the source expression must not name `ra` at
+    // all: SQLite resolves every column reference at prepare time, unreachable arms included.
+    let (rate_join, source) = if has_quote {
+        (
+            format!(
+                " LEFT JOIN valuation.rates ra
+                    ON ra.algorithm_version={algorithm_version}
+                   AND ra.quote_ordinal={alias}.basecurrency
+                   AND ra.minute_utc=v.rate_minute_utc AND ra.status=0",
+                algorithm_version = ALGORITHM_VERSION,
+            ),
+            format!(
+                "CASE WHEN {identity} THEN 'identity'
+                      WHEN {prepared} THEN COALESCE(
+                          ra.provider || ' ' || ra.symbol
+                          || CASE ra.orientation WHEN {inverse} THEN ' inv' ELSE '' END,
+                          'cached') END",
+                inverse = RateOrientation::Inverse.code(),
+            ),
+        )
+    } else {
+        (String::new(), "NULL".to_string())
+    };
+    let value_join = format!(" LEFT JOIN valuation.trade_values v ON {input_match}");
+    // `mr` serves `unavailable` and nothing else, so a row query that never counts must not pay a
+    // probe into it per matching row; `ra` serves provenance only, so an aggregate must not either.
+    let miss_join = format!(" LEFT JOIN valuation.rates mr ON {rate_match}");
     CoverageSql {
-        joins: format!(
-            " LEFT JOIN valuation.trade_values v ON {input_match}
-              LEFT JOIN valuation.rates mr ON {rate_match}"
-        ),
+        joins: format!("{value_join}{miss_join}"),
         eligible,
         valued,
         unavailable,
+        per_row: PerRowSql {
+            // `rate_join` resolves `v.rate_minute_utc`, so it can only follow the value join.
+            joins: format!("{value_join}{rate_join}"),
+            rate,
+            source,
+        },
         profit_usdt,
         spent_usdt,
     }
 }
+
+/// Report columns a trade must carry before it can be valued at all.
+///
+/// Shared with the Report window's synthetic-column table, so the columns that OFFER a conversion
+/// and the gate that decides a row can be converted cannot drift into disagreeing — the visible
+/// symptom of which would be a column that is permanently blank rather than absent.
+pub(crate) const REQUIRED_TRADE_INPUTS: &[&str] = &["closedate", "basecurrency", "profitbtc"];
 
 /// Check whether one report source carries every mandatory valuation input column.
 ///
@@ -316,7 +385,7 @@ pub(crate) fn coverage_sql(
 /// Returns:
 ///     Whether close time, quote identity, and native profit are available.
 pub(crate) fn has_required_trade_inputs(columns: &std::collections::HashSet<String>) -> bool {
-    ["closedate", "basecurrency", "profitbtc"]
+    REQUIRED_TRADE_INPUTS
         .iter()
         .all(|column| columns.contains(*column))
 }

@@ -322,6 +322,19 @@ pub struct WindowLayout {
     /// separate sets. No entry = table default (usually "all visible").
     #[serde(default)]
     pub table_visible_columns: HashMap<String, Vec<String>>,
+    /// One-shot Report column migrations already applied to [`Self::table_visible_columns`].
+    ///
+    /// A saved visible-column set is an EXPLICIT list, so a column added later is simply absent
+    /// from it and would stay hidden forever for everyone who ever arranged their columns. The
+    /// migration that repairs that must record its completion HERE, in the same document as the
+    /// sets it rewrites: a marker in the recoverable report replica would have an independent
+    /// write and recovery lifecycle, so an interrupted layout flush could skip the migration
+    /// permanently, while a report-replica recovery would re-apply one the user has since undone.
+    /// One document, one atomic write, one answer.
+    ///
+    /// Read leniently like the other hand-editable numbers here; `None` means never migrated.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
+    pub report_columns_migration: Option<u32>,
     /// Panel-tab index in its "home" tab strip at DETACH time, so returning it to the dock restores
     /// THE SAME position rather than the canonical priority position. Key: `group:panel`
     /// (for example, `default:Orders`). No entry → return by priority.
