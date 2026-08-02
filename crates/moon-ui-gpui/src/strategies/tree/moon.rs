@@ -1,9 +1,8 @@
-//! Strategy tree built on MoonUI's forked `MoonTree` and its headless `Tree::custom` mode.
-//! It replaces the former `tree.rs` manual flattening, virtualization, and hitbox-based DnD:
-//! MoonTree flattens `expanded_ids`, virtualizes rows, handles the keyboard, and supplies row
+//! Strategy tree built on MoonUI's headless `Tree::custom` mode.
+//! MoonTree flattens `expanded_ids`, virtualizes rows, handles keyboard input, and supplies row
 //! hitboxes to DnD decorators. Selection, staging, and expansion remain in `StrategiesView`; this
-//! module only adapts `CoreStore` to `MoonTreeItem`, builds the `id -> NodeData` side map for row
-//! and drag data, and renders rows and decorators. Callbacks outside `Context<Self>` mutate through
+//! module adapts `CoreStore` to `MoonTreeItem`, builds the `id -> NodeData` side map for row and drag
+//! data, and renders rows and decorators. Callbacks outside `Context<Self>` mutate through
 //! `Entity::update`.
 
 use std::collections::HashMap;
@@ -16,7 +15,8 @@ use moon_ui::{
     MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta, h_flex,
 };
 
-use super::super::logic::{build_node, ensure_folder, folder_counts, toggle};
+use super::super::filter::PreparedFilter;
+use super::super::logic::{FolderCounts, build_node, ensure_folder, toggle};
 use super::super::{Key, StrategiesView, moon_alpha};
 use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
 use crate::design;
@@ -68,7 +68,12 @@ pub(crate) enum NodeData {
         staged: Option<bool>,
         highlighted: bool,
         is_short: bool,
-        drag_ids: Vec<u64>,
+        /// The whole selection of this core when the row belongs to it, else `None` — a row
+        /// outside the selection drags only its own `id`.
+        ///
+        /// Sharing one list across selected rows keeps large multi-selections linear, while the
+        /// `None` case keeps ordinary unselected rows allocation-free.
+        drag_ids: Option<Rc<[u64]>>,
     },
     /// Core's Deleted folder: strategies absent from the server and retained only in the local DB.
     /// The DB retains their folder paths for restoration, while the UI lists them flat here.
@@ -92,13 +97,16 @@ pub(crate) struct MoonTreeBuild {
     pub(crate) searching: bool,
 }
 
-/// Builds an owned MoonTree representation from the store without exposing store borrows.
+/// Builds the visible MoonTree forest and row data without exposing store borrows.
+///
+/// Collapsed cores contribute only their root row and totals; open cores are each scanned once for
+/// visible rows and folder counts.
 pub(crate) fn build(
     view: &StrategiesView,
     store: &CoreStore,
     cores: &crate::core_order::OrderedCores,
 ) -> MoonTreeBuild {
-    let filter = &view.filter;
+    let filter = view.filter.prepare();
     let searching = filter.searching();
     let mut items = Vec::new();
     let mut data: HashMap<SharedString, NodeData> = HashMap::new();
@@ -108,103 +116,55 @@ pub(crate) fn build(
     for (core_id, core_name) in cores.iter() {
         let core = *core_id;
         let Some(cd) = store.core(core) else { continue };
-        if cd.strategies.is_empty() || !cd.strategies.iter().any(|r| filter.matches(r)) {
+        // Openness is decided before the strategies are walked: nothing below a collapsed core can
+        // be rendered and MoonTree never descends into one, so such a core needs only the two
+        // numbers in its own caption — no row list, no per-folder map. With dozens of cores
+        // collapsed this avoids the dominant per-frame work. A search force-expands every node, so
+        // it never prunes; a reveal expands its target's core and folder chain before this runs
+        // (`selection::drain_goto` and `sync_pending_select`), so navigation is never pruned away.
+        let core_open = searching || view.expanded_cores.contains(&core);
+
+        // One pass feeds both the visible set and every folder count because this list is walked on
+        // every frame.
+        let mut counts = if core_open {
+            FolderCounts::default()
+        } else {
+            FolderCounts::totals_only()
+        };
+        let mut matched: Vec<&StrategyRow> = Vec::new();
+        let mut any_matched = false;
+        for r in &cd.strategies {
+            counts.add(r, &filter);
+            if filter.matches(r) {
+                any_matched = true;
+                if core_open {
+                    matched.push(r);
+                }
+            }
+        }
+        // Cores without a visible strategy have no row to expose under the current filter.
+        if !any_matched {
             continue;
         }
-        let core_open = searching || view.expanded_cores.contains(&core);
-        let total = cd.strategies.iter().filter(|r| filter.counts(r)).count();
-        let active = cd
-            .strategies
-            .iter()
-            .filter(|r| filter.counts(r) && r.checked)
-            .count();
+        let (active, total) = counts.root();
         let open_orders_total = cd.orders.iter().filter(|o| !o.job_is_done).count();
-        // Count the core's open orders by strategy ID.
-        let order_counts: HashMap<u64, usize> = {
-            let mut m = HashMap::new();
-            for o in cd.orders.iter().filter(|o| !o.job_is_done) {
-                *m.entry(o.strat_id).or_insert(0) += 1;
-            }
-            m
-        };
 
         let cid = id_core(core);
+        let mut children = Vec::new();
         if core_open {
             expanded.push(cid.clone());
-        }
-
-        // Build the folder tree from visible strategies plus empty UI-only folders.
-        let mut root = build_node(cd.strategies.iter().filter(|r| filter.matches(r)));
-        for parts in view.ui_folder_paths(core) {
-            ensure_folder(&mut root, &parts);
-        }
-
-        let mut children = Vec::new();
-        let mut prefix: Vec<String> = Vec::new();
-        convert_node(
-            &root,
-            core,
-            &cd.strategies,
-            &order_counts,
-            &mut prefix,
-            view,
-            searching,
-            core_open,
-            &mut children,
-            &mut data,
-            &mut flat,
-            &mut expanded,
-        );
-
-        // Append the Deleted folder after live strategies and filter its rows by name during search.
-        let search_lc = filter.search.trim().to_lowercase();
-        let del: Vec<&moon_core::strat_db::stats::HeadRow> = view
-            .deleted
-            .get(&core)
-            .map(|v| {
-                v.iter()
-                    .filter(|h| search_lc.is_empty() || h.name.to_lowercase().contains(&search_lc))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !del.is_empty() {
-            let did = id_del_folder(core);
-            if searching || view.expanded_deleted.contains(&core) {
-                expanded.push(did.clone());
-            }
-            let mut dchildren = Vec::new();
-            for h in &del {
-                let sid_u = h.strategy_id as u64;
-                let key: Key = (core, sid_u);
-                let dsid = id_del_strat(core, sid_u);
-                data.insert(
-                    dsid.clone(),
-                    NodeData::DeletedStrategy {
-                        core,
-                        id: sid_u,
-                        name: h.name.clone(),
-                        kind: h.kind.clone(),
-                        is_short: h.is_short,
-                        highlighted: if view.sel.is_empty() {
-                            view.selected == Some(key)
-                        } else {
-                            view.sel.contains(&key)
-                        },
-                    },
-                );
-                dchildren.push(MoonTreeItem::new(dsid, h.name.clone()));
-            }
-            data.insert(
-                did.clone(),
-                NodeData::DeletedFolder {
-                    core,
-                    count: del.len(),
-                },
-            );
-            children.push(
-                MoonTreeItem::new(did, rust_i18n::t!("strat.deleted_folder").to_string())
-                    .folder(true)
-                    .children(dchildren),
+            build_core_subtree(
+                view,
+                cd,
+                core,
+                &filter,
+                searching,
+                &counts,
+                &matched,
+                &mut children,
+                &mut data,
+                &mut flat,
+                &mut expanded,
             );
         }
 
@@ -234,16 +194,154 @@ pub(crate) fn build(
     }
 }
 
+/// Builds the folder and strategy rows of one open core, followed by its Deleted folder.
+#[allow(clippy::too_many_arguments)]
+fn build_core_subtree(
+    view: &StrategiesView,
+    cd: &moon_core::session::store::CoreData,
+    core: CoreId,
+    filter: &PreparedFilter,
+    searching: bool,
+    counts: &FolderCounts,
+    matched: &[&StrategyRow],
+    children: &mut Vec<MoonTreeItem>,
+    data: &mut HashMap<SharedString, NodeData>,
+    flat: &mut Vec<Key>,
+    expanded: &mut Vec<SharedString>,
+) {
+    let mut order_counts: HashMap<u64, usize> = HashMap::new();
+    for o in cd.orders.iter().filter(|o| !o.job_is_done) {
+        *order_counts.entry(o.strat_id).or_insert(0) += 1;
+    }
+    // Every selected row in this core shares the same drag payload.
+    let selected_ids: Rc<[u64]> = view.drag_ids_for_core(core);
+    // Borrowed once per core so the per-folder probe below needs no owned key.
+    let open_folders: std::collections::HashSet<&str> = view
+        .expanded_folders
+        .iter()
+        .filter(|(c, _)| *c == core)
+        .map(|(_, p)| p.as_str())
+        .collect();
+
+    // Build the folder tree from visible strategies plus empty UI-only folders.
+    let mut root = build_node(matched.iter().copied());
+    for parts in view.ui_folder_paths(core) {
+        ensure_folder(&mut root, &parts);
+    }
+
+    let mut prefix: Vec<String> = Vec::new();
+    convert_node(
+        &root,
+        core,
+        counts,
+        &order_counts,
+        &selected_ids,
+        &open_folders,
+        &mut prefix,
+        view,
+        searching,
+        children,
+        data,
+        flat,
+        expanded,
+    );
+
+    // Append the Deleted folder after live strategies and filter its rows by name during search.
+    let del: Vec<&moon_core::strat_db::stats::HeadRow> = view
+        .deleted
+        .get(&core)
+        .map(|v| {
+            v.iter()
+                .filter(|h| {
+                    filter
+                        .query()
+                        .is_none_or(|q| h.name.to_lowercase().contains(q))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !del.is_empty() {
+        let did = id_del_folder(core);
+        if searching || view.expanded_deleted.contains(&core) {
+            expanded.push(did.clone());
+        }
+        let mut dchildren = Vec::new();
+        for h in &del {
+            let sid_u = h.strategy_id as u64;
+            let key: Key = (core, sid_u);
+            let dsid = id_del_strat(core, sid_u);
+            data.insert(
+                dsid.clone(),
+                NodeData::DeletedStrategy {
+                    core,
+                    id: sid_u,
+                    name: h.name.clone(),
+                    kind: h.kind.clone(),
+                    is_short: h.is_short,
+                    highlighted: if view.sel.is_empty() {
+                        view.selected == Some(key)
+                    } else {
+                        view.sel.contains(&key)
+                    },
+                },
+            );
+            dchildren.push(MoonTreeItem::new(dsid, h.name.clone()));
+        }
+        data.insert(
+            did.clone(),
+            NodeData::DeletedFolder {
+                core,
+                count: del.len(),
+            },
+        );
+        children.push(
+            MoonTreeItem::new(did, rust_i18n::t!("strat.deleted_folder").to_string())
+                .folder(true)
+                .children(dchildren),
+        );
+    }
+}
+
+/// Hashes the tree shape that [`MoonTreeState`] renders from: node ids, labels, folder flags,
+/// nesting, the expanded set, and the search-forced expansion.
+///
+/// Equal signatures allow the caller to skip an otherwise redundant forest push. Row contents are
+/// intentionally excluded because they live in `NodeData`, which is rebuilt every frame and is not
+/// stored by MoonTree.
+pub(crate) fn shape_sig(items: &[MoonTreeItem], expanded: &[SharedString], searching: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    searching.hash(&mut h);
+    /// Adds one item subtree to the structural signature.
+    fn walk(items: &[MoonTreeItem], h: &mut impl Hasher) {
+        items.len().hash(h);
+        for it in items {
+            it.id().hash(h);
+            it.label.hash(h);
+            it.is_folder().hash(h);
+            walk(&it.children, h);
+        }
+    }
+    walk(items, &mut h);
+    expanded.hash(&mut h);
+    h.finish()
+}
+
+/// Converts one folder node and its subtree.
+///
+/// Every node reached here is visible, so recursion stops at a closed folder because
+/// `MoonTreeState` cannot render its descendants.
 #[allow(clippy::too_many_arguments)]
 fn convert_node(
     node: &super::super::logic::FolderNode,
     core: CoreId,
-    all_strats: &[StrategyRow],
+    counts: &FolderCounts,
     order_counts: &HashMap<u64, usize>,
+    selected_ids: &Rc<[u64]>,
+    open_folders: &std::collections::HashSet<&str>,
     prefix: &mut Vec<String>,
     view: &StrategiesView,
     searching: bool,
-    ancestors_visible: bool,
     out: &mut Vec<MoonTreeItem>,
     data: &mut HashMap<SharedString, NodeData>,
     flat: &mut Vec<Key>,
@@ -251,28 +349,31 @@ fn convert_node(
 ) {
     for (name, child) in &node.children {
         prefix.push(name.clone());
+        // One joined path keeps the node id, expansion probe, selection comparison, and count
+        // lookup on the same folder identity without repeated allocation.
         let path = prefix.join("/");
         let fid = id_folder(core, &path);
-        let fopen = searching || view.expanded_folders.contains(&(core, path.clone()));
+        let fopen = searching || open_folders.contains(path.as_str());
+        let (active, total) = counts.for_path(&path);
+        let mut fchildren = Vec::new();
         if fopen {
             expanded.push(fid.clone());
+            convert_node(
+                child,
+                core,
+                counts,
+                order_counts,
+                selected_ids,
+                open_folders,
+                prefix,
+                view,
+                searching,
+                &mut fchildren,
+                data,
+                flat,
+                expanded,
+            );
         }
-        let (active, total) = folder_counts(all_strats, &view.filter, prefix);
-        let mut fchildren = Vec::new();
-        convert_node(
-            child,
-            core,
-            all_strats,
-            order_counts,
-            prefix,
-            view,
-            searching,
-            ancestors_visible && fopen,
-            &mut fchildren,
-            data,
-            flat,
-            expanded,
-        );
         data.insert(
             fid.clone(),
             NodeData::Folder {
@@ -281,7 +382,7 @@ fn convert_node(
                 label: name.clone(),
                 active,
                 total,
-                selected: view.selected_folder.as_ref() == Some(&(core, prefix.join("/"))),
+                selected: view.selected_folder.as_ref() == Some(&(core, path)),
             },
         );
         out.push(
@@ -296,14 +397,13 @@ fn convert_node(
         let key: Key = (core, r.id);
         let sid = id_strat(core, r.id);
         let staged = view.staged.get(&key).copied();
+        let in_sel = view.sel.contains(&key);
         let highlighted = if view.sel.is_empty() {
             view.selected == Some(key)
         } else {
-            view.sel.contains(&key)
+            in_sel
         };
-        if ancestors_visible {
-            flat.push(key);
-        }
+        flat.push(key);
         data.insert(
             sid.clone(),
             NodeData::Strategy {
@@ -316,7 +416,7 @@ fn convert_node(
                 staged,
                 highlighted,
                 is_short: r.is_short,
-                drag_ids: view.drag_ids_for(core, r.id),
+                drag_ids: in_sel.then(|| selected_ids.clone()),
             },
         );
         out.push(MoonTreeItem::new(sid, r.name.clone()));
@@ -353,9 +453,13 @@ impl StrategiesView {
             {
                 let data = data.clone();
                 move |entry, _meta| match data.get(entry.item().id()) {
-                    Some(NodeData::Strategy { core, drag_ids, .. }) => Some(StratDrag {
+                    Some(NodeData::Strategy {
+                        core, id, drag_ids, ..
+                    }) => Some(StratDrag {
                         core: *core,
-                        ids: drag_ids.clone(),
+                        ids: drag_ids
+                            .as_ref()
+                            .map_or_else(|| vec![*id], |ids| ids.to_vec()),
                     }),
                     _ => None,
                 }

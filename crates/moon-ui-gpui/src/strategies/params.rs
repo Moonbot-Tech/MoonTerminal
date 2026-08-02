@@ -19,7 +19,10 @@ pub(super) enum ParamsPanelModel {
 }
 
 impl StrategiesView {
-    pub(super) fn params_model(&self, store: &CoreStore) -> ParamsPanelModel {
+    /// Builds the selected parameter-section model from dependency values shared across both panes.
+    ///
+    /// Accepting `values` keeps field and schema normalization to one pass per frame.
+    pub(super) fn params_model(&self, store: &CoreStore, values: Values) -> ParamsPanelModel {
         if selected_row(self, store).is_none() {
             return ParamsPanelModel::NoSelection;
         }
@@ -81,7 +84,6 @@ impl StrategiesView {
             };
             section
         };
-        let values = selected_values(self, store);
         let row_pairs: Vec<(Key, StrategyRow)> = multi_row_pairs(self, store)
             .into_iter()
             .map(|(key, row)| (key, row.clone()))
@@ -312,9 +314,8 @@ impl StrategiesView {
         let row_id = editor_state_id(keys, &field_name);
         let view = cx.entity();
 
-        // `merged == None` means the selected strategies have DIFFERENT values. Previously the row
-        // only displayed `≠` and could not be edited. It now remains editable with a `≠` marker and
-        // highlight; stage_field_value applies any entered value to ALL selected keys, unifying them.
+        // `merged == None` leaves the row editable with a `≠` marker and highlight;
+        // `stage_field_value` applies entered text to every selected key, unifying their values.
         let differ = merged.is_none();
         let value = merged.unwrap_or_default();
         // Preserve the version value before moving it into a control so it can be compared with the
@@ -609,8 +610,7 @@ impl StrategiesView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    // Clip values to their cells so they cannot bleed into adjacent fields; long
-                    // memo text previously overlapped the rows below.
+                    // Clip values to their cells so long memo text cannot overlap adjacent rows.
                     .overflow_hidden()
                     .text_color(moon(val_col))
                     .child(value_el),
