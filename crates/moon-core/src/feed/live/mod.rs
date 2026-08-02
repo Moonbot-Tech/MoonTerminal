@@ -878,6 +878,21 @@ pub(super) fn run(
                                     server.name,
                                     rec_ids.len(),
                                 ),
+                                // An alive map answers `reconcile_alive`, which this terminal never
+                                // calls: the report replica detects removals through `RowDelete`
+                                // and `RowsDeleted` instead. Arriving here therefore means a core
+                                // answered a request nobody made, so it is logged rather than
+                                // applied — treating an unrequested bitmap as authoritative over
+                                // `covered_up_to` would delete live rows.
+                                ReportEvent::AliveMapComplete(map) => log::warn!(
+                                    "отчёты: core={} «{}» получена незапрошенная карта живых строк \
+                                     (epoch={}, covered_up_to={}, outcome={:?})",
+                                    server.uid,
+                                    server.name,
+                                    map.epoch,
+                                    map.covered_up_to,
+                                    map.outcome,
+                                ),
                                 ReportEvent::SchemaRejected { reason } => log::error!(
                                     "отчёты: core={} «{}» схема отвергнута: {reason}",
                                     server.uid,

@@ -190,6 +190,9 @@ fn production_report_messages_stage_matching_valuation_outbox_actions() {
                 ticket: moonproto::ReportSyncTicket { sync_id: 1 },
                 page_count: 0,
                 total_rows: 0,
+                // The writer discards `done` entirely, so this fixture only has to be a valid
+                // value, not a meaningful database identity.
+                epoch: 0,
                 max_rec_id: 0,
                 next_from_rec_id: 1,
             },
