@@ -430,7 +430,7 @@ impl DetachedChartHost {
     }
 
     /// Return market-search matches for this window from its bucket's cores.
-    fn coin_results(&self, cx: &App) -> Vec<(CoreId, String, String)> {
+    fn coin_results(&self, cx: &App) -> Vec<crate::controls::coin_search::CoinHit> {
         coin_search::search(
             self.backend.read(cx),
             &self.group,

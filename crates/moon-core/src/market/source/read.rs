@@ -2,6 +2,7 @@
 
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
+use crate::market::source::MarketLabel;
 use crate::session::CoreId;
 
 use std::collections::HashMap;
@@ -198,6 +199,71 @@ impl MarketDataSource {
         let inner = self.inner.read().expect("market source poisoned");
         let provider = inner.core_provider.get(&core).copied().unwrap_or(core);
         inner.exchange_of_provider(provider)
+    }
+
+    /// How a market is NAMED to the user: its coin token and quote currency.
+    ///
+    /// THE source of truth for every surface that shows a ticker — the search popup, the chart
+    /// label, tab titles, the header list, detect cards, Alerts. The catalog answers first
+    /// (`market_currency` / `base_currency`, the fields the core itself uses and matches its coin
+    /// lists against), and the per-exchange name rules answer only for a market the catalog does
+    /// not hold. Both live behind this one call so a caller cannot pick the weaker one by
+    /// accident: that is how the same coin came to read three different ways in three panels.
+    ///
+    /// Resolve this where a market is ASSIGNED — a pane, a row, a search hit — and keep the
+    /// result. It takes the source lock and reads a snapshot, so it does not belong in a
+    /// per-frame render path.
+    pub fn market_label(&self, core: CoreId, market: &str) -> MarketLabel {
+        let mut labels = self.market_labels(core, std::slice::from_ref(&market));
+        debug_assert_eq!(labels.len(), 1, "market_labels is parallel to its input");
+        labels.pop().unwrap_or_default()
+    }
+
+    /// [`Self::market_label`] for many markets of ONE core, resolved under a single lock and a
+    /// single snapshot.
+    ///
+    /// A search popup asks about dozens of markets per keystroke; asking one at a time would take
+    /// the source lock once per row. The result is parallel to `markets`.
+    pub fn market_labels(&self, core: CoreId, markets: &[&str]) -> Vec<MarketLabel> {
+        let (client, exchange) = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied().unwrap_or(core);
+            let client = inner.clients.get(&provider).and_then(SharedMoonClient::get);
+            (client, inner.exchange_of_provider(provider))
+        };
+        let snapshot = client.and_then(|client| client.snapshot_versioned());
+        let catalog = snapshot.as_ref().map(|snapshot| snapshot.markets());
+        markets
+            .iter()
+            .map(|market| {
+                catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.get(market))
+                    .and_then(|handle| {
+                        handle.with(|m| {
+                            let coin = m.market_currency.trim();
+                            (!coin.is_empty()).then(|| {
+                                let quote = m.base_currency.trim().to_ascii_uppercase();
+                                MarketLabel {
+                                    coin: coin.to_string(),
+                                    // A COIN-M contract reports no base currency at all, so its
+                                    // quote comes from the name (`BTCUSD_PERP` → `USD`); without
+                                    // this the pair collapses to a bare coin.
+                                    quote: if quote.is_empty() {
+                                        MarketLabel::from_name(market, exchange).quote
+                                    } else {
+                                        quote
+                                    },
+                                    contract: None,
+                                }
+                            })
+                        })
+                    })
+                    // A market the catalog does not hold — delisted under an open order, or a
+                    // core that has not sent its list yet.
+                    .unwrap_or_else(|| MarketLabel::from_name(market, exchange))
+            })
+            .collect()
     }
 
     /// Return the USD rate for the quote currency of `market`.

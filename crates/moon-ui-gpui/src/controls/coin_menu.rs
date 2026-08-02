@@ -356,17 +356,18 @@ fn add_to_strategy_blacklist(b: &Backend, core: CoreId, sid: u64, coin: &str) {
 
 /// Checks a comma-separated list for a token, ignoring ASCII case and surrounding whitespace.
 ///
-/// Deliberately a LITERAL comparison, not `symbol::coin_match_key`. The list is being
-/// WRITTEN for the core here, and how the core matches an entry against its own
-/// `market_currency` — whether it folds `BTC_RP` to `BTC` — has never been verified. Folding
-/// here would let us claim "the coin is already listed" about an entry the core may not
-/// associate with that coin at all, turning the click into a silent no-op.
+/// Deliberately a LITERAL comparison, not `symbol::coin_match_key` — and this is now MEASURED
+/// rather than assumed. MoonProto's `rebuild_market_blacklisted_cfg` compares each list entry
+/// against the market's own `market_currency` with `same_text_ascii`, an exact case-insensitive
+/// match with no folding. So the token to write and to compare is the core's spelling
+/// (`BTC_RP`, `1kBONKPERP`), which is what `MarketLabel::coin` carries and what every caller of
+/// this menu now supplies. Folding here would claim "already listed" about an entry the core
+/// does not associate with the market.
 ///
-/// The Analytics coin axis DOES fold, and it now writes too (`analytics::tuner::coins`), so
-/// the two paths disagree: a coin ticked there that the strategy did not already list is sent
-/// as the folded token. That is the same unverified assumption, on the other side of the
-/// bet — recorded here rather than silently equalised, because guessing which behaviour the
-/// core has would break whichever list is currently working.
+/// The Analytics coin axis DOES fold, and it writes too (`analytics::tuner::coins`), so the two
+/// paths still disagree for contract-qualified coins. That one is now the side known to be
+/// wrong; it is left alone here because changing what a working list writes belongs in its own
+/// change, not smuggled into this one.
 fn blacklist_contains(text: &str, coin: &str) -> bool {
     text.split(',').any(|s| s.trim().eq_ignore_ascii_case(coin))
 }

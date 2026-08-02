@@ -186,7 +186,14 @@ fn ticker_readout(
     });
     let base = sel
         .as_ref()
-        .map(|(_, market)| moon_core::symbol::coin_of_market(market).to_string())
+        .map(|(core, market)| {
+            backend
+                .read(cx)
+                .session
+                .market_source()
+                .market_label(*core, market)
+                .coin
+        })
         .unwrap_or_else(|| "BTC".to_string());
     // Each delta carries its window as a label; without one the tooltip is the only place that
     // says which span a percentage covers.

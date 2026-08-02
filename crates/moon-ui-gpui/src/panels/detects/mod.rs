@@ -178,31 +178,30 @@ impl DetectsPanel {
     /// whether the visible card collection or a retained card changed.
     fn ingest(&mut self, b: &Backend) -> bool {
         let mut changed = false;
-        // Read each core's server color and resolved default-market quote from configuration. The
-        // current card path uses the color; its coin label is derived independently by
-        // `coin_of_market`, so the collected quote remains unused.
+        // Read each core's server color from configuration. The coin label comes from the core's
+        // catalog when the card is built, not from the market name.
         // Canonical order: fresh events are appended core by core and rendered back in
         // reverse insertion order, with no chronological re-sort anywhere — so this order is
         // what decides how detects of the same instant read on screen.
         let order = crate::core_order::CoreOrder::new(&b.config);
-        let mut cores: Vec<(CoreId, String, [u8; 3], String)> = b
+        let mut cores: Vec<(CoreId, String, [u8; 3])> = b
             .session
             .sessions()
             .iter()
             .filter(|s| s.group == self.group)
             .map(|s| {
-                let (color, quote) = b
+                let color = b
                     .config
                     .servers
                     .iter()
                     .find(|sv| sv.id == s.id)
-                    .map(|sv| (sv.color, moon_core::symbol::resolve_quote(&sv.market)))
-                    .unwrap_or((DEFAULT_SERVER_COLOR, String::new()));
-                (s.id, s.name.clone(), color, quote)
+                    .map(|sv| sv.color)
+                    .unwrap_or(DEFAULT_SERVER_COLOR);
+                (s.id, s.name.clone(), color)
             })
             .collect();
-        order.sort_by(&mut cores, |(id, _, _, _)| *id);
-        for (id, name, color, _quote) in cores {
+        order.sort_by(&mut cores, |(id, _, _)| *id);
+        for (id, name, color) in cores {
             let Some(d) = b.session.store().core(id) else {
                 continue;
             };
@@ -240,6 +239,14 @@ impl DetectsPanel {
                     it.born_ms = det.time_ms;
                     it.ttl_ms = ttl;
                     it.color = color;
+                    // Re-resolve the label too: a card first built before its core sent a market
+                    // list would otherwise wear the name-derived spelling for its whole TTL.
+                    it.base = b
+                        .session
+                        .market_source()
+                        .market_label(id, &det.market)
+                        .display_coin()
+                        .to_string();
                     it.kind = det.kind;
                     it.is_short = det.is_short;
                     // Refresh the snapshot and TTL in place when the same core and market fire again.
@@ -255,7 +262,15 @@ impl DetectsPanel {
                         core: id,
                         core_name: name.clone(),
                         market: det.market.clone(),
-                        base: moon_core::symbol::coin_of_market(&det.market).to_string(),
+                        // Resolved when the card is built, not while rendering: a card is
+                        // re-rendered constantly, and the core's catalog is the only thing that
+                        // can name a Hyperliquid spot index.
+                        base: b
+                            .session
+                            .market_source()
+                            .market_label(id, &det.market)
+                            .display_coin()
+                            .to_string(),
                         color,
                         kind: det.kind,
                         is_short: det.is_short,

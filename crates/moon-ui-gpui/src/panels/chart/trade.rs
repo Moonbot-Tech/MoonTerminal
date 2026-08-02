@@ -474,8 +474,10 @@ impl ChartPanel {
             .find(|s| s.id == core)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        // A line whose order has already left the store falls back to the name-only reading.
-        let coin = coin.unwrap_or_else(|| moon_core::symbol::coin_of_market(&market).to_string());
+        // A line whose order has already left the store asks the catalog directly: this token is
+        // written into the core's coin blacklists, which it matches by exact text.
+        let coin =
+            coin.unwrap_or_else(|| b.session.market_source().market_label(core, &market).coin);
         let ctx = crate::controls::CoinMenuCtx {
             core,
             core_name,

@@ -150,6 +150,10 @@ pub struct OrderRow {
     /// A market the catalog no longer holds falls back to the per-exchange name rules in
     /// `moon_core::symbol::parse`.
     pub coin: String,
+    /// Quote currency for this market from the catalog's `base_currency`, uppercase, resolved
+    /// beside [`Self::coin`] so a panel can label the pair without asking the market source.
+    /// Empty when neither the catalog nor the name carries one — a COIN-M contract reports none.
+    pub quote: String,
     /// true = Short, false = Long.
     pub is_short: bool,
     /// Entry-leg size in the base currency: buy for long or sell for short.

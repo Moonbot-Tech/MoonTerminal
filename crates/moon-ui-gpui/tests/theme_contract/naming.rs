@@ -61,3 +61,35 @@ fn orders_token_cell_uses_the_resolved_coin() {
         "the Orders table must not re-derive a coin from the market name"
     );
 }
+
+/// Every surface that shows a coin and HAS a core must ask the market source for it.
+///
+/// The plausible edit is reaching for `coin_of_market`, which is one call instead of two and reads
+/// the market NAME — so it cannot name a Hyperliquid spot index (`@156`), cannot tell two COIN-M
+/// expiries apart, and cannot reproduce the core's own foldings. That is exactly how the coin came
+/// to read three different ways in three panels. This pins the surfaces that were converted; the
+/// Log panel is absent on purpose, because it scans free text and has no core to ask.
+#[test]
+fn coin_surfaces_resolve_through_the_market_source() {
+    for rel in [
+        "controls/coin_search.rs",
+        "chartdx/data_state/market.rs",
+        "chart_tabs/custom.rs",
+        "chrome/terminal_chrome.rs",
+        "panels/alerts.rs",
+        "panels/detects/mod.rs",
+        "panels/report/render.rs",
+        "panels/report/columns.rs",
+        "panels/chart/trade.rs",
+    ] {
+        let src = read_src(rel);
+        assert!(
+            src.contains("market_label(") || src.contains("market_labels("),
+            "{rel}: a coin surface must resolve through MarketDataSource::market_label"
+        );
+        assert!(
+            !src.contains("coin_of_market("),
+            "{rel}: must not re-derive a coin from the market name"
+        );
+    }
+}

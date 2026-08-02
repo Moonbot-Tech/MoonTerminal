@@ -8,7 +8,6 @@
 use gpui::*;
 use moon_core::feed::{OrderRow, OrderStopsForm, StopGroupEdit, TakeProfitEdit, VStopEdit};
 use moon_core::session::CoreId;
-use moon_core::symbol;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonInput,
     MoonInputState, MoonNotification, MoonPalette, MoonTone, MoonWindowExt as _, h_flex, v_flex,

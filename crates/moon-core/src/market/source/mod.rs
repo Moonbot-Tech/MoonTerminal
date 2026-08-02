@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod label_tests;
 mod read;
 mod refresh;
 #[cfg(test)]
@@ -392,6 +394,115 @@ struct MarketDataSourceInner {
     /// Each `(provider, market, kind_min)` records one deliberate core timeframe-slot change when
     /// opening a coarse timeframe with an empty cache.
     native_backfill_done: Mutex<HashSet<(CoreId, String, u32)>>,
+}
+
+/// How one market is named to the user.
+///
+/// Built by [`MarketDataSource::market_label`]; see it for why both fields come from one place.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MarketLabel {
+    /// Coin TOKEN as the core names it: `SOL`, OKX `BEAT`, Bybit `1kBONKPERP`, COIN-M `SOL_RP`
+    /// and `SOL_0925`, Hyperliquid spot `HFUN` for the market `@156`.
+    ///
+    /// This is the identity to WRITE and to FILTER by — the core matches its coin lists against it
+    /// by exact text and its report stores it. It is not always what a coin column should show:
+    /// it carries a contract tail. Use [`Self::display_coin`] for that and [`Self::match_key`] to
+    /// compare two spellings of one coin.
+    pub coin: String,
+    /// Quote currency, uppercase, or empty when neither the catalog nor the name carries one.
+    pub quote: String,
+    /// Contract tail recovered from a market NAME when the catalog could not answer, so a dated
+    /// contract does not share a label with its perpetual. `None` on the catalog path, where the
+    /// contract is already spelled inside [`Self::coin`].
+    pub contract: Option<String>,
+}
+
+impl MarketLabel {
+    /// The reading a market NAME alone supports, used when the catalog does not hold the market.
+    pub fn from_name(market: &str, exchange: crate::symbol::Exchange) -> Self {
+        let parts = crate::symbol::parse::split_market(market, exchange);
+        Self {
+            coin: parts.base.to_string(),
+            quote: parts.quote.to_ascii_uppercase(),
+            contract: parts.contract.map(str::to_string),
+        }
+    }
+
+    /// The coin WITHOUT its contract tail, for a column headed "coin": `AAVE_RP` reads `AAVE`.
+    pub fn display_coin(&self) -> &str {
+        crate::symbol::strip_contract_suffix(&self.coin)
+    }
+
+    /// THE key for "are these the same coin?", folding contract and case exactly as a strategy
+    /// coin list is compared. Matching raw [`Self::coin`] would fail to connect `AAVE` to the
+    /// COIN-M market the core calls `AAVE_RP`.
+    pub fn match_key(&self) -> String {
+        crate::symbol::coin_match_key(&self.coin)
+    }
+
+    /// `SOL-USDT` for a table cell or a chart caption, with a dated contract keeping its expiry
+    /// (`SOL-USD-0925`) because two expiries are two instruments. A perpetual carries no tail:
+    /// on a futures connection every market is one, so printing it everywhere says nothing.
+    pub fn pair(&self) -> String {
+        let base = self.display_coin();
+        let mut out = if self.quote.is_empty() {
+            base.to_string()
+        } else {
+            format!("{base}-{}", self.quote)
+        };
+        if let Some(expiry) = self.expiry() {
+            out.push('-');
+            out.push_str(expiry);
+        }
+        out
+    }
+
+    /// The EXPIRY this market carries, if any: `BTC_0925` → `0925`, a name-sourced `07AUG26`.
+    ///
+    /// `None` for a perpetual. Moonbot marks one with an `_RP` tail, which is a contract KIND and
+    /// not a date — reading it as an expiry is what made the market picker prefer a quarterly
+    /// over the perpetual.
+    pub fn expiry(&self) -> Option<&str> {
+        let base = self.display_coin();
+        self.coin
+            .get(base.len()..)
+            .map(|tail| tail.trim_start_matches('_'))
+            .filter(|tail| !tail.is_empty())
+            .or(self.contract.as_deref())
+            .filter(|tail| !tail.eq_ignore_ascii_case("RP"))
+    }
+}
+
+/// Pick the market a COIN belongs to, from candidates already labelled by the core's catalog.
+///
+/// The question "which market is `1kRATS`?" cannot be answered from market names: the market is
+/// spelled `1000RATSUSDT` and only the catalog knows the core folds it to `1kRATS`. Comparing a
+/// name reading against a coin the core wrote — a report row, a coin list — silently finds
+/// nothing and leaves the caller inventing a market that does not exist.
+///
+/// Exact token first, then the folded [`MarketLabel::match_key`] so a bare `AAVE` still reaches
+/// the COIN-M market the core calls `AAVE_RP`. Within each pass an undated contract wins: a coin
+/// names an instrument family, not an expiry.
+pub fn pick_market_for_coin<'a>(
+    candidates: &'a [(String, MarketLabel)],
+    coin: &str,
+) -> Option<&'a str> {
+    let wanted_key = crate::symbol::coin_match_key(coin);
+    let pick = |matches: &dyn Fn(&MarketLabel) -> bool| -> Option<&'a str> {
+        let mut dated = None;
+        for (name, label) in candidates {
+            if !matches(label) {
+                continue;
+            }
+            if label.expiry().is_none() {
+                return Some(name.as_str());
+            }
+            dated.get_or_insert(name.as_str());
+        }
+        dated
+    };
+    pick(&|label: &MarketLabel| label.coin.eq_ignore_ascii_case(coin))
+        .or_else(|| pick(&|label: &MarketLabel| label.match_key() == wanted_key))
 }
 
 impl MarketDataSourceInner {

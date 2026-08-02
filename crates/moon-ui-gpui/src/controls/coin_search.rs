@@ -22,6 +22,7 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::design;
 use moon_core::config::ChartBucket;
+use moon_core::market::MarketLabel;
 use moon_core::session::CoreId;
 
 /// Maximum number of MoonProto search results requested per core.
@@ -129,13 +130,29 @@ pub(crate) fn normalize_layout(query: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Returns token-search results as `(core, market, server name)` tuples.
+/// One search hit: the market to open, and how to LABEL it.
+///
+/// The label is resolved here, once per hit, rather than in the row renderer: the renderer has no
+/// core, and without one a Hyperliquid spot market can only be shown as its index (`@156`) and
+/// three COIN-M contracts of one coin all read `SOL`.
+#[derive(Clone)]
+pub(crate) struct CoinHit {
+    pub(crate) core: CoreId,
+    /// Market key, used to open and to match the selection. Never displayed.
+    pub(crate) market: String,
+    /// Core name shown beside the coin.
+    pub(crate) server: String,
+    /// Coin token and quote as the CORE names them; see `MarketDataSource::market_label`.
+    pub(crate) label: MarketLabel,
+}
+
+/// Returns token-search results, each carrying its resolved label.
 pub(crate) fn search(
     b: &Backend,
     group: &str,
     bucket: Option<&ChartBucket>,
     query: &str,
-) -> Vec<(CoreId, String, String)> {
+) -> Vec<CoinHit> {
     let query = normalize_layout(query.trim());
     let query = query.trim();
     if query.is_empty() {
@@ -152,9 +169,21 @@ pub(crate) fn search(
             .find(|s| s.id == core)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        for market in ms.search_markets(core, query, COIN_SEARCH_LIMIT) {
-            out.push((core, market, server.clone()));
-        }
+        let markets = ms.search_markets(core, query, COIN_SEARCH_LIMIT);
+        // One lock and one snapshot for this core's whole page of hits.
+        let refs: Vec<&str> = markets.iter().map(String::as_str).collect();
+        let labels = ms.market_labels(core, &refs);
+        out.extend(
+            markets
+                .into_iter()
+                .zip(labels)
+                .map(|(market, label)| CoinHit {
+                    core,
+                    market,
+                    server: server.clone(),
+                    label,
+                }),
+        );
     }
     out
 }
@@ -167,7 +196,7 @@ pub(crate) fn search(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_popup<F, G, H>(
     id: &'static str,
-    results: Vec<(CoreId, String, String)>,
+    results: Vec<CoinHit>,
     selected: &HashSet<(CoreId, String)>,
     multi_select: bool,
     p: MoonPalette,
@@ -205,9 +234,14 @@ where
         );
     }
 
-    for (i, (core, market, server)) in results.into_iter().enumerate() {
-        let quote = moon_core::symbol::resolve_quote(&market);
-        let base = moon_core::symbol::coin_of_market(&market).to_string();
+    for (i, hit) in results.into_iter().enumerate() {
+        let CoinHit {
+            core,
+            market,
+            server,
+            label,
+        } = hit;
+        let (base, quote) = (label.coin, label.quote);
         let on_pick = on_pick.clone();
         let market_pick = market.clone();
         let checked = selected.contains(&(core, market.clone()));

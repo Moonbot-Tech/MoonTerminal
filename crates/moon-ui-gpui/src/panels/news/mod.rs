@@ -883,11 +883,14 @@ impl NewsView {
             let b = self.backend.read(cx);
             let mut seen: HashSet<CoreId> = HashSet::new();
             let mut rows: Vec<(CoreId, String, String)> = Vec::new();
-            for (core, market, name) in coin_search::search(b, &self.group, None, coin) {
-                if moon_core::symbol::coin_of_market(&market).eq_ignore_ascii_case(coin)
-                    && seen.insert(core)
-                {
-                    rows.push((core, market, name));
+            // Match against the label the CORE gives the market, not a reading of its name: on
+            // Hyperliquid spot the name is an index and carries no coin at all. Compared through
+            // the shared match key, NOT by raw equality — the catalog token carries a contract
+            // tail (`AAVE_RP`, `SOL_0925`), and a news item names the bare coin.
+            let wanted = moon_core::symbol::coin_match_key(coin);
+            for hit in coin_search::search(b, &self.group, None, coin) {
+                if hit.label.match_key() == wanted && seen.insert(hit.core) {
+                    rows.push((hit.core, hit.market, hit.server));
                 }
             }
             // Exchange labels are only needed to disambiguate the multi-core picker.
