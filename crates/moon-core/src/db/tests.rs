@@ -795,6 +795,11 @@ fn union_reader_and_legacy_drop() {
 /// that the panel or file export could mistake for a complete result.
 #[test]
 fn corrupt_replica_fails_report_query_instead_of_truncating() {
+    // The corruption latch this test trips is process-global, and `test_state_guard` is what
+    // serializes it against the tests that assert on it; without it this test can flip
+    // `WRITES_BLOCKED` under an unrelated assertion.
+    let _integrity = integrity::test_state_guard();
+    integrity::reset_test_state();
     let path = test_support::temp_db("report-rows");
     let day = 1_780_000_000i64 / 86_400 * 86_400;
     let conn = test_support::build_replica(&path, &test_support::spread_rows(day, 2000));
@@ -855,6 +860,11 @@ fn corrupt_replica_fails_report_query_instead_of_truncating() {
 /// healthy empty period.
 #[test]
 fn corrupt_replica_fails_report_totals_instead_of_zeroing() {
+    // The corruption latch this test trips is process-global, and `test_state_guard` is what
+    // serializes it against the tests that assert on it; without it this test can flip
+    // `WRITES_BLOCKED` under an unrelated assertion.
+    let _integrity = integrity::test_state_guard();
+    integrity::reset_test_state();
     let path = test_support::temp_db("report-totals");
     let day = 1_780_000_000i64 / 86_400 * 86_400;
     let conn = test_support::build_replica(&path, &test_support::spread_rows(day, 2000));

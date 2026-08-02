@@ -42,6 +42,11 @@ fn bundled_sqlite_contains_the_wal_reset_fix() {
 /// durable outbox during a derived-cache reset.
 #[test]
 fn corrupted_cache_is_quarantined_without_touching_reports() {
+    // The corruption latch this test trips is process-global, and `test_state_guard` is what
+    // serializes it against the tests that assert on it; without it this test can flip
+    // `WRITES_BLOCKED` under an unrelated assertion.
+    let _integrity = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
     let (root, files, damage_root, pending) = recovery_fixture("corrupt");
     let store = open_store(&files[0]).expect("open valuation fixture");
     let transaction = store

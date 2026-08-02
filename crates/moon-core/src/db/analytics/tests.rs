@@ -505,6 +505,11 @@ fn summary_omits_previous_stats_when_quote_changes() {
 /// Index-page corruption surfaces as an error rather than an empty period.
 #[test]
 fn corrupt_replica_surfaces_error_not_empty() {
+    // The corruption latch this test trips is process-global, and `test_state_guard` is what
+    // serializes it against the tests that assert on it; without it this test can flip
+    // `WRITES_BLOCKED` under an unrelated assertion.
+    let _integrity = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
     let path = temp_db("corrupt");
     // Enough rows keep the target index leaf away from the header page so
     // corruption surfaces during the period scan rather than file opening.
