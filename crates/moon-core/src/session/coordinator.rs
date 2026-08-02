@@ -138,8 +138,10 @@ impl SessionManager {
         for (id, provider, markets, orderbook_markets) in cmds {
             if let Some(s) = self.sessions.iter().find(|s| s.id == id) {
                 market_diag(format!(
-                    "set_open send core={id} provider={provider} markets={markets:?} \
-                     orderbook={orderbook_markets:?}"
+                    // `provider` here is the is-provider FLAG, not another core's id.
+                    "set_open send core={} provider={provider} markets={markets:?} \
+                     orderbook={orderbook_markets:?}",
+                    crate::feed::core_label(id)
                 ));
                 let _ = s.handle.cmd_tx.send(CoreCmd::SetMarket {
                     provider,

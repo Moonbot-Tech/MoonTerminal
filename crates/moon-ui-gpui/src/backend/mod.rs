@@ -547,11 +547,17 @@ impl Backend {
     pub(crate) fn cancel_buy_orders(&self, core: CoreId, market: &str) -> usize {
         match self.session.cancel_market_buys(core, market.to_string()) {
             Ok(()) => {
-                log::info!("cancel buy: requested market buys for core={core} market={market}");
+                log::info!(
+                    "cancel buy: requested market buys for core={} market={market}",
+                    moon_core::feed::core_label(core)
+                );
                 1
             }
             Err(err) => {
-                log::warn!("cancel buy failed: core={core} market={market}: {err:#}");
+                log::warn!(
+                    "cancel buy failed: core={} market={market}: {err:#}",
+                    moon_core::feed::core_label(core)
+                );
                 0
             }
         }
@@ -1427,10 +1433,10 @@ impl Backend {
                 && self.group_windows.contains_key(&server.group)
                 && !market.is_empty()
                 && session_exists)
-                .then(|| (server.id, market.to_string(), server.name.clone()))
+                .then(|| (server.id, market.to_string()))
         });
 
-        let Some((core, market, name)) = candidate else {
+        let Some((core, market)) = candidate else {
             self.diag_open_done = true;
             log::warn!("diag auto-open: no active visible server with default market");
             return;
@@ -1441,7 +1447,10 @@ impl Backend {
         if std::env::var_os("MOON_RENDER_DIAG_PAUSE_AFTER_OPEN").is_some() {
             self.follow = false;
         }
-        log::info!("diag auto-open: core={core} name={name} market={market}");
+        log::info!(
+            "diag auto-open: core={} market={market}",
+            moon_core::feed::core_label(core)
+        );
         cx.notify();
     }
 

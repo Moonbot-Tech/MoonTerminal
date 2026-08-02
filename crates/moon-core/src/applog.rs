@@ -7,6 +7,14 @@
 //! an `env_logger` wrapper that duplicates each accepted `log::` entry into the buffer
 //! before passing it to env_logger for console/file output. Thread-safe for multiple feed
 //! threads while the UI thread reads a snapshot.
+//!
+//! A core is named, never addressed, in the log. Each entry point redacts once — [`TeeLogger::log`]
+//! for `log::` records, [`command`], [`parse_file_line`] for history read back from disk, and the
+//! core stream at its source in `feed::live` — and [`DatedWriter::write`] scans again on the way to
+//! a file, the sink whose contents outlive the process and get shared. [`panic_log`] owns the crash
+//! file on the same terms.
+
+pub mod redact;
 
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -102,6 +110,9 @@ fn app_writer() -> &'static Mutex<DatedWriter> {
 
 /// Adds a line to the ring buffer, evicting the oldest, and appends it to
 /// `logs/<date>_app.log` when file logging is enabled.
+///
+/// Callers redact before building the line; [`DatedWriter::write`] scans again on the way to disk,
+/// so a mistake here cannot reach a file.
 fn push(line: LogLine) {
     if file_logging_enabled() {
         if let Ok(mut w) = app_writer().lock() {
@@ -239,6 +250,9 @@ impl DatedWriter {
 
     /// Appends a line. If file logging is disabled, writes nothing and closes any open file.
     /// `date`=YYYY-MM-DD for the filename; `hms`=HH:MM:SS.mmm for the line.
+    ///
+    /// Network addresses are redacted here, so every file this writer owns — the application log
+    /// and each core's log — is address-free regardless of what the caller passed.
     pub fn write(&mut self, date: &str, hms: &str, level: &str, target: &str, msg: &str) {
         if !file_logging_enabled() {
             self.file = None;
@@ -249,7 +263,7 @@ impl DatedWriter {
         }
         if let Some(f) = self.file.as_mut() {
             // Remove line breaks from msg so one entry occupies one file line.
-            let msg = msg.replace(['\n', '\r'], " ");
+            let msg = redact::addresses(msg).replace(['\n', '\r'], " ");
             let _ = writeln!(f, "{hms}\t{level}\t{target}\t{msg}");
         }
     }
@@ -342,14 +356,17 @@ pub fn read_file(filename: &str, max: usize) -> Vec<LogLine> {
         return Vec::new();
     };
     let date = filename.get(0..10).unwrap_or("");
-    let mut out: Vec<LogLine> = text.lines().map(|l| parse_file_line(date, l)).collect();
-    if out.len() > max {
-        let drop = out.len() - max;
-        out.drain(0..drop);
-    }
-    out
+    // Skip to the last `max` lines BEFORE parsing: a day-sized core log holds far more lines than
+    // the view keeps, and parsing (with its redaction scan) the discarded ones runs on the UI thread.
+    let total = text.lines().count();
+    text.lines()
+        .skip(total.saturating_sub(max))
+        .map(|l| parse_file_line(date, l))
+        .collect()
 }
 
+/// Parses one stored line. Files written by earlier builds still hold addresses, and the Log tab
+/// reads them back into the same view (and clipboard) as live lines, so redact on the way in.
 fn parse_file_line(date: &str, l: &str) -> LogLine {
     let mut it = l.splitn(4, '\t');
     match (it.next(), it.next(), it.next(), it.next()) {
@@ -357,13 +374,13 @@ fn parse_file_line(date: &str, l: &str) -> LogLine {
             ts: format!("{date} {hms}"),
             level: level_from_code(lv),
             target: tg.to_string(),
-            msg: m.to_string(),
+            msg: redact::addresses(m).into_owned(),
         },
         _ => LogLine {
             ts: date.to_string(),
             level: log::Level::Info,
             target: String::new(),
-            msg: l.to_string(),
+            msg: redact::addresses(l).into_owned(),
         },
     }
 }
@@ -372,6 +389,7 @@ fn parse_file_line(date: &str, l: &str) -> LogLine {
 /// in-memory buffer.
 pub fn command(line: &str) {
     let ts = ts();
+    let line = redact::addresses(line);
     if file_logging_enabled() {
         if let Some(m) = handle() {
             if let Ok(mut f) = m.lock() {
@@ -383,8 +401,47 @@ pub fn command(line: &str) {
         ts,
         level: log::Level::Info,
         target: "core.cmd".to_string(),
-        msg: line.to_string(),
+        msg: line.into_owned(),
     });
+}
+
+/// Installs `env` as the global logger, wrapped in [`TeeLogger`].
+///
+/// The wrapper is what redacts and what feeds the Log tab, so nothing may install the inner logger
+/// directly. Returns the error from `log::set_boxed_logger` when a logger is already installed.
+pub fn install(env: env_logger::Logger) -> Result<(), log::SetLoggerError> {
+    log::set_max_level(env.filter());
+    log::set_boxed_logger(Box::new(TeeLogger::new(env)))
+}
+
+/// Appends a crash report to `panic.log`, redacting addresses first.
+///
+/// The panic hook and the native crash handler both write here; owning the sink in one place keeps
+/// the file's path and its redaction from being restated at each call site.
+pub fn panic_log(line: &str) {
+    let line = redact::addresses(line);
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(paths::panic_log())
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// Runs `f` on a copy of `src` whose message is `msg`.
+///
+/// `format_args!` produces a temporary that cannot outlive the statement building the record, so a
+/// rebuilt record can only be handed to a callback, never returned or stored. The fields are copied
+/// by hand because `Record::to_builder` needs log's `kv` feature, which this tree does not enable.
+fn with_redacted_record<R>(msg: &str, src: &log::Record, f: impl FnOnce(&log::Record) -> R) -> R {
+    f(&log::Record::builder()
+        .metadata(src.metadata().clone())
+        .args(format_args!("{msg}"))
+        .module_path(src.module_path())
+        .file(src.file())
+        .line(src.line())
+        .build())
 }
 
 /// Logger wrapper that duplicates emitted entries into the ring buffer and delegates
@@ -405,17 +462,38 @@ impl log::Log for TeeLogger {
     }
 
     fn log(&self, record: &log::Record) {
-        // Buffer only entries that pass env_logger's filter, matching console output;
-        // otherwise dependency trace noise would fill the buffer.
-        if self.inner.matches(record) {
+        // Level/module gate first: formatting the message for a record env_logger will drop is the
+        // dependency trace noise this wrapper exists to keep out of the buffer.
+        if !self.inner.enabled(record.metadata()) {
+            return;
+        }
+        // Format ONCE. Dependencies such as moonproto format addresses into their own records, so
+        // the console and file copy is rebuilt from this text rather than forwarding the original:
+        // re-formatting it would run the arguments' `Display` a second time, and an argument whose
+        // value moved in between (a core renamed mid-line) would print differently in each copy.
+        let raw = record.args().to_string();
+        // The `Cow` borrows `raw`, so reduce it before reusing `raw` itself on the clean path —
+        // that keeps a line without an address at exactly one allocation.
+        let masked = match redact::addresses(&raw) {
+            std::borrow::Cow::Borrowed(_) => None,
+            std::borrow::Cow::Owned(text) => Some(text),
+        };
+        let msg = masked.unwrap_or(raw);
+        // Both copies are decided on the SAME text: env_logger's filter can match on the message
+        // body, so testing one text and emitting another would let the two disagree.
+        let buffered = with_redacted_record(&msg, record, |rebuilt| {
+            let matched = self.inner.matches(rebuilt);
+            self.inner.log(rebuilt);
+            matched
+        });
+        if buffered {
             push(LogLine {
                 ts: ts(),
                 level: record.level(),
                 target: record.target().to_string(),
-                msg: record.args().to_string(),
+                msg,
             });
         }
-        self.inner.log(record);
     }
 
     fn flush(&self) {

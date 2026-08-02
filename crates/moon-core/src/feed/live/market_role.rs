@@ -107,12 +107,16 @@ impl MarketRoleState {
                     Ok(()) => {
                         if diag_on {
                             log::info!(
-                                "[market_diag] core {server_id} subscribe_orderbook({market})"
+                                "[market_diag] core {} subscribe_orderbook({market})",
+                                crate::feed::core_label(server_id)
                             );
                         }
                     }
                     Err(error) => {
-                        log::warn!("core {server_id} subscribe_orderbook({market}) failed: {error}")
+                        log::warn!(
+                            "core {} subscribe_orderbook({market}) failed: {error}",
+                            crate::feed::core_label(server_id)
+                        )
                     }
                 }
             }
@@ -127,12 +131,14 @@ impl MarketRoleState {
                     Ok(()) => {
                         if diag_on {
                             log::info!(
-                                "[market_diag] core {server_id} unsubscribe_orderbook({market})"
+                                "[market_diag] core {} unsubscribe_orderbook({market})",
+                                crate::feed::core_label(server_id)
                             );
                         }
                     }
                     Err(error) => log::warn!(
-                        "core {server_id} unsubscribe_orderbook({market}) failed: {error}"
+                        "core {} unsubscribe_orderbook({market}) failed: {error}",
+                        crate::feed::core_label(server_id)
                     ),
                 }
             }
@@ -155,10 +161,16 @@ fn apply_market_role(client: &MoonClient, server_id: u64, provider: bool) {
         let _ = client
             .streams()
             .subscribe_all_trades(TradesStreamMode::TradesOnly);
-        log::info!("core {server_id} -> market provider (all-trades)");
+        log::info!(
+            "core {} -> market provider (all-trades)",
+            crate::feed::core_label(server_id)
+        );
     } else {
         let _ = client.streams().unsubscribe_all_trades();
-        log::info!("core {server_id} -> account-only");
+        log::info!(
+            "core {} -> account-only",
+            crate::feed::core_label(server_id)
+        );
     }
 }
 

@@ -34,7 +34,11 @@ pub(super) fn insert_index(existing: &[CoreId], order: &[CoreId], id: CoreId) ->
 
 impl SessionManager {
     /// Register a session at its configured position for every insertion path.
+    ///
+    /// Also publishes the core's name for log labels: every line that identifies a core by id
+    /// resolves the name through the registry, and this is the one place a session comes into being.
     fn insert_session(&mut self, session: CoreSession) {
+        crate::feed::set_core_name(session.id, &session.name);
         let existing: Vec<CoreId> = self.sessions.iter().map(|s| s.id).collect();
         let at = insert_index(&existing, &self.config_order, session.id);
         self.sessions.insert(at, session);
@@ -149,6 +153,9 @@ impl SessionManager {
             match self.sessions.iter().position(|x| x.id == s.id) {
                 None => self.spawn_core(s, sig, mem, reports),
                 Some(idx) => {
+                    // A rename alone does not touch the connection, so the label registry has to be
+                    // updated here too — otherwise logs keep the old name until the next respawn.
+                    feed::set_core_name(s.id, &s.name);
                     self.sessions[idx].name = s.name.clone();
                     self.sessions[idx].group = s.group.clone();
                     if self.sessions[idx].conn_sig != sig {
@@ -176,6 +183,9 @@ impl SessionManager {
             return;
         }
         self.store.ensure(id);
+        // Publish the name BEFORE the feed thread starts: its first lines are logged from that
+        // thread and would otherwise carry a bare id.
+        feed::set_core_name(id, &s.name);
         let handle = self.spawn_feed(s.clone(), mem, reports);
         self.insert_session(CoreSession {
             id,
@@ -184,7 +194,7 @@ impl SessionManager {
             conn_sig: sig,
             handle,
         });
-        log::info!("session up: core={id}");
+        log::info!("session up: core={}", crate::feed::core_label(id));
     }
 
     /// Replace a core feed or insert the missing session, then reset provider coordination.
@@ -209,11 +219,15 @@ impl SessionManager {
         let id = server.id;
         let name = server.name.clone();
         let group = server.group.clone();
+        // Before the replacement thread starts, for the same reason as in `spawn_core`.
+        feed::set_core_name(id, &name);
         let handle = self.spawn_feed(server, mem, reports);
         match self.sessions.iter_mut().find(|s| s.id == id) {
             Some(sess) => {
                 sess.handle = handle; // Dropping the old handle stops its feed thread.
                 sess.conn_sig = sig;
+                // A rename arrives as a respawn, so log labels follow it from here on.
+                crate::feed::set_core_name(id, &name);
                 sess.name = name;
                 sess.group = group;
             }
@@ -230,7 +244,7 @@ impl SessionManager {
             core.begin_connection_attempt();
         }
         self.clear_core_coordination(id);
-        log::info!("{why}: core={id}");
+        log::info!("{why}: core={}", crate::feed::core_label(id));
     }
 
     /// Stop a removed or deactivated core and clear its account data, market client, and
@@ -242,7 +256,10 @@ impl SessionManager {
         self.clear_core_coordination(id);
         self.wanted.remove(&id);
         self.pending_drop.retain(|(core, _), _| *core != id);
-        log::info!("session down: core={id}");
+        log::info!("session down: core={}", crate::feed::core_label(id));
+        // Release the name AFTER the line above, so the last line still names the core; a later id
+        // reuse must not inherit it.
+        crate::feed::clear_core_name(id);
     }
 
     /// Drain every core channel into the session stores.
@@ -319,12 +336,16 @@ impl SessionManager {
     ) -> bool {
         let provider = self.core_provider.get(&core).copied().unwrap_or(core);
         let Some(sess) = self.sessions.iter().find(|s| s.id == provider) else {
-            log::warn!("diag history fill skipped: provider core={provider} not found");
+            log::warn!(
+                "diag history fill skipped: provider core={} not found",
+                crate::feed::core_label(provider)
+            );
             return false;
         };
         let Some(client) = sess.handle.client.get() else {
             log::warn!(
-                "diag history fill skipped: provider core={provider} has no MoonProto client"
+                "diag history fill skipped: provider core={} has no MoonProto client",
+                crate::feed::core_label(provider)
             );
             return false;
         };
@@ -332,15 +353,19 @@ impl SessionManager {
         match client.diag_fill_market_history_to_capacity(market, now_ms, span_ms) {
             Ok(filled) => {
                 log::info!(
-                    "diag history fill: core={core} provider={provider} market={market} \
+                    "diag history fill: core={} provider={} market={market} \
                      span_ms={span_ms} filled={filled}",
+                    crate::feed::core_label(core),
+                    crate::feed::core_label(provider),
                 );
                 filled
             }
             Err(err) => {
                 log::warn!(
-                    "diag history fill failed: core={core} provider={provider} \
-                     market={market} span_ms={span_ms}: {err:#}"
+                    "diag history fill failed: core={} provider={} \
+                     market={market} span_ms={span_ms}: {err:#}",
+                    crate::feed::core_label(core),
+                    crate::feed::core_label(provider)
                 );
                 false
             }
@@ -360,7 +385,9 @@ impl SessionManager {
         let provider = self.core_provider.get(&core).copied().unwrap_or(core);
         log::warn!(
             "diag history fill disabled: MoonProto diagnostics feature is forbidden in terminal \
-             core={core} provider={provider} market={market} now_ms={now_ms} span_ms={span_ms}"
+             core={} provider={} market={market} now_ms={now_ms} span_ms={span_ms}",
+            crate::feed::core_label(core),
+            crate::feed::core_label(provider)
         );
         false
     }

@@ -227,8 +227,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             .default_filter_or("warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info"),
     )
     .build();
-    log::set_max_level(env.filter());
-    if let Err(e) = log::set_boxed_logger(Box::new(moon_core::applog::TeeLogger::new(env))) {
+    if let Err(e) = moon_core::applog::install(env) {
         eprintln!("не удалось установить логгер: {e}");
     }
     log::info!(
@@ -267,16 +266,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
             // Force a backtrace without RUST_BACKTRACE: clamp panics report a location inside core,
             // while we need the CALLING frame in our code.
             let bt = std::backtrace::Backtrace::force_capture();
-            let line = format!("PANIC at {loc}: {payload}\n--- backtrace ---\n{bt}\n--- end ---");
+            // Both sinks redact on their own: `panic_log` owns the file, `TeeLogger` the log.
+            // A panic message can quote foreign text carrying an endpoint.
+            moon_core::applog::panic_log(&format!(
+                "PANIC at {loc}: {payload}\n--- backtrace ---\n{bt}\n--- end ---"
+            ));
             log::error!("PANIC at {loc}: {payload}");
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("panic.log")
-            {
-                let _ = writeln!(f, "{line}");
-            }
             default_hook(info);
         }));
     }

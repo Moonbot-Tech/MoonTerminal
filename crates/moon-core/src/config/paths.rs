@@ -391,6 +391,14 @@ pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }
 
+/// Crash report file, written by the panic hook and the native crash handler.
+///
+/// Deliberately relative to the working directory rather than [`data_dir`]: a crash can happen
+/// before — or because of — storage setup, and this file must not depend on it.
+pub fn panic_log() -> PathBuf {
+    PathBuf::from("panic.log")
+}
+
 /// Snapshot directory for irreplaceable config files; see `config::backup`.
 ///
 /// Lives in the `data_dir` root beside `logs/` and `servers.enc`, NOT inside `cfg/`: a snapshot

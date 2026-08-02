@@ -301,7 +301,10 @@ fn add_to_core_blacklist(b: &Backend, core: CoreId, coin: &str) {
     let (_, text) = core_blacklist(b, core);
     let new = blacklist_add(&text, coin);
     if let Err(err) = b.session.set_blacklist(core, true, new) {
-        log::warn!("coin_menu: add {coin} to core {core} blacklist failed: {err:#}");
+        log::warn!(
+            "coin_menu: add {coin} to core {} blacklist failed: {err:#}",
+            moon_core::feed::core_label(core)
+        );
     }
 }
 

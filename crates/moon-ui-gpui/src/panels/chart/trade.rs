@@ -211,7 +211,8 @@ impl ChartPanel {
         let placed = self.backend.update(cx, |b, _| {
             let Some(terms) = b.manual_order_terms(core, None) else {
                 log::warn!(
-                    "manual chart order blocked: core={core} market={market} has no complete local terms or valid base/USD rate"
+                    "manual chart order blocked: core={} market={market} has no complete local terms or valid base/USD rate",
+                    moon_core::feed::core_label(core)
                 );
                 return false;
             };
@@ -232,7 +233,8 @@ impl ChartPanel {
             {
                 Ok(()) => {
                     log::info!(
-                        "manual chart order: core={core} market={market} side={} price={price:.8} size={} usd={usd}",
+                        "manual chart order: core={} market={market} side={} price={price:.8} size={} usd={usd}",
+                        moon_core::feed::core_label(core),
                         if short { "short" } else { "long" },
                         terms.size_base
                     );
@@ -240,7 +242,8 @@ impl ChartPanel {
                 }
                 Err(err) => {
                     log::warn!(
-                        "manual chart order failed: core={core} market={market} price={price:.8}: {err:#}"
+                        "manual chart order failed: core={} market={market} price={price:.8}: {err:#}",
+                        moon_core::feed::core_label(core)
                     );
                     false
                 }
@@ -414,9 +417,15 @@ impl ChartPanel {
         let (core, uid) = (hit.core, hit.uid);
         self.backend
             .update(cx, |b, _| match b.session.cancel_order(core, uid) {
-                Ok(()) => log::info!("chart start-cross cancel: core={core} uid={uid}"),
+                Ok(()) => log::info!(
+                    "chart start-cross cancel: core={} uid={uid}",
+                    moon_core::feed::core_label(core)
+                ),
                 Err(error) => {
-                    log::warn!("chart start-cross cancel failed: core={core} uid={uid}: {error}")
+                    log::warn!(
+                        "chart start-cross cancel failed: core={} uid={uid}: {error}",
+                        moon_core::feed::core_label(core)
+                    )
                 }
             });
         true

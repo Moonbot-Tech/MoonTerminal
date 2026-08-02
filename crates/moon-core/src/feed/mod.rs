@@ -2,6 +2,7 @@
 //! to the UI. The UI never calls moonproto directly. Live mode is the only mode.
 
 pub(crate) mod assets;
+mod core_label;
 pub mod live;
 pub mod news;
 pub mod news_marks;
@@ -11,6 +12,7 @@ pub mod synth;
 mod trade;
 pub mod types;
 
+pub use core_label::{clear_core_name, core_label, set_core_name};
 pub use news::{NewsItem, NewsSnapshot};
 pub use types::*;
 

@@ -74,8 +74,8 @@ fn target_group(
             Some((true, false, 0.0, 0.0))
         } else {
             log::warn!(
-                "core {server_id} order form {uid} {kind:?}: возврат к глобальному без уровня стратегии/дефолта — оставляем fixed"
-            );
+                "core {} order form {uid} {kind:?}: возврат к глобальному без уровня стратегии/дефолта — оставляем fixed"
+            , crate::feed::core_label(server_id));
             resolve(Some(true))
         };
     }
@@ -93,14 +93,23 @@ pub(super) fn update_order_stops_form(
         return;
     }
     let Some(snap) = client.snapshot() else {
-        log::warn!("core {server_id} order form {uid}: no snapshot yet");
+        log::warn!(
+            "core {} order form {uid}: no snapshot yet",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
     let Some(o) = snap.orders().iter().find(|o| o.uid == uid) else {
-        log::warn!("core {server_id} order form {uid}: order not tracked");
+        log::warn!(
+            "core {} order form {uid}: order not tracked",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
-    log::info!("core {server_id} order form {uid}: {form:?}");
+    log::info!(
+        "core {} order form {uid}: {form:?}",
+        crate::feed::core_label(server_id)
+    );
 
     if form.sl.is_some() || form.ts.is_some() || form.tp.is_some() {
         let stops = o.stops;
@@ -242,8 +251,8 @@ pub(super) fn update_order_stops_form(
                 );
             } else {
                 log::warn!(
-                    "core {server_id} order form {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
-                );
+                    "core {} order form {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
+                , crate::feed::core_label(server_id));
             }
         }
 

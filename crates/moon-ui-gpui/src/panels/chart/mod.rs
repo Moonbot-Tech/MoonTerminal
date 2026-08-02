@@ -912,7 +912,8 @@ impl ChartPanel {
         };
         let now_ms = now_unix_ms();
         log::info!(
-            "debug history fill: requesting core={core} market={market} span_ms={DEBUG_HISTORY_FILL_SPAN_MS}"
+            "debug history fill: requesting core={} market={market} span_ms={DEBUG_HISTORY_FILL_SPAN_MS}",
+            moon_core::feed::core_label(core)
         );
         let filled = self
             .backend
@@ -925,14 +926,20 @@ impl ChartPanel {
                 DEBUG_HISTORY_FILL_SPAN_MS,
             );
         if !filled {
-            log::warn!("debug history fill: failed core={core} market={market}");
+            log::warn!(
+                "debug history fill: failed core={} market={market}",
+                moon_core::feed::core_label(core)
+            );
             return false;
         }
         self.chart.force_history_reupload();
         self.view_dirty = true;
         crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);
         cx.notify();
-        log::info!("debug history fill: force reupload core={core} market={market}");
+        log::info!(
+            "debug history fill: force reupload core={} market={market}",
+            moon_core::feed::core_label(core)
+        );
         true
     }
 }

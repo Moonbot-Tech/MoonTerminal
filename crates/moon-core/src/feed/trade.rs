@@ -25,8 +25,11 @@ pub(super) fn report<T, E: std::fmt::Display>(
     r: Result<T, E>,
 ) {
     match r {
-        Ok(_) => log::info!("core {server_id} {ctx}"),
-        Err(error) => log::warn!("core {server_id} {ctx} failed: {error}"),
+        Ok(_) => log::info!("core {} {ctx}", crate::feed::core_label(server_id)),
+        Err(error) => log::warn!(
+            "core {} {ctx} failed: {error}",
+            crate::feed::core_label(server_id)
+        ),
     }
 }
 
@@ -54,10 +57,10 @@ pub(super) fn place_order(
     );
     match client.trade().new_order(params) {
         Ok(_ticket) => log::info!(
-            "core {server_id} place order {market} short={short} price={price} size={size} strat={strategy_id:?}"
-        ),
+            "core {} place order {market} short={short} price={price} size={size} strat={strategy_id:?}"
+        , crate::feed::core_label(server_id)),
         Err(error) => {
-            log::warn!("core {server_id} place order {market} failed: {error}")
+            log::warn!("core {} place order {market} failed: {error}", crate::feed::core_label(server_id))
         }
     }
 }
@@ -162,7 +165,10 @@ pub(super) fn market_sell_token(client: &MoonClient, server_id: u64, market: Str
 /// Filled positions (`BuyDone`/sell phases) and terminal orders remain untouched.
 pub(super) fn cancel_market_buys(client: &MoonClient, server_id: u64, market: &str) {
     let Some(snap) = client.snapshot() else {
-        log::warn!("core {server_id} cancel market buys {market}: no snapshot yet");
+        log::warn!(
+            "core {} cancel market buys {market}: no snapshot yet",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
     let uids: Vec<u64> = snap
@@ -176,12 +182,16 @@ pub(super) fn cancel_market_buys(client: &MoonClient, server_id: u64, market: &s
         .map(|o| o.uid)
         .collect();
     log::info!(
-        "core {server_id} cancel market buys {market}: {} pending",
+        "core {} cancel market buys {market}: {} pending",
+        crate::feed::core_label(server_id),
         uids.len()
     );
     for uid in uids {
         if let Err(error) = client.orders().cancel(uid) {
-            log::warn!("core {server_id} cancel market buys {market} uid {uid} failed: {error}");
+            log::warn!(
+                "core {} cancel market buys {market} uid {uid} failed: {error}",
+                crate::feed::core_label(server_id)
+            );
         }
     }
 }
@@ -257,7 +267,10 @@ pub(super) fn split_order_for_market(
     parts: i32,
 ) {
     let Some(snap) = client.snapshot() else {
-        log::warn!("core {server_id} split order {market}: no snapshot yet");
+        log::warn!(
+            "core {} split order {market}: no snapshot yet",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
     let target = resolve_market_split_target(
@@ -274,10 +287,13 @@ pub(super) fn split_order_for_market(
         SplitTarget::One(uid) => report(
             server_id,
             format!("split order {market} uid={uid} parts={parts}"),
-            client.trade().split_order(SplitOrderParams::new(uid, parts)),
+            client
+                .trade()
+                .split_order(SplitOrderParams::new(uid, parts)),
         ),
         SplitTarget::Ambiguous => log::warn!(
-            "core {server_id} split order {market}: not exactly one active sell order — sending nothing"
+            "core {} split order {market}: not exactly one active sell order — sending nothing",
+            crate::feed::core_label(server_id)
         ),
     }
 }
@@ -308,11 +324,17 @@ pub(super) fn set_order_stop(
     on: bool,
 ) {
     let Some(snap) = client.snapshot() else {
-        log::warn!("core {server_id} set order stop {uid} {kind:?}->{on}: no snapshot yet");
+        log::warn!(
+            "core {} set order stop {uid} {kind:?}->{on}: no snapshot yet",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
     let Some(o) = snap.orders().iter().find(|o| o.uid == uid) else {
-        log::warn!("core {server_id} set order stop {uid} {kind:?}->{on}: order not tracked");
+        log::warn!(
+            "core {} set order stop {uid} {kind:?}->{on}: order not tracked",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
     // Effective order strategy: its own OR the core settings' `manual strategy`, which governs
@@ -325,8 +347,8 @@ pub(super) fn set_order_stop(
         .map(|c| (f64::from(c.price_drop_level), f64::from(c.trailing_drop)))
         .unwrap_or((0.0, 0.0));
     log::info!(
-        "core {server_id} set order stop {uid} {kind:?}->{on}: found order emulator={} sl={} ts={} vstop={} \
-         strat_id={} eff_strat={} has_strat={} cs={} price_drop={cs_sl} trailing_drop={cs_ts}",
+        "core {} set order stop {uid} {kind:?}->{on}: found order emulator={} sl={} ts={} vstop={} \
+         strat_id={} eff_strat={} has_strat={} cs={} price_drop={cs_sl} trailing_drop={cs_ts}", crate::feed::core_label(server_id),
         o.emulator_mode,
         o.stops.stop_loss_enabled(),
         o.stops.trailing_enabled(),
@@ -334,8 +356,7 @@ pub(super) fn set_order_stop(
         o.strat_id,
         strat_id,
         has_strat,
-        cs.is_some(),
-    );
+        cs.is_some());
     let result = match kind {
         OrderStopKind::StopLoss | OrderStopKind::Trailing => {
             let stops = o.stops;
@@ -396,8 +417,8 @@ pub(super) fn set_order_stop(
             // TS too, the log will show it and wire ts will remain false.
             if kind == OrderStopKind::Trailing && on && ts.is_none() {
                 log::info!(
-                    "core {server_id} set order stop {uid} Trailing->on: уровень не найден — пробуем enable с level=0 (дефолт ядра)"
-                );
+                    "core {} set order stop {uid} Trailing->on: уровень не найден — пробуем enable с level=0 (дефолт ядра)"
+                , crate::feed::core_label(server_id));
                 ts = Some((true, false, 0.0, 0.0));
             }
             // The toggled group must resolve, or nothing is sent. If the neighboring group has no
@@ -409,14 +430,14 @@ pub(super) fn set_order_stop(
             };
             if on && target.is_none() {
                 log::warn!(
-                    "core {server_id} set order stop {uid} {kind:?}->on: нет уровня (провод/память/стратегия/дефолт пусты), не шлём"
-                );
+                    "core {} set order stop {uid} {kind:?}->on: нет уровня (провод/память/стратегия/дефолт пусты), не шлём"
+                , crate::feed::core_label(server_id));
                 return;
             }
             if other.is_none() {
                 log::warn!(
-                    "core {server_id} set order stop {uid} {kind:?}: у соседнего стопа нет уровня — его страта может погаснуть"
-                );
+                    "core {} set order stop {uid} {kind:?}: у соседнего стопа нет уровня — его страта может погаснуть"
+                , crate::feed::core_label(server_id));
             }
             let apply_sl = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g
             {
@@ -464,8 +485,8 @@ pub(super) fn set_order_stop(
                     );
                 } else {
                     log::warn!(
-                        "core {server_id} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
-                    );
+                        "core {} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
+                    , crate::feed::core_label(server_id));
                 }
             }
             if !on {
@@ -486,8 +507,8 @@ pub(super) fn set_order_stop(
                     o.vstop_vol,
                 ) else {
                     log::warn!(
-                        "core {server_id} set order stop {uid} {kind:?}->on: нет уровня (провод/память пусты), не шлём"
-                    );
+                        "core {} set order stop {uid} {kind:?}->on: нет уровня (провод/память пусты), не шлём"
+                    , crate::feed::core_label(server_id));
                     return;
                 };
                 if fixed {
@@ -520,8 +541,8 @@ pub(super) fn set_order_stop(
                         );
                     } else {
                         log::warn!(
-                            "core {server_id} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
-                        );
+                            "core {} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
+                        , crate::feed::core_label(server_id));
                     }
                 }
                 remember_stop_params(
@@ -731,11 +752,17 @@ pub(super) fn move_order_stop_price(
         return;
     }
     let Some(snap) = client.snapshot() else {
-        log::warn!("core {server_id} move order stop price {uid} {kind:?}: no snapshot yet");
+        log::warn!(
+            "core {} move order stop price {uid} {kind:?}: no snapshot yet",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
     let Some(o) = snap.orders().iter().find(|o| o.uid == uid) else {
-        log::warn!("core {server_id} move order stop price {uid} {kind:?}: order not tracked");
+        log::warn!(
+            "core {} move order stop price {uid} {kind:?}: order not tracked",
+            crate::feed::core_label(server_id)
+        );
         return;
     };
     let stops = o.stops;

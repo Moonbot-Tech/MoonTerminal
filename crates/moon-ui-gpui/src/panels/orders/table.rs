@@ -490,7 +490,8 @@ fn flag_toggle_cell(
         .child(label)
         .on_click(move |_, _window, app| {
             log::info!(
-                "orders UI click toggle stop core={core} uid={uid} kind={kind:?} on={on} -> {}",
+                "orders UI click toggle stop core={} uid={uid} kind={kind:?} on={on} -> {}",
+                moon_core::feed::core_label(core),
                 !on
             );
             view.update(app, |this, cx| {
@@ -503,7 +504,8 @@ fn flag_toggle_cell(
                 this.backend.update(cx, |b, _| {
                     if let Err(err) = b.session.set_order_stop(core, uid, kind, !on) {
                         log::warn!(
-                            "orders toggle stop failed core={core} uid={uid} kind={kind:?}: {err:#}"
+                            "orders toggle stop failed core={} uid={uid} kind={kind:?}: {err:#}",
+                            moon_core::feed::core_label(core)
                         );
                     }
                 });

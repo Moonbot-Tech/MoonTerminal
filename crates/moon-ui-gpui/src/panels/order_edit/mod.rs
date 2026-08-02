@@ -118,7 +118,10 @@ pub(crate) fn open_order_edit(
             .core(core)
             .and_then(|d| d.orders.iter().find(|o| o.uid == uid).cloned())
         else {
-            log::warn!("order edit: order core={core} uid={uid} not found");
+            log::warn!(
+                "order edit: order core={} uid={uid} not found",
+                moon_core::feed::core_label(core)
+            );
             return;
         };
         let core_name = b

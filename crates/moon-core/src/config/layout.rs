@@ -339,8 +339,8 @@ pub struct WindowLayout {
     /// [`Self::dock_tab_index`] (the panel is either in a split or in the tab row).
     #[serde(default)]
     pub dock_split_slot: HashMap<String, DockSplitSlot>,
-    /// Custom Core Status server display names keyed by endpoint IP string (for example
-    /// `45.87.212.44`). No entry means the panel shows the default `Server N` ordinal. Set through
+    /// Custom Core Status server display names keyed by endpoint IP string. No entry means the
+    /// panel shows the default `Server N` ordinal. Set through
     /// the panel's inline pencil editor; an empty edit removes the entry and restores the default.
     #[serde(default)]
     pub core_server_names: HashMap<String, String>,
