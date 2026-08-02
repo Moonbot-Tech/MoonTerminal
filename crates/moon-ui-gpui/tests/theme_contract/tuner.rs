@@ -78,6 +78,40 @@ fn the_tuning_strategy_list_stays_virtualized() {
     );
 }
 
+/// `AnalyticsView::new` must retain one strategy-list scroll handle and `strat_list_card` must
+/// reuse it; constructing the handle in render or omitting `track_scroll` sends the list back to
+/// row zero whenever a background valuation refresh replaces the strategy data.
+#[test]
+fn the_tuning_strategy_list_retains_scroll_across_refreshes() {
+    let analytics = read_src("analytics/mod.rs");
+    let table = read_src("analytics/tuner/list/table.rs");
+    let card = braced_body(&table, "fn strat_list_card(");
+
+    assert_eq!(
+        analytics
+            .matches("MoonVirtualListScrollHandle::new()")
+            .count(),
+        1,
+        "AnalyticsView must construct exactly one retained strategy scroll handle"
+    );
+    assert!(
+        analytics.contains("strat_scroll: MoonVirtualListScrollHandle::new(),"),
+        "the sole strategy scroll handle must be initialized with AnalyticsView state"
+    );
+    let list = card
+        .find("\"an-strat-rows\"")
+        .map(|index| &card[index..])
+        .expect("the strategy virtual list must retain its stable id");
+    assert!(
+        list.contains(".track_scroll(&self.strat_scroll)"),
+        "the strategy virtual list must reuse AnalyticsView's retained scroll handle"
+    );
+    assert!(
+        !card.contains("MoonVirtualListScrollHandle::new()"),
+        "render must not replace the retained strategy scroll handle"
+    );
+}
+
 /// Changing the strategy list back to hover-only scrolling must fail this assertion; the user must
 /// be able to see the vertical position and scrollbar affordance without first finding it.
 #[test]

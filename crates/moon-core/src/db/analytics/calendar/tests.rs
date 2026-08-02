@@ -61,6 +61,8 @@ fn seed_spent(rows: &[(i64, i64, f64, f64)]) -> Connection {
 // 2021-01-01 00:00:00 UTC.
 const D0: i64 = 1_609_459_200;
 
+/// Removing dense UTC-day filling from `calendar_cells_from` would lose the empty middle day or
+/// corrupt the independently asserted trade/win counts around it.
 #[test]
 fn buckets_by_utc_day_fills_gaps_and_counts_wins() {
     // Day 0: two profitable trades (+10, +5); day 1: empty; day 2: one loss (-3).
@@ -74,7 +76,7 @@ fn buckets_by_utc_day_fills_gaps_and_counts_wins() {
         to: D0 + 3 * 86_400,
         ..Default::default()
     };
-    let days = calendar_cells_from(&c, &q).unwrap();
+    let days = calendar_cells_from(&c, &q, ProjectionMode::Native).unwrap();
     // Dense range: exactly three days, including empty day 1.
     assert_eq!(
         days.iter().map(|d| d.start).collect::<Vec<_>>(),
@@ -96,9 +98,16 @@ fn empty_period_is_successful_empty() {
         ..Default::default()
     };
     // A schema with no trades yields a successful empty calendar, not an infinite fill.
-    assert_eq!(calendar_cells_from(&c, &q).unwrap().len(), 0);
+    assert_eq!(
+        calendar_cells_from(&c, &q, ProjectionMode::Native)
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
+/// Changing the period predicate from half-open to inclusive would admit the independently seeded
+/// trade exactly beyond `to` and make the three-day result contain its 99-unit profit.
 #[test]
 fn respects_period_bounds_excluding_to() {
     // The day-3 trade is outside [from, to), while the trailing empty day 2 is present.
@@ -108,7 +117,7 @@ fn respects_period_bounds_excluding_to() {
         to: D0 + 3 * 86_400,
         ..Default::default()
     };
-    let days = calendar_cells_from(&c, &q).unwrap();
+    let days = calendar_cells_from(&c, &q, ProjectionMode::Native).unwrap();
     assert_eq!(days.len(), 3);
     assert_eq!(days[0].trades, 1);
     assert!(days.iter().all(|d| (d.profit - 99.0).abs() > 1e-9)); // Day 3 is excluded.
@@ -225,6 +234,8 @@ fn calendar_omits_previous_when_quote_changes() {
     );
 }
 
+/// Replacing Percent projection with native profit in `calendar_cells_from` would yield 7 instead
+/// of the independently calculated sum of +5% and -5% while changing neither win count nor rows.
 #[test]
 fn percent_metric_is_profit_over_spent() {
     // Same day, two trades: +10 on 200 spent = +5%, -3 on 60 spent = -5%.
@@ -235,7 +246,7 @@ fn percent_metric_is_profit_over_spent() {
         ..Default::default()
     };
     // USDT (default): raw money, 10 - 3 = 7.
-    let usd = calendar_cells_from(&c, &base).unwrap();
+    let usd = calendar_cells_from(&c, &base, ProjectionMode::Native).unwrap();
     assert!((usd[0].profit - 7.0).abs() < 1e-9, "usd={}", usd[0].profit);
     // Percent: each trade as profit/spent*100, summed: +5 + (-5) = 0.
     let pct = calendar_cells_from(
@@ -244,6 +255,7 @@ fn percent_metric_is_profit_over_spent() {
             metric: crate::db::ProfitMetric::Percent,
             ..base.clone()
         },
+        ProjectionMode::Percent,
     )
     .unwrap();
     assert!((pct[0].profit - 0.0).abs() < 1e-9, "pct={}", pct[0].profit);
@@ -268,6 +280,7 @@ fn percent_metric_excludes_zero_spent() {
             metric: crate::db::ProfitMetric::Percent,
             ..Default::default()
         },
+        ProjectionMode::Percent,
     )
     .unwrap();
     // Only the +5% trade survives: one trade, one win, +5% — the zero-spent row is gone from
@@ -283,11 +296,14 @@ fn percent_metric_excludes_zero_spent() {
             to: D0 + 86_400,
             ..Default::default()
         },
+        ProjectionMode::Native,
     )
     .unwrap();
     assert_eq!(usd[0].trades, 2);
 }
 
+/// Changing `hour_profile_one` to group by complete calendar timestamp instead of UTC hour would
+/// split the independently seeded hour-one trades across days and lose the expected aggregate.
 #[test]
 fn hour_profile_buckets_by_hour_of_day_across_days() {
     // Hour 1: +10 and -4 on day 0, plus +3 on day 1, aggregated by hour of day.

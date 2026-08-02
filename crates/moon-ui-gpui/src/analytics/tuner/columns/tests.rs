@@ -66,3 +66,27 @@ fn mixed_quote_money_stays_unavailable() {
     assert_eq!((COL_PROFIT.text)(&group), "—");
     assert_eq!((COL_AVG_ORDER.text)(&group), "—");
 }
+
+/// `columns.rs:quote_amount` must not return stable/fiat quotes to `usd_grouped`; that formatter
+/// trims trailing zeros, so equal-currency Profit and Avg order cells drift between one and two
+/// fractional positions. Crypto must still retain meaningful precision instead of rounding to cents.
+#[test]
+fn quote_money_keeps_its_currency_precision_and_grouping() {
+    let usdt = QuoteCurrency::usdt();
+    let mut group = GroupStat {
+        profit: 1_842.0,
+        avg_order: 1_842.5,
+        quote: QuoteScope::Single(usdt),
+        ..GroupStat::default()
+    };
+    set_pnl_unit(Some(ProfitUnit::Quote(usdt)));
+
+    assert_eq!((COL_PROFIT.text)(&group), "+1 842.00 USDT");
+    assert_eq!((COL_AVG_ORDER.text)(&group), "1 842.50 USDT");
+
+    let btc = QuoteCurrency::from_report_ordinal(0).expect("BTC report ordinal");
+    group.profit = 0.12345678;
+    group.quote = QuoteScope::Single(btc);
+    set_pnl_unit(Some(ProfitUnit::Quote(btc)));
+    assert_eq!((COL_PROFIT.text)(&group), "+0.12345678 BTC");
+}

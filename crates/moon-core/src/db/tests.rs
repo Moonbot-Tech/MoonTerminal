@@ -84,19 +84,62 @@ fn reader_tuning_stays_behaviour_neutral() {
     test_support::remove_db(&path);
 }
 
-/// `db/mod.rs:publish_report_commit` must set the dirty bit after the generation bump; removing
-/// that store leaves an open Report or Analytics view stale until an unrelated Backend repaint.
+/// `db/mod.rs:publish_report_commit` must set one bounded background edge after each generation
+/// bump; removing that store leaves catch-up data stale, while incrementing per observer wake turns
+/// a coalesced edge back into unbounded revision churn.
 #[test]
 fn committed_batch_publication_is_bounded_and_advances_generation() {
     let generation = AtomicU64::new(0);
-    let dirty = AtomicBool::new(false);
+    let immediate = AtomicBool::new(false);
+    let background = AtomicBool::new(false);
 
-    publish_report_commit(&generation, &dirty);
-    publish_report_commit(&generation, &dirty);
+    publish_report_commit(
+        &generation,
+        &immediate,
+        &background,
+        ReportPublication::Background,
+    );
+    publish_report_commit(
+        &generation,
+        &immediate,
+        &background,
+        ReportPublication::Background,
+    );
 
     assert_eq!(generation.load(Ordering::Relaxed), 2);
-    assert!(dirty.swap(false, Ordering::Acquire));
-    assert!(!dirty.swap(false, Ordering::Acquire));
+    assert!(!immediate.load(Ordering::Acquire));
+    assert!(background.swap(false, Ordering::Acquire));
+    assert!(!background.swap(false, Ordering::Acquire));
+}
+
+/// `db/mod.rs:publish_report_commit` must never clear the opposite class's dirty edge; adding a
+/// convenient reset before either store loses an unconsumed earlier batch during the writer/UI
+/// hand-off race.
+#[test]
+fn publishing_one_report_class_preserves_the_other_pending_edge() {
+    let generation = AtomicU64::new(0);
+    let immediate = AtomicBool::new(false);
+    let background = AtomicBool::new(true);
+
+    publish_report_commit(
+        &generation,
+        &immediate,
+        &background,
+        ReportPublication::Immediate,
+    );
+    assert!(immediate.load(Ordering::Acquire));
+    assert!(background.load(Ordering::Acquire));
+
+    immediate.store(true, Ordering::Release);
+    background.store(false, Ordering::Release);
+    publish_report_commit(
+        &generation,
+        &immediate,
+        &background,
+        ReportPublication::Background,
+    );
+    assert!(immediate.load(Ordering::Acquire));
+    assert!(background.load(Ordering::Acquire));
 }
 
 /// `db/mod.rs:publish_after_generation` must advance the generation before invoking
@@ -112,6 +155,155 @@ fn committed_batch_publishes_only_after_generation_advance() {
     });
 
     assert_eq!(observed.get(), 42);
+}
+
+/// Removing valuation staging from `db/mod.rs:apply_msg` for hard deletes or completed legacy
+/// migration would leave stale prepared rows after the report mutation committed.
+#[test]
+fn production_report_messages_stage_matching_valuation_outbox_actions() {
+    let conn = Connection::open_in_memory().expect("open report fixture");
+    init_db(&conn).expect("initialize report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL,
+             newrecid INTEGER NOT NULL, PRIMARY KEY (core_uid, newrecid)
+         );",
+    )
+    .expect("create typed report fixture");
+    let mut state = test_support::rep_init(&conn);
+
+    let delete = apply_msg(
+        &conn,
+        &mut state,
+        &DbMsg::Delete {
+            core_uid: 7,
+            rec_id: 91,
+        },
+    )
+    .expect("apply production delete message");
+    let complete = apply_msg(
+        &conn,
+        &mut state,
+        &DbMsg::SyncComplete {
+            core_uid: 8,
+            done: moonproto::ReportSyncComplete {
+                ticket: moonproto::ReportSyncTicket { sync_id: 1 },
+                page_count: 0,
+                total_rows: 0,
+                max_rec_id: 0,
+                next_from_rec_id: 1,
+            },
+        },
+    )
+    .expect("apply production sync-complete message");
+    let maintenance = apply_msg(&conn, &mut state, &DbMsg::ValuationAck { through_seq: 0 })
+        .expect("apply valuation acknowledgement");
+
+    assert_eq!(
+        delete.publication,
+        Some(ReportPublication::Immediate),
+        "live deletes must keep their immediate reader refresh"
+    );
+    assert_eq!(
+        complete.publication,
+        Some(ReportPublication::Background),
+        "sync completion belongs to the coalesced catch-up stream"
+    );
+    assert!(!delete.page_ack && !complete.page_ack);
+    assert_eq!(
+        maintenance.publication, None,
+        "valuation acknowledgements must not create phantom report revisions"
+    );
+
+    let publication = merge_report_publication(None, delete.publication);
+    let publication = merge_report_publication(publication, complete.publication);
+    let generation = AtomicU64::new(0);
+    let immediate = AtomicBool::new(false);
+    let background = AtomicBool::new(false);
+    publish_report_commit(
+        &generation,
+        &immediate,
+        &background,
+        publication.expect("the mixed batch changes report data"),
+    );
+    assert_eq!(generation.load(Ordering::Relaxed), 1);
+    assert!(immediate.load(Ordering::Acquire));
+    assert!(!background.load(Ordering::Acquire));
+    let events = valuation::read_outbox(&conn, 10).expect("read staged valuation events");
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        (
+            events[0].source,
+            events[0].core_uid,
+            events[0].row_id,
+            events[0].action
+        ),
+        (
+            valuation::TradeSource::Typed,
+            7,
+            91,
+            valuation::OutboxAction::Delete,
+        )
+    );
+    assert_eq!(
+        (
+            events[1].source,
+            events[1].core_uid,
+            events[1].row_id,
+            events[1].action
+        ),
+        (
+            valuation::TradeSource::Legacy,
+            8,
+            0,
+            valuation::OutboxAction::PurgeLegacy,
+        )
+    );
+}
+
+/// `db/mod.rs:apply_msg` must classify `DbMsg::Page` as background; changing its constructor to
+/// `ApplyEffect::immediate(true)` restores the five-to-ten-second UI freeze throughout catch-up.
+#[test]
+fn catch_up_pages_use_background_report_publication() {
+    let source = include_str!("mod.rs");
+    let apply_msg = source
+        .split_once("fn apply_msg(")
+        .expect("db/mod.rs must contain apply_msg")
+        .1;
+    let page_arm = apply_msg
+        .split_once("DbMsg::Page {")
+        .expect("apply_msg must handle catch-up pages")
+        .1
+        .split_once("DbMsg::SyncComplete")
+        .expect("the page arm must precede sync completion")
+        .0;
+
+    assert!(page_arm.contains("Ok(ApplyEffect::background(true))"));
+    assert!(!page_arm.contains("ApplyEffect::immediate"));
+}
+
+/// The writer retry closure must aggregate every applied message before publishing once; replacing
+/// `merge_report_publication` with last-write-wins can demote a mixed live/catch-up batch, while
+/// publishing inside the loop increments generation more than once for one transaction.
+#[test]
+fn writer_batch_uses_the_ordered_publication_aggregator_once() {
+    let source = include_str!("mod.rs");
+    let writer = source
+        .split_once("pub fn spawn_writer(")
+        .expect("db/mod.rs must contain spawn_writer")
+        .1
+        .split_once("struct ApplyEffect")
+        .expect("writer must precede ApplyEffect")
+        .0;
+
+    assert_eq!(
+        writer
+            .matches("merge_report_publication(publication, effect.publication)")
+            .count(),
+        1
+    );
+    assert_eq!(writer.matches("publish_report_commit(").count(), 1);
+    assert!(writer.contains("if let Some(publication) = publication"));
 }
 
 /// `db/mod.rs:commit_stateful_batch` must retry the same owned work with a fresh

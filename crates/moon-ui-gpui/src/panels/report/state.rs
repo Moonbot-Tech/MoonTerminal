@@ -33,7 +33,7 @@ impl ReportPanel {
     ///     cx: Construction context.
     ///
     /// Returns:
-    ///     A panel with the default Report filters and its first query scheduled.
+    ///     A panel with the default Report filters and its first query pending for active render.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
@@ -53,7 +53,7 @@ impl ReportPanel {
     ///     cx: Construction context.
     ///
     /// Returns:
-    ///     A scoped or default Report panel with one background query scheduled.
+    ///     A scoped or default Report panel with one query pending for its first active render.
     pub(crate) fn new_with_scope(
         backend: Entity<Backend>,
         group: String,
@@ -66,6 +66,11 @@ impl ReportPanel {
             .reports
             .as_ref()
             .map(|h| h.generation.clone());
+        let valuation_generation = backend
+            .read(cx)
+            .valuation
+            .as_ref()
+            .map(|valuation| valuation.generation.clone());
         // Keep this connection for panel metadata. Startup core/schema probes
         // are deliberately lossy because the fallible background batch below
         // owns user-visible read errors.
@@ -83,7 +88,13 @@ impl ReportPanel {
         let last_gen = generation
             .as_ref()
             .map(|g| g.load(Ordering::Relaxed))
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .wrapping_add(
+                valuation_generation
+                    .as_ref()
+                    .map(|generation| generation.load(Ordering::Relaxed))
+                    .unwrap_or(0),
+            );
         // Restore visible column names from `app_meta`, or use the defaults when never saved.
         let visible: HashSet<String> = conn
             .as_ref()
@@ -226,12 +237,20 @@ impl ReportPanel {
         // The dedicated report-revision channel avoids repainting every shell on each commit.
         let report_revision = backend.read(cx).report_revision.clone();
         cx.observe(&report_revision, |this, _revision, cx| {
-            if let Some(g) = &this.generation {
-                let v = g.load(Ordering::Relaxed);
-                if v != this.last_gen {
-                    this.last_gen = v;
-                    this.requery_on_generation(cx);
-                }
+            let report_generation = this
+                .generation
+                .as_ref()
+                .map(|generation| generation.load(Ordering::Relaxed))
+                .unwrap_or(0);
+            let valuation_generation = this
+                .valuation_generation
+                .as_ref()
+                .map(|generation| generation.load(Ordering::Relaxed))
+                .unwrap_or(0);
+            let current = report_generation.wrapping_add(valuation_generation);
+            if current != this.last_gen {
+                this.last_gen = current;
+                this.requery_on_generation(cx);
             }
         })
         .detach();
@@ -246,6 +265,7 @@ impl ReportPanel {
             backend,
             group,
             generation,
+            valuation_generation,
             last_gen,
             conn,
             cores,
@@ -290,7 +310,7 @@ impl ReportPanel {
             query_inflight: false,
             query_seq: 0,
             last_query_start: None,
-            throttle_armed: false,
+            generation_refresh: query::GenerationRefreshGate::default(),
             last_metadata_at: None,
             last_strategy_scope: None,
             visible,
@@ -305,7 +325,6 @@ impl ReportPanel {
         // A per-context shared-storage column set overrides the one loaded from `app_meta`. Without
         // one for this mode, the `app_meta` set remains as a migration seed.
         this.apply_ctx_columns(cx);
-        this.schedule_requery(cx);
         this
     }
 

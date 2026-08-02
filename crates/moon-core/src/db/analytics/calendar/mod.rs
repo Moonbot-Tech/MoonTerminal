@@ -2,9 +2,12 @@
 
 use rusqlite::Connection;
 
-use super::super::read_fail::read_fail;
+use super::super::read_fail::read_fail_on;
 use super::super::ReadResult;
-use super::{min_closedate, scope_decision_on, scoped, unified_from, Query, ScopeDecision};
+use super::{
+    min_closedate, scope_decision_on, scoped, unified_from_mode, ProjectionMode, Query,
+    ScopeDecision,
+};
 use crate::db::{ProfitScope, ProfitUnit};
 
 /// The per-cell aggregate shared by every calendar view: profit sum, trade count, and win
@@ -57,24 +60,32 @@ pub(super) fn calendar_period_from(
         ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
         decision => decision,
     };
+    let current_projection = decision
+        .projection()
+        .expect("split decisions return before calendar construction");
     let current = if hourly {
-        calendar_hours_from(conn, &current_query)?
+        calendar_hours_from(conn, &current_query, current_projection)?
     } else {
-        calendar_cells_from(conn, &current_query)?
+        calendar_cells_from(conn, &current_query, current_projection)?
     };
-    let previous = match previous {
-        Some(query) if comparison_is_compatible(conn, &decision, query)? => Some(
-            calendar_cells_from(conn, query)?
-                .iter()
-                .fold((0.0f64, 0i64, 0i64), |total, day| {
+    let previous_projection = previous
+        .map(|query| comparison_projection(conn, &decision, query))
+        .transpose()?
+        .flatten();
+    let previous = match (previous, previous_projection) {
+        (Some(query), Some(projection)) => {
+            Some(calendar_cells_from(conn, query, projection)?.iter().fold(
+                (0.0f64, 0i64, 0i64),
+                |total, day| {
                     (
                         total.0 + day.profit,
                         total.1 + day.trades,
                         total.2 + day.wins,
                     )
-                }),
-        ),
-        Some(_) | None => None,
+                },
+            ))
+        }
+        (Some(_), None) | (None, _) => None,
     };
     Ok(scoped(decision, CalendarPeriod { current, previous }))
 }
@@ -87,21 +98,42 @@ pub(super) fn calendar_period_from(
 ///     previous: Previous-period query.
 ///
 /// Returns:
-///     `true` for percent mode or the same exact known quote currency, or a classified read
-///     failure when the previous-period quote cannot be verified.
-fn comparison_is_compatible(
+///     Compatible native, historical USDT, or percent projection; `None` when the previous
+///     period cannot be expressed in the current unit.
+///
+/// Errors:
+///     Returns a classified report read failure when previous-period preflight cannot complete.
+fn comparison_projection(
     conn: &Connection,
     current: &ScopeDecision,
     previous: &Query,
-) -> ReadResult<bool> {
+) -> ReadResult<Option<ProjectionMode>> {
     Ok(match current {
-        ScopeDecision::Comparable(ProfitUnit::Percent) => true,
-        ScopeDecision::Comparable(ProfitUnit::Quote(current_quote)) => matches!(
-            scope_decision_on(conn, previous)?,
-            ScopeDecision::Comparable(ProfitUnit::Quote(previous_quote))
-                if *current_quote == previous_quote
-        ),
-        ScopeDecision::Empty | ScopeDecision::Split(_) => false,
+        ScopeDecision::Comparable {
+            unit: ProfitUnit::Percent,
+            projection: ProjectionMode::Percent,
+        } => Some(ProjectionMode::Percent),
+        ScopeDecision::Comparable {
+            unit: ProfitUnit::Quote(current_quote),
+            projection: ProjectionMode::Native,
+        } => match scope_decision_on(conn, previous)? {
+            ScopeDecision::Comparable {
+                unit: ProfitUnit::Quote(previous_quote),
+                projection: ProjectionMode::Native,
+            } if *current_quote == previous_quote => Some(ProjectionMode::Native),
+            _ => None,
+        },
+        ScopeDecision::Comparable {
+            unit: ProfitUnit::Quote(current_quote),
+            projection: ProjectionMode::Usdt,
+        } if *current_quote == crate::db::QuoteCurrency::usdt() => {
+            let totals = super::quote_breakdown_on(conn, previous)?;
+            (totals.unknown_orders == 0 && totals.unified_usdt().is_some())
+                .then_some(ProjectionMode::Usdt)
+        }
+        ScopeDecision::Comparable { .. }
+        | ScopeDecision::Empty { .. }
+        | ScopeDecision::Split(_) => None,
     })
 }
 
@@ -128,7 +160,13 @@ pub fn calendar_cells(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
             ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
             decision => decision,
         };
-        Ok(scoped(decision, calendar_cells_from(snapshot, &q)?))
+        let projection = decision
+            .projection()
+            .expect("split decisions return before calendar construction");
+        Ok(scoped(
+            decision,
+            calendar_cells_from(snapshot, &q, projection)?,
+        ))
     })
 }
 
@@ -138,17 +176,22 @@ pub fn calendar_cells(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
 /// Args:
 ///     conn: Existing SQLite connection whose snapshot should be queried.
 ///     q: Report scope and time range to aggregate.
+///     projection: Money projection resolved by the caller's quote preflight.
 ///
 /// Returns:
 ///     Dense daily cells or a classified database read failure.
-fn calendar_cells_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>> {
+fn calendar_cells_from(
+    conn: &Connection,
+    q: &Query,
+    projection: ProjectionMode,
+) -> ReadResult<Vec<DayCell>> {
     const CTX: &str = "analytics: calendar_cells";
     let mut q = q.clone();
     let all_history = q.from < 0;
     if all_history {
         q.from = min_closedate(conn)?;
     }
-    let Some(src) = unified_from(conn, &q)? else {
+    let Some(src) = unified_from_mode(conn, &q, projection)? else {
         // Source schemas have not arrived yet, so return an empty calendar (as `summary`
         // returns its default), not an error; otherwise the tab would remain on Loading.
         return Ok(Vec::new());
@@ -159,7 +202,7 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>>
                 {CELL_AGG}
          FROM {src} GROUP BY d ORDER BY d"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((
@@ -169,11 +212,11 @@ fn calendar_cells_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>>
                 r.get::<_, i64>(3)?,
             ))
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut map: std::collections::HashMap<i64, DayCell> = std::collections::HashMap::new();
     let (mut first, mut last) = (i64::MAX, i64::MIN);
     for row in rows {
-        let (d, profit, n, wins) = row.map_err(|e| read_fail(CTX, e))?;
+        let (d, profit, n, wins) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
         first = first.min(d);
         last = last.max(d);
         map.insert(
@@ -231,7 +274,13 @@ pub fn calendar_hours(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
             ScopeDecision::Split(totals) => return Ok(ProfitScope::Split(totals)),
             decision => decision,
         };
-        Ok(scoped(decision, calendar_hours_from(snapshot, q)?))
+        let projection = decision
+            .projection()
+            .expect("split decisions return before calendar construction");
+        Ok(scoped(
+            decision,
+            calendar_hours_from(snapshot, q, projection)?,
+        ))
     })
 }
 
@@ -240,12 +289,17 @@ pub fn calendar_hours(q: &Query) -> ReadResult<ProfitScope<Vec<DayCell>>> {
 /// Args:
 ///     conn: Existing SQLite connection whose snapshot should be queried.
 ///     q: Report scope and one-day time range to aggregate.
+///     projection: Money projection resolved by the caller's quote preflight.
 ///
 /// Returns:
 ///     Sparse hourly cells or a classified database read failure.
-fn calendar_hours_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>> {
+fn calendar_hours_from(
+    conn: &Connection,
+    q: &Query,
+    projection: ProjectionMode,
+) -> ReadResult<Vec<DayCell>> {
     const CTX: &str = "analytics: calendar_hours";
-    let src = match unified_from(conn, q)? {
+    let src = match unified_from_mode(conn, q, projection)? {
         Some(s) => s,
         None => return Ok(Vec::new()), // The schema has not arrived yet.
     };
@@ -254,7 +308,7 @@ fn calendar_hours_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>>
                 {CELL_AGG}
          FROM {src} GROUP BY h ORDER BY h"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok(DayCell {
@@ -264,10 +318,10 @@ fn calendar_hours_from(conn: &Connection, q: &Query) -> ReadResult<Vec<DayCell>>
                 wins: r.get(3)?,
             })
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut out = Vec::new();
     for row in rows {
-        out.push(row.map_err(|e| read_fail(CTX, e))?);
+        out.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
     }
     Ok(out)
 }
@@ -332,12 +386,13 @@ fn hour_profile_one(
     let mut q = base.clone();
     q.from = if from < 0 { min_closedate(conn)? } else { from };
     q.to = to;
-    if matches!(scope_decision_on(conn, &q)?, ScopeDecision::Split(_)) {
+    let decision = scope_decision_on(conn, &q)?;
+    let Some(projection) = decision.projection() else {
         return Err(super::super::ReadFail::IncomparableQuote);
-    }
+    };
     let mut prof = [HourStat::default(); 24];
     // Source schemas have not arrived yet, so return an empty profile like summary/calendar.
-    let Some(src) = unified_from(conn, &q)? else {
+    let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Ok(prof);
     };
     // Hour of day comes from the trade OPEN time (`buydate`), matching the schedule and tuner
@@ -348,7 +403,7 @@ fn hour_profile_one(
                 {CELL_AGG}
          FROM {src} GROUP BY h ORDER BY h"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((
@@ -358,9 +413,9 @@ fn hour_profile_one(
                 r.get::<_, i64>(3)?,
             ))
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     for row in rows {
-        let (h, profit, trades, wins) = row.map_err(|e| read_fail(CTX, e))?;
+        let (h, profit, trades, wins) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
         if (0..24).contains(&h) {
             prof[h as usize] = HourStat {
                 profit,

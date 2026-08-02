@@ -43,6 +43,31 @@ fn failures_keep_their_kind_and_not_ready_has_none() {
     super::super::integrity::reset_test_state();
 }
 
+/// Weakening `read_fail_on` to suppress every corruption-class error would let genuine or
+/// inconclusive report-main damage continue accepting writes when no damaged valuation schema can
+/// be proven.
+#[test]
+fn unproven_corruption_remains_fail_closed() {
+    let _state = super::super::integrity::test_state_guard();
+    super::super::integrity::reset_test_state();
+    let conn = rusqlite::Connection::open_in_memory().expect("open report fixture");
+    let failure = read_fail_on(
+        &conn,
+        "test: unproven corruption",
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: ErrorCode::DatabaseCorrupt,
+                extended_code: 11,
+            },
+            None,
+        ),
+    );
+
+    assert_eq!(failure.kind(), Some(FailKind::Corrupt));
+    assert!(super::super::integrity::writes_blocked());
+    super::super::integrity::reset_test_state();
+}
+
 /// Repeated instances of the same failure are suppressed within the window.
 #[test]
 fn repeated_failures_are_throttled() {

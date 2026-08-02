@@ -29,7 +29,7 @@ use rusqlite::Connection;
 use super::{FieldClass, FIELDS};
 use crate::db::analytics::Query;
 use crate::db::metrics::Tally;
-use crate::db::read_fail::read_fail;
+use crate::db::read_fail::read_fail_on;
 use crate::db::ReadResult;
 
 /// Minimum accepted restart count. Shared with the UI so displayed and executed counts agree.
@@ -631,11 +631,11 @@ fn scan_on(
     let mut profits: Vec<f64> = Vec::new();
     let mut closes: Vec<i64> = Vec::new();
     let mut vals: Vec<Vec<f64>> = vec![Vec::new(); nf];
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut rows = stmt
         .query(rusqlite::params![q.from, q.to])
-        .map_err(|e| read_fail(CTX, e))?;
-    while let Some(r) = rows.next().map_err(|e| read_fail(CTX, e))? {
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
+    while let Some(r) = rows.next().map_err(|e| read_fail_on(conn, CTX, e))? {
         if profits.len().is_multiple_of(SCAN_CANCEL_EVERY) && handle.is_cancelled() {
             // The scan is a unit of work like any other, and dropping it mid-way is exactly what
             // `abandoned` exists to report — otherwise a stop during the scan reads as "the
@@ -643,10 +643,12 @@ fn scan_on(
             handle.note_abandoned();
             return Ok(None);
         }
-        profits.push(r.get(nf).map_err(|e| read_fail(CTX, e))?);
-        closes.push(r.get(nf + 1).map_err(|e| read_fail(CTX, e))?);
+        profits.push(r.get(nf).map_err(|e| read_fail_on(conn, CTX, e))?);
+        closes.push(r.get(nf + 1).map_err(|e| read_fail_on(conn, CTX, e))?);
         for (fi, col) in vals.iter_mut().enumerate() {
-            let v = r.get::<_, Option<f64>>(fi).map_err(|e| read_fail(CTX, e))?;
+            let v = r
+                .get::<_, Option<f64>>(fi)
+                .map_err(|e| read_fail_on(conn, CTX, e))?;
             col.push(v.filter(|v| v.is_finite()).unwrap_or(0.0));
         }
     }

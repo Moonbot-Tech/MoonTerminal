@@ -10,6 +10,110 @@ use super::*;
 /// repeatedly materializing very large result sets.
 pub(super) const MAX_REPORT_ROWS: usize = 500;
 
+/// Minimum spacing between automatic Report queries driven by writer generations.
+const GENERATION_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wake action selected after observing one committed report generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenerationRefreshPlan {
+    /// Existing pending or due work already owns the required wake.
+    Idle,
+    /// The throttle has elapsed and an active Report render may start the query.
+    NotifyNow,
+    /// One versioned timer must release the due edge after the remaining throttle interval.
+    NotifyAfter {
+        /// Remaining time before automatic work may become due.
+        wait: std::time::Duration,
+        /// Token that prevents a superseded timer from releasing newer work.
+        timer_token: u64,
+    },
+}
+
+/// Durable automatic Report-refresh state shared by generation, timer, and render paths.
+#[derive(Default)]
+pub(super) struct GenerationRefreshGate {
+    /// Whether a committed generation is not yet covered by a query start.
+    pending: bool,
+    /// Whether the throttle elapsed and an active Report render may consume the refresh.
+    due: bool,
+    /// Whether one timer already owns the remaining throttle wait.
+    timer_armed: bool,
+    /// Identity of the current timer; query starts invalidate every older wake.
+    timer_token: u64,
+}
+
+impl GenerationRefreshGate {
+    /// Record one committed generation without starting database work.
+    ///
+    /// Args:
+    ///     since_query_start: Time elapsed since the latest Report query began.
+    ///
+    /// Returns:
+    ///     Whether to notify now, arm one timer, or leave an existing wake in charge.
+    fn observe(&mut self, since_query_start: std::time::Duration) -> GenerationRefreshPlan {
+        self.pending = true;
+        if self.due {
+            return GenerationRefreshPlan::Idle;
+        }
+        if since_query_start >= GENERATION_QUERY_INTERVAL {
+            self.due = true;
+            return GenerationRefreshPlan::NotifyNow;
+        }
+        if self.timer_armed {
+            return GenerationRefreshPlan::Idle;
+        }
+        self.timer_armed = true;
+        self.timer_token = self.timer_token.wrapping_add(1);
+        GenerationRefreshPlan::NotifyAfter {
+            wait: GENERATION_QUERY_INTERVAL - since_query_start,
+            timer_token: self.timer_token,
+        }
+    }
+
+    /// Release the matching timer slot and make still-pending work available to an active render.
+    ///
+    /// Args:
+    ///     timer_token: Identity captured when this timer was armed.
+    ///
+    /// Returns:
+    ///     `true` when the current timer published a new due edge that should notify the panel.
+    fn timer_fired(&mut self, timer_token: u64) -> bool {
+        if !self.timer_armed || timer_token != self.timer_token {
+            return false;
+        }
+        self.timer_armed = false;
+        if !self.pending || self.due {
+            return false;
+        }
+        self.due = true;
+        true
+    }
+
+    /// Consume one due automatic refresh from an active Report render.
+    ///
+    /// Returns:
+    ///     `true` exactly once for each due generation burst.
+    pub(super) fn take_due(&mut self) -> bool {
+        if !self.due {
+            return false;
+        }
+        self.pending = false;
+        self.due = false;
+        true
+    }
+
+    /// Mark every generation visible at a new query start as covered.
+    ///
+    /// Returns:
+    ///     Nothing; pending work and any older timer ownership are invalidated in place.
+    fn query_started(&mut self) {
+        self.pending = false;
+        self.due = false;
+        self.timer_armed = false;
+        self.timer_token = self.timer_token.wrapping_add(1);
+    }
+}
+
 /// Rows and exact period totals from one completed report read.
 ///
 /// The schema is stored separately so a completed failed read cannot collapse
@@ -174,39 +278,37 @@ impl ReportPanel {
         cx.notify();
     }
 
-    /// Request a writer-generation refresh at most once every five seconds.
+    /// Make a writer-generation refresh due at most once every five seconds.
     ///
-    /// A trailing timer waits out the remaining interval so the final generation change is not
-    /// lost. User filter edits bypass this throttle.
+    /// A trailing timer publishes only a bounded due edge. The active-window render owns the heavy
+    /// query start, so a Report tab behind Analytics cannot consume resources every five seconds.
+    /// User filter edits bypass this throttle through [`Self::request_requery`].
     pub(super) fn requery_on_generation(&mut self, cx: &mut Context<Self>) {
-        const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
         let since = self
             .last_query_start
             .map(|t| t.elapsed())
-            .unwrap_or(MIN_INTERVAL);
-        if since >= MIN_INTERVAL {
-            self.request_requery(cx);
-            return;
+            .unwrap_or(GENERATION_QUERY_INTERVAL);
+        match self.generation_refresh.observe(since) {
+            GenerationRefreshPlan::Idle => {}
+            GenerationRefreshPlan::NotifyNow => cx.notify(),
+            GenerationRefreshPlan::NotifyAfter { wait, timer_token } => {
+                cx.spawn(async move |this, cx| {
+                    let executor = cx.update(|cx| cx.background_executor().clone());
+                    executor.timer(wait).await;
+                    let _ = cx.update(|cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.generation_refresh.timer_fired(timer_token) {
+                                cx.notify();
+                            }
+                        });
+                    });
+                })
+                .detach();
+            }
         }
-        if self.throttle_armed {
-            return;
-        }
-        self.throttle_armed = true;
-        let wait = MIN_INTERVAL - since;
-        cx.spawn(async move |this, cx| {
-            let executor = cx.update(|cx| cx.background_executor().clone());
-            executor.timer(wait).await;
-            let _ = cx.update(|cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.throttle_armed = false;
-                    this.request_requery(cx);
-                });
-            });
-        })
-        .detach();
     }
 
-    /// Coalesce report reads and optionally refresh selector metadata once per minute.
+    /// Start one pending Report query, whether manual or released by an active render.
     ///
     /// Args:
     ///     cx: Panel context used to spawn and publish the background read.
@@ -218,6 +320,7 @@ impl ReportPanel {
             return;
         }
         self.needs_query = false;
+        self.generation_refresh.query_started();
         self.query_inflight = true;
         self.query_seq = self.query_seq.wrapping_add(1);
         self.last_query_start = Some(std::time::Instant::now());
@@ -262,7 +365,9 @@ impl ReportPanel {
                     }
                     this.query_inflight = false;
                     if this.needs_query {
-                        this.schedule_requery(cx);
+                        // A manual scope change must not publish the old query under new controls.
+                        // Preserve the stale snapshot and let the next active render catch up.
+                        cx.notify();
                         return;
                     }
 

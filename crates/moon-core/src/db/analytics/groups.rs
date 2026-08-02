@@ -6,9 +6,9 @@ mod tests;
 use rusqlite::Connection;
 
 use super::super::metrics::{profit_factor, winrate};
-use super::super::read_fail::read_fail;
+use super::super::read_fail::read_fail_on;
 use super::super::{QuoteCurrency, QuoteScope, ReadFail, ReadResult};
-use super::{unified_from, Query};
+use super::{raw_money_projection_on, scope_decision_on, unified_from, unified_from_mode, Query};
 
 /// Aggregate for a strategy-and-core or coin group.
 ///
@@ -143,7 +143,7 @@ pub(super) fn kind_stats(
                 COUNT(*), COALESCE(SUM(o.pnl),0)
          FROM {src} GROUP BY k, o.core_uid"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok((
@@ -156,10 +156,10 @@ pub(super) fn kind_stats(
                 r.get::<_, f64>(4)?,
             ))
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut map: std::collections::HashMap<String, KindStat> = std::collections::HashMap::new();
     for row in rows {
-        let (kind, uid, name, trades, profit) = row.map_err(|e| read_fail(CTX, e))?;
+        let (kind, uid, name, trades, profit) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
         let e = map.entry(kind.clone()).or_insert_with(|| KindStat {
             kind,
             profit: 0.0,
@@ -232,13 +232,13 @@ pub(in crate::db) fn strategies_for_coins_on(
         "SELECT DISTINCT CAST(o.strategyid AS TEXT) || '@' || CAST(o.core_uid AS TEXT)
          FROM {src} WHERE COALESCE(o.coin,'') IN ({list})"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| r.get::<_, String>(0))
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut out = Vec::new();
     for row in rows {
-        out.push(row.map_err(|e| read_fail(CTX, e))?);
+        out.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
     }
     Ok(out)
 }
@@ -274,7 +274,10 @@ pub(in crate::db) fn coin_groups_on(conn: &Connection, q: &Query) -> ReadResult<
     // "Fact vs v1" matrix sit on one screen and must cover the same span — resolving
     // "all history" differently here would let the two halves describe two periods.
     q.floor_all_history();
-    let Some(src) = unified_from(conn, &q)? else {
+    let projection = scope_decision_on(conn, &q)?
+        .projection()
+        .ok_or(ReadFail::IncomparableQuote)?;
+    let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Err(ReadFail::NotReady);
     };
     let raw_src = raw_source(conn, &q)?;
@@ -298,7 +301,8 @@ pub(super) fn raw_source(conn: &Connection, q: &Query) -> ReadResult<Option<Stri
     }
     let mut raw_query = q.clone();
     raw_query.metric = crate::db::ProfitMetric::Quote;
-    unified_from(conn, &raw_query)?
+    let projection = raw_money_projection_on(conn, &raw_query)?;
+    unified_from_mode(conn, &raw_query, projection)?
         .ok_or(ReadFail::NotReady)
         .map(Some)
 }
@@ -608,15 +612,15 @@ pub(super) fn groups(
          FROM a {raw_join}
          ORDER BY a.profit DESC, a.k"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], group_from_row)
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut out = Vec::new();
     for row in rows {
         // Each row carries the group's COUNT/SUM, so dropping one would
         // understate the table the user reads as complete.
-        out.push(row.map_err(|e| read_fail(CTX, e))?);
+        out.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
     }
     Ok(out)
 }
@@ -638,7 +642,7 @@ pub(super) fn top_trades(
          FROM {src} WHERE o.pnl IS NOT NULL
          ORDER BY o.pnl {order} LIMIT 5"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok(TopTrade {
@@ -650,13 +654,13 @@ pub(super) fn top_trades(
                 is_short: r.get::<_, i64>(5)? != 0,
             })
         })
-        .map_err(|e| read_fail(CTX, e))?;
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut out = Vec::new();
     for row in rows {
         // The ranked row carries closedate/profitbtc/isshort, so it is metric-
         // bearing end to end: skipping it would silently drop the extreme trade
         // the user opened this widget to see.
-        out.push(row.map_err(|e| read_fail(CTX, e))?);
+        out.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
     }
     Ok(out)
 }

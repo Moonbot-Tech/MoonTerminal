@@ -29,9 +29,13 @@ pub mod report_recovery;
 #[cfg(test)]
 mod test_support;
 pub mod tuner;
+pub mod valuation;
 
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
-pub use quote::{ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal};
+pub use quote::{
+    ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal, UsdtTotal,
+    ValuationCoverage,
+};
 pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use report_read::max_core_uid_in;
@@ -57,15 +61,17 @@ pub type ReportTx = ReportSink;
 
 /// Database handle containing the writer channel and post-commit publication state.
 ///
-/// The generation is the source of truth; the bounded dirty edge only wakes report-derived UI
-/// consumers after a successful commit.
+/// The generation is the source of truth; bounded dirty edges distinguish immediate live changes
+/// from coalesced historical catch-up after successful commits.
 pub struct ReportsHandle {
     /// Typed replication sink used by core feed sessions.
     pub tx: ReportTx,
     /// Monotonic committed report generation.
     pub generation: Arc<AtomicU64>,
-    /// Coalescing post-commit edge consumed by UI coordination.
-    pub commit_dirty: Arc<AtomicBool>,
+    /// Coalescing edge for live report changes that must refresh UI immediately.
+    pub immediate_commit_dirty: Arc<AtomicBool>,
+    /// Coalescing edge for historical catch-up changes that may refresh UI in bulk.
+    pub background_commit_dirty: Arc<AtomicBool>,
 }
 
 /// Initialize shared report metadata and any still-present read-only legacy table.
@@ -81,6 +87,7 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
         [],
     )?;
+    valuation::init_report_outbox(conn)?;
 
     // The legacy table was already dropped after the full typed-replica migration.
     // Do not recreate it: CREATE IF NOT EXISTS would bring the dead table back.
@@ -181,19 +188,51 @@ const REPORT_BATCH_ATTEMPTS: usize = 4;
 /// Maximum exhausted retry rounds before a non-corruption error closes the writer.
 const REPORT_BATCH_MAX_FAILED_ROUNDS: u32 = 8;
 
-/// Publish one successfully committed writer batch to report-data consumers.
+/// Report-data publication urgency for one successfully committed writer batch.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ReportPublication {
+    /// Historical catch-up data may be coalesced before waking analytical readers.
+    Background,
+    /// Live or user-visible data must wake analytical readers immediately.
+    Immediate,
+}
+
+/// Merge one message's publication into the class selected for its writer batch.
 ///
-/// The dirty bit is a bounded one-slot signal. Repeated commits coalesce while it is already set
-/// without losing the generation that consumers use as the source of truth.
+/// Args:
+///     batch: Publication already selected for earlier messages in the batch.
+///     next: Publication required by the newly applied message, or `None` for maintenance.
+///
+/// Returns:
+///     The highest urgency observed across the batch.
+fn merge_report_publication(
+    batch: Option<ReportPublication>,
+    next: Option<ReportPublication>,
+) -> Option<ReportPublication> {
+    batch.max(next)
+}
+
+/// Publish one successfully committed report-changing writer batch.
+///
+/// Each dirty bit is a bounded one-slot signal. Publishing one class deliberately leaves the
+/// opposite bit untouched because it may carry an unconsumed edge from an earlier batch.
 ///
 /// Args:
 ///     generation: Monotonic report snapshot revision shared with readers.
-///     commit_dirty: Coalescing dirty bit sampled by UI coordination.
+///     immediate_dirty: Coalescing edge for live report mutations.
+///     background_dirty: Coalescing edge for historical catch-up mutations.
+///     publication: Urgency selected across the committed batch.
 ///
 /// The function has no return value.
-fn publish_report_commit(generation: &AtomicU64, commit_dirty: &AtomicBool) {
-    publish_after_generation(generation, || {
-        commit_dirty.store(true, Ordering::Release);
+fn publish_report_commit(
+    generation: &AtomicU64,
+    immediate_dirty: &AtomicBool,
+    background_dirty: &AtomicBool,
+    publication: ReportPublication,
+) {
+    publish_after_generation(generation, || match publication {
+        ReportPublication::Background => background_dirty.store(true, Ordering::Release),
+        ReportPublication::Immediate => immediate_dirty.store(true, Ordering::Release),
     });
 }
 
@@ -306,7 +345,7 @@ fn passive_wal_checkpoint(conn: &Connection) -> rusqlite::Result<WalCheckpointSt
     })
 }
 
-/// Start the sole report-replica writer and mark its shared state dirty after each commit.
+/// Start the sole report-replica writer and publish each report-changing commit.
 ///
 /// Args:
 ///     permit: Private capability proving startup recovery and the process lease succeeded.
@@ -339,8 +378,10 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
     };
     let generation = Arc::new(AtomicU64::new(0));
     let gen_writer = generation.clone();
-    let commit_dirty = Arc::new(AtomicBool::new(false));
-    let writer_commit_dirty = commit_dirty.clone();
+    let immediate_commit_dirty = Arc::new(AtomicBool::new(false));
+    let writer_immediate_dirty = immediate_commit_dirty.clone();
+    let background_commit_dirty = Arc::new(AtomicBool::new(false));
+    let writer_background_dirty = background_commit_dirty.clone();
     if let Err(e) = std::thread::Builder::new()
         .name("reports-db".into())
         .spawn(move || {
@@ -382,17 +423,20 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                 thr_count += batch.len() as u64;
                 // Keep the owned batch until one whole attempt commits. ACK indices are
                 // recreated per attempt and become observable only after that commit.
-                let ack_indices = match commit_stateful_batch_until_success(
+                let (ack_indices, publication) = match commit_stateful_batch_until_success(
                     &conn,
                     &mut rep_state,
                     |transaction, candidate| {
                         let mut ack_indices = Vec::new();
+                        let mut publication = None;
                         for (index, msg) in batch.iter().enumerate() {
-                            if apply_msg(transaction, candidate, msg)? {
+                            let effect = apply_msg(transaction, candidate, msg)?;
+                            publication = merge_report_publication(publication, effect.publication);
+                            if effect.page_ack {
                                 ack_indices.push(index);
                             }
                         }
-                        Ok(ack_indices)
+                        Ok((ack_indices, publication))
                     },
                     integrity::writer_should_stop,
                     |failed_rounds, error| {
@@ -433,7 +477,14 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                         rep::commit_sync_complete(&rep_state, *core_uid, done);
                     }
                 }
-                publish_report_commit(&gen_writer, &writer_commit_dirty);
+                if let Some(publication) = publication {
+                    publish_report_commit(
+                        &gen_writer,
+                        &writer_immediate_dirty,
+                        &writer_background_dirty,
+                        publication,
+                    );
+                }
                 for index in ack_indices {
                     let DbMsg::Page { ack, page, .. } = &batch[index] else {
                         continue;
@@ -512,33 +563,97 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
             send_failed: Arc::new(AtomicBool::new(false)),
         },
         generation,
-        commit_dirty,
+        immediate_commit_dirty,
+        background_commit_dirty,
     })
 }
 
-/// Apply one typed-replica writer message.
+/// Effects produced by one report-writer message.
+struct ApplyEffect {
+    /// Whether a catch-up page may be acknowledged after the surrounding commit.
+    page_ack: bool,
+    /// Report publication required after the surrounding commit, absent for maintenance.
+    publication: Option<ReportPublication>,
+}
+
+impl ApplyEffect {
+    /// Build an immediately published report mutation.
+    ///
+    /// Args:
+    ///     page_ack: Whether the surrounding commit may acknowledge one catch-up page.
+    ///
+    /// Returns:
+    ///     Immediate report effect with optional page acknowledgement.
+    const fn immediate(page_ack: bool) -> Self {
+        Self {
+            page_ack,
+            publication: Some(ReportPublication::Immediate),
+        }
+    }
+
+    /// Build a background report mutation whose UI refresh may be coalesced.
+    ///
+    /// Args:
+    ///     page_ack: Whether the surrounding commit may acknowledge one catch-up page.
+    ///
+    /// Returns:
+    ///     Background report effect with optional page acknowledgement.
+    const fn background(page_ack: bool) -> Self {
+        Self {
+            page_ack,
+            publication: Some(ReportPublication::Background),
+        }
+    }
+
+    /// Build an internal maintenance effect that must not wake report readers.
+    ///
+    /// Returns:
+    ///     Non-report-changing effect.
+    const fn maintenance() -> Self {
+        Self {
+            page_ack: false,
+            publication: None,
+        }
+    }
+}
+
+/// Apply one typed-replica writer message and stage its durable valuation change.
 ///
-/// Returns `true` only for a page whose acknowledgement may be sent after the
-/// surrounding transaction commits.
+/// Args:
+///     conn: Active transaction receiving the message and valuation outbox mutation.
+///     rep_state: Candidate replication state committed with the transaction.
+///     msg: Typed replication or valuation-maintenance message to apply.
+///
+/// Returns:
+///     Effect describing report publication and page acknowledgement after the surrounding
+///     transaction commits.
 fn apply_msg(
     conn: &Connection,
     rep_state: &mut rep::RepState,
     msg: &DbMsg,
-) -> rusqlite::Result<bool> {
+) -> rusqlite::Result<ApplyEffect> {
     match msg {
         DbMsg::Schema { core_uid, schema } => {
             rep::apply_schema(conn, rep_state, *core_uid, schema.clone())?;
+            Ok(ApplyEffect::background(false))
         }
         DbMsg::Upsert {
             core_uid,
             core_name,
             row,
-        } => rep::apply_upsert(conn, rep_state, *core_uid, core_name, row)?,
+        } => {
+            rep::apply_upsert(conn, rep_state, *core_uid, core_name, row)?;
+            valuation::stage_row(conn, valuation::TradeSource::Typed, *core_uid, row.rec_id)?;
+            Ok(ApplyEffect::immediate(false))
+        }
         DbMsg::Delete { core_uid, rec_id } => {
             rep::apply_delete(conn, *core_uid, *rec_id)?;
+            valuation::stage_delete(conn, valuation::TradeSource::Typed, *core_uid, *rec_id)?;
+            Ok(ApplyEffect::immediate(false))
         }
         DbMsg::SetDeleted { core_uid, change } => {
             rep::apply_set_deleted(conn, rep_state, *core_uid, change)?;
+            Ok(ApplyEffect::immediate(false))
         }
         DbMsg::Page {
             core_uid,
@@ -547,13 +662,24 @@ fn apply_msg(
             ..
         } => {
             rep::apply_page(conn, rep_state, *core_uid, core_name, page)?;
-            return Ok(true);
+            if page.database_recreated {
+                valuation::stage_rescan_core(conn, *core_uid)?;
+            }
+            for row in page.rows.iter() {
+                valuation::stage_row(conn, valuation::TradeSource::Typed, *core_uid, row.rec_id)?;
+            }
+            Ok(ApplyEffect::background(true))
         }
         DbMsg::SyncComplete { core_uid, done: _ } => {
             rep::apply_sync_complete(conn, rep_state, *core_uid)?;
+            valuation::stage_legacy_purge(conn, *core_uid)?;
+            Ok(ApplyEffect::background(false))
+        }
+        DbMsg::ValuationAck { through_seq } => {
+            valuation::ack_outbox(conn, *through_seq)?;
+            Ok(ApplyEffect::maintenance())
         }
     }
-    Ok(false)
 }
 
 // ============================================================================
@@ -637,6 +763,10 @@ pub fn open_reader() -> ReadResult<Connection> {
     // keeps strategy-aware filtering consistent across all of them. It must happen before any
     // transaction is opened because SQLite does not allow ATTACH inside a transaction.
     analytics::attach_strategies(&conn);
+    // Historical valuations are derived but correctness-sensitive: an existing unreadable cache
+    // is a read failure, never silently interpreted as zero coverage. Startup initializes the file
+    // before report-derived views can open readers; an absent file remains a normal not-ready state.
+    let _ = valuation::attach(&conn)?;
     Ok(conn)
 }
 

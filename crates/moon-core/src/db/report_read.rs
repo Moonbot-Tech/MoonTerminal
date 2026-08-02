@@ -435,19 +435,56 @@ fn append_strategy_filter(
 ///     f: Complete Report filter.
 ///
 /// Returns:
-///     Exact known-currency buckets plus unknown and complete row counts.
+///     Exact known-currency buckets, unknown and complete row counts, and optional complete USDT
+///     valuation coverage.
 ///
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<QuoteBreakdown> {
-    const CTX: &str = "отчёты: query_totals";
+    let sources = read_sources_res(conn)?;
+    let valuation_attached = super::valuation::is_attached(conn);
+    match query_totals_attempt(conn, f, &sources, valuation_attached) {
+        Ok(totals) => Ok(totals),
+        Err(error)
+            if valuation_attached && super::valuation::prove_derived_corruption(conn, &error) =>
+        {
+            let _ = conn.execute(&format!("DETACH DATABASE {}", super::valuation::SCHEMA), []);
+            query_totals_attempt(conn, f, &sources, false).map_err(|retry_error| {
+                super::read_fail::read_fail("reports: query_totals native retry", retry_error)
+            })
+        }
+        // The guard above already performed schema attribution for this exact error.
+        Err(error) => Err(super::read_fail::read_fail("reports: query_totals", error)),
+    }
+}
+
+/// Execute one complete Report totals pass with fresh accumulators.
+///
+/// Args:
+///     conn: Open report reader or snapshot.
+///     f: Complete Report filter.
+///     sources: Physical report sources discovered from `main`.
+///     include_valuation: Whether to join the attached derived valuation cache.
+///
+/// Returns:
+///     Exact quote totals, optionally carrying complete USDT coverage.
+///
+/// Errors:
+///     Returns the underlying SQLite error from any physical-source aggregate.
+fn query_totals_attempt(
+    conn: &Connection,
+    f: &ReportFilter,
+    sources: &[ReadSource],
+    include_valuation: bool,
+) -> rusqlite::Result<QuoteBreakdown> {
     let mut groups = Vec::new();
+    let mut coverage = super::valuation::CoverageAggregate::default();
     let has_strategy_names = f
         .strategies
         .as_ref()
         .is_some_and(|strategies| !strategies.is_empty())
         && super::analytics::strategies_attached(conn);
-    for src in read_sources_res(conn)? {
+    for src in sources {
         let (where_sql, params) = build_where(f, &src.cols, has_strategy_names);
         let profit = if src.cols.contains("profitbtc") {
             "COALESCE(SUM(r.profitbtc),0.0)"
@@ -456,24 +493,47 @@ pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<QuoteBrea
         };
         let (quote, group_by) =
             super::quote::trusted_quote_group("r.basecurrency", src.cols.contains("basecurrency"));
+        let valuation = include_valuation.then(|| {
+            let source = if src.legacy {
+                super::valuation::TradeSource::Legacy
+            } else {
+                super::valuation::TradeSource::Typed
+            };
+            super::valuation::coverage_sql("r", &src.cols, source)
+        });
+        let joins = valuation
+            .as_ref()
+            .map(|parts| parts.joins.as_str())
+            .unwrap_or("");
+        let coverage_columns = valuation
+            .as_ref()
+            .map(|parts| format!(", {}", parts.aggregate_columns()))
+            .unwrap_or_default();
         let sql = format!(
-            "SELECT {quote}, {profit}, COUNT(*) FROM {} r{where_sql}{group_by}",
-            src.table
+            "SELECT {quote}, {profit}, COUNT(*){coverage_columns}
+             FROM {} r{joins}{where_sql}{group_by}",
+            src.table,
         );
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
-        let rows = stmt
-            .query_map(refs.as_slice(), |r| {
-                let raw = r.get::<_, Value>(0)?;
-                let ordinal = super::quote::report_ordinal_from_value(&raw);
-                Ok((ordinal, r.get::<_, f64>(1)?, r.get::<_, i64>(2)?))
-            })
-            .map_err(|e| read_fail(CTX, e))?;
-        for row in rows {
-            groups.push(row.map_err(|e| read_fail(CTX, e))?);
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(refs.as_slice())?;
+        while let Some(row) = rows.next()? {
+            let raw = row.get::<_, Value>(0)?;
+            let ordinal = super::quote::report_ordinal_from_value(&raw);
+            let profit = row.get::<_, f64>(1)?;
+            let orders = row.get::<_, i64>(2)?;
+            groups.push((ordinal, profit, orders));
+            if valuation.is_some() {
+                coverage.add_row(row, 3)?;
+            }
         }
     }
-    Ok(QuoteBreakdown::from_groups(groups))
+    let totals = QuoteBreakdown::from_groups(groups);
+    Ok(if include_valuation {
+        totals.with_valuation(coverage.finish())
+    } else {
+        totals
+    })
 }
 
 /// Return the top `limit` reports for the filter and sort using all display columns.

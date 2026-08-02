@@ -191,6 +191,18 @@ report.unknown_quote_orders:
   ru: "валюта неизвестна: %{n}"
   en: "unknown quote: %{n}"
   es: "moneda desconocida: %{n}"
+report.valuation_total:
+  ru: "в USDT: %{amount} USDT"
+  en: "in USDT: %{amount} USDT"
+  es: "en USDT: %{amount} USDT"
+report.valuation_progress:
+  ru: "пересчёт в USDT: %{ready}/%{total}"
+  en: "USDT valuation: %{ready}/%{total}"
+  es: "valoración en USDT: %{ready}/%{total}"
+report.valuation_unavailable:
+  ru: "нет исторического курса: %{n}"
+  en: "historical rate unavailable: %{n}"
+  es: "tasa histórica no disponible: %{n}"
 report.shown_top:
   ru: "показано (топ): %{n}"
   en: "shown (top): %{n}"

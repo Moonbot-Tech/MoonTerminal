@@ -3,7 +3,88 @@
 use moon_core::db::{self, ReportFilter, ReportStrategyKey, SideFilter};
 use rusqlite::Connection;
 
-use super::{MAX_REPORT_ROWS, strategy_catalog_scope, strategy_metadata_request};
+use super::{
+    GENERATION_QUERY_INTERVAL, GenerationRefreshGate, GenerationRefreshPlan, MAX_REPORT_ROWS,
+    strategy_catalog_scope, strategy_metadata_request,
+};
+
+/// `query.rs:GenerationRefreshGate::observe` must retain one pending generation until the timer
+/// makes it due and an active render consumes it; setting `due` immediately bypasses the Report
+/// throttle, while clearing it in the timer loses the final hidden-panel catch-up.
+#[test]
+fn generation_refresh_waits_and_stays_due_until_render() {
+    let mut gate = GenerationRefreshGate::default();
+
+    let timer_token = match gate.observe(std::time::Duration::from_secs(2)) {
+        GenerationRefreshPlan::NotifyAfter { wait, timer_token } => {
+            assert_eq!(wait, std::time::Duration::from_secs(3));
+            timer_token
+        }
+        plan => panic!("expected a delayed notification, got {plan:?}"),
+    };
+    assert_eq!(
+        gate.observe(std::time::Duration::from_secs(3)),
+        GenerationRefreshPlan::Idle
+    );
+    assert!(!gate.take_due());
+    assert!(gate.timer_fired(timer_token));
+    assert!(!gate.timer_fired(timer_token));
+    assert!(gate.take_due());
+    assert!(!gate.take_due());
+}
+
+/// `query.rs:GenerationRefreshGate::query_started` must cancel covered pending work without
+/// reviving it when an already-armed timer wakes; omitting the pending reset runs a duplicate
+/// five-second Report query after a manual refresh already covered that generation.
+#[test]
+fn query_start_cancels_pending_work_and_its_stale_timer() {
+    let mut gate = GenerationRefreshGate::default();
+
+    let timer_token = match gate.observe(std::time::Duration::from_secs(1)) {
+        GenerationRefreshPlan::NotifyAfter { timer_token, .. } => timer_token,
+        plan => panic!("expected a delayed notification, got {plan:?}"),
+    };
+    gate.query_started();
+    assert!(!gate.timer_fired(timer_token));
+    assert!(!gate.take_due());
+}
+
+/// `query.rs:GenerationRefreshGate::query_started` must invalidate an armed timer token; removing
+/// that invalidation lets the old wake release a generation observed after a manual query, causing
+/// a Report refresh less than five seconds after the latest query start.
+#[test]
+fn stale_timer_cannot_release_a_new_generation_early() {
+    let mut gate = GenerationRefreshGate::default();
+
+    let old_timer_token = match gate.observe(std::time::Duration::from_secs(1)) {
+        GenerationRefreshPlan::NotifyAfter { timer_token, .. } => timer_token,
+        plan => panic!("expected the first delayed notification, got {plan:?}"),
+    };
+    gate.query_started();
+    let new_timer_token = match gate.observe(std::time::Duration::from_secs(1)) {
+        GenerationRefreshPlan::NotifyAfter { timer_token, .. } => timer_token,
+        plan => panic!("expected the replacement delayed notification, got {plan:?}"),
+    };
+
+    assert!(!gate.timer_fired(old_timer_token));
+    assert!(!gate.take_due());
+    assert!(gate.timer_fired(new_timer_token));
+    assert!(gate.take_due());
+}
+
+/// `query.rs:GenerationRefreshGate::observe` must release an already-throttled generation without
+/// arming another timer; changing `>=` to `>` delays the exact five-second boundary and leaves a
+/// visible Report stale until another commit arrives.
+#[test]
+fn elapsed_generation_is_due_without_another_timer() {
+    let mut gate = GenerationRefreshGate::default();
+
+    assert_eq!(
+        gate.observe(GENERATION_QUERY_INTERVAL),
+        GenerationRefreshPlan::NotifyNow
+    );
+    assert!(gate.take_due());
+}
 
 /// Build one fully populated filter for scope-comparison tests.
 ///
