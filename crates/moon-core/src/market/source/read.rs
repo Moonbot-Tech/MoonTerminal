@@ -157,9 +157,9 @@ impl MarketDataSource {
 
     /// Return the USD rate for `currency`.
     ///
-    /// A USD stablecoin maps to 1; otherwise this uses `p_last` for `<currency>USDT`, such as
-    /// `BTCUSDT` for BTC. `None` means the provider, snapshot, market, or rate is unavailable. This
-    /// uses the same linear model as `feed::assets`, without contract multipliers.
+    /// A USD stablecoin maps to 1; otherwise this uses `p_last` for the coin's USDT market,
+    /// whatever this exchange calls it. `None` means the provider, snapshot, market, or rate is
+    /// unavailable. This uses the same linear model as `feed::assets`, without contract multipliers.
     pub fn currency_usd_rate(&self, core: CoreId, currency: &str) -> Option<f64> {
         if currency.is_empty() {
             return None;
@@ -167,18 +167,37 @@ impl MarketDataSource {
         if crate::symbol::is_usd_stable(currency) {
             return Some(1.0);
         }
-        let client = {
+        // Client and naming family come from ONE guard: read separately, a provider election
+        // landing between them would price against one exchange's catalog while spelling the
+        // market for another's.
+        let (client, exchange) = {
             let inner = self.inner.read().expect("market source poisoned");
             let provider = inner.core_provider.get(&core).copied()?;
-            inner
+            let client = inner
                 .clients
                 .get(&provider)
-                .and_then(SharedMoonClient::get)?
+                .and_then(SharedMoonClient::get)?;
+            (client, inner.exchange_of_provider(provider))
         };
         let snapshot = client.snapshot_versioned()?;
-        let market = format!("{}USDT", currency.to_ascii_uppercase());
-        let p = snapshot.markets().price(&market)?;
-        (p.p_last.is_finite() && p.p_last > 0.0).then_some(p.p_last)
+        // How the coin/USDT market is spelled depends on the exchange; the shared helper asks the
+        // naming module instead of concatenating, which only ever produced Binance-style names.
+        crate::feed::assets::price_of_pair(
+            snapshot.markets(),
+            &currency.to_ascii_uppercase(),
+            "USDT",
+            exchange,
+        )
+    }
+
+    /// The naming family of the exchange `core` reads market data from.
+    ///
+    /// It follows the market-data provider, because that is whose catalog the names come from.
+    /// Before identity arrives the family is `Unknown`, which recognizes the name's shape.
+    pub fn exchange_of(&self, core: CoreId) -> crate::symbol::Exchange {
+        let inner = self.inner.read().expect("market source poisoned");
+        let provider = inner.core_provider.get(&core).copied().unwrap_or(core);
+        inner.exchange_of_provider(provider)
     }
 
     /// Return the USD rate for the quote currency of `market`.
@@ -186,6 +205,10 @@ impl MarketDataSource {
     /// This converts `quantity * price` notional into USD. A USDT quote maps to 1, while a BTC quote
     /// uses the BTC/USDT rate. `None` means the rate is unknown.
     pub fn quote_usd_rate(&self, core: CoreId, market: &str) -> Option<f64> {
+        // Read by SHAPE, without the exchange: this sits on the chart's per-frame order-label
+        // rebuild, and taking the market-source lock to learn the family would cost one there for
+        // every label — while the shape reading lands on the same quote for every name a core
+        // lists (asserted over the real-name fixture in `tests/market_naming.rs`).
         let quote = crate::symbol::resolve_quote(market);
         if quote.is_empty() {
             // HL/HIP-3 DEX perpetuals use names such as `xyz:BIRD`, consisting of a DEX prefix and

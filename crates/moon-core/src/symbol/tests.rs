@@ -53,3 +53,28 @@ fn coin_hip3_strips_dex() {
     assert_eq!(coin_of_market("xyz:BIRD"), "BIRD");
     assert_eq!(coin_of_market("xyz:BIRDUSDC"), "BIRD");
 }
+
+/// The chart label. A perpetual reads like a spot pair, because on a futures connection every
+/// market is perpetual and a `-SWAP` in every label carries no information; a DATED contract keeps
+/// its expiry, because two expiries of one pair are different instruments and a shared label would
+/// make the two charts indistinguishable.
+#[test]
+fn pair_label_hides_perpetual_and_keeps_expiry() {
+    assert_eq!(super::display_pair("BTCUSDT"), "BTC-USDT");
+    assert_eq!(super::display_pair("BEAT-USDT-SWAP"), "BEAT-USDT");
+    assert_eq!(super::display_pair("BTCUSDT-07AUG26"), "BTC-USDT-07AUG26");
+    assert_eq!(super::display_pair("BNBUSD_260925"), "BNB-USD-260925");
+    // No recognized quote: show the coin alone rather than invent a pair.
+    assert_eq!(super::display_pair("KAITO"), "KAITO");
+    assert_eq!(super::display_pair("xyz:BIRD"), "BIRD");
+}
+
+/// The quote drives the USD conversion, so an unrecognized one must stay empty rather than
+/// guess: a wrong quote silently misprices every size label on that market.
+#[test]
+fn quote_is_canonical_uppercase_or_empty() {
+    assert_eq!(super::resolve_quote("BEAT-USDT-SWAP"), "USDT");
+    assert_eq!(super::resolve_quote("btcusdt"), "USDT");
+    assert_eq!(super::resolve_quote("KAITO"), "");
+    assert_eq!(super::resolve_quote("@206"), "");
+}

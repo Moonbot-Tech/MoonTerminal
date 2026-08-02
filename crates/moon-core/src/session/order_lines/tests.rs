@@ -4,6 +4,7 @@ fn order(uid: u64) -> OrderRow {
     OrderRow {
         market: "BTCUSDT".into(),
         market_display: "BTCUSDT".into(),
+        coin: "BTC".into(),
         is_short: false,
         size: 0.01,
         remaining_size: 0.01,

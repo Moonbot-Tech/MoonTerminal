@@ -449,15 +449,17 @@ impl ChartPanel {
             // Stops, trailing lines, and other kinds do not expose the coin/order menu.
             _ => return false,
         };
-        // Read the strategy ID from the core's open-order row; zero denotes manual/join orders.
+        // Read the strategy ID and the coin token from the core's open-order row; a zero strategy
+        // denotes manual/join orders. The row's `coin` was resolved with this core's exchange
+        // rules and is what the menu writes into the coin blacklists.
         let b = self.backend.read(cx);
-        let strat_id = b
+        let order = b
             .session
             .store()
             .core(core)
-            .and_then(|cd| cd.orders.iter().find(|o| o.uid == uid))
-            .map(|o| o.strat_id)
-            .filter(|id| *id != 0);
+            .and_then(|cd| cd.orders.iter().find(|o| o.uid == uid));
+        let strat_id = order.map(|o| o.strat_id).filter(|id| *id != 0);
+        let coin = order.map(|o| o.coin.clone());
         let strat_name = strat_id.and_then(|sid| {
             b.session
                 .store()
@@ -472,7 +474,8 @@ impl ChartPanel {
             .find(|s| s.id == core)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        let coin = moon_core::symbol::coin_of_market(&market).to_string();
+        // A line whose order has already left the store falls back to the name-only reading.
+        let coin = coin.unwrap_or_else(|| moon_core::symbol::coin_of_market(&market).to_string());
         let ctx = crate::controls::CoinMenuCtx {
             core,
             core_name,

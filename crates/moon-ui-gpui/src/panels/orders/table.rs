@@ -611,7 +611,7 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
     // the order's user-assigned `strat_name` field rendered by `strat_name_cell`.
     let strat_kind = r.strat.clone();
     let market_menu = r.market.clone();
-    let coin_menu = symbol::coin_of_market(&r.market).to_string();
+    let coin_menu = r.coin.clone();
     let short = r.is_short;
     let view = view.clone();
     let view_menu = view.clone();
@@ -677,18 +677,18 @@ fn core_cell(
         })
 }
 
-/// Build the clickable base-token cell, resolving the token from the display market name.
+/// Build the clickable base-token cell.
 ///
-/// The quote is omitted (`ADAUSDT` becomes `ADA`) and accent styling signals interactivity.
-/// Left-click opens the exact order market on Main for the order's core without activating the
-/// Main window; right-click opens the shared coin context menu.
+/// The quote is omitted (`ADAUSDT` becomes `ADA`, OKX's `BEAT-USDT-SWAP` becomes `BEAT`) and
+/// accent styling signals interactivity. Left-click opens the exact order market on Main for the
+/// order's core without activating the Main window; right-click opens the shared coin context menu.
 fn token_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
     p: MoonPalette,
 ) -> impl IntoElement + 'static {
-    // Resolve from the display (`mb_classic`) name so `@206` becomes `UENA`, not the raw index.
-    let token = symbol::coin_of_market(&e.row.market_display).to_string();
+    // The feed resolved this with the core's own exchange rules; see `OrderRow::coin`.
+    let token = e.row.coin.clone();
     let coin = token.clone();
     let core = e.core;
     let market = e.row.market.clone();

@@ -1,0 +1,89 @@
+# Real market names from the connected cores catalogs, one per exchange ordinal.
+# Format: <ExchangeCode ordinal><TAB><market name>. Blank lines and # comments are ignored.
+# Kept deliberately diverse rather than long: one entry per distinct NAME SHAPE per exchange,
+# plus the awkward ones (single-character and digit-leading bases, non-ASCII names, a coin
+# called SWAP). Add a row when a new shape appears on a live core, not to pad the list.
+
+# Bybit futures
+2	0GUSDT
+2	1000000BABYDOGEUSDT
+2	1000BONKPERP
+2	BTCUSDT-07AUG26
+2	BTCUSDT-14AUG26
+
+# Binance spot
+3	0GUSDC
+3	1000CATUSDC
+3	币安人生USDC
+
+# Binance USD-M
+4	0GUSDT
+4	1000000BOBUSDT
+4	币安人生USDT
+4	BTCUSDT_260925
+4	BTCUSDT_261225
+
+# Binance COIN-M (quarterly)
+6	BNBUSD_260925
+6	BNBUSD_261225
+6	AAVEUSD_PERP
+6	ADAUSD_PERP
+
+# Gate spot
+8	ETH_BTC
+8	0G_USDT
+8	10SET_USDT
+8	小股东_USDT
+8	A_USDT
+8	EZSWAP_USDT
+
+# Gate futures
+9	0G_USDT
+9	1INCH_USDT
+9	币安人生_USDT
+9	4_USDT
+
+# BitGet
+10	0GUSDT
+10	10SETUSDT
+
+# Hyperliquid spot
+12	@1
+12	@100
+12	PURR/USDC
+
+# Hyperliquid futures
+13	0G
+13	2Z
+
+# Hyperliquid futures HIP-3 DEX
+13	xyz:AAPL
+13	xyz:AMAT
+13	xyz:AMD
+
+# OKX futures
+15	0G-USDT-SWAP
+15	1INCH-USDT-SWAP
+15	A-USDT-SWAP
+15	BEAT-USDT-SWAP
+
+# Real names the shape sampling above collapsed away, kept because each one is a trap:
+# a base that ends in a quote, a base that IS a quote, and Bybit's USDC perpetual whose
+# `PERP` the core keeps as part of the coin (it reports `AAVEPERP`, not `AAVE`).
+10	PYUSDUSDT
+10	USDEUSDT
+8	SWAP_USDT
+2	AAVEPERP
+
+# OKX shapes documented by the exchange but not present on any core connected here, so the rules
+# for them are unverified against live data. Sourced from the OKX v5 instrument-ID docs. The spot
+# ones carry ordinal 14 (OKX spot), which no connected core uses either.
+14	BTC-USDT
+15	BTC-USD-SWAP
+15	BTC-USDT-250808
+
+# Ordinals with no connected core and therefore no real names: 5 (Huobi), 7 (Bybit spot),
+# 11 (BitGet futures). Each shares its family with an ordinal that IS covered above — Huobi with
+# Binance's concatenated form, 7 with 2, 11 with 10 — so their rules are exercised, but a name
+# from a live core of those three has never been seen here. Add rows when one connects.
+

@@ -201,7 +201,9 @@ impl AlertsPanel {
                 .w(px(70.0))
                 .cursor_pointer()
                 .text_color(moon(p.accent))
-                .child(r.market.clone())
+                // The column is headed "coin", so show the coin: the raw market name overflows a
+                // 70px cell on any exchange that spells it out (`BEAT-USDT-SWAP`).
+                .child(moon_core::symbol::coin_of_market(&r.market).to_string())
                 .on_click(move |_, _w, app| {
                     backend_open.update(app, |b, bcx| {
                         b.open_on_main((core, open_market.clone()), true);

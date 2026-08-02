@@ -47,9 +47,13 @@ pub(super) fn money(v: f64) -> String {
     s
 }
 
-/// Resolves a real `<coin>/<quote>` market name from the core catalog. Exchange formats differ:
-/// Binance and Bitget concatenate (`BTCUSDC`), while Gate uses an underscore (`SOVRN_USDT`).
-/// Returns the catalog name used by Market Sell and ticker navigation, or `None` when absent.
+/// Resolves a real `<coin>/<quote>` market name from the core catalog, trying every spelling an
+/// exchange might use for that pair. Returns the catalog name used by Market Sell and ticker
+/// navigation, or `None` when absent.
+///
+/// The spellings come from `symbol::parse::market_names_for`. This function used to enumerate two
+/// of them by hand — concatenated and underscored — so an OKX, COIN-M or HIP-3 market never
+/// resolved and Market Sell stayed hidden on those cores.
 ///
 /// This deliberately does not map a canonical coin to an indexed Hyperliquid spot market such as
 /// `KHYPE` to `@151`: Moonbot cannot market-sell those wallet holdings, so hiding the button is
@@ -59,20 +63,15 @@ fn resolve_market(
     markets: &std::collections::HashSet<String>,
     coin: &str,
     quote: &str,
+    exchange: moon_core::symbol::Exchange,
 ) -> Option<String> {
-    // Accept the coin itself as a market name; Hyperliquid spot indexes use `@699`, not `@699USDC`.
+    // The coin's own name comes first, as it always did: a Hyperliquid spot index is listed under
+    // exactly that name, and probing the pair spellings ahead of it would be work with no answer.
     if markets.contains(coin) {
         return Some(coin.to_string());
     }
-    let concat = format!("{coin}{quote}");
-    if markets.contains(&concat) {
-        return Some(concat);
-    }
-    let under = format!("{coin}_{quote}");
-    if markets.contains(&under) {
-        return Some(under);
-    }
-    None
+    moon_core::symbol::parse::market_names_for(coin, quote, exchange)
+        .find(|name| markets.contains(name))
 }
 
 /// Builds a synthetic `AssetRow` for a spot-wallet coin absent from per-market balances. `market`
@@ -150,17 +149,10 @@ impl AssetsView {
             let Some(cd) = store.core(*id) else { continue };
             for o in &cd.orders {
                 if !o.job_is_done && matches!(o.status.as_str(), "SellSet" | "SellAlmostDone") {
-                    // `market_display` resolves an indexed market such as `@N` to a display name
-                    // such as `KHYPEUSDT`, from which `coin_of_market` extracts the coin normally.
-                    let disp = if o.market_display.is_empty() {
-                        &o.market
-                    } else {
-                        &o.market_display
-                    };
-                    out.insert((
-                        *id,
-                        moon_core::symbol::coin_of_market(disp).to_ascii_uppercase(),
-                    ));
+                    // The feed already resolved this order's coin with the core's exchange rules,
+                    // indexed Hyperliquid names included. Re-deriving it here is how the badge and
+                    // the Orders table came to disagree about the same order.
+                    out.insert((*id, o.coin.to_ascii_uppercase()));
                 }
             }
         }
@@ -278,6 +270,8 @@ impl AssetsView {
                     }
                 };
                 let quote_up = quote.to_ascii_uppercase();
+                // Hoisted: the family is a property of the core, not of the row.
+                let exchange = b.session.market_source().exchange_of(id);
                 for w in &cd.transfer_assets.spot {
                     let coin_up = w.currency.to_ascii_uppercase();
                     if seen_coin.contains(&coin_up) {
@@ -287,7 +281,8 @@ impl AssetsView {
                     // Resolve the exchange-specific market name from the core catalog. If none
                     // exists, retain a concatenated display fallback but set `market_exists=false`
                     // so Market Sell remains hidden.
-                    let resolved = resolve_market(&cd.assets.markets, &w.currency, &quote);
+                    let resolved =
+                        resolve_market(&cd.assets.markets, &w.currency, &quote, exchange);
                     // Use the complete held wallet balance, as Moonbot does: `total` includes the
                     // free amount and quantities locked in orders, while `amount` is only free.
                     // Do not subtract listed sell quantities, or a fully listed spot holding would
@@ -300,7 +295,13 @@ impl AssetsView {
                     }
                     seen_coin.insert(coin_up);
                     let market_exists = resolved.is_some();
-                    let market = resolved.unwrap_or_else(|| format!("{}{}", w.currency, quote));
+                    // No catalog match: keep this exchange's own spelling as a display-only
+                    // fallback rather than a hand-concatenated one, with Sell hidden either way.
+                    let market = resolved.unwrap_or_else(|| {
+                        moon_core::symbol::parse::market_names_for(&w.currency, &quote, exchange)
+                            .next()
+                            .unwrap_or_else(|| w.currency.clone())
+                    });
                     let row = wallet_asset_row(w, &quote, is_quote, market, held_value, held_qty);
                     out.push(AssetEntry {
                         core: id,

@@ -394,6 +394,20 @@ struct MarketDataSourceInner {
     native_backfill_done: Mutex<HashSet<(CoreId, String, u32)>>,
 }
 
+impl MarketDataSourceInner {
+    /// The naming family of a market-data provider, for callers already holding the lock.
+    ///
+    /// Exists so a caller that needs the provider's client AND its naming family reads both under
+    /// one guard: taken separately, a provider election between the two would spell markets for
+    /// one exchange and price them against another's catalog.
+    fn exchange_of_provider(&self, provider: CoreId) -> crate::symbol::Exchange {
+        self.provider_exchange
+            .get(&provider)
+            .map(|id| crate::symbol::Exchange::from_code(id.code))
+            .unwrap_or_default()
+    }
+}
+
 /// UI-agnostic market read-model bridge.
 ///
 /// Feed threads publish only `SharedMoonClient` slots and lightweight wakes.

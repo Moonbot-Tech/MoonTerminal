@@ -328,10 +328,27 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // "@" prefix so ordinary markets such as BTCUSDT remain unchanged. INTERNAL catalog lookups
     // below (price/snapshot/liquidation) keep the RAW `o.market_name`, which the core uses as its
     // key. Fall back to the raw name when mb_classic is empty or also starts with "@".
-    let market_display = if o.market_name.starts_with('@') {
-        snap.markets()
-            .get(&o.market_name)
-            .map(|h| h.with(|m| m.market_name_mb_classic.clone()))
+    let indexed = o.market_name.starts_with('@');
+    let catalog = snap.markets().get(&o.market_name).map(|h| {
+        h.with(|m| {
+            // `market_currency`, NOT `market_currency_canonic`. The two answer different
+            // questions, measured on live cores: for Bybit's `1000BONKPERP` the catalog holds
+            // currency=`1kBONKPERP` / canonic=`BONKPERP`, and for COIN-M's `AAVEUSD_PERP`
+            // currency=`AAVE_RP` / canonic=`AAVE`. The core matches its coin lists against
+            // `market_currency` by exact text, and the report writes that same spelling, so it is
+            // the token to show and to write back. `canonic` is the contract-free WALLET identity,
+            // which is why `feed::assets` deliberately prefers it when deduplicating holdings.
+            let coin = m.market_currency.trim();
+            // The classic spelling is only ever needed for an indexed name, so an ordinary market
+            // does not pay for a String it would discard.
+            let classic = indexed.then(|| m.market_name_mb_classic.clone());
+            (classic, coin.to_string())
+        })
+    });
+    let market_display = if indexed {
+        catalog
+            .as_ref()
+            .and_then(|(classic, _)| classic.clone())
             .filter(|s| !s.is_empty() && !s.starts_with('@'))
             .unwrap_or_else(|| o.market_name.clone())
     } else {
@@ -611,10 +628,35 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     let stop_eff = |kind: crate::feed::OrderStopKind, wire: bool, strat: bool| -> bool {
         crate::feed::trade::stop_override(server_id, o.uid, kind, wire).unwrap_or(wire || strat)
     };
+    // The coin token, from the CATALOG. It is not a display convenience: it is what the coin
+    // context menu writes into the core's and the strategy's blacklists, and the core matches
+    // those against this very field. `market_currency_canonic`/`market_currency` also carry the
+    // core's own foldings — `1000BONKPERP` is reported as `1kBONKPERP`, `AAVEUSD_PERP` as
+    // `AAVE_RP` — which no rule applied to the market name can reconstruct. `feed::assets` reads
+    // the same pair of fields for the same reason.
+    //
+    // The name-based rules answer only when the catalog does not hold this market: a market
+    // delisted while an order is still open. There the exchange's rules apply to the EXCHANGE's
+    // spelling, so to the raw `market_name` — except for a Hyperliquid spot index, whose raw name
+    // (`@206`) carries no coin at all while the classic display spelling (`UENAUSDT`) does. With
+    // no catalog entry there is no classic spelling either, so an index falls back to itself:
+    // nothing outside the catalog can say which coin `@206` is.
+    let coin = match catalog {
+        Some((_, coin)) if !coin.is_empty() => coin,
+        _ => {
+            let parts = crate::symbol::parse::split_market(&o.market_name, exchange_of(snap));
+            if parts.is_index() {
+                crate::symbol::coin_of_market(&market_display).to_string()
+            } else {
+                parts.base.to_string()
+            }
+        }
+    };
     OrderRow {
         // The data KEY is the raw name used by the core; display uses the resolved mb_classic name.
         market: o.market_name.clone(),
         market_display,
+        coin,
         is_short: o.is_short,
         size,
         remaining_size,
@@ -670,6 +712,18 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         buy_trace: o.buy_trace_line.as_ref().and_then(order_trace),
         sell_trace: o.sell_trace_line.as_ref().and_then(order_trace),
     }
+}
+
+/// The naming family of the core this snapshot belongs to.
+///
+/// `BaseCheck` reports the exchange ordinal; before it arrives the snapshot has none and the
+/// parser recognizes the name's shape instead, which lands on the same coin for every market
+/// these cores actually list.
+fn exchange_of(snap: &moonproto::MoonStateSnapshot) -> crate::symbol::Exchange {
+    snap.server_info()
+        .exchange_code
+        .map(|code| crate::symbol::Exchange::from_code(code.stable_id()))
+        .unwrap_or_default()
 }
 
 /// Build the current order rows and overlay captured order events from this drain.

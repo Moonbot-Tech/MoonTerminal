@@ -127,10 +127,29 @@ pub struct OrderRow {
     /// human-readable name.
     pub market: String,
     /// Display market name from `market_name_mb_classic`, such as `@206` becoming `UENAUSDT`;
-    /// regular markets equal `market`. The table resolves the token from this value through
-    /// `coin_of_market`, while data lookups use `market`. Keeping them separate preserves key-based
-    /// matching and lookups.
+    /// regular markets equal `market`. Data lookups use `market`. Keeping them separate preserves
+    /// key-based matching and lookups.
     pub market_display: String,
+    /// Coin token for this market under its own exchange's naming rules: `ADA` for `ADAUSDT`,
+    /// `BEAT` for OKX's `BEAT-USDT-SWAP`, `UENA` for Hyperliquid spot's `@206`.
+    ///
+    /// Resolved ONCE, here, so every consumer shows and writes the same token: the Orders table,
+    /// the order-edit title and the coin menu that writes this value into the core's and the
+    /// strategy's coin blacklists, which the core matches against its own `market_currency`.
+    /// Re-deriving it per panel is what let those disagree.
+    ///
+    /// Read from the core's own catalog field `market_currency`, which is what the core matches
+    /// its coin lists against by exact text and what its report writes. It carries foldings no
+    /// rule could derive from the market name — Bybit's `1000BONKPERP` is `1kBONKPERP`, COIN-M's
+    /// `AAVEUSD_PERP` is `AAVE_RP` — which is why a token derived from the name would be written
+    /// into a blacklist the core then fails to match.
+    ///
+    /// Not `market_currency_canonic`: that is the contract-free WALLET identity (`BONKPERP`,
+    /// `AAVE`), correct for deduplicating holdings in `feed::assets` and wrong here.
+    ///
+    /// A market the catalog no longer holds falls back to the per-exchange name rules in
+    /// `moon_core::symbol::parse`.
+    pub coin: String,
     /// true = Short, false = Long.
     pub is_short: bool,
     /// Entry-leg size in the base currency: buy for long or sell for short.

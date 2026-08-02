@@ -10,13 +10,9 @@ use super::{
     WalletKind,
 };
 
-/// USD stablecoins whose exchange rate to USDT is treated as 1.
-fn is_stable(q: &str) -> bool {
-    matches!(
-        q,
-        "USDT" | "USDC" | "BUSD" | "USD" | "FDUSD" | "TUSD" | "DAI" | "USDP"
-    )
-}
+// One stablecoin list, in `symbol`, with the rest of the currency knowledge: this file used to
+// carry its own copy and the two were kept in sync by a comment.
+use crate::symbol::is_usd_stable as is_stable;
 
 /// Exchange rate of the `quote` currency in USDT (USDT≈1, BTC≈the BTC/USDT rate).
 /// Uses the core's standard `base_currency_price`; falls back to 1 for stablecoins, otherwise 0.
@@ -37,16 +33,13 @@ fn quote_to_usdt(markets: &MarketsState, quote: &str) -> f64 {
 }
 
 /// Exchange rate of the account's base currency (`base`) in USDT. USDT/stablecoins use 1;
-/// otherwise searches for the `<base>USDT` market or `base_currency_price`. 0 means unknown.
+/// otherwise searches for the base/USDT market or `base_currency_price`. 0 means unknown.
 fn base_rate(markets: &MarketsState, base: &str) -> f64 {
     let b = base.to_ascii_uppercase();
     if is_stable(&b) {
         return 1.0;
     }
-    markets
-        .price(&format!("{b}USDT"))
-        .map(|p| p.p_last)
-        .filter(|x| *x > 0.0)
+    price_of_pair(markets, &b, "USDT", crate::symbol::Exchange::Unknown)
         .or_else(|| {
             markets
                 .base_currency_price(base)
@@ -56,11 +49,36 @@ fn base_rate(markets: &MarketsState, base: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// The last price of `base`/`quote`, trying every spelling `ex` might use for that pair.
+///
+/// The spellings come from `symbol::parse::market_names_for`, so a Gate `BTC_USDT` or an OKX
+/// `BTC-USDT-SWAP` is found as readily as Binance's `BTCUSDT`. Each candidate is an exact catalog
+/// lookup, so a name this exchange does not list simply misses; `Exchange::Unknown` therefore
+/// safely tries them all.
+///
+/// Shared with `market::source::read`, which asks the same question about a consumer core: one
+/// "spell the pair, take the first priced one" loop, not two.
+pub(crate) fn price_of_pair(
+    markets: &MarketsState,
+    base: &str,
+    quote: &str,
+    ex: crate::symbol::Exchange,
+) -> Option<f64> {
+    // A listed but UNPRICED spelling must not stop the search: OKX lists spot `BTC-USDT` next to
+    // the perpetual, and accepting its empty price would hide the live one.
+    crate::symbol::parse::market_names_for(base, quote, ex).find_map(|name| {
+        markets
+            .price(&name)
+            .map(|p| p.p_last)
+            .filter(|x| x.is_finite() && *x > 0.0)
+    })
+}
+
 /// USDT value of `qty` units of `currency`. Stablecoins pass through unchanged; otherwise the
-/// rate comes from the exact currency-named market, `<CUR>USDT`, `<CUR>USDC` (≈USD), any
-/// USD-denominated contract with the `<CUR>USD` prefix, then the canonical-coin `coin_px`
-/// fallback. COIN-M/quarterly cores have no `<CUR>USDT` market, but contract prices such as
-/// `BTCUSD_PERP`/`BTCUSD_260925` are already in USD. 0 means unknown.
+/// rate comes from the exact currency-named market, the currency/USDT pair, the currency/USDC pair
+/// (≈USD), any USD-denominated contract with the `<CUR>USD` prefix, then the canonical-coin
+/// `coin_px` fallback. COIN-M/quarterly cores have no currency/USDT market, but contract prices
+/// such as `BTCUSD_PERP`/`BTCUSD_260925` are already in USD. 0 means unknown.
 fn coin_to_usdt(
     markets: &MarketsState,
     currency: &str,
@@ -79,18 +97,8 @@ fn coin_to_usdt(
         .price(currency)
         .map(|p| p.p_last)
         .filter(|x| *x > 0.0)
-        .or_else(|| {
-            markets
-                .price(&format!("{cur}USDT"))
-                .map(|p| p.p_last)
-                .filter(|x| *x > 0.0)
-        })
-        .or_else(|| {
-            markets
-                .price(&format!("{cur}USDC"))
-                .map(|p| p.p_last)
-                .filter(|x| *x > 0.0)
-        })
+        .or_else(|| price_of_pair(markets, &cur, "USDT", crate::symbol::Exchange::Unknown))
+        .or_else(|| price_of_pair(markets, &cur, "USDC", crate::symbol::Exchange::Unknown))
         .or_else(|| {
             let prefix = format!("{cur}USD");
             markets
@@ -164,9 +172,11 @@ pub(super) fn build_assets(
         // expose listed as `Market::listed_type()` would (SPOT when futures_type=EMPTY,
         // otherwise BOTH), because moonproto does not re-export `ListedType` itself.
         let (coin, quote, listed) = h.with(|m| {
+            // Both fields are trimmed: `OrderRow::coin` reads the same pair the same way, and the
+            // Assets for-sale badge matches the two by equality.
             let canon = m.market_currency_canonic.trim();
             let coin = if canon.is_empty() {
-                m.market_currency.clone()
+                m.market_currency.trim().to_string()
             } else {
                 canon.to_string()
             };

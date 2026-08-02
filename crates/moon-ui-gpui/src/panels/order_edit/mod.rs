@@ -191,7 +191,7 @@ pub(crate) fn open_order_edit(
         let footer_state = state.clone();
         let title = {
             let s = state.read(cx);
-            let token = symbol::coin_of_market(&s.row.market_display).to_string();
+            let token = s.row.coin.clone();
             let (side, _) = side_label(&s.row, s.executed);
             format!("{} — {token} ({side})", t!("orders.edit.title"))
         };

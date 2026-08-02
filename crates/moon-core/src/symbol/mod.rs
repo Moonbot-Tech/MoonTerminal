@@ -1,21 +1,34 @@
-//! Market-symbol display utilities. A core connects using a single quote currency
-//! (USDT/USDC/…), and the UI displays the coin WITHOUT that suffix: `ADAUSDT` → `ADA`.
+//! THE market-naming module: one place that answers "what coin is this market, and how is it
+//! spelled?", for every exchange.
+//!
+//! A core connects using a single quote currency (USDT/USDC/…) and the UI displays the coin
+//! WITHOUT it: `ADAUSDT` → `ADA`. Each exchange spells that differently — `BTC_USDT` on Gate,
+//! `BTC-USDT-SWAP` on OKX, `BTCUSD_PERP` on Binance COIN-M — so the rules are per exchange, in
+//! [`parse`], dispatched by [`Exchange`]. Nothing outside this module may hand-roll a quote list
+//! or a name split; two spellings of the rule is how one panel starts disagreeing with another
+//! about which coin an order is on.
+//!
+//! The exchange is often known at the call site (a panel has the core, and the core has its
+//! `ExchangeCode`); pass it through [`Exchange::from_code`] and use the `*_on` variants. Where it
+//! is not — a log line, a report row read before any core connected — [`Exchange::Unknown`]
+//! recognizes the shape instead.
 
-/// Known quote currencies whose suffixes are stripped. Ordered by length (longest first),
-/// so `FDUSD`/`USDC` match before `USD`.
-const QUOTES: [&str; 9] = [
-    "FDUSD", "TUSD", "USDC", "BUSD", "USDT", "USD", "BTC", "ETH", "BNB",
-];
+mod exchange;
+pub mod parse;
+
+pub use exchange::Exchange;
+
+use parse::split_market;
 
 /// Recognizes a known quote suffix in any market name, ASCII-case-insensitively.
 /// `BTCUSDT` → `USDT`; returns the canonical uppercase quote, or an empty string if unrecognized.
 pub fn resolve_quote(market: &str) -> String {
-    let up = market.to_ascii_uppercase();
-    QUOTES
-        .iter()
-        .find(|q| up.ends_with(*q) && up.len() > q.len())
-        .map(|q| q.to_string())
-        .unwrap_or_default()
+    resolve_quote_on(market, Exchange::Unknown)
+}
+
+/// [`resolve_quote`] for a market whose exchange is known.
+pub fn resolve_quote_on(market: &str, ex: Exchange) -> String {
+    split_market(market, ex).quote.to_ascii_uppercase()
 }
 
 /// Whether the currency is a USD stablecoin (its USD rate is approximately 1).
@@ -27,62 +40,44 @@ pub fn is_usd_stable(currency: &str) -> bool {
     )
 }
 
-/// Returns the base coin by stripping `quote` from the end of `sym` when it matches.
-/// If `quote` is empty or does not match, returns the symbol unchanged.
-///
-/// Gate and similar exchanges separate the symbol with an underscore (`VANRY_USDT`,
-/// `1INCH_USDT`). Stripping `USDT` leaves a trailing separator as in `VANRY_`, so also
-/// strip `_`, `-`, or `/`; otherwise tables would display the token as `VANRY_`.
-pub fn base_symbol<'a>(sym: &'a str, quote: &str) -> &'a str {
-    if !quote.is_empty() && sym.len() > quote.len() && sym.to_ascii_uppercase().ends_with(quote) {
-        let base = &sym[..sym.len() - quote.len()];
-        base.trim_end_matches(|c| c == '_' || c == '-' || c == '/')
-    } else {
-        sym
-    }
-}
-
 /// Full ticker for a chart label: `BTCUSDT` → `BTC-USDT`. HIP-3 (`xyz:BIRD`) → `BIRD`
 /// because the DEX prefix and implicit USDC quote are hidden. If the quote is unrecognized,
 /// displays the coin without its DEX prefix.
+///
+/// A dated contract keeps its date (`BTCUSDT-07AUG26` → `BTC-USDT-07AUG26`): two expiries of the
+/// same pair are different instruments and must not share a label. A perpetual has no tail, so
+/// `BTC-USDT-SWAP` and `BTCUSDT` both read `BTC-USDT`.
 pub fn display_pair(market: &str) -> String {
-    let after_dex = strip_dex(market);
-    let quote = resolve_quote(after_dex);
-    if quote.is_empty() {
-        return coin_of_market(market).to_string();
+    let parts = split_market(market, Exchange::Unknown);
+    if parts.quote.is_empty() {
+        return parts.base.to_string();
     }
-    format!("{}-{}", base_symbol(after_dex, &quote), quote)
-}
-
-/// A Hyperliquid HIP-3 market whose name carries a `dex_name:coin` DEX prefix (`xyz:BIRD`).
-/// A colon occurs in market names ONLY for HIP-3; regular exchanges send an empty `dex_name`
-/// without a colon.
-pub fn is_hip3(market: &str) -> bool {
-    market.contains(':')
-}
-
-/// The DEX name of a HIP-3 market (`xyz:BIRD` → `Some("xyz")`), or `None` otherwise.
-pub fn dex_of_market(market: &str) -> Option<&str> {
-    market.split_once(':').map(|(dex, _)| dex)
-}
-
-/// The part of the market name AFTER its DEX prefix: `xyz:BIRD` → `BIRD`,
-/// `ADAUSDT` → `ADAUSDT`.
-fn strip_dex(market: &str) -> &str {
-    market.rsplit(':').next().unwrap_or(market)
+    let pair = format!("{}-{}", parts.base, parts.quote.to_ascii_uppercase());
+    match parts.contract {
+        Some(contract) => format!("{pair}-{contract}"),
+        None => pair,
+    }
 }
 
 /// The CANONICAL market coin for blacklists, matching, and ticker display: strips the DEX
 /// prefix, then the quote suffix. `xyz:BIRD` → `BIRD`, `BIRDUSDC` → `BIRD`,
-/// `ADAUSDT` → `ADA`.
+/// `ADAUSDT` → `ADA`, `BEAT-USDT-SWAP` → `BEAT`.
 ///
 /// IMPORTANT: this is NOT a market key. Subscribing, opening, and data lookup require the full
 /// market name (`xyz:BIRD`). Search may accept a base-coin query, but returns full market keys.
 /// `coin_of_market` only answers "what is this coin called?"; the server compares blacklists
 /// against this unprefixed `market_currency`.
+///
+/// It answers from the NAME alone. Where a core's market catalog is at hand, its `market_currency`
+/// is the better answer and the only one that reproduces the core's own foldings
+/// (`1000BONKPERP` → `1kBONKPERP`); see [`parse`].
 pub fn coin_of_market(market: &str) -> &str {
-    let after_dex = strip_dex(market);
-    base_symbol(after_dex, &resolve_quote(after_dex))
+    coin_of_market_on(market, Exchange::Unknown)
+}
+
+/// [`coin_of_market`] for a market whose exchange is known.
+pub fn coin_of_market_on(market: &str, ex: Exchange) -> &str {
+    split_market(market, ex).base
 }
 
 /// The token a strategy's coin list (`CoinsBlackList` / `CoinsWhiteList`) uses for
