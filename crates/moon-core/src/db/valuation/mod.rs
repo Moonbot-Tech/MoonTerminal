@@ -12,8 +12,12 @@ mod worker;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use health::{FailureKind, FaultCause};
-pub use health::{StageHealth, ValuationFault, ValuationStage, ValuationStatus};
+// `FaultCause` stays crate-private: it is the worker's builder, and a public constructor would let
+// anything mint a fault the worker never reported — the opposite of "health is published, not
+// derived". `FailureKind` is public only because `ValuationFault.kind` is a public field, so a
+// consumer could otherwise read the class without being able to name its type.
+pub(crate) use health::FaultCause;
+pub use health::{FailureKind, StageHealth, ValuationFault, ValuationStage, ValuationStatus};
 pub(crate) use provider::{HttpSpotRateSource, SpotRateSource};
 pub use worker::{spawn_worker, ValuationHandle};
 

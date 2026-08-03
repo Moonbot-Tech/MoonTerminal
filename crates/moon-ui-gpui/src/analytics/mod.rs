@@ -1655,21 +1655,17 @@ fn quote_split_note(
 ) -> AnyElement {
     let mut chips = h_flex().flex_wrap().justify_center().gap_2();
     for total in &totals.totals {
-        let color = if total.profit > 0.0 {
-            p.green
-        } else if total.profit < 0.0 {
-            p.red
-        } else {
-            p.text_soft
-        };
+        // Colour from the sign the TEXT shows, not from the raw amount: a loss too small to survive
+        // this currency's rounding prints as a plus and must not still be tinted red.
+        let (amount, sign) = total.signed_display();
         chips = chips.child(
             div()
                 .px_2()
                 .py_1()
                 .rounded_sm()
                 .bg(moon(p.table_head))
-                .text_color(moon(color))
-                .child(quote_total_text(*total)),
+                .text_color(moon(sign.pick(p.green, p.red, p.text_soft)))
+                .child(amount),
         );
     }
     if totals.unknown_orders > 0 {
@@ -1758,20 +1754,6 @@ fn quote_split_note(
                 .child(t!("analytics.quote_split_orders", n = totals.orders).to_string()),
         )
         .into_any_element()
-}
-
-/// Format one exact quote total with enough precision for crypto-denominated reports.
-///
-/// Args:
-///     total: Known quote aggregate.
-///
-/// Returns:
-///     Signed compact amount followed by its ticker.
-fn quote_total_text(total: moon_core::db::QuoteTotal) -> String {
-    let amount =
-        moon_core::util::fmt::compact(total.profit.abs(), total.currency.display_decimals());
-    let sign = if total.profit >= 0.0 { "+" } else { "-" };
-    format!("{sign}{amount} {}", total.currency.ticker())
 }
 
 fn analytics_header(p: MoonPalette, cx: &App) -> impl IntoElement {

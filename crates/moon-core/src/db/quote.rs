@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 
 use rusqlite::types::Value;
 
+use crate::util::fmt::{self, DeltaSign};
+
 /// Decode a SQLite report value into an integral persisted currency ordinal.
 ///
 /// Args:
@@ -141,6 +143,21 @@ pub struct QuoteTotal {
     pub profit: f64,
     /// Number of contributing rows.
     pub orders: i64,
+}
+
+impl QuoteTotal {
+    /// Signed compact amount followed by this bucket's exact ticker, plus the sign that text shows.
+    ///
+    /// One home for every surface that prints a quote total — the Report footer and the Analytics
+    /// quote split both read it. Two copies of the precision rule drift, and then the same figure
+    /// renders differently depending on which window the user happens to be looking at.
+    ///
+    /// Returns:
+    ///     `"+12.5 USDT"` and its [`DeltaSign`], classified from the rounded amount.
+    pub fn signed_display(self) -> (String, DeltaSign) {
+        let (amount, sign) = fmt::signed_amount(self.profit, self.currency.display_decimals());
+        (format!("{amount} {}", self.currency.ticker()), sign)
+    }
 }
 
 /// Complete unified USDT aggregate available only after every eligible row is valued.

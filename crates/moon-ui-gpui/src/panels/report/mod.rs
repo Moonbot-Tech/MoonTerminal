@@ -8,7 +8,7 @@
 //!
 //! Responsibilities are split across this module for state, queries, and lifecycle; [`controls`]
 //! for selectors and the column menu; [`columns`] for column, cell, and header formatting; and
-//! [`export`] for file export.
+//! [`export`] for file export; and [`totals`] for footer fact priority and recovery text.
 
 mod actions;
 mod columns;
@@ -20,6 +20,7 @@ mod render;
 mod selection;
 mod state;
 mod strategy_filter;
+mod totals;
 mod widths;
 mod window;
 
@@ -46,8 +47,7 @@ use moon_ui::{
     MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState,
     MoonDataTableWidthPolicy, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
     MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone,
-    MoonTooltipView, MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex,
-    rgba_from, v_flex,
+    MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
@@ -55,7 +55,6 @@ use rust_i18n::t;
 
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
-use crate::valuation_health;
 use crate::{Backend, design};
 use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{

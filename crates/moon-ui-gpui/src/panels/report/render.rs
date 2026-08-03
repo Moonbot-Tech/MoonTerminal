@@ -3,58 +3,6 @@
 use super::*;
 
 impl ReportPanel {
-    /// Footer chip stating that historical valuation is retrying or has stopped making progress.
-    ///
-    /// Read from the worker's published health rather than from the valued-row counts beside it: a
-    /// count cannot distinguish a slow backfill from a worker retrying one unreachable provider
-    /// forever, which is the whole question this chip answers.
-    ///
-    /// # Arguments
-    ///
-    /// * `p` - Active MoonUI palette.
-    /// * `cx` - Panel context supplying the current text scale.
-    ///
-    /// # Returns
-    ///
-    /// A chip while the worker reports trouble, or `None` while it is healthy.
-    fn valuation_health_chip(&self, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
-        let now_ms = moon_core::util::now_unix_ms_i64();
-        if let Some(facts) = valuation_health::stall_facts(&self.valuation_status, now_ms) {
-            // The chip states the cause in words; the machine codes ride in the tooltip, where a
-            // user can quote them into a bug report without them leaking into a translated line.
-            let tip = t!(
-                "report.valuation_stalled_tip",
-                stage = facts.stage,
-                kind = facts.kind,
-                codes = facts.codes,
-                minutes = facts.minutes,
-                detail = facts.detail
-            )
-            .to_string();
-            return Some(
-                div()
-                    .id("report-valuation-stalled")
-                    .text_size(design::t_body(cx))
-                    .font_bold()
-                    .text_color(rgb(p.red))
-                    .child(t!("report.valuation_stalled").to_string())
-                    .tooltip(move |_window, cx| {
-                        cx.new(|_| MoonTooltipView::new(tip.clone())).into()
-                    })
-                    .into_any_element(),
-            );
-        }
-        // A short failing run is how an ordinary rate-limit backoff looks, so it is stated quietly
-        // rather than in the alarm colour the stall gets.
-        self.valuation_status.is_retrying().then(|| {
-            div()
-                .text_size(design::t_body(cx))
-                .text_color(rgb(p.text_soft))
-                .child(t!("report.valuation_retrying").to_string())
-                .into_any_element()
-        })
-    }
-
     /// Render the report table from currently renderable data.
     ///
     /// `vis` indexes [`Self::cols`]. Empty rows keep the header and show the
@@ -416,16 +364,75 @@ impl Render for ReportPanel {
             Ok(data) => self.table_el(data.clone(), &vis, p, cx),
         };
 
-        // Exact totals over the full filtered period.
-        // Without current data, never render +0.00 / 0 orders: those values are
-        // indistinguishable from a genuinely empty period.
-        // The totals line doubles as the selection bar: while rows are selected it carries their
-        // commands on the right and takes the same accent tint the separate bar used to have.
-        // Wrapping keeps it usable in a narrow dock, where totals plus commands outgrow one line.
+        // Exact totals over the full filtered period. WHY the row is split into a never-yielding
+        // head and one clipping tail is stated once, in `totals.rs`'s module doc; what only this
+        // file knows is how that split is expressed in flex, below.
+        // The row doubles as the selection bar: while rows are selected it carries their commands
+        // and uses an accent tint to distinguish the active selection state.
         let selection_actions = self.selection_actions(p, cx);
-        let mut totals = h_flex()
+        let facts = totals::footer_facts(
+            self.data.data().map(Arc::as_ref),
+            matches!(self.data, LoadState::Failed(_)),
+            &self.valuation_status,
+            moon_core::util::now_unix_ms_i64(),
+        );
+        let tip: SharedString = totals::footer_tooltip(&facts).into();
+        let body = design::t_body(cx);
+        // Every fact is `flex_none`, which is load-bearing in the tail alone: earlier facts retain
+        // their intrinsic widths while overflow clips the tail at its right edge.
+        let fact_el = move |index: usize, fact: totals::FooterFact| {
+            let color = match fact.tone {
+                totals::FactTone::Soft | totals::FactTone::Untrusted => p.text_soft,
+                // Through the accessors: the light theme needs its darker tokens to stay legible,
+                // and this match is the one place the footer picks a money colour.
+                totals::FactTone::Positive => design::positive_color(p),
+                totals::FactTone::Negative | totals::FactTone::Alarm => design::danger_color(p),
+                totals::FactTone::Warn => p.orange,
+            };
+            let el = div()
+                .id(index)
+                .flex_none()
+                .text_size(body)
+                .text_color(rgb(color))
+                .when(fact.bold, |chip| chip.font_bold())
+                .child(fact.text);
+            match fact.tip {
+                // A fact carrying diagnostics keeps its own tooltip; hovering it wins over the
+                // group's, so the codes stay one hover away without crowding the visible row.
+                Some(text) => el
+                    .tooltip(crate::panels::common::text_tooltip(text))
+                    .into_any_element(),
+                None => el.into_any_element(),
+            }
+        };
+        let fact_group = |id: &'static str, tip: SharedString, group: Vec<totals::FooterFact>| {
+            h_flex()
+                .id(id)
+                .items_center()
+                .gap_2()
+                .tooltip(crate::panels::common::text_tooltip(tip))
+                .children(
+                    group
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, fact)| fact_el(index, fact)),
+                )
+        };
+        // Head and tail are DIRECT children of the row, never nested in a shared box. Nested, the
+        // wrapper would take a zero flex basis and be allocated only the width the commands leave,
+        // while its `flex_none` head kept painting at full width — straight over the command
+        // buttons. As siblings the row lays them out sequentially, so the worst case is a clean
+        // overflow off the panel's clipped edge rather than overlapping glyphs. The tooltip rides
+        // the two groups, not the row, which also keeps it from rising over a command button.
+        let essential = fact_group("rep-totals-head", tip.clone(), facts.essential).flex_none();
+        // Zero flex basis: the tail grows into whatever the commands leave and contributes nothing
+        // to shrink, so a shortfall lands on the commands.
+        let clipping = fact_group("rep-totals-tail", tip, facts.tail)
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden();
+        let totals = h_flex()
             .w_full()
-            .flex_wrap()
             .gap_2()
             .items_center()
             .px_2()
@@ -433,115 +440,11 @@ impl Render for ReportPanel {
             .when(selection_actions.is_some(), |row| {
                 row.bg(rgba_from(p.accent, 0.08))
             })
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("report.totals").to_string()),
-            );
-        totals = match self.data.data() {
-            Some(d) => {
-                for total in &d.totals.totals {
-                    let sum_col = if total.profit > 0.0 {
-                        p.green
-                    } else if total.profit < 0.0 {
-                        p.red
-                    } else {
-                        p.text_soft
-                    };
-                    totals = totals.child(
-                        div()
-                            .font_bold()
-                            .text_color(rgb(sum_col))
-                            .child(report_quote_total_text(*total)),
-                    );
-                }
-                if d.totals.unknown_orders > 0 {
-                    totals = totals.child(div().font_bold().text_color(rgb(p.orange)).child(
-                        t!("report.unknown_quote_orders", n = d.totals.unknown_orders).to_string(),
-                    ));
-                }
-                if matches!(
-                    d.totals.scope(),
-                    db::QuoteScope::Mixed | db::QuoteScope::Unknown
-                ) {
-                    if let Some(usdt) = d.totals.unified_usdt() {
-                        totals = totals.child(
-                            div()
-                                .font_bold()
-                                .text_color(rgb(if usdt.profit >= 0.0 { p.green } else { p.red }))
-                                .child(
-                                    t!("report.valuation_total", amount = signed_usdt(usdt.profit))
-                                        .to_string(),
-                                ),
-                        );
-                    } else if let Some(coverage) = d.totals.valuation {
-                        if coverage.eligible_orders > 0 {
-                            totals = totals.child(
-                                div().text_color(rgb(p.orange)).child(
-                                    t!(
-                                        "report.valuation_progress",
-                                        ready = coverage.valued_orders,
-                                        total = coverage.eligible_orders
-                                    )
-                                    .to_string(),
-                                ),
-                            );
-                        }
-                        if coverage.unavailable_orders > 0 {
-                            totals = totals.child(
-                                div().text_color(rgb(p.orange)).child(
-                                    t!(
-                                        "report.valuation_unavailable",
-                                        n = coverage.unavailable_orders
-                                    )
-                                    .to_string(),
-                                ),
-                            );
-                        }
-                    }
-                }
-                // Deliberately outside every quote-scope and coverage branch. A stuck worker is a
-                // property of the worker, not of the rows on screen: gating it on the data shape
-                // would hide it behind a routine single-currency filter, which is most of the time.
-                if let Some(chip) = self.valuation_health_chip(p, cx) {
-                    totals = totals.child(chip);
-                }
-                totals
-                    .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_soft))
-                            .child(t!("report.orders_count", count = d.totals.orders).to_string()),
-                    )
-                    // The shown-rows note yields its right slot to the selection commands, which
-                    // ride their own `ml_auto` group instead: a flexible spacer would claim a whole
-                    // line of the wrapping row once the commands wrap onto one.
-                    .when(selection_actions.is_none(), |row| {
-                        row.child(
-                            div()
-                                .flex_1()
-                                .flex()
-                                .justify_end()
-                                .text_size(design::t_body(cx))
-                                .text_color(rgb(p.text_soft))
-                                .child(t!("report.shown_top", n = d.rows.len()).to_string()),
-                        )
-                    })
-                    .children(selection_actions)
-            }
-            None => {
-                let failed = matches!(self.data, LoadState::Failed(_));
-                let (text, color) = if failed {
-                    (t!("common.db_read_failed_short").to_string(), p.orange)
-                } else {
-                    ("—".to_string(), p.text_soft)
-                };
-                // No commands here: a read that fails or has not landed clears the selection first
-                // (`query.rs`, the `Err` arm), so `selection_actions` is always `None` in this arm.
-                totals.child(div().font_bold().text_color(rgb(color)).child(text))
-            }
-        };
+            .child(essential)
+            .child(clipping)
+            // No commands in the no-data arms: a read that fails or has not landed clears the
+            // selection first (`query.rs`, the `Err` arm), so this is `None` there.
+            .children(selection_actions);
 
         let root = v_flex()
             .id("report-panel")
@@ -598,31 +501,4 @@ impl Render for ReportPanel {
             root
         }
     }
-}
-
-/// Format one Report footer total with precision appropriate to its quote currency.
-///
-/// Args:
-///     total: Known-currency aggregate to display.
-///
-/// Returns:
-///     Signed compact amount followed by the exact quote ticker.
-fn report_quote_total_text(total: db::QuoteTotal) -> String {
-    let amount =
-        moon_core::util::fmt::compact(total.profit.abs(), total.currency.display_decimals());
-    let sign = if total.profit >= 0.0 { "+" } else { "-" };
-    format!("{sign}{amount} {}", total.currency.ticker())
-}
-
-/// Format a signed historical USDT value for the Report footer.
-///
-/// Args:
-///     value: Complete historical USDT profit.
-///
-/// Returns:
-///     Signed compact amount without a currency suffix.
-fn signed_usdt(value: f64) -> String {
-    let amount = moon_core::util::fmt::compact(value.abs(), 2);
-    let sign = if value >= 0.0 { "+" } else { "-" };
-    format!("{sign}{amount}")
 }

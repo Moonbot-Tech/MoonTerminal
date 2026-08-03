@@ -89,3 +89,38 @@ fn pct_shares_the_signed_rounding_without_the_sign() {
     );
     assert!(pct(f64::NAN, 1).is_none());
 }
+
+/// A loss too small to survive rounding must not keep its minus sign or its negative
+/// classification, and the returned sign must always describe the string beside it.
+///
+/// Breakage: taking the sign from the raw value — `let sign = if v < 0.0 { "-" } else { "+" }`
+/// before rounding, or returning `classify(v)` instead of `classify(rounded)`. Either renders
+/// `-0.001` as a red "-0.00": a figure that reads as zero while being coloured and signed as a
+/// loss. The `1.5` case pins the half-away-from-zero rule this module shares with `pct`, so a
+/// switch to `{:.*}`'s half-to-even cannot slip in unnoticed.
+#[test]
+fn signed_amount_takes_its_sign_from_the_rounded_value() {
+    assert_eq!(
+        signed_amount(-0.001, 2),
+        ("+0".to_string(), DeltaSign::Zero),
+        "a loss that rounds away is neither negative nor minus-signed"
+    );
+    assert_eq!(
+        signed_amount(-0.02, 2),
+        ("-0.02".to_string(), DeltaSign::Negative)
+    );
+    assert_eq!(
+        signed_amount(12.5, 2),
+        ("+12.5".to_string(), DeltaSign::Positive)
+    );
+    assert_eq!(
+        signed_amount(1.5, 0),
+        ("+2".to_string(), DeltaSign::Positive),
+        "midpoints round away from zero, as pct() already does"
+    );
+    assert_eq!(
+        signed_amount(f64::NAN, 2),
+        ("+0".to_string(), DeltaSign::Zero),
+        "a non-finite amount has no sign worth stating"
+    );
+}
