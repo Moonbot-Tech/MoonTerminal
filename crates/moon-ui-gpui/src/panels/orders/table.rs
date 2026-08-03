@@ -67,6 +67,7 @@ fn open_row_coin_menu(
         side: None,
         short,
         origin: CoinMenuOrigin::OrderTable,
+        trailing: Vec::new(),
     };
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);
 }

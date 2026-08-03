@@ -42,7 +42,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::MoonContextMenuWindowExt as _;
 use moon_ui::MoonWindowExt as _;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,

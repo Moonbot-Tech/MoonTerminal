@@ -22,7 +22,7 @@ const FIELD_COINS_BLACK_LIST: &str = "CoinsBlackList";
 
 /// Popup menu width in pixels. It is wider than the 170-pixel order menu to accommodate core-wide
 /// blacklist labels containing a core name.
-pub(crate) const MENU_WIDTH: f32 = 220.0;
+const MENU_WIDTH: f32 = 220.0;
 
 /// Side of the order line at the clicked point. The chart distinguishes Buy from Sell by line type;
 /// Buy provides Cancel, while Sell provides Join All Sells and Split actions.
@@ -63,9 +63,17 @@ pub struct CoinMenuCtx {
     /// Order position direction used by `join_sells`.
     pub short: bool,
     pub origin: CoinMenuOrigin,
+    /// Entries the caller appends after everything this menu builds, behind their own separator.
+    ///
+    /// This is how a panel adds an action that only IT can express — the Report's trade log needs a
+    /// task number no other caller has — without this module learning about that panel. Empty for
+    /// callers that add nothing.
+    pub trailing: Vec<MoonMenuItem>,
 }
 
 /// Opens the shared token context menu at window-coordinate `pos`, usually `event.position`.
+///
+/// Opens nothing when the context yields no entry at all — an empty popup reads as a bug.
 pub fn open_coin_menu(
     ctx: CoinMenuCtx,
     backend: Entity<Backend>,
@@ -73,13 +81,16 @@ pub fn open_coin_menu(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let items = build_items(&ctx, &backend, cx);
+    let items = build_items(ctx, &backend, cx);
+    if items.is_empty() {
+        return;
+    }
     window.open_moon_context_menu(cx, "coin-context-menu", pos, items, MENU_WIDTH);
 }
 
 /// Builds context-dependent entries. It reads core state through `cx` to mark existing blacklist
 /// membership and gates the strategy entry on its schema.
-fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
+fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
     let b = backend.read(cx);
     let core = ctx.core;
     let coin = ctx.coin.clone();
@@ -120,77 +131,81 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
         );
     }
 
-    // Blacklist actions.
-    if !items.is_empty() {
-        items.push(MoonMenuItem::separator());
-    }
+    // Blacklist actions. Every one of them writes a TOKEN, so a context without one — a table row
+    // whose coin cell is empty — gets none of them rather than entries that would write nothing.
+    if !coin.is_empty() {
+        if !items.is_empty() {
+            items.push(MoonMenuItem::separator());
+        }
 
-    // Add to the current core's global blacklist.
-    let (_, cur_text) = core_blacklist(b, core);
-    let in_core = blacklist_contains(&cur_text, &coin);
-    {
-        let backend_bl = backend.clone();
-        let coin_c = coin.clone();
-        items.push(
-            MoonMenuItem::with_key(
-                "coin-bl-core",
-                t!("coin_menu.bl_core", core = ctx.core_name.clone()).to_string(),
-            )
-            .checked(in_core)
-            .on_click(move |_, window, app| {
-                window.close_context_menu(app);
-                backend_bl.update(app, |b, _| add_to_core_blacklist(b, core, &coin_c));
-            }),
-        );
-    }
-
-    // Add to every core selected in the panel filter, but only when more than one is selected.
-    if ctx.selected_cores.len() > 1 {
-        let cores = ctx.selected_cores.clone();
-        let all_in = cores
-            .iter()
-            .all(|&c| blacklist_contains(&core_blacklist(b, c).1, &coin));
-        let backend_m = backend.clone();
-        let coin_m = coin.clone();
-        items.push(
-            MoonMenuItem::with_key(
-                "coin-bl-cores",
-                t!("coin_menu.bl_cores", n = cores.len()).to_string(),
-            )
-            .checked(all_in)
-            .on_click(move |_, window, app| {
-                window.close_context_menu(app);
-                backend_m.update(app, |b, _| {
-                    for &c in &cores {
-                        add_to_core_blacklist(b, c, &coin_m);
-                    }
-                });
-            }),
-        );
-    }
-
-    // Add to the order strategy's blacklist only when the strategy is known and its schema contains
-    // `CoinsBlackList`; otherwise the view editor would silently discard the field edit.
-    if let Some(sid) = ctx.strat_id {
-        if strategy_has_blacklist_field(b, core, sid) {
-            let in_strat = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
-            let label = match ctx.strat_name.as_deref().filter(|n| !n.is_empty()) {
-                Some(name) => t!("coin_menu.bl_strategy", name = name.to_string()).to_string(),
-                None => t!("coin_menu.bl_strategy", name = sid.to_string()).to_string(),
-            };
-            let backend_s = backend.clone();
-            let coin_s = coin.clone();
+        // Add to the current core's global blacklist.
+        let (_, cur_text) = core_blacklist(b, core);
+        let in_core = blacklist_contains(&cur_text, &coin);
+        {
+            let backend_bl = backend.clone();
+            let coin_c = coin.clone();
             items.push(
-                MoonMenuItem::with_key("coin-bl-strat", label)
-                    .checked(in_strat)
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        backend_s
-                            .update(app, |b, _| add_to_strategy_blacklist(b, core, sid, &coin_s));
-                    }),
+                MoonMenuItem::with_key(
+                    "coin-bl-core",
+                    t!("coin_menu.bl_core", core = ctx.core_name.clone()).to_string(),
+                )
+                .checked(in_core)
+                .on_click(move |_, window, app| {
+                    window.close_context_menu(app);
+                    backend_bl.update(app, |b, _| add_to_core_blacklist(b, core, &coin_c));
+                }),
             );
         }
-    }
+
+        // Add to every core selected in the panel filter, but only when more than one is selected.
+        if ctx.selected_cores.len() > 1 {
+            let cores = ctx.selected_cores.clone();
+            let all_in = cores
+                .iter()
+                .all(|&c| blacklist_contains(&core_blacklist(b, c).1, &coin));
+            let backend_m = backend.clone();
+            let coin_m = coin.clone();
+            items.push(
+                MoonMenuItem::with_key(
+                    "coin-bl-cores",
+                    t!("coin_menu.bl_cores", n = cores.len()).to_string(),
+                )
+                .checked(all_in)
+                .on_click(move |_, window, app| {
+                    window.close_context_menu(app);
+                    backend_m.update(app, |b, _| {
+                        for &c in &cores {
+                            add_to_core_blacklist(b, c, &coin_m);
+                        }
+                    });
+                }),
+            );
+        }
+
+        // Add to the order strategy's blacklist only when the strategy is known and its schema contains
+        // `CoinsBlackList`; otherwise the view editor would silently discard the field edit.
+        if let Some(sid) = ctx.strat_id {
+            if strategy_has_blacklist_field(b, core, sid) {
+                let in_strat = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
+                let label = match ctx.strat_name.as_deref().filter(|n| !n.is_empty()) {
+                    Some(name) => t!("coin_menu.bl_strategy", name = name.to_string()).to_string(),
+                    None => t!("coin_menu.bl_strategy", name = sid.to_string()).to_string(),
+                };
+                let backend_s = backend.clone();
+                let coin_s = coin.clone();
+                items.push(
+                    MoonMenuItem::with_key("coin-bl-strat", label)
+                        .checked(in_strat)
+                        .on_click(move |_, window, app| {
+                            window.close_context_menu(app);
+                            backend_s.update(app, |b, _| {
+                                add_to_strategy_blacklist(b, core, sid, &coin_s)
+                            });
+                        }),
+                );
+            }
+        }
+    } // end of the token-dependent blacklist actions
 
     // Strategy actions.
     if let Some(sid) = ctx.strat_id {
@@ -273,6 +288,14 @@ fn build_items(ctx: &CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Mo
                 );
             }
         }
+    }
+
+    // Whatever the caller could express and this module could not, last and behind its own rule.
+    if !ctx.trailing.is_empty() {
+        if !items.is_empty() {
+            items.push(MoonMenuItem::separator());
+        }
+        items.extend(ctx.trailing);
     }
 
     items

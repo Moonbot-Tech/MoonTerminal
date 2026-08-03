@@ -269,33 +269,34 @@ impl ReportPanel {
         cx.notify();
     }
 
-    /// Open the row's right-click menu at the cursor.
+    /// Open the row's right-click menu at the cursor: the shared token menu, plus this trade's log.
     ///
-    /// The only entry is the trade's core log. A row whose core recorded no task number cannot
-    /// produce one — a log line carries no other identity — so the entry is shown DISABLED and says
-    /// why, instead of opening a window that could only ever be empty. A right-click landing past
-    /// the last row opens nothing at all.
+    /// ONE menu for the whole row — every cell opens it, not just the coin. It is the same menu the
+    /// Orders table, Assets and the chart's order lines use, so a token action reads the same
+    /// everywhere; what only the Report can add rides at the end, behind its own separator.
+    ///
+    /// That trailing entry is the trade's core log. A row whose core recorded no task number cannot
+    /// produce one — a log line carries no other identity — so it is shown DISABLED and says why,
+    /// instead of opening a window that could only ever be empty.
     ///
     /// Args:
     ///     row: Index into the current snapshot's rows.
     ///     window: Window hosting the menu and the resulting dialog.
-    ///     cx: Panel context used to read the row and the core's configured name.
+    ///     cx: Panel context used to read the row, the core, and the panel's core scope.
     ///
     /// Returns:
-    ///     Nothing.
+    ///     Nothing; a right-click landing past the last row opens nothing.
     pub(super) fn open_row_menu(
         &mut self,
         row: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.data.data().is_none_or(|data| row >= data.rows.len()) {
-            return;
-        }
-        let items = vec![match self.trade_log_request(row, cx) {
+        let trade_log = vec![match self.trade_log_request(row, cx) {
             Ok(request) => {
                 MoonMenuItem::with_key("rep-row-trade-log", t!("report.trade_log.open").to_string())
                     .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
                         trade_log::open_trade_log(request.clone(), window, app);
                     })
             }
@@ -303,12 +304,34 @@ impl ReportPanel {
                 MoonMenuItem::with_key("rep-row-trade-log", t!(reason).to_string()).disabled(true)
             }
         }];
-        window.open_moon_context_menu(
+        // With no explicit filter the coin actions may act on every core the selector currently
+        // knows, exactly as the coin cell's menu did.
+        let selected_cores: Vec<u64> = if self.sel_cores.is_empty() {
+            self.cores.iter().map(|(uid, _)| *uid).collect()
+        } else {
+            self.sel_cores.iter().copied().collect()
+        };
+        let Some(data) = self.data.data().cloned() else {
+            return;
+        };
+        let Some(values) = data.rows.get(row) else {
+            return;
+        };
+        let ctx = columns::row_coin_menu_ctx(
+            values,
+            &self.cols,
+            data.core_uids.get(row).copied().unwrap_or(0),
+            selected_cores,
+            trade_log,
+            &self.backend,
             cx,
-            "report-row-menu",
+        );
+        crate::controls::open_coin_menu(
+            ctx,
+            self.backend.clone(),
             window.mouse_position(),
-            items,
-            crate::controls::MENU_WIDTH,
+            window,
+            cx,
         );
     }
 
