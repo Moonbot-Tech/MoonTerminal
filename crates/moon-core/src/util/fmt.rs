@@ -210,6 +210,34 @@ pub fn pct(v: f64, decimals: usize) -> Option<(String, DeltaSign)> {
     Some((format!("{:.*}%", decimals, rounded), sign))
 }
 
+/// Signed compact amount whose sign is classified from the ROUNDED value.
+///
+/// A raw `v >= 0.0` disagrees with the text it labels the moment a small negative rounds away: the
+/// amount reads `0.00` while the prefix — and any colour picked the same way — still says negative.
+/// Rounding first removes that, and returning the classification lets a caller tint exactly the
+/// sign its own text shows. A non-finite input has no sign worth stating and renders as zero.
+///
+/// Sign and digits therefore share ONE rounding rule — [`round_to`]'s half-away-from-zero, as
+/// [`pct`] and [`signed_pct`] already use — rather than `{:.*}`'s half-to-even. Splitting them
+/// would print an exact `x.xx5` a hair closer while reopening the same desync at the next midpoint
+/// down, so an exactly-representable midpoint rounds up here. Display only: the report export
+/// writes raw values.
+///
+/// Args:
+///     v: Raw signed amount.
+///     decimals: Places to round and format to.
+///
+/// Returns:
+///     The formatted amount with an explicit `+`/`-`, and the sign that text represents.
+pub fn signed_amount(v: f64, decimals: usize) -> (String, DeltaSign) {
+    let rounded = round_to(v, decimals).unwrap_or(0.0);
+    let sign = if rounded < 0.0 { "-" } else { "+" };
+    (
+        format!("{sign}{}", compact(rounded.abs(), decimals)),
+        classify(rounded),
+    )
+}
+
 /// Classify an already-rounded value.
 fn classify(rounded: f64) -> DeltaSign {
     if rounded == 0.0 {

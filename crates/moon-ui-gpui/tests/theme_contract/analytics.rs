@@ -873,6 +873,78 @@ fn calendar_hover_is_element_state_not_view_state() {
     );
 }
 
+/// The Report totals row must degrade by priority, and every fact it states must be one the
+/// tooltip already knows about.
+///
+/// This is the structural half of "the tooltip repeats everything that can clip": the unit test in
+/// `totals/tests.rs` can only check the facts it is given, so what makes the guarantee real is that
+/// `render.rs` builds the row from `footer_facts` ALONE. A fact constructed inline beside them
+/// would render without ever reaching `footer_tooltip`, and on a narrow dock that fact becomes
+/// unreachable — precisely what the tooltip exists to prevent.
+///
+/// Breakage: "fixing" narrow layout by putting `.flex_wrap()` back on the totals row, which trades
+/// a fixed-height footer for one that grows and pushes the table; or splitting the tail into two
+/// shrinkable boxes, since flex shrink is proportional to base size and two siblings would erode
+/// higher-priority facts alongside lower-priority ones.
+#[test]
+fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
+    let render = read_src("panels/report/render.rs");
+    let body = braced_body(&render, "fn render(");
+
+    for anchor in [
+        "totals::footer_facts(",
+        "totals::footer_tooltip(&facts)",
+        // Both halves must actually reach the tree. Rendering only the head would keep every other
+        // assertion here green while quietly deleting the clippable facts. The anchors start at the
+        // builder calls so reflowing the surrounding block does not redden this.
+        "fact_group(\"rep-totals-head\"",
+        "fact_group(\"rep-totals-tail\"",
+        "facts.essential)",
+        "facts.tail)",
+    ] {
+        assert!(
+            body.contains(anchor),
+            "the totals row must be assembled through {anchor}"
+        );
+    }
+    for inline in [
+        "report.orders_count",
+        "report.shown_top",
+        "report.valuation_total",
+        "report.unknown_quote_orders",
+    ] {
+        assert!(
+            !body.contains(inline),
+            "{inline} must reach the row through footer_facts, not as an inline chip"
+        );
+    }
+    assert_eq!(
+        body.matches(".overflow_hidden()").count(),
+        1,
+        "exactly one clipping box: the fact tail"
+    );
+    assert_eq!(
+        body.matches(".flex_wrap()").count(),
+        1,
+        "the only wrapping row left in Report's render is the filters row"
+    );
+    // (`.overflow_x_scroll()` is already banned across this file by
+    // `report_table_uses_scrollable_preserved_widths`; repeating it here would pin nothing new.)
+
+    // The commands are the only way to act on a selection, so they are the row's shrinkable
+    // sibling: allowed to wrap internally, never to clip.
+    let controls = read_src("panels/report/controls.rs");
+    let actions = braced_body(&controls, "pub(super) fn selection_actions(");
+    assert!(
+        actions.contains(".min_w_0()") && actions.contains(".flex_wrap()"),
+        "the selection commands must absorb a narrow row by wrapping"
+    );
+    assert!(
+        !actions.contains(".ml_auto()"),
+        "the fact group's zero flex basis pins the commands right; a second mechanism would fight it"
+    );
+}
+
 /// The report footer must learn that valuation is stuck from the WORKER, not from row counts.
 ///
 /// Breakage: a cleanup deleting the `valuation_status` plumbing and deriving "stuck" from
@@ -928,25 +1000,6 @@ fn the_report_footer_reads_stall_from_worker_health_not_row_counts() {
     );
 }
 
-/// The stall chip must not be gated on the shape of the rows currently in view.
-///
-/// Breakage: moving the `valuation_health_chip` call inside the
-/// `QuoteScope::Mixed | QuoteScope::Unknown` branch. A stuck worker is a property of the worker,
-/// not of the filter: under a routine single-currency filter that branch never runs, so no surface
-/// anywhere would report a worker that had been stuck for hours.
-#[test]
-fn the_valuation_stall_chip_is_not_gated_on_quote_scope() {
-    let render = read_src("panels/report/render.rs");
-    assert!(
-        render.contains("self.valuation_health_chip(p, cx)"),
-        "the footer must render the health chip"
-    );
-    let scoped = braced_body(
-        &render,
-        "if matches!(\n                    d.totals.scope(),",
-    );
-    assert!(
-        !scoped.contains("valuation_health_chip"),
-        "the health chip must sit outside the mixed/unknown quote-scope branch"
-    );
-}
+// Quote-scope independence is exercised by
+// `panels::report::totals::tests::worker_health_is_stated_outside_every_quote_scope_branch`, which
+// builds a single-currency snapshot with a stalled worker and requires the marker to lead the tail.

@@ -230,10 +230,9 @@ impl ReportPanel {
         // (off hides deleted trades, on shows ONLY them) rather than an "also show" checkbox.
         div()
             .id("rep-scope-tip")
-            .tooltip(|_window, cx| {
-                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.filter.scope_tip").to_string()))
-                    .into()
-            })
+            .tooltip(crate::panels::common::text_tooltip(
+                t!("report.filter.scope_tip").to_string(),
+            ))
             .child(
                 MoonDropdown::new("rep-scope")
                     .label(label)
@@ -281,9 +280,14 @@ impl ReportPanel {
 
     /// Build the selection commands for the totals line.
     ///
-    /// They live in the totals row rather than a bar of their own: a bar that appears on the first
-    /// click pushed the table up under the cursor, and the totals line already ends in a
-    /// right-aligned slot (the "shown (top N)" note) that is idle exactly while rows are selected.
+    /// They live in the totals row because a separate bar appearing on the first click would push
+    /// the table up under the cursor. They close the row, after the facts, and the
+    /// fact tail's zero flex basis is what pins them to its right edge.
+    ///
+    /// This group is the row's one concession to a genuinely narrow dock. The facts degrade by
+    /// clipping and stay reachable through the row tooltip; commands cannot, since they are the
+    /// only way to act on a selection. So they wrap instead, growing the row only while rows are
+    /// selected and the dock is narrower than the count plus the currently available buttons.
     ///
     /// Args:
     ///     palette: Active Moon palette used for the count label.
@@ -301,12 +305,11 @@ impl ReportPanel {
             return None;
         }
         let mutable = self.selection.mutable_count();
-        // `ml_auto` pins the group to the right edge of the totals row and, once that row wraps, to
-        // the right edge of its own line. It wraps internally too: a narrow side dock is narrower
-        // than count plus three buttons, and the dock clips overflow — an unwrapped group would put
-        // Delete past the edge instead of on a second line.
+        // `min_w_0` is what makes the wrap above reachable: only a group allowed to shrink below
+        // its content wraps rather than overflowing. No `ml_auto` — the fact tail's zero flex basis
+        // already pins this group right.
         let mut bar = h_flex()
-            .ml_auto()
+            .min_w_0()
             .flex_wrap()
             .justify_end()
             .items_center()
@@ -409,10 +412,9 @@ impl ReportPanel {
         // Keep the glyph button alongside the column selector and explain it with a tooltip.
         div()
             .id("rep-export-tip")
-            .tooltip(|_window, cx| {
-                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.export_menu").to_string()))
-                    .into()
-            })
+            .tooltip(crate::panels::common::text_tooltip(
+                t!("report.export_menu").to_string(),
+            ))
             .child(
                 MoonDropdown::new("rep-export")
                     .segment(moon_ui::MoonButtonSegment::new("⇩"))
@@ -456,10 +458,9 @@ impl ReportPanel {
         // tooltip is localized; glyphs remain outside the locale dictionary per locales/README.
         div()
             .id("rep-cols-tip")
-            .tooltip(|_window, cx| {
-                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.columns_menu").to_string()))
-                    .into()
-            })
+            .tooltip(crate::panels::common::text_tooltip(
+                t!("report.columns_menu").to_string(),
+            ))
             .child(
                 MoonDropdown::new("rep-cols")
                     .segment(moon_ui::MoonButtonSegment::new("▦"))

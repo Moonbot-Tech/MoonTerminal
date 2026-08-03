@@ -122,7 +122,7 @@ pub(super) fn undated_banner_state(
         .totals
         .iter()
         .copied()
-        .map(super::quote_total_text)
+        .map(|total| total.signed_display().0)
         .collect::<Vec<_>>();
     if u.totals.unknown_orders > 0 {
         amounts.push(

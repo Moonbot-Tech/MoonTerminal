@@ -171,6 +171,24 @@ pub(crate) fn popup_close_button(
         .render()
 }
 
+/// Build the handler for a plain-text tooltip.
+///
+/// GPUI takes a factory rather than a string, so every call site otherwise spells out the same
+/// `move |_, cx| cx.new(|_| MoonTooltipView::new(text.clone())).into()`. Taking a
+/// [`SharedString`] keeps each tooltip-view clone a refcount bump instead of copying the text.
+///
+/// Args:
+///     text: Complete tooltip content.
+///
+/// Returns:
+///     A handler suitable for `Styled::tooltip`.
+pub(crate) fn text_tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |_window, cx| cx.new(|_| MoonTooltipView::new(text.clone())).into()
+}
+
 /// Builds an unlabeled compact checkbox with a tooltip. A `div.id.tooltip` wrapper
 /// supplies the tooltip because an unlabeled `MoonCheckbox` has none.
 pub(crate) fn icon_checkbox(
@@ -181,7 +199,7 @@ pub(crate) fn icon_checkbox(
 ) -> AnyElement {
     div()
         .id(SharedString::from(format!("{id}-tip")))
-        .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tooltip.clone())).into())
+        .tooltip(text_tooltip(tooltip))
         .child(
             MoonCheckbox::new(SharedString::from(id.to_string()))
                 .checked(checked)
