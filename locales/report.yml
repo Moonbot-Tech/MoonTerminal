@@ -215,6 +215,18 @@ report.valuation_stalled_tip:
   ru: "Пересчёт в USDT не продвигается уже %{minutes} мин. Этап: %{stage}. Причина: %{kind}. [%{codes}] %{detail}"
   en: "USDT valuation has made no progress for %{minutes} min. Stage: %{stage}. Cause: %{kind}. [%{codes}] %{detail}"
   es: "La valoración en USDT no avanza desde hace %{minutes} min. Etapa: %{stage}. Causa: %{kind}. [%{codes}] %{detail}"
+report.valuation_total_current:
+  ru: "в USDT по текущему курсу: %{amount} USDT"
+  en: "in USDT at the current rate: %{amount} USDT"
+  es: "en USDT a la tasa actual: %{amount} USDT"
+report.valuation_current_progress:
+  ru: "текущий курс: %{ready}/%{total}"
+  en: "current rate: %{ready}/%{total}"
+  es: "tasa actual: %{ready}/%{total}"
+report.valuation_current_unavailable:
+  ru: "нет текущего курса: %{n}"
+  en: "current rate unavailable: %{n}"
+  es: "tasa actual no disponible: %{n}"
 report.shown_top:
   ru: "показано (топ): %{n}"
   en: "shown (top): %{n}"

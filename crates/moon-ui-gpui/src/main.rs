@@ -100,7 +100,8 @@ struct Backend {
     /// The session uses `tx` across starts and reconnects; the Report panel uses
     /// `generation` to trigger reads. `None` means the database is unavailable.
     reports: Option<moon_core::db::ReportsHandle>,
-    /// Historical quote-to-USDT worker and its independently committed generation.
+    /// Historical and current-rate quote-to-USDT worker with its independently committed data
+    /// generation.
     valuation: Option<moon_core::db::valuation::ValuationHandle>,
     /// Dedicated wake channel for report-derived consumers.
     report_revision: Entity<ReportRevision>,

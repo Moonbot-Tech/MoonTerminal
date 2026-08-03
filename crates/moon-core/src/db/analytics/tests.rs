@@ -16,6 +16,7 @@ fn q(from: i64, to: i64) -> Query {
         emulator: Some(false),
         strategies: Vec::new(),
         metric: Default::default(),
+        valuation: Default::default(),
     }
 }
 

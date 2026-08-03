@@ -3,6 +3,7 @@
 use rusqlite::types::Value;
 use rusqlite::Connection;
 
+use super::super::valuation::ValuationMode;
 use super::super::{ProfitMetric, QuoteBreakdown, ReadResult, SideFilter};
 
 /// Selection filters shared by all Analytics tabs.
@@ -30,6 +31,11 @@ pub struct Query {
     /// return on spent capital (`Percent`, the report's `Profit` column). Applied once in
     /// [`unified_from`]'s projected `pnl` column, so every reader below shares the choice.
     pub metric: ProfitMetric,
+    /// Which conversion turns quote money into USDT: per-trade historical rates, or the latest
+    /// known ones. Carried on the query rather than passed down as a parameter so every Analytics
+    /// reader — summary, calendar, coin groups, the tuner source — inherits one answer; a reader
+    /// that missed the parameter would render a differently converted number under the same label.
+    pub valuation: ValuationMode,
 }
 
 impl Query {
@@ -199,8 +205,49 @@ pub(in crate::db) enum ProjectionMode {
     Native,
     /// Replace profit, spend, quote identity, and active PnL with historical USDT values.
     Usdt,
+    /// The same replacement, but every trade converted at the latest known rate.
+    UsdtCurrent,
     /// Use per-trade return on spent capital without historical FX.
     Percent,
+}
+
+impl ProjectionMode {
+    /// Which conversion this projection applies, if it converts at all.
+    ///
+    /// Every decision downstream asks this rather than comparing against one variant, so adding a
+    /// conversion cannot silently fall through to native money in a branch nobody updated.
+    ///
+    /// Returns:
+    ///     The valuation mode to build SQL for, or `None` for a projection that converts nothing.
+    pub(in crate::db) const fn valuation(self) -> Option<ValuationMode> {
+        match self {
+            Self::Usdt => Some(ValuationMode::Historical),
+            Self::UsdtCurrent => Some(ValuationMode::Current),
+            Self::Native | Self::Percent => None,
+        }
+    }
+
+    /// Whether this projection reports money in USDT.
+    ///
+    /// Returns:
+    ///     True for either conversion.
+    pub(in crate::db) const fn is_usdt(self) -> bool {
+        self.valuation().is_some()
+    }
+
+    /// The USDT projection matching one requested valuation mode.
+    ///
+    /// Args:
+    ///     mode: Conversion the caller asked for.
+    ///
+    /// Returns:
+    ///     The projection that applies it.
+    pub(in crate::db) const fn usdt_for(mode: ValuationMode) -> Self {
+        match mode {
+            ValuationMode::Historical => Self::Usdt,
+            ValuationMode::Current => Self::UsdtCurrent,
+        }
+    }
 }
 
 /// Read safe raw-money totals for one Analytics query scope.
@@ -256,7 +303,8 @@ pub(in crate::db) fn quote_breakdown_on(
 ///     conn: Open report reader or pinned snapshot.
 ///     q: Fully resolved Analytics query.
 ///     sources: Physical report sources discovered from `main`.
-///     include_valuation: Whether to join the attached derived valuation cache.
+///     include_valuation: Whether the historical mode may join the attached derived cache; the
+///         current-rate mode does not depend on it.
 ///
 /// Returns:
 ///     Exact quote totals, optionally carrying complete USDT coverage.
@@ -272,6 +320,10 @@ fn quote_breakdown_attempt(
     let has_names = strategies_attached(conn);
     let mut groups = Vec::new();
     let mut coverage = super::super::valuation::CoverageAggregate::default();
+    // Loop-invariant: current-rate coverage is publishable without the cache; historical coverage
+    // is publishable only while the derived cache is attached.
+    let valuation_present =
+        q.valuation == super::super::valuation::ValuationMode::Current || include_valuation;
     for src in sources {
         if !src.cols.contains("closedate") || !src.cols.contains("profitbtc") {
             continue;
@@ -283,14 +335,14 @@ fn quote_breakdown_attempt(
             "r.basecurrency",
             src.cols.contains("basecurrency"),
         );
-        let valuation = include_valuation.then(|| {
-            let source = if src.legacy {
-                super::super::valuation::TradeSource::Legacy
-            } else {
-                super::super::valuation::TradeSource::Typed
-            };
-            super::super::valuation::coverage_sql("r", &src.cols, source)
-        });
+        let source = super::super::report_read::source_partition(src);
+        let valuation = super::super::valuation::projection(
+            q.valuation,
+            include_valuation,
+            "r",
+            &src.cols,
+            source,
+        );
         let joins = valuation
             .as_ref()
             .map(|parts| parts.joins.as_str())
@@ -323,7 +375,9 @@ fn quote_breakdown_attempt(
         }
     }
     let totals = QuoteBreakdown::from_groups(groups);
-    Ok(if include_valuation {
+    // Publish coverage whenever the selected mode can build a projection: always for current rates,
+    // and only with an attached cache for historical rates.
+    Ok(if valuation_present {
         totals.with_valuation(coverage.finish())
     } else {
         totals
@@ -438,7 +492,8 @@ pub(in crate::db) fn unified_from(conn: &Connection, q: &Query) -> ReadResult<Op
 /// Args:
 ///     conn: Existing report reader or pinned snapshot.
 ///     q: Period and row filters.
-///     mode: Native, historical USDT, or percent projection established by preflight.
+///     mode: Native, historical USDT, current-rate USDT, or percent projection established by
+///         preflight.
 ///
 /// Returns:
 ///     Unified filtered source SQL, no ready source, or a classified read failure.
@@ -488,18 +543,12 @@ pub(in crate::db) fn unified_from_mode(
         // OUTER row explicitly. Unqualified `core_uid` inside it would bind to `strat.strategies`
         // and silently match every strategy of that name on any core.
         let sid = effective_sid_expr("r", &src.cols, has_names);
-        let source = if src.legacy {
-            super::super::valuation::TradeSource::Legacy
-        } else {
-            super::super::valuation::TradeSource::Typed
-        };
-        let valuation = if mode == ProjectionMode::Usdt {
-            Some(super::super::valuation::coverage_sql(
-                "r", &src.cols, source,
-            ))
-        } else {
-            None
-        };
+        let source = super::super::report_read::source_partition(&src);
+        // `true` for attachment: a USDT projection is only ever chosen after `scope_decision_on`
+        // proved coverage on this same snapshot, and the current-rate mode needs no cache at all.
+        let valuation = mode.valuation().and_then(|valuation_mode| {
+            super::super::valuation::projection(valuation_mode, true, "r", &src.cols, source)
+        });
         let proj = cols
             .iter()
             .map(|c| {
@@ -507,7 +556,7 @@ pub(in crate::db) fn unified_from_mode(
                     // The attributed value is published UNDER THE ORIGINAL NAME, so every
                     // query outside this source keeps reading `o.strategyid` and gets it.
                     format!("{sid} AS \"strategyid\"")
-                } else if mode == ProjectionMode::Usdt && *c == "profitbtc" {
+                } else if mode.is_usdt() && *c == "profitbtc" {
                     format!(
                         "{} AS \"profitbtc\"",
                         valuation
@@ -515,7 +564,7 @@ pub(in crate::db) fn unified_from_mode(
                             .expect("USDT projection has coverage SQL")
                             .profit_usdt
                     )
-                } else if mode == ProjectionMode::Usdt && *c == "spentbtc" {
+                } else if mode.is_usdt() && *c == "spentbtc" {
                     format!(
                         "{} AS \"spentbtc\"",
                         valuation
@@ -523,7 +572,7 @@ pub(in crate::db) fn unified_from_mode(
                             .expect("USDT projection has coverage SQL")
                             .spent_usdt
                     )
-                } else if mode == ProjectionMode::Usdt && *c == "basecurrency" {
+                } else if mode.is_usdt() && *c == "basecurrency" {
                     "1 AS \"basecurrency\"".to_string()
                 } else if src.cols.contains(*c) {
                     format!("r.\"{c}\"")

@@ -144,6 +144,7 @@ impl ReportPanel {
             .as_ref()
             .map(|valuation| valuation.seed_status())
             .unwrap_or_default();
+        let seeded_valuation_mode = backend.read(cx).valuation_mode();
         // Keep this connection for panel metadata. Startup core/schema probes
         // are deliberately lossy because the fallible background batch below
         // owns user-visible read errors.
@@ -326,6 +327,15 @@ impl ReportPanel {
                 this.last_gen = current;
                 this.requery_on_generation(cx);
             }
+            // The valuation mode is application-wide and is edited in Settings, so it changes from
+            // outside this panel entirely — nothing here can notice the edit as it happens. It
+            // moves no generation — a mode switch changes no rows — so it is compared separately,
+            // and it requeries rather than merely repainting: the numbers themselves change.
+            let mode = this.backend.read(cx).valuation_mode();
+            if mode != this.last_valuation_mode {
+                this.last_valuation_mode = mode;
+                this.request_requery(cx);
+            }
             // Health is polled beside the data generation but never triggers a query: a stall
             // changes no rows, and re-running the report on each visible health transition would
             // turn a broken provider into needless full-table scans.
@@ -358,6 +368,7 @@ impl ReportPanel {
             valuation_status,
             last_gen,
             last_status_rev,
+            last_valuation_mode: seeded_valuation_mode,
             conn,
             cores,
             strategies,

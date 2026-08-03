@@ -45,7 +45,7 @@ use crate::design::{moon, moon_alpha};
 use crate::valuation_health;
 use crate::{Backend, design};
 use moon_core::db::analytics::{DayCell, Query, StrategyBase, Summary};
-use moon_core::db::valuation::ValuationStatus;
+use moon_core::db::valuation::{ValuationMode, ValuationStatus};
 use moon_core::db::{
     FailKind, ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, SideFilter,
 };
@@ -296,7 +296,7 @@ pub struct AnalyticsView {
     backend: Entity<Backend>,
     /// Report-writer generation observed only while this window exists.
     report_generation: Option<Arc<AtomicU64>>,
-    /// Historical-valuation generation observed beside report commits.
+    /// Historical-cache and current-rate data generation observed beside report commits.
     valuation_generation: Option<Arc<AtomicU64>>,
     /// Latest published worker health, refreshed only when its revision moves. Polled separately
     /// from the data generation because a stalled worker commits no rows at all.
@@ -334,6 +334,9 @@ pub struct AnalyticsView {
     /// Profit metric: absolute quote money (`Quote`) or the report `Profit` column
     /// (`Percent` = profit ÷ spent). Persisted in `layout.analytics_profit_percent`.
     metric: ProfitMetric,
+    /// Which conversion turns quote money into USDT. Mirrors the application-wide backend setting;
+    /// see [`Self::observe_valuation_mode`] for why it is a mirror rather than a live read.
+    valuation_mode: ValuationMode,
     /// Background summary state with distinct loading, unavailable, ready, and
     /// failed outcomes so only a successful empty read appears empty.
     pub(in crate::analytics) data: ProfitLoadState<Summary>,
@@ -612,6 +615,7 @@ impl AnalyticsView {
         // Armed probe → open straight on the surface under observation, so the channel
         // reports the coin table rather than the summary nobody asked about.
         let probe = probe_enabled();
+        let saved_valuation_mode = backend.read(cx).valuation_mode();
         let mut this = Self {
             backend,
             report_generation,
@@ -634,6 +638,7 @@ impl AnalyticsView {
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
             metric: saved_metric,
+            valuation_mode: saved_valuation_mode,
             data: ProfitLoadState::default(),
             strategy_data: ProfitLoadState::default(),
             strategy_data_period: saved_strat_period.unwrap_or(Period::CurMonth),
@@ -744,12 +749,35 @@ impl AnalyticsView {
         cx.notify();
     }
 
+    /// Adopt a valuation mode saved in Settings, and reload if it moved.
+    ///
+    /// The mode is application-wide and is edited nowhere in this window, so it can change under
+    /// an open Analytics window at any time.
+    /// Mirrored into a field because [`Self::query`] is called from helpers that hold no `App`,
+    /// and synced HERE rather than at render because adopting it schedules a reload — which the
+    /// Analytics render root must never do.
+    ///
+    /// Args:
+    ///     cx: Analytics window context used to read the backend and schedule the reload.
+    fn observe_valuation_mode(&mut self, cx: &mut Context<Self>) {
+        let mode = self.backend.read(cx).valuation_mode();
+        if self.valuation_mode == mode {
+            return;
+        }
+        self.valuation_mode = mode;
+        self.reload(cx);
+    }
+
     /// Mark report-derived caches stale and schedule a load-shed automatic refresh.
+    ///
+    /// This poll also adopts application-wide valuation-mode changes before comparing data
+    /// generations, because switching modes changes query results without committing report rows.
     ///
     /// Args:
     ///     cx: GPUI context used to schedule or start the refresh.
     fn observe_report_generation(&mut self, cx: &mut Context<Self>) {
         self.observe_valuation_health(cx);
+        self.observe_valuation_mode(cx);
         let generation = self.current_report_generation();
         if !self
             .report_refresh
@@ -945,6 +973,7 @@ impl AnalyticsView {
             emulator: self.emu,
             strategies: Vec::new(),
             metric: self.metric,
+            valuation: self.valuation_mode,
         }
     }
 
@@ -1076,11 +1105,19 @@ impl AnalyticsView {
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to run and publish the shared background query.
     fn reload_summary(&mut self, after_report: bool, show_overlay: bool, cx: &mut Context<Self>) {
-        // Mark the request at its start so an error from another period cannot
-        // remain under the current period label.
-        // Quote identity belongs to the request scope. Retaining stale scalar data would render
-        // it briefly under the new metric/core filters before the exact unit is known.
-        self.data = ProfitLoadState::default();
+        // Mark the request at its start so an error from another period cannot remain under the
+        // current period label. Quote identity belongs to the request scope, so a MANUAL change
+        // drops the previous figures: retaining them would render a scalar under the new
+        // metric/core filters before its exact unit is known.
+        //
+        // A report-driven catch-up changes neither the period nor the filters, so the visible
+        // snapshot stays until its replacement lands — the same rule `reload_strategy_base`
+        // already follows. Dropping it would make the page blink through "loading" after every
+        // live trade, and repeatedly under the current-rate mode, whose worker republishes on its
+        // own schedule.
+        if !after_report {
+            self.data = ProfitLoadState::default();
+        }
         // Drop every chart hover: the bars/columns under the cursor are about to be
         // replaced (and on a single-day period the right card swaps its whole element
         // tree), so they never fire `hovered = false` and a stale index would re-open a
@@ -1512,7 +1549,9 @@ impl Render for AnalyticsView {
             | WindowBounds::Fullscreen(b) => f32::from(b.size.width),
         };
         let body = match split {
-            Some(totals) => quote_split_note(&totals, &self.valuation_status, p, cx),
+            Some(totals) => {
+                quote_split_note(&totals, &self.valuation_status, self.valuation_mode, p, cx)
+            }
             None => match self.tab {
                 Tab::Summary => self.summary_tab(p, cx),
                 Tab::Strategies => self.strategies_tab(p, window, cx),
@@ -1642,6 +1681,7 @@ impl Render for AnalyticsView {
 /// Args:
 ///     totals: Known quote buckets and unknown row count for the active scope.
 ///     status: Published valuation worker health, explaining a coverage figure that stopped moving.
+///     mode: Which conversion produced the coverage figures.
 ///     p: Active MoonUI palette.
 ///     cx: Analytics render context.
 ///
@@ -1650,6 +1690,7 @@ impl Render for AnalyticsView {
 fn quote_split_note(
     totals: &QuoteBreakdown,
     status: &ValuationStatus,
+    mode: ValuationMode,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -1681,8 +1722,13 @@ fn quote_split_note(
     }
     let coverage_note = totals.valuation.and_then(|coverage| {
         (coverage.eligible_orders > 0).then(|| {
+            // The current-rate wording is shared with the Report footer rather than duplicated:
+            // rust-i18n keeps one global key namespace, and one concept deserves one sentence.
             let mut text = t!(
-                "analytics.quote_valuation_progress",
+                mode.key(
+                    "analytics.quote_valuation_progress",
+                    "report.valuation_current_progress"
+                ),
                 ready = coverage.valued_orders,
                 total = coverage.eligible_orders
             )
@@ -1691,7 +1737,10 @@ fn quote_split_note(
                 text.push_str(" · ");
                 text.push_str(
                     &t!(
-                        "analytics.quote_valuation_unavailable",
+                        mode.key(
+                            "analytics.quote_valuation_unavailable",
+                            "report.valuation_current_unavailable"
+                        ),
                         n = coverage.unavailable_orders
                     )
                     .to_string(),

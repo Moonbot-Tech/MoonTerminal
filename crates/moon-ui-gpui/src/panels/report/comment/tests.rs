@@ -43,6 +43,7 @@ fn fixture() -> (Vec<String>, ReportData) {
                 orders: 3,
                 ..Default::default()
             },
+            valuation: Default::default(),
         },
     )
 }

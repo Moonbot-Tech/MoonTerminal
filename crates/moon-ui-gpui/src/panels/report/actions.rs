@@ -148,6 +148,7 @@ impl ReportPanel {
             self.request_requery(cx);
         }
     }
+
     /// Close the coin-match popup without changing the typed report filter.
     ///
     /// Unlike chart tabs, dismissing this popup leaves its text intact.

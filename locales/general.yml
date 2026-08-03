@@ -10,6 +10,22 @@ general.language_hint:
   ru: "Применяется после сохранения."
   en: "Applies after saving."
   es: "Se aplica al guardar."
+general.valuation_mode:
+  ru: "Курс пересчёта в USDT"
+  en: "Rate used for USDT conversion"
+  es: "Tasa para la conversión a USDT"
+general.valuation_mode.historical:
+  ru: "На момент сделки"
+  en: "At trade time"
+  es: "Al cerrar la operación"
+general.valuation_mode.current:
+  ru: "Текущий курс"
+  en: "Current rate"
+  es: "Tasa actual"
+general.valuation_mode_hint:
+  ru: "Отчёт и Аналитика пересчитывают в USDT по курсу той минуты, когда сделка закрылась. Меняйте это только осознанно: «Текущий курс» берёт последний известный курс со спота Binance/Bybit, а не с биржи, где шла торговля, обновляет его раз в несколько минут и нигде не сохраняет. Он же меняет подбор порогов в тюнере: пороги подбираются по переоценённой истории. Применяется после сохранения."
+  en: "Report and Analytics convert to USDT at the rate of the minute the trade closed. Change this only deliberately: “Current rate” takes the latest known rate from Binance/Bybit spot rather than the exchange the trade was made on, refreshes it every few minutes, and never stores it. It also changes tuning: thresholds are then fitted against re-valued history. Applies after saving."
+  es: "El Informe y Analítica convierten a USDT con la tasa del minuto en que se cerró la operación. Cámbielo solo deliberadamente: «Tasa actual» toma la última tasa conocida del spot de Binance/Bybit y no del exchange donde se operó, la actualiza cada pocos minutos y nunca la guarda. También cambia el ajuste: los umbrales se calculan sobre un histórico revalorizado. Se aplica al guardar."
 general.charts_split_by_core:
   ru: "Отдельная чарт-вкладка на каждое ядро"
   en: "Separate chart tab per core"

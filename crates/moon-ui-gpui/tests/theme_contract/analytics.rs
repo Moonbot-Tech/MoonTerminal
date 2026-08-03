@@ -1000,6 +1000,203 @@ fn the_report_footer_reads_stall_from_worker_health_not_row_counts() {
     );
 }
 
+/// The valuation mode is edited in exactly one place — Settings — and every reading surface
+/// learns about a change without being the one that made it.
+///
+/// Breakage: putting the selector back on the Analytics toolbar or the Report filters row, where
+/// its label had no room and where an expert setting sits in front of every user who never needs
+/// it; or landing a saved mode without waking the windows that render under it, which leaves the
+/// previous conversion's numbers on screen under the new label.
+#[test]
+fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
+    // The reading windows offer no selector of their own, and none of them writes the setting.
+    // Scanned crate-wide rather than over a named list: the point is that NO surface outside
+    // Settings acquires one, including hosts that do not exist yet.
+    let settings_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("settings");
+    let mut sources = Vec::new();
+    rust_sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
+    );
+    for path in sources {
+        if path.starts_with(&settings_dir) {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+            .replace("\r\n", "\n");
+        // Any selector has to label its two options, and the only labels for them are these keys —
+        // UI strings may not be literals (CONTRIBUTING.md), so a re-added control cannot avoid
+        // naming them whatever it calls its own function. That is what makes this ban bite for
+        // hosts that do not exist yet, rather than only for the names deleted in this change.
+        assert!(
+            !text.contains("general.valuation_mode"),
+            "{} must not present the valuation mode: the selector lives in Settings",
+            path.display()
+        );
+        // Reads are fine and expected — `startup.rs` and `backend/mod.rs` both need one. A WRITE
+        // is what would give a surface its own copy of an application-wide setting, so each
+        // occurrence must be followed by something that cannot begin an assignment: `==` counts as
+        // a read, a lone `=` or a struct-literal `:` does not.
+        for (at, _) in text.match_indices("report_valuation_mode") {
+            let tail = text[at + "report_valuation_mode".len()..].trim_start();
+            let writes =
+                (tail.starts_with('=') && !tail.starts_with("==")) || tail.starts_with(':');
+            assert!(
+                !writes,
+                "{} must not write the valuation mode: only Settings edits it",
+                path.display()
+            );
+        }
+    }
+
+    // Settings offers both modes from one table, historical first because it is the default.
+    let settings = read_src("settings/mod.rs");
+    let labels = chain_between(
+        &settings,
+        "const VALUATION_LABELS:",
+        "];",
+        "the valuation-mode label table",
+    );
+    assert!(
+        labels
+            .find("ValuationMode::Historical")
+            .unwrap_or(usize::MAX)
+            < labels.find("ValuationMode::Current").unwrap_or(0),
+        "the default conversion must be offered first"
+    );
+
+    // MoonUI-first: the row is a MoonSelect over that table, not a hand-built trigger, and it
+    // carries the hint. Both caveats of the expert setting — rates come from Binance/Bybit spot,
+    // and the tuner is re-valued too — live in `general.valuation_mode_hint`.
+    let general = read_src("settings/general.rs");
+    let tab = braced_body(&general, "pub(super) fn general_tab(");
+    for needle in [
+        "\"general.valuation_mode\"",
+        "&self.valuation",
+        "hint(&t!(\"general.valuation_mode_hint\"))",
+    ] {
+        assert!(
+            tab.contains(needle),
+            "the General tab must present the conversion setting: missing {needle}"
+        );
+    }
+    // The row it is built from is MoonUI's select, not a hand-rolled trigger.
+    assert!(
+        braced_body(&general, "fn labeled_select<").contains("MoonSelect::new(state)"),
+        "the General tab's enum rows must be MoonUI selects"
+    );
+
+    // A mode switch changes no rows, so neither generation moves and no open window would learn
+    // about it on its own. Applying the saved mode must both aim the worker and publish the
+    // revision every surface observes.
+    let backend = read_src("backend/mod.rs");
+    let apply = braced_body(&backend, "pub(crate) fn apply_valuation_mode(");
+    for needle in [
+        "set_current_wanted(",
+        "self.report_revision.update(cx, |_, cx| cx.notify())",
+    ] {
+        assert!(
+            apply.contains(needle),
+            "applying the mode must reach every consumer: missing {needle}"
+        );
+    }
+    // ...and the save path must actually call it, from INSIDE the changed-mode guard. Scoped to
+    // that branch rather than asserted file-wide: an unconditional call plus the comparison
+    // surviving somewhere else in the file would otherwise read as correct.
+    let save = read_src("settings/apply.rs");
+    let guarded = chain_between(
+        &save,
+        "before.report_valuation_mode != after.report_valuation_mode",
+        "\n        }",
+        "the Settings save's valuation-mode branch",
+    );
+    assert!(
+        guarded.contains("apply_valuation_mode(bcx)"),
+        "a Settings save must activate the mode from inside its own changed-mode guard"
+    );
+
+    // The hint must state both caveats in every language. Asserted on the TEXT, because a key that
+    // resolves to one bland word would satisfy the reference check above and tell the user nothing.
+    let locales =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/general.yml"))
+            .expect("failed to read locales/general.yml")
+            .replace("\r\n", "\n");
+    let hint = chain_between(
+        &locales,
+        "general.valuation_mode_hint:",
+        "\ngeneral.",
+        "the valuation-mode hint",
+    );
+    assert_eq!(
+        hint.matches("Binance/Bybit").count(),
+        3,
+        "every language must name where the current rate comes from"
+    );
+    for tuner_word in ["тюнер", "tuning", "ajuste"] {
+        assert!(
+            hint.contains(tuner_word),
+            "every language must state that the tuner is re-valued too: missing {tuner_word}"
+        );
+    }
+
+    // The two reading windows must REQUERY on that wake, not merely repaint: the numbers change
+    // even though no row did, and neither window is the writer.
+    let state = read_src("panels/report/state.rs");
+    // Bounded by the branch's own closing brace rather than by the comment that follows it: a
+    // reworded neighbouring comment must not be able to redden this.
+    let observe = chain_between(
+        &state,
+        "let mode = this.backend.read(cx).valuation_mode();",
+        "\n            }",
+        "the Report panel's valuation-mode comparison",
+    );
+    assert!(
+        observe.contains("this.last_valuation_mode = mode") && observe.contains("request_requery("),
+        "the Report panel must requery when another window changes the mode"
+    );
+    // And the footer must label the numbers it is SHOWING. A requery leaves the previous result on
+    // screen while it runs, so a live read here would put the new mode's words under the old
+    // mode's figures for as long as the query takes.
+    let report_render = read_src("panels/report/render.rs");
+    let footer = chain_between(
+        &report_render,
+        "totals::footer_facts(",
+        ");",
+        "the Report footer's fact assembly",
+    );
+    assert!(
+        !footer.contains("valuation_mode()"),
+        "the totals row must take its conversion from the snapshot, not from the live setting"
+    );
+
+    let analytics = read_src("analytics/mod.rs");
+    let adopt = braced_body(&analytics, "fn observe_valuation_mode(");
+    assert!(
+        adopt.contains("self.reload(cx)"),
+        "Analytics must reload when the mode changes"
+    );
+    // Adopting it schedules a reload, so it belongs to the poll, never to the render root — which
+    // takes BOTH halves: the poll must carry it, and render must not.
+    assert!(
+        braced_body(&analytics, "fn observe_report_generation(")
+            .contains("observe_valuation_mode("),
+        "the mode must be adopted from the periodic poll"
+    );
+    let render = braced_body(
+        &analytics,
+        "fn render(&mut self, window: &mut Window, cx: &mut Context<Self>)",
+    );
+    for banned in ["observe_report_generation(", "observe_valuation_mode("] {
+        assert!(
+            !render.contains(banned),
+            "the Analytics render root must not adopt the mode: found {banned}"
+        );
+    }
+}
+
 // Quote-scope independence is exercised by
 // `panels::report::totals::tests::worker_health_is_stated_outside_every_quote_scope_branch`, which
 // builds a single-currency snapshot with a stalled worker and requires the marker to lead the tail.

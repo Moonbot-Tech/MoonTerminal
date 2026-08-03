@@ -5,6 +5,7 @@ use rusqlite::Connection;
 
 use super::read_fail::read_fail;
 use super::rep;
+use super::valuation::ValuationMode;
 use super::{read_sources_res, table_columns_res, QuoteBreakdown, ReadResult, ReadSource};
 
 /// Columns and ordering displayed in the Reports window; the window owns titles and widths.
@@ -193,6 +194,12 @@ pub struct ReportFilter {
     /// The core is part of every key because strategy ids repeat across cores. An explicit empty
     /// collection intentionally matches no rows so a lost/stale selection cannot broaden a query.
     pub strategies: Option<Vec<ReportStrategyKey>>,
+    /// Which conversion the three USDT columns and the totals row apply.
+    ///
+    /// Carried on the filter rather than passed as a parameter because rows, totals and export all
+    /// already receive this one value: a mode that reached the rows but not the totals would print
+    /// a footer that does not sum the column above it.
+    pub valuation: ValuationMode,
 }
 
 /// Exact report strategy identity across all connected cores.
@@ -593,13 +600,29 @@ fn with_valuation_fallback<T>(
     }
 }
 
+/// Classify one discovered report source into its valuation partition.
+///
+/// Args:
+///     src: Physical report source.
+///
+/// Returns:
+///     The partition the valuation cache keys its rows by.
+pub(in crate::db) fn source_partition(src: &ReadSource) -> super::valuation::TradeSource {
+    if src.legacy {
+        super::valuation::TradeSource::Legacy
+    } else {
+        super::valuation::TradeSource::Typed
+    }
+}
+
 /// Execute one complete Report totals pass with fresh accumulators.
 ///
 /// Args:
 ///     conn: Open report reader or snapshot.
 ///     f: Complete Report filter.
 ///     sources: Physical report sources discovered from `main`.
-///     include_valuation: Whether to join the attached derived valuation cache.
+///     include_valuation: Whether the historical mode may join the attached derived cache; the
+///         current-rate mode does not depend on it.
 ///
 /// Returns:
 ///     Exact quote totals, optionally carrying complete USDT coverage.
@@ -619,6 +642,9 @@ fn query_totals_attempt(
         .as_ref()
         .is_some_and(|strategies| !strategies.is_empty())
         && super::analytics::strategies_attached(conn);
+    // Loop-invariant: `projection` yields a builder for the current-rate mode whatever the cache is
+    // doing, and for the historical one exactly when the cache may be joined.
+    let valuation_present = f.valuation == ValuationMode::Current || include_valuation;
     for src in sources {
         let (where_sql, params) = build_where(f, &src.cols, has_strategy_names);
         let profit = if src.cols.contains("profitbtc") {
@@ -628,14 +654,13 @@ fn query_totals_attempt(
         };
         let (quote, group_by) =
             super::quote::trusted_quote_group("r.basecurrency", src.cols.contains("basecurrency"));
-        let valuation = include_valuation.then(|| {
-            let source = if src.legacy {
-                super::valuation::TradeSource::Legacy
-            } else {
-                super::valuation::TradeSource::Typed
-            };
-            super::valuation::coverage_sql("r", &src.cols, source)
-        });
+        let valuation = super::valuation::projection(
+            f.valuation,
+            include_valuation,
+            "r",
+            &src.cols,
+            source_partition(src),
+        );
         let joins = valuation
             .as_ref()
             .map(|parts| parts.joins.as_str())
@@ -664,7 +689,9 @@ fn query_totals_attempt(
         }
     }
     let totals = QuoteBreakdown::from_groups(groups);
-    Ok(if include_valuation {
+    // Publish coverage whenever the selected mode can build a projection: always for current rates,
+    // and only with an attached cache for historical rates.
+    Ok(if valuation_present {
         totals.with_valuation(coverage.finish())
     } else {
         totals
@@ -700,7 +727,8 @@ struct ReportPass<'a> {
 /// Args:
 ///     conn: Open report reader or snapshot.
 ///     pass: The request, identical across both attempts.
-///     include_valuation: Whether to join the attached derived valuation cache.
+///     include_valuation: Whether the historical mode may join the attached derived cache; the
+///         current-rate mode does not depend on it.
 ///
 /// Returns:
 ///     Globally sorted rows, truncated to the requested limit.
@@ -718,14 +746,13 @@ fn query_reports_attempt(
     let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
     for src in pass.sources {
         let (where_sql, mut params) = build_where(pass.filter, &src.cols, pass.has_strategy_names);
-        let valuation = include_valuation.then(|| {
-            let source = if src.legacy {
-                super::valuation::TradeSource::Legacy
-            } else {
-                super::valuation::TradeSource::Typed
-            };
-            super::valuation::coverage_sql("r", &src.cols, source)
-        });
+        let valuation = super::valuation::projection(
+            pass.filter.valuation,
+            include_valuation,
+            "r",
+            &src.cols,
+            source_partition(src),
+        );
         let joins = valuation
             .as_ref()
             .map(|parts| parts.per_row.joins.as_str())

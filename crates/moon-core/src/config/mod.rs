@@ -70,6 +70,7 @@ use uid_counter::UidCounter;
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
 
 /// Atomically writes a user config/layout file through a temporary sibling plus rename.
@@ -170,6 +171,9 @@ pub struct AppConfig {
     pub chart_memory_percent: u16,
     /// Order of every core list in the application (`settings.toml`). Defaults to `Name`.
     pub core_sort: CoreSortMode,
+    /// Which conversion every quote-money surface applies (`settings.toml`). Defaults to
+    /// `Historical`, the at-trade-time rate; the current-rate mode is deliberately opt-in.
+    pub report_valuation_mode: ValuationMode,
     /// Next uid candidate after config entries and the supplied durable-store floor are reconciled.
     ///
     /// Private to `config`: a `pub` field could be overwritten with a stale counter from
@@ -227,6 +231,7 @@ impl AppConfig {
             ui_scale: Default::default(),
             chart_memory_percent: Default::default(),
             core_sort: Default::default(),
+            report_valuation_mode: Default::default(),
             hotkeys: Default::default(),
             theme: Default::default(),
             orders: Default::default(),
@@ -319,6 +324,7 @@ impl AppConfig {
                 ui_scale: merged.ui_scale,
                 chart_memory_percent: merged.chart_memory_percent,
                 core_sort: merged.core_sort,
+                report_valuation_mode: merged.report_valuation_mode,
                 next_uid: merged.next_uid,
                 hotkeys,
                 theme,
@@ -538,6 +544,7 @@ impl AppConfig {
             ui_scale: schema::default_ui_scale(),
             chart_memory_percent: schema::default_chart_memory_percent(),
             core_sort: CoreSortMode::default(),
+            report_valuation_mode: ValuationMode::default(),
             // The plaintext config issues uid 1 above, so the counter starts at 2 before applying
             // the optional store floor. This mode can share `data/` with encrypted-config runs.
             next_uid: UidCounter::new(2, uid_floor),
@@ -609,6 +616,7 @@ impl AppConfig {
             self.ui_scale,
             self.chart_memory_percent,
             self.core_sort,
+            self.report_valuation_mode,
             self.next_uid.get(),
         );
         // Snapshot AFTER validation and immediately before the first write. Taking it earlier
@@ -706,6 +714,9 @@ impl AppConfig {
             // it builds `SessionManager::config_order`, which determines a reactivated session's
             // position and therefore affects the session layer.
             CoreSortMode::default(),
+            // The conversion applied to quote money is a read-side presentation choice: it changes
+            // no session, window, or connection.
+            ValuationMode::default(),
             // The uid counter advances on save and does not describe structure by itself.
             0,
         );

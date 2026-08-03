@@ -3,7 +3,9 @@
 //! Explicit imports throughout: the parent re-exports `gpui::*`, whose own `test` shadows the
 //! built-in attribute and makes `#[test]` expand recursively.
 
-use moon_core::db::valuation::{FailureKind, ValuationFault, ValuationStage, ValuationStatus};
+use moon_core::db::valuation::{
+    FailureKind, ValuationFault, ValuationMode, ValuationStage, ValuationStatus,
+};
 use moon_core::db::{QuoteBreakdown, ValuationCoverage};
 
 use super::{FactTone, FooterFacts, footer_facts, footer_tooltip};
@@ -23,6 +25,7 @@ fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
         core_uids: Vec::new(),
         row_keys: Vec::new(),
         totals: QuoteBreakdown::from_groups(groups),
+        valuation: ValuationMode::Historical,
     }
 }
 
@@ -43,6 +46,19 @@ fn stalled() -> ValuationStatus {
     status
 }
 
+/// Assemble the footer over a snapshot built by [`data`], which is historical by default.
+///
+/// Every priority-order case is independent of the conversion, so none of them says which one it
+/// is using.
+fn historical_facts(
+    data: Option<&ReportData>,
+    failed: bool,
+    status: &ValuationStatus,
+    now_ms: i64,
+) -> FooterFacts {
+    footer_facts(data, failed, status, now_ms)
+}
+
 /// Collect the tones of a fact list, which is what the priority order is asserted against.
 fn tones(facts: &[super::FooterFact]) -> Vec<FactTone> {
     facts.iter().map(|fact| fact.tone).collect()
@@ -56,7 +72,7 @@ fn tones(facts: &[super::FooterFact]) -> Vec<FactTone> {
 /// the counts qualifying it stay on screen.
 #[test]
 fn the_head_is_the_caption_and_one_money_figure() {
-    let facts = footer_facts(
+    let facts = historical_facts(
         Some(&data(vec![(Some(0), 12.5, 3)], 5)),
         false,
         &ValuationStatus::default(),
@@ -84,7 +100,7 @@ fn the_head_is_the_caption_and_one_money_figure() {
 #[test]
 fn a_clipped_facts_diagnostic_survives_in_the_row_tooltip() {
     let snapshot = data(vec![(Some(0), 12.5, 3)], 5);
-    let facts = footer_facts(Some(&snapshot), false, &stalled(), T0 + 200_000);
+    let facts = historical_facts(Some(&snapshot), false, &stalled(), T0 + 200_000);
 
     let tip = footer_tooltip(&facts);
     assert!(
@@ -108,7 +124,7 @@ fn a_stall_leads_the_tail_and_the_counts_close_it() {
         vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2), (None, 0.0, 4)],
         5,
     );
-    let facts = footer_facts(Some(&snapshot), false, &stalled(), T0 + 200_000);
+    let facts = historical_facts(Some(&snapshot), false, &stalled(), T0 + 200_000);
 
     assert_eq!(
         tones(&facts.tail),
@@ -139,13 +155,13 @@ fn a_stall_leads_the_tail_and_the_counts_close_it() {
 fn worker_health_is_stated_outside_every_quote_scope_branch() {
     let single = data(vec![(Some(1), 5.0, 2)], 2);
 
-    let healthy = footer_facts(Some(&single), false, &ValuationStatus::default(), T0);
+    let healthy = historical_facts(Some(&single), false, &ValuationStatus::default(), T0);
     assert!(
         !tones(&healthy.tail).contains(&FactTone::Alarm),
         "a healthy worker adds nothing"
     );
 
-    let stuck = footer_facts(Some(&single), false, &stalled(), T0 + 200_000);
+    let stuck = historical_facts(Some(&single), false, &stalled(), T0 + 200_000);
     assert_eq!(
         tones(&stuck.tail).first(),
         Some(&FactTone::Alarm),
@@ -160,15 +176,54 @@ fn worker_health_is_stated_outside_every_quote_scope_branch() {
 /// period.
 #[test]
 fn an_absent_snapshot_states_the_read_rather_than_a_zero() {
-    let failed: FooterFacts = footer_facts(None, true, &ValuationStatus::default(), T0);
+    let failed: FooterFacts = historical_facts(None, true, &ValuationStatus::default(), T0);
     assert_eq!(
         tones(&failed.essential),
         vec![FactTone::Soft, FactTone::Warn]
     );
     assert!(failed.tail.is_empty(), "there is nothing to qualify");
 
-    let pending = footer_facts(None, false, &ValuationStatus::default(), T0);
+    let pending = historical_facts(None, false, &ValuationStatus::default(), T0);
     assert_eq!(pending.essential[1].text, "—");
+}
+
+/// A current-rate figure must never wear the sentence that claims historical profit.
+///
+/// Breakage: `totals.rs::footer_facts` ignoring `data.valuation` and always reaching for
+/// `report.valuation_total`. Both conversions would then render the identical caption, and a
+/// number that says what the position would be worth today would read as what it actually made.
+///
+/// The conversion is read off the SNAPSHOT, never off the live setting, so that a mode change
+/// whose requery is still running cannot put the new mode's words under the old mode's numbers.
+#[test]
+fn a_current_rate_total_is_labelled_apart_from_historical_profit() {
+    let head_under = |mode| {
+        let mut snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
+        snapshot.totals = snapshot.totals.with_valuation(ValuationCoverage {
+            eligible_orders: 5,
+            valued_orders: 5,
+            unavailable_orders: 0,
+            usdt: Some(moon_core::db::UsdtTotal {
+                profit: 99.0,
+                spent: None,
+            }),
+        });
+        snapshot.valuation = mode;
+        footer_facts(Some(&snapshot), false, &ValuationStatus::default(), T0).essential[1]
+            .text
+            .clone()
+    };
+
+    let historical = head_under(ValuationMode::Historical);
+    let current = head_under(ValuationMode::Current);
+    assert!(
+        historical.contains("99") && current.contains("99"),
+        "both state the same amount, got {historical:?} and {current:?}"
+    );
+    assert_ne!(
+        historical, current,
+        "the two conversions must not share one sentence"
+    );
 }
 
 /// A complete unified USDT total takes the head, and every exact currency total moves to the tail.
@@ -190,7 +245,7 @@ fn a_unified_usdt_total_outranks_the_currency_it_was_built_from() {
         }),
     });
 
-    let facts = footer_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
     let head = &facts.essential[1].text;
 
     assert_eq!(facts.essential.len(), 2);
@@ -229,14 +284,15 @@ fn a_unified_usdt_total_outranks_the_currency_it_was_built_from() {
 fn a_partial_headline_figure_is_stated_in_the_untrusted_tone() {
     let mixed = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
     assert_eq!(
-        tones(&footer_facts(Some(&mixed), false, &ValuationStatus::default(), T0).essential)[1],
+        tones(&historical_facts(Some(&mixed), false, &ValuationStatus::default(), T0).essential)[1],
         FactTone::Untrusted,
         "two currencies and no unified total: the leading bucket is not the answer"
     );
 
     let unknown = data(vec![(Some(0), 12.5, 3), (None, 0.0, 2)], 5);
     assert_eq!(
-        tones(&footer_facts(Some(&unknown), false, &ValuationStatus::default(), T0).essential)[1],
+        tones(&historical_facts(Some(&unknown), false, &ValuationStatus::default(), T0).essential)
+            [1],
         FactTone::Untrusted,
         "rows of unidentified currency make the known total partial too"
     );
@@ -249,7 +305,7 @@ fn a_partial_headline_figure_is_stated_in_the_untrusted_tone() {
 /// answer indistinguishable from a pending one.
 #[test]
 fn a_loaded_empty_result_promotes_no_figure() {
-    let facts = footer_facts(
+    let facts = historical_facts(
         Some(&data(Vec::new(), 0)),
         false,
         &ValuationStatus::default(),
