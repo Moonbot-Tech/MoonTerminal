@@ -7,9 +7,13 @@
 //! `(core_uid, newrecid)`. The legacy `closed_sell_reports` table uses a different
 //! `db_id`, is read-only, and is purged per core after the first complete typed sync.
 //!
-//! Under the protocol-v4 replication contract, a core resumes at the local
-//! `max(newRecID) + 1`; zero requests a fresh sync. Open rows below that cursor
-//! are reconciled separately through `check_open_rows`.
+//! A core resumes from a durable checkpoint — `{epoch, next_from_rec_id}` — held in `app_meta`
+//! under `rep_epoch_{core_uid}` / `rep_next_{core_uid}`. The checkpoint is written ONLY by the
+//! transaction that applies an alive map, never by `SyncComplete`: catch-up advances by
+//! `newRecID` and therefore cannot observe a soft-delete, restore, or retention removal of an
+//! older row that happened while the terminal was offline. The alive map is what repairs that,
+//! so a checkpoint stored before it would record the repair as done. Open rows below the
+//! checkpoint are reconciled separately through `check_open_rows`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,13 +21,49 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 use moonproto::{
-    MoonReports, ReportRow as RepRow, ReportRowsDeleted, ReportSchema, ReportSyncComplete,
-    ReportSyncPage, ReportValue,
+    MoonReports, ReportAliveMapComplete, ReportRow as RepRow, ReportRowsDeleted, ReportSchema,
+    ReportSyncCheckpoint, ReportSyncComplete, ReportSyncPage, ReportValue,
 };
 use rusqlite::types::Value;
 use rusqlite::Connection;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) const TABLE: &str = "orders_rep";
+
+/// The ONE ranged visibility update. Both visibility paths use this exact text so they share one
+/// `prepare_cached` entry on the writer connection.
+fn set_deleted_range_sql() -> String {
+    format!("UPDATE {TABLE} SET deleted=?1 WHERE core_uid=?2 AND newrecid BETWEEN ?3 AND ?4")
+}
+
+/// Report field whose non-zero value hides a row from the default Report and Analytics filters.
+const DELETED_COL: &str = "deleted";
+
+/// Where an upserted row came from, which decides how an ABSENT `deleted` field is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RowSource {
+    /// A live `RowUpsert`: partial by nature, and a missing `deleted` means the row is alive.
+    Live,
+    /// A catch-up page row: carries the core's whole column set.
+    CatchUpPage,
+}
+
+/// Where a core's report replication starts when a feed connects.
+///
+/// The states stay separate because a replica with rows but no checkpoint must resume without a
+/// full-history download, while `sync_from` requires an epoch-bearing checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReportStart {
+    /// No local rows: request the core's full retained history.
+    Fresh,
+    /// Local rows but no stored epoch: resume at the next local id until an alive map commits the
+    /// first epoch-bearing checkpoint.
+    Resume(i64),
+    /// A checkpoint committed together with an applied alive map.
+    Checkpoint(ReportSyncCheckpoint),
+}
 
 /// Message for the SQLite writer, the sole owner of the write connection.
 pub enum DbMsg {
@@ -63,11 +103,35 @@ pub enum DbMsg {
         page: Arc<ReportSyncPage>,
         ack: MoonReports,
     },
-    /// Complete catch-up after the final-page acknowledgement, commit the cursor,
-    /// and purge legacy rows.
+    /// Complete catch-up after the final-page acknowledgement and purge legacy rows.
+    ///
+    /// This does NOT advance the replication start state: the alive map that follows does,
+    /// together with the visibility it repairs.
     SyncComplete {
         core_uid: u64,
         done: ReportSyncComplete,
+    },
+    /// Authoritative row visibility for `newrecid = 1..=covered_up_to`, committed in the same
+    /// transaction as the durable checkpoint of the catch-up it answers.
+    ///
+    /// A clear bit means the row is soft-deleted OR physically absent on the core (retention).
+    /// Both hide the local row rather than dropping it, so a later restore or upsert revives it.
+    /// The library overlays live `RowUpsert`/`RowDelete`/`RowsDeleted` onto the bitmap before
+    /// emitting completion, and anything arriving afterwards sits behind this message in the same
+    /// FIFO — so the sole writer needs no race-recovery layer of its own.
+    AliveMap {
+        core_uid: u64,
+        map: ReportAliveMapComplete,
+        /// Taken from the `ReportSyncComplete` this map answers, never from the map itself.
+        checkpoint: ReportSyncCheckpoint,
+    },
+    /// The core serves another report database: wipe this core's replica and sync it from zero.
+    ///
+    /// Carries the reports handle for the same reason [`DbMsg::Page`] carries `ack`: only the
+    /// writer knows the wipe committed, so it re-issues the fresh sync itself once it has.
+    ReplicaRecreated {
+        core_uid: u64,
+        reports: MoonReports,
     },
     /// Acknowledge valuation outbox rows after their derived values committed.
     ///
@@ -79,10 +143,10 @@ pub enum DbMsg {
     },
 }
 
-/// Value exposed to the feed thread as `ReportTx`: a writer channel and start cursors.
+/// Value exposed to the feed thread as `ReportTx`: a writer channel and per-core start states.
 ///
-/// The writer computes the cursors when opening the database, and each feed takes
-/// its own cursor when starting sync. The channel is BOUNDED by
+/// The writer computes the start states when opening the database, and each feed takes
+/// its own when starting sync. The channel is BOUNDED by
 /// [`super::REPORT_QUEUE_CAP`]: a large-history catch-up emits batches faster than
 /// the writer inserts them, and an unbounded queue once consumed ALL machine memory
 /// (88 GB virtual commit measured before the system froze). When full, `send` blocks
@@ -90,11 +154,11 @@ pub enum DbMsg {
 #[derive(Clone)]
 pub struct ReportSink {
     pub(super) tx: SyncSender<DbMsg>,
-    pub(super) cursors: Arc<Mutex<HashMap<u64, i64>>>,
+    pub(super) starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
     /// Open rows per core at database open: `newrecid`, newest first, at most 100.
     ///
     /// The feed registers them with `check_open_rows` because an open trade may
-    /// have closed or been deleted offline BELOW the cursor. Results arrive as
+    /// have closed or been deleted offline BELOW the checkpoint. Results arrive as
     /// ordinary `RowUpsert` or `RowDelete` messages.
     pub(super) open_rows: Arc<Mutex<HashMap<u64, Vec<i64>>>>,
     /// Coalesces the terminal channel-closed diagnostic if the writer thread panics.
@@ -109,18 +173,16 @@ impl ReportSink {
         }
     }
 
-    /// Cursor for the core's next sync request: zero starts fresh and positive values resume.
+    /// Where this core's replication starts, defaulting to [`ReportStart::Fresh`].
     ///
-    /// Under the report-replication flow-control contract, the cursor is always the local replica's
-    /// `max(newRecID) + 1`. Sequential page acknowledgements prevent a crash from
-    /// skipping successfully applied tail rows. Any row failure aborts and retries its
-    /// whole writer batch before the cursor can advance.
-    pub fn next_cursor(&self, core_uid: u64) -> i64 {
-        self.cursors
+    /// A core absent from the map has no local rows, and a poisoned lock has no trustworthy
+    /// answer; both resolve to a full re-sync rather than to a guessed position.
+    pub(crate) fn next_start(&self, core_uid: u64) -> ReportStart {
+        self.starts
             .lock()
             .ok()
             .and_then(|m| m.get(&core_uid).copied())
-            .unwrap_or(0)
+            .unwrap_or(ReportStart::Fresh)
     }
 
     /// Core's open rows for `check_open_rows`; empty means there is nothing to check.
@@ -140,7 +202,7 @@ pub(super) struct RepState {
     schemas: HashMap<u64, Arc<ReportSchema>>,
     /// Cache of lowercase table-column names to avoid PRAGMA calls for every row.
     cols: HashSet<String>,
-    cursors: Arc<Mutex<HashMap<u64, i64>>>,
+    starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
     /// Whether the read-only legacy table still exists; completed typed syncs
     /// progressively purge it by core.
     pub(super) legacy_exists: bool,
@@ -232,14 +294,14 @@ fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> rusqlite::Result
     Ok(done)
 }
 
-/// Initialize the replica table, per-core cursors, and open-row sets.
+/// Initialize the replica table, per-core start states, and open-row sets.
 ///
 /// Table-creation, required-schema, and core-scan setup errors return `Err`.
 /// In particular, an unreadable column schema makes the caller disable the
 /// writer for this session rather than acknowledge incompletely written pages.
 pub(super) fn init(
     conn: &Connection,
-    cursors: Arc<Mutex<HashMap<u64, i64>>>,
+    starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
     open_rows: Arc<Mutex<HashMap<u64, Vec<i64>>>>,
 ) -> rusqlite::Result<RepState> {
     conn.execute(
@@ -259,14 +321,14 @@ pub(super) fn init(
     // with a readable replica can resync the page instead of losing its fields.
     let cols = table_cols_for_init(conn)?;
     {
-        let mut map = cursors.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = starts.lock().unwrap_or_else(|e| e.into_inner());
         let mut open_map = open_rows.lock().unwrap_or_else(|e| e.into_inner());
         map.clear();
         open_map.clear();
         let mut stmt = conn.prepare(&format!("SELECT DISTINCT core_uid FROM {TABLE}"))?;
         let uids: Vec<i64> = stmt.query_map([], |r| r.get(0))?.flatten().collect();
         for uid in uids {
-            map.insert(uid as u64, startup_cursor(conn, uid));
+            map.insert(uid as u64, startup_start(conn, uid));
             open_map.insert(uid as u64, open_row_ids(conn, &cols, uid));
         }
     }
@@ -287,7 +349,7 @@ pub(super) fn init(
     let mut st = RepState {
         schemas: HashMap::new(),
         cols,
-        cursors,
+        starts,
         legacy_exists,
         synced,
         vacuum_pending: false,
@@ -383,12 +445,20 @@ pub(super) fn apply_schema(
 ///
 /// Write only fields present in the row because live updates may be partial;
 /// preserve all other values.
+///
+/// [`RowSource::Live`] additionally treats an ABSENT `deleted` field as "alive": that is how
+/// moonproto itself reads a live row when it overlays one onto an in-flight alive map
+/// (`state/report.rs`, `unwrap_or(0) == 0`). Preserving the stored flag instead would leave a row
+/// the alive map hid hidden forever, since the core has no reason to resend a field that did not
+/// change — and the map's own contract is that a hidden row can be revived. Page rows carry the
+/// whole column set, so [`RowSource::CatchUpPage`] keeps the plain preserve-what-is-absent rule.
 pub(super) fn apply_upsert(
     conn: &Connection,
     st: &RepState,
     core_uid: u64,
     core_name: &str,
     row: &RepRow,
+    source: RowSource,
 ) -> rusqlite::Result<()> {
     let Some(schema) = st.schemas.get(&core_uid) else {
         log::warn!(
@@ -399,6 +469,7 @@ pub(super) fn apply_upsert(
     };
     let mut names: Vec<String> = Vec::with_capacity(row.fields.len());
     let mut vals: Vec<Value> = Vec::with_capacity(row.fields.len());
+    let mut carries_deleted = false;
     for fv in &row.fields {
         let Some(f) = schema.field(fv.field_index) else {
             continue;
@@ -412,7 +483,12 @@ pub(super) fn apply_upsert(
             ReportValue::Float(x) => Value::Real(*x),
             ReportValue::Text(s) => Value::Text(s.clone()),
         });
+        carries_deleted |= name == DELETED_COL;
         names.push(name);
+    }
+    if source == RowSource::Live && !carries_deleted && st.cols.contains(DELETED_COL) {
+        vals.push(Value::Integer(0));
+        names.push(DELETED_COL.to_owned());
     }
     let mut cols_sql = String::from("core_uid, core_name, newrecid");
     let mut ph = String::from("?, ?, ?");
@@ -435,7 +511,7 @@ pub(super) fn apply_upsert(
         params.push(v);
     }
     // Catch-up batches have a stable field set, so `prepare_cached` can reuse the
-    // same SQL. Compiling every row used to bottleneck the writer and grow the queue to OOM.
+    // same SQL. Compiling it per row would bottleneck the writer and let the queue grow to OOM.
     let mut stmt = conn.prepare_cached(&sql)?;
     stmt.execute(params.as_slice())?;
     Ok(())
@@ -467,16 +543,14 @@ pub(super) fn apply_set_deleted(
     core_uid: u64,
     change: &ReportRowsDeleted,
 ) -> rusqlite::Result<()> {
-    if change.is_empty() || !st.cols.contains("deleted") {
+    if change.is_empty() || !st.cols.contains(DELETED_COL) {
         return Ok(());
     }
     // `deleted` is stored as 0/1, matching the `COALESCE(deleted, 0)` the read filters use.
     let flag = i64::from(change.deleted);
     let uid = core_uid as i64;
     {
-        let mut stmt = conn.prepare_cached(&format!(
-            "UPDATE {TABLE} SET deleted=?1 WHERE core_uid=?2 AND newrecid BETWEEN ?3 AND ?4"
-        ))?;
+        let mut stmt = conn.prepare_cached(&set_deleted_range_sql())?;
         for range in change.ranges.iter() {
             stmt.execute(rusqlite::params![
                 flag,
@@ -497,6 +571,40 @@ pub(super) fn apply_set_deleted(
     Ok(())
 }
 
+/// Drop one core's replica rows and its durable checkpoint.
+///
+/// The ONE reset used by both recreation signals — the `database_recreated` page and the alive
+/// map's [`moonproto::ReportAliveMapOutcome::DatabaseRecreated`]. Splitting them would leave the
+/// page path clearing rows while the checkpoint survived, and the next start would then resume
+/// with a stale epoch, wipe the partly rebuilt replica again, and re-download everything on a
+/// loop. `rep_synced_{uid}` is deliberately kept: it only gates the legacy purge, which is a
+/// property of this terminal's migration, not of the core's database identity.
+fn reset_replica(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
+    conn.execute(
+        &format!("DELETE FROM {TABLE} WHERE core_uid=?1"),
+        [core_uid as i64],
+    )?;
+    clear_checkpoint(conn, core_uid)
+}
+
+/// Publish the in-memory half of a committed [`reset_replica`].
+///
+/// The open-row set goes with the rows: checking `newrecid`s from the superseded database
+/// reconciles nothing. Both recreation signals — the page and the alive map — publish
+/// through here, so neither can leave the other's in-memory state behind.
+pub(super) fn commit_replica_reset(
+    st: &RepState,
+    core_uid: u64,
+    open_rows: &Mutex<HashMap<u64, Vec<i64>>>,
+) {
+    if let Ok(mut m) = st.starts.lock() {
+        m.insert(core_uid, ReportStart::Fresh);
+    }
+    if let Ok(mut m) = open_rows.lock() {
+        m.remove(&core_uid);
+    }
+}
+
 /// Apply a catch-up page, resetting the core replica when `database_recreated` is set.
 ///
 /// When reset, the library restarts from zero after the acknowledgement; this page's
@@ -510,67 +618,295 @@ pub(super) fn apply_page(
     page: &ReportSyncPage,
 ) -> rusqlite::Result<()> {
     if page.database_recreated {
-        conn.execute(
-            &format!("DELETE FROM {TABLE} WHERE core_uid=?1"),
-            [core_uid as i64],
-        )?;
+        reset_replica(conn, core_uid)?;
         log::warn!(
             "отчёты(rep): ядро {core_uid} пересоздало БД — реплика сброшена, lib рестартует sync"
         );
     }
     for row in page.rows.iter() {
-        apply_upsert(conn, st, core_uid, core_name, row)?;
+        apply_upsert(conn, st, core_uid, core_name, row, RowSource::CatchUpPage)?;
     }
     Ok(())
 }
 
-/// Stage `SyncComplete` database effects while keeping the in-memory cursor unchanged.
+/// Wipe a core's replica because the core serves another report database.
+pub(super) fn apply_replica_recreated(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
+    reset_replica(conn, core_uid)?;
+    log::warn!(
+        "отчёты(rep): карта живых строк ядра {core_uid} сообщила о другой БД — реплика сброшена"
+    );
+    Ok(())
+}
+
+/// Stage `SyncComplete` database effects.
 ///
-/// The legacy migration completes in the transaction; cursor publication happens only
-/// after the caller commits that transaction successfully.
+/// The legacy migration completes in the transaction. `done` is taken but its checkpoint is
+/// deliberately NOT stored: catch-up advances by `newRecID` and so cannot see an offline
+/// soft-delete, restore or retention removal of an older row. Storing it here would record that
+/// repair as done before the alive map ran it, and no later session would retry — the whole point
+/// of [`apply_alive_map`] owning the write.
 pub(super) fn apply_sync_complete(
     conn: &Connection,
     st: &mut RepState,
     core_uid: u64,
+    done: &ReportSyncComplete,
 ) -> rusqlite::Result<()> {
     meta_set_i64(conn, &format!("rep_synced_{core_uid}"), 1)?;
     st.synced.insert(core_uid);
+    log::debug!(
+        "отчёты(rep): sync ядра {core_uid} закрыт на epoch={} (чекпойнт ждёт карту живых строк)",
+        done.epoch,
+    );
     purge_legacy(conn, st, core_uid)
 }
 
-/// Publish the in-memory cursor side effect of a committed `SyncComplete`.
-///
-/// Keeping this outside [`apply_sync_complete`] prevents a rolled-back batch
-/// from advancing reconnect beyond rows that never reached SQLite.
-pub(super) fn commit_sync_complete(st: &RepState, core_uid: u64, done: &ReportSyncComplete) {
-    if let Ok(mut m) = st.cursors.lock() {
-        m.insert(core_uid, done.next_from_rec_id.max(1));
-    }
+/// Log a committed `SyncComplete`. Visibility and the checkpoint follow with the alive map.
+pub(super) fn commit_sync_complete(core_uid: u64, done: &ReportSyncComplete) {
     log::info!(
-        "отчёты(rep): sync ядра {core_uid} завершён: страниц={} строк={} max_rec_id={} курсор={}",
+        "отчёты(rep): sync ядра {core_uid} завершён: страниц={} строк={} epoch={} max_rec_id={} \
+         курсор={}",
         done.page_count,
         done.total_rows,
+        done.epoch,
         done.max_rec_id,
         done.next_from_rec_id,
     );
 }
 
-/// Derive a core cursor from the local database under the report-replication flow-control contract.
+/// How many rows one alive map inspected and how many changed visibility.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct AliveMapApplied {
+    /// Local rows of this core at or below the map's coverage.
+    pub inspected: i64,
+    /// Rows the map hid.
+    pub hidden: i64,
+    /// Rows the map revealed.
+    pub revealed: i64,
+}
+
+impl AliveMapApplied {
+    /// Whether any row's visibility changed, i.e. whether open surfaces must requery.
+    pub(super) fn changed(self) -> bool {
+        self.hidden > 0 || self.revealed > 0
+    }
+}
+
+/// Accumulates the `newrecid` ranges an alive map must update, fed one scanned row at a time.
 ///
-/// The cursor is ALWAYS `max(newRecID) + 1`. Sequential page acknowledgements prevent
-/// a crash or row failure from skipping tail rows because a failed page is never acknowledged.
-/// Zero means the core replica is empty and requests a fresh sync. `check_open_rows` reconciles
-/// offline changes to open rows below the cursor, so the old minimum-open rule no longer applies.
-fn startup_cursor(conn: &Connection, uid: i64) -> i64 {
-    conn.query_row(
-        &format!("SELECT MAX(newrecid) FROM {TABLE} WHERE core_uid=?1"),
-        [uid],
-        |r| r.get::<_, Option<i64>>(0),
-    )
-    .ok()
-    .flatten()
-    .map(|m| m + 1)
-    .unwrap_or(0)
+/// A range may span physical gaps — those hold no local rows of this core, so widening across
+/// them updates nothing extra — but an AGREEING row must break it, or the update would flip a row
+/// the core did not ask about. Feeding row by row is what keeps the scan streaming: only the
+/// coalesced ranges are retained, never the rows.
+#[derive(Debug, Default)]
+struct DisagreementRanges {
+    hide: Vec<(i64, i64)>,
+    reveal: Vec<(i64, i64)>,
+    /// Which list the immediately preceding row extended, so an agreeing row breaks both.
+    running: Option<bool>,
+}
+
+impl DisagreementRanges {
+    /// Record one scanned row: its id, whether the replica currently hides it, and what the map
+    /// says. `alive == None` covers ids outside the map, which the map says nothing about.
+    fn push(&mut self, rec_id: i64, deleted: bool, alive: Option<bool>) {
+        // A row disagrees exactly when the map's verdict equals its current `deleted` flag:
+        // alive-but-hidden must be revealed, dead-but-visible must be hidden. `None` — an id
+        // outside the map — says nothing, so it breaks any running range.
+        let Some(want_alive) = alive.filter(|&alive| alive == deleted) else {
+            self.running = None;
+            return;
+        };
+        let list = if want_alive {
+            &mut self.reveal
+        } else {
+            &mut self.hide
+        };
+        match list.last_mut() {
+            Some(last) if self.running == Some(want_alive) => last.1 = rec_id,
+            _ => list.push((rec_id, rec_id)),
+        }
+        self.running = Some(want_alive);
+    }
+
+    /// The collected `(hide, reveal)` ranges, inclusive on both ends.
+    fn finish(self) -> (Vec<(i64, i64)>, Vec<(i64, i64)>) {
+        (self.hide, self.reveal)
+    }
+}
+
+/// Apply an alive map's visibility and write its checkpoint alongside the row changes.
+///
+/// The caller's surrounding transaction commits both atomically.
+///
+/// `is_alive` is the map's bit lookup, taken abstractly because `ReportAliveMapComplete` has no
+/// public constructor and could not otherwise be exercised by a test.
+///
+/// The scan is bounded by this core's LOCAL rows, never by `covered_up_to`, which is a core-side
+/// high-water in the millions: the primary key `(core_uid, newrecid)` serves both the filter and
+/// the ordering, so no sort, no temporary b-tree, and no additional index is needed — and
+/// [`REP_INDEXES`] documents why another index is not free. Only disagreements are collected, so
+/// the steady state after the first pass costs one index scan and no writes.
+///
+/// Without the `deleted` column there is nowhere to record visibility, so the checkpoint is NOT
+/// stored: recording an alive map as applied while its clear bits went nowhere would leave rows
+/// the core has dropped visible forever. Such a core stays on its previous start state and
+/// reconciles again next session.
+///
+/// Nothing is staged into the valuation outbox, matching [`apply_set_deleted`] — hiding a row
+/// changes no trade's value, and the valuation worker does not read the flag.
+pub(super) fn apply_alive_map(
+    conn: &Connection,
+    st: &RepState,
+    core_uid: u64,
+    covered_up_to: i64,
+    is_alive: impl Fn(i64) -> Option<bool>,
+    checkpoint: ReportSyncCheckpoint,
+) -> rusqlite::Result<Option<AliveMapApplied>> {
+    if !st.cols.contains(DELETED_COL) {
+        log::warn!(
+            "отчёты(rep): у ядра {core_uid} нет колонки `deleted` — карта живых строк не \
+             применена, чекпойнт не сохранён"
+        );
+        return Ok(None);
+    }
+    let mut applied = AliveMapApplied::default();
+    let uid = core_uid as i64;
+    let (hide, reveal) = {
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT newrecid, COALESCE(deleted,0) FROM {TABLE} \
+             WHERE core_uid=?1 AND newrecid>0 AND newrecid<=?2 ORDER BY newrecid"
+        ))?;
+        let mut rows = stmt.query(rusqlite::params![uid, covered_up_to])?;
+        let mut ranges = DisagreementRanges::default();
+        while let Some(row) = rows.next()? {
+            let rec_id: i64 = row.get(0)?;
+            let deleted: i64 = row.get(1)?;
+            applied.inspected += 1;
+            ranges.push(rec_id, deleted != 0, is_alive(rec_id));
+        }
+        ranges.finish()
+    };
+    // The scan statement is dropped above: an UPDATE must not interleave with an open cursor
+    // over the same table on this connection.
+    let mut stmt = conn.prepare_cached(&set_deleted_range_sql())?;
+    for (flag, ranges, counter) in [
+        (1i64, &hide, &mut applied.hidden),
+        (0i64, &reveal, &mut applied.revealed),
+    ] {
+        for &(from, to) in ranges {
+            *counter += stmt.execute(rusqlite::params![flag, uid, from, to])? as i64;
+        }
+    }
+    store_checkpoint(conn, core_uid, checkpoint)?;
+    Ok(Some(applied))
+}
+
+/// Publish the in-memory half of a committed alive map.
+///
+/// Outside [`apply_alive_map`] for the same reason [`commit_sync_complete`] is outside
+/// [`apply_sync_complete`]: a rolled-back batch must not move the next connection's start state.
+pub(super) fn commit_alive_map(
+    st: &RepState,
+    core_uid: u64,
+    checkpoint: ReportSyncCheckpoint,
+    applied: AliveMapApplied,
+) {
+    if let Ok(mut m) = st.starts.lock() {
+        m.insert(core_uid, ReportStart::Checkpoint(checkpoint));
+    }
+    log::info!(
+        "отчёты(rep): карта живых строк ядра {core_uid} применена: просмотрено={} скрыто={} \
+         возвращено={} чекпойнт={{epoch={}, next={}}}",
+        applied.inspected,
+        applied.hidden,
+        applied.revealed,
+        checkpoint.epoch,
+        checkpoint.next_from_rec_id,
+    );
+}
+
+/// `app_meta` key holding a core's checkpoint epoch.
+fn epoch_key(core_uid: u64) -> String {
+    format!("rep_epoch_{core_uid}")
+}
+
+/// `app_meta` key holding a core's checkpoint cursor.
+fn next_key(core_uid: u64) -> String {
+    format!("rep_next_{core_uid}")
+}
+
+/// Read a core's durable checkpoint, or `None` when it is absent or unusable.
+///
+/// The validity rule mirrors moonproto's `ReportSyncCheckpoint::is_valid`, which is crate-private
+/// there: a zero epoch identifies no database, and a negative cursor addresses no row. Either one
+/// would be rejected by `sync_from`, so an unusable pair is treated as no checkpoint at all.
+fn load_checkpoint(conn: &Connection, core_uid: u64) -> Option<ReportSyncCheckpoint> {
+    let epoch = super::meta_get_i64(conn, &epoch_key(core_uid))?;
+    let next_from_rec_id = super::meta_get_i64(conn, &next_key(core_uid))?;
+    let epoch = i32::try_from(epoch).ok()?;
+    (epoch != 0 && next_from_rec_id >= 0).then_some(ReportSyncCheckpoint {
+        epoch,
+        next_from_rec_id,
+    })
+}
+
+/// Write a core's durable checkpoint. Only [`apply_alive_map`] calls this.
+fn store_checkpoint(
+    conn: &Connection,
+    core_uid: u64,
+    checkpoint: ReportSyncCheckpoint,
+) -> rusqlite::Result<()> {
+    meta_set_i64(conn, &epoch_key(core_uid), i64::from(checkpoint.epoch))?;
+    meta_set_i64(conn, &next_key(core_uid), checkpoint.next_from_rec_id)
+}
+
+/// Drop a core's durable checkpoint, so its next sync starts from zero.
+fn clear_checkpoint(conn: &Connection, core_uid: u64) -> rusqlite::Result<()> {
+    super::meta_delete(conn, &epoch_key(core_uid))?;
+    super::meta_delete(conn, &next_key(core_uid))
+}
+
+/// Decide where a core's replication starts, from the durable checkpoint and the local rows.
+///
+/// Two rules that both look like defects until stated:
+///
+/// - the stored `next_from_rec_id` is NEVER raised to `max(newrecid) + 1`. Live upserts
+///   legitimately land ABOVE the checkpoint between two catch-ups, so `max(newrecid) + 1` is
+///   normally the larger of the two. Resuming at the checkpoint re-fetches those few rows, which
+///   upsert idempotently by `(core_uid, newrecid)`; resuming at the maximum would skip the pages
+///   between them, which is the hole the checkpoint exists to prevent.
+/// - a checkpoint with no local rows is DISCARDED. Otherwise a core whose rows were all removed
+///   would resume at a high cursor and never re-download the history it just lost.
+///
+/// The inverse — rows lost while `app_meta` survives — cannot arise from any path here:
+/// `maint::compact_db` and `backup_db` delete no rows, and `report_recovery` moves whole database
+/// files, so rows and metadata are always recovered as one unit. A future partial-restore path
+/// must clear the checkpoint keys itself.
+///
+/// ACCEPTED RESIDUAL RISK whenever replication starts from [`ReportStart::Resume`]. Without a
+/// stored epoch the library has no identity to compare, so it falls back to its
+/// high-water heuristic; a core that recreated its report database while this terminal was offline
+/// goes undetected once the replacement has already grown past the old maximum `newrecid`. Rows
+/// whose ids exist in BOTH databases then keep the dead database's field values, and the alive map
+/// that follows cannot repair them — it carries visibility, not content. Ids the replacement does
+/// not have are still hidden by that map. Once an alive map commits a checkpoint, later
+/// recreations are detected by epoch. A full-history download avoids the risk at the cost of
+/// downloading the entire retained replica; a user who suspects stale content can clear the
+/// replica to force that sync.
+fn startup_start(conn: &Connection, uid: i64) -> ReportStart {
+    let max_local: Option<i64> = conn
+        .query_row(
+            &format!("SELECT MAX(newrecid) FROM {TABLE} WHERE core_uid=?1"),
+            [uid],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten();
+    match (max_local, load_checkpoint(conn, uid as u64)) {
+        (None, _) => ReportStart::Fresh,
+        (Some(_), Some(checkpoint)) => ReportStart::Checkpoint(checkpoint),
+        (Some(max), None) => ReportStart::Resume(max + 1),
+    }
 }
 
 /// Load at most 100 open core rows, with NULL or non-positive `closedate`, newest first.

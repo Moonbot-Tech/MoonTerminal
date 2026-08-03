@@ -24,7 +24,8 @@ use std::time::{Duration, Instant};
 use moonproto::state::{AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent};
 use moonproto::{
     ClientConfig, ConnectConfig, Event, InitConfig, InitialStrategies, LifecycleEvent, MoonClient,
-    MoonEventSink, ReportEvent, ReportHistoryDepth, ReportSyncRequest, TransportMode,
+    MoonEventSink, ReportAliveMapOutcome, ReportAliveMapTicket, ReportEvent, ReportHistoryDepth,
+    ReportSyncCheckpoint, ReportSyncComplete, ReportSyncRequest, TransportMode,
 };
 
 use super::assets::{build_assets, build_transfer_assets};
@@ -37,7 +38,7 @@ use super::{
     LatestMarketRole, SharedMoonClient, StrategyRow,
 };
 use crate::config::ServerConfig;
-use crate::db::{DbMsg, ReportTx};
+use crate::db::{DbMsg, ReportStart, ReportTx};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
 use account_reconciliation::AccountReconciliation;
@@ -49,6 +50,48 @@ use convert::{
 };
 use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
+
+/// What to do with an arriving report alive map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AliveAction {
+    /// Route the map and checkpoint for atomic application by the writer.
+    Apply(ReportSyncCheckpoint),
+    /// The core serves another report database: wipe the replica and sync from zero.
+    Wipe,
+    /// Drop the map, naming why for the log.
+    Ignore(&'static str),
+}
+
+/// Decide what an arriving alive map may do, given the catch-up this feed asked it to reconcile.
+///
+/// Every rejection here protects the checkpoint. A map is authoritative over
+/// `1..=covered_up_to`, so applying one that does not describe the catch-up whose checkpoint is
+/// about to be stored would hide live rows and then record the damage as reconciled. The ticket
+/// match matters because a second `SyncComplete` replaces the pending pair — and the library
+/// likewise replaces its active request — so a late map from the previous pass must be dropped,
+/// not applied against the newer checkpoint. A matching `DatabaseRecreated` result bypasses the
+/// epoch and coverage comparison because its purpose is to report that those values cannot agree.
+fn alive_map_action(
+    pending: Option<&(ReportAliveMapTicket, ReportSyncComplete)>,
+    ticket: ReportAliveMapTicket,
+    epoch: i32,
+    covered_up_to: i64,
+    outcome: ReportAliveMapOutcome,
+) -> AliveAction {
+    let Some((wanted, done)) = pending else {
+        return AliveAction::Ignore("карта не запрашивалась");
+    };
+    if *wanted != ticket {
+        return AliveAction::Ignore("карта от другого запроса");
+    }
+    if outcome == ReportAliveMapOutcome::DatabaseRecreated {
+        return AliveAction::Wipe;
+    }
+    if epoch != done.epoch || covered_up_to != done.max_rec_id {
+        return AliveAction::Ignore("карта описывает другой catch-up");
+    }
+    AliveAction::Apply(done.checkpoint())
+}
 
 struct ClientSlotGuard {
     slot: SharedMoonClient,
@@ -177,21 +220,35 @@ pub(super) fn run(
     };
 
     // Typed report-database replica: declare catch-up immediately. It remains an intent that the
-    // library sends after connection and repeats on its own after a hard reconnect. The cursor is
-    // max(newRecID)+1 in the local replica; 0 means the replica is empty, so start fresh with ALL
-    // retained core history, replacing the legacy table. Catch-up is PAGED: the next page is not
-    // requested until the writer commits and acknowledges the current one (backpressure by design).
+    // library sends after connection and repeats on its own after a hard reconnect. Where it
+    // starts comes from the writer's durable start state: a checkpoint pairs the numeric cursor
+    // with the core's database epoch, so a replaced core database is detected even when the new
+    // one already grew past the old ids. Catch-up is PAGED: the next page is not requested until
+    // the writer commits and acknowledges the current one (backpressure by design).
     if server.feed.reports {
         if let Some(sink) = reports {
-            let from = sink.next_cursor(server.uid);
-            let req = if from > 0 {
-                ReportSyncRequest::resume(from)
-            } else {
-                ReportSyncRequest::fresh(ReportHistoryDepth::All)
+            let start = sink.next_start(server.uid);
+            let started = match start {
+                ReportStart::Fresh => client
+                    .reports()
+                    .sync(ReportSyncRequest::fresh(ReportHistoryDepth::All))
+                    .map(|_| "fresh(All)".to_string()),
+                ReportStart::Resume(from) => client
+                    .reports()
+                    .sync(ReportSyncRequest::resume(from))
+                    .map(|_| format!("resume(from_rec_id={from}) — миграция без epoch")),
+                ReportStart::Checkpoint(checkpoint) => {
+                    client.reports().sync_from(checkpoint).map(|_| {
+                        format!(
+                            "sync_from(epoch={}, from_rec_id={})",
+                            checkpoint.epoch, checkpoint.next_from_rec_id
+                        )
+                    })
+                }
             };
-            match client.reports().sync(req) {
-                Ok(_) => log::info!(
-                    "отчёты: core={} «{}» sync запрошен (from_rec_id={from})",
+            match started {
+                Ok(how) => log::info!(
+                    "отчёты: core={} «{}» sync запрошен: {how}",
                     server.uid,
                     server.name
                 ),
@@ -201,9 +258,9 @@ pub(super) fn run(
                     server.name
                 ),
             }
-            // Open rows may have closed or been deleted offline BELOW the cursor. Register them
-            // for checking; the library retains the set and repeats it on hard reconnect, and the
-            // results arrive as ordinary RowUpsert/RowDelete events.
+            // Open rows may have closed or been deleted offline BELOW the catch-up start. Register
+            // them for checking; the library retains the set and repeats it on hard reconnect,
+            // and the results arrive as ordinary RowUpsert/RowDelete events.
             let open = sink.open_rows(server.uid);
             if !open.is_empty() {
                 if let Err(e) = client.reports().check_open_rows(&open) {
@@ -246,6 +303,11 @@ pub(super) fn run(
     let mut strat_db_initial = true;
     // Monotonic per-core detect number used as the ingestion cursor for the UI detect feed.
     let mut detect_seq: u64 = 0;
+    // The catch-up whose alive map this feed is waiting for, paired with its request ticket.
+    // A `run()` local on purpose: a hard drop ends this loop and discards it, and the next `run()`
+    // re-syncs from the writer's durable start state and reconciles again. Hoisting it into the
+    // shared sink would let a stale completion outlive the connection that produced it.
+    let mut pending_alive: Option<(ReportAliveMapTicket, ReportSyncComplete)> = None;
     // File writer for this core's server log (logs/<date>_<core>.log), with daily rotation. Write
     // on the FEED THREAD rather than the UI thread because log volume is high and the UI must not
     // wait for disk. Only an in-memory copy reaches the UI for live viewing and search.
@@ -820,8 +882,8 @@ pub(super) fn run(
                             is_short: strat.map(|st| st.is_short()).unwrap_or(false),
                         });
                     }
-                    // Typed report-database replica: send schema/rows/catch-up completion to the
-                    // SQLite writer, the sole owner of the write connection.
+                    // Typed report-database replica: send schema, rows, catch-up state, and
+                    // reconciliation results to the SQLite writer, the sole write-connection owner.
                     Event::Report(rev) if server.feed.reports => {
                         if let Some(sink) = reports {
                             match rev {
@@ -852,19 +914,41 @@ pub(super) fn run(
                                 ),
                                 // Catch-up page: the writer applies it in a transaction and
                                 // acknowledges it with `page_applied` after commit. Until then the
-                                // library does not request another page. The writer also handles
-                                // `database_recreated` by wiping data, and the library restarts itself.
+                                // library requests no next page. A recreation also clears the local
+                                // replica and re-declares the terminal's full-history policy after ACK.
                                 ReportEvent::SyncPage(page) => sink.send(DbMsg::Page {
                                     core_uid: server.uid,
                                     core_name: server.name.clone(),
                                     page: page.clone(),
                                     ack: client.reports(),
                                 }),
+                                // Catch-up advances by newRecID, so it cannot see a soft-delete,
+                                // restore or retention removal of an OLDER row that happened while
+                                // this terminal was offline. Ask for the core's compact alive map
+                                // and hold the completion: its checkpoint is committed by the
+                                // transaction that applies that map, never here.
                                 ReportEvent::SyncComplete(done) => {
                                     sink.send(DbMsg::SyncComplete {
                                         core_uid: server.uid,
                                         done: done.clone(),
                                     });
+                                    match client.reports().reconcile_alive(done) {
+                                        Ok(ticket) => {
+                                            pending_alive = Some((ticket, done.clone()));
+                                        }
+                                        // Fail-closed by construction: with no map the checkpoint
+                                        // does not advance, and the next connection repeats
+                                        // catch-up from the last committed start state.
+                                        Err(e) => {
+                                            pending_alive = None;
+                                            log::warn!(
+                                                "отчёты: core={} «{}» запрос карты живых строк не \
+                                                 ушёл: {e:?}",
+                                                server.uid,
+                                                server.name,
+                                            );
+                                        }
+                                    }
                                 }
                                 ReportEvent::OpenRowsCheckStarted { rec_ids } => log::info!(
                                     "отчёты: core={} «{}» проверка открытых строк начата ({} шт)",
@@ -878,21 +962,44 @@ pub(super) fn run(
                                     server.name,
                                     rec_ids.len(),
                                 ),
-                                // An alive map answers `reconcile_alive`, which this terminal never
-                                // calls: the report replica detects removals through `RowDelete`
-                                // and `RowsDeleted` instead. Arriving here therefore means a core
-                                // answered a request nobody made, so it is logged rather than
-                                // applied — treating an unrequested bitmap as authoritative over
-                                // `covered_up_to` would delete live rows.
-                                ReportEvent::AliveMapComplete(map) => log::warn!(
-                                    "отчёты: core={} «{}» получена незапрошенная карта живых строк \
-                                     (epoch={}, covered_up_to={}, outcome={:?})",
-                                    server.uid,
-                                    server.name,
-                                    map.epoch,
-                                    map.covered_up_to,
-                                    map.outcome,
-                                ),
+                                // Authoritative visibility for 1..=covered_up_to. Only a map that
+                                // describes the catch-up this feed asked about may be applied;
+                                // anything else would hide live rows and then record that as
+                                // reconciled.
+                                ReportEvent::AliveMapComplete(map) => {
+                                    match alive_map_action(
+                                        pending_alive.as_ref(),
+                                        map.ticket,
+                                        map.epoch,
+                                        map.covered_up_to,
+                                        map.outcome,
+                                    ) {
+                                        AliveAction::Apply(checkpoint) => {
+                                            pending_alive = None;
+                                            sink.send(DbMsg::AliveMap {
+                                                core_uid: server.uid,
+                                                map: map.clone(),
+                                                checkpoint,
+                                            });
+                                        }
+                                        AliveAction::Wipe => {
+                                            pending_alive = None;
+                                            sink.send(DbMsg::ReplicaRecreated {
+                                                core_uid: server.uid,
+                                                reports: client.reports(),
+                                            });
+                                        }
+                                        AliveAction::Ignore(why) => log::warn!(
+                                            "отчёты: core={} «{}» карта живых строк отклонена \
+                                             ({why}): epoch={}, covered_up_to={}, outcome={:?}",
+                                            server.uid,
+                                            server.name,
+                                            map.epoch,
+                                            map.covered_up_to,
+                                            map.outcome,
+                                        ),
+                                    }
+                                }
                                 ReportEvent::SchemaRejected { reason } => log::error!(
                                     "отчёты: core={} «{}» схема отвергнута: {reason}",
                                     server.uid,
