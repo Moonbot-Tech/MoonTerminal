@@ -42,13 +42,6 @@ impl ReportPanel {
             .refresh(&self.cols, &data.rows, vis, p, cx);
         let cols = columns::report_columns(&self.cols, vis, &self.natural_widths.widths);
         let selection = self.selection.clone();
-        // With no explicit filter, the coin menu may act on every core currently
-        // known to the report selector.
-        let selected_cores: Rc<Vec<u64>> = Rc::new(if self.sel_cores.is_empty() {
-            self.cores.iter().map(|(u, _)| *u).collect()
-        } else {
-            self.sel_cores.iter().copied().collect()
-        });
         // Clip resized columns at the shared table host; an empty successful
         // result keeps the header and uses the panel overlay.
         crate::panels::common::data_table_host(
@@ -63,7 +56,6 @@ impl ReportPanel {
                     &row_cols,
                     &data,
                     &visible,
-                    &selected_cores,
                     &backend,
                     &view_row,
                     selection.contains(data.row_keys.get(ri).copied().flatten()),

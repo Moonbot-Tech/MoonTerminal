@@ -28,7 +28,6 @@ mod scale;
 mod strips;
 pub(crate) mod toolbar;
 
-pub(crate) use coin_menu::MENU_WIDTH;
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_combo::{
     core_combo, core_menu_sections, core_selection_is_all, normalized_core_filter_ids,

@@ -37,7 +37,6 @@ pub(super) fn report_columns(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Build one report row; missing values render empty while coin and core cells retain actions.
 ///
 /// Args:
@@ -45,7 +44,6 @@ pub(super) fn report_columns(
 ///     cols: Runtime report schema in source order.
 ///     data: Current report result containing the row and core identity.
 ///     vis: Visible source-column indices in render order.
-///     selected_cores: Current core scope for coin actions.
 ///     backend: Shared backend used by interactive cells.
 ///     view: Owning Report panel entity.
 ///     selected: Whether the controlled selection contains this row.
@@ -53,12 +51,12 @@ pub(super) fn report_columns(
 ///
 /// Returns:
 ///     A MoonDataTable row whose highlight mirrors the controlled selection.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn report_data_row(
     ri: usize,
     cols: &[String],
     data: &ReportData,
     vis: &[usize],
-    selected_cores: &Rc<Vec<u64>>,
     backend: &Entity<Backend>,
     view: &Entity<ReportPanel>,
     selected: bool,
@@ -67,30 +65,11 @@ pub(super) fn report_data_row(
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = data.rows.get(ri) {
         let core_uid = data.core_uids.get(ri).copied().unwrap_or(0);
-        // Read strategyid from all columns, even when hidden. Zero or missing means manual/no
-        // strategy and suppresses the strategy section of the context menu.
-        let strat_id = cols
-            .iter()
-            .position(|c| c == "strategyid")
-            .and_then(|idx| r.get(idx))
-            .and_then(|v| match v {
-                Value::Integer(i) => Some(*i as u64),
-                _ => None,
-            })
-            .filter(|id| *id != 0);
         for &i in vis {
             let cname = cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
             if cname == "coin" {
-                cells.push(coin_cell(
-                    ri,
-                    val,
-                    core_uid,
-                    strat_id,
-                    selected_cores.clone(),
-                    backend,
-                    p,
-                ));
+                cells.push(coin_cell(ri, val, core_uid, backend, p));
             } else if cname == "core_name" {
                 cells.push(core_cell(ri, val, core_uid, view, p));
             } else if cname == "deleted" {
@@ -103,23 +82,104 @@ pub(super) fn report_data_row(
     MoonDataRow::new(cells).selected(selected)
 }
 
+/// Build the shared coin-menu context for one report row.
+///
+/// The row, not the coin cell, is what the menu now belongs to: every cell opens the same one, so
+/// the context is resolved once per right-click from the row's values. The token written into the
+/// coin blacklists is read with the CORE's own exchange rules, because the core matches it against
+/// that core's `market_currency`.
+///
+/// Args:
+///     values: The row's cell values, parallel to `cols`.
+///     cols: Runtime report schema in source order.
+///     core_uid: Core that recorded the row.
+///     selected_cores: Cores the panel's filter currently scopes to.
+///     trailing: Entries only the Report can build, appended after the shared ones.
+///     backend: Shared backend read for market, core, and strategy names.
+///     cx: Application context.
+///
+/// Returns:
+///     The context to hand to [`crate::controls::open_coin_menu`].
+pub(super) fn row_coin_menu_ctx(
+    values: &[Value],
+    cols: &[String],
+    core_uid: u64,
+    selected_cores: Vec<u64>,
+    trailing: Vec<MoonMenuItem>,
+    backend: &Entity<Backend>,
+    cx: &App,
+) -> CoinMenuCtx {
+    let column = |name: &str| {
+        cols.iter()
+            .position(|col| col == name)
+            .and_then(|ix| values.get(ix))
+    };
+    let coin = column("coin").map(value_to_string).unwrap_or_default();
+    let strat_id = column("strategyid")
+        .and_then(|value| match value {
+            Value::Integer(id) => Some(*id as u64),
+            _ => None,
+        })
+        .filter(|id| *id != 0);
+    let b = backend.read(cx);
+    // An empty coin still yields a context: the shared menu drops its token actions and the row
+    // keeps whatever the caller appended.
+    let market = if coin.is_empty() {
+        String::new()
+    } else {
+        resolve_market(b, core_uid, &coin)
+    };
+    let coin_base = if market.is_empty() {
+        String::new()
+    } else {
+        b.session
+            .market_source()
+            .market_label(core_uid, &market)
+            .coin
+    };
+    let core_name = b
+        .session
+        .sessions()
+        .iter()
+        .find(|s| s.id == core_uid)
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+    let strat_name = strat_id.and_then(|sid| {
+        b.session
+            .store()
+            .core(core_uid)
+            .and_then(|cd| cd.strategies.iter().find(|s| s.id == sid))
+            .map(|s| s.name.clone())
+    });
+    CoinMenuCtx {
+        core: core_uid,
+        core_name,
+        market,
+        coin: coin_base,
+        selected_cores,
+        strat_id,
+        strat_name,
+        order_uid: None,
+        side: None,
+        short: false,
+        origin: CoinMenuOrigin::OrderTable,
+        trailing,
+    }
+}
+
 /// Build a full-cell clickable coin cell.
 ///
-/// Left-click opens the resolved market on the transaction's core in Main without activating
-/// Main; right-click opens the shared coin context menu.
+/// Left-click opens the resolved market on the transaction's core in Main without activating Main.
+/// The right-click menu is not here: it belongs to the ROW, so that every cell opens the same one.
 fn coin_cell(
     ri: usize,
     val: &Value,
     core_uid: u64,
-    strat_id: Option<u64>,
-    selected_cores: Rc<Vec<u64>>,
     backend: &Entity<Backend>,
     p: MoonPalette,
 ) -> MoonDataCell {
     let coin = value_to_string(val);
     let backend = backend.clone();
-    let backend_menu = backend.clone();
-    let coin_menu = coin.clone();
     let el = div()
         .id(SharedString::from(format!("rep-coin-{ri}")))
         .w_full()
@@ -152,59 +212,7 @@ fn coin_cell(
                 b.open_on_main((core_uid, market.clone()), false);
                 bcx.notify();
             });
-        })
-        // Right-click opens the shared coin menu. A nonzero strategyid enables the strategy
-        // blacklist, while selected_cores reflects the report's core filter.
-        .on_mouse_down(
-            MouseButton::Right,
-            move |e: &MouseDownEvent, window, app| {
-                if coin_menu.is_empty() {
-                    return;
-                }
-                app.stop_propagation();
-                // One borrow for everything this menu needs. The token it writes into the coin
-                // blacklists is read with the core's own exchange rules, because the core matches
-                // it against that core's `market_currency`.
-                let (market, coin_base, core_name, strat_name) = {
-                    let b = backend_menu.read(app);
-                    let market = resolve_market(b, core_uid, &coin_menu);
-                    let coin_base = b
-                        .session
-                        .market_source()
-                        .market_label(core_uid, &market)
-                        .coin;
-                    let core_name = b
-                        .session
-                        .sessions()
-                        .iter()
-                        .find(|s| s.id == core_uid)
-                        .map(|s| s.name.clone())
-                        .unwrap_or_default();
-                    let strat_name = strat_id.and_then(|sid| {
-                        b.session
-                            .store()
-                            .core(core_uid)
-                            .and_then(|cd| cd.strategies.iter().find(|s| s.id == sid))
-                            .map(|s| s.name.clone())
-                    });
-                    (market, coin_base, core_name, strat_name)
-                };
-                let ctx = CoinMenuCtx {
-                    core: core_uid,
-                    core_name,
-                    market,
-                    coin: coin_base,
-                    selected_cores: (*selected_cores).clone(),
-                    strat_id,
-                    strat_name,
-                    order_uid: None,
-                    side: None,
-                    short: false,
-                    origin: CoinMenuOrigin::OrderTable,
-                };
-                crate::controls::open_coin_menu(ctx, backend_menu.clone(), e.position, window, app);
-            },
-        );
+        });
     MoonDataCell::element(el)
 }
 
