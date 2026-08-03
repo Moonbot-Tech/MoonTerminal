@@ -350,6 +350,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
             core_uid: 2,
             strategy_id: -7,
         }]),
+        valuation: Default::default(),
     };
     let keys = distinct_strategies(&conn, &scoped)
         .expect("load scoped strategy choices")
@@ -985,4 +986,54 @@ fn corrupt_derived_cache_blanks_the_usdt_columns_not_the_rows() {
     drop(conn);
     super::super::integrity::reset_test_state();
     std::fs::remove_dir_all(&dir).expect("remove per-row fixture directory");
+}
+
+/// Current-rate coverage must be published even when the historical cache is unavailable.
+///
+/// Breakage: `report_read.rs::query_totals_attempt` gating `with_valuation` on `include_valuation`
+/// — the derived cache's attach state — instead of on the projection actually existing. The
+/// current-rate mode needs no cache, so a detached or recovering `valuation.sqlite` would make the
+/// footer compute a perfectly good USDT total and then throw it away, degrading a convertible
+/// scope to split per-currency totals for a reason that has nothing to do with it.
+#[test]
+fn current_rate_coverage_survives_an_unavailable_historical_cache() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL, closedate INTEGER,
+                                  basecurrency INTEGER, profitbtc REAL, spentbtc REAL,
+                                  newrecid INTEGER, deleted INTEGER);
+         INSERT INTO orders_rep VALUES (1, 1000, 1, 7.5, 10.0, 1, 0)",
+    )
+    .expect("schema");
+    let sources = super::read_sources_res(&conn).expect("sources");
+    let filter = |mode| ReportFilter {
+        valuation: mode,
+        ..Default::default()
+    };
+
+    // `false` is the cache-unavailable case both modes are asked about.
+    let current = super::query_totals_attempt(
+        &conn,
+        &filter(super::ValuationMode::Current),
+        &sources,
+        false,
+    )
+    .expect("current-rate totals");
+    assert!(
+        current.valuation.is_some(),
+        "the in-memory conversion does not depend on the derived cache"
+    );
+    assert_eq!(current.valuation.expect("coverage").valued_orders, 1);
+
+    let historical = super::query_totals_attempt(
+        &conn,
+        &filter(super::ValuationMode::Historical),
+        &sources,
+        false,
+    )
+    .expect("historical totals");
+    assert!(
+        historical.valuation.is_none(),
+        "the historical conversion has nothing to report without its cache"
+    );
 }

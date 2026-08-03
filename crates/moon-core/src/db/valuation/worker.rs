@@ -53,9 +53,10 @@ fn register_worker(worker: std::thread::Thread) {
 
 /// Background valuation publication and wake handle.
 pub struct ValuationHandle {
-    /// Monotonic generation incremented after prepared values or coverage state commit.
+    /// Monotonic generation incremented after prepared values, coverage state, or current rates
+    /// are published.
     pub generation: Arc<AtomicU64>,
-    /// Coalescing UI wake edge set after prepared values or coverage state commit.
+    /// Coalescing UI wake edge set beside every data-generation publication.
     pub commit_dirty: Arc<AtomicBool>,
     /// Monotonic counter bumped only when published worker health changes shape.
     ///
@@ -66,6 +67,12 @@ pub struct ValuationHandle {
     pub status_dirty: Arc<AtomicBool>,
     /// Latest health snapshot published before the corresponding revision bump.
     status: Arc<RwLock<ValuationStatus>>,
+    /// Whether the application-wide current-rate valuation mode is enabled.
+    ///
+    /// While this is false the worker issues ZERO provider requests for it. The mode is one
+    /// application-wide setting, not a per-window one, so a single flag mirrors it exactly and no
+    /// view-lifetime reference count is needed.
+    current_wanted: Arc<AtomicBool>,
     thread: std::thread::Thread,
 }
 
@@ -73,6 +80,23 @@ impl ValuationHandle {
     /// Wake the worker after a committed report outbox change.
     pub fn wake(&self) {
         self.thread.unpark();
+    }
+
+    /// Declare whether the application-wide mode needs current-rate valuation.
+    ///
+    /// Wakes the worker on EITHER edge, because it may be parked until its next scheduled turn —
+    /// or, while it has nothing else to do, until a stall deadline far beyond it. Rising, the first
+    /// snapshot should not wait that long. Falling, the stage may be sitting in a provider backoff
+    /// of up to five minutes, and until it runs again it keeps a failure published for a feature
+    /// the user has just switched off. A restored persisted mode must call this at startup for the
+    /// same reason.
+    ///
+    /// Args:
+    ///     wanted: True while the application-wide mode is current-rate valuation.
+    pub fn set_current_wanted(&self, wanted: bool) {
+        if self.current_wanted.swap(wanted, Ordering::Release) != wanted {
+            self.wake();
+        }
     }
 
     /// Take the first health snapshot together with the revision it belongs to.
@@ -303,11 +327,11 @@ pub fn spawn_worker(report_tx: ReportTx) -> Option<ValuationHandle> {
     spawn_worker_with_source(report_tx, Arc::new(HttpSpotRateSource::new()))
 }
 
-/// Start a valuation worker with a caller-supplied deterministic or production rate source.
+/// Start a valuation worker with a caller-supplied deterministic or production spot-rate source.
 ///
 /// Args:
 ///     report_tx: Sole report-writer sink used for outbox acknowledgements.
-///     source: Historical closed-candle boundary.
+///     source: Closed-candle boundary used by historical and current-rate valuation.
 ///
 /// Returns:
 ///     Worker handle, or `None` only when the background thread cannot be created. Storage
@@ -328,8 +352,10 @@ fn spawn_worker_with_source(
     let status = Arc::new(RwLock::new(ValuationStatus::default()));
     let status_revision = Arc::new(AtomicU64::new(0));
     let status_dirty = Arc::new(AtomicBool::new(false));
+    let current_wanted = Arc::new(AtomicBool::new(false));
     let thread_generation = generation.clone();
     let thread_dirty = commit_dirty.clone();
+    let thread_current_wanted = current_wanted.clone();
     let sink = StatusSink {
         status: status.clone(),
         revision: status_revision.clone(),
@@ -344,6 +370,7 @@ fn spawn_worker_with_source(
                 source,
                 thread_generation,
                 thread_dirty,
+                thread_current_wanted,
                 sink,
                 initial_store,
             );
@@ -364,17 +391,20 @@ fn spawn_worker_with_source(
         status_revision,
         status_dirty,
         status,
+        current_wanted,
         thread,
     })
 }
 
-/// Reconcile historical rows, consume durable changes, and sleep on report/minute boundaries.
+/// Refresh current rates, reconcile historical rows, consume durable changes, and park until the
+/// next due retry, freshness, stall, report, or minute boundary.
 ///
 /// Args:
 ///     report_tx: Sole report-writer sink used for outbox acknowledgements.
-///     source: Historical closed-candle boundary.
+///     source: Closed-candle boundary used by historical and current-rate valuation.
 ///     generation: Monotonic valuation publication counter.
 ///     dirty: Coalescing UI wake edge.
+///     current_wanted: Whether the application-wide current-rate mode is enabled.
 ///     sink: Channel publishing worker health to the UI.
 ///     initial_store: Startup-validated cache, or `None` when background recovery must retry.
 fn run_worker(
@@ -382,6 +412,7 @@ fn run_worker(
     source: Arc<dyn SpotRateSource>,
     generation: Arc<AtomicU64>,
     dirty: Arc<AtomicBool>,
+    current_wanted: Arc<AtomicBool>,
     mut sink: StatusSink,
     initial_store: Option<Connection>,
 ) {
@@ -390,8 +421,46 @@ fn run_worker(
     let mut reconciliation = Some(ReconcileState::new());
     let mut pending_ack = None;
     let mut status = ValuationStatus::default();
+    let mut current = CurrentRateState::default();
     'worker: loop {
         let now_ms = now_unix_ms_i64();
+        let mut retry_after = None;
+        // BEFORE the cache-recovery gate on purpose. Current rates live in memory and need no
+        // derived cache, so an unopenable `valuation.sqlite` — an entirely unrelated failure — must
+        // not also take the mode that does not depend on it. Everything below this point requires
+        // an open store; this stage does not.
+        if current_wanted.load(Ordering::Acquire) {
+            // OUTSIDE `attempt`, and therefore outside the stage's provider backoff. Retiring an
+            // expired rate is not a provider operation: gating it on the retry gate would mean a
+            // failing provider — the very case that lets a rate expire — also decides when the
+            // expiry is noticed, and a 300 s backoff would keep an expired figure on screen for
+            // five minutes past the cutoff it is supposed to enforce.
+            if current.expire_stale(now_ms) {
+                current.publish_snapshot(&generation, &dirty, now_ms);
+            }
+            match attempt(
+                &mut status,
+                &mut sink,
+                ValuationStage::CurrentRates,
+                now_ms,
+                &mut retry_after,
+                || refresh_current_rates(source.as_ref(), &generation, &dirty, &mut current),
+            ) {
+                // Only `Ran { more: true }` short-circuits, and it must: the remaining currencies
+                // would otherwise be resolved a minute apart. Everything else falls through,
+                // `Attempt::CacheLost` included — a provider failure while the derived cache is
+                // also unhealthy belongs to the recovery stage below, whose own fault is the one
+                // that matters in that window.
+                Attempt::Done(StageTurn::Ran { more: true }) => continue,
+                _ => {}
+            }
+        } else {
+            // Current-rate mode is disabled, so this stage issues no provider request at all — the
+            // whole point of the demand flag. Progress is still recorded so a run left failing when
+            // the mode was switched off cannot report a stall for an idle feature.
+            current.stand_down();
+            record_progress(&mut status, &mut sink, ValuationStage::CurrentRates, now_ms);
+        }
         if store.is_none() || !super::cache_is_healthy() {
             drop(store.take());
             // Deliberately NOT gated by `ValuationStatus::wait_for` through `attempt`.
@@ -417,13 +486,15 @@ fn run_worker(
                             .at(ValuationStage::CacheRecovery),
                         now_ms,
                     );
-                    std::thread::park_timeout(until_stall(&status, delay, now_unix_ms_i64()));
+                    // Capped by the freshness deadline too: an unopenable derived cache must not
+                    // decide how long an expired current rate — which needs no cache — stays up.
+                    let settled = now_unix_ms_i64();
+                    park_worker(&status, &current, &current_wanted, delay, settled);
                     continue;
                 }
             }
         }
         let store_ref = store.as_ref().expect("valuation store recovered above");
-        let mut retry_after = None;
         let reconciled = match &mut reconciliation {
             Some(state) => attempt(
                 &mut status,
@@ -516,7 +587,11 @@ fn run_worker(
                 delay_to_next_minute()
             }
         });
-        std::thread::park_timeout(until_stall(&status, delay, settled));
+        // The freshness deadline caps the park exactly as the stall deadline does. Expiry is
+        // evaluated when the loop turns, so a worker asleep on a five-minute provider backoff would
+        // otherwise notice the cutoff only when that backoff ended — and health-only revisions
+        // deliberately requery nothing, so the expired figure would stay on screen meanwhile.
+        park_worker(&status, &current, &current_wanted, delay, settled);
     }
 }
 
@@ -534,7 +609,7 @@ enum Attempt {
 
 /// Run one stage under its own backoff, recording its health and selecting the next wait.
 ///
-/// The three work stages share this scaffold so the backoff gate, unavailable-replica handling,
+/// The four gated work stages share this scaffold so the backoff gate, unavailable-replica handling,
 /// progress/failure publication, cache-health check before fault recording, and selection of the
 /// shortest wait are written once. Stage-specific work and reactions to completed outcomes stay at
 /// the call sites.
@@ -588,6 +663,71 @@ fn attempt(
     }
 }
 
+/// Cap one park by the current-rate freshness deadline.
+///
+/// Expiry is evaluated when the loop turns, so a park that outlives the cutoff leaves an expired
+/// figure on screen for the difference — and both parks can be minutes long: the recovery arm's
+/// cache backoff and the stage's own provider backoff both reach five minutes. Shared by BOTH so a
+/// third park cannot be added without the cap.
+///
+/// Args:
+///     current: Pass state holding the gathered rates.
+///     wanted: Whether the application-wide current-rate mode is enabled.
+///     delay: Park the caller selected.
+///     now_ms: Current wall clock in Unix milliseconds.
+///
+/// Returns:
+///     The shorter of the caller's park and the wait until the earliest expiry.
+fn until_expiry(
+    current: &CurrentRateState,
+    wanted: bool,
+    delay: Duration,
+    now_ms: i64,
+) -> Duration {
+    cap_at_deadline(delay, current.next_expiry_ms().filter(|_| wanted), now_ms)
+}
+
+/// Shorten a park so it ends no later than an outstanding deadline.
+///
+/// Args:
+///     delay: Park the caller selected.
+///     deadline: Instant the park must not outlive, in Unix milliseconds.
+///     now_ms: Current wall clock in Unix milliseconds.
+///
+/// Returns:
+///     The shorter of the park and the wait to the deadline, never zero.
+fn cap_at_deadline(delay: Duration, deadline: Option<i64>, now_ms: i64) -> Duration {
+    match deadline {
+        Some(deadline) => delay.min(Duration::from_millis(
+            deadline.saturating_sub(now_ms).max(1) as u64,
+        )),
+        None => delay,
+    }
+}
+
+/// Park the worker for `delay`, shortened by every deadline it must not oversleep.
+///
+/// The ONE park in this loop. Applying both caps here keeps the invariant "no park outlives a
+/// deadline" true for every caller, including any future park arm.
+///
+/// Args:
+///     status: Current worker health, carrying the stall deadline.
+///     current: Pass state, carrying the freshness deadline.
+///     current_wanted: Whether the application-wide current-rate mode is enabled.
+///     delay: Park the loop selected on its own.
+///     now_ms: Current wall clock in Unix milliseconds.
+fn park_worker(
+    status: &ValuationStatus,
+    current: &CurrentRateState,
+    current_wanted: &AtomicBool,
+    delay: Duration,
+    now_ms: i64,
+) {
+    let wanted = current_wanted.load(Ordering::Acquire);
+    let delay = until_expiry(current, wanted, delay, now_ms);
+    std::thread::park_timeout(until_stall(status, delay, now_ms));
+}
+
 /// Shorten a park so a run that is only waiting out the clock still publishes when it stalls.
 ///
 /// A backoff can extend past the pending stall deadline, so without this the worker would sleep
@@ -602,12 +742,7 @@ fn attempt(
 /// Returns:
 ///     The shorter of the requested park and the wait to the next stall deadline.
 fn until_stall(status: &ValuationStatus, delay: Duration, now_ms: i64) -> Duration {
-    match status.next_stall_ms(now_ms) {
-        Some(deadline) => delay.min(Duration::from_millis(
-            deadline.saturating_sub(now_ms).max(1) as u64,
-        )),
-        None => delay,
-    }
+    cap_at_deadline(delay, status.next_stall_ms(now_ms), now_ms)
 }
 
 /// Keep the earliest of two outstanding waits so no eligible stage oversleeps.
@@ -1264,6 +1399,348 @@ fn reconciliation_batch(
     Ok(inputs)
 }
 
+/// How many minutes a discovered quote-ordinal set is reused before the report is re-scanned.
+///
+/// The SET of currencies traded changes on the scale of a user adding a core, so re-deriving it
+/// once per pass would pay a `DISTINCT` scan over the whole replica to learn nothing.
+const CURRENT_SCAN_MINUTES: i64 = 10;
+
+/// How many minutes pass between two refreshes of the gathered rates.
+///
+/// Half the freshness window, so a rate is replaced well before [`super::FRESHNESS_MS`] can retire
+/// it and one failed pass still cannot expire one. A shorter interval adds provider traffic without
+/// improving the ten-minute freshness contract and creates more opportunities for visible changes
+/// that make every open Report host and the Analytics window requery.
+const CURRENT_REFRESH_MINUTES: i64 = 5;
+
+/// One in-flight current-rate refresh pass.
+///
+/// Rates and permanent misses persist ACROSS passes: a refresh pass whose provider call failed
+/// should keep serving the last good number until the freshness cutoff retires it, rather than
+/// blanking every figure on one bad request.
+#[derive(Default)]
+struct CurrentRateState {
+    /// Minute the most recent pass was armed in, and the candle that pass asks for.
+    minute: Option<i64>,
+    /// Ordinals still to resolve in this pass, popped from the back.
+    pending: Vec<i64>,
+    /// Latest known rate per quote ordinal.
+    rates: BTreeMap<i64, super::CurrentRate>,
+    /// Ordinals whose direct and inverse routes were all last classified as permanently absent.
+    missing: BTreeSet<i64>,
+    /// Minute the ordinal set was last discovered in.
+    scanned: Option<i64>,
+    /// Quote ordinals the report actually uses.
+    ordinals: Vec<i64>,
+    /// The most recently stored rates and permanent misses, used as the render-equivalence
+    /// baseline for the next snapshot.
+    ///
+    /// Held to answer one question: does this snapshot render differently from the last stored
+    /// one? A stored snapshot that caused no wake is render-equivalent to what the surfaces drew;
+    /// its timestamps may move even when the rendered figures do not.
+    published: Option<(BTreeMap<i64, super::CurrentRate>, BTreeSet<i64>)>,
+}
+
+impl CurrentRateState {
+    /// Abandon the pass in flight because current-rate mode is disabled.
+    ///
+    /// The gathered rates are kept: switching the mode back on should reuse whatever is still
+    /// inside the freshness window instead of blanking every figure until the next pass completes.
+    fn stand_down(&mut self) {
+        self.minute = None;
+        self.pending.clear();
+    }
+
+    /// Whether this snapshot would render differently from the last published one.
+    ///
+    /// A raw `fetched_at_ms` comparison is deliberately NOT the answer: it moves on every pass and
+    /// feeds only the freshness cutoff, so a pegged quote whose price came back identical would
+    /// otherwise cost a requery for nothing. What DOES matter is which quotes that cutoff still
+    /// admits at `now_ms`, because a quote outside it converts nothing and renders as uncovered.
+    /// The two differ whenever a pass outlives the window it is refreshing: each currency may cost
+    /// four sequential provider routes, and a transient failure adds the stage's backoff on top, so
+    /// a rate published before the pass began can expire for readers while the pass is still
+    /// running. Without the freshness comparison, finishing that pass with unchanged prices would
+    /// withhold the bump and leave the screen reading "uncovered" over a snapshot that covers it.
+    ///
+    /// Args:
+    ///     now_ms: Instant the freshness cutoff is judged at.
+    ///
+    /// Returns:
+    ///     `true` when a rate, its provenance, the permanently-missing set, or the set of quotes
+    ///     still inside the freshness window changed.
+    fn renders_differently(&self, now_ms: i64) -> bool {
+        let Some((rates, missing)) = &self.published else {
+            return true;
+        };
+        // One traversal answers both halves: a differing key set shows up as a `None` lookup,
+        // and a rate that crossed the cutoff since the last publication differs in freshness while
+        // matching in price.
+        *missing != self.missing
+            || rates.len() != self.rates.len()
+            || self.rates.iter().any(|(ordinal, rate)| {
+                rates.get(ordinal).is_none_or(|previous| {
+                    !rate.renders_same(previous)
+                        || rate.is_fresh(now_ms) != previous.is_fresh(now_ms)
+                })
+            })
+    }
+
+    /// Drop every gathered rate that has aged past the freshness window.
+    ///
+    /// Args:
+    ///     now_ms: Current wall clock in Unix milliseconds.
+    ///
+    /// Returns:
+    ///     Whether anything was dropped, so the caller can republish.
+    fn expire_stale(&mut self, now_ms: i64) -> bool {
+        let before = self.rates.len();
+        self.rates.retain(|_, rate| rate.is_fresh(now_ms));
+        self.rates.len() != before
+    }
+
+    /// When the oldest gathered rate stops counting as current.
+    ///
+    /// Returns:
+    ///     The earliest expiry instant, or `None` while nothing is held.
+    fn next_expiry_ms(&self) -> Option<i64> {
+        self.rates
+            .values()
+            .map(|rate| rate.fetched_at_ms.saturating_add(super::FRESHNESS_MS))
+            .min()
+    }
+
+    /// Publish the gathered snapshot, and wake the surfaces only when it reads differently.
+    ///
+    /// The snapshot itself is stored unconditionally, refreshed timestamps included: the SQL
+    /// builders judge freshness against what is stored, so withholding an unchanged snapshot would
+    /// expire rates the worker had in fact just re-fetched.
+    ///
+    /// The generation bump is separate, and conditional, because it is the half that costs the
+    /// user something: every open Report host and the Analytics window requery on it, and asking
+    /// them to redraw the same numbers is flicker with nothing behind it. An expiry DOES move the
+    /// figures — the retired quote falls back to uncovered — and `renders_differently` sees that
+    /// as a shrunken map, so the cutoff still reaches the screen on schedule.
+    ///
+    /// Args:
+    ///     generation: Monotonic valuation publication counter.
+    ///     dirty: Coalescing UI wake edge.
+    ///     now_ms: Instant the freshness cutoff is judged at.
+    fn publish_snapshot(&mut self, generation: &AtomicU64, dirty: &AtomicBool, now_ms: i64) {
+        let changed = self.renders_differently(now_ms);
+        super::publish_current_rates(super::CurrentRates::new(
+            self.rates.clone(),
+            self.missing.clone(),
+        ));
+        self.published = Some((self.rates.clone(), self.missing.clone()));
+        if changed {
+            // Through the DATA generation, not the health revision: this is a new set of numbers
+            // to render, and the health counter deliberately never triggers a requery.
+            publish(generation, dirty);
+        }
+    }
+}
+
+/// Discover which quote currencies the report actually contains.
+///
+/// Bounded by construction: the persisted ordinal contract is 0..=20, so this returns at most
+/// twenty-one values however large the replica is.
+///
+/// COST: no index covers `basecurrency` on either source, so this is a full scan of the replica —
+/// on a large one, tens to hundreds of milliseconds. It is bounded by the caller's
+/// [`CURRENT_SCAN_MINUTES`] throttle and by the demand flag, so it runs at most once every ten
+/// minutes and only while current-rate mode is enabled; it also runs on the worker
+/// thread against its own reader, never on the UI thread. Deliberately NOT worth an index: that
+/// would cost write amplification on every replicated trade to serve an opt-in feature.
+///
+/// The storage-class filter is applied in Rust rather than as a `typeof()` predicate. Same result,
+/// but a `typeof()` in the WHERE clause defeats an index seek unconditionally — so if a covering
+/// index ever does appear, this query can use it.
+///
+/// Args:
+///     conn: Open report reader.
+///
+/// Returns:
+///     Distinct known quote ordinals other than identity USDT, which needs no rate.
+///
+/// Errors:
+///     Returns a classified report read failure when source discovery or the scan fails.
+fn report_quote_ordinals(conn: &Connection) -> ReadResult<Vec<i64>> {
+    const CTX: &str = "valuation: quote scan";
+    let mut found = BTreeSet::new();
+    for src in crate::db::read_sources_res(conn)? {
+        if !src.cols.contains("basecurrency") {
+            continue;
+        }
+        let sql = format!("SELECT DISTINCT basecurrency FROM {}", src.table);
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|error| crate::db::read_fail::read_fail(CTX, error))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, rusqlite::types::Value>(0))
+            .map_err(|error| crate::db::read_fail::read_fail(CTX, error))?;
+        for raw in rows {
+            let raw = raw.map_err(|error| crate::db::read_fail::read_fail(CTX, error))?;
+            // The readers' own decode: a placeholder, a REAL, a TEXT or a future ordinal resolves
+            // to no currency at all. Identity USDT is excluded separately — it needs no rate.
+            let Some(currency) = crate::db::QuoteCurrency::from_report_value(&raw) else {
+                continue;
+            };
+            let rusqlite::types::Value::Integer(ordinal) = raw else {
+                continue;
+            };
+            if currency != crate::db::QuoteCurrency::usdt() {
+                found.insert(ordinal);
+            }
+        }
+    }
+    Ok(found.into_iter().collect())
+}
+
+/// Whether a fresh refresh pass may be armed.
+///
+/// Split out of [`refresh_current_rates`] because both operands are UNIX SECONDS — the unit
+/// [`current_minute_utc`] hands back — while the interval beside it is written in minutes. Keeping
+/// the conversion in one named place with its own test is what stops the two from being compared
+/// directly, which silently turns the whole throttle into "every minute".
+///
+/// A pass still working through its queue is never re-armed on top of: a slow provider must not
+/// have its sweep restarted from the beginning underneath it.
+///
+/// Args:
+///     minute: Current UTC minute, in Unix seconds.
+///     armed: Minute the pass in flight was armed at, in Unix seconds.
+///     pending_empty: Whether the previous pass has drained.
+///
+/// Returns:
+///     `true` when a new pass should be armed for this minute.
+fn refresh_is_due(minute: i64, armed: Option<i64>, pending_empty: bool) -> bool {
+    pending_empty && minutes_elapsed(minute, armed, CURRENT_REFRESH_MINUTES)
+}
+
+/// Whether at least `minutes` have passed since `since`.
+///
+/// Both instants are UNIX SECONDS — the unit [`current_minute_utc`] hands back — while every
+/// interval beside them is written in minutes. This is the one place the two units meet.
+///
+/// Args:
+///     now: Current UTC minute, in Unix seconds.
+///     since: Instant to measure from, in Unix seconds; `None` counts as elapsed.
+///     minutes: Interval to clear.
+///
+/// Returns:
+///     `true` when the interval has passed, or nothing has happened yet.
+fn minutes_elapsed(now: i64, since: Option<i64>, minutes: i64) -> bool {
+    since.is_none_or(|since| now - since >= minutes * 60)
+}
+
+/// Resolve one quote currency's latest rate, at most one per turn.
+///
+/// One currency per turn on purpose. A cold pass over K currencies costs up to K x 4 sequential
+/// provider routes at a fifteen-second timeout each, and doing them in one turn would park the
+/// reconciliation and outbox stages behind minutes of network wait.
+///
+/// The minute asked for is the PREVIOUS one: the current minute's candle has not closed, and the
+/// historical path already refuses to value against it for the same reason.
+///
+/// Args:
+///     source: Spot candle boundary.
+///     generation: Monotonic valuation publication counter.
+///     dirty: Coalescing UI wake edge.
+///     state: Pass state carried across turns.
+///
+/// Returns:
+///     The stage outcome: awaiting the report replica, drained, or still carrying queued currencies.
+///
+/// Errors:
+///     Returns a provider fault on a transient failure, leaving the currency queued for retry.
+fn refresh_current_rates(
+    source: &dyn SpotRateSource,
+    generation: &AtomicU64,
+    dirty: &AtomicBool,
+    state: &mut CurrentRateState,
+) -> Result<StageTurn, FaultCause> {
+    let minute = current_minute_utc();
+    if refresh_is_due(minute, state.minute, state.pending.is_empty()) {
+        if minutes_elapsed(minute, state.scanned, CURRENT_SCAN_MINUTES) {
+            let conn = match crate::db::open_reader() {
+                Ok(conn) => conn,
+                Err(ReadFail::NotReady) => return Ok(StageTurn::AwaitingReplica),
+                Err(error) => return Err(report_fault(error)),
+            };
+            state.ordinals = report_quote_ordinals(&conn).map_err(report_fault)?;
+            state.scanned = Some(minute);
+        }
+        state.minute = Some(minute);
+        state.pending = state.ordinals.clone();
+    }
+    resolve_next_rate(source, generation, dirty, state, minute)
+}
+
+/// Resolve the next queued currency of an already-scoped pass.
+///
+/// Split from [`refresh_current_rates`] so the expensive half — how many provider calls one turn
+/// costs, and when the pass stops asking — can be exercised without opening the report replica.
+///
+/// Args:
+///     source: Spot candle boundary.
+///     generation: Monotonic valuation publication counter.
+///     dirty: Coalescing UI wake edge.
+///     state: Pass state carried across turns.
+///     minute: Minute this pass belongs to.
+///
+/// Returns:
+///     Whether more currencies remain in this pass.
+///
+/// Errors:
+///     Returns a provider fault on a transient failure, leaving the currency queued for retry.
+fn resolve_next_rate(
+    source: &dyn SpotRateSource,
+    generation: &AtomicU64,
+    dirty: &AtomicBool,
+    state: &mut CurrentRateState,
+    minute: i64,
+) -> Result<StageTurn, FaultCause> {
+    let Some(&ordinal) = state.pending.last() else {
+        return Ok(StageTurn::Drained);
+    };
+    let ticker = crate::db::QuoteCurrency::from_report_ordinal(ordinal)
+        .map(|currency| currency.ticker())
+        .unwrap_or("UNKNOWN");
+    match resolve_rate(source, ordinal, ticker, minute - 60) {
+        Ok(rate) => {
+            state.missing.remove(&ordinal);
+            state.rates.insert(
+                ordinal,
+                super::CurrentRate {
+                    rate_usdt: rate.rate_usdt,
+                    provider: rate.provider,
+                    symbol: rate.symbol,
+                    fetched_at_ms: now_unix_ms_i64(),
+                },
+            );
+        }
+        Err(FetchFailure::Missing) => {
+            // Every route is permanently absent for this currency. Drop any rate it once had, so a
+            // figure cannot keep rendering from a price the exchange has since delisted.
+            state.rates.remove(&ordinal);
+            state.missing.insert(ordinal);
+        }
+        // Leave the currency queued: the stage's own backoff decides when to try it again, and the
+        // published snapshot keeps serving whatever is still fresh meanwhile.
+        Err(FetchFailure::Transient(message)) => {
+            return Err(FaultCause::new(FailureKind::Provider, message))
+        }
+    }
+    state.pending.pop();
+    if state.pending.is_empty() {
+        state.publish_snapshot(generation, dirty, now_unix_ms_i64());
+        Ok(StageTurn::Drained)
+    } else {
+        Ok(StageTurn::Ran { more: true })
+    }
+}
+
 /// Resolve one source's physical table, column set, and stable row-id column.
 ///
 /// Args:
@@ -1424,7 +1901,7 @@ fn trade_key(input: &TradeInput) -> (i64, i64, i64) {
     (input.source.code(), input.core_uid, input.row_id)
 }
 
-/// Publish one committed valuation generation and coalescing UI edge.
+/// Publish one valuation-data generation and coalescing UI edge.
 ///
 /// Args:
 ///     generation: Monotonic valuation publication counter.

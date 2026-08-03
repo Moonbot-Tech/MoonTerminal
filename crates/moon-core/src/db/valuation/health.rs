@@ -37,6 +37,8 @@ pub enum ValuationStage {
     Outbox,
     /// Retrying rows whose closing minute had not closed when they arrived.
     DeferredMinute,
+    /// Refreshing the in-memory current-rate snapshot while the application-wide mode is enabled.
+    CurrentRates,
 }
 
 impl ValuationStage {
@@ -54,6 +56,7 @@ impl ValuationStage {
             Self::Reconcile => "reconcile",
             Self::Outbox => "outbox",
             Self::DeferredMinute => "deferred_minute",
+            Self::CurrentRates => "current_rates",
         }
     }
 
@@ -67,6 +70,7 @@ impl ValuationStage {
             Self::Reconcile => 1,
             Self::Outbox => 2,
             Self::DeferredMinute => 3,
+            Self::CurrentRates => 4,
         }
     }
 }
@@ -235,11 +239,14 @@ impl StageHealth {
     }
 }
 
+/// Mixing constant for the published signature; the standard 64-bit FNV prime.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 /// Worker health published to the UI.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ValuationStatus {
     /// Per-stage failing runs, indexed by [`ValuationStage::index`].
-    stages: [StageHealth; 4],
+    stages: [StageHealth; 5],
 }
 
 impl ValuationStatus {
@@ -411,7 +418,11 @@ impl ValuationStatus {
                     state ^ fnv1a64(fault.detail.as_bytes())
                 }
             };
-            packed = packed.rotate_left(16) ^ slot;
+            // Multiply-then-xor rather than a fixed rotate: a rotate by 64/N only stays collision-
+            // free while there are exactly N stages, and it silently starts aliasing the moment one
+            // is added — two different stages' faults would then pack to the same signature and the
+            // surfaces would never learn about the transition.
+            packed = (packed ^ slot).wrapping_mul(FNV_PRIME);
         }
         packed
     }

@@ -14,6 +14,7 @@ use super::schema::{
 use super::servers::{self, CoreSortMode};
 use super::uid_counter::UidCounter;
 use super::ServerConfig;
+use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
 
 /// Result of merging the two files into runtime state.
@@ -53,6 +54,8 @@ pub struct Merged {
     pub chart_memory_percent: u16,
     /// How core lists are ordered app-wide.
     pub core_sort: CoreSortMode,
+    /// Which conversion every quote-money surface applies.
+    pub report_valuation_mode: ValuationMode,
     /// Durable uid counter, already advanced past any uid handed out during this merge.
     pub next_uid: UidCounter,
     /// Legacy hotkeys from settings.toml (schema < v13), used only for one-time migration
@@ -95,6 +98,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let ui_scale = repair_ui_scale(meta.ui_scale);
     let chart_memory_percent = clamp_chart_memory_percent(meta.chart_memory_percent);
     let core_sort = meta.core_sort;
+    let report_valuation_mode = meta.report_valuation_mode;
     let hotkeys = meta.hotkeys;
     let mut groups = meta.groups.clone();
     for group in &mut groups {
@@ -166,6 +170,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         ui_scale,
         chart_memory_percent,
         core_sort,
+        report_valuation_mode,
         next_uid,
         hotkeys,
         dirty,
@@ -193,6 +198,7 @@ pub fn split(
     ui_scale: f32,
     chart_memory_percent: u16,
     core_sort: CoreSortMode,
+    report_valuation_mode: ValuationMode,
     next_uid: u64,
 ) -> (ServersFile, SettingsFile) {
     let sf = ServersFile {
@@ -225,6 +231,7 @@ pub fn split(
         hotkeys: HotkeysConfig::default(),
         groups: groups.to_vec(),
         core_sort,
+        report_valuation_mode,
         next_uid,
         servers: servers
             .iter()

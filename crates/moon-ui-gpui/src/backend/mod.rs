@@ -21,6 +21,7 @@ use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
+use moon_core::db::valuation::ValuationMode;
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 
@@ -915,6 +916,40 @@ impl Backend {
     /// Return the group's cores in canonical order for the header selector.
     pub(crate) fn group_cores(&self, group: &str) -> OrderedCores {
         CoreOrder::new(&self.config).from_sessions(self.session.sessions(), |s| s.group == group)
+    }
+
+    /// Which conversion every quote-money surface currently applies.
+    ///
+    /// One application-wide setting rather than one per panel: the many simultaneous Report hosts —
+    /// a docked tab per group window, a detached window per group, the scoped standalone window,
+    /// and Analytics — must not present the same period under two conversions. It also makes the
+    /// worker's demand signal exact: one setting, one flag, no reference counting to leak.
+    ///
+    /// Returns:
+    ///     The saved valuation mode.
+    pub(crate) fn valuation_mode(&self) -> ValuationMode {
+        self.config.report_valuation_mode
+    }
+
+    /// Activate the valuation mode a Settings save just committed.
+    ///
+    /// The value itself is already in `config`, written by the save. Two things do not follow from
+    /// that on their own:
+    ///
+    /// * the worker only fetches current rates while the mode demands them, so this activation
+    ///   point sets the demand flag rather than leaving it to each view;
+    /// * every open surface reads the mode without polling it. They observe the report revision,
+    ///   which nothing else would move here — a mode switch changes no rows, so neither generation
+    ///   advances. Without this wake they would keep rendering the previous mode's numbers under
+    ///   the new mode's label until some unrelated data change happened along.
+    ///
+    /// Args:
+    ///     cx: Backend context used to publish the revision the other surfaces observe.
+    pub(crate) fn apply_valuation_mode(&mut self, cx: &mut Context<Self>) {
+        if let Some(valuation) = &self.valuation {
+            valuation.set_current_wanted(self.valuation_mode() == ValuationMode::Current);
+        }
+        self.report_revision.update(cx, |_, cx| cx.notify());
     }
 
     pub(crate) fn retain_chart_market(&mut self, core: CoreId, market: &str) {

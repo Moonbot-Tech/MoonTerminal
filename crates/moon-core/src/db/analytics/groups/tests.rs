@@ -22,6 +22,7 @@ fn q() -> Query {
         emulator: None,
         strategies: Vec::new(),
         metric: Default::default(),
+        valuation: Default::default(),
     }
 }
 

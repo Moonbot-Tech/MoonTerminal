@@ -1,4 +1,6 @@
-use super::{effective_sid_expr, strategies_attached, unified_from, Query};
+use super::{
+    effective_sid_expr, strategies_attached, unified_from, unified_from_mode, ProjectionMode, Query,
+};
 use std::collections::HashSet;
 
 use crate::db::SideFilter;
@@ -215,6 +217,7 @@ fn q() -> Query {
         emulator: None,
         strategies: Vec::new(),
         metric: Default::default(),
+        valuation: Default::default(),
     }
 }
 
@@ -301,4 +304,60 @@ fn without_the_strategy_db_it_falls_back_silently() {
     // RUN IT: a string-matching test happily passed SQL that SQLite refuses ("no such
     // column" from a correlated reference in a subquery's ORDER BY).
     assert_eq!(projected_sids(&c, &src), vec![0]);
+}
+
+/// Selecting the current-rate mode must change the SQL, not merely the label above it.
+///
+/// Breakage: `analytics/query/mod.rs::unified_from_mode` keeping `mode == ProjectionMode::Usdt`
+/// where it now asks `mode.valuation()`. A new mode would fall into the `else` arm, emit the plain
+/// native projection, and every Analytics surface would show unconverted money under a heading
+/// that promised current-rate USDT.
+#[test]
+fn the_current_rate_mode_emits_its_own_projection() {
+    let c = conn_with_orders();
+    c.execute_batch(
+        "ATTACH ':memory:' AS valuation;
+         CREATE TABLE valuation.trade_values (source_kind INTEGER, core_uid INTEGER,
+             row_id INTEGER, algorithm_version INTEGER, closedate INTEGER,
+             quote_ordinal INTEGER, profit_quote REAL, spent_quote REAL,
+             profit_usdt REAL, spent_usdt REAL, rate_usdt REAL, rate_minute_utc INTEGER);
+         CREATE TABLE valuation.rates (algorithm_version INTEGER, quote_ordinal INTEGER,
+             minute_utc INTEGER, status INTEGER, provider TEXT, symbol TEXT,
+             orientation INTEGER);
+         ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN newrecid INTEGER;",
+    )
+    .expect("valuation fixture");
+
+    let historical = unified_from_mode(&c, &q(), ProjectionMode::Usdt)
+        .expect("read")
+        .expect("a source");
+    let current = unified_from_mode(&c, &q(), ProjectionMode::UsdtCurrent)
+        .expect("read")
+        .expect("a source");
+
+    let native = unified_from_mode(&c, &q(), ProjectionMode::Native)
+        .expect("read")
+        .expect("a source");
+
+    assert_ne!(historical, current, "the two conversions cannot share SQL");
+    assert!(
+        historical.contains("valuation.trade_values"),
+        "the historical projection reads the derived cache"
+    );
+    assert!(
+        !current.contains("valuation."),
+        "the current-rate projection joins nothing at all, got {current}"
+    );
+    // Both negative assertions above are also satisfied by the plain NATIVE projection, which is
+    // exactly what the named breakage produces. These two are the positive half: the current-rate
+    // mode must APPLY a conversion, not merely decline to read the cache.
+    assert_ne!(
+        native, current,
+        "falling through to native money is the failure this test exists to catch"
+    );
+    assert!(
+        current.contains("CASE r.basecurrency WHEN 1 THEN 1.0"),
+        "the current-rate projection must carry the rate CASE, got {current}"
+    );
 }

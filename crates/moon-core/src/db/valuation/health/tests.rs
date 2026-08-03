@@ -351,3 +351,48 @@ fn logging_thins_out_as_a_failing_run_continues() {
     assert_eq!(logged, vec![1, 2, 3, 5, 10, 20, 40, 60]);
     assert!(!should_log(1_000_001));
 }
+
+/// The same fault on two different stages must pack to two different signatures.
+///
+/// Breakage: `health.rs::ValuationStatus::signature` going back to `packed.rotate_left(16) ^ slot`.
+/// That is collision-free only while there are exactly four stages — 64/16 — and there are now
+/// five, so the first and fifth would rotate into the same lanes and pack identically. The worker
+/// publishes a revision only when this value moves, so an aliased pair means the surfaces never
+/// learn that the trouble moved from one stage to another: the footer would keep naming the stage
+/// that recovered while the one that broke stays silent.
+#[test]
+fn every_stage_packs_into_its_own_part_of_the_signature() {
+    let now = 1_700_000_000_000;
+    let stages = [
+        ValuationStage::CacheRecovery,
+        ValuationStage::Reconcile,
+        ValuationStage::Outbox,
+        ValuationStage::DeferredMinute,
+        ValuationStage::CurrentRates,
+    ];
+    let signatures: Vec<u64> = stages
+        .iter()
+        .map(|stage| {
+            let mut status = ValuationStatus::default();
+            // Identical cause and text on purpose: the STAGE is then the only thing that differs.
+            status.record_failure(
+                FaultCause::new(FailureKind::Provider, "the same reason everywhere").at(*stage),
+                now,
+            );
+            status.signature(now)
+        })
+        .collect();
+
+    for (index, signature) in signatures.iter().enumerate() {
+        assert!(
+            !signatures[index + 1..].contains(signature),
+            "stage {} shares a signature with a later one",
+            stages[index].code()
+        );
+        assert_ne!(
+            *signature,
+            ValuationStatus::default().signature(now),
+            "a failing stage must not pack like a healthy worker"
+        );
+    }
+}

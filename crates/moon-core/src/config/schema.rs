@@ -12,6 +12,7 @@ use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
 use super::servers::{self, CoreSortMode, FeedFlags};
+use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
 
 /// Current `settings.toml` schema version.
@@ -222,6 +223,13 @@ pub struct SettingsFile {
     /// How core lists are ordered app-wide; missing values default to `Name`.
     #[serde(default)]
     pub core_sort: CoreSortMode,
+    /// Which conversion every quote-money surface applies; missing values default to `Historical`.
+    ///
+    /// No schema bump accompanies this field: `Historical` is both the serde default and the
+    /// intended default, so an older file that omits it already reads correctly, and the next save
+    /// materializes the key.
+    #[serde(default)]
+    pub report_valuation_mode: ValuationMode,
     /// Next uid to issue, persisted so deleted identities are not reused.
     ///
     /// Zero falls back to one past the highest surviving uid. This field is the only durable

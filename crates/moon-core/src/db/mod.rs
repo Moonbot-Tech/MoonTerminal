@@ -783,11 +783,11 @@ pub fn read_snapshot(conn: &Connection) -> ReadResult<rusqlite::Transaction<'_>>
         .map_err(|e| read_fail("отчёты: снимок для чтения", e))
 }
 
-/// Run a multi-query read inside one pinned SQLite snapshot.
+/// Run a multi-query read inside one pinned SQLite snapshot and one pinned current-rate snapshot.
 ///
 /// Args:
 ///     conn: Reader connection with every required database already attached.
-///     read: Query batch that must observe one committed report generation.
+///     read: Query batch that must observe one committed report generation and one rate snapshot.
 ///
 /// Returns:
 ///     The batch result, or a classified snapshot/query failure.
@@ -795,6 +795,10 @@ pub(in crate::db) fn with_read_snapshot<T>(
     conn: &Connection,
     read: impl FnOnce(&Connection) -> ReadResult<T>,
 ) -> ReadResult<T> {
+    // The rate snapshot is pinned alongside the row snapshot, for the same reason: everything one
+    // batch shows the user must describe ONE state of the world. Without it a worker publication
+    // landing mid-batch would convert the preflight and the scan at different rates.
+    let _rates = valuation::pin_current_rates();
     let snapshot = read_snapshot(conn)?;
     read(&snapshot)
 }

@@ -230,7 +230,8 @@ pub struct ReportPanel {
     pub(super) backend: Entity<Backend>,
     pub(super) group: String,
     generation: Option<Arc<AtomicU64>>,
-    /// Historical-valuation generation combined with report commits for refresh detection.
+    /// Historical-cache and current-rate data generation combined with report commits for refresh
+    /// detection.
     valuation_generation: Option<Arc<AtomicU64>>,
     /// Latest published worker health, refreshed only when its revision moves. Polled separately
     /// from the data generation because a stalled worker commits no rows at all.
@@ -238,6 +239,11 @@ pub struct ReportPanel {
     last_gen: u64,
     /// Health revision already folded into `valuation_status`.
     last_status_rev: u64,
+    /// Valuation mode this panel's current rows were queried under.
+    ///
+    /// Settings may change the application-wide mode while this panel is open, and the change
+    /// moves no data generation, so the queried mode is tracked separately.
+    last_valuation_mode: moon_core::db::valuation::ValuationMode,
 
     conn: Option<Connection>,
     pub(super) cores: Vec<(u64, String)>,

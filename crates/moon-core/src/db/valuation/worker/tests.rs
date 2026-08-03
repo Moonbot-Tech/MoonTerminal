@@ -769,3 +769,498 @@ fn a_restart_covers_trades_that_arrived_above_the_previous_cursor() {
     drop(reports);
     std::fs::remove_dir_all(&dir).expect("remove reconciliation order fixture directory");
 }
+
+/// Provider boundary that records every request and answers from a scripted price table.
+struct CountingSource {
+    /// Symbols that resolve, and the close they resolve to.
+    prices: std::collections::HashMap<&'static str, f64>,
+    /// Every `(provider, symbol)` asked for, in request order.
+    calls: Mutex<Vec<(&'static str, String)>>,
+    /// When set, every request fails transiently with this reason instead of answering.
+    transient: Option<&'static str>,
+}
+
+impl CountingSource {
+    /// Build a source answering only the listed symbols.
+    ///
+    /// Args:
+    ///     prices: Provider symbols and the closes they should return.
+    ///
+    /// Returns:
+    ///     A scripted source that treats every unlisted route as permanently absent.
+    fn new(prices: &[(&'static str, f64)]) -> Self {
+        Self {
+            prices: prices.iter().copied().collect(),
+            calls: Mutex::new(Vec::new()),
+            transient: None,
+        }
+    }
+
+    /// Build a source whose every route fails transiently.
+    ///
+    /// Returns:
+    ///     A scripted source that reports a connection failure for every request.
+    fn unreachable() -> Self {
+        Self {
+            prices: std::collections::HashMap::new(),
+            calls: Mutex::new(Vec::new()),
+            transient: Some("connection reset"),
+        }
+    }
+
+    /// How many provider requests have been made so far.
+    ///
+    /// Returns:
+    ///     The number of calls recorded across all routes.
+    fn call_count(&self) -> usize {
+        self.calls.lock().expect("call log").len()
+    }
+}
+
+impl SpotRateSource for CountingSource {
+    /// Answer a scripted symbol with one closed candle, or report the route absent.
+    ///
+    /// Args:
+    ///     provider: Canonical provider identifier.
+    ///     symbol: Provider-native market symbol.
+    ///     start_minute_utc: First requested UTC minute.
+    ///     _end_minute_utc: Last requested UTC minute.
+    ///
+    /// Returns:
+    ///     One candle for a scripted symbol, or a permanent or transient failure.
+    fn candles(
+        &self,
+        provider: &'static str,
+        symbol: &str,
+        start_minute_utc: i64,
+        _end_minute_utc: i64,
+    ) -> Result<Vec<super::super::provider::SpotCandle>, FetchFailure> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .push((provider, symbol.to_string()));
+        if let Some(reason) = self.transient {
+            return Err(FetchFailure::Transient(reason.to_string()));
+        }
+        match self.prices.get(symbol) {
+            Some(&close) => Ok(vec![super::super::provider::SpotCandle {
+                open_ms: start_minute_utc * 1000,
+                close_ms: start_minute_utc * 1000 + 59_999,
+                close,
+            }]),
+            None => Err(FetchFailure::Missing),
+        }
+    }
+}
+
+/// The minute every current-rate fixture resolves against.
+const RATE_MINUTE: i64 = 1_800_000_000;
+
+/// Serializes the tests that publish a current-rate snapshot.
+///
+/// `publish_current_rates` replaces ONE process-wide cell, so tests that publish run against
+/// shared state whatever their own fixtures say. Only a test that READS that cell back strictly
+/// needs the lock, but a writer running unserialized beside it would overwrite the value under
+/// assertion — so every publisher takes it.
+static PUBLISH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Claim the publication lock, ignoring a poisoning left by an unrelated failed test.
+fn publish_guard() -> std::sync::MutexGuard<'static, ()> {
+    PUBLISH_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Build a pass already scoped to the given ordinals, as if the report scan had just run.
+///
+/// Args:
+///     ordinals: Quote ordinals queued for the pass.
+///
+/// Returns:
+///     Current-rate state scoped to [`RATE_MINUTE`].
+fn scoped_pass(ordinals: &[i64]) -> CurrentRateState {
+    CurrentRateState {
+        minute: Some(RATE_MINUTE),
+        pending: ordinals.to_vec(),
+        scanned: Some(RATE_MINUTE),
+        ordinals: ordinals.to_vec(),
+        ..CurrentRateState::default()
+    }
+}
+
+/// The refresh throttle must be read in the unit its operands actually carry.
+///
+/// Breakage: `worker.rs::refresh_is_due` comparing `minute - armed` against
+/// `CURRENT_REFRESH_MINUTES` without the `* 60`. `current_minute_utc` returns Unix SECONDS rounded
+/// to a minute, so adjacent minutes differ by 60 and `60 >= 5` holds immediately — the five-minute
+/// throttle silently becomes a one-minute one, and both the provider traffic and the requery of
+/// every open Report host and the Analytics window go back to once a minute. It reads correct at a
+/// glance, which is exactly why it needs pinning; the scan throttle three lines below carries the
+/// `* 60` and would keep working, so nothing else would flag it.
+#[test]
+fn the_refresh_throttle_counts_seconds_not_minutes() {
+    let armed = RATE_MINUTE;
+    assert!(
+        refresh_is_due(armed, None, true),
+        "a pass that has never run is due"
+    );
+    assert!(
+        !refresh_is_due(armed + 60, Some(armed), true),
+        "one minute later is NOT due"
+    );
+    assert!(
+        !refresh_is_due(armed + CURRENT_REFRESH_MINUTES * 60 - 1, Some(armed), true),
+        "one second short of the interval is not due"
+    );
+    assert!(
+        refresh_is_due(armed + CURRENT_REFRESH_MINUTES * 60, Some(armed), true),
+        "the interval itself is due"
+    );
+    assert!(
+        !refresh_is_due(armed + 3_600, Some(armed), false),
+        "a pass still draining is never re-armed under itself"
+    );
+}
+
+/// A cold refresh of K currencies must cost K turns, not one turn of K sequential network waits.
+///
+/// Breakage: `worker.rs::resolve_next_rate` draining `state.pending` in a loop instead of taking
+/// one entry per call. Each currency costs up to four sequential provider routes at a fifteen
+/// second timeout, so a batched turn would park reconciliation and the outbox behind minutes of
+/// network wait while the user watches an unmoving backfill.
+#[test]
+fn a_refresh_pass_asks_one_provider_per_turn() {
+    let _published = publish_guard();
+    let source = CountingSource::new(&[("BTCUSDT", 60_000.0), ("ETHUSDT", 3_000.0)]);
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let mut state = scoped_pass(&[0, 2]);
+
+    let first = resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE);
+    assert_eq!(first, Ok(StageTurn::Ran { more: true }));
+    assert_eq!(source.call_count(), 1, "one currency per turn");
+
+    let second = resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE);
+    assert_eq!(second, Ok(StageTurn::Drained));
+    assert_eq!(source.call_count(), 2);
+    assert_eq!(
+        generation.load(Ordering::Relaxed),
+        1,
+        "the finished pass publishes exactly once, through the DATA generation"
+    );
+    assert!(dirty.load(Ordering::Relaxed));
+}
+
+/// A drained pass must issue no further requests until the refresh gate arms another one.
+///
+/// Breakage: `worker.rs::resolve_next_rate` refilling `pending` when it empties. The worker
+/// re-runs every stage each 25 ms while reconciling, so that would hammer the exchange
+/// continuously and get the user's address rate-limited.
+///
+/// The refresh gate in `refresh_current_rates` that decides WHEN `pending` is refilled is a
+/// separate guard, and this test does not reach it: it calls `resolve_next_rate` directly, because
+/// the enclosing function opens a report reader against the real data directory.
+#[test]
+fn a_drained_pass_stops_asking_within_the_same_minute() {
+    let _published = publish_guard();
+    let source = CountingSource::new(&[("BTCUSDT", 60_000.0)]);
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let mut state = scoped_pass(&[0]);
+
+    assert_eq!(
+        resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE),
+        Ok(StageTurn::Drained)
+    );
+    let after_first_pass = source.call_count();
+    for _ in 0..5 {
+        assert_eq!(
+            resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE),
+            Ok(StageTurn::Drained)
+        );
+    }
+    assert_eq!(
+        source.call_count(),
+        after_first_pass,
+        "a drained pass must cost nothing"
+    );
+}
+
+/// A currency whose routes have all gone permanently absent must lose its cached price.
+///
+/// Breakage: `worker.rs::resolve_next_rate` inserting into `missing` without removing from
+/// `rates` — a delisted market's last price would keep rendering as the current rate forever,
+/// because nothing else would ever refresh it away.
+#[test]
+fn a_permanently_missing_route_drops_the_price_it_used_to_have() {
+    let _published = publish_guard();
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let mut state = scoped_pass(&[0]);
+    let listed = CountingSource::new(&[("BTCUSDT", 60_000.0)]);
+    resolve_next_rate(&listed, &generation, &dirty, &mut state, RATE_MINUTE).expect("first pass");
+    assert!(state.rates.contains_key(&0));
+
+    state.pending = vec![0];
+    let delisted = CountingSource::new(&[]);
+    resolve_next_rate(&delisted, &generation, &dirty, &mut state, RATE_MINUTE)
+        .expect("second pass");
+    assert!(
+        !state.rates.contains_key(&0),
+        "the stale price must be gone"
+    );
+    assert!(state.missing.contains(&0));
+}
+
+/// A transient provider failure must leave the currency queued rather than silently skipped.
+///
+/// Breakage: `worker.rs::resolve_next_rate` popping `pending` before the request rather than after
+/// it resolves — one connection reset would drop that currency until a later refresh pass, and its
+/// trades would read as permanently unconvertible rather than as still being fetched.
+#[test]
+fn a_transient_failure_leaves_the_currency_queued() {
+    let source = CountingSource::unreachable();
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let mut state = scoped_pass(&[0, 2]);
+
+    let outcome = resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE);
+    assert!(
+        outcome.is_err(),
+        "a transient failure is reported, not swallowed"
+    );
+    assert_eq!(state.pending, vec![0, 2], "nothing is consumed");
+    assert!(state.rates.is_empty());
+    assert!(state.missing.is_empty(), "transient is not permanent");
+    assert_eq!(
+        generation.load(Ordering::Relaxed),
+        0,
+        "nothing was published"
+    );
+}
+
+/// A rate that ages past the window must be dropped even when nothing new can be fetched.
+///
+/// Breakage: `worker.rs::refresh_current_rates` checking freshness only on the success path, or
+/// dropping the `CurrentRateState::expire_stale` call before the provider request. Freshness is evaluated when
+/// SQL is built, and SQL is only rebuilt when the data generation moves — so during a provider
+/// outage longer than the window nothing would ever move it, and an expired rate would keep
+/// rendering under a label that calls it current.
+#[test]
+fn an_expired_rate_is_dropped_even_while_the_provider_is_unreachable() {
+    let mut state = scoped_pass(&[0, 2]);
+    let fresh_at = RATE_MINUTE * 1000;
+    for ordinal in [0, 2] {
+        state.rates.insert(
+            ordinal,
+            super::super::CurrentRate {
+                rate_usdt: 1.0,
+                provider: "binance_spot".to_string(),
+                symbol: "X".to_string(),
+                fetched_at_ms: fresh_at,
+            },
+        );
+    }
+
+    assert!(
+        !state.expire_stale(fresh_at + super::super::FRESHNESS_MS - 1),
+        "one millisecond inside the window keeps both"
+    );
+    assert_eq!(state.rates.len(), 2);
+
+    assert!(
+        state.expire_stale(fresh_at + super::super::FRESHNESS_MS),
+        "reaching the window edge must report a change so the caller republishes"
+    );
+    assert!(state.rates.is_empty());
+}
+
+/// The wake deadline must be the EARLIEST expiry, not the latest.
+///
+/// Breakage: `worker.rs::CurrentRateState::next_expiry_ms` using `.max()` instead of `.min()`, or
+/// the park cap in `run_worker` reading it without one. The worker evaluates expiry when its loop
+/// turns, so a deadline taken from the freshest rate would let the stalest one sit on screen past
+/// the cutoff for as long as the difference between them — and during a provider outage the park
+/// is a five-minute backoff, so nothing else would wake it.
+#[test]
+fn the_wake_deadline_follows_the_rate_that_expires_first() {
+    let mut state = scoped_pass(&[0, 2]);
+    assert_eq!(
+        state.next_expiry_ms(),
+        None,
+        "nothing held, nothing to wake for"
+    );
+
+    let base = RATE_MINUTE * 1000;
+    for (ordinal, fetched_at_ms) in [(0, base + 90_000), (2, base)] {
+        state.rates.insert(
+            ordinal,
+            super::super::CurrentRate {
+                rate_usdt: 1.0,
+                provider: "binance_spot".to_string(),
+                symbol: "X".to_string(),
+                fetched_at_ms,
+            },
+        );
+    }
+
+    assert_eq!(
+        state.next_expiry_ms(),
+        Some(base + super::super::FRESHNESS_MS),
+        "the oldest rate sets the deadline"
+    );
+}
+
+/// The scan must return the currencies needing a rate, and only those.
+///
+/// Breakage: `worker.rs::report_quote_ordinals` dropping the identity-USDT exclusion or the
+/// storage-class guard — every quote scan would schedule needless provider requests for USDT and
+/// placeholder values that decode to no currency at all.
+#[test]
+fn the_quote_scan_returns_only_currencies_that_need_a_rate() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL, closedate INTEGER,
+                                  basecurrency, profitbtc REAL, newrecid INTEGER);
+         INSERT INTO orders_rep VALUES (1, 10, 1, 1.0, 1),
+                                       (1, 11, 0, 1.0, 2),
+                                       (1, 12, 8, 1.0, 3),
+                                       (1, 13, 8, 1.0, 4),
+                                       (1, 14, 99, 1.0, 5),
+                                       (1, 15, 'x', 1.0, 6),
+                                       (1, 16, NULL, 1.0, 7)",
+    )
+    .expect("schema");
+    let ordinals = report_quote_ordinals(&conn).expect("scan");
+    assert_eq!(ordinals, vec![0, 8]);
+}
+
+/// Re-fetching prices that have not moved must wake nobody, while the snapshot itself is stored.
+///
+/// Breakage: `worker.rs::CurrentRateState::publish_snapshot` bumping the generation
+/// unconditionally, or `renders_differently` folding `fetched_at_ms` into the comparison — every
+/// open Report host and the Analytics window requery on that generation and reload their whole
+/// tree, so a refresh that changed no figure redraws every surface for nothing. The refresh
+/// interval alone does not remove it: a pegged quote's price never moves, and its rate would still
+/// be republished for as long as the mode stays on.
+///
+/// The mirror-image breakage is publishing NOTHING when unchanged — an `if changed` wrapped around
+/// the `publish_current_rates` call as well as the generation bump. Freshness is judged against the
+/// PUBLISHED snapshot, so a re-fetch that stored nothing would let the cutoff retire a rate the
+/// worker had in fact just refreshed. That half is asserted through the published snapshot itself,
+/// not through the private diff baseline, because the baseline is not what any reader consults.
+#[test]
+fn republishing_the_same_prices_costs_no_requery() {
+    /// Judged from an instant where every fixture rate below is inside the freshness window, so
+    /// only the PRICE comparison can decide the bump here.
+    const NOW: i64 = 600_000;
+
+    let _published = publish_guard();
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let mut state = scoped_pass(&[0]);
+    let rate = |rate_usdt: f64, fetched_at_ms: i64| super::super::CurrentRate {
+        rate_usdt,
+        provider: "binance_spot".to_string(),
+        symbol: "BTCUSDT".to_string(),
+        fetched_at_ms,
+    };
+    // Whether the published snapshot still serves the quote at `now_ms`, which is the exact
+    // question `valuation::projection` asks of it.
+    let served_at = |now_ms: i64| {
+        super::super::current::current_rates_at()
+            .0
+            .fresh(now_ms)
+            .any(|(ordinal, _)| ordinal == 0)
+    };
+
+    state.rates.insert(0, rate(60_000.0, 1_000));
+    state.publish_snapshot(&generation, &dirty, NOW);
+    assert_eq!(
+        generation.load(Ordering::Relaxed),
+        1,
+        "the first snapshot is new to every surface"
+    );
+    assert!(dirty.swap(false, Ordering::Relaxed), "a bump wakes the UI");
+
+    state.rates.insert(0, rate(60_000.0, 400_000));
+    state.publish_snapshot(&generation, &dirty, NOW);
+    assert_eq!(
+        generation.load(Ordering::Relaxed),
+        1,
+        "an unchanged price must cost no requery"
+    );
+    assert!(
+        !dirty.load(Ordering::Relaxed),
+        "withholding the bump must withhold the wake edge with it"
+    );
+    // The re-fetch happened at 400_000, so the quote must survive to 400_000 + FRESHNESS_MS. Had
+    // the store been skipped, the published snapshot would still carry the 1_000 fetch and this
+    // instant would already be past its cutoff.
+    assert!(
+        served_at(400_000 + super::super::FRESHNESS_MS - 1),
+        "the refreshed fetch instant must reach the published snapshot"
+    );
+    assert!(
+        !served_at(400_000 + super::super::FRESHNESS_MS),
+        "and the cutoff must still be measured from it"
+    );
+
+    state.rates.insert(0, rate(61_000.0, 500_000));
+    state.publish_snapshot(&generation, &dirty, NOW);
+    assert_eq!(
+        generation.load(Ordering::Relaxed),
+        2,
+        "a moved price must reach every surface"
+    );
+    assert!(dirty.swap(false, Ordering::Relaxed), "a bump wakes the UI");
+
+    // An expiry shrinks the map, and that IS a visible change: the retired quote falls back to
+    // uncovered. The freshness contract therefore survives the conditional bump.
+    state.rates.clear();
+    state.publish_snapshot(&generation, &dirty, NOW);
+    assert_eq!(
+        generation.load(Ordering::Relaxed),
+        3,
+        "an expiry must still reach the screen on schedule"
+    );
+}
+
+/// A pass that outlived the freshness window must reach the screen even at an unchanged price.
+///
+/// Breakage: `worker.rs::CurrentRateState::renders_differently` comparing only prices, provenance
+/// and the missing set. The snapshot is published once the pass DRAINS, and a pass can outlive the
+/// window it refreshes: each currency permits four
+/// sequential provider routes, and a transient failure adds the stage's 30-300 s backoff. In that
+/// interval the previously published rate ages past the cutoff and every surface renders the quote
+/// as uncovered. If the pass then lands the same price, a price-only comparison withholds the bump
+/// and the screen keeps saying "uncovered" over a snapshot that covers it — until some unrelated
+/// change happens along.
+#[test]
+fn a_refresh_that_outlived_the_window_wakes_the_surfaces_at_an_unchanged_price() {
+    let _published = publish_guard();
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let mut state = scoped_pass(&[0]);
+    let rate = |fetched_at_ms: i64| super::super::CurrentRate {
+        rate_usdt: 60_000.0,
+        provider: "binance_spot".to_string(),
+        symbol: "BTCUSDT".to_string(),
+        fetched_at_ms,
+    };
+
+    state.rates.insert(0, rate(0));
+    state.publish_snapshot(&generation, &dirty, 0);
+    assert_eq!(generation.load(Ordering::Relaxed), 1);
+
+    // The pass took longer than the window. At this instant the published rate has expired, so the
+    // quote is rendering as uncovered — and the fetch that just landed carries the same price.
+    let late = super::super::FRESHNESS_MS + 60_000;
+    state.rates.insert(0, rate(late));
+    state.publish_snapshot(&generation, &dirty, late);
+    assert_eq!(
+        generation.load(Ordering::Relaxed),
+        2,
+        "a quote re-entering the freshness window changes what renders, price or no price"
+    );
+}

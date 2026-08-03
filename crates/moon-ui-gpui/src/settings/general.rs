@@ -15,6 +15,39 @@ use super::SettingsView;
 use crate::{Backend, design};
 use moon_core::config::UiThemeMode;
 
+/// One bold caption beside a MoonUI select, the General tab's shape for an enum setting.
+///
+/// The width is passed once and reaches both the trigger box and the menu: written out per row,
+/// those two drift, and the menu ends up narrower or wider than the control that opened it.
+///
+/// Args:
+///     label: Localization key for the caption.
+///     state: Select state driving the dropdown.
+///     width: Trigger and menu width in unscaled pixels.
+///     cx: Context used to scale the menu width with the UI font.
+///
+/// Returns:
+///     The assembled row.
+fn labeled_select<T: Clone + PartialEq + 'static>(
+    label: &'static str,
+    state: &Entity<moon_ui::MoonSelectState<T>>,
+    width: f32,
+    cx: &Context<SettingsView>,
+) -> impl IntoElement {
+    h_flex()
+        .gap(px(10.0))
+        .items_center()
+        .child(div().font_bold().child(t!(label).to_string()))
+        .child(
+            div().w(px(width)).child(
+                MoonSelect::new(state)
+                    .trigger_size(MoonButtonSize::Action)
+                    .menu_width(design::font_w(cx, width))
+                    .menu_size(MoonMenuSize::Compact),
+            ),
+        )
+}
+
 impl SettingsView {
     /// Adjust the draft log-retention period, clamped to `0..=365` days.
     fn adjust_ret(&mut self, delta: i32, cx: &mut Context<Self>) {
@@ -235,21 +268,18 @@ impl SettingsView {
             .child(hint(&t!("iface.font_delta_hint")))
             .child(super::separator(p, cx))
             // Interface locale selector.
-            .child(
-                h_flex()
-                    .gap(px(10.0))
-                    .items_center()
-                    .child(div().font_bold().child(t!("general.language").to_string()))
-                    .child(
-                        div().w(px(220.0)).child(
-                            MoonSelect::new(&self.lang)
-                                .trigger_size(MoonButtonSize::Action)
-                                .menu_width(design::font_w(cx, 220.0))
-                                .menu_size(MoonMenuSize::Compact),
-                        ),
-                    ),
-            )
+            .child(labeled_select("general.language", &self.lang, 220.0, cx))
             .child(hint(&t!("general.language_hint")))
+            .child(super::separator(p, cx))
+            // Which rate converts quote money to USDT. The hint explains the two limitations of
+            // the current-rate conversion at the point where the application-wide choice is made.
+            .child(labeled_select(
+                "general.valuation_mode",
+                &self.valuation,
+                260.0,
+                cx,
+            ))
+            .child(hint(&t!("general.valuation_mode_hint")))
             .child(super::separator(p, cx))
             // Place each core in a separate chart tab.
             .child(

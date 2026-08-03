@@ -229,6 +229,15 @@ impl SettingsView {
             cx.refresh_windows();
         }
 
+        // The saved conversion is already in `config`, but two things do not follow from the write:
+        // the valuation worker only fetches current rates while they are demanded, and every open
+        // Report host and the Analytics window learn about the change through the report revision
+        // rather than by polling the config.
+        if before.report_valuation_mode != after.report_valuation_mode {
+            self.backend
+                .update(cx, |b, bcx| b.apply_valuation_mode(bcx));
+        }
+
         // Apply file logging live; purge immediately after toggling it or changing retention.
         if before.log_to_file != after.log_to_file
             || before.log_retention_days != after.log_retention_days

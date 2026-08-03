@@ -174,6 +174,9 @@ pub(super) fn footer_facts(
     };
 
     let totals = &data.totals;
+    // Read from the snapshot, never from the live setting: this row must label the numbers it is
+    // actually showing, and those may predate a mode change whose requery has not landed yet.
+    let mode = data.valuation;
     // A unified USDT figure is offered only where the raw money is not comparable as one scalar.
     // Under a single known currency its own total already IS the answer.
     let mixed = matches!(
@@ -193,7 +196,12 @@ pub(super) fn footer_facts(
         Some(usdt) => {
             let (amount, sign) = fmt::signed_amount(usdt.profit, 2);
             Some((
-                t!("report.valuation_total", amount = amount).to_string(),
+                // A current-rate figure is not historical P&L, so it never borrows that sentence.
+                t!(
+                    mode.key("report.valuation_total", "report.valuation_total_current"),
+                    amount = amount
+                )
+                .to_string(),
                 sign,
             ))
         }
@@ -230,7 +238,10 @@ pub(super) fn footer_facts(
             if coverage.eligible_orders > 0 {
                 tail.push(fact(
                     t!(
-                        "report.valuation_progress",
+                        mode.key(
+                            "report.valuation_progress",
+                            "report.valuation_current_progress"
+                        ),
                         ready = coverage.valued_orders,
                         total = coverage.eligible_orders
                     )
@@ -242,7 +253,10 @@ pub(super) fn footer_facts(
             if coverage.unavailable_orders > 0 {
                 tail.push(fact(
                     t!(
-                        "report.valuation_unavailable",
+                        mode.key(
+                            "report.valuation_unavailable",
+                            "report.valuation_current_unavailable"
+                        ),
                         n = coverage.unavailable_orders
                     )
                     .to_string(),

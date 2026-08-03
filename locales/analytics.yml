@@ -1078,6 +1078,10 @@ valuation.stage.deferred_minute:
   ru: "ожидание закрытия минуты"
   en: "waiting for the minute to close"
   es: "esperando el cierre del minuto"
+valuation.stage.current_rates:
+  ru: "текущие курсы"
+  en: "current rates"
+  es: "tasas actuales"
 valuation.kind.provider:
   ru: "биржа не отдаёт курс"
   en: "the exchange is not returning a rate"

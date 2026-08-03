@@ -98,8 +98,8 @@ pub(super) fn calendar_period_from(
 ///     previous: Previous-period query.
 ///
 /// Returns:
-///     Compatible native, historical USDT, or percent projection; `None` when the previous
-///     period cannot be expressed in the current unit.
+///     Compatible native, historical USDT, current-rate USDT, or percent projection; `None` when
+///     the previous period cannot be expressed in the current unit.
 ///
 /// Errors:
 ///     Returns a classified report read failure when previous-period preflight cannot complete.
@@ -123,13 +123,14 @@ fn comparison_projection(
             } if *current_quote == previous_quote => Some(ProjectionMode::Native),
             _ => None,
         },
+        // Either USDT projection compares; the previous period is asked for the SAME one, since
+        // `previous` carries the same valuation mode as the current query.
         ScopeDecision::Comparable {
             unit: ProfitUnit::Quote(current_quote),
-            projection: ProjectionMode::Usdt,
-        } if *current_quote == crate::db::QuoteCurrency::usdt() => {
+            projection,
+        } if projection.is_usdt() && *current_quote == crate::db::QuoteCurrency::usdt() => {
             let totals = super::quote_breakdown_on(conn, previous)?;
-            (totals.unknown_orders == 0 && totals.unified_usdt().is_some())
-                .then_some(ProjectionMode::Usdt)
+            (totals.unknown_orders == 0 && totals.unified_usdt().is_some()).then_some(*projection)
         }
         ScopeDecision::Comparable { .. }
         | ScopeDecision::Empty { .. }

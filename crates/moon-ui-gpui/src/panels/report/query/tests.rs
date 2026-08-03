@@ -104,6 +104,7 @@ fn populated_filter() -> ReportFilter {
             core_uid: 7,
             strategy_id: -11,
         }]),
+        valuation: Default::default(),
     }
 }
 

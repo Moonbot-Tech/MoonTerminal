@@ -389,7 +389,7 @@ fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> 
         },
         QuoteScope::Mixed if totals.unified_usdt().is_some() => ScopeDecision::Comparable {
             unit: ProfitUnit::Quote(crate::db::QuoteCurrency::usdt()),
-            projection: ProjectionMode::Usdt,
+            projection: ProjectionMode::usdt_for(q.valuation),
         },
         QuoteScope::Mixed | QuoteScope::Unknown => ScopeDecision::Split(totals),
     })
@@ -402,7 +402,7 @@ fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> 
 ///     q: Concrete Analytics query.
 ///
 /// Returns:
-///     Native, historical USDT, or percent projection.
+///     Native, historical USDT, current-rate USDT, or percent projection.
 ///
 /// Errors:
 ///     Returns `IncomparableQuote` for partial or unknown raw-money scopes, or propagates a
@@ -426,7 +426,8 @@ pub(in crate::db) fn projection_mode_on(
 ///     q: Concrete query whose metric is ignored.
 ///
 /// Returns:
-///     Historical USDT for fully valued mixed known scopes, native money otherwise.
+///     The query's requested USDT conversion for fully valued mixed known scopes, native money
+///     otherwise.
 ///
 /// Errors:
 ///     Returns a classified report read failure when quote or valuation preflight cannot complete.
@@ -436,7 +437,7 @@ fn raw_money_projection_on(conn: &Connection, q: &Query) -> ReadResult<Projectio
     let totals = quote_breakdown_on(conn, &raw)?;
     Ok(
         if matches!(totals.scope(), QuoteScope::Mixed) && totals.unified_usdt().is_some() {
-            ProjectionMode::Usdt
+            ProjectionMode::usdt_for(q.valuation)
         } else {
             ProjectionMode::Native
         },
@@ -447,7 +448,8 @@ impl ScopeDecision {
     /// Projection established by this comparable or empty preflight.
     ///
     /// Returns:
-    ///     Native, historical USDT, or percent mode; split scopes return no projection.
+    ///     Native, historical USDT, current-rate USDT, or percent mode; split scopes return no
+    ///     projection.
     fn projection(&self) -> Option<ProjectionMode> {
         match self {
             Self::Comparable { projection, .. } | Self::Empty { projection } => Some(*projection),
@@ -526,7 +528,7 @@ fn strategy_base_on(
 /// period has zero current-period counters.
 ///
 /// Args:
-///     q: Active Analytics filters, period, and profit metric.
+///     q: Active Analytics filters, period, profit metric, and valuation mode.
 ///
 /// Returns:
 ///     Comparable or empty Summary data, split totals, or a classified read failure.
@@ -538,6 +540,9 @@ pub fn summary(q: &Query) -> ReadResult<ProfitScope<Summary>> {
     // group tables are separate statements, and the writer commits between them
     // during catch-up — without this they could disagree about which trades the
     // period contains while being published as one coherent result.
+    // The current-rate snapshot is pinned for the same span and the same reason — `with_read_snapshot`
+    // does this for the compound readers; this one takes its snapshot by hand and must too.
+    let _rates = super::valuation::pin_current_rates();
     let snap = super::read_snapshot(&conn)?;
     summary_on(&snap, q, has_strat_names, true)
 }
@@ -678,10 +683,12 @@ fn previous_stats(
                     projection: ProjectionMode::Native,
                 } if *current_quote == previous_quote
             ),
+            // Either USDT projection compares, as long as BOTH periods use the same one — which
+            // they do, because `previous` is a clone carrying the same valuation mode.
             ScopeDecision::Comparable {
                 unit: ProfitUnit::Quote(current_quote),
-                projection: ProjectionMode::Usdt,
-            } if *current_quote == crate::db::QuoteCurrency::usdt() => {
+                projection,
+            } if projection.is_usdt() && *current_quote == crate::db::QuoteCurrency::usdt() => {
                 let totals = quote_breakdown_on(conn, &previous).ok()?;
                 totals.unknown_orders == 0 && totals.unified_usdt().is_some()
             }

@@ -127,6 +127,13 @@ pub(super) struct ReportData {
     pub(super) row_keys: Vec<Option<selection::ReportRowKey>>,
     /// Exact per-quote totals over the full filter, not the displayed top N.
     pub(super) totals: db::QuoteBreakdown,
+    /// The conversion these figures were computed under.
+    ///
+    /// Travels WITH the data rather than being read live at render: a mode change requeries, and
+    /// the previous result stays on screen while that query runs. Labelling it from the live
+    /// setting would put the new mode's words under the old mode's numbers for exactly as long as
+    /// the requery takes — the one thing this feature must never do.
+    pub(super) valuation: db::valuation::ValuationMode,
 }
 
 /// One completed background batch with optional selector-metadata refresh.
@@ -204,6 +211,10 @@ fn run_report_query(
     // Pin one snapshot across cores, rows, and totals. Separate autocommit reads
     // could straddle a writer commit, including legacy cleanup after sync, and
     // publish rows and totals from different database states.
+    // The current-rate snapshot is pinned for the same span and the same reason: a worker
+    // publication landing between the rows and the totals would convert the two at different
+    // rates, so the footer would stop summing the column above it.
+    let _rates = db::valuation::pin_current_rates();
     let snap = db::read_snapshot(&conn)?;
     let cores = if with_core_metadata {
         Some(db::distinct_cores(&snap)?)
@@ -238,6 +249,7 @@ fn run_report_query(
             core_uids: table.core_uids,
             row_keys,
             totals,
+            valuation: filter.valuation,
         },
     })
 }
@@ -246,11 +258,11 @@ impl ReportPanel {
     /// Assemble the exact database filter represented by the retained controls.
     ///
     /// Args:
-    ///     _cx: Application context retained for the panel filter interface.
+    ///     cx: Application context used to read the application-wide valuation mode.
     ///
     /// Returns:
     ///     A filter shared by rows, totals, and export.
-    pub(super) fn filter(&self, _cx: &App) -> ReportFilter {
+    pub(super) fn filter(&self, cx: &App) -> ReportFilter {
         // A preset overrides the manual date only on the edge it SETS itself. Every preset
         // but "All" sets the lower one; only "Yesterday" sets the upper one — for the rest
         // `to = None`, and then the upper edge comes from the "To:" field if it holds a date.
@@ -269,6 +281,9 @@ impl ReportPanel {
             deleted_only: self.deleted_only,
             closed_only: self.closed_only,
             strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
+            // Read from the backend at build time rather than mirrored into the panel: the rows,
+            // the totals and the export all derive from this ONE filter, so they convert alike.
+            valuation: self.backend.read(cx).valuation_mode(),
         }
     }
 

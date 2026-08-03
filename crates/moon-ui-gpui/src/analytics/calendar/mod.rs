@@ -419,7 +419,8 @@ impl AnalyticsView {
 /// logic lives next to its page). The query builds its own window from the
 /// mode (month/year/day); the window's period bar plays no part here.
 impl AnalyticsView {
-    /// Calendar `[from,to)` range per mode + the current core/side/emu filters.
+    /// Calendar `[from,to)` range per mode plus the current core, side, emulator, metric, and
+    /// valuation filters.
     fn cal_query(&self) -> Query {
         let (from, to) = match self.cal_mode {
             CalMode::Month => month_range(self.cal_ym),
@@ -438,10 +439,11 @@ impl AnalyticsView {
             emulator: self.emu,
             strategies: Vec::new(),
             metric: self.metric,
+            valuation: self.valuation_mode,
         }
     }
 
-    /// PREVIOUS month's query (for the KPI deltas) — "Month" mode only.
+    /// Previous month's query under the same filters and valuation mode, for Month KPI deltas only.
     fn cal_query_prev(&self) -> Option<Query> {
         if self.cal_mode != CalMode::Month {
             return None;
@@ -455,6 +457,7 @@ impl AnalyticsView {
             emulator: self.emu,
             strategies: Vec::new(),
             metric: self.metric,
+            valuation: self.valuation_mode,
         })
     }
 
@@ -496,10 +499,14 @@ impl AnalyticsView {
         }
         self.acknowledge_report_refresh();
         self.cal_dirty = false;
-        // Calendar quote identity can change with its period. Old scalar cells must not render
-        // beneath the new navigation label while the replacement scope is still unverified.
-        self.cal_days = ProfitLoadState::default();
-        self.cal_prev = LoadState::default();
+        // Calendar quote identity can change with its period, so a MANUAL navigation drops the
+        // old cells: they must not render beneath the new label while the scope is unverified.
+        // A report-driven catch-up keeps the same period and scope, so its cells stay on screen
+        // until the replacement lands instead of blinking through "loading".
+        if !after_report {
+            self.cal_days = ProfitLoadState::default();
+            self.cal_prev = LoadState::default();
+        }
         self.cal_seq = self.cal_seq.wrapping_add(1);
         let req = self.cal_seq;
         let report_req = self.current_report_generation();

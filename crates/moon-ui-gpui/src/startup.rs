@@ -32,7 +32,7 @@ struct ReportRevisionDecision {
     wake_valuation: bool,
 }
 
-/// The commit edges observed in one coordination tick.
+/// The report-data, valuation-data, and health edges observed in one coordination tick.
 ///
 /// A struct rather than four positional `bool`s: they share a type but have different publication
 /// and wake semantics. Swapping a health edge with a report-commit edge would compile while making
@@ -43,7 +43,8 @@ struct TickEdges {
     immediate_report: bool,
     /// Historical catch-up report data committed this tick.
     background_report: bool,
-    /// The valuation worker published committed values this tick.
+    /// The valuation worker published historical values, coverage, or a current-rate snapshot this
+    /// tick.
     valuation: bool,
     /// Published valuation health changed shape this tick.
     valuation_status: bool,
@@ -368,6 +369,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let valuation_status_dirty = valuation
             .as_ref()
             .map(|valuation| valuation.status_dirty.clone());
+        // A mode restored from settings.toml has to reach the worker before anything renders, or
+        // the first current-rate view would wait out a park for a snapshot nobody had asked for.
+        if let Some(valuation) = &valuation {
+            valuation.set_current_wanted(
+                cfg.report_valuation_mode == moon_core::db::valuation::ValuationMode::Current,
+            );
+        }
         let report_revision = cx.new(|_| crate::ReportRevision);
         // Check the complete replica once because individual reads only detect
         // damage on pages reached by their query.

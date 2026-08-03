@@ -5,6 +5,7 @@
 //! stored input with the current report row, so an upsert under the same report identity cannot
 //! publish a stale conversion while the worker is catching up.
 
+mod current;
 mod health;
 mod provider;
 mod worker;
@@ -16,6 +17,10 @@ mod tests;
 // anything mint a fault the worker never reported — the opposite of "health is published, not
 // derived". `FailureKind` is public only because `ValuationFault.kind` is a public field, so a
 // consumer could otherwise read the class without being able to name its type.
+pub(crate) use current::current_rate_sql;
+use current::publish_current_rates;
+pub use current::{pin_current_rates, RatePin, ValuationMode};
+pub(crate) use current::{CurrentRate, CurrentRates, FRESHNESS_MS};
 pub(crate) use health::FaultCause;
 pub use health::{FailureKind, StageHealth, ValuationFault, ValuationStage, ValuationStatus};
 pub(crate) use provider::{HttpSpotRateSource, SpotRateSource};
@@ -227,6 +232,57 @@ impl CoverageAggregate {
     }
 }
 
+/// The row-level guards both conversions share.
+pub(super) struct SourcePredicates {
+    /// One for a row whose quote currency is a trusted persisted ordinal.
+    pub quote_known: String,
+    /// One for a row whose profit is numeric.
+    pub numeric_profit: String,
+    /// The row's spend, or NULL when absent or non-numeric.
+    pub spent_value: String,
+}
+
+/// Build the guards that decide which rows either conversion may touch at all.
+///
+/// Shared by both SQL builders on purpose. The trusted-ordinal contract and the storage-class
+/// checks are what "eligible" MEANS, and stating them twice is how the two modes would come to
+/// disagree about which rows count — silently, with both still compiling and both still passing.
+///
+/// Args:
+///     alias: Qualified report-row alias used by the caller.
+///     columns: Discovered physical source columns.
+///
+/// Returns:
+///     Predicates that name only columns the source actually has.
+pub(super) fn source_predicates(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+) -> SourcePredicates {
+    // SQLite resolves every column reference at prepare time, unreachable arms included, so an
+    // absent column collapses to a constant rather than being named.
+    SourcePredicates {
+        quote_known: if columns.contains("basecurrency") {
+            format!(
+                "typeof({alias}.basecurrency)='integer' AND {alias}.basecurrency BETWEEN 0 AND 20"
+            )
+        } else {
+            "0".to_string()
+        },
+        numeric_profit: if columns.contains("profitbtc") {
+            format!("typeof({alias}.profitbtc) IN ('integer','real')")
+        } else {
+            "0".to_string()
+        },
+        spent_value: if columns.contains("spentbtc") {
+            format!(
+                "CASE WHEN typeof({alias}.spentbtc) IN ('integer','real') THEN {alias}.spentbtc END"
+            )
+        } else {
+            "NULL".to_string()
+        },
+    }
+}
+
 /// Build input-matching valuation SQL for one physical report source.
 ///
 /// Args:
@@ -249,28 +305,15 @@ pub(crate) fn coverage_sql(
     let has_closedate = columns.contains("closedate");
     let has_quote = columns.contains("basecurrency");
     let has_profit = columns.contains("profitbtc");
-    let has_spent = columns.contains("spentbtc");
-    let quote_known = if has_quote {
-        format!("typeof({alias}.basecurrency)='integer' AND {alias}.basecurrency BETWEEN 0 AND 20")
-    } else {
-        "0".to_string()
-    };
-    let numeric_profit = if has_profit {
-        format!("typeof({alias}.profitbtc) IN ('integer','real')")
-    } else {
-        "0".to_string()
-    };
+    let SourcePredicates {
+        quote_known,
+        numeric_profit,
+        spent_value,
+    } = source_predicates(alias, columns);
     let date_valid = if has_closedate {
         format!("typeof({alias}.closedate)='integer' AND {alias}.closedate>0")
     } else {
         "0".to_string()
-    };
-    let spent_value = if has_spent {
-        format!(
-            "CASE WHEN typeof({alias}.spentbtc) IN ('integer','real') THEN {alias}.spentbtc END"
-        )
-    } else {
-        "NULL".to_string()
     };
     let input_match = if let Some(id_column) =
         id_column.filter(|_| columns.contains("core_uid") && has_required_trade_inputs(columns))
@@ -371,6 +414,43 @@ pub(crate) fn coverage_sql(
         },
         profit_usdt,
         spent_usdt,
+    }
+}
+
+/// Build valuation SQL for one physical report source under the requested mode.
+///
+/// The one seam between the two conversions. Every reader goes through here, so a mode cannot
+/// reach one query path and miss another — which would show a row and the total it belongs to
+/// converted by different rules.
+///
+/// Only the historical mode can be withheld. Its rows live in the attached derived cache, so a
+/// detached or corrupt cache leaves nothing to project; current rates live in memory and stay
+/// available whatever the cache is doing, which is also why they need no DETACH-and-retry path.
+///
+/// Args:
+///     mode: Historical per-trade rates, or the latest known rates.
+///     attached: Whether the derived valuation cache may be joined.
+///     alias: Qualified report-row alias used by the caller.
+///     columns: Discovered physical source columns.
+///     source: Typed or legacy source partition.
+///
+/// Returns:
+///     Coverage fragments in the shape both modes share, or `None` when the historical cache is
+///     unavailable and the caller must fall back to native money.
+pub(in crate::db) fn projection(
+    mode: ValuationMode,
+    attached: bool,
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+    source: TradeSource,
+) -> Option<CoverageSql> {
+    match mode {
+        ValuationMode::Historical => attached.then(|| coverage_sql(alias, columns, source)),
+        ValuationMode::Current => {
+            // One snapshot AND one clock for every projection of this read batch — see `RatePin`.
+            let (rates, now_ms) = current::current_rates_at();
+            Some(current_rate_sql(alias, columns, &rates, now_ms))
+        }
     }
 }
 

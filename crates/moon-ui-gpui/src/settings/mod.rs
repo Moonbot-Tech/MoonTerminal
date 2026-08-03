@@ -38,6 +38,7 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::media::icons::IconSet;
 use moon_core::config::{AppConfig, CoreSortMode, Language};
+use moon_core::db::valuation::ValuationMode;
 use moon_core::market::MarketDataMode;
 
 use badges::BadgesEd;
@@ -105,6 +106,16 @@ const MODE_LABELS: [(&str, MarketDataMode); 2] = [
     ("conn.market_percore", MarketDataMode::PerCore),
 ];
 
+/// Labels and values for the quote-money conversion selector, historical first: it is the default
+/// and the one almost every user should keep.
+const VALUATION_LABELS: [(&str, ValuationMode); 2] = [
+    (
+        "general.valuation_mode.historical",
+        ValuationMode::Historical,
+    ),
+    ("general.valuation_mode.current", ValuationMode::Current),
+];
+
 /// Labels and values for the global core-order selector.
 const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
     ("conn.core_sort.name", CoreSortMode::Name),
@@ -121,6 +132,7 @@ pub(crate) enum StatusMsg {
     Text(String),
 }
 
+/// Settings editor whose draft is previewed in the backend and committed only on save.
 pub struct SettingsView {
     backend: Entity<Backend>,
     active: Tab,
@@ -138,6 +150,8 @@ pub struct SettingsView {
     ui_font_input: Entity<MoonInputState>,
     /// Language selector for the General tab.
     lang: Entity<MoonSelectState<Language>>,
+    /// Quote-money conversion selector for the General tab.
+    valuation: Entity<MoonSelectState<ValuationMode>>,
     /// Data-source selector for the Connections tab.
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Order selector shared by every core list on the Connections tab.
@@ -226,10 +240,15 @@ impl SettingsView {
         .detach();
 
         // Initialize the language dropdown, ported from egui's ComboBox, from the current draft.
-        let (cur_lang, cur_mode, cur_core_sort) = {
+        let (cur_lang, cur_mode, cur_core_sort, cur_valuation) = {
             let b = backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
-            (d.language, d.market_mode, d.core_sort)
+            (
+                d.language,
+                d.market_mode,
+                d.core_sort,
+                d.report_valuation_mode,
+            )
         };
         let lang_items = Language::ALL
             .iter()
@@ -252,6 +271,41 @@ impl SettingsView {
                 });
             }
         })
+        .detach();
+
+        // Quote-money conversion. It lives here rather than on the Report or Analytics toolbars
+        // because it is an expert setting almost nobody should touch: the default answers "what was
+        // this trade worth when it closed", which is the right question for nearly every user.
+        let valuation_items = VALUATION_LABELS
+            .iter()
+            .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
+            .collect::<Vec<_>>();
+        let valuation_idx = VALUATION_LABELS
+            .iter()
+            .position(|(_, m)| *m == cur_valuation)
+            .unwrap_or(0);
+        let valuation = cx.new(|cx| {
+            MoonSelectState::new(
+                valuation_items,
+                Some(IndexPath::new(valuation_idx)),
+                window,
+                cx,
+            )
+        });
+        cx.subscribe(
+            &valuation,
+            |this, _e, ev: &MoonSelectEvent<ValuationMode>, cx| {
+                if let MoonSelectEvent::Confirm(Some(mode)) = ev {
+                    let mode = *mode;
+                    this.backend.update(cx, |b, bcx| {
+                        if let Some(p) = b.preview.as_mut() {
+                            p.report_valuation_mode = mode;
+                            bcx.notify();
+                        }
+                    });
+                }
+            },
+        )
         .detach();
 
         // Build the data-source dropdown, ported from egui's ComboBox.
@@ -346,6 +400,7 @@ impl SettingsView {
             ui_font,
             ui_font_input,
             lang,
+            valuation,
             mode,
             core_sort,
             open_lines: HashSet::new(),
@@ -368,6 +423,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.language.code().hash(&mut h);
     cfg.market_mode.code().hash(&mut h);
     cfg.core_sort.hash(&mut h);
+    cfg.report_valuation_mode.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
     cfg.charts_stack_compress.hash(&mut h);
