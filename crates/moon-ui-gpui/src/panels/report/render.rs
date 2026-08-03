@@ -34,6 +34,7 @@ impl ReportPanel {
         let view_click = view.clone();
         let view_double = view.clone();
         let view_select_all = view.clone();
+        let view_menu = view.clone();
         let backend = self.backend.clone();
         let table_state = self.table_state.clone();
         let row_cols = self.cols.clone();
@@ -92,6 +93,11 @@ impl ReportPanel {
             })
             .on_select_all_rows(move |_window, app| {
                 view_select_all.update(app, |this, cx| this.select_all_report_rows(cx));
+            })
+            // The coin cell keeps its own right-click menu and stops propagation; anywhere else on
+            // the row opens the row menu.
+            .on_right_click_row(move |row, window, app| {
+                view_menu.update(app, |this, cx| this.open_row_menu(row, window, cx));
             })
             .on_sort(move |key, ascending, _window, app| {
                 let key = key.to_string();

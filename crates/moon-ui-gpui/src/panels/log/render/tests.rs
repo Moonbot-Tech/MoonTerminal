@@ -2,9 +2,10 @@
 // re-export, whose `test` shadows the built-in attribute and makes `#[test]` expand
 // recursively ("recursion limit reached").
 use super::{
-    LineView, RefreshGate, aggregate, classify_lower, exchange_chart_candidates,
-    exchange_members_from, selected_core_log_sig,
+    LineView, RefreshGate, aggregate, collect_coin_bases, exchange_chart_candidates,
+    exchange_members_from, find_coin, selected_core_log_sig,
 };
+use crate::panels::line_list::classify_lower;
 use crate::panels::log::{
     AGG_PER_CORE, LogSource, LogSourceItem, VIEW_LIMIT, exchange_membership_changed,
 };
@@ -302,5 +303,80 @@ fn exchange_membership_changes_invalidate_paused_rows() {
     assert!(
         !exchange_membership_changed(Some(&original), None),
         "a non-exchange source relies on its normal source-change reset"
+    );
+}
+
+/// The coin the core states at the head of its own line, as the panel must read it.
+///
+/// Both shapes come from real core logs, and both defeat every shape-based rule: `CLO` is a bare
+/// three-letter name, `1kRATS` carries a lowercase letter.
+#[test]
+fn a_core_line_head_names_its_coin() {
+    let known = HashSet::new();
+    let short = "12:27:56  CLO<Short> : [1] (48190) Auto cancel buy order activated since 184 sec.";
+    let long = "12:27:47  1kRATS: [1] (48186) Auto cancel buy order activated since 180 sec.";
+
+    let (range, base) = find_coin(short, &known).expect("CLO стоит в голове строки");
+    assert_eq!(&short[range], "CLO");
+    assert_eq!(base, "CLO");
+
+    let (range, base) = find_coin(long, &known).expect("1kRATS стоит в голове строки");
+    assert_eq!(
+        &long[range], "1kRATS",
+        "строчная буква — часть имени монеты"
+    );
+    assert_eq!(base, "1kRATS");
+}
+
+/// A two-letter name is a real coin (`US`), and the slot bracket is what separates a coin head
+/// from an ordinary prefixed sentence.
+#[test]
+fn only_the_slot_or_direction_tail_makes_a_head_a_coin() {
+    let known = HashSet::new();
+
+    let two = "00:00:02  US<Short> : [4] (155845) BUY Order SET!";
+    assert_eq!(
+        find_coin(two, &known).map(|(r, _)| &two[r]),
+        Some("US"),
+        "двухбуквенная монета — тоже монета"
+    );
+
+    let prefixed = "12:27:56  PumpDetection: NBIS Ask:199.39 dBTC: 0.16";
+    assert_ne!(
+        find_coin(prefixed, &known).map(|(_, base)| base),
+        Some("PumpDetection".to_string()),
+        "обычная строка с префиксом — не монета"
+    );
+
+    let sentence = "Starting new MoonShot market: USDT-AIO (strategy <MainShotMS>) Delay: 16";
+    assert_eq!(
+        find_coin(sentence, &known).map(|(_, base)| base),
+        Some("AIO".to_string()),
+        "без головы работает прежнее правило рыночной формы"
+    );
+}
+
+/// A head coin joins the known set, so a later BARE mention of it lights up as well.
+#[test]
+fn a_head_coin_is_learned_for_later_bare_mentions() {
+    let line = |msg: &str| LogLine {
+        ts: "2026-08-03 12:27:56".into(),
+        level: log::Level::Info,
+        target: String::new(),
+        msg: msg.to_string(),
+    };
+    let lines = [
+        line("12:27:47  1kRATS: [1] (48186) Auto cancel buy order activated"),
+        line("Srv: NewOrder worker created: Market=1kRATS CorrelationTag=<0>"),
+    ];
+
+    let known = collect_coin_bases(&lines);
+
+    assert!(known.contains("1kRATS"), "голова строки учит имя монеты");
+    let bare = &lines[1].msg;
+    assert_eq!(
+        find_coin(bare, &known).map(|(r, _)| &bare[r]),
+        Some("1kRATS"),
+        "выученное имя подсвечивается и в строке без головы"
     );
 }

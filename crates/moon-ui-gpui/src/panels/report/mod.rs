@@ -21,9 +21,11 @@ mod selection;
 mod state;
 mod strategy_filter;
 mod totals;
+mod trade_log;
 mod widths;
 mod window;
 
+use columns::{as_i64, value_to_string};
 use query::ReportData;
 use selection::ReportSelection;
 use strategy_filter::{
@@ -40,6 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_ui::MoonContextMenuWindowExt as _;
 use moon_ui::MoonWindowExt as _;
 use moon_ui::{
     DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,

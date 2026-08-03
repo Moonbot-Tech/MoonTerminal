@@ -1,12 +1,12 @@
-//! Log rebuild signature, aggregation of live core logs, line classification, and rendering of
-//! one row with severity colors plus coin and search-match highlighting.
+//! Log rebuild signature, aggregation of live core logs, and line classification.
 //!
 //! [`super::LogPanel`] owns filtering, the virtual list, and follow-tail scrolling. Classification
-//! ([`classify_lower`]) and coin detection ([`find_coin`]) run once while `apply_filter` builds
+//! (`line_list::classify_lower`) and coin detection ([`find_coin`]) run once while `apply_filter` builds
 //! [`LineView`] values instead of every frame: parsing is expensive, while the virtual list calls
-//! the row renderer for every visible line on each frame.
+//! the row renderer in [`super::row`] for every visible line on each frame.
 
 use super::*;
+use crate::panels::line_list::{Cat, Class, Sev};
 use moon_core::session::CoreStore;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::ops::Range;
@@ -70,40 +70,6 @@ impl RefreshGate {
     }
 }
 
-/// Line severity, which determines the row's base text color.
-///
-/// Core logs have no source level and [`LogLine::core`] assigns `Info`, so their `Error` and
-/// `Warn` severities are inferred from message text.
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Sev {
-    Error,
-    Warn,
-    Info,
-    /// Muted `Debug` and `Trace` output.
-    Dim,
-    /// Noise from the GPUI fork, including bursts of `window not found` errors while windows close.
-    ///
-    /// These are muted so they do not obscure real errors and are excluded from errors-only mode.
-    Noise,
-}
-
-/// Semantic line category, independent of severity, used for the compact category badge.
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Cat {
-    None,
-    /// Order failure or rejection, insufficient funds, and similar messages.
-    Reject,
-    /// Connection loss, reconnection, or timeout.
-    Conn,
-}
-
-/// Severity and category produced together from a single lowercase conversion.
-#[derive(Clone, Copy)]
-pub(super) struct Class {
-    pub(super) sev: Sev,
-    pub(super) cat: Cat,
-}
-
 /// Precomputed render-ready line containing time, source, classification, flattened text, and an
 /// optional coin-token byte range into `flat`.
 #[derive(Clone)]
@@ -126,7 +92,7 @@ impl LineView {
     /// Build a render-ready line from an existing classification.
     ///
     /// Coin detection happens here so errors-only filtering can reject a line before scanning it.
-    /// `cl` comes from [`classify_lower`], which the caller runs before that filter to avoid
+    /// `cl` comes from `line_list::classify_lower`, which the caller runs before that filter to avoid
     /// classifying twice. `known` contains coin bases collected from the full buffer, allowing bare
     /// tickers such as `SPK` to be highlighted.
     pub(super) fn from_parts(line: &LogLine, cl: Class, known: &HashSet<String>) -> Self {
@@ -150,85 +116,10 @@ impl LineView {
     }
 }
 
-/// Return whether a severity passes errors-only mode; GPUI noise is deliberately excluded.
-pub(super) fn is_error(sev: Sev) -> bool {
-    matches!(sev, Sev::Error | Sev::Warn)
-}
-
-const ERROR_KW: [&str; 8] = [
-    "error",
-    "panic",
-    "exception",
-    "critical",
-    "fail",
-    "reject",
-    "ошиб",
-    "отклон",
-];
-const WARN_KW: [&str; 5] = ["warn", "timeout", "таймаут", "retry", "предупре"];
-const REJECT_KW: [&str; 6] = [
-    "reject",
-    "отклон",
-    "denied",
-    "insufficient",
-    "недостаточно",
-    "rejected",
-];
-const CONN_KW: [&str; 8] = [
-    "disconnect",
-    "reconnect",
-    "connection",
-    "разрыв",
-    "timeout",
-    "таймаут",
-    "соедин",
-    "подключ",
-];
-
-/// Classifies a line from a lowercase message already prepared by the filtering pass.
-///
-/// Reusing `lower` keeps query, coin, severity, and category checks to one Unicode lowercase
-/// allocation per row. Explicit non-`Info` levels take precedence over message text, while
-/// recognized GPUI noise overrides everything; `Info` lines infer severity from their text.
-pub(super) fn classify_lower(level: log::Level, lower: &str) -> Class {
-    if lower.contains("window not found") || lower.contains("недопустимый дескриптор окна")
-    {
-        return Class {
-            sev: Sev::Noise,
-            cat: Cat::None,
-        };
-    }
-    let cat = categorize(lower);
-    let sev = match level {
-        log::Level::Error => Sev::Error,
-        log::Level::Warn => Sev::Warn,
-        log::Level::Debug | log::Level::Trace => Sev::Dim,
-        log::Level::Info => {
-            if ERROR_KW.iter().any(|k| lower.contains(k)) {
-                Sev::Error
-            } else if WARN_KW.iter().any(|k| lower.contains(k)) {
-                Sev::Warn
-            } else {
-                Sev::Info
-            }
-        }
-    };
-    Class { sev, cat }
-}
-
-/// Categorize already-lowercased text, preferring `Reject` over `Conn` for rejection timeouts.
-fn categorize(lower: &str) -> Cat {
-    if REJECT_KW.iter().any(|k| lower.contains(k)) {
-        Cat::Reject
-    } else if CONN_KW.iter().any(|k| lower.contains(k)) {
-        Cat::Conn
-    } else {
-        Cat::None
-    }
-}
-
 fn is_tick(b: u8) -> bool {
-    b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
+    // Lowercase letters belong to a token too: real coins carry them (`kPEPE`, `1kRATS`), and
+    // without them `USDT-kPEPE` would break into two pieces neither of which is a market.
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
 /// Extract the base coin from a market-shaped token, or `None` for an ordinary word.
@@ -241,13 +132,72 @@ fn market_base(w: &str) -> Option<String> {
     moon_core::symbol::parse::market_in_text(w).map(str::to_string)
 }
 
-/// Collect coin bases that appear in market-shaped tokens anywhere in the buffer.
+/// Longest coin token the core's line head may carry, in bytes.
 ///
-/// This allows later bare mentions to be highlighted because `SPK` alone is structurally
+/// Real names run to about ten characters (`1000000MOG`, `PUMPBTC`); the cap is what keeps a
+/// sentence that merely LOOKS like the head shape from being read as a ticker.
+const MAX_COIN_LEN: usize = 12;
+
+/// Coin the core names at the head of its own log line, as a byte range into `msg`.
+///
+/// A trading core writes every task line as `HH:MM:SS  COIN<Dir> : [slot] (task) text` or
+/// `HH:MM:SS  COIN: [slot] (task) text` — the coin is stated outright, in the core's own spelling.
+/// Reading it here is what makes `CLO` and `1kRATS` coins: neither is market-SHAPED, and a name
+/// carrying a lowercase letter (`kPEPE`, `1kRATS`, `preOPAI` — all real) cannot be recognized by
+/// shape at all.
+///
+/// The tail is what makes this safe. The token counts only when a direction bracket or the slot
+/// bracket follows it, so an ordinary prefixed line (`PumpDetection: ...`, `Starting new MoonShot
+/// market: ...`) is not mistaken for one — measured against a day of real core logs, where the
+/// strict form matches 150k lines of 211k and `PumpDetection` never matches.
+fn coin_at_head(msg: &str) -> Option<Range<usize>> {
+    let bytes = msg.as_bytes();
+    // The core repeats its clock inside the message; step over it when present.
+    let mut at = 0;
+    if bytes.len() > 8 && bytes[2] == b':' && bytes[5] == b':' {
+        at = 8;
+    }
+    while bytes.get(at) == Some(&b' ') {
+        at += 1;
+    }
+    let start = at;
+    while bytes.get(at).is_some_and(u8::is_ascii_alphanumeric) {
+        at += 1;
+    }
+    let token = msg.get(start..at)?;
+    if !(2..=MAX_COIN_LEN).contains(&token.len()) || !token.bytes().any(|b| b.is_ascii_uppercase())
+    {
+        return None;
+    }
+    // `COIN<Short>`, or `COIN : [slot]` with the spaces the core puts in or leaves out.
+    let mut tail = at;
+    if bytes.get(tail) == Some(&b'<') {
+        return Some(start..at);
+    }
+    while bytes.get(tail) == Some(&b' ') {
+        tail += 1;
+    }
+    if bytes.get(tail) != Some(&b':') {
+        return None;
+    }
+    tail += 1;
+    while bytes.get(tail) == Some(&b' ') {
+        tail += 1;
+    }
+    (bytes.get(tail) == Some(&b'[')).then_some(start..at)
+}
+
+/// Collect coin names that any line in the buffer states outright: at its head, or as a
+/// market-shaped token.
+///
+/// This lets a later BARE mention be highlighted too, because `SPK` alone is structurally
 /// indistinguishable from words such as `BUY` or `API`.
 pub(super) fn collect_coin_bases(lines: &[LogLine]) -> HashSet<String> {
     let mut set = HashSet::new();
     for l in lines {
+        if let Some(head) = coin_at_head(&l.msg) {
+            set.insert(l.msg[head].to_string());
+        }
         let bytes = l.msg.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
@@ -269,10 +219,14 @@ pub(super) fn collect_coin_bases(lines: &[LogLine]) -> HashSet<String> {
 
 /// Find the first coin in a message with a purpose-built scanner rather than a regex.
 ///
-/// A market-shaped token takes its full byte range for highlighting and yields a base for the
-/// click filter. A bare ticker is accepted only when present in `known`. Return the byte range and
-/// base, or `None` when no coin is found.
+/// The core's own line head answers first ([`coin_at_head`]) — it is the one place a coin is named
+/// rather than inferred. Otherwise a market-shaped token takes its full byte range for highlighting
+/// and yields a base for the click filter, and a bare ticker is accepted only when `known` holds it.
+/// Return the byte range and base, or `None` when no coin is found.
 pub(super) fn find_coin(msg: &str, known: &HashSet<String>) -> Option<(Range<usize>, String)> {
+    if let Some(head) = coin_at_head(msg) {
+        return Some((head.clone(), msg[head].to_string()));
+    }
     let bytes = msg.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -288,7 +242,7 @@ pub(super) fn find_coin(msg: &str, known: &HashSet<String>) -> Option<(Range<usi
         if let Some(base) = market_base(word) {
             return Some((start..i, base));
         }
-        if word.len() >= 3 && known.contains(word) {
+        if word.len() >= 2 && known.contains(word) {
             return Some((start..i, word.to_string()));
         }
     }
@@ -499,238 +453,6 @@ pub(super) fn aggregate(
             line
         })
         .collect()
-}
-
-/// Return the row's base text color for its severity.
-fn sev_color(sev: Sev, p: MoonPalette) -> u32 {
-    match sev {
-        Sev::Error => p.red,
-        Sev::Warn => p.amber,
-        Sev::Info => p.text_soft,
-        Sev::Dim | Sev::Noise => p.text_muted,
-    }
-}
-
-/// Return the severity badge for `Error` or `Warn`.
-fn badge(sev: Sev, p: MoonPalette) -> Option<(&'static str, u32)> {
-    match sev {
-        Sev::Error => Some(("ERR", p.red)),
-        Sev::Warn => Some(("WARN", p.amber)),
-        _ => None,
-    }
-}
-
-/// Return the rejection or connection category badge.
-fn cat_badge(cat: Cat, p: MoonPalette) -> Option<(&'static str, u32)> {
-    match cat {
-        Cat::Reject => Some(("REJ", p.orange)),
-        Cat::Conn => Some(("NET", p.yellow)),
-        Cat::None => None,
-    }
-}
-
-/// Message segment kind used for styling; a search match takes precedence over a coin.
-#[derive(Clone, Copy, PartialEq)]
-enum Seg {
-    Plain,
-    Coin,
-    Match,
-}
-
-fn seg_at(idx: usize, coin: &Option<Range<usize>>, matches: &[Range<usize>]) -> Seg {
-    if matches.iter().any(|r| r.contains(&idx)) {
-        Seg::Match
-    } else if coin.as_ref().is_some_and(|r| r.contains(&idx)) {
-        Seg::Coin
-    } else {
-        Seg::Plain
-    }
-}
-
-/// Split a message into styled spans.
-///
-/// Plain text uses the severity color, a clickable coin is blue, and search matches use bold
-/// accent text. An empty query with no coin takes the single-span fast path.
-fn message_spans(
-    flat: &str,
-    base: u32,
-    coin: &Option<Range<usize>>,
-    query: &str,
-    // Panel, coin base, and row source used by left-click filtering and right-click chart opening.
-    coin_click: Option<(WeakEntity<LogPanel>, SharedString, SharedString)>,
-    p: MoonPalette,
-) -> Vec<AnyElement> {
-    let mut matches: Vec<Range<usize>> = Vec::new();
-    if !query.is_empty() {
-        let lower = flat.to_lowercase();
-        let mut from = 0;
-        while let Some(pos) = lower[from..].find(query) {
-            let s = from + pos;
-            matches.push(s..s + query.len());
-            from = s + query.len();
-        }
-    }
-    if coin.is_none() && matches.is_empty() {
-        return vec![
-            div()
-                .flex_none()
-                .text_color(rgb(base))
-                .child(flat.to_string())
-                .into_any_element(),
-        ];
-    }
-    let span = |text: &str, seg: Seg| -> AnyElement {
-        match seg {
-            Seg::Plain => div()
-                .flex_none()
-                .text_color(rgb(base))
-                .child(text.to_string())
-                .into_any_element(),
-            Seg::Match => div()
-                .flex_none()
-                .font_bold()
-                .text_color(rgb(p.accent))
-                .child(text.to_string())
-                .into_any_element(),
-            Seg::Coin => {
-                let mut d = div()
-                    .flex_none()
-                    .font_bold()
-                    .text_color(rgb(p.blue))
-                    .child(text.to_string());
-                if let Some((weak, ticker, target)) = coin_click.clone() {
-                    // Left-click filters the panel to this coin base.
-                    d = d.cursor_pointer().on_mouse_down(MouseButton::Left, {
-                        let weak = weak.clone();
-                        let ticker = ticker.clone();
-                        move |_ev, _w, app| {
-                            if let Some(e) = weak.upgrade() {
-                                let ticker = ticker.to_string();
-                                e.update(app, |t, cx| t.set_coin_filter(Some(ticker), cx));
-                            }
-                        }
-                    });
-                    // Right-click resolves the coin against the row source and opens it on Main.
-                    // Stop propagation so the row-level clipboard handler does not also run.
-                    d = d.on_mouse_down(MouseButton::Right, move |_ev, _w, app| {
-                        if let Some(e) = weak.upgrade() {
-                            let (base, target) = (ticker.to_string(), target.to_string());
-                            e.update(app, |t, cx| t.open_coin_chart(base, target, cx));
-                        }
-                        app.stop_propagation();
-                    });
-                }
-                d.into_any_element()
-            }
-        }
-    };
-    let mut out: Vec<AnyElement> = Vec::new();
-    let mut cur: Option<Seg> = None;
-    let mut buf = String::new();
-    for (idx, ch) in flat.char_indices() {
-        let seg = seg_at(idx, coin, &matches);
-        if Some(seg) != cur {
-            if let Some(prev) = cur {
-                out.push(span(&buf, prev));
-                buf.clear();
-            }
-            cur = Some(seg);
-        }
-        buf.push(ch);
-    }
-    if let Some(prev) = cur {
-        if !buf.is_empty() {
-            out.push(span(&buf, prev));
-        }
-    }
-    out
-}
-
-/// Render one log row as time, optional severity and category badges, source, and message.
-///
-/// `query` is already trimmed and lowercased for match highlighting. Right-clicking the row outside
-/// a coin copies it to the clipboard; clicking a coin filters to its base, while right-clicking it
-/// opens the resolved market on Main.
-pub(super) fn log_row(
-    v: &LineView,
-    query: &str,
-    weak: &WeakEntity<LogPanel>,
-    p: MoonPalette,
-    cx: &App,
-) -> AnyElement {
-    let base = sev_color(v.sev, p);
-    let mut row = h_flex()
-        .w_full()
-        .gap_1()
-        .items_baseline()
-        .text_size(crate::design::t_body(cx))
-        .px_1();
-    row = row.child(
-        div()
-            .flex_none()
-            .text_color(rgb(p.text_muted))
-            .child(v.time.clone()),
-    );
-    if let Some((tag, col)) = badge(v.sev, p) {
-        row = row.child(
-            div()
-                .flex_none()
-                .font_bold()
-                .text_color(rgb(col))
-                .child(tag),
-        );
-    }
-    if let Some((tag, col)) = cat_badge(v.cat, p) {
-        row = row.child(
-            div()
-                .flex_none()
-                .font_bold()
-                .text_color(rgb(col))
-                .child(tag),
-        );
-    }
-    if !v.target.is_empty() {
-        row = row.child(
-            div()
-                .flex_none()
-                .text_color(rgb(p.text_soft))
-                .child(v.target.clone()),
-        );
-    }
-    // Left-click filters by the coin base (`USDT-SPK` becomes `SPK`); right-click resolves the
-    // market from the panel source and row target before opening its chart.
-    let coin_range = v.coin.as_ref().map(|(r, _)| r.clone());
-    let coin_click = v.coin.as_ref().map(|(_, base)| {
-        (
-            weak.clone(),
-            SharedString::from(base.clone()),
-            SharedString::from(v.target.clone()),
-        )
-    });
-    // Build the space-separated time, optional source, and text copied on row right-click.
-    let copy = if v.target.is_empty() {
-        format!("{} {}", v.time, v.flat)
-    } else {
-        format!("{} {} {}", v.time, v.target, v.flat)
-    };
-    row.child(
-        h_flex()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .children(message_spans(
-                &v.flat,
-                base,
-                &coin_range,
-                query,
-                coin_click,
-                p,
-            )),
-    )
-    .on_mouse_down(MouseButton::Right, move |_ev, _w, app| {
-        app.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
-    })
-    .into_any_element()
 }
 
 #[cfg(test)]

@@ -365,6 +365,102 @@ pub fn read_file(filename: &str, max: usize) -> Vec<LogLine> {
         .collect()
 }
 
+/// Name of the rotated log file a source writes on one UTC date, as [`DatedWriter::open`] spells it.
+///
+/// Args:
+///     date: UTC day as `YYYY-MM-DD`, from [`split_unix_ms`].
+///     label: Source label, `"app"` for the local log or the core name for a core log.
+///
+/// Returns:
+///     The bare file name inside `logs/`, without a directory.
+pub fn file_name(date: &str, label: &str) -> String {
+    format!("{date}_{}.log", sanitize_label(label))
+}
+
+/// Marker a core writes on every line of one trading task: its number in parentheses.
+///
+/// This spelling is the only link between a stored trade and its log — the wire protocol carries no
+/// identifier on a log line — so it lives here, next to the file format it is searched in.
+pub fn task_marker(task_id: i64) -> String {
+    format!("({task_id})")
+}
+
+/// Result of scanning one rotated log file for lines containing a marker.
+pub struct ScanResult {
+    /// Matching lines in file order, oldest first, at most the requested cap.
+    pub lines: Vec<LogLine>,
+    /// Whether the cap stopped the scan before the end of the file, so later matches are missing.
+    pub truncated: bool,
+}
+
+/// Collects lines of one rotated log file whose raw text contains `needle`, oldest first.
+///
+/// Reads incrementally rather than through [`read_file`]: a day of one core's log reaches tens of
+/// megabytes, and a caller looking for one trade wants a handful of lines out of it. Parsing (with
+/// its redaction scan) runs only for the lines that matched. A missing or unreadable file yields no
+/// lines, which is the ordinary case for a day the core was not running or whose file retention
+/// already removed.
+///
+/// Args:
+///     filename: Bare file name inside `logs/`, from [`file_name`] or [`list_files`].
+///     needle: Raw substring to look for, matched against the stored line before parsing.
+///     max: Maximum number of matches to return.
+///
+/// Returns:
+///     The matches in file order plus whether `max` cut the scan short.
+pub fn scan_file(filename: &str, needle: &str, max: usize) -> ScanResult {
+    let path = paths::logs_dir().join(filename);
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(e) => {
+            // A day the core did not run, or one retention already removed, is the ordinary case and
+            // says nothing. Anything else — a permission or sharing error — is a fact about this
+            // machine that the empty result cannot express, so it goes to the log.
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("лог: не удалось открыть {}: {e}", path.display());
+            }
+            return ScanResult {
+                lines: Vec::new(),
+                truncated: false,
+            };
+        }
+    };
+    let date = filename.get(0..10).unwrap_or("");
+    scan_reader(std::io::BufReader::new(file), date, needle, max)
+}
+
+/// Selects and parses matching lines from an already opened log reader.
+///
+/// Split from [`scan_file`] so the selection rule is testable without touching the filesystem.
+/// A read or decoding error ends the scan and marks the result truncated: the writer only ever
+/// emits UTF-8, so a failure means the file is damaged or not one of ours, and what was collected
+/// so far is a partial answer — reporting it as complete would be a lie the caller cannot detect.
+fn scan_reader<R: std::io::BufRead>(reader: R, date: &str, needle: &str, max: usize) -> ScanResult {
+    let mut lines = Vec::new();
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            return ScanResult {
+                lines,
+                truncated: true,
+            };
+        };
+        if !line.contains(needle) {
+            continue;
+        }
+        if lines.len() == max {
+            return ScanResult {
+                lines,
+                truncated: true,
+            };
+        }
+        lines.push(parse_file_line(date, &line));
+    }
+    ScanResult {
+        lines,
+        truncated: false,
+    }
+}
+
 /// Parses one stored line. Files written by earlier builds still hold addresses, and the Log tab
 /// reads them back into the same view (and clipboard) as live lines, so redact on the way in.
 fn parse_file_line(date: &str, l: &str) -> LogLine {
@@ -500,3 +596,7 @@ impl log::Log for TeeLogger {
         self.inner.flush();
     }
 }
+
+#[cfg(test)]
+/// Tests for log-file scanning and stored-line parsing.
+mod tests;

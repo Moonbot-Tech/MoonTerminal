@@ -430,7 +430,13 @@ fn basecurrency_text(value: &Value) -> String {
         .unwrap_or_else(|| cell_display_text(value))
 }
 
-fn as_i64(v: &Value) -> Option<i64> {
+/// Reads a database value as a whole number, or `None` when it holds something else.
+///
+/// A core writes identifiers and dates as integers, but a value can arrive as a real from an older
+/// or hand-repaired database. Text is NOT accepted here: the cells this serves render a text value
+/// as text on purpose, and only the trade log wants a text-stored number read as one — it parses at
+/// its own call site.
+pub(super) fn as_i64(v: &Value) -> Option<i64> {
     match v {
         Value::Integer(i) => Some(*i),
         Value::Real(r) => Some(*r as i64),
@@ -448,7 +454,7 @@ fn as_f64(v: &Value) -> Option<f64> {
 /// Converts a database value to a string without display-only text normalization.
 ///
 /// Text is returned verbatim because coin and core callers use it as an identity.
-fn value_to_string(v: &Value) -> String {
+pub(super) fn value_to_string(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
         Value::Integer(i) => i.to_string(),

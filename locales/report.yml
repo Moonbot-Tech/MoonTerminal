@@ -295,3 +295,44 @@ report.kind.emu_short:
   ru: "эмул."
   en: "emu"
   es: "emu"
+
+# --- Trade log (the core's own log lines for one trade, matched by its task number) ---
+report.trade_log.open:
+  ru: "Лог сделки"
+  en: "Trade log"
+  es: "Registro de la operación"
+# Shown DISABLED when the row carries no core task number: a log line has no other identity, so
+# there is nothing the scan could look for.
+report.trade_log.no_task:
+  ru: "Лог сделки — нет номера задачи"
+  en: "Trade log — no task number"
+  es: "Registro de la operación — sin número de tarea"
+# Shown DISABLED when the row's core cannot be named, so no log file can be located.
+report.trade_log.no_core:
+  ru: "Лог сделки — ядро не определено"
+  en: "Trade log — core cannot be identified"
+  es: "Registro de la operación — núcleo no identificado"
+report.trade_log.title:
+  ru: "Лог сделки"
+  en: "Trade log"
+  es: "Registro de la operación"
+report.trade_log.loading:
+  ru: "Читаю файлы логов..."
+  en: "Reading log files..."
+  es: "Leyendo archivos de registro..."
+report.trade_log.count:
+  ru: "Строк: %{n}"
+  en: "Lines: %{n}"
+  es: "Líneas: %{n}"
+report.trade_log.truncated:
+  ru: "Показаны первые %{n} строк — остальные обрезаны"
+  en: "First %{n} lines shown — the rest were cut"
+  es: "Se muestran las primeras %{n} líneas; el resto se cortó"
+report.trade_log.copy_all:
+  ru: "Копировать всё"
+  en: "Copy all"
+  es: "Copiar todo"
+report.trade_log.empty:
+  ru: "Лог не найден: файл за эти сутки удалён по сроку хранения, или у ядра был выключен приём лога"
+  en: "No log found: the day's file is past its retention, or log relaying was off for this core"
+  es: "Sin registro: el archivo del día ya expiró, o la retransmisión del registro estaba apagada para este núcleo"
