@@ -3,11 +3,12 @@
 //! The PRIMARY path is a typed replica of the server database (moonproto
 //! `Event::Report`, the `orders_rep` table; see [`rep`]): the core supplies the
 //! schema, rows are upserted or deleted by `newRecID`, offline changes catch up
-//! from a cursor, and `SyncComplete` reconciles the replica. Analytical fields
+//! from a durable checkpoint, and the alive map that follows each `SyncComplete`
+//! reconciles the visibility of older rows. Analytical fields
 //! (deltas, pump, signaltype, and others) arrive with their real values.
 //!
 //! LEGACY table `closed_sell_reports` (PK `(core_uid, db_id)`) is READ-ONLY: the
-//! terminal no longer consumes `Event::ClosedSellOrderReport`, so no new legacy
+//! terminal does not consume `Event::ClosedSellOrderReport`, so no new legacy
 //! rows are written. The report window still UNION-s its existing rows while any
 //! core lingers on it, and [`rep`]'s per-core purge drops the table once every
 //! core is on typed replication (marker `legacy_dropped`).
@@ -37,6 +38,7 @@ pub use quote::{
     ValuationCoverage,
 };
 pub use read_fail::{FailKind, ReadFail, ReadResult};
+pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
@@ -53,11 +55,12 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Duration;
 
+use moonproto::{MoonReports, ReportSyncCheckpoint, ReportSyncComplete};
 use rusqlite::Connection;
 
 use crate::config::paths;
 
-/// Feed-to-writer sink for typed replication messages plus per-core start cursors.
+/// Feed-to-writer sink for typed replication messages plus per-core replication start states.
 pub type ReportTx = ReportSink;
 
 /// Database handle containing the writer channel and post-commit publication state.
@@ -368,9 +371,9 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
         log::error!("отчёты: init схемы не удался: {e}");
         return None;
     }
-    let cursors = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let starts = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let open_rows = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut rep_state = match rep::init(&conn, cursors.clone(), open_rows.clone()) {
+    let mut rep_state = match rep::init(&conn, starts.clone(), open_rows.clone()) {
         Ok(st) => st,
         Err(e) => {
             log::error!("отчёты: init typed-реплики не удался: {e}");
@@ -383,6 +386,9 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
     let writer_immediate_dirty = immediate_commit_dirty.clone();
     let background_commit_dirty = Arc::new(AtomicBool::new(false));
     let writer_background_dirty = background_commit_dirty.clone();
+    // A committed replica wipe drops the core's open-row set too: checking `newrecid`s from the
+    // superseded database reconciles nothing.
+    let writer_open_rows = open_rows.clone();
     if let Err(e) = std::thread::Builder::new()
         .name("reports-db".into())
         .spawn(move || {
@@ -392,6 +398,9 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
             // Batch messages into one transaction: catch-up emits thousands of rows,
             // and per-row autocommit (fsync) would stretch catch-up into minutes.
             let mut thr_count: u64 = 0;
+            // Cores whose replica this batch wiped, to be re-declared at full history after the
+            // acknowledgements. Reused across batches so the allocation is not per-batch.
+            let mut recreated_resyncs: Vec<(u64, MoonReports)> = Vec::new();
             let mut thr_started = std::time::Instant::now();
             // Backdate the value by 30 seconds so the first WAL size check becomes eligible
             // roughly 30 seconds after startup, on the next completed batch, rather than 60.
@@ -424,43 +433,51 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                 thr_count += batch.len() as u64;
                 // Keep the owned batch until one whole attempt commits. ACK indices are
                 // recreated per attempt and become observable only after that commit.
-                let (ack_indices, publication) = match commit_stateful_batch_until_success(
-                    &conn,
-                    &mut rep_state,
-                    |transaction, candidate| {
-                        let mut ack_indices = Vec::new();
-                        let mut publication = None;
-                        for (index, msg) in batch.iter().enumerate() {
-                            let effect = apply_msg(transaction, candidate, msg)?;
-                            publication = merge_report_publication(publication, effect.publication);
-                            if effect.page_ack {
-                                ack_indices.push(index);
+                let (ack_indices, publication, post_commit) =
+                    match commit_stateful_batch_until_success(
+                        &conn,
+                        &mut rep_state,
+                        |transaction, candidate| {
+                            let mut ack_indices = Vec::new();
+                            let mut publication = None;
+                            // Ordered publications, recreated per attempt like the ACK indices
+                            // and observable only after the attempt that commits.
+                            let mut post_commit = Vec::new();
+                            for (index, msg) in batch.iter().enumerate() {
+                                let effect = apply_msg(transaction, candidate, msg)?;
+                                publication =
+                                    merge_report_publication(publication, effect.publication);
+                                if effect.page_ack {
+                                    ack_indices.push(index);
+                                }
+                                if let Some(action) = effect.post_commit {
+                                    post_commit.push(action);
+                                }
                             }
-                        }
-                        Ok((ack_indices, publication))
-                    },
-                    integrity::writer_should_stop,
-                    |failed_rounds, error| {
-                        let delay =
-                            Duration::from_secs(1u64 << failed_rounds.saturating_sub(1).min(5));
-                        log::error!(
+                            Ok((ack_indices, publication, post_commit))
+                        },
+                        integrity::writer_should_stop,
+                        |failed_rounds, error| {
+                            let delay =
+                                Duration::from_secs(1u64 << failed_rounds.saturating_sub(1).min(5));
+                            log::error!(
                             "reports: writer batch still blocked after {} attempts; retrying in \
                              {}s: {error}",
                             failed_rounds as usize * REPORT_BATCH_ATTEMPTS,
                             delay.as_secs()
                         );
-                        std::thread::sleep(delay);
-                    },
-                ) {
-                    Ok(indices) => indices,
-                    Err(error) => {
-                        log::error!(
+                            std::thread::sleep(delay);
+                        },
+                    ) {
+                        Ok(indices) => indices,
+                        Err(error) => {
+                            log::error!(
                             "reports: writer stopped after repeated or permanent replica failure; \
                              owned batch was not acknowledged: {error}"
                         );
-                        break;
-                    }
-                };
+                            break;
+                        }
+                    };
                 let _ack_guard = integrity::writer_ack_guard();
                 // The background scan can publish damage while this transaction is committing.
                 // The publication barrier makes this check and every following ACK indivisible
@@ -473,9 +490,28 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                     );
                     break;
                 }
-                for msg in &batch {
-                    if let DbMsg::SyncComplete { core_uid, done } = msg {
-                        rep::commit_sync_complete(&rep_state, *core_uid, done);
+                // Replayed in the order the writes went in, which `PostCommit` preserved by
+                // construction. The full-history re-declarations are deferred until after the
+                // acknowledgements below; everything else publishes here.
+                for action in post_commit {
+                    match action {
+                        PostCommit::SyncComplete { core_uid, done } => {
+                            rep::commit_sync_complete(core_uid, &done);
+                        }
+                        PostCommit::ReplicaReset {
+                            core_uid,
+                            redeclare_history,
+                        } => {
+                            rep::commit_replica_reset(&rep_state, core_uid, &writer_open_rows);
+                            recreated_resyncs.push((core_uid, redeclare_history));
+                        }
+                        PostCommit::AliveMap {
+                            core_uid,
+                            checkpoint,
+                            applied,
+                        } => {
+                            rep::commit_alive_map(&rep_state, core_uid, checkpoint, applied);
+                        }
                     }
                 }
                 if let Some(publication) = publication {
@@ -492,6 +528,19 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                     };
                     if let Err(error) = ack.page_applied(page) {
                         log::warn!("reports(rep): page_applied failed: {error:?}");
+                    }
+                }
+                // After the acknowledgements on purpose: a page-detected recreation makes the
+                // library restart catch-up on `page_applied`, and this request must land behind
+                // that restart to replace its history depth rather than be replaced by it.
+                for (core_uid, reports) in recreated_resyncs.drain(..) {
+                    if let Err(error) = reports.sync(moonproto::ReportSyncRequest::fresh(
+                        moonproto::ReportHistoryDepth::All,
+                    )) {
+                        log::warn!(
+                            "отчёты(rep): ядро {core_uid} — полный sync после сброса реплики не \
+                             ушёл: {error:?}"
+                        );
                     }
                 }
                 drop(_ack_guard);
@@ -559,7 +608,7 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
     Some(ReportsHandle {
         tx: ReportSink {
             tx,
-            cursors,
+            starts,
             open_rows,
             send_failed: Arc::new(AtomicBool::new(false)),
         },
@@ -569,15 +618,59 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
     })
 }
 
+/// One message's post-commit action, replayed in batch order after SQLite commits.
+///
+/// Actions that publish the IN-MEMORY half of a write can overwrite each other per core, so their
+/// order has to match the SQLite write order. A batch can hold
+/// an alive map followed by a `database_recreated` page for the same core; the committed database
+/// then holds no checkpoint, and publishing the map's checkpoint afterwards would hand the next
+/// feed an epoch SQLite has discarded, costing another wipe and a full catch-up.
+enum PostCommit {
+    /// Log a finished catch-up. The checkpoint deliberately follows with its alive map.
+    SyncComplete {
+        core_uid: u64,
+        done: ReportSyncComplete,
+    },
+    /// The replica was wiped: reset the core's start state and open rows, then replicate anew.
+    ///
+    /// `redeclare_history` re-sends this terminal's full-history policy. A page-detected
+    /// recreation needs it because the library restarts catch-up itself on `page_applied` and
+    /// reuses the `ServerDefault` depth `sync_from` resumed at; an alive-map-detected wipe needs
+    /// it because nothing restarts on its own. Either way the request must be sent AFTER the
+    /// acknowledgements, so it lands behind any restart rather than being replaced by one.
+    ReplicaReset {
+        core_uid: u64,
+        redeclare_history: MoonReports,
+    },
+    /// An alive map reached SQLite: publish the checkpoint it committed with.
+    AliveMap {
+        core_uid: u64,
+        checkpoint: ReportSyncCheckpoint,
+        applied: rep::AliveMapApplied,
+    },
+}
+
 /// Effects produced by one report-writer message.
 struct ApplyEffect {
     /// Whether a catch-up page may be acknowledged after the surrounding commit.
     page_ack: bool,
     /// Report publication required after the surrounding commit, absent for maintenance.
     publication: Option<ReportPublication>,
+    /// Action to run once the surrounding transaction commits.
+    ///
+    /// Deciding it HERE, while applying, keeps publication ordered and honest: the list
+    /// is replayed in the batch's own order, so a later message's effect can overwrite an
+    /// earlier one exactly as SQLite applied them, and a message whose write did not happen
+    /// contributes no action at all.
+    post_commit: Option<PostCommit>,
 }
 
 impl ApplyEffect {
+    /// Attach the post-commit action produced by this message.
+    fn publishing(mut self, action: PostCommit) -> Self {
+        self.post_commit = Some(action);
+        self
+    }
     /// Build an immediately published report mutation.
     ///
     /// Args:
@@ -589,6 +682,7 @@ impl ApplyEffect {
         Self {
             page_ack,
             publication: Some(ReportPublication::Immediate),
+            post_commit: None,
         }
     }
 
@@ -603,6 +697,7 @@ impl ApplyEffect {
         Self {
             page_ack,
             publication: Some(ReportPublication::Background),
+            post_commit: None,
         }
     }
 
@@ -614,6 +709,7 @@ impl ApplyEffect {
         Self {
             page_ack: false,
             publication: None,
+            post_commit: None,
         }
     }
 }
@@ -643,7 +739,14 @@ fn apply_msg(
             core_name,
             row,
         } => {
-            rep::apply_upsert(conn, rep_state, *core_uid, core_name, row)?;
+            rep::apply_upsert(
+                conn,
+                rep_state,
+                *core_uid,
+                core_name,
+                row,
+                rep::RowSource::Live,
+            )?;
             valuation::stage_row(conn, valuation::TradeSource::Typed, *core_uid, row.rec_id)?;
             Ok(ApplyEffect::immediate(false))
         }
@@ -660,7 +763,7 @@ fn apply_msg(
             core_uid,
             core_name,
             page,
-            ..
+            ack,
         } => {
             rep::apply_page(conn, rep_state, *core_uid, core_name, page)?;
             if page.database_recreated {
@@ -669,12 +772,66 @@ fn apply_msg(
             for row in page.rows.iter() {
                 valuation::stage_row(conn, valuation::TradeSource::Typed, *core_uid, row.rec_id)?;
             }
-            Ok(ApplyEffect::background(true))
+            let effect = ApplyEffect::background(true);
+            Ok(if page.database_recreated {
+                effect.publishing(PostCommit::ReplicaReset {
+                    core_uid: *core_uid,
+                    redeclare_history: ack.clone(),
+                })
+            } else {
+                effect
+            })
         }
-        DbMsg::SyncComplete { core_uid, done: _ } => {
-            rep::apply_sync_complete(conn, rep_state, *core_uid)?;
+        DbMsg::SyncComplete { core_uid, done } => {
+            rep::apply_sync_complete(conn, rep_state, *core_uid, done)?;
             valuation::stage_legacy_purge(conn, *core_uid)?;
-            Ok(ApplyEffect::background(false))
+            Ok(
+                ApplyEffect::background(false).publishing(PostCommit::SyncComplete {
+                    core_uid: *core_uid,
+                    done: done.clone(),
+                }),
+            )
+        }
+        DbMsg::AliveMap {
+            core_uid,
+            map,
+            checkpoint,
+        } => {
+            let applied = rep::apply_alive_map(
+                conn,
+                rep_state,
+                *core_uid,
+                map.covered_up_to,
+                |rec_id| map.is_alive(rec_id),
+                *checkpoint,
+            )?;
+            // `None` means the replica has no `deleted` column, so nothing was written and no
+            // checkpoint may be published.
+            let Some(applied) = applied else {
+                return Ok(ApplyEffect::maintenance());
+            };
+            // A map that moved no row is the steady state after the first reconciliation: only
+            // the checkpoint advanced, and waking every Report host for that would be noise.
+            let effect = if applied.changed() {
+                ApplyEffect::immediate(false)
+            } else {
+                ApplyEffect::maintenance()
+            };
+            Ok(effect.publishing(PostCommit::AliveMap {
+                core_uid: *core_uid,
+                checkpoint: *checkpoint,
+                applied,
+            }))
+        }
+        DbMsg::ReplicaRecreated { core_uid, reports } => {
+            rep::apply_replica_recreated(conn, *core_uid)?;
+            valuation::stage_rescan_core(conn, *core_uid)?;
+            Ok(
+                ApplyEffect::immediate(false).publishing(PostCommit::ReplicaReset {
+                    core_uid: *core_uid,
+                    redeclare_history: reports.clone(),
+                }),
+            )
         }
         DbMsg::ValuationAck { through_seq } => {
             valuation::ack_outbox(conn, *through_seq)?;
@@ -827,6 +984,23 @@ fn meta_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         rusqlite::params![key, value],
     )?;
+    Ok(())
+}
+
+/// Read one `app_meta` value as an integer, returning `None` when lookup or parsing fails.
+fn meta_get_i64(conn: &Connection, key: &str) -> Option<i64> {
+    conn.query_row("SELECT value FROM app_meta WHERE key=?1", [key], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()?
+    .trim()
+    .parse()
+    .ok()
+}
+
+/// Remove one `app_meta` key. Removing an absent key succeeds.
+fn meta_delete(conn: &Connection, key: &str) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM app_meta WHERE key=?1", [key])?;
     Ok(())
 }
 

@@ -281,7 +281,7 @@ fn catch_up_pages_use_background_report_publication() {
         .expect("the page arm must precede sync completion")
         .0;
 
-    assert!(page_arm.contains("Ok(ApplyEffect::background(true))"));
+    assert!(page_arm.contains("ApplyEffect::background(true)"));
     assert!(!page_arm.contains("ApplyEffect::immediate"));
 }
 
@@ -307,6 +307,49 @@ fn writer_batch_uses_the_ordered_publication_aggregator_once() {
     );
     assert_eq!(writer.matches("publish_report_commit(").count(), 1);
     assert!(writer.contains("if let Some(publication) = publication"));
+}
+
+/// The full-history re-declaration after a replica wipe must be sent AFTER the page
+/// acknowledgements, and the post-commit publications must be replayed in ONE ordered pass.
+///
+/// Breaks on: `db/mod.rs:spawn_writer` moving the `recreated_resyncs` drain above the
+/// `page_applied` loop — the natural tidy-up that groups "everything the reset needs" together.
+/// A page-detected recreation makes moonproto restart catch-up itself on `page_applied`, reusing
+/// the `ServerDefault` history depth `sync_from` resumed at; our `fresh(All)` must land BEHIND
+/// that restart or the library's narrower request wins and the rebuilt replica silently stops at
+/// the core's default window instead of its full retained history. Also breaks on the ordered
+/// replay being split back into per-kind passes, which is how an alive map's checkpoint could be
+/// published after a later reset in the same batch had already discarded it.
+///
+/// This asserts on the source text because the boundary types make a behavioural test
+/// impossible: `MoonReports` (private `tx`) and `ReportAliveMapComplete` (private `bitmap`) have
+/// no public constructor, so neither `DbMsg::ReplicaRecreated` nor `DbMsg::AliveMap` can be built
+/// outside moonproto. Same technique, and same limitation, as the two contract tests above.
+#[test]
+fn a_replica_wipe_redeclares_full_history_after_the_acknowledgements() {
+    let source = include_str!("mod.rs");
+    let writer = source
+        .split_once("pub fn spawn_writer(")
+        .expect("db/mod.rs must contain spawn_writer")
+        .1
+        .split_once("struct ApplyEffect")
+        .expect("writer must precede ApplyEffect")
+        .0;
+
+    let acks = writer
+        .find("page_applied(page)")
+        .expect("the writer must acknowledge applied pages");
+    let resync = writer
+        .find("recreated_resyncs.drain(..)")
+        .expect("the writer must drain the queued full-history re-declarations");
+    assert!(
+        acks < resync,
+        "the full-history re-declaration must be sent after page_applied"
+    );
+
+    // One replay pass over the ordered actions, not one pass per message kind.
+    assert_eq!(writer.matches("for action in post_commit").count(), 1);
+    assert_eq!(writer.matches("PostCommit::ReplicaReset").count(), 1);
 }
 
 /// `db/mod.rs:commit_stateful_batch` must retry the same owned work with a fresh
@@ -782,7 +825,20 @@ fn union_reader_and_legacy_drop() {
     assert_eq!(totals.totals[0].orders, 2);
 
     // SyncComplete for core 1 purges its legacy rows; the empty table is then dropped.
-    rep::apply_sync_complete(&conn, &mut st, 1).unwrap();
+    rep::apply_sync_complete(
+        &conn,
+        &mut st,
+        1,
+        &moonproto::ReportSyncComplete {
+            ticket: moonproto::ReportSyncTicket { sync_id: 1 },
+            page_count: 1,
+            total_rows: 1,
+            epoch: 91,
+            max_rec_id: 1,
+            next_from_rec_id: 2,
+        },
+    )
+    .unwrap();
     let legacy_left = table_columns_res(&conn).expect("схема читается");
     assert!(legacy_left.is_empty(), "легаси-таблица должна быть снесена");
     let t = query_reports(&conn, &ReportFilter::default(), "closedate", true, 10)
