@@ -23,6 +23,7 @@ mod chart;
 mod common;
 mod core_status;
 mod detects;
+pub(crate) mod line_list;
 mod log;
 mod news;
 mod order_edit;

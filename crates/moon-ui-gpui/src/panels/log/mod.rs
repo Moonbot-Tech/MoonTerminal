@@ -8,11 +8,17 @@
 //! filtered output at the tail.
 //!
 //! State, row collection, filtering, and lifecycle live here; source and file selectors are in
-//! [`controls`]; signatures, aggregation, classification, and row rendering are in [`render`].
+//! [`controls`]; rebuild signatures and aggregation in [`render`]; one row's elements in [`row`];
+//! the panel's own element tree in [`view`]. Line classification, the row-range selection, the copy
+//! commands and the horizontal viewport are shared with the Report's trade-log dialog and live in
+//! [`crate::panels::line_list`].
 
 mod controls;
 mod render;
+mod row;
+mod view;
 
+use crate::panels::line_list::{self, RowSelection};
 use gpui::*;
 use moon_ui::{
     DockArea, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
@@ -102,6 +108,10 @@ pub struct LogPanel {
     /// Filtered render rows indexed by the virtual list. Classification and coin detection are
     /// precomputed in `apply_filter` rather than repeated for each rendered frame.
     lines: Vec<render::LineView>,
+    /// Character budget of the widest filtered row, sizing the horizontal scroll area.
+    widest_chars: usize,
+    /// Rows selected for copying, as indices into `lines`.
+    selection: RowSelection,
     total: usize,
     /// User intent to follow the tail. Turning Live off manually prevents automatic resumption until
     /// the user enables it again.
@@ -113,6 +123,8 @@ pub struct LogPanel {
     /// earlier timers, so the five-second delay starts at the latest scroll.
     scroll_gen: u64,
     scroll: MoonVirtualListScrollHandle,
+    /// Sideways offset of the row viewport, kept across frames so it survives every rebuild.
+    hscroll: ScrollHandle,
     /// Visibility and selected-source revision gate for expensive row rebuilding.
     ///
     /// A hidden dock tab records no intermediate revisions; activation catches it up once.
@@ -136,6 +148,7 @@ impl LogPanel {
             cx.new(|cx| MoonInputState::new(window, cx).placeholder(t!("log.search").to_string()));
         cx.subscribe(&query, |t, _e, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
+                t.selection.clear();
                 t.apply_filter(cx);
                 cx.notify();
             }
@@ -167,11 +180,14 @@ impl LogPanel {
             raw_lines: Vec::new(),
             exchange_membership: None,
             lines: Vec::new(),
+            widest_chars: 0,
+            selection: RowSelection::default(),
             total: 0,
             live: true,
             scroll_pause: false,
             scroll_gen: 0,
             scroll: MoonVirtualListScrollHandle::new(),
+            hscroll: ScrollHandle::new(),
             refresh: render::RefreshGate::default(),
             dock: None,
             focus: cx.focus_handle(),
@@ -299,8 +315,8 @@ impl LogPanel {
             .iter()
             .filter_map(|l| {
                 let lower = l.msg.to_lowercase();
-                let cl = render::classify_lower(l.level, &lower);
-                if errors_only && !render::is_error(cl.sev) {
+                let cl = line_list::classify_lower(l.level, &lower);
+                if errors_only && !line_list::is_error(cl.sev) {
                     return None;
                 }
                 if !query.is_empty()
@@ -315,10 +331,93 @@ impl LogPanel {
                 Some(render::LineView::from_parts(l, cl, &known))
             })
             .collect();
+        // Size the horizontal scroll area from the widest row that survived the filters. The cap is
+        // what keeps ONE outlier from setting the width of the whole panel: a flattened backtrace or
+        // a raw exchange JSON response is a single row tens of thousands of characters wide, and
+        // sizing to it would shrink the scrollbar thumb to nothing for every ordinary line. Past the
+        // cap a row is clipped and read through its copy instead.
+        self.widest_chars = self
+            .lines
+            .iter()
+            .map(row::row_width_chars)
+            .max()
+            .unwrap_or(0)
+            .min(line_list::WIDEST_CHARS_CAP);
+        // A rebuild can drop rows the user had selected; endpoints past the end address other
+        // lines now, so the selection goes rather than moving to strangers.
+        self.selection.clamp_to(self.lines.len());
         if self.following() && !self.lines.is_empty() {
             self.scroll
                 .scroll_to_item(self.lines.len() - 1, ScrollStrategy::Bottom);
         }
+    }
+
+    /// Handles a press on row `ix`, starting or extending the selection.
+    ///
+    /// Pressing also pauses tail following the way a wheel scroll does: rows are addressed by index,
+    /// and a following reload REPLACES the buffer, which would leave the selection pointing at
+    /// different lines. While paused, reloads only append, so the indices stay put. An already
+    /// paused panel is left alone — its timer defers itself while the selection lives, so a burst
+    /// of clicks does not each spawn one.
+    pub(super) fn on_row_press(&mut self, ix: usize, shift: bool, cx: &mut Context<Self>) {
+        if !self.scroll_pause {
+            self.pause_follow(cx);
+        }
+        if shift {
+            self.selection.shift_press(ix);
+        } else {
+            self.selection.press(ix);
+        }
+        cx.notify();
+    }
+
+    /// Extends an in-flight selection to row `ix`.
+    pub(super) fn on_row_drag(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if self.selection.drag_to(ix) {
+            cx.notify();
+        }
+    }
+
+    /// Copies the current selection, or row `ix` alone when it sits outside one.
+    pub(super) fn copy_row_or_selection(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let rows = self.selection.range_for(ix);
+        line_list::copy_rows(&self.lines, rows, row::row_copy_text, cx);
+    }
+
+    /// Handles the panel's copy, select-all, and clear-selection keys.
+    ///
+    /// Only the panel root acts. Key events bubble from whatever holds focus, so without this check
+    /// a Ctrl+C meant for the search field would also overwrite the clipboard with log rows.
+    fn on_key(&mut self, ev: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) {
+            return;
+        }
+        if ev.keystroke.key.as_str() == "escape" {
+            self.clear_selection(cx);
+            return;
+        }
+        match line_list::handle_list_key(&mut self.selection, ev, self.lines.len()) {
+            Some(line_list::ListKey::Copy(rows)) => {
+                line_list::copy_rows(&self.lines, rows, row::row_copy_text, cx);
+            }
+            Some(line_list::ListKey::SelectedAll) => {
+                // Selecting everything holds the tail the way a press does.
+                if !self.scroll_pause {
+                    self.pause_follow(cx);
+                }
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    /// Drops the selection; the deferred resume timer picks the panel up on its own.
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        if self.selection.is_empty() {
+            return;
+        }
+        self.selection.clear();
+        cx.notify();
     }
 
     /// Returns effective tail-following state: Live intent enabled and no temporary scroll pause.
@@ -336,10 +435,12 @@ impl LogPanel {
         self.refresh.request_reload();
     }
 
-    /// Handles a wheel event over the list. With Live intent enabled it temporarily unchecks
-    /// effective follow and schedules resumption five seconds after the latest scroll. A manually
-    /// disabled Live setting ignores scrolling.
-    fn on_user_scroll(&mut self, cx: &mut Context<Self>) {
+    /// Temporarily unchecks effective follow and schedules resumption five seconds later.
+    ///
+    /// Wheel scrolling and starting a row selection both use this: each is a signal that the user is
+    /// reading the rows currently on screen rather than the tail. A manually disabled Live setting
+    /// has nothing to pause.
+    fn pause_follow(&mut self, cx: &mut Context<Self>) {
         if !self.live {
             return;
         }
@@ -349,16 +450,30 @@ impl LogPanel {
             self.scroll_pause = true;
             cx.notify(); // Reflect the temporarily unchecked follow control.
         }
+        self.arm_resume(want_gen, cx);
+    }
+
+    /// Waits five seconds and resumes tail following, unless something newer invalidated this timer.
+    ///
+    /// A held selection defers the resume rather than cancelling it: resuming replaces the buffer
+    /// and the selection addresses rows by index, so the wait is simply restarted. Giving up
+    /// instead would leave following switched off for good whenever a selection was dropped by a
+    /// path other than the one that armed this timer — a filter change, a reload, a cleared chip.
+    fn arm_resume(&mut self, want_gen: u64, cx: &mut Context<Self>) {
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             executor.timer(std::time::Duration::from_secs(5)).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |t, cx| {
-                    // Resume only if no newer scroll or manual Live toggle invalidated this timer.
-                    if t.scroll_gen == want_gen && t.live && t.scroll_pause {
-                        t.resume_live();
-                        cx.notify();
+                    if t.scroll_gen != want_gen || !t.live || !t.scroll_pause {
+                        return; // A newer scroll, press, or manual Live toggle owns the state now.
                     }
+                    if !t.selection.is_empty() {
+                        t.arm_resume(want_gen, cx);
+                        return;
+                    }
+                    t.resume_live();
+                    cx.notify();
                 })
                 .ok();
             });
@@ -370,8 +485,41 @@ impl LogPanel {
     pub(super) fn set_coin_filter(&mut self, coin: Option<String>, cx: &mut Context<Self>) {
         if self.coin_filter != coin {
             self.coin_filter = coin;
+            self.selection.clear();
             self.apply_filter(cx);
             cx.notify();
+        }
+    }
+
+    /// Selects the core a row's source name belongs to, as if it were picked from the source list.
+    ///
+    /// This is the Report's core-cell gesture: the click narrows the panel to one core through the
+    /// SAME control the user would otherwise open, and that control is then both the indicator and
+    /// the way back. There is deliberately no toggle-back on a second click: only the aggregate and
+    /// exchange sources label their rows with a core name, so once this switches to that core the
+    /// name is no longer on screen to click (a core's own ring lines carry no source label).
+    ///
+    /// Only real cores are matched — never the `All`/`Local` pseudo-entries, whose labels a core
+    /// could otherwise be named after. A name matching no configured core does nothing: it belongs
+    /// to a core removed or renamed since the line was buffered.
+    ///
+    /// Args:
+    ///     name: Display name shown in the row's source column.
+    ///     cx: Panel context used to read the configured sources and reload the selection.
+    ///
+    /// Returns:
+    ///     Nothing.
+    pub(super) fn select_source_by_name(&mut self, name: &str, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        let core = self
+            .sources(backend.read(cx))
+            .into_iter()
+            .find_map(|item| match item.source {
+                LogSource::Core(core) if item.display == name => Some(core),
+                _ => None,
+            });
+        if let Some(core) = core {
+            self.set_source(LogSource::Core(core), cx);
         }
     }
 
@@ -474,7 +622,9 @@ impl LogPanel {
         self.exchange_membership = exchange_membership.clone();
         let fresh = self.gather(b, &sources, exchange_membership.as_ref());
         if self.following() || membership_changed {
-            // Effective follow replaces the buffer with the current bounded snapshot.
+            // Effective follow replaces the buffer with the current bounded snapshot. Row indices
+            // no longer address the same lines, so a selection cannot survive it.
+            self.selection.clear();
             self.raw_lines = fresh;
         } else {
             // While following is paused, append only unseen suffix rows and retain the existing
@@ -515,6 +665,11 @@ impl LogPanel {
         if self.raw_lines.len() > PAUSED_CAP {
             let drop = self.raw_lines.len() - PAUSED_CAP;
             self.raw_lines.drain(0..drop);
+            // Dropping a prefix shifts every row index down. The selection addresses rows by index,
+            // so keeping it would slide it onto lines the user never picked; `clamp_to` cannot see
+            // this because the list is still long. A selection holds following paused, so this is
+            // reachable: enough lines arrive under a selection held open on a busy aggregate.
+            self.selection.clear();
         }
     }
 
@@ -524,6 +679,7 @@ impl LogPanel {
         self.live = true;
         self.scroll_pause = false;
         self.scroll_gen = self.scroll_gen.wrapping_add(1);
+        self.selection.clear();
     }
 
     pub(super) fn set_source(&mut self, s: LogSource, cx: &mut Context<Self>) {
@@ -600,178 +756,5 @@ impl Panel for LogPanel {
             self.backend.clone(),
             self.dock.clone(),
         )])
-    }
-}
-
-impl Render for LogPanel {
-    /// Renders the panel and activates direct detached-window hosts on their first frame.
-    ///
-    /// Args:
-    ///     _window: Host window; rendering needs no direct window operations.
-    ///     cx: Panel context used for backend reads, controls, and deferred reloads.
-    ///
-    /// Returns:
-    ///     The complete responsive Log panel element tree.
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.refresh.is_active() {
-            self.set_refresh_active(true, cx);
-        } else if self.refresh.take_observed_reload() {
-            let backend = self.backend.clone();
-            self.reload_rows(backend.read(cx), cx);
-        }
-        let p = MoonPalette::active(cx);
-
-        let sources = self.sources(self.backend.read(cx));
-        let is_agg = matches!(self.source, LogSource::Aggregate | LogSource::Exchange(_));
-        let total = self.total;
-
-        // Build the wrapping filter and follow controls.
-        let mut controls = h_flex()
-            .w_full()
-            .flex_wrap()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1();
-        controls = controls.child(self.source_combo(&sources, cx));
-        if !is_agg {
-            controls = controls
-                .child(
-                    div()
-                        .text_size(crate::design::t_body(cx))
-                        .text_color(rgb(p.text_soft))
-                        .child(t!("log.file").to_string()),
-                )
-                .child(self.file_combo(&self.available_files, cx));
-        }
-        controls = controls
-            .child(
-                div().w(px(180.0)).child(
-                    MoonInput::new("log-query")
-                        .state(&self.query)
-                        .small()
-                        .cleanable(true),
-                ),
-            )
-            .child(
-                MoonCheckbox::new("log-errors-only")
-                    .label(t!("log.errors_only").to_string())
-                    .checked(self.errors_only)
-                    .size(MoonCheckboxSize::Compact)
-                    .on_change(cx.listener(|t, ch: &bool, _, cx| {
-                        if t.errors_only != *ch {
-                            t.errors_only = *ch;
-                            t.apply_filter(cx);
-                            cx.notify();
-                        }
-                    })),
-            )
-            .child(
-                MoonCheckbox::new("log-live")
-                    .label(t!("log.follow_tail").to_string())
-                    .checked(self.following())
-                    .size(MoonCheckboxSize::Compact)
-                    .on_change(cx.listener(|t, ch: &bool, _, cx| {
-                        // A manual toggle invalidates any delayed automatic resumption.
-                        t.scroll_gen = t.scroll_gen.wrapping_add(1);
-                        if *ch {
-                            t.resume_live(); // Reload on render and return to the selection's tail.
-                        } else {
-                            // Manual disable freezes following until the user enables it again.
-                            t.live = false;
-                            t.scroll_pause = false;
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .text_size(crate::design::t_body(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(t!("log.count", shown = self.lines.len(), total = total).to_string()),
-            );
-        // Show a removable chip for the active coin filter.
-        if let Some(coin) = self.coin_filter.clone() {
-            controls = controls.child(
-                div()
-                    .id("log-coin-chip")
-                    .flex_none()
-                    .cursor_pointer()
-                    .px_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(p.blue))
-                    .text_size(crate::design::t_body(cx))
-                    .text_color(rgb(p.blue))
-                    .child(format!("{coin} ✕"))
-                    .on_click(cx.listener(|t, _, _, cx| t.set_coin_filter(None, cx))),
-            );
-        }
-
-        // Build the tail-oriented virtualized list or its empty-state message.
-        let weak = cx.entity().downgrade();
-        let body: AnyElement = if self.lines.is_empty() {
-            let msg = if total == 0 {
-                t!("dock.log.empty").to_string()
-            } else {
-                t!("log.empty_filtered").to_string()
-            };
-            div()
-                .flex_1()
-                .w_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(rgb(p.text_soft))
-                .child(msg)
-                .into_any_element()
-        } else {
-            let scroll = self.scroll.clone();
-            let query = self.query.read(cx).value().trim().to_lowercase();
-            let list_el = MoonVirtualList::new(
-                "log-virtual-rows",
-                self.lines.len(),
-                // Scale row height with the font because MoonVirtualList accepts raw pixels; a
-                // fixed 18 px row clipped text at the +6 font setting.
-                crate::design::fit_h_value(cx, 18.0, 14.0, 2.0),
-                move |ix, _w, app| {
-                    weak.upgrade()
-                        .and_then(|e| {
-                            e.read(app)
-                                .lines
-                                .get(ix)
-                                .map(|line| render::log_row(line, &query, &weak, p, app))
-                        })
-                        .unwrap_or_else(|| div().into_any_element())
-                },
-            )
-            .track_scroll(&scroll)
-            .surface(false)
-            .border(false)
-            .radius(0.0)
-            .scrollbar_visibility(MoonScrollbarVisibility::Hover);
-            div()
-                .flex_1()
-                .w_full()
-                .min_h_0()
-                .child(list_el)
-                // Any wheel event over the list pauses effective following and starts its timer.
-                .on_scroll_wheel(cx.listener(|t, _e: &ScrollWheelEvent, _w, cx| {
-                    t.on_user_scroll(cx);
-                }))
-                .into_any_element()
-        };
-
-        v_flex()
-            .id("log-panel")
-            .size_full()
-            .track_focus(&self.focus)
-            // Set the monospace font on this root, as Orders, Assets, and Report do. A detached
-            // panel does not inherit it from the dock header; without this, it would render in Inter
-            // and disagree with both the docked view and selector-width measurements in controls.rs.
-            .font_family(crate::design::mono())
-            .child(controls)
-            .child(div().w_full().h(px(1.0)).bg(rgb(p.border)))
-            .child(body)
     }
 }

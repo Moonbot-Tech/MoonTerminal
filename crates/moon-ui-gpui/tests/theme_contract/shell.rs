@@ -427,14 +427,20 @@ fn log_exchange_headers_select_a_live_exchange_aggregate() {
     let panel = read_src("panels/log/mod.rs");
     let gather = braced_body(&panel, "fn gather(");
     let reload = braced_body(&panel, "fn reload_rows(");
+    // The two places that must treat an exchange source exactly like the aggregate: the reload path
+    // in the panel, and the file-selector visibility in its element tree. They live in separate
+    // files and are counted separately — a sum would let one arm vanish while the other doubled.
+    let view = read_src("panels/log/view.rs");
+    let arms = |text: &str| {
+        text.matches("LogSource::Aggregate | LogSource::Exchange(_)")
+            .count()
+    };
     assert!(
         panel.contains("Exchange(String)")
             && gather.contains("LogSource::Exchange(_)")
             && gather.contains("exchange_membership")
-            && panel
-                .matches("LogSource::Aggregate | LogSource::Exchange(_)")
-                .count()
-                == 2
+            && arms(&panel) == 1
+            && arms(&view) == 1
             && reload.contains("render::exchange_core_ids(")
             && reload.contains("exchange_membership_changed(")
             && reload.contains("self.following() || membership_changed"),
