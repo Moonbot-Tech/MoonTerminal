@@ -67,3 +67,7 @@ dialogs.delete_confirm:
   ru: "Удалить %{what}? Действие необратимо."
   en: "Delete %{what}? This cannot be undone."
   es: "¿Eliminar %{what}? Esta acción no se puede deshacer."
+dialogs.close:
+  ru: "Закрыть"
+  en: "Close"
+  es: "Cerrar"

@@ -269,6 +269,113 @@ impl ReportPanel {
         cx.notify();
     }
 
+    /// Open the row's right-click menu at the cursor.
+    ///
+    /// The only entry is the trade's core log. A row whose core recorded no task number cannot
+    /// produce one — a log line carries no other identity — so the entry is shown DISABLED and says
+    /// why, instead of opening a window that could only ever be empty. A right-click landing past
+    /// the last row opens nothing at all.
+    ///
+    /// Args:
+    ///     row: Index into the current snapshot's rows.
+    ///     window: Window hosting the menu and the resulting dialog.
+    ///     cx: Panel context used to read the row and the core's configured name.
+    ///
+    /// Returns:
+    ///     Nothing.
+    pub(super) fn open_row_menu(
+        &mut self,
+        row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.data.data().is_none_or(|data| row >= data.rows.len()) {
+            return;
+        }
+        let items = vec![match self.trade_log_request(row, cx) {
+            Ok(request) => {
+                MoonMenuItem::with_key("rep-row-trade-log", t!("report.trade_log.open").to_string())
+                    .on_click(move |_, window, app| {
+                        trade_log::open_trade_log(request.clone(), window, app);
+                    })
+            }
+            Err(reason) => {
+                MoonMenuItem::with_key("rep-row-trade-log", t!(reason).to_string()).disabled(true)
+            }
+        }];
+        window.open_moon_context_menu(
+            cx,
+            "report-row-menu",
+            window.mouse_position(),
+            items,
+            crate::controls::MENU_WIDTH,
+        );
+    }
+
+    /// Resolve one report row into everything the log scan needs, or say why it cannot be done.
+    ///
+    /// Args:
+    ///     row: Index into the current snapshot's rows.
+    ///     cx: Panel context used to read the row and the core's configured name.
+    ///
+    /// Returns:
+    ///     The scan request, or the locale key naming the reason this row has no log to show — the
+    ///     two reasons are different facts about the row and the menu says which one it is.
+    fn trade_log_request(
+        &self,
+        row: usize,
+        cx: &App,
+    ) -> Result<trade_log::TradeLogRequest, &'static str> {
+        let (data, values) = self
+            .data
+            .data()
+            .and_then(|data| data.rows.get(row).map(|values| (data, values)))
+            .ok_or("report.trade_log.no_task")?;
+        let column = |name: &str| {
+            self.cols
+                .iter()
+                .position(|col| col == name)
+                .and_then(|ix| values.get(ix))
+        };
+        // A `taskid` stored as text is still a task number; `as_i64` deliberately leaves text alone
+        // for the cells that must render it verbatim, so this call site parses it itself.
+        let task_id = column("taskid")
+            .and_then(|value| match value {
+                Value::Text(text) => text.trim().parse().ok(),
+                other => as_i64(other),
+            })
+            .unwrap_or(0);
+        if task_id == 0 {
+            return Err("report.trade_log.no_task");
+        }
+        let core_uid = data.core_uids.get(row).copied().unwrap_or(0);
+        let config_name = self
+            .backend
+            .read(cx)
+            .config
+            .servers
+            .iter()
+            .find(|server| server.id == core_uid)
+            .map(|server| server.name.clone());
+        // Report dates are unix seconds; the log files are named from milliseconds.
+        let secs_to_ms = |v: Option<i64>| v.unwrap_or(0).saturating_mul(1000);
+        // With no name for the core there is no file to open at all, and the dialog could only ever
+        // report "nothing found" for a reason it does not know — so that is refused below, named.
+        let request = trade_log::trade_log_request(
+            &column("core_name").map(value_to_string).unwrap_or_default(),
+            config_name.as_deref(),
+            &column("coin").map(value_to_string).unwrap_or_default(),
+            task_id,
+            secs_to_ms(column("buydate").and_then(as_i64)),
+            secs_to_ms(column("closedate").and_then(as_i64)),
+            moon_core::util::now_unix_ms_i64(),
+        );
+        if request.labels.is_empty() {
+            return Err("report.trade_log.no_core");
+        }
+        Ok(request)
+    }
+
     /// Copy selected rows as spreadsheet-friendly TSV in current visual order.
     ///
     /// Args:

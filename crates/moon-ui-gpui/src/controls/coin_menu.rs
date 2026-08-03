@@ -22,7 +22,7 @@ const FIELD_COINS_BLACK_LIST: &str = "CoinsBlackList";
 
 /// Popup menu width in pixels. It is wider than the 170-pixel order menu to accommodate core-wide
 /// blacklist labels containing a core name.
-const MENU_WIDTH: f32 = 220.0;
+pub(crate) const MENU_WIDTH: f32 = 220.0;
 
 /// Side of the order line at the clicked point. The chart distinguishes Buy from Sell by line type;
 /// Buy provides Cancel, while Sell provides Join All Sells and Split actions.
