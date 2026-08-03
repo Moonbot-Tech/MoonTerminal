@@ -545,16 +545,15 @@ impl TunerState {
         }
     }
 
-    /// Mark report-derived calculations stale without discarding the user's staged tuner edits.
+    /// Mark KPI and histogram calculations stale while preserving tuner drafts and suggestions.
     ///
-    /// A new trade changes KPI, histogram, and any in-flight automatic suggestion inputs, but it
-    /// does not change draft bounds, staged ignore switches, or an open confirmation dialog.
-    ///
-    /// The method has no return value; callers subsequently reload the active report-derived view.
+    /// Report generations can advance throughout a minutes-long field-set composition. Retiring
+    /// the suggestion on every advance could repeatedly cancel a manually started search before
+    /// it finishes, so search-input and destination changes invalidate it through
+    /// [`Self::invalidate`] or [`Self::invalidate_suggest`] instead.
     pub(in crate::analytics) fn mark_report_stale(&mut self) {
         self.dirty = true;
         self.hist_dirty = true;
-        self.invalidate_suggest();
     }
 
     /// Apply a selected-strategy snapshot without inventing an empty automatic-refresh baseline.

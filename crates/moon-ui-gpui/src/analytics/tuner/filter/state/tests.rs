@@ -12,20 +12,37 @@ use moon_core::db::tuner::threshold_search::{
     EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
 };
 
-/// `filter/state.rs:TunerState::mark_report_stale` preserves drafts but retires suggestions.
+/// `filter/state.rs:TunerState::mark_report_stale` preserves drafts and the running search.
 ///
-/// Removing its suggestion-generation bump lets an optimizer pinned before a report commit write
-/// stale bounds into v1 after the commit, where they become saveable for the new report state.
+/// Breakage this pins: adding an `invalidate_suggest()` call would cancel the `SearchHandle`, clear
+/// the running state, and prevent the result from publishing. Frequent report commits could then
+/// keep a manually started, minutes-long field-set composition from finishing.
 #[test]
-fn report_staleness_preserves_filter_drafts() {
+fn report_staleness_preserves_filter_drafts_and_the_running_search() {
     let mut state = TunerState::load(None, None, None, None, None, false);
     state.bounds[0][0] = ("1".into(), "2".into());
     state.staged_ignore.insert("IgnoreFilters", true);
+    let handle = SearchHandle::new();
+    state.sugg = SuggestState::Running(SuggestJob::Compose {
+        handle: handle.clone(),
+    });
     let (seq, hist_seq, sugg_seq, dialog_seq) =
         (state.seq, state.hist_seq, state.sugg_seq, state.dialog_seq);
 
     state.mark_report_stale();
 
+    assert!(
+        !handle.is_cancelled(),
+        "a committed report row must not stop a search the user started"
+    );
+    assert!(
+        state.sugg.is_running(),
+        "and the row must keep reporting that search as running"
+    );
+    assert_eq!(
+        state.sugg_seq, sugg_seq,
+        "the search's own result must still be publishable when it lands"
+    );
     assert!(
         !state.variants()[1].is_empty(),
         "the KPI consumer must still receive the staged bound"
@@ -36,7 +53,6 @@ fn report_staleness_preserves_filter_drafts() {
     );
     assert_eq!(state.seq, seq);
     assert_eq!(state.hist_seq, hist_seq);
-    assert_ne!(state.sugg_seq, sugg_seq);
     assert_eq!(
         state.dialog_seq, dialog_seq,
         "report data cannot invalidate a pending Save dialog"
