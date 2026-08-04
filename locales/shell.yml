@@ -390,9 +390,9 @@ chart.candles.apply_all:
   en: "Apply to all tabs and windows"
   es: "Aplicar a todas las pestañas y ventanas"
 chart.candles.tip:
-  ru: "Отображение свечей и трейдов (общее для всех чартов)"
-  en: "Candle & trade display (global for all charts)"
-  es: "Visualización de velas y trades (global)"
+  ru: "Настройки свечей и сделок (общее для всех чартов)"
+  en: "Candles and trades settings (global for all charts)"
+  es: "Ajustes de velas y operaciones (global)"
 chart.candles.frame_candles:
   ru: "Свечи"
   en: "Candles"
@@ -537,6 +537,22 @@ chart.coin.open_new_tab:
   ru: "Открыть в новой вкладке"
   en: "Open in new tab"
   es: "Abrir en pestaña nueva"
+chart.coin.recent:
+  ru: "Недавние"
+  en: "Recent"
+  es: "Recientes"
+chart.coin.top_volatile:
+  ru: "Топ движений 24ч"
+  en: "Top 24h movers"
+  es: "Top de movimientos 24 h"
+chart.coin.multi_hint:
+  ru: "Отметьте монеты для новой вкладки"
+  en: "Tick coins for a new tab"
+  es: "Marque monedas para otra pestaña"
+chart.coin.no_suggestions:
+  ru: "Пока нечего предложить — начните вводить монету"
+  en: "Nothing to suggest yet — start typing a coin"
+  es: "Aún no hay sugerencias: empiece a escribir una moneda"
 # --- Stack orientation (vertical/horizontal) and width labels in horizontal mode ---
 chart.layout.orientation_tip:
   ru: "Ориентация: вертикально / горизонтально"

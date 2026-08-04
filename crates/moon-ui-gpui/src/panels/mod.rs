@@ -20,7 +20,8 @@
 mod alerts;
 mod assets;
 mod chart;
-mod common;
+/// Shared panel widgets — also reached from `controls`, which builds the same tooltips and chips.
+pub(crate) mod common;
 mod core_status;
 mod detects;
 pub(crate) mod line_list;

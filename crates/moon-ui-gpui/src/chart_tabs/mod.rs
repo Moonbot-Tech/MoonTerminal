@@ -363,6 +363,13 @@ impl ChartTabs {
             &coin_input,
             window,
             |this, input, ev: &MoonInputEvent, window, cx| {
+                // Focusing the field opens the list without typing: an empty field then shows
+                // recents and the day's movers, which is what makes it browsable rather than a
+                // box you must already know the answer to fill in.
+                if matches!(ev, MoonInputEvent::Focus) {
+                    this.open_coin_popup(cx);
+                    return;
+                }
                 if matches!(ev, MoonInputEvent::Change) {
                     let value = input.read(cx).value().to_string();
                     if let std::borrow::Cow::Owned(en) =
@@ -372,7 +379,8 @@ impl ChartTabs {
                         return;
                     }
                     if this.coin_query != value {
-                        this.coin_popup_open = !value.trim().is_empty();
+                        // Clearing the text does not close the list; it falls back to suggestions.
+                        this.coin_popup_open = true;
                         this.coin_query = value;
                         cx.notify();
                     }

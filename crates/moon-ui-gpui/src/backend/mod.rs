@@ -842,13 +842,7 @@ impl Backend {
     /// mutates the backend.
     pub(crate) fn header_ticker(&self) -> Option<(CoreId, String)> {
         if let Some(sel) = &self.layout.header_ticker {
-            let core = self
-                .config
-                .servers
-                .iter()
-                .find(|s| s.uid == sel.core_uid)
-                .map(|s| s.id);
-            if let Some(core) = core {
+            if let Some(core) = self.core_of_uid(sel.core_uid) {
                 if self.session.sessions().iter().any(|s| s.id == core) {
                     return Some((core, sel.market.clone()));
                 }
@@ -862,13 +856,7 @@ impl Backend {
 
     /// Store the header ticker selected in the search popup by core UID and mark layout persistence dirty.
     pub(crate) fn set_header_ticker(&mut self, core: CoreId, market: String) {
-        let Some(uid) = self
-            .config
-            .servers
-            .iter()
-            .find(|s| s.id == core)
-            .map(|s| s.uid)
-        else {
+        let Some(uid) = self.uid_of(core) else {
             return;
         };
         let sel = moon_core::config::layout::HeaderTicker {
@@ -879,6 +867,156 @@ impl Backend {
             self.layout.header_ticker = Some(sel);
             self.layout_dirty = true;
         }
+    }
+
+    /// The stable UID of a configured core, or `None` when it has no config entry.
+    ///
+    /// Persisted UI state names cores by UID rather than by `CoreId` so it survives a configuration
+    /// reorder; this is the one place that translation is written, in either direction, together
+    /// with [`Self::core_of_uid`].
+    ///
+    /// Args:
+    ///     core: Live session identifier to translate.
+    ///
+    /// Returns:
+    ///     The configured stable UID, or `None` when the core has no configuration entry.
+    fn uid_of(&self, core: CoreId) -> Option<u64> {
+        self.config
+            .servers
+            .iter()
+            .find(|s| s.id == core)
+            .map(|s| s.uid)
+    }
+
+    /// The live `CoreId` a persisted UID refers to, or `None` when that core is gone.
+    ///
+    /// Args:
+    ///     uid: Stable configured UID to resolve.
+    ///
+    /// Returns:
+    ///     The current session identifier, or `None` when the configuration no longer contains it.
+    fn core_of_uid(&self, uid: u64) -> Option<CoreId> {
+        self.config
+            .servers
+            .iter()
+            .find(|s| s.uid == uid)
+            .map(|s| s.id)
+    }
+
+    /// Record a market as the most recently opened one in the coin-search history.
+    ///
+    /// Thin wrapper: the MRU policy (move-to-front, dedup, cap) lives on [`WindowLayout`], beside
+    /// the field it persists. A core with no config entry has no stable UID to store, so the call
+    /// is a no-op rather than writing a UID that cannot be resolved back.
+    ///
+    /// Args:
+    ///     core: Live core on which the market was opened.
+    ///     market: Canonical market name.
+    pub(crate) fn push_recent_coin(&mut self, core: CoreId, market: &str) {
+        let Some(uid) = self.uid_of(core) else {
+            return;
+        };
+        if self.layout.push_recent_coin(uid, market) {
+            self.layout_dirty = true;
+        }
+    }
+
+    /// Recently opened markets, newest first, resolved from stable UIDs to `CoreId`s.
+    ///
+    /// An entry whose core is gone from the configuration is skipped, but one whose core is merely
+    /// OFFLINE is kept: liveness is decided once, downstream, by the resolver that also needs the
+    /// session's name (`controls::coin_search::hits_for`), so this does not scan sessions itself.
+    /// Nothing is ever dropped from the file here — a core that is offline right now keeps its
+    /// history.
+    ///
+    /// Returns:
+    ///     Resolvable `(core, market)` entries in most-recent-first order.
+    pub(crate) fn recent_coins(&self) -> Vec<(CoreId, String)> {
+        self.layout
+            .recent_coins
+            .iter()
+            .flatten()
+            .filter_map(|entry| Some((self.core_of_uid(entry.core_uid)?, entry.market.clone())))
+            .collect()
+    }
+
+    /// Rebuild this field's coin suggestions unless a fresh list is already cached.
+    ///
+    /// Called when a coin-search popup OPENS — never from a render pass. Building the list walks
+    /// every market of every provider feeding the field, which is far too expensive to repeat at
+    /// frame rate; the chart chrome must not do work at present frequency.
+    ///
+    /// Args:
+    ///     group: Window group whose cores feed the search field.
+    ///     bucket: Optional chart bucket narrowing that core scope.
+    pub(crate) fn refresh_coin_suggest(
+        &mut self,
+        group: &str,
+        bucket: Option<&moon_core::config::ChartBucket>,
+    ) {
+        use crate::controls::coin_search;
+
+        let key = (group.to_string(), bucket.cloned());
+        let sig = coin_search::universe_sig(self, group, bucket);
+        if self
+            .coin_suggest
+            .get(&key)
+            .is_some_and(|entry| entry.is_fresh(&sig))
+        {
+            return;
+        }
+        let markets = coin_search::suggest_volatile(
+            self,
+            group,
+            bucket,
+            crate::controls::coin_search::COIN_SUGGEST_LIMIT,
+        )
+        .into_iter()
+        .map(|hit| (hit.core, hit.market))
+        .collect::<Vec<_>>();
+        // An empty answer is "not ready yet", not "nothing to suggest": at startup the providers'
+        // market snapshots have not arrived, so caching that emptiness would keep the section blank
+        // — and the popup reading "no connected cores" — for the whole TTL after data does arrive.
+        // Drop the entry instead, and let the next open try again.
+        if markets.is_empty() {
+            self.coin_suggest.remove(&key);
+            return;
+        }
+        self.coin_suggest.insert(
+            key,
+            coin_search::CoinSuggestEntry {
+                at: std::time::Instant::now(),
+                sig,
+                markets,
+            },
+        );
+    }
+
+    /// The cached suggestion markets for this field, or nothing when none is valid right now.
+    ///
+    /// This runs on the popup's RENDER path, so it only checks the entry's age. Validating the core
+    /// and provider set here instead would re-sort the group's cores and take one market-source
+    /// lock per core on every frame the popup is open — precisely the work the chart chrome must
+    /// not do at present frequency. That check belongs to [`Self::refresh_coin_suggest`], which
+    /// runs when the popup opens; between two opens an entry can at worst outlive a core by the
+    /// TTL, and a suggestion for a core that just dropped resolves to nothing downstream anyway.
+    ///
+    /// Args:
+    ///     group: Window group whose cached entry should be read.
+    ///     bucket: Optional chart bucket narrowing that cache key.
+    ///
+    /// Returns:
+    ///     Cached `(core, market)` pairs, or an empty vector when the entry is absent or expired.
+    pub(crate) fn coin_suggest_markets(
+        &self,
+        group: &str,
+        bucket: Option<&moon_core::config::ChartBucket>,
+    ) -> Vec<(CoreId, String)> {
+        self.coin_suggest
+            .get(&(group.to_string(), bucket.cloned()))
+            .filter(|entry| entry.is_recent())
+            .map(|entry| entry.markets.clone())
+            .unwrap_or_default()
     }
 
     /// The IANA zone id of the city the header clock shows, or `None` when none was ever picked.

@@ -294,6 +294,19 @@ pub struct WindowLayout {
     /// (first connected core; BTCUSDT, or UBTCUSDC on Hyperliquid-like exchanges).
     #[serde(default)]
     pub header_ticker: Option<HeaderTicker>,
+    /// Markets opened from a chart coin search, most recent first, capped at
+    /// [`Self::RECENT_COINS_CAP`]. `None` = nothing opened yet.
+    ///
+    /// Stored by stable core UID like [`HeaderTicker`], so the list survives a configuration
+    /// reorder. Entries whose core is gone stay in the file — they cost nothing, and dropping them
+    /// on load would silently discard the history of a core that is merely offline right now. They
+    /// are filtered at READ time instead, and they still raise the durable UID high-water mark (see
+    /// [`Self::max_core_uid`]) so a deleted core's UID can never be reissued to a different server.
+    ///
+    /// Lenient: this file is one schema-less document, and a single mistyped entry must not discard
+    /// every window position along with it.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub recent_coins: Option<Vec<HeaderTicker>>,
     /// Clock in the header's right corner: the IANA zone id of the selected city, such as
     /// `Europe/Warsaw`. `None` = never chosen, which reads as UTC. Shared by all windows.
     ///
@@ -695,8 +708,9 @@ impl WindowLayout {
 
     /// Highest core uid this layout still references.
     ///
-    /// Feeds the durable uid high-water mark: the header ticker and active trade-core selections
-    /// are stored by UID, so reissuing one would silently bind saved UI state to a new core.
+    /// Feeds the durable UID high-water mark: the header ticker, recent coin history, and active
+    /// trade-core selections are stored by UID, so reissuing one would silently bind saved UI state
+    /// to a new core.
     ///
     /// Returns:
     ///     The largest stable core UID referenced by layout state, if any.
@@ -706,7 +720,50 @@ impl WindowLayout {
             .map(|ticker| ticker.core_uid)
             .into_iter()
             .chain(self.active_trade_core_by_group.values().copied())
+            .chain(
+                self.recent_coins
+                    .iter()
+                    .flatten()
+                    .map(|entry| entry.core_uid),
+            )
             .max()
+    }
+
+    /// Cap on [`Self::recent_coins`]: enough to cover a working set, short enough to stay scannable
+    /// in a dropdown that also shows a second section.
+    pub const RECENT_COINS_CAP: usize = 12;
+
+    /// Records a market as the most recently opened one.
+    ///
+    /// Moves an existing entry to the front rather than duplicating it, so re-opening a market
+    /// refreshes its position instead of pushing an older copy down the list, and trims to
+    /// [`Self::RECENT_COINS_CAP`]. The whole MRU policy lives here, on the type that is persisted,
+    /// so it can be exercised without a running UI.
+    ///
+    /// Args:
+    ///     core_uid: Stable UID of the core the market was opened on.
+    ///     market: Canonical market name.
+    ///
+    /// Returns:
+    ///     Whether the list changed and therefore needs saving.
+    pub fn push_recent_coin(&mut self, core_uid: u64, market: &str) -> bool {
+        let entries = self.recent_coins.get_or_insert_with(Vec::new);
+        if entries
+            .first()
+            .is_some_and(|top| top.core_uid == core_uid && top.market == market)
+        {
+            return false;
+        }
+        entries.retain(|entry| !(entry.core_uid == core_uid && entry.market == market));
+        entries.insert(
+            0,
+            HeaderTicker {
+                core_uid,
+                market: market.to_string(),
+            },
+        );
+        entries.truncate(Self::RECENT_COINS_CAP);
+        true
     }
 
     /// Writes layout.toml (non-fatal: errors are only logged).

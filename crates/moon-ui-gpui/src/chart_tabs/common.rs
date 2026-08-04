@@ -45,7 +45,7 @@ pub(super) enum StackSetting {
     LineLabels(bool),
     /// Crosshair labels.
     CursorLabels(bool),
-    /// Candle/trade display settings (the ❚ popup).
+    /// Candle/trade display settings (the candlestick popup).
     CandleView(moon_core::market::CandleViewCfg),
 }
 
@@ -452,9 +452,16 @@ pub(super) trait CoinPopupHost: Sized + 'static {
     fn clear_coin_search(&mut self, cx: &mut Context<Self>);
     /// Open the selected coin on the host target (active tab/window stack).
     fn open_picked_coin(&mut self, core: CoreId, market: String, cx: &mut Context<Self>);
+    /// The backend this host reads and writes, so shared plumbing can reach persisted state.
+    fn coin_backend(&self) -> Entity<crate::Backend>;
 }
 
 /// Handle a coin-list selection by opening it, clearing the field, and closing the popup.
+///
+/// Recording the market as recently opened happens HERE rather than in each host's
+/// `open_picked_coin`: this is the one funnel every single pick passes through, so a future opening
+/// path cannot quietly stop feeding the suggestion list. The bulk "open in new tab" path does not
+/// pass through here and records its own.
 pub(super) fn coin_pick_handler<T: CoinPopupHost>(
     cx: &Context<T>,
     input: Entity<MoonInputState>,
@@ -465,7 +472,11 @@ pub(super) fn coin_pick_handler<T: CoinPopupHost>(
     // search opens. The caller passes `coin_input` while it still has `&self`.
     let view = cx.entity();
     move |core, market, window, app| {
-        view.update(app, |this, cx| this.open_picked_coin(core, market, cx));
+        view.update(app, |this, cx| {
+            this.coin_backend()
+                .update(cx, |b, _| b.push_recent_coin(core, &market));
+            this.open_picked_coin(core, market, cx);
+        });
         input.update(app, |inp, c| {
             inp.set_value(SharedString::default(), window, c)
         });

@@ -247,22 +247,19 @@ struct PaneRender {
     /// Whether `ticker` has been resolved at all. An empty string cannot say this: a market with
     /// no label resolves to one, and the pane would take the source lock again every sync.
     ticker_resolved: bool,
-    /// Measured logical-pixel width of the widest corner-label row. `prepare_text` measures it and
-    /// `sync_readout_params` builds the translucent backing plate. Zero means no label.
-    caption_w: f32,
-    /// Logical-pixel size of the comparison-anchor delta row below the corner label in broom mode:
-    /// a large "+0.12%" difference between this exchange's Last and the anchor. Zero means no row.
-    /// `prepare_text` measures it and `sync_readout_params` expands the plate.
-    caption_delta_w: f32,
-    caption_delta_h: f32,
     /// Current Y-scale badge to the left of the corner label, as a whole percentage of visible range
     /// relative to price. `None` hides it when fixed percentage matches the selected step. Computed
     /// by `sync_from_market_source` from the panel's logical `ChartView`.
     scale_badge: Option<i32>,
-    /// Measured logical-pixel scale-badge text size. Width INCLUDES the gap before the label.
-    /// `prepare_text` measures it and `sync_readout_params` expands the plate.
-    caption_scale_w: f32,
-    caption_scale_h: f32,
+    /// Finished translucent plate under the corner caption, in DEVICE pixels `[x, y, w, h]`.
+    ///
+    /// Computed by `prepare_text`, which owns the caption's geometry, and drawn verbatim by
+    /// `sync_readout_params`. A zero height means no caption is drawn this frame. This is the ONE
+    /// caption's plates, one per column: the coin's and, when the two lines split around the order
+    /// book's left edge, the core name's. Measuring each drawn row separately is what let the plate
+    /// drift away from the text it sits under; a single plate spanning both columns would instead
+    /// darken the candles lying between them.
+    caption_plates: [[f32; 4]; 2],
     view: ChartViewGpu,
     layers: PlatformLayers,
     background_params: BackgroundParams,
@@ -392,6 +389,10 @@ struct PaneRender {
 }
 
 impl PaneRender {
+    /// Creates a pane with no retained caption geometry or uploaded market state.
+    ///
+    /// The caption plate starts empty because `prepare_text` is its sole publisher; seeding a
+    /// guessed rectangle here would briefly draw stale backing geometry before the first prepare.
     fn new() -> Self {
         Self {
             core: None,
@@ -400,12 +401,8 @@ impl PaneRender {
             ticker: String::new(),
             ticker_catalog_key: 0,
             ticker_resolved: false,
-            caption_w: 0.0,
-            caption_delta_w: 0.0,
-            caption_delta_h: 0.0,
             scale_badge: None,
-            caption_scale_w: 0.0,
-            caption_scale_h: 0.0,
+            caption_plates: [[0.0; 4]; 2],
             view: ChartViewGpu::default(),
             layers: PlatformLayers::new(),
             background_params: BackgroundParams::default(),

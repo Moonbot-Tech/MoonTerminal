@@ -1,5 +1,5 @@
 //! The "Candles and Trades" popup configures candle and trade-zone rendering for the ACTIVE tab
-//! or detached window (the ❚ button beside ⚙; per-tab like the layout settings).
+//! or detached window (the candlestick button beside ⚙; per-tab like the layout settings).
 //! The tab spec persists to charts.json through `ChartTabSpec::candle_view`; tabs without an
 //! override follow the global `layout.candle_view` default. Like the ⚙ "apply to all" action, the
 //! ⧉ button distributes settings to all Add/Custom tabs and detached windows and updates the global
@@ -390,7 +390,7 @@ pub(super) trait CandlePopupHost: LayoutPopupHost {
 
     /// Close the popup.
     ///
-    /// The already-closed guard is load-bearing: clicking ❚ while the popup is open makes `Popover`
+    /// The already-closed guard is load-bearing: clicking the button while the popup is open makes `Popover`
     /// fire `on_open_change(false)` twice (outside-click handler, then the trigger re-arming).
     fn close_candle_popup(&mut self, cx: &mut Context<Self>) {
         if !self.candle_popup_open() {
@@ -401,7 +401,7 @@ pub(super) trait CandlePopupHost: LayoutPopupHost {
     }
 }
 
-/// Build the ❚ candles-and-trades popup: a `MoonPopover` anchored to the button that opens it.
+/// Build the candles-and-trades popup: a `MoonPopover` anchored to the button that opens it.
 ///
 /// The content is built ONLY while open — `MoonPopover` takes it eagerly, and this sits in a chart
 /// host that repaints constantly.
@@ -422,7 +422,7 @@ pub(super) fn candle_popup_host<T: CandlePopupHost>(
 ) -> MoonPopover {
     let open_entity = cx.entity();
     let mut popover = MoonPopover::new(SharedString::from(format!("{id_prefix}-popover")))
-        // Anchored bottom-right of the ❚ button: growing left keeps the wide popup inside the
+        // Anchored bottom-right of the button: growing left keeps the wide popup inside the
         // window rather than running off its right edge.
         .placement(MoonPopoverPlacement::BottomEnd)
         .content_width(f32::from(content_width(cx)))

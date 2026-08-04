@@ -5,6 +5,7 @@
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonPalette, MoonScrollableElement, MoonScrollbarVisibility, MoonVirtualList,
@@ -32,6 +33,15 @@ pub(super) struct ChartStackEntry {
 }
 
 impl ChartStackEntry {
+    /// Whether this entry IS the chart named by `key`.
+    ///
+    /// A chart is identified by `(core, market)` and never by its position: the stack renumbers
+    /// whenever an entry expires or a comparison lock moves its anchor to the front, and an index
+    /// taken before that stays in range while pointing at somebody else's market.
+    pub(super) fn is(&self, key: &(CoreId, String)) -> bool {
+        self.core == key.0 && self.market == key.1
+    }
+
     pub(super) fn new(core: CoreId, market: String, panel: Entity<ChartPanel>) -> Self {
         Self {
             core,
@@ -72,6 +82,25 @@ pub(super) const COMPACT_STABLE: Duration = Duration::from_millis(5000);
 const STACK_GUTTER: f32 = 8.0;
 const STACK_HEADER_H: f32 = 20.0;
 
+/// Whether one tile draws the gutter strip below itself.
+///
+/// The gutter separates tiles from one another, so a lone tile has nothing to separate from: drawn
+/// there it is simply an 8px band of panel colour under the chart, and the chart body shrinks by
+/// that much. That reads as a defect rather than as spacing — most visibly when right-click
+/// switches a single chart between fullscreen and stack presentation, where the two views are then
+/// identical except that one of them jumps.
+///
+/// Args:
+///     fullscreen: Whether this is the single full-bleed chart, which never gutters.
+///     tile_count: Number of tiles the stack lays out, vacated slots included — a retained empty
+///         slot is still something to be separated from.
+///
+/// Returns:
+///     Whether to draw the gutter.
+pub(super) fn tile_gutter(fullscreen: bool, tile_count: usize) -> bool {
+    !fullscreen && tile_count > 1
+}
+
 type VisibleRangeHandler = Box<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 
 /// Render the visual shell for one chart host in stack mode.
@@ -80,6 +109,10 @@ type VisibleRangeHandler = Box<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 /// UnderScene, so any opaque quad over the plot zone would hide it. Only the header, border, and a
 /// separate gutter outside the plot zone receive color. The caller resolves `title_size` through
 /// `design::t_body(cx)` because the `Clone + 'static` layout closure cannot capture `&App`.
+/// `gutter` draws the 8px separator strip below the card; it exists to space STACKED tiles apart
+/// and is dropped for a single full-bleed chart. `trailing` is an optional muted note pinned to the
+/// header's right, such as which chart of how many is on screen.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn chart_stack_card(
     id: SharedString,
     label: impl Into<SharedString>,
@@ -87,29 +120,34 @@ pub(super) fn chart_stack_card(
     p: MoonPalette,
     border: Rgba,
     title_size: Pixels,
+    gutter: bool,
+    trailing: Option<SharedString>,
 ) -> Stateful<Div> {
     let label = label.into();
+    let gutter_h = if gutter { STACK_GUTTER } else { 0.0 };
     div()
         .id(id)
         .w_full()
         .relative()
         .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .bottom_0()
-                .h(px(STACK_GUTTER))
-                .bg(rgb(p.gutter)),
-        )
+        .when(gutter, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(STACK_GUTTER))
+                    .bg(rgb(p.gutter)),
+            )
+        })
         .child(
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .right_0()
-                .bottom(px(STACK_GUTTER))
+                .bottom(px(gutter_h))
                 .overflow_hidden()
                 .border_1()
                 .border_color(border)
@@ -135,7 +173,18 @@ pub(super) fn chart_stack_card(
                                 .whitespace_nowrap()
                                 .overflow_hidden()
                                 .child(label),
-                        ),
+                        )
+                        .children(trailing.map(|note| {
+                            div()
+                                .ml_auto()
+                                .flex_none()
+                                .pl(px(8.0))
+                                .font_family(crate::design::mono())
+                                .text_size(title_size)
+                                .text_color(rgb(p.text_muted))
+                                .whitespace_nowrap()
+                                .child(note)
+                        })),
                 )
                 .child(
                     div()
@@ -765,3 +814,6 @@ where
         .child(inner)
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;

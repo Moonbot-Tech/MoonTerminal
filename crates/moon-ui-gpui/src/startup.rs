@@ -430,6 +430,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             debug_main_chart_handles: HashMap::new(),
             layout: layout.clone(),
             layout_dirty: false,
+            coin_suggest: HashMap::new(),
             ui_session: UiSessionState::default(),
             detects_view: moon_core::config::DetectViewFile::load(),
             news_tag_settings: moon_core::config::NewsTagSettings::load(),

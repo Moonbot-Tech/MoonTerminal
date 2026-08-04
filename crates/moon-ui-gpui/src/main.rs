@@ -169,6 +169,15 @@ struct Backend {
     /// the debounced coordination loop. Ported from egui's `WindowLayout` and `layout.toml`.
     layout: WindowLayout,
     layout_dirty: bool,
+    /// Cached empty-field coin suggestions, one entry per search field's core scope.
+    ///
+    /// Building a suggestion list walks every market of every provider, so it runs when a popup
+    /// OPENS and never at render. One entry per key, not a single slot: the tab strip and a
+    /// detached window can hold popups open at the same time and would otherwise blank each other.
+    coin_suggest: HashMap<
+        (String, Option<moon_core::config::ChartBucket>),
+        crate::controls::coin_search::CoinSuggestEntry,
+    >,
     /// Process-lifetime window state that survives view replacement but is never serialized.
     ui_session: UiSessionState,
     /// Per-group detect-strip presentation: dimensions, chart, rail, and size slots.

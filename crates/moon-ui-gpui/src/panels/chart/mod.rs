@@ -782,6 +782,12 @@ impl ChartPanel {
         self.chart.last_price()
     }
 
+    /// The panel's market as its own corner caption spells it, or `None` before the catalog
+    /// answers. See [`crate::chartdx::ChartEngine::pane_ticker`] for why it is read, not resolved.
+    pub fn pane_ticker(&self) -> Option<String> {
+        self.chart.pane_ticker()
+    }
+
     /// Starts the accent border flash for a chart that just arrived in a stack slot.
     ///
     /// Deliberately takes no `cx` and issues no notify: the flash is drawn and paced by the chart's

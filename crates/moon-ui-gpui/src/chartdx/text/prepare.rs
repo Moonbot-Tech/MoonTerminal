@@ -5,6 +5,19 @@ use moon_chart::axes::price_decimals;
 use super::*;
 
 impl RenderState {
+    /// Prepares axis, order, cursor, and corner-caption text runs for the current frame.
+    ///
+    /// This is also the sole owner of the caption's backing-plate geometry: publishing the finished
+    /// rectangle with the measured runs keeps the later readout pass from repeating layout rules.
+    ///
+    /// Args:
+    ///     ctx: Text context used to measure and retain GPU text runs.
+    ///
+    /// Returns:
+    ///     `Ok(())` after all visible pane text has been prepared.
+    ///
+    /// Errors:
+    ///     Propagates failures from measuring or drawing retained text runs.
     pub(crate) fn prepare_text(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
@@ -75,41 +88,94 @@ impl RenderState {
                 plot_left - 4.0
             };
 
-            // Corner caption: core name + ticker as light text on a translucent badge built by
-            // render_state from `caption_w`. Anchor its right edge at the panel edge when the
-            // order book is present (above the book), otherwise at the plot edge. render_state
-            // repeats this choice for the badge and must stay synchronized. Draw before the
-            // `plot_w` gate so the caption remains above the book in collapsed book-only mode.
-            {
-                let right_edge = if orderbook_enabled {
-                    pane_right
-                } else {
-                    plot_right
-                };
-                let cap_x = right_edge - CAPTION_PAD_X;
-                let cap_y = plot_top + CAPTION_PAD_Y;
-                let mut cap_w = 0.0_f32;
-                let mut lines = 0u32;
-                if !core_name.is_empty() {
-                    cap_w = cap_w.max(self.measure_text(ctx, &core_name).width.as_f32());
-                    self.draw_text(ctx, &core_name, cap_x, cap_y, 1.0, 0.0, caption_fg)?;
-                    lines += 1;
-                }
+            // Corner caption: the coin, then the core name that qualifies it, over a translucent
+            // plate this block also publishes. Its zone comes from `text::caption`, the one home of
+            // that geometry. Drawn before the `plot_w` gate so the caption remains above the book in
+            // collapsed book-only mode.
+            let caption_zone = caption_geom(
+                pane_left,
+                pane_right,
+                plot_left,
+                plot_right,
+                plot_top,
+                orderbook_enabled,
+                self.panes[idx].orderbook_view.bounds[0] / sf,
+                CAPTION_PAD_X,
+                CAPTION_PAD_Y,
+            );
+            // A pane with no room draws NO caption at all — not the rows suppressed while the broom
+            // delta and the scale badge still paint at substitute coordinates.
+            if let Some(zone) = caption_zone {
+                // Where each line goes is `caption::caption_layout`'s decision, not this pass's:
+                // over a book with chart to its left the coin centres on the book and the core name
+                // hangs off the book's left edge, and everywhere else both lines share one column.
+                let lay = caption_layout(&zone, plot_left);
+                let cap_y = zone.top_y;
+                // One bounding box per column. Split, the two plates are separate — a single plate
+                // spanning both would darken the whole run of candles lying between them.
+                let mut coin_box = CaptionBox::default();
+                let mut core_box = CaptionBox::default();
+                let mut block_h = 0.0_f32;
+                // The coin's own line height and the core name's drawn width, both needed once the
+                // two share a row: the coin is set larger, so centring the name against it needs
+                // its height, and the scale badge hangs off the name's left edge rather than the
+                // column's.
+                let mut coin_h = 0.0_f32;
+                let mut core_w = 0.0_f32;
+                // The coin leads, one size up: it is the fact a glance needs, and the core name is
+                // context for it.
+                let coin_size = self.label_font_px() * 1.25;
                 if !ticker.is_empty() {
-                    cap_w = cap_w.max(self.measure_text(ctx, &ticker).width.as_f32());
-                    self.draw_text(ctx, &ticker, cap_x, cap_y + LINE_H, 1.0, 0.0, caption_fg)?;
-                    lines += 1;
+                    let (text, w) = crate::design::fit_text(&ticker, lay.coin_max_w, |s| {
+                        measure_run_width(ctx, s, coin_size)
+                    });
+                    let m = self.draw_sized_text(
+                        ctx,
+                        &text,
+                        coin_size,
+                        lay.coin_x,
+                        cap_y,
+                        lay.coin_ax,
+                        0.0,
+                        caption_fg,
+                    )?;
+                    coin_box.add(
+                        lay.coin_x - w * lay.coin_ax,
+                        w,
+                        cap_y,
+                        m.line_height.as_f32(),
+                    );
+                    coin_h = m.line_height.as_f32();
+                    block_h += coin_h;
                 }
-                if (self.panes[idx].caption_w - cap_w).abs() > 0.25 {
-                    self.panes[idx].caption_w = cap_w;
-                    readout_metrics_changed = true;
+                // Split, the two sit SIDE BY SIDE and share a row, so the smaller core name is
+                // centred against the coin's taller line rather than hung from the same top edge —
+                // aligned by their tops the name reads as having slipped downward. Unsplit they
+                // remain stacked, the name on the second line.
+                let core_y = if lay.split {
+                    cap_y + ((coin_h - LINE_H) * 0.5).max(0.0)
+                } else {
+                    cap_y + block_h
+                };
+                if !core_name.is_empty() {
+                    let (text, w) = crate::design::fit_text(&core_name, lay.core_max_w, |s| {
+                        measure_run_width(ctx, s, FONT_SIZE)
+                    });
+                    self.draw_text(ctx, &text, lay.core_x, core_y, lay.core_ax, 0.0, caption_fg)?;
+                    core_w = w;
+                    column(lay.split, &mut coin_box, &mut core_box).add(
+                        lay.core_x - w * lay.core_ax,
+                        w,
+                        core_y,
+                        LINE_H,
+                    );
                 }
                 // Broom mode: show this exchange's last-price difference from the locked anchor
                 // prominently below the caption, with sign and positive/negative color. Both
                 // sides are live: this pane provides its last price, while the stack supplies
                 // the anchor's last price through `set_compare_ref_price` in apply_compare on
                 // every observation.
-                let (delta_w, delta_h) = {
+                {
                     let (ob_only, own_last) = {
                         let pr = &self.panes[idx];
                         (pr.orderbook_only, pr.cached_last_price)
@@ -124,68 +190,78 @@ impl RenderState {
                         let text = fmt_pct(pct);
                         let col = pct_hsla(pct, self.label_positive, self.label_negative);
                         let size = self.label_font_px() * 1.7;
+                        // Follows the coin: the delta belongs to the same instrument, so the two
+                        // read as one column wherever that column ended up.
+                        let top = cap_y + block_h + 2.0;
                         let m = self.draw_sized_text(
                             ctx,
                             &text,
                             size,
-                            cap_x,
-                            cap_y + lines as f32 * LINE_H + 2.0,
-                            1.0,
+                            lay.coin_x,
+                            top,
+                            lay.coin_ax,
                             0.0,
                             col,
                         )?;
-                        (m.width.as_f32(), m.line_height.as_f32() + 2.0)
-                    } else {
-                        (0.0, 0.0)
+                        let w = m.width.as_f32();
+                        coin_box.add(lay.coin_x - w * lay.coin_ax, w, top, m.line_height.as_f32());
                     }
                 };
-                if (self.panes[idx].caption_delta_w - delta_w).abs() > 0.25
-                    || (self.panes[idx].caption_delta_h - delta_h).abs() > 0.25
-                {
-                    self.panes[idx].caption_delta_w = delta_w;
-                    self.panes[idx].caption_delta_h = delta_h;
-                    readout_metrics_changed = true;
-                }
+                // Where the scale badge hangs its right edge. In one-column layout it sits beside
+                // the caption; in split layout it aligns with the core name so the left column
+                // reads as a coherent block instead of a stray figure.
+                let badge_right = if lay.split {
+                    // Beside the core name on the same row, not above it: the name no longer sits
+                    // on a line of its own for the badge to occupy.
+                    lay.core_x - core_w - CAPTION_SCALE_GAP
+                } else {
+                    coin_box.left_or(lay.coin_x) - CAPTION_SCALE_GAP
+                };
                 // Place the current Y-scale badge LEFT of the caption block, using the caption
                 // color and a size 2 px smaller than the broom delta, without a sign. Display an
                 // integer percentage such as "14%". sync_from_market_source controls visibility:
                 // always in Auto mode, or manually when scales differ.
-                let (scale_w, scale_h) = if let Some(pct) = self.panes[idx].scale_badge {
+                if let Some(pct) = self.panes[idx].scale_badge {
                     // A range below a whole 1% in a quiet Auto market is shown as "<1%", not zero.
                     let text = if pct == 0 {
                         "<1%".to_string()
                     } else {
                         format!("{pct}%")
                     };
-                    // Make the badge 2 px smaller than the broom delta to keep the delta prominent.
+                    // Keep the broom delta visually dominant over this secondary scale indicator.
                     let size = self.label_font_px() * 1.7 - 2.0;
-                    let block_w = cap_w.max(delta_w);
-                    let gap = if block_w > 0.0 {
-                        CAPTION_SCALE_GAP
-                    } else {
-                        0.0
-                    };
+                    // Right-anchored, so the badge always sits beside its column and never under it.
                     let m = self.draw_sized_text(
                         ctx,
                         &text,
                         size,
-                        cap_x - block_w - gap,
+                        badge_right,
                         cap_y,
                         1.0,
                         0.0,
                         caption_fg,
                     )?;
-                    (m.width.as_f32() + gap, m.line_height.as_f32())
-                } else {
-                    (0.0, 0.0)
-                };
-                if (self.panes[idx].caption_scale_w - scale_w).abs() > 0.25
-                    || (self.panes[idx].caption_scale_h - scale_h).abs() > 0.25
-                {
-                    self.panes[idx].caption_scale_w = scale_w;
-                    self.panes[idx].caption_scale_h = scale_h;
+                    let w = m.width.as_f32();
+                    // Drawn at `cap_y` in both modes: the badge is the tallest run in the caption,
+                    // so its own top edge is the one that should line up with the coin's.
+                    column(lay.split, &mut coin_box, &mut core_box).add(
+                        badge_right - w,
+                        w,
+                        cap_y,
+                        m.line_height.as_f32(),
+                    );
+                }
+                // Publish the finished plate rectangles in DEVICE pixels. `render_state` draws them
+                // verbatim so measured text and its plate share this single geometry source.
+                let plates = [coin_box.plate(sf), core_box.plate(sf)];
+                if self.panes[idx].caption_plates != plates {
+                    self.panes[idx].caption_plates = plates;
                     readout_metrics_changed = true;
                 }
+            } else if self.panes[idx].caption_plates != [[0.0; 4]; 2] {
+                // No room this frame: retire any plate left over from a wider layout.
+                self.panes[idx].caption_plates = [[0.0; 4]; 2];
+                readout_metrics_changed = true;
             }
 
             // Axes, cursor, and grid below apply only to a normal, non-collapsed chart.

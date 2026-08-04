@@ -300,6 +300,23 @@ impl ChartEngine {
             .set_compare_ref_price(price.map(|p| p as f32))
     }
 
+    /// Returns the first active pane's ticker as the corner caption spells it, if it has one yet.
+    ///
+    /// Read rather than resolved again: `data_state::market` already resolves the label through
+    /// the market source, retries it when the catalog generation moves, and caches the answer,
+    /// precisely because resolving takes the source lock and a snapshot and must not sit on a
+    /// per-frame path. Any other surface naming the same chart takes it from here, so the two can
+    /// never spell the instrument differently.
+    pub fn pane_ticker(&self) -> Option<String> {
+        self.state
+            .borrow()
+            .panes
+            .iter()
+            .find(|p| p.active)
+            .map(|p| p.ticker.clone())
+            .filter(|ticker| !ticker.is_empty())
+    }
+
     /// Returns the first active pane's last price, which the anchor supplies for neighbor deltas.
     pub fn last_price(&self) -> Option<f64> {
         self.state
