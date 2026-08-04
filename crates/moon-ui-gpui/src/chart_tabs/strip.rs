@@ -164,7 +164,15 @@ impl Render for ChartTabs {
         let gather_btn = (detached_count > 0).then(|| {
             let entity = cx.entity();
             MoonButton::new("chart-gather-windows")
-                .label("▦")
+                // Two stacked windows, which is literally what the action does. Deliberately the
+                // one FILLED icon in the strip: MoonUI's is a solid path rather than a Lucide
+                // outline, and `render_alpha_mask` keeps only the raster's alpha, so its own black
+                // fill is discarded and the silhouette takes the button's variant colour. It reads
+                // heavier than its neighbours by choice, not by mistake.
+                .leading_icon(MoonButtonIconSlot::new("icons/window-restore.svg"))
+                // The glyph it replaces carried the button's whole meaning, so dropping it without
+                // a tooltip would leave the action unnamed.
+                .tooltip(t!("chart.gather_windows.tip").to_string())
                 .size(MoonButtonSize::Micro)
                 .variant(MoonButtonVariant::Ghost)
                 .on_click(move |_, _w, app| {
@@ -187,13 +195,20 @@ impl Render for ChartTabs {
         } else {
             t!("chart.layout.apply_all_charts").to_string()
         };
+        // Every button in this cluster is icon-only, and that is load-bearing rather than a style
+        // preference: MoonUI's `Button` takes its SQUARE path (`size_5`, one value for width and
+        // height) only when there is no label and no child. Give one a text label and it switches
+        // to `h_5().px_1()`, where the width follows that glyph's advance — which is how the row
+        // came to hold three buttons of three different widths. A new button here needs an icon
+        // from `moon-ui-components-assets/assets/icons`, not a glyph.
+        //
         // The gear IS the popover trigger, so the popup opens under its own button and rides
         // MoonUI's Root layer instead of an in-scene overlay the strip's clipping could cut.
         let settings_btn = common::layout_popup_host(
             self,
             "chart-layout",
             MoonButton::new("chart-layout-settings")
-                .label("⚙")
+                .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
                 .tooltip(t!("chart.layout.tip").to_string())
                 .size(MoonButtonSize::Micro)
                 .variant(if popup_open {

@@ -9,8 +9,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize,
-    MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
+    MoonAccent, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown,
+    MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
     MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -109,7 +109,7 @@ impl DetectsPanel {
     }
 }
 
-/// Builds the panel toolbar whose ⚙ button triggers the configurator's overlay popover.
+/// Builds the panel toolbar whose gear button triggers the configurator's overlay popover.
 pub(super) fn toolbar(
     this: &DetectsPanel,
     cfg: &DetectViewCfg,
@@ -117,8 +117,12 @@ pub(super) fn toolbar(
     cx: &mut Context<DetectsPanel>,
 ) -> Div {
     let entity = cx.entity();
+    // The same icon the chart strip's layout gear uses. A "⚙" label drew noticeably heavier and
+    // lighter-toned than the stroke icons beside it — the glyph carries its own rendering rather
+    // than taking the button's colour — and any label at all costs MoonUI's square icon-only
+    // geometry, which is what left this button a different size from its neighbours.
     let gear = MoonButton::new("detects-view-gear")
-        .label("⚙")
+        .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
         .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .tooltip(t!("detects.cfg.title").to_string())
