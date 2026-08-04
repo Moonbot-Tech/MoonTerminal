@@ -1200,3 +1200,129 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
 // Quote-scope independence is exercised by
 // `panels::report::totals::tests::worker_health_is_stated_outside_every_quote_scope_branch`, which
 // builds a single-currency snapshot with a stalled worker and requires the marker to lead the tail.
+
+/// The period bar stays two named groups — presets and custom range — that wrap between
+/// themselves rather than clipping either one.
+///
+/// Breakage this pins: flattening the groups in `analytics/toolbar.rs:period_bar` or replacing its
+/// minimum height with a fixed height would split or clip controls in a narrow host.
+#[test]
+fn period_bar_wraps_between_its_two_control_groups() {
+    let toolbar = read_src("analytics/toolbar.rs");
+    let body = braced_body(&toolbar, "pub(super) fn period_bar(");
+
+    for needle in [
+        "let presets = MoonSegmentedControl::new(",
+        "let custom = design::chrome_section(cx)",
+        ".child(presets)",
+        ".child(custom)",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`period_bar` must contain {needle:?} so the presets and the custom range stay two \
+             separate, atomic groups the row can wrap between"
+        );
+    }
+    let presets_at = body
+        .find("let presets = MoonSegmentedControl::new(")
+        .expect("checked above");
+    let custom_at = body
+        .find("let custom = design::chrome_section(cx)")
+        .expect("checked above");
+    let child_presets_at = body.find(".child(presets)").expect("checked above");
+    let child_custom_at = body.find(".child(custom)").expect("checked above");
+    assert!(
+        presets_at < custom_at
+            && custom_at < child_presets_at
+            && child_presets_at < child_custom_at,
+        "the presets group must be built, then the custom group, before either joins the row, \
+         so the row wraps between two complete groups rather than through a half-built one"
+    );
+
+    assert!(
+        body.contains(".flex_wrap()"),
+        "`period_bar` must wrap a second line instead of clipping a preset or the custom range"
+    );
+    assert!(
+        body.contains(".min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))"),
+        "`period_bar` must keep its responsive floor rather than a fixed height"
+    );
+    assert!(
+        !body.contains(".h(design::fit_h_px(cx, 34.0, 13.0, 10.5))"),
+        "a fixed row height would clip the wrapped second line instead of growing the row"
+    );
+}
+
+/// The Calendar nav keeps three wrapping groups: zoom level, navigation, and badge/title.
+///
+/// Breakage: flattening zoom and navigation into one button run, restoring a fixed height, or
+/// giving badge and title separate margins would clip controls or split the trailing pair.
+///
+/// It also pins the ordering source: `CalMode::ALL` is ordered for DISPLAY (Year first) and NOT as
+/// the enum declares (`Day, Month, Year`), so a hand-written second list for the items or for the
+/// click index would silently select a different mode than the one clicked, with no compile error.
+#[test]
+fn calendar_nav_wraps_between_its_control_groups() {
+    let calendar = read_src("analytics/calendar/mod.rs");
+    let body = braced_body(&calendar, "fn cal_nav(");
+
+    for needle in [
+        "let modes = MoonSegmentedControl::new(",
+        "let nav = design::chrome_section(cx)",
+        "let trailing = h_flex()",
+        ".child(modes)",
+        ".child(nav)",
+        ".child(trailing)",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`cal_nav` must contain {needle:?} so its three groups stay separate and atomic"
+        );
+    }
+    let at = |needle: &str| body.find(needle).expect("checked above");
+    assert!(
+        at("let trailing = h_flex()") < at(".child(modes)"),
+        "every group must be complete before any of them joins the row, so the row wraps between \
+         whole groups rather than through a half-built one"
+    );
+    assert!(
+        at(".child(modes)") < at(".child(nav)") && at(".child(nav)") < at(".child(trailing)"),
+        "the row must read zoom level, then navigation, then the trailing badge and title — the \
+         order the wrap divides and the order the eye follows"
+    );
+
+    assert!(
+        body.contains(".flex_wrap()"),
+        "`cal_nav` must wrap a second line instead of clipping a mode or a nav button"
+    );
+    assert!(
+        body.contains(".min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))"),
+        "`cal_nav` must keep its responsive floor rather than a fixed height"
+    );
+    assert!(
+        !body.contains(".h(design::fit_h_px(cx, 34.0, 13.0, 10.5))"),
+        "a fixed row height would clip the wrapped second line instead of growing the row"
+    );
+    assert!(
+        !body.contains("div().flex_1()"),
+        "a spacer child is one more thing free to take a line in a wrapping row — the trailing \
+         group is pushed by its own margin instead"
+    );
+    assert_eq!(
+        body.matches(".ml_auto()").count(),
+        1,
+        "exactly one margin, on the group holding BOTH the quote badge and the title — a margin \
+         each would let them wrap onto separate lines"
+    );
+    // Check the construction and lookup sites themselves; a prose mention would not prove that
+    // both sides share the same ordering source.
+    assert!(
+        body.contains("CalMode::ALL.map("),
+        "the mode cells must be built by mapping `CalMode::ALL`, never from a literal array"
+    );
+    assert!(
+        body.contains("CalMode::ALL.get(ix)"),
+        "the click index must be resolved against the SAME ordering source the cells were built \
+         from, or clicking one mode silently selects another"
+    );
+}
