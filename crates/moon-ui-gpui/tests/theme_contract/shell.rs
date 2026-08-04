@@ -407,6 +407,54 @@ fn status_bar_keeps_three_glanceable_groups() {
     }
 }
 
+/// Protects the row viewport both log surfaces scroll sideways in.
+///
+/// The plausible edits are dropping the list's own `Hidden` scrollbar — which would ride the right
+/// edge of the CONTENT, off screen, while a second bar appeared over the rows — and softening the
+/// horizontal bar to a visibility that only shows it while scrolling. The wheel is deliberately
+/// restricted to one axis, so a bar nobody can see is a tail nobody can reach.
+#[test]
+fn log_row_viewports_keep_a_reachable_horizontal_scrollbar() {
+    let line_list = read_src("panels/line_list.rs");
+    let viewport = braced_body(&line_list, "pub(crate) fn hscroll_viewport(");
+    assert!(
+        viewport.contains("MoonScrollAxis::Horizontal")
+            && viewport.contains("MoonScrollbarVisibility::Always")
+            && viewport.contains(".restrict_scroll_to_axis()"),
+        "the shared row viewport must keep a permanently visible horizontal scrollbar"
+    );
+    let log_view = read_src("panels/log/view.rs");
+    let trade_log_view = read_src("panels/report/trade_log/view.rs");
+    for (surface, text) in [
+        ("panels/log/view.rs", &log_view),
+        ("panels/report/trade_log/view.rs", &trade_log_view),
+    ] {
+        assert!(
+            text.contains(".scrollbar_visibility(MoonScrollbarVisibility::Hidden)")
+                && text.contains("line_list::hscroll_viewport(")
+                // Not merely hidden: a bar drawn HERE would ride the content and leave the viewport
+                // to draw a second one over the rows.
+                && !text.contains(".horizontal_scrollbar(")
+                && !text.contains(".vertical_scrollbar("),
+            "{surface} must hand its scrollbars to the shared viewport, not draw its own"
+        );
+    }
+    // Following the tail has to yield to the bar as well as to the wheel: a drag that moved the
+    // list would otherwise be undone by the next reload. The body is read, not just the call, or an
+    // emptied listener would still pass on the wheel handler's own `pause_follow`.
+    let grab = log_view
+        .split_once(".capture_any_mouse_down(")
+        .map(|(_, rest)| rest)
+        .unwrap_or_default();
+    assert!(
+        grab.split("}))")
+            .next()
+            .unwrap_or_default()
+            .contains("pause_follow"),
+        "grabbing a Log scrollbar must pause tail following"
+    );
+}
+
 /// `panels/log/controls.rs:source_combo` replacing the known exchange action with a label would
 /// leave the Log tab's exchange headings inert even though the shared core selectors still work.
 #[test]

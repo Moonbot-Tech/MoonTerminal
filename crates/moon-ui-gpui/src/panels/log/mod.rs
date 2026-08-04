@@ -122,6 +122,12 @@ pub struct LogPanel {
     /// Generation guarding delayed follow resumption. A new scroll or manual Live toggle invalidates
     /// earlier timers, so the five-second delay starts at the latest scroll.
     scroll_gen: u64,
+    /// Whether a left button is held down inside the list, which defers follow resumption.
+    ///
+    /// Dragging a scrollbar produces no further events the pause timer could restart from — unlike
+    /// the wheel, which re-arms on each notch — so a gesture longer than the five seconds would
+    /// resume following mid-drag and jump the list to the tail under the hand holding it.
+    press_held: bool,
     scroll: MoonVirtualListScrollHandle,
     /// Sideways offset of the row viewport, kept across frames so it survives every rebuild.
     hscroll: ScrollHandle,
@@ -186,6 +192,7 @@ impl LogPanel {
             live: true,
             scroll_pause: false,
             scroll_gen: 0,
+            press_held: false,
             scroll: MoonVirtualListScrollHandle::new(),
             hscroll: ScrollHandle::new(),
             refresh: render::RefreshGate::default(),
@@ -411,6 +418,16 @@ impl LogPanel {
         }
     }
 
+    /// Ends a held press: the selection gesture stops and follow resumption is free to run again.
+    ///
+    /// The pending timer is what resumes following, and it re-arms itself while the press is held,
+    /// so releasing needs no timer of its own — the next expiry, at most one delay away, finds the
+    /// hold gone.
+    pub(super) fn release_press(&mut self) {
+        self.selection.release();
+        self.press_held = false;
+    }
+
     /// Drops the selection; the deferred resume timer picks the panel up on its own.
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if self.selection.is_empty() {
@@ -455,8 +472,9 @@ impl LogPanel {
 
     /// Waits five seconds and resumes tail following, unless something newer invalidated this timer.
     ///
-    /// A held selection defers the resume rather than cancelling it: resuming replaces the buffer
-    /// and the selection addresses rows by index, so the wait is simply restarted. Giving up
+    /// A held selection or a held mouse button defers the resume rather than cancelling it: resuming
+    /// replaces the buffer and the selection addresses rows by index, so the wait is simply
+    /// restarted, and a scrollbar drag has no event of its own to restart it with. Giving up
     /// instead would leave following switched off for good whenever a selection was dropped by a
     /// path other than the one that armed this timer — a filter change, a reload, a cleared chip.
     fn arm_resume(&mut self, want_gen: u64, cx: &mut Context<Self>) {
@@ -468,7 +486,7 @@ impl LogPanel {
                     if t.scroll_gen != want_gen || !t.live || !t.scroll_pause {
                         return; // A newer scroll, press, or manual Live toggle owns the state now.
                     }
-                    if !t.selection.is_empty() {
+                    if !t.selection.is_empty() || t.press_held {
                         t.arm_resume(want_gen, cx);
                         return;
                     }
