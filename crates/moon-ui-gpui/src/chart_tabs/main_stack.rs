@@ -3,10 +3,13 @@
 //! renderer lives in [`super::stack`].
 
 use std::ops::Range;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use moon_ui::{MoonPalette, MoonVirtualListScrollHandle};
+use moon_ui::{
+    MoonPalette, MoonRect, MoonTabItem, MoonTabStrip, MoonVirtualListScrollHandle, v_flex,
+};
 
 use super::stack::{
     ChartStackEntry, apply_setting, chart_stack_card, compare_role, render_chart_stack,
@@ -14,6 +17,7 @@ use super::stack::{
     set_panels_candle_view, set_panels_cursor_labels, set_panels_line_labels,
     set_panels_liquidations, set_panels_orderbook_enabled, set_panels_price_axis_pos,
     set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
+    tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -104,6 +108,27 @@ fn take_active_close_index(
     *active = (remaining > 0).then_some(index.min(remaining.saturating_sub(1)));
     *show_stack = remaining > 0;
     Some(index)
+}
+
+/// Decide what a right-click on the chart body does to Main's presentation mode.
+///
+/// Fullscreen means "this chart alone, full bleed"; stack means "all of them, tiled". With a
+/// single chart the two render the same content, so flipping into stack presentation changes
+/// nothing the user asked for and only shifts the chart by the gutter the tiled layout adds — a
+/// vertical jump with no visible cause. Returning to fullscreen FROM the stack stays available at
+/// any count, because a stack can be left holding one chart after the others expire.
+///
+/// Args:
+///     show_stack: Current presentation mode.
+///     chart_count: Number of charts the stack holds.
+///
+/// Returns:
+///     The new `show_stack` value, or `None` when the gesture has nothing to change.
+fn stack_toggle_target(show_stack: bool, chart_count: usize) -> Option<bool> {
+    if chart_count < 2 {
+        return show_stack.then_some(false);
+    }
+    Some(!show_stack)
 }
 
 /// Resolve an active index after entries were reordered while preserving the active identity.
@@ -291,11 +316,7 @@ impl MainChartStack {
                 self.charts.len(),
                 active_key.as_ref(),
                 previous_active,
-                |ix, key| {
-                    self.charts
-                        .get(ix)
-                        .is_some_and(|entry| entry.core == key.0 && entry.market == key.1)
-                },
+                |ix, key| self.charts.get(ix).is_some_and(|entry| entry.is(key)),
             );
         }
         changed
@@ -334,17 +355,12 @@ impl MainChartStack {
     /// Returns:
     ///     Nothing; the requested chart becomes the fullscreen active entry.
     pub(super) fn open_or_focus(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
-        if let Some(ix) = self
-            .charts
-            .iter()
-            .position(|entry| entry.core == core && entry.market == market)
-        {
-            self.active = Some(ix);
-            self.show_stack = false;
-            self.sync_visibility(cx);
-            self.sync_backend_open_markets(cx);
+        let key = (core, market.clone());
+        if self.index_of(&key).is_some() {
+            // Already open: this is the same selection the tab row performs, plus the idle timer
+            // an explicit open restarts.
+            self.select_market(&key, true, cx);
             self.arm_idle_timer(cx);
-            cx.notify();
             return;
         }
 
@@ -377,11 +393,7 @@ impl MainChartStack {
             self.charts.len(),
             active_key.as_ref(),
             previous_active,
-            |ix, key| {
-                self.charts
-                    .get(ix)
-                    .is_some_and(|entry| entry.core == key.0 && entry.market == key.1)
-            },
+            |ix, key| self.charts.get(ix).is_some_and(|entry| entry.is(key)),
         );
         if self.active.is_none() {
             self.show_stack = false;
@@ -429,6 +441,27 @@ impl MainChartStack {
         else {
             return false;
         };
+        // Escape has already decided what stays active and that the remainder returns to stack
+        // view; this only performs the removal.
+        self.remove_chart_at(idx, cx);
+        self.publish(cx);
+        true
+    }
+
+    /// Remove one chart and release everything hanging off it, deciding nothing about what is
+    /// active afterwards.
+    ///
+    /// All single-chart close paths use this teardown so they release the panel's panes and
+    /// order-book subscriptions, plus any comparison lock the removed chart anchored. Selection
+    /// remains a caller decision because Escape and the tab-row close button choose differently.
+    ///
+    /// Args:
+    ///     idx: Index of the chart to remove; assumed in range.
+    ///     cx: Stack context used to close the panel and refresh comparison peers.
+    ///
+    /// Returns:
+    ///     Nothing; selection and publication remain the caller's responsibility.
+    fn remove_chart_at(&mut self, idx: usize, cx: &mut Context<Self>) {
         let entry = self.charts.remove(idx);
         entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
         let had_compare_anchor = self.compare_anchor.is_some();
@@ -445,9 +478,42 @@ impl MainChartStack {
             // Refresh comparison peers and clear any locks left by a removed anchor.
             self.sync_compare(cx);
         }
-        self.sync_visibility(cx);
-        self.sync_backend_open_markets(cx);
-        cx.notify();
+    }
+
+    /// Close one chart chosen from the tab row, keeping the selection where the user left it.
+    ///
+    /// Unlike Escape this does not change presentation mode: closing a sibling from the row is not
+    /// a request to leave fullscreen. The chart that stays active is tracked by IDENTITY rather
+    /// than by index, because removing an earlier entry shifts every index after it — following
+    /// the number would silently select a different market.
+    ///
+    /// Args:
+    ///     idx: Index of the chart to close.
+    ///     cx: Stack context used to release the chart and publish the new state.
+    ///
+    /// Returns:
+    ///     Whether a chart closed.
+    fn close_at(&mut self, idx: usize, cx: &mut Context<Self>) -> bool {
+        if idx >= self.charts.len() {
+            return false;
+        }
+        // The identity to keep active — unless it is the one going away, in which case the numeric
+        // fallback picks up whatever slid into its place.
+        let keep = self
+            .active
+            .filter(|&active| active != idx)
+            .and_then(|active| self.charts.get(active))
+            .map(|entry| (entry.core, entry.market.clone()));
+        let fallback = self.active;
+        self.remove_chart_at(idx, cx);
+        let charts = &self.charts;
+        self.active = remap_active_index(charts.len(), keep.as_ref(), fallback, |ix, key| {
+            charts[ix].is(key)
+        });
+        if self.charts.is_empty() {
+            self.show_stack = false;
+        }
+        self.publish(cx);
         true
     }
 
@@ -463,14 +529,24 @@ impl MainChartStack {
         }
         self.active = None;
         self.show_stack = false;
+        // The anchor left with the charts. Left set, it names a market that no longer exists, and
+        // the next charts opened here are classified as its followers — locked to a price window
+        // and, in broom mode, reduced to order books — with no leader on screen to explain it.
+        self.compare_anchor = None;
+        self.compare_y = None;
+        self.compare_orderbook_only = false;
+        // Orders highlights and prioritizes rows for the markets Main has open. Nothing else writes
+        // that list, so without this it keeps pointing at charts that are gone.
+        self.sync_backend_open_markets(cx);
         cx.notify();
         true
     }
 
-    /// Auto-close charts after the configured window inactivity interval in seconds.
+    /// Auto-close unpinned charts after the configured window inactivity interval in seconds.
     /// Each deadline is `max(last_input, arrived_at) + interval`, with `arrived_at` used when no
     /// input exists. Closing the active fullscreen chart returns the remainder to stack view and
-    /// immediately releases its order-book subscriptions.
+    /// immediately releases its order-book subscriptions. A focused detached chart window refreshes
+    /// group activity because its input does not reach Main directly.
     ///
     /// Args:
     ///     cx: Stack context used to inspect windows, close panels, and publish open markets.
@@ -531,10 +607,18 @@ impl MainChartStack {
             return false;
         }
         let active_closed = self.active.is_some_and(|a| expired.contains(&a));
-        // Remove from the end to preserve indices, closing each panel first to release order books.
+        // Track the surviving selection by IDENTITY. A numeric index may shift when an earlier
+        // chart expires and would then highlight a different market and redirect trading hotkeys.
+        let keep = self
+            .active
+            .filter(|active| !expired.contains(active))
+            .and_then(|active| self.charts.get(active))
+            .map(|entry| (entry.core, entry.market.clone()));
+        let fallback = self.active;
+        // Remove from the end to preserve indices. Routed through the shared removal so an expiring
+        // comparison anchor tears its lock down with it, exactly as closing one by hand does.
         for &ix in expired.iter().rev() {
-            let entry = self.charts.remove(ix);
-            entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
+            self.remove_chart_at(ix, cx);
         }
         if self.charts.is_empty() {
             self.active = None;
@@ -544,11 +628,12 @@ impl MainChartStack {
             if active_closed && !self.show_stack {
                 self.show_stack = true;
             }
-            self.active = Some(self.active.unwrap_or(0).min(self.charts.len() - 1));
+            let charts = &self.charts;
+            self.active = remap_active_index(charts.len(), keep.as_ref(), fallback, |ix, key| {
+                charts[ix].is(key)
+            });
         }
-        self.sync_visibility(cx);
-        self.sync_backend_open_markets(cx);
-        cx.notify();
+        self.publish(cx);
         true
     }
 
@@ -865,26 +950,135 @@ impl MainChartStack {
             .update(cx, |b, _| b.set_main_open_markets(&self.group, open));
     }
 
+    /// Republish everything derived from which charts exist and which one is selected.
+    ///
+    /// Keep these steps together because panel visibility follows the selection, Orders reads the
+    /// published open-market list, and the parent only learns of either through the notification.
+    ///
+    /// Args:
+    ///     cx: Stack context used to update child visibility, Backend state, and observers.
+    ///
+    /// Returns:
+    ///     Nothing; all derived state is synchronized before notification.
+    fn publish(&mut self, cx: &mut Context<Self>) {
+        self.sync_visibility(cx);
+        self.sync_backend_open_markets(cx);
+        cx.notify();
+    }
+
+    /// Select one chart, optionally showing it alone.
+    ///
+    /// Args:
+    ///     key: Core and market of the chart to select.
+    ///     fullscreen: Whether to leave stack presentation and show it full bleed.
+    ///     cx: Stack context used to publish the new state.
+    ///
+    /// Returns:
+    ///     Whether anything changed.
+    fn select_market(
+        &mut self,
+        key: &(CoreId, String),
+        fullscreen: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(ix) = self.index_of(key) else {
+            return false;
+        };
+        if self.active == Some(ix) && !(fullscreen && self.show_stack) {
+            return false;
+        }
+        self.active = Some(ix);
+        if fullscreen {
+            self.show_stack = false;
+        }
+        self.publish(cx);
+        true
+    }
+
+    /// Make one chart the active one without changing presentation mode.
+    ///
+    /// The active chart is also the group's trading target — `ChartTabs::main_chart_target` reads
+    /// it — so picking a tab redirects the F1-F6 / S1-S6 hotkeys and cancel-buy to that market.
+    /// That is the point of the row, but it means a stray click moves where an order would land.
+    ///
+    /// The comparison anchor deliberately does NOT follow because it leads the shared price scale,
+    /// while Main's trading target follows the selected chart. The two markers therefore represent
+    /// separate responsibilities.
+    ///
+    /// Args:
+    ///     key: Core and market of the chart to select.
+    ///     cx: Stack context used to publish visibility and wake the parent.
+    ///
+    /// Returns:
+    ///     Nothing; a missing or already-selected market leaves state unchanged.
+    fn focus_market(&mut self, key: &(CoreId, String), cx: &mut Context<Self>) {
+        self.select_market(key, false, cx);
+    }
+
+    /// Select one chart and show it alone, full bleed — the tab row's double-click.
+    ///
+    /// Args:
+    ///     key: Core and market of the chart to show.
+    ///     cx: Stack context used to publish visibility and wake the parent.
+    ///
+    /// Returns:
+    ///     Nothing; a missing market leaves state unchanged.
+    fn fullscreen_market(&mut self, key: &(CoreId, String), cx: &mut Context<Self>) {
+        self.select_market(key, true, cx);
+    }
+
+    /// Resolve a chart's identity to its CURRENT index, or `None` once it is gone.
+    ///
+    /// Every tab-row handler goes through this. A handler fires after the render that built it, and
+    /// in between an idle chart can expire or a comparison lock can move its anchor to the front —
+    /// both of which renumber the stack while leaving the old index perfectly in range, pointing at
+    /// somebody else's market.
+    fn index_of(&self, key: &(CoreId, String)) -> Option<usize> {
+        self.charts.iter().position(|entry| entry.is(key))
+    }
+
     /// Toggle one clicked chart between fullscreen and whole-stack presentation.
+    ///
+    /// With a single chart open the gesture is deliberately inert — see [`stack_toggle_target`].
     ///
     /// Args:
     ///     ix: Index of the clicked chart.
     ///     cx: Stack context used to update visibility and notify the parent.
     ///
     /// Returns:
-    ///     Nothing; an out-of-range index is ignored.
+    ///     Nothing; an out-of-range index, or a gesture with nothing to change, is ignored.
     fn toggle_from_chart(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix >= self.charts.len() {
             return;
         }
+        let Some(show_stack) = stack_toggle_target(self.show_stack, self.charts.len()) else {
+            return;
+        };
         self.active = Some(ix);
-        self.show_stack = !self.show_stack;
-        self.sync_visibility(cx);
-        self.sync_backend_open_markets(cx);
-        cx.notify();
+        self.show_stack = show_stack;
+        self.publish(cx);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Renders one Main-chart tile in either stacked or fullscreen presentation.
+    ///
+    /// Fullscreen deliberately keeps the card header so the active market remains identifiable;
+    /// only the inter-tile gutter is removed, and a position note appears when siblings exist.
+    ///
+    /// Args:
+    ///     ix: Index of the chart entry being rendered.
+    ///     panel: Chart panel placed inside the card.
+    ///     size: Optional extent along the stack axis.
+    ///     flex: Whether the tile may flex in Compress or Fit layout.
+    ///     min_w: Minimum extent along the stack axis while flexing.
+    ///     horizontal: Whether the stack axis is horizontal.
+    ///     border: Border color for the card.
+    ///     entity: Stack entity used by the fullscreen toggle callback.
+    ///     palette: Active MoonUI palette.
+    ///     fullscreen: Whether this is the single full-bleed active chart.
+    ///     title_size: Resolved title font size.
+    ///
+    /// Returns:
+    ///     The sized chart card with its fullscreen toggle handler attached.
     #[allow(clippy::too_many_arguments)]
     fn render_tile(
         &self,
@@ -897,7 +1091,7 @@ impl MainChartStack {
         border: Rgba,
         entity: Entity<Self>,
         palette: MoonPalette,
-        stack_card: bool,
+        fullscreen: bool,
         title_size: Pixels,
     ) -> Stateful<Div> {
         let panel_for_event = panel.clone();
@@ -906,25 +1100,31 @@ impl MainChartStack {
             .get(ix)
             .map(|e| e.market.clone())
             .unwrap_or_else(|| "Chart".to_string());
-        let mut tile = if stack_card {
-            chart_stack_card(
-                SharedString::from(format!("main-chart-stack-tile-{ix}")),
-                label,
-                panel,
-                palette,
-                border,
-                title_size,
-            )
+        // The card — and therefore the market name — is drawn in fullscreen too. Without it the
+        // fullscreen view is the stacked view MINUS its only label, so with a single chart the
+        // gesture reads as "the coin name disappeared" rather than as a mode change; with several,
+        // nothing on screen says which one is showing. Fullscreen drops only the inter-tile gutter,
+        // which has nothing left to separate, and gains a position note when there are siblings.
+        let trailing = (fullscreen && self.charts.len() > 1)
+            .then(|| SharedString::from(format!("{}/{}", ix + 1, self.charts.len())));
+        // Tiled, the tab row above says which chart is selected; the card repeats it with an accent
+        // frame so the answer is also where the user's eyes already are. Fullscreen shows only the
+        // selected chart, so there is nothing to distinguish it from.
+        let border = if !fullscreen && Some(ix) == self.active && self.charts.len() > 1 {
+            rgb(palette.accent)
         } else {
-            div()
-                .id(("main-chart-stack-tile", ix))
-                .w_full()
-                .relative()
-                .overflow_hidden()
-                .border_1()
-                .border_color(border)
-                .child(div().size_full().relative().overflow_hidden().child(panel))
-        }
+            border
+        };
+        let mut tile = chart_stack_card(
+            SharedString::from(format!("main-chart-stack-tile-{ix}")),
+            label,
+            panel,
+            palette,
+            border,
+            title_size,
+            tile_gutter(fullscreen, self.charts.len()),
+            trailing,
+        )
         .on_mouse_up(
             MouseButton::Right,
             move |event: &MouseUpEvent, _window, app| {
@@ -975,11 +1175,132 @@ impl MainChartStack {
     }
 }
 
+impl MainChartStack {
+    /// Render the row of per-chart tabs above the stack, or `None` when it would say nothing.
+    ///
+    /// It exists because the Main tab is a stack of markets under one label: with several charts
+    /// open, nothing on screen said which of them was selected — and the selected one is where
+    /// trading hotkeys land. Below two charts the row is suppressed: a single tab names a market
+    /// the card header already names, at the cost of a strip of chart height.
+    ///
+    /// The label is the panel's OWN resolved ticker, so the tab and the chart's corner caption
+    /// cannot spell the instrument differently; a chart whose catalog has not answered yet falls
+    /// back to the raw market key rather than rendering blank.
+    ///
+    /// Args:
+    ///     window: Window whose width the strip is laid out against.
+    ///     cx: Stack context, used to read each panel and to build the click handlers.
+    ///
+    /// Returns:
+    ///     The row, or `None` when fewer than two charts are open.
+    fn render_tab_row(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // Vacated slots are retained placeholders in COMPRESS layout — they hold a position, not a
+        // chart, so they get no tab.
+        let live: Vec<(CoreId, String, SharedString)> = self
+            .charts
+            .iter()
+            .filter(|entry| !entry.vacated)
+            .map(|entry| {
+                let label = entry
+                    .panel
+                    .read(cx)
+                    .pane_ticker()
+                    .unwrap_or_else(|| entry.market.clone());
+                (entry.core, entry.market.clone(), SharedString::from(label))
+            })
+            .collect();
+        if live.len() < 2 {
+            return None;
+        }
+        let active_key = self
+            .active
+            .and_then(|ix| self.charts.get(ix))
+            .map(|entry| (entry.core, entry.market.as_str()));
+        let strip_h = crate::chart_tabs::chart_tab_strip_h(cx);
+        let gap = 4.0_f32;
+        let pad_l = 8.0_f32;
+        let mut total_w = pad_l;
+        let items: Vec<MoonTabItem> = live
+            .iter()
+            .map(|(core, market, label)| {
+                let width = crate::design::tab_width(cx, label.chars().count(), false, true);
+                total_w += width + gap;
+                MoonTabItem::new(label.clone())
+                    .width(width)
+                    .selected(active_key == Some((*core, market.as_str())))
+                    .closable(true)
+            })
+            .collect();
+        let keys: Rc<Vec<(CoreId, String)>> = Rc::new(
+            live.into_iter()
+                .map(|(core, market, _)| (core, market))
+                .collect(),
+        );
+        let view = cx.entity();
+        // Lay the strip out at its OWN width rather than the window's: `MoonTabStrip` positions
+        // every tab absolutely and clips to the bounds it is given, so a stack wider than the
+        // window would simply lose its tail. Scrolling the row keeps every chart reachable.
+        let strip_w = total_w.max(f32::from(window.viewport_size().width).max(1.0));
+        let strip = MoonTabStrip::new("main-chart-tab-row-strip")
+            .padding_left(pad_l)
+            .gap(gap)
+            .bounds(MoonRect::new(0.0, 0.0, strip_w, strip_h))
+            .items(items)
+            .on_click({
+                let keys = keys.clone();
+                let view = view.clone();
+                move |ix, event, _window, app| {
+                    let Some(key) = keys.get(ix).cloned() else {
+                        return;
+                    };
+                    view.update(app, |this, cx| {
+                        if event.click_count() >= 2 {
+                            this.fullscreen_market(&key, cx);
+                        } else {
+                            this.focus_market(&key, cx);
+                        }
+                    });
+                }
+            })
+            .on_close({
+                let keys = keys.clone();
+                move |ix, _event, _window, app| {
+                    let Some(key) = keys.get(ix).cloned() else {
+                        return;
+                    };
+                    view.update(app, |this, cx| {
+                        if let Some(at) = this.index_of(&key) {
+                            this.close_at(at, cx);
+                        }
+                    });
+                }
+            });
+        Some(
+            div()
+                .id("main-chart-tab-row")
+                .flex_none()
+                .w_full()
+                .h(px(strip_h))
+                // `.relative()` is load-bearing: given explicit bounds, `MoonTabStrip` makes its own
+                // root ABSOLUTE and places itself against the nearest positioned ancestor. Without
+                // this the row would escape to `ChartTabs`'s relative root and paint over the
+                // Main/Add tab strip at the very top of the panel. The sibling strip wraps itself
+                // the same way for the same reason.
+                .relative()
+                .overflow_x_scroll()
+                .child(strip)
+                .into_any_element(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
 impl Render for MainChartStack {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Renders the per-chart tab row above either the active full-bleed chart or the virtualized
+    /// whole-stack layout.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
             return div()
@@ -993,6 +1314,26 @@ impl Render for MainChartStack {
                 .into_any_element();
         }
 
+        // The row is built first but composed last: it must know the active chart before the body
+        // below borrows `self` for the stack layout's closures.
+        let tab_row = self.render_tab_row(window, cx);
+        let body = self.render_body(palette, cx);
+        let Some(tab_row) = tab_row else {
+            return body;
+        };
+        // The body flexes into whatever the row leaves, so the chart loses exactly the row's
+        // height and nothing has to subtract it by hand.
+        return v_flex()
+            .size_full()
+            .child(tab_row)
+            .child(div().flex_1().w_full().min_h(px(0.0)).child(body))
+            .into_any_element();
+    }
+}
+
+impl MainChartStack {
+    /// The chart area itself: one full-bleed chart, or the whole stack tiled.
+    fn render_body(&mut self, palette: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
         let active = self.active.unwrap_or(0).min(self.charts.len() - 1);
         if !self.show_stack {
             let panel = self.charts[active].panel.clone();
@@ -1008,11 +1349,10 @@ impl Render for MainChartStack {
                     rgb(palette.border),
                     entity,
                     palette,
-                    false,
+                    true,
                     crate::design::t_body(cx),
                 )
                 .size_full()
-                .border_0()
                 .into_any_element();
         }
 
@@ -1049,7 +1389,7 @@ impl Render for MainChartStack {
             |s, ix| s.charts.get(ix).map(|e| e.panel.clone()),
             move |s, ix, panel, size, flex, min_w, horizontal, border, ent| {
                 s.render_tile(
-                    ix, panel, size, flex, min_w, horizontal, border, ent, p, true, title_size,
+                    ix, panel, size, flex, min_w, horizontal, border, ent, p, false, title_size,
                 )
                 .into_any_element()
             },

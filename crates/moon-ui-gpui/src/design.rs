@@ -512,6 +512,32 @@ pub fn font_w(cx: &App, base: f32) -> f32 {
     MoonTheme::active_tokens(cx).font_width(base)
 }
 
+/// Width of one `MoonTabItem` in a chart-tab strip, scaled the way the tab's own contents are.
+///
+/// `MoonTabStrip` absolutely positions every tab at the width the caller hands it, so the caller
+/// owns the fit. The label inside the tab is a `MoonText` and therefore grows with the Font slider,
+/// while the tab's paddings, badge and close button follow the UI scale — a width built from raw
+/// pixels tracks neither, so at a non-zero Font delta the label outgrows the box it is centred in.
+/// The character term is `font_w` and the chrome terms are `ui_value` for exactly that reason.
+///
+/// `Hotkeys` keeps its own narrower floor and is deliberately not routed here: widening a settings
+/// surface is outside what this helper exists to fix.
+///
+/// Args:
+///     cx: Application context used to calculate the font and UI scales.
+///     label_chars: Character count of the rendered label.
+///     badge: Whether the tab carries an unread badge.
+///     closable: Whether the tab carries a close button.
+///
+/// Returns:
+///     The tab width in raw pixels, clamped to the strip's scaled floor and ceiling.
+pub fn tab_width(cx: &App, label_chars: usize, badge: bool, closable: bool) -> f32 {
+    let text = font_w(cx, label_chars as f32 * 7.0);
+    let chrome = ui_value(cx, if badge { 38.0 } else { 28.0 })
+        + if closable { ui_value(cx, 20.0) } else { 0.0 };
+    (text + chrome).clamp(font_w(cx, 72.0), font_w(cx, 168.0))
+}
+
 // Radius tokens come from `MoonMetrics::TERMINAL`, rather than local numeric values. Avoid raw
 // `px(N)` in `.rounded()`. Pill values such as `SEL_H / 2.0` or `999.0` describe shape, not a radius
 // tier, and are outside this rule. `*_BASE` values are unscaled inputs for MoonUI builders that scale

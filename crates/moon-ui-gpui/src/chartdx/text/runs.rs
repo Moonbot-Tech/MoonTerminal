@@ -252,12 +252,16 @@ impl RenderState {
         // order book, use the control zone's left edge.
         let pane_left = pane_bounds[0] / sf;
         let pane_right = (pane_bounds[0] + pane_bounds[2]) / sf;
-        let zone_left = if orderbook_enabled {
-            orderbook_view.bounds[0] / sf
-        } else {
-            let zone_w = moon_chart::GLASS_ZONE_PX.min((pane_right - pane_left) * 0.5);
-            pane_right - zone_w
-        };
+        // One home for "where does the order book's zone start"; see `text::caption`. The cursor
+        // needs only that edge, so it calls the primitive rather than the caption's own geometry.
+        let zone_left = super::book_zone_left(
+            pane_left,
+            pane_right,
+            pane_left,
+            pane_right,
+            orderbook_enabled,
+            orderbook_view.bounds[0] / sf,
+        );
         let right_x = zone_left + READOUT_PAD_X;
         // Keep the label badge from cutting through the horizontal line; see cursor_label_gap.
         let gap = cursor_label_gap(self.cursor_thickness, sf);

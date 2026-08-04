@@ -14,12 +14,10 @@ const READOUT_INSET: f32 = 2.0;
 // Distance from an order-line label to the line itself (px). Large enough that the badge
 // (its bottom/top = dy ± READOUT_PAD_Y) does not cover the line: GAP > READOUT_PAD_Y.
 const LABEL_LINE_GAP: f32 = 4.0;
-// Corner caption (core name + ticker), anchored by its right edge. With an order book it sits
-// at the panel edge (above the book, left of the close button); without one it sits at the plot
-// edge. The close button occupies the outermost ~26 px (bounds `right-26`, width 22), so a 30 px
-// inset moves the caption's right edge LEFT of the button by ~4 px and keeps text from hiding
-// under it. These are pub(super) because render_state uses them to build a translucent badge
-// with the same inset, keeping it aligned with the text.
+// Insets of the corner caption (the coin, then the core name) from the zone `text::caption`
+// resolves for it. The close button occupies the outermost ~26 px of the pane (bounds `right-26`,
+// width 22), so a 30 px right inset keeps the caption's own right edge ~4 px clear of it and stops
+// text from hiding underneath.
 pub(super) const CAPTION_PAD_X: f32 = 30.0;
 pub(super) const CAPTION_PAD_Y: f32 = 4.0;
 // Gap between the current Y-scale badge and the corner-caption block (badge on the left).
@@ -291,5 +289,28 @@ fn nearest_orderbook_notional(
 
 // Split by responsibility: runs contains RenderState draw/measure helpers, FireTest text, and
 // the ghost cursor; prepare contains the main prepare_text implementation.
+mod caption;
 mod prepare;
 mod runs;
+
+use caption::{CaptionBox, book_zone_left, caption_geom, caption_layout, column};
+
+/// Width of `text` at `size` in the caption font, without touching the retained run list.
+///
+/// [`crate::design::fit_text`] takes an `Fn` measuring closure, which cannot hold the `&mut self`
+/// that [`RenderState::measure_text`] needs, and the caption draws its two rows at two different
+/// sizes. Measuring through a throwaway run answers both: it borrows only the context, and it takes
+/// the size the caller actually draws at — truncating against a narrower font would underestimate
+/// the width and overflow anyway.
+fn measure_run_width(ctx: &GpuCanvasTextContext<'_>, text: &str, size: f32) -> f32 {
+    GpuCanvasTextRun::default()
+        .measure(
+            ctx,
+            text,
+            gpui::font(crate::design::mono()),
+            px(size),
+            px(size + 4.0),
+        )
+        .width
+        .as_f32()
+}

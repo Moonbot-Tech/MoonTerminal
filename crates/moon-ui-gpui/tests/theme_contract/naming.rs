@@ -93,3 +93,30 @@ fn coin_surfaces_resolve_through_the_market_source() {
         );
     }
 }
+
+/// The Main tab row must name each chart the way that chart's own caption names it.
+///
+/// The plausible edit is labelling the tab with the raw `entry.market` — it is right there on the
+/// stack entry and looks like the market's name. It is the exchange's key, not a name: a
+/// Hyperliquid spot index reads as `@156`, and two COIN-M expiries of one coin read alike. The
+/// resolved label already exists on the panel, resolved once through `MarketDataSource` and
+/// re-resolved when the catalog generation moves, so the row reads it rather than resolving again
+/// — `market_label` takes the source lock and a snapshot and must not sit on a render path.
+#[test]
+fn the_main_tab_row_labels_charts_from_the_panels_own_ticker() {
+    let main_stack = read_src("chart_tabs/main_stack.rs");
+    let row = braced_body(&main_stack, "fn render_tab_row(");
+
+    assert!(
+        row.contains("pane_ticker()"),
+        "the tab row must take its label from the panel's resolved ticker"
+    );
+    assert!(
+        !row.contains("market_label(") && !row.contains("market_labels("),
+        "and must not resolve it again on the render path: that takes the market-source lock"
+    );
+    assert!(
+        !row.contains("coin_of_market("),
+        "and must not re-derive a coin from the market name"
+    );
+}

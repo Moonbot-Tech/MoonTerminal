@@ -14,19 +14,57 @@ use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
 impl ChartTabs {
-    /// Search results for the current query. Add tabs search within their bucket; Main and custom
-    /// tabs search the whole group because a custom tab can collect coins from different cores.
-    pub(super) fn coin_results(&self, cx: &App) -> Vec<crate::controls::coin_search::CoinHit> {
-        let bucket = match &self.active {
+    /// The cores this tab's coin field searches. Add tabs search within their bucket; Main and
+    /// custom tabs search the whole group because a custom tab can collect coins from different
+    /// cores.
+    fn coin_bucket(&self) -> Option<ChartBucket> {
+        match &self.active {
             Tab::Main | Tab::Custom(..) => None,
             Tab::Add(_, b) => Some(b.clone()),
-        };
-        coin_search::search(
-            self.backend.read(cx),
+        }
+    }
+
+    /// What the dropdown shows: matches for the typed query, or suggestions for an empty field.
+    ///
+    /// The empty-field branch reads only cached suggestions — the scan that fills that cache runs
+    /// when the popup opens, never here.
+    pub(super) fn coin_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults {
+        use crate::controls::coin_search::{CoinResults, suggestions};
+
+        let bucket = self.coin_bucket();
+        let b = self.backend.read(cx);
+        if !self.coin_query.trim().is_empty() {
+            return CoinResults::Query(coin_search::search(
+                b,
+                &self.group,
+                bucket.as_ref(),
+                &self.coin_query,
+            ));
+        }
+        let (recent, volatile) = suggestions(
+            b,
             &self.group,
             bucket.as_ref(),
-            &self.coin_query,
-        )
+            b.coin_suggest_markets(&self.group, bucket.as_ref()),
+        );
+        CoinResults::Suggest { recent, volatile }
+    }
+
+    /// Open the coin dropdown, refreshing the suggestion cache the empty-field list reads.
+    ///
+    /// Both entry points route here — gaining focus, and clicking a field that already has it —
+    /// so the expensive rebuild has exactly one home and cannot leak into a render pass.
+    pub(super) fn open_coin_popup(&mut self, cx: &mut Context<Self>) {
+        // Re-read the field before deciding what to show. Close paths clear the query MIRROR
+        // without rewriting the input, so reopening on focus must resync both values or suggestions
+        // can appear under text the user can still see in the field.
+        self.coin_query = self.coin_input.read(cx).value().to_string();
+        let bucket = self.coin_bucket();
+        let group = self.group.clone();
+        self.backend
+            .update(cx, |b, _| b.refresh_coin_suggest(&group, bucket.as_ref()));
+        self.coin_popup_open = true;
+        cx.notify();
     }
 
     /// Open the selected coin on the ACTIVE tab: Main → fullscreen chart; Add/Custom → its stack.
@@ -100,6 +138,10 @@ impl ChartTabs {
             stack.update(cx, |s, c| {
                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c)
             });
+            // The bulk path does not pass through `open_coin_on_active`, so it records its own
+            // recents; without this, coins opened here would never appear in the suggestion list.
+            self.backend
+                .update(cx, |b, _| b.push_recent_coin(*core, market));
         }
         // Pin charts immediately to protect them from TTL closure.
         stack.update(cx, |s, c| s.pin_all(c));
@@ -538,6 +580,11 @@ impl ChartTabs {
 /// Coin search in the tab strip. The selected coin opens on the ACTIVE tab (Main → fullscreen
 /// chart; Add/Custom → its stack). Popup plumbing lives in [`super::common`].
 impl CoinPopupHost for ChartTabs {
+    /// Return the shared backend that supplies search state and persisted recents.
+    fn coin_backend(&self) -> Entity<crate::Backend> {
+        self.backend.clone()
+    }
+
     /// Clear the coin field and close the list after selection or an outside click.
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();

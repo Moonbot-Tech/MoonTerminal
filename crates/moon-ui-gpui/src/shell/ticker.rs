@@ -63,9 +63,11 @@ impl Shell {
         };
         let backend = self.backend.clone();
         let view = cx.entity();
+        // Always a query list: this field picks a RATE to display in the header, so "recently
+        // opened chart" and "biggest mover" would be the wrong universe to offer.
         let list = coin_search::render_popup(
             "header-ticker-search",
-            results,
+            crate::controls::coin_search::CoinResults::Query(results),
             &Default::default(),
             false,
             p,
@@ -123,6 +125,10 @@ impl Shell {
             .right(px(right))
             .top(px(top))
             .on_mouse_down(MouseButton::Left, |_, _w, app| app.stop_propagation())
+            // The results list inside occludes on its own, but this box extends above it — over
+            // the caption and the query input — and that band would otherwise pass the wheel
+            // straight through to whatever the header sits on.
+            .occlude()
             .on_hover(cx.listener(|this, hovered: &bool, _w, cx| {
                 if *hovered {
                     this.ticker_popup_hovered = true;
@@ -131,11 +137,13 @@ impl Shell {
                 }
             }))
             .child(
-                // `render_popup` font-scales its nominal 240-unit list width, while this outer box
-                // keeps a raw 240-pixel base and adds scaled horizontal padding plus two raw border
+                // `render_popup` font-scales the shared nominal width, while this outer box keeps
+                // it as a raw pixel base and adds scaled horizontal padding plus two raw border
                 // pixels. The dimensions align at the default font scale but do not scale together.
                 v_flex()
-                    .w(px(240.0 + 2.0 * f32::from(design::ui_px(cx, 6.0)) + 2.0))
+                    .w(px(crate::controls::coin_search::COIN_POPUP_W
+                        + 2.0 * f32::from(design::ui_px(cx, 6.0))
+                        + 2.0))
                     .gap(design::ui_px(cx, 4.0))
                     .p(design::ui_px(cx, 6.0))
                     // `panel_high`, NOT the `shell_high` a `MoonPopover` paints: this popup opens

@@ -63,7 +63,7 @@ pub(super) struct DetachedChartHost {
     ///
     /// It is not a separate OS window because chart text now lies below the normal GPUI scene.
     layout_popup_open: bool,
-    /// Anchored "Candles and Trades" popup opened by ❚ for this window tab's candle settings.
+    /// Anchored "Candles and Trades" popup opened by the candlestick button for this window tab.
     candle_popup_open: bool,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in THIS window applies scale to its panel
     /// and persists it in the tab spec exactly once.
@@ -285,6 +285,11 @@ impl DetachedChartHost {
             &coin_input,
             window,
             |this, input, ev: &MoonInputEvent, window, cx| {
+                // Focus opens the list without typing; see `ChartTabs::new` for why.
+                if matches!(ev, MoonInputEvent::Focus) {
+                    this.open_coin_popup(cx);
+                    return;
+                }
                 if matches!(ev, MoonInputEvent::Change) {
                     let value = input.read(cx).value().to_string();
                     if let std::borrow::Cow::Owned(en) =
@@ -294,7 +299,8 @@ impl DetachedChartHost {
                         return;
                     }
                     if this.coin_query != value {
-                        this.coin_popup_open = !value.trim().is_empty();
+                        // Clearing the text falls back to suggestions rather than closing.
+                        this.coin_popup_open = true;
                         this.coin_query = value;
                         cx.notify();
                     }
@@ -450,14 +456,40 @@ impl DetachedChartHost {
         cx.notify();
     }
 
-    /// Return market-search matches for this window from its bucket's cores.
-    fn coin_results(&self, cx: &App) -> Vec<crate::controls::coin_search::CoinHit> {
-        coin_search::search(
-            self.backend.read(cx),
+    /// What this window's dropdown shows: query matches, or empty-field suggestions.
+    ///
+    /// Mirrors `ChartTabs::coin_results`, scoped to this window's own bucket. The empty-field
+    /// branch reads only the cached suggestions; the scan filling that cache runs on open.
+    fn coin_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults {
+        use crate::controls::coin_search::{CoinResults, suggestions};
+
+        let b = self.backend.read(cx);
+        if !self.coin_query.trim().is_empty() {
+            return CoinResults::Query(coin_search::search(
+                b,
+                &self.group,
+                Some(&self.bucket),
+                &self.coin_query,
+            ));
+        }
+        let (recent, volatile) = suggestions(
+            b,
             &self.group,
             Some(&self.bucket),
-            &self.coin_query,
-        )
+            b.coin_suggest_markets(&self.group, Some(&self.bucket)),
+        );
+        CoinResults::Suggest { recent, volatile }
+    }
+
+    /// Open this window's coin dropdown, refreshing the suggestions it reads.
+    pub(super) fn open_coin_popup(&mut self, cx: &mut Context<Self>) {
+        // Resync the query mirror with the field; see `ChartTabs::open_coin_popup`.
+        self.coin_query = self.coin_input.read(cx).value().to_string();
+        let (group, bucket) = (self.group.clone(), self.bucket.clone());
+        self.backend
+            .update(cx, |b, _| b.refresh_coin_suggest(&group, Some(&bucket)));
+        self.coin_popup_open = true;
+        cx.notify();
     }
 
     /// Rewrite a Custom tab spec's tickers from the current panel composition only when changed.
@@ -546,7 +578,7 @@ impl DetachedChartHost {
     }
 }
 
-/// Host for the "Candles and Trades" ❚ popup targeting THIS window's panel.
+/// Host for the "Candles and Trades" candlestick popup targeting THIS window's panel.
 ///
 /// "Apply to all" sends a group request through Backend, drained by the tab strip like
 /// `ChartApplyAll`.
@@ -706,6 +738,11 @@ impl LayoutPopupHost for DetachedChartHost {
 ///
 /// For a detached Custom tab, the ticker composition is persisted immediately.
 impl CoinPopupHost for DetachedChartHost {
+    /// Return the shared backend that supplies search state and persisted recents.
+    fn coin_backend(&self) -> Entity<crate::Backend> {
+        self.backend.clone()
+    }
+
     fn clear_coin_search(&mut self, cx: &mut Context<Self>) {
         self.coin_query.clear();
         self.coin_popup_open = false;

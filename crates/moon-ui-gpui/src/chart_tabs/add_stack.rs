@@ -14,6 +14,7 @@ use super::stack::{
     set_panels_candle_view, set_panels_cursor_labels, set_panels_line_labels,
     set_panels_liquidations, set_panels_orderbook_enabled, set_panels_price_axis_pos,
     set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
+    tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -726,6 +727,10 @@ impl AddChartStack {
 }
 
 impl Render for AddChartStack {
+    /// Renders every Add/Custom chart as a labelled, guttered stack tile.
+    ///
+    /// These stacks have no fullscreen mode, so their shared card helper always retains the
+    /// separator and never needs the Main stack's position note.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = moon_ui::MoonPalette::active(cx);
         if self.charts.is_empty() {
@@ -806,8 +811,21 @@ impl Render for AddChartStack {
                         "Chart".to_string(),
                     ),
                 };
-                let mut tile =
-                    chart_stack_card(SharedString::from(id), label, panel, p, border, title_size);
+                // Add/Custom stacks have no fullscreen mode and need no position note, since each
+                // tile already carries its own market name. The gutter still goes through the
+                // shared decision: a tab holding a single chart — the ordinary state of a fresh
+                // Add tab opened by one detect — would otherwise carry a permanent empty strip
+                // under it.
+                let mut tile = chart_stack_card(
+                    SharedString::from(id),
+                    label,
+                    panel,
+                    p,
+                    border,
+                    title_size,
+                    tile_gutter(false, s.charts.len()),
+                    None,
+                );
                 // Fill width/height across the axis. Along the axis, use flex with a cap (COMPRESS
                 // down to size), fixed size without flex, or stretch (FIT). Horizontal uses the X
                 // axis (width); vertical uses the Y axis (height).

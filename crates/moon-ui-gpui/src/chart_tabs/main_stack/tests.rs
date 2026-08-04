@@ -1,7 +1,7 @@
 //! Regression coverage for Main-chart Escape state transitions.
 
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
-use super::{remap_active_index, take_active_close_index};
+use super::{remap_active_index, stack_toggle_target, take_active_close_index};
 
 /// Reintroducing a tiled-mode early return in `main_stack.rs:take_active_close_index`, or clearing
 /// `active` while charts remain, must fail: Escape would work only once or only in fullscreen.
@@ -60,4 +60,35 @@ fn comparison_reordering_preserves_the_active_chart_identity() {
     });
 
     assert_eq!(active, Some(0));
+}
+
+/// `main_stack.rs:stack_toggle_target` must leave a single chart alone.
+///
+/// Breakage this pins: restoring the unconditional `show_stack = !show_stack`. With one chart the
+/// stack and fullscreen presentations draw the same content, so the flip changed nothing except to
+/// add the tiled layout's gutter — the chart jumped up by that strip and back on every
+/// right-click, which reads as the chart twitching rather than as a mode change.
+#[test]
+fn right_click_never_expands_a_single_chart_into_a_stack() {
+    assert_eq!(
+        stack_toggle_target(false, 1),
+        None,
+        "a lone fullscreen chart has no stack to expand into"
+    );
+    assert_eq!(
+        stack_toggle_target(false, 0),
+        None,
+        "an empty stack has nothing to toggle"
+    );
+    assert_eq!(
+        stack_toggle_target(true, 1),
+        Some(false),
+        "returning to fullscreen must stay available: charts expire and can leave a stack of one"
+    );
+    assert_eq!(
+        stack_toggle_target(false, 2),
+        Some(true),
+        "with siblings the gesture works as before"
+    );
+    assert_eq!(stack_toggle_target(true, 3), Some(false));
 }

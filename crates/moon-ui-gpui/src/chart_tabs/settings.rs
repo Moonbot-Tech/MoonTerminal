@@ -311,7 +311,7 @@ impl ChartTabs {
     }
 
     /// Apply candle rendering settings, plus the source window's X scale when set, to ALL group
-    /// tabs and windows through the ❚ popup's ⧉ button, then update the defaults inherited by new
+    /// tabs and windows through the candlestick popup's ⧉ button, then update the defaults inherited by new
     /// tabs and windows. As with ⚙, `include_main` changes Main ONLY when its own popup is open;
     /// otherwise Main is pinned to its current view before the global fallback changes.
     pub(super) fn apply_candle_view_to_all(
@@ -462,7 +462,7 @@ impl ChartTabs {
     }
 }
 
-/// Host for the "Candles and Trades" ❚ popup targeting the ACTIVE tab, like ⚙.
+/// Host for the "Candles and Trades" candlestick popup targeting the ACTIVE tab, like ⚙.
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::CandleView)`.
 impl super::candle_popup::CandlePopupHost for ChartTabs {

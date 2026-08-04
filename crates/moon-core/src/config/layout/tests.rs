@@ -21,6 +21,36 @@ fn active_trade_core_selection_raises_uid_floor() {
     assert_eq!(layout.max_core_uid(), Some(42));
 }
 
+/// Protects `layout.rs:WindowLayout::max_core_uid` from dropping the recent-coins history.
+///
+/// The plausible edit is tidying the iterator chain and dropping the `.chain(self.recent_coins
+/// ...)` link, reasoning the header ticker and active-trade selections already cover "referenced
+/// UIDs". A core referenced only by a market it was once opened on (never pinned as the active
+/// trade core or the header ticker) would then stop raising the high-water mark, letting a
+/// deleted core's UID be reissued to a new server, which inherits the deleted core's trades and
+/// P&L.
+#[test]
+fn recent_coins_history_also_raises_the_uid_floor() {
+    let mut layout = WindowLayout {
+        header_ticker: Some(HeaderTicker {
+            core_uid: 3,
+            market: "BTCUSDT".to_string(),
+        }),
+        ..WindowLayout::default()
+    };
+    layout
+        .active_trade_core_by_group
+        .insert("default".to_string(), 5);
+    // Referenced ONLY here: a market opened once from the coin-search dropdown on a core that was
+    // never made the header ticker or the active trade selection for any group.
+    layout.recent_coins = Some(vec![HeaderTicker {
+        core_uid: 99,
+        market: "ETHUSDT".to_string(),
+    }]);
+
+    assert_eq!(layout.max_core_uid(), Some(99));
+}
+
 /// A hand-written tuner seed must never cost the user the rest of their layout.
 ///
 /// `layout.toml` is one document with no schema version, so a field that rejects its stored value
@@ -356,6 +386,38 @@ fn a_hand_written_field_list_cannot_discard_the_saved_layout() {
             "{written:?} must not take the rest of the layout down with it"
         );
     }
+}
+
+/// Re-opening the same market repeatedly must not flood the recent-coins history.
+///
+/// Breakage this pins: `layout.rs:WindowLayout::push_recent_coin` dropping the
+/// `entries.retain(...)` dedup pass, reasoning that `insert(0, ..)` already puts the newest entry
+/// first. Without the dedup, re-opening one coin over and over fills every slot up to
+/// [`WindowLayout::RECENT_COINS_CAP`] with copies of that one market and pushes every other
+/// recently opened market out of the history entirely.
+#[test]
+fn reopening_the_same_market_repeatedly_does_not_flood_the_history() {
+    let mut layout = WindowLayout::default();
+    assert!(layout.push_recent_coin(1, "ETHUSDT"));
+    for _ in 0..(WindowLayout::RECENT_COINS_CAP * 2) {
+        // Moving it to the front each time is a no-op once it is already on top, so this must
+        // stop reporting a change (and stop growing the list) after the very first call.
+        layout.push_recent_coin(1, "BTCUSDT");
+        layout.push_recent_coin(1, "ETHUSDT");
+    }
+
+    let entries = layout.recent_coins.expect("entries were pushed");
+    assert_eq!(
+        entries.len(),
+        2,
+        "repeated re-opens of two markets must leave exactly those two entries, not one per call: {:?}",
+        entries.iter().map(|e| &e.market).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        entries[0].market, "ETHUSDT",
+        "the most recently opened market leads"
+    );
+    assert_eq!(entries[1].market, "BTCUSDT");
 }
 
 /// Standalone Report geometry must survive restart without making `layout.toml` fragile.

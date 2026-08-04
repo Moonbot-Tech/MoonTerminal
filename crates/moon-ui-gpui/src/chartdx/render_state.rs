@@ -308,6 +308,10 @@ impl RenderState {
         self.sync_readout_params();
     }
 
+    /// Rebuilds the GPU readout rectangles from geometry published by text preparation.
+    ///
+    /// The corner-caption plate is consumed verbatim rather than re-derived here, preventing the
+    /// background from drifting away when the order-book bounds or caption anchoring change.
     pub(super) fn sync_readout_params(&mut self) {
         let sf = self.pixel_scale.max(0.1);
         let bg = self.readout_bg;
@@ -371,35 +375,14 @@ impl RenderState {
             let axis_hidden = matches!(pr.price_axis_pos, PriceAxisPos::Hide);
             let axis_on_right = matches!(pr.price_axis_pos, PriceAxisPos::Right);
 
-            // Translucent corner-label backing plate with alpha 0.2, or 80% transparency. Its anchor
-            // matches `text/prepare.rs::prepare_text`: at the panel edge with an order book,
-            // otherwise at the plot edge.
-            // Draw BEFORE the `plot_w<60` gate so order-book-only broom followers retain a plate
-            // under their label even while the chart is collapsed.
-            if pr.caption_w > 0.0 || pr.caption_delta_w > 0.0 || pr.caption_scale_w > 0.0 {
-                let lines = (!pr.core_name.is_empty()) as u32 + (!pr.market.is_empty()) as u32;
-                // Broom anchor-delta row sits below the label on the same plate. Width uses the
-                // widest row, and height adds its measured height from `prepare_text`. The current
-                // Y-scale badge sits left of the block, adding its width and gap there; its large
-                // font may exceed label-row height, so use the maximum.
-                let cap_w = pr.caption_w.max(pr.caption_delta_w) + pr.caption_scale_w;
-                let cap_h = (lines as f32 * super::text::LINE_H + pr.caption_delta_h)
-                    .max(pr.caption_scale_h);
-                if cap_h > 0.0 {
-                    let right_edge = if pr.orderbook_enabled {
-                        pane_right
-                    } else {
-                        plot_right
-                    };
-                    let cap_x = right_edge - super::text::CAPTION_PAD_X;
-                    let cap_y = plot_top + super::text::CAPTION_PAD_Y;
-                    let (pad_l, pad_r, pad_y) = (5.0_f32, 3.0_f32, 2.0_f32);
-                    let dst = [
-                        (cap_x - cap_w - pad_l) * sf,
-                        (cap_y - pad_y) * sf,
-                        (cap_w + pad_l + pad_r) * sf,
-                        (cap_h + pad_y * 2.0) * sf,
-                    ];
+            // Translucent corner-label backing plate with alpha 0.2, or 80% transparency.
+            //
+            // The rectangle is NOT recomputed here: `text/prepare.rs::prepare_text` owns the
+            // caption's geometry and publishes the finished plate, so the plate can no longer drift
+            // away from the text. Pushed BEFORE the `plot_w<60` gate so order-book-only broom
+            // followers keep a plate under their label while the chart is collapsed.
+            for dst in pr.caption_plates {
+                if dst[3] > 0.0 {
                     pr.readout_rects.push(ReadoutRect {
                         dst,
                         bg: self.readout_soft_bg,

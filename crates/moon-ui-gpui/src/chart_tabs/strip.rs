@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, MoonRect, MoonTabItem,
-    MoonTabStrip, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
+    MoonRect, MoonTabItem, MoonTabStrip, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -17,6 +17,10 @@ use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
 
 impl Render for ChartTabs {
+    /// Renders the chart tabs and the grouped toolbar shared by the docked chart surface.
+    ///
+    /// Popup hosts remain outside the strip's clipping layer so search results and anchored
+    /// settings are not cut off when the tab row overflows.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Snapshot tabs so callbacks do not retain a borrow of `self.add`: identity, label, width
         // count, unread badge count, and detachability.
@@ -52,10 +56,7 @@ impl Render for ChartTabs {
         let items = tabs
             .iter()
             .map(|(tab, label, _count, unread, detachable)| {
-                let width = (label.chars().count() as f32 * 7.0
-                    + if *unread > 0 { 38.0 } else { 28.0 }
-                    + if *detachable { 20.0 } else { 0.0 })
-                .clamp(72.0, 168.0);
+                let width = design::tab_width(cx, label.chars().count(), *unread > 0, *detachable);
                 let mut item = MoonTabItem::new(label.clone())
                     .width(width)
                     .selected(self.active == *tab)
@@ -193,6 +194,7 @@ impl Render for ChartTabs {
             "chart-layout",
             MoonButton::new("chart-layout-settings")
                 .label("⚙")
+                .tooltip(t!("chart.layout.tip").to_string())
                 .size(MoonButtonSize::Micro)
                 .variant(if popup_open {
                     MoonButtonVariant::Blue
@@ -209,8 +211,12 @@ impl Render for ChartTabs {
         let candle_btn = candle_popup::candle_popup_host(
             self,
             "chart-candles",
+            // An icon, not a glyph: the former "❚" label drew as a thin vertical bar that read as a
+            // separator between toolbar groups rather than as a button. No explicit icon colour —
+            // the icon inherits the button's variant foreground, so the selected (Blue) state stays
+            // visible.
             MoonButton::new("chart-candle-settings")
-                .label("❚")
+                .leading_icon(MoonButtonIconSlot::new("icons/chart-candlestick.svg"))
                 .tooltip(t!("chart.candles.tip").to_string())
                 .size(MoonButtonSize::Micro)
                 .variant(if candle_popup_open {
@@ -252,12 +258,24 @@ impl Render for ChartTabs {
         let coin_search_el = div()
             .relative()
             .child(
-                div().w(design::font_w_px(cx, 80.0)).child(
-                    MoonInput::new("tabs-coin-search")
-                        .state(&self.coin_input)
-                        .cleanable(true)
-                        .small(),
-                ),
+                div()
+                    .w(design::font_w_px(cx, 80.0))
+                    // `Focus` fires only on GAINING focus, so clicking a field that already has it
+                    // emits nothing and would leave a dismissed list closed. This reopens it, and
+                    // stops the event before the dismiss layer underneath closes it again.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _ev, _window, cx| {
+                            this.open_coin_popup(cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child(
+                        MoonInput::new("tabs-coin-search")
+                            .state(&self.coin_input)
+                            .cleanable(true)
+                            .small(),
+                    ),
             )
             .children(coin_popup);
         // Catch clicks outside the market list on a layer below the cluster to dismiss it.
@@ -269,21 +287,36 @@ impl Render for ChartTabs {
                 .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
         });
 
-        let fig_tools = self.render_fig_tools(cx);
+        // Erased to `AnyElement` immediately: `render_fig_tools` returns `impl IntoElement`, which
+        // captures the `&mut cx` borrow for as long as the element lives, and every scaled metric
+        // below reads `cx` again.
+        let fig_tools = self.render_fig_tools(cx).into_any_element();
 
-        // Right cluster: drawing tools, market, scale, optional gather, candles, and layout. Both
-        // settings buttons carry their own anchored popovers, so nothing here positions a popup.
-        let right_cluster = div().absolute().right(px(6.0)).top(px(4.0)).child(
-            h_flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(fig_tools)
-                .child(coin_search_el)
-                .child(scale_dropdown)
-                .children(gather_btn)
-                .child(candle_btn)
-                .child(settings_btn),
-        );
+        // Right cluster, read left to right as three groups of one job each: what you DRAW on the
+        // chart, what you PUT on it, and how you VIEW it. The groups are `chrome_section`s with a
+        // `chrome_divider` standing between them, so the boundary comes from the rule rather than
+        // from wider spacing — the same block idiom the terminal header and the trading toolbar use.
+        // Both settings buttons carry their own anchored popovers, so nothing here positions a popup.
+        let right_cluster = div()
+            .absolute()
+            .right(design::ui_px(cx, 6.0))
+            .top(design::ui_px(cx, 4.0))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(design::ui_px(cx, design::CHROME_GAP))
+                    .child(design::chrome_section(cx).child(fig_tools))
+                    .child(design::chrome_divider(cx, p_strip))
+                    .child(design::chrome_section(cx).child(coin_search_el))
+                    .child(design::chrome_divider(cx, p_strip))
+                    .child(
+                        design::chrome_section(cx)
+                            .child(scale_dropdown)
+                            .children(gather_btn)
+                            .child(candle_btn)
+                            .child(settings_btn),
+                    ),
+            );
         v_flex()
             .size_full()
             .relative()

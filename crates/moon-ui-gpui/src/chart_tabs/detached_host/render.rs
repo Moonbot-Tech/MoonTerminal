@@ -1,12 +1,13 @@
-//! `Render` implementation for `DetachedChartHost`: a window header with market search, scale,
-//! the ⚙ layout popup, and "close all charts" above the chart-stack panel. The ⚙ popup overlay and
-//! market-search plumbing are shared with the tab strip through [`super::super::common`].
+//! `Render` implementation for `DetachedChartHost`: a window header with market search, scale, the
+//! candlestick and ⚙ layout popups, and "close all charts" above the chart-stack panel. The ⚙ popup
+//! overlay and market-search plumbing are shared with the tab strip through
+//! [`super::super::common`], and the header's group/divider structure mirrors that strip's.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette, MoonWindowFrame,
-    MoonWindowFrameControls, h_flex, v_flex,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
+    MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -17,6 +18,10 @@ use super::DetachedChartHost;
 use crate::design;
 
 impl Render for DetachedChartHost {
+    /// Renders the detached chart window with the dock toolbar's grouping and popup behavior.
+    ///
+    /// The market dropdown and dismiss layer use the measured header height so scaling cannot move
+    /// either layer across the search field.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Correct a restored window's size once it is on the target display with the correct scale:
         // force the saved logical size to override `WM_DPICHANGED` shrinkage.
@@ -69,12 +74,26 @@ impl Render for DetachedChartHost {
         let candle_popup_open = self.candle_popup_open;
         // Header market-search input and matches. Render the list at the `v_flex` level after the
         // body; otherwise the later-painted window body covers the header dropdown.
-        let coin_search_el = div().w(design::font_w_px(cx, 80.0)).child(
-            MoonInput::new("detached-coin-search")
-                .state(&self.coin_input)
-                .cleanable(true)
-                .small(),
-        );
+        let coin_search_el = div()
+            .w(design::font_w_px(cx, 80.0))
+            // Reopen on a click into an already-focused field; see the tab strip's twin.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _ev, _window, cx| {
+                    this.open_coin_popup(cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .child(
+                MoonInput::new("detached-coin-search")
+                    .state(&self.coin_input)
+                    .cleanable(true)
+                    .small(),
+            );
+        // Both layers hang off the header's ACTUAL height rather than the 34 it is built from: that
+        // height is scaled, so raw constants drift under a non-default UI or font scale and leave
+        // the popup overlapping the header or the dismiss layer covering the input.
+        let header_h = design::fit_h_px(cx, 34.0, 13.0, 10.5);
         let coin_popup = self.coin_popup_open.then(|| {
             let results = self.coin_results(cx);
             coin_search::render_popup(
@@ -89,15 +108,15 @@ impl Render for DetachedChartHost {
                 |_app| {},
             )
             .absolute()
-            .right(px(6.0))
-            .top(px(38.0))
+            .right(design::ui_px(cx, 6.0))
+            .top(header_h + design::ui_px(cx, 4.0))
         });
-        // Catch outside clicks only below the 34-pixel header so the search field remains interactive.
+        // Catch outside clicks only below the header so the search field remains interactive.
         let coin_dismiss = self.coin_popup_open.then(|| {
             div()
                 .id("detached-coin-dismiss")
                 .absolute()
-                .top(px(34.0))
+                .top(header_h)
                 .left(px(0.0))
                 .right(px(0.0))
                 .bottom(px(0.0))
@@ -113,10 +132,10 @@ impl Render for DetachedChartHost {
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_hotkey(ev, cx)))
             .child(
                 h_flex()
-                    .h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
+                    .h(header_h)
                     .w_full()
                     .items_center()
-                    .gap(design::ui_px(cx, 8.0))
+                    .gap(design::ui_px(cx, design::CHROME_GAP))
                     .pl(design::ui_px(cx, design::titlebar_leading_inset()))
                     .pr(design::ui_px(cx, 6.0))
                     .border_b_1()
@@ -130,58 +149,69 @@ impl Render for DetachedChartHost {
                             .min_w_0()
                             .items_center(),
                     )
-                    .child(coin_search_el)
-                    .child(crate::controls::scale_dropdown_for_add_stack(
-                        cx,
-                        scale,
-                        panel.clone(),
-                        p,
-                    ))
-                    // Both buttons ARE their popovers' triggers, so each popup opens under its
-                    // own button on MoonUI's Root layer.
-                    .child(candle_popup::candle_popup_host(
-                        self,
-                        "detached-chart-candles",
-                        MoonButton::new("detached-candle-settings")
-                            .label("❚")
-                            .tooltip(t!("chart.candles.tip").to_string())
-                            .size(MoonButtonSize::Micro)
-                            .variant(if candle_popup_open {
-                                MoonButtonVariant::Blue
-                            } else {
-                                MoonButtonVariant::Ghost
-                            })
-                            .selected(candle_popup_open)
-                            .render(),
-                        cx,
-                    ))
-                    .child(common::layout_popup_host(
-                        self,
-                        "detached-chart-layout",
-                        MoonButton::new("detached-layout-settings")
-                            .label("⚙")
-                            .tooltip(t!("chart.layout.tip").to_string())
-                            .size(MoonButtonSize::Micro)
-                            .variant(if popup_open {
-                                MoonButtonVariant::Blue
-                            } else {
-                                MoonButtonVariant::Ghost
-                            })
-                            .selected(popup_open)
-                            .render(),
-                        t!("chart.layout.apply_all_charts").to_string(),
-                        cx,
-                    ))
+                    .child(design::chrome_divider(cx, p))
+                    .child(design::chrome_section(cx).child(coin_search_el))
+                    .child(design::chrome_divider(cx, p))
                     .child(
-                        MoonButton::new("detached-close-all")
-                            .label("🗑")
-                            .tooltip(t!("chartwin.clear").to_string())
-                            .size(MoonButtonSize::Micro)
-                            .variant(MoonButtonVariant::Ghost)
-                            .on_click(move |_, _w, app| {
-                                close_all_panel.update(app, |p, cx| p.close_all_panes(cx));
-                            })
-                            .render(),
+                        design::chrome_section(cx)
+                            .child(crate::controls::scale_dropdown_for_add_stack(
+                                cx,
+                                scale,
+                                panel.clone(),
+                                p,
+                            ))
+                            // Both buttons ARE their popovers' triggers, so each popup opens under its
+                            // own button on MoonUI's Root layer.
+                            .child(candle_popup::candle_popup_host(
+                                self,
+                                "detached-chart-candles",
+                                // Mirrors the dock strip's candle button; see `chart_tabs::strip`.
+                                MoonButton::new("detached-candle-settings")
+                                    .leading_icon(MoonButtonIconSlot::new(
+                                        "icons/chart-candlestick.svg",
+                                    ))
+                                    .tooltip(t!("chart.candles.tip").to_string())
+                                    .size(MoonButtonSize::Micro)
+                                    .variant(if candle_popup_open {
+                                        MoonButtonVariant::Blue
+                                    } else {
+                                        MoonButtonVariant::Ghost
+                                    })
+                                    .selected(candle_popup_open)
+                                    .render(),
+                                cx,
+                            ))
+                            .child(common::layout_popup_host(
+                                self,
+                                "detached-chart-layout",
+                                MoonButton::new("detached-layout-settings")
+                                    .label("⚙")
+                                    .tooltip(t!("chart.layout.tip").to_string())
+                                    .size(MoonButtonSize::Micro)
+                                    .variant(if popup_open {
+                                        MoonButtonVariant::Blue
+                                    } else {
+                                        MoonButtonVariant::Ghost
+                                    })
+                                    .selected(popup_open)
+                                    .render(),
+                                t!("chart.layout.apply_all_charts").to_string(),
+                                cx,
+                            )),
+                    )
+                    .child(design::chrome_divider(cx, p))
+                    .child(
+                        design::chrome_section(cx).child(
+                            MoonButton::new("detached-close-all")
+                                .label("🗑")
+                                .tooltip(t!("chartwin.clear").to_string())
+                                .size(MoonButtonSize::Micro)
+                                .variant(MoonButtonVariant::Ghost)
+                                .on_click(move |_, _w, app| {
+                                    close_all_panel.update(app, |p, cx| p.close_all_panes(cx));
+                                })
+                                .render(),
+                        ),
                     )
                     .when(design::show_custom_window_controls(), |this| {
                         this.child(frame.visual_controls(cx))

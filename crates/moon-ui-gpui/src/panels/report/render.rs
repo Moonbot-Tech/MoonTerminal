@@ -209,9 +209,10 @@ impl Render for ReportPanel {
             let view = cx.entity();
             let coin_input = self.coin.clone();
             let backend_pick = self.backend.clone();
+            // Always a query list: this field filters a report COLUMN, not a set of charts.
             crate::controls::coin_search::render_popup(
                 "rep-coin-search",
-                results,
+                crate::controls::coin_search::CoinResults::Query(results),
                 &HashSet::new(),
                 false,
                 p,

@@ -647,3 +647,238 @@ fn core_status_throttles_repaints_and_averages_cpu() {
         "the warning engine must average CPU over the window"
     );
 }
+
+/// Protects the market popups from letting the wheel reach whatever they cover.
+///
+/// The plausible edit is dropping `occlude()` while reshuffling a popup's chrome — it reads as a
+/// no-op next to the `stop_propagation` already there. The chart reads the wheel through an
+/// ordinary gpui handler gated on its own hitbox, so without the occluder a scroll over the coin
+/// list also rescales the chart behind it, and a scroll over the header ticker reaches the
+/// surface under the header. Neither shows up in any unit test: it is visible only in a running
+/// build.
+#[test]
+fn market_popups_occlude_the_wheel_from_the_surface_behind() {
+    let coin_search = read_src("controls/coin_search.rs");
+    let ticker = read_src("shell/ticker.rs");
+
+    let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H>(");
+    assert!(
+        popup.contains(".occlude()"),
+        "the coin-search popup must occlude, or the wheel over its results rescales the chart \
+         behind them"
+    );
+
+    let layers = braced_body(&ticker, "pub(super) fn ticker_popup_layers(");
+    assert!(
+        layers.contains(".occlude()"),
+        "the header ticker's popup box must occlude: its caption and query input sit ABOVE the \
+         occluding results list, so that band would still pass the wheel through"
+    );
+}
+
+/// Protects every stack card's gutter from being decided by a literal at the call site.
+///
+/// The plausible edit is passing `true` (or `!fullscreen`) straight into `chart_stack_card`.
+/// The gutter is 8px of panel colour drawn BELOW the card, and it also
+/// shortens the chart body by that much — so a stack holding one tile shows an empty strip under
+/// the chart, and Main's right-click gesture moved the chart vertically for no visible reason.
+/// Both stacks must route the decision through the one predicate that knows how many tiles there
+/// are.
+#[test]
+fn stack_cards_take_their_gutter_from_the_shared_decision() {
+    let stack = read_src("chart_tabs/stack.rs");
+    assert!(
+        stack.contains("pub(super) fn tile_gutter("),
+        "the shared gutter decision must live in stack.rs beside the card that draws it"
+    );
+
+    for rel in ["chart_tabs/main_stack.rs", "chart_tabs/add_stack.rs"] {
+        let source = read_src(rel);
+        let call = chain_between(&source, "chart_stack_card(", ");", rel);
+        assert!(
+            call.contains("tile_gutter("),
+            "{rel}: the chart_stack_card call must take its gutter from tile_gutter, not a literal"
+        );
+    }
+}
+
+/// Protects the Main tab row from appearing where it says nothing, and its handlers from
+/// addressing charts by a number that moves.
+///
+/// Two plausible edits, both silent. Rendering the row unconditionally costs a strip of chart
+/// height to name a market the card header already names. And keeping the click handlers' snapshot
+/// as indices — the shape the tab strip above it uses, where tabs do not renumber — would let an
+/// expiring chart or a comparison lock reordering the stack slide a different market under a
+/// perfectly in-range index, so a click selects, fullscreens or CLOSES the wrong chart.
+#[test]
+fn the_main_tab_row_is_gated_and_addresses_charts_by_identity() {
+    let main_stack = read_src("chart_tabs/main_stack.rs");
+
+    let row = braced_body(&main_stack, "fn render_tab_row(");
+    assert!(
+        row.contains("live.len() < 2"),
+        "the row must be suppressed below two charts"
+    );
+    assert!(
+        row.contains("Rc<Vec<(CoreId, String)>>"),
+        "its handlers must snapshot chart IDENTITY, never indices"
+    );
+
+    // Both gestures funnel through one selection method, and THAT is where the identity is turned
+    // into a current index — at the moment the handler fires, not when the row was drawn.
+    let select = braced_body(&main_stack, "fn select_market(");
+    assert!(
+        select.contains("self.index_of("),
+        "select_market must resolve the identity to a current index when it fires"
+    );
+    for name in ["fn focus_market(", "fn fullscreen_market("] {
+        let body = braced_body(&main_stack, name);
+        assert!(
+            body.contains("self.select_market("),
+            "{name} must go through the shared selection, not resolve or assign on its own"
+        );
+    }
+
+    let close_at = braced_body(&main_stack, "fn close_at(");
+    assert!(
+        close_at.contains("remap_active_index("),
+        "close_at must re-resolve the active chart by identity: removing an earlier entry shifts \
+         every index after it"
+    );
+    assert!(
+        close_at.contains("remove_chart_at("),
+        "and must release the panel and any comparison lock through the shared removal, not a \
+         second copy of it"
+    );
+}
+
+/// Protects every bounded `MoonTabStrip` from escaping the box that is meant to hold it.
+///
+/// The plausible edit is wrapping a strip in a plain `div` — nothing about the call site suggests
+/// otherwise. But a strip given explicit `bounds` makes its OWN root absolute and positions itself
+/// against the nearest positioned ancestor, so an unpositioned wrapper silently hands it to
+/// whichever ancestor happens to be relative. In this panel that is `ChartTabs`'s root, and the row
+/// then paints over the Main/Add tab strip at the top of the window instead of sitting above the
+/// chart.
+#[test]
+fn a_bounded_tab_strip_sits_in_a_positioned_wrapper() {
+    for (rel, signature) in [
+        ("chart_tabs/main_stack.rs", "fn render_tab_row("),
+        (
+            "chart_tabs/strip.rs",
+            "fn render(&mut self, window: &mut Window",
+        ),
+    ] {
+        let source = read_src(rel);
+        let body = braced_body(&source, signature);
+        // Comments are stripped first, and that is load-bearing: the comment explaining WHY the
+        // wrapper is positioned names `.relative()` itself, so a raw search over the body stayed
+        // true with the actual call deleted — the assertion passed on the very edit it exists to
+        // catch.
+        let code: String = body
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains(".bounds(MoonRect::new("),
+            "{rel}: expected a bounded tab strip here"
+        );
+        assert!(
+            code.contains(".relative()"),
+            "{rel}: a bounded MoonTabStrip must live inside a positioned wrapper, or it anchors to \
+             an unrelated ancestor"
+        );
+    }
+}
+
+/// Protects every path that removes a Main chart from doing its own teardown.
+///
+/// The plausible edit is independently popping the entry and closing its panel in each path.
+/// Each chart also owns state OUTSIDE its own entry — a comparison lock it may be
+/// the anchor of, and the published list of markets Orders highlights — and a removal that skips
+/// those leaves surviving charts locked to a leader that is gone, or Orders pointing at charts that
+/// no longer exist. It is invisible until a user hits Shift+Escape or waits out the idle timer.
+#[test]
+fn every_main_chart_removal_goes_through_the_shared_teardown() {
+    let main_stack = read_src("chart_tabs/main_stack.rs");
+
+    for name in ["fn close_active(", "fn close_at(", "fn prune_idle("] {
+        let body = braced_body(&main_stack, name);
+        assert!(
+            body.contains("remove_chart_at("),
+            "{name} must release the chart through the shared removal"
+        );
+        assert!(
+            !body.contains("self.charts.remove("),
+            "{name} must not take a chart out of the stack itself"
+        );
+    }
+
+    // `close_all` drains the whole stack rather than removing one entry, so it clears the same
+    // state inline; what it must not do is forget it.
+    let close_all = braced_body(&main_stack, "fn close_all(");
+    assert!(
+        close_all.contains("self.compare_anchor = None")
+            && close_all.contains("sync_backend_open_markets("),
+        "close_all must drop the comparison anchor and republish the open-market list"
+    );
+
+    // The idle sweep must re-resolve the selection by identity: an EARLIER chart expiring shifts
+    // every later index, so a clamped number selects somebody else's market.
+    let prune = braced_body(&main_stack, "fn prune_idle(");
+    assert!(
+        prune.contains("remap_active_index("),
+        "prune_idle must re-resolve the active chart by identity, not clamp its old index"
+    );
+}
+
+/// Protects the coin-search popup's multi-select hint from wrapping onto a second line.
+///
+/// The plausible edit is dropping `whitespace_nowrap` while restyling the note, or adding a longer
+/// translation and assuming the box will cope. It will not: wrapped, the hint doubles the popup's
+/// header and pushes the first result out of view. The popup's width is font-scaled while the
+/// dictionary values are not, so the guarantee has to be structural — the line clips rather than
+/// folds — and nothing else in the popup would fail if it folded.
+#[test]
+fn the_multi_select_hint_clips_instead_of_wrapping() {
+    let coin_search = read_src("controls/coin_search.rs");
+    let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H>(");
+    let hint = chain_between(
+        &popup,
+        "if multi_select {",
+        "chart.coin.multi_hint",
+        "the multi-select hint",
+    );
+
+    assert!(
+        hint.contains(".whitespace_nowrap()") && hint.contains(".overflow_hidden()"),
+        "the hint must be pinned to one line and clip: wrapped, it hides the first result"
+    );
+}
+
+/// Protects the movers suggestion from offering one market once per core that can open it.
+///
+/// The plausible edit is restoring the `flat_map` over every consumer core — it looks like the
+/// generous choice, and it is what the typed search does. But a mover is a property of the MARKET,
+/// so on a config where dozens of cores share an exchange the top of eight becomes the same coin
+/// repeated down the entire list, which is what the section is for reading past.
+#[test]
+fn the_movers_suggestion_offers_each_market_once() {
+    let coin_search = read_src("controls/coin_search.rs");
+    let suggest = braced_body(&coin_search, "pub(crate) fn suggest_volatile(");
+    let code: String = suggest
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        code.contains(".first()?"),
+        "each mover must resolve to the FIRST core that can open it"
+    );
+    assert!(
+        !code.contains(".flat_map(|mover|"),
+        "and must not fan a mover out across every consuming core"
+    );
+}
