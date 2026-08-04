@@ -58,6 +58,11 @@ pub(super) struct FooterFacts {
     pub(super) essential: Vec<FooterFact>,
     /// Clipped from the right; earlier entries survive longer.
     pub(super) tail: Vec<FooterFact>,
+    /// Pinned to the row's right edge, past the clipping tail.
+    ///
+    /// A table statistic rather than a fact about the money: it describes what the grid above is
+    /// currently showing, so it sits away from the figures instead of trailing them.
+    pub(super) trailing: Vec<FooterFact>,
 }
 
 /// Build one plain fact with no diagnostic detail.
@@ -137,8 +142,9 @@ fn health_fact(status: &ValuationStatus, now_ms: i64) -> Option<FooterFact> {
 /// The tail order is the priority order and is deliberate. A valuation stall leads it because it
 /// warns that a number already on screen may be wrong, and that outranks any tally. The remaining
 /// quote totals come next because a missing currency total silently changes what the row appears to
-/// sum, whereas a missing row count only withholds a tally the table itself shows. The two counts
-/// therefore close the tail and are the first to go.
+/// sum, whereas a missing row count only withholds a tally the table itself shows. The shown-rows
+/// count therefore closes the tail and is the first to go; the ORDER count is not here at all, it
+/// rides in the never-clipped caption.
 ///
 /// Args:
 ///     data: Current report snapshot, or `None` while none is renderable.
@@ -154,7 +160,13 @@ pub(super) fn footer_facts(
     status: &ValuationStatus,
     now_ms: i64,
 ) -> FooterFacts {
-    let mut essential = vec![fact(t!("report.totals").to_string(), FactTone::Soft, false)];
+    // The caption carries the order count, so the tally the row is a total OF can never be the
+    // thing a narrow dock clips away. Without a snapshot there is no count to state.
+    let caption = match data {
+        Some(data) => t!("report.totals_n", n = data.totals.orders).to_string(),
+        None => t!("report.totals").to_string(),
+    };
+    let mut essential = vec![fact(caption, FactTone::Soft, false)];
     let mut tail = Vec::new();
 
     let Some(data) = data else {
@@ -170,7 +182,11 @@ pub(super) fn footer_facts(
         } else {
             fact("—".to_string(), FactTone::Soft, true)
         });
-        return FooterFacts { essential, tail };
+        return FooterFacts {
+            essential,
+            tail,
+            trailing: Vec::new(),
+        };
     };
 
     let totals = &data.totals;
@@ -222,8 +238,19 @@ pub(super) fn footer_facts(
     if let Some(health) = health_fact(status, now_ms) {
         tail.push(health);
     }
-    for total in quotes {
-        let (text, sign) = total.signed_display();
+    // The exact per-currency totals read as ONE parenthesised breakdown of the figure above —
+    // "+500 USDT (+600 USDT -100 USDC)". They stay separate facts so each keeps its own sign
+    // colour; only the outer brackets are glued to the first and last of them.
+    let breakdown: Vec<_> = quotes.map(|total| total.signed_display()).collect();
+    let last = breakdown.len().saturating_sub(1);
+    for (i, (text, sign)) in breakdown.into_iter().enumerate() {
+        let mut text = text;
+        if i == 0 {
+            text.insert(0, '(');
+        }
+        if i == last {
+            text.push(')');
+        }
         tail.push(fact(text, money_tone(sign), true));
     }
     if totals.unknown_orders > 0 {
@@ -266,18 +293,17 @@ pub(super) fn footer_facts(
             }
         }
     }
-    tail.push(fact(
-        t!("report.orders_count", count = totals.orders).to_string(),
-        FactTone::Soft,
-        false,
-    ));
-    tail.push(fact(
+    let trailing = vec![fact(
         t!("report.shown_top", n = data.rows.len()).to_string(),
         FactTone::Soft,
         false,
-    ));
+    )];
 
-    FooterFacts { essential, tail }
+    FooterFacts {
+        essential,
+        tail,
+        trailing,
+    }
 }
 
 /// Build the recovery text for the whole row: one line per fact, each followed by its detail.
@@ -297,6 +323,7 @@ pub(super) fn footer_tooltip(facts: &FooterFacts) -> String {
         .essential
         .iter()
         .chain(&facts.tail)
+        .chain(&facts.trailing)
         .flat_map(|fact| std::iter::once(fact.text.as_str()).chain(fact.tip.as_deref()))
         .collect::<Vec<_>>()
         .join("\n")

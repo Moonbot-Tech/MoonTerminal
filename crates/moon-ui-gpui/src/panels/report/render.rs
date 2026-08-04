@@ -442,10 +442,16 @@ impl Render for ReportPanel {
         let essential = fact_group("rep-totals-head", tip.clone(), facts.essential).flex_none();
         // Zero flex basis: the tail grows into whatever the commands leave and contributes nothing
         // to shrink, so a shortfall lands on the commands.
-        let clipping = fact_group("rep-totals-tail", tip, facts.tail)
+        let clipping = fact_group("rep-totals-tail", tip.clone(), facts.tail)
             .flex_1()
             .min_w_0()
             .overflow_hidden();
+        // Pinned right: the shown-rows tally describes the grid, not the money, so it sits at the
+        // far edge. `ml_auto` inside the row, not inside the tail — nested in the clipping box it
+        // would be pushed out of view instead of holding the edge.
+        let shown = fact_group("rep-totals-shown", tip, facts.trailing)
+            .flex_none()
+            .ml_auto();
         let totals = h_flex()
             .w_full()
             .gap_2()
@@ -457,6 +463,7 @@ impl Render for ReportPanel {
             })
             .child(essential)
             .child(clipping)
+            .child(shown)
             // No commands in the no-data arms: a read that fails or has not landed clears the
             // selection first (`query.rs`, the `Err` arm), so this is `None` there.
             .children(selection_actions);

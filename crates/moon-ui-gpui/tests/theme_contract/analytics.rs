@@ -899,8 +899,11 @@ fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
         // builder calls so reflowing the surrounding block does not redden this.
         "fact_group(\"rep-totals-head\"",
         "fact_group(\"rep-totals-tail\"",
+        // The right-pinned group is built the same way, so its fact also reaches the tooltip.
+        "fact_group(\"rep-totals-shown\"",
         "facts.essential)",
         "facts.tail)",
+        "facts.trailing)",
     ] {
         assert!(
             body.contains(anchor),
@@ -908,7 +911,7 @@ fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
         );
     }
     for inline in [
-        "report.orders_count",
+        "report.totals_n",
         "report.shown_top",
         "report.valuation_total",
         "report.unknown_quote_orders",

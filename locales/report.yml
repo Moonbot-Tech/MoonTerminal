@@ -179,22 +179,25 @@ report.empty:
   ru: "Нет отчётов под фильтр (или БД пуста)."
   en: "No reports match the filter (or the DB is empty)."
   es: "Ningún informe coincide con el filtro (o la BD está vacía)."
+# Footer caption while no snapshot is renderable, when there is no order count to state.
 report.totals:
-  ru: "Итого за период:"
-  en: "Period total:"
-  es: "Total del periodo:"
-report.orders_count:
-  ru: "ордеров: %{count}"
-  en: "orders: %{count}"
-  es: "órdenes: %{count}"
+  ru: "Итого:"
+  en: "Total:"
+  es: "Total:"
+# Footer caption over a loaded snapshot: the bracketed number is the orders the total sums.
+report.totals_n:
+  ru: "Итого (%{n}):"
+  en: "Total (%{n}):"
+  es: "Total (%{n}):"
 report.unknown_quote_orders:
   ru: "валюта неизвестна: %{n}"
   en: "unknown quote: %{n}"
   es: "moneda desconocida: %{n}"
+# The unified figure needs no "in USDT" prefix: the ticker is already on the amount.
 report.valuation_total:
-  ru: "в USDT: %{amount} USDT"
-  en: "in USDT: %{amount} USDT"
-  es: "en USDT: %{amount} USDT"
+  ru: "%{amount} USDT"
+  en: "%{amount} USDT"
+  es: "%{amount} USDT"
 report.valuation_progress:
   ru: "пересчёт в USDT: %{ready}/%{total}"
   en: "USDT valuation: %{ready}/%{total}"
@@ -215,10 +218,12 @@ report.valuation_stalled_tip:
   ru: "Пересчёт в USDT не продвигается уже %{minutes} мин. Этап: %{stage}. Причина: %{kind}. [%{codes}] %{detail}"
   en: "USDT valuation has made no progress for %{minutes} min. Stage: %{stage}. Cause: %{kind}. [%{codes}] %{detail}"
   es: "La valoración en USDT no avanza desde hace %{minutes} min. Etapa: %{stage}. Causa: %{kind}. [%{codes}] %{detail}"
+# Keeps its qualifier: this figure is what the period would be worth TODAY, not what it earned,
+# and dropping the words would make the two conversions render identically.
 report.valuation_total_current:
-  ru: "в USDT по текущему курсу: %{amount} USDT"
-  en: "in USDT at the current rate: %{amount} USDT"
-  es: "en USDT a la tasa actual: %{amount} USDT"
+  ru: "по текущему курсу: %{amount} USDT"
+  en: "at the current rate: %{amount} USDT"
+  es: "a la tasa actual: %{amount} USDT"
 report.valuation_current_progress:
   ru: "текущий курс: %{ready}/%{total}"
   en: "current rate: %{ready}/%{total}"
@@ -228,9 +233,9 @@ report.valuation_current_unavailable:
   en: "current rate unavailable: %{n}"
   es: "tasa actual no disponible: %{n}"
 report.shown_top:
-  ru: "показано (топ): %{n}"
-  en: "shown (top): %{n}"
-  es: "mostrado (top): %{n}"
+  ru: "показано: %{n}"
+  en: "shown: %{n}"
+  es: "mostrado: %{n}"
 
 report.filter.emu:
   ru: "Эмулятор"
