@@ -1,7 +1,7 @@
 //! Connections tab assembly: pending-core, group, and exchange branch headers; icon picker;
 //! market-data and core-order selectors; and the editable hierarchy with its top add button.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::*;
@@ -13,10 +13,41 @@ use rust_i18n::t;
 
 use super::SettingsView;
 use crate::design;
+use moon_core::config::GroupConfig;
 use moon_core::session::CoreId;
 
 /// Draft server metadata needed to assemble the Connections hierarchy.
 pub(super) type ServerRowMeta = (CoreId, u64, bool, String, Option<String>);
+
+/// Visible group metadata needed to render one Connections branch.
+pub(super) type GroupRowMeta = (String, bool, u32);
+
+/// Project retained draft groups onto names referenced by the current server rows.
+///
+/// Settings keeps orphaned `GroupConfig` rows until Save so erasing and retyping a name preserves
+/// its local trading controls. Those historical rows must not become visible branches while the
+/// user is still typing. Pending rows participate because their group name is editable too.
+///
+/// Args:
+///     servers: Every current draft server row, including rows whose uid is still zero.
+///     groups: Retained draft group configurations, including intermediate names.
+///
+/// Returns:
+///     Referenced groups in their stored order with their active and icon metadata intact.
+pub(super) fn visible_group_rows(
+    servers: &[ServerRowMeta],
+    groups: &[GroupConfig],
+) -> Vec<GroupRowMeta> {
+    let referenced: HashSet<&str> = servers
+        .iter()
+        .map(|(_, _, _, group, _)| group.as_str())
+        .collect();
+    groups
+        .iter()
+        .filter(|group| referenced.contains(group.name.as_str()))
+        .map(|group| (group.name.clone(), group.active, group.icon))
+        .collect()
+}
 
 /// Return draft indices for unsaved cores that must stay in the top pending section.
 pub(super) fn pending_server_indices(servers: &[ServerRowMeta]) -> Vec<usize> {
@@ -357,30 +388,33 @@ impl SettingsView {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             let exchange_names = b.session.market_source().core_exchange_names();
-            (
-                crate::core_order::CoreOrder::new(d),
-                d.servers
-                    .iter()
-                    .map(|s| {
-                        (
-                            s.id,
-                            s.uid,
-                            s.active,
-                            s.group.clone(),
-                            exchange_names.get(&s.id).cloned(),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                d.groups
-                    .iter()
-                    .map(|g| (g.name.clone(), g.active, g.icon))
-                    .collect::<Vec<_>>(),
-            )
+            let servers = d
+                .servers
+                .iter()
+                .map(|s| {
+                    (
+                        s.id,
+                        s.uid,
+                        s.active,
+                        s.group.clone(),
+                        exchange_names.get(&s.id).cloned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let groups = visible_group_rows(&servers, &d.groups);
+            (crate::core_order::CoreOrder::new(d), servers, groups)
         };
         // Keep group branches in stable name order.
         groups.sort_by(|a, b| a.0.cmp(&b.0));
         // Preload group icons and, while the picker is open, every picker icon. `texture()` needs
         // `&mut self.icons`, so load before building UI and then read from the map.
+        if self
+            .picking
+            .as_ref()
+            .is_some_and(|selected| !groups.iter().any(|group| group.0 == *selected))
+        {
+            self.picking = None;
+        }
         let picking = self.picking.clone();
         let mut icon_tex: HashMap<u32, Option<Arc<RenderImage>>> = HashMap::new();
         for (_, _, icon) in &groups {

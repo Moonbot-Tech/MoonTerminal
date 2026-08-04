@@ -1,7 +1,7 @@
 //! Deterministic regression coverage for the Connections hierarchy.
 
 use super::sync_groups_from_servers;
-use super::tab::{ServerRowMeta, exchange_sections, pending_server_indices};
+use super::tab::{ServerRowMeta, exchange_sections, pending_server_indices, visible_group_rows};
 use moon_core::config::{
     FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,
     TakeProfitMode,
@@ -126,5 +126,43 @@ fn retyping_a_group_name_preserves_its_complete_local_state_until_save() {
     assert!(
         groups.iter().any(|group| group.name.is_empty()),
         "the intermediate row stays in preview until AppConfig::save_impl prunes it"
+    );
+}
+
+/// Regression target: removing the server-name filter from `tab.rs:visible_group_rows` renders
+/// every retained intermediate value as another group header while a user types a group name.
+#[test]
+fn only_current_server_group_names_become_visible_branches() {
+    let servers: Vec<ServerRowMeta> = vec![
+        (1, 0, true, String::new(), None),
+        (2, 21, true, "desk".to_string(), Some("Bybit".to_string())),
+        (3, 22, true, "desk".to_string(), None),
+        (4, 23, true, "ops".to_string(), None),
+    ];
+    let mut empty = GroupConfig::new("");
+    empty.active = false;
+    empty.icon = 7;
+    let mut desk = GroupConfig::new("desk");
+    desk.active = false;
+    desk.icon = 17;
+    let mut ops = GroupConfig::new("ops");
+    ops.icon = 27;
+    let groups = vec![
+        GroupConfig::new("d"),
+        empty,
+        GroupConfig::new("de"),
+        desk,
+        GroupConfig::new("des"),
+        ops,
+    ];
+
+    assert_eq!(
+        visible_group_rows(&servers, &groups),
+        vec![
+            (String::new(), false, 7),
+            ("desk".to_string(), false, 17),
+            ("ops".to_string(), true, 27),
+        ],
+        "pending, shared, and separate current names must keep their stored metadata"
     );
 }
