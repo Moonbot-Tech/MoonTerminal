@@ -1073,3 +1073,154 @@ fn the_usdt_profit_column_precedes_the_percentage_one() {
         "the USDT amount reads first and the percentage sits to its right: {cols:?}"
     );
 }
+
+/// Build a report replica carrying every column the purge predicate can name, with an attached
+/// (in-memory) strategy database so liquidation attribution is live.
+///
+/// Returns an open connection; the caller seeds rows itself so each test states its own fixture.
+fn purge_fixture() -> Connection {
+    let conn = Connection::open_in_memory().expect("open purge fixture");
+    super::super::init_db(&conn).expect("initialize report database");
+    // The replica table is created by the schema-driven replication path, not by `init_db`, so the
+    // fixture builds it the way an upgraded database looks: bare skeleton, then core-added columns.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS orders_rep (core_uid INTEGER NOT NULL,
+             core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             PRIMARY KEY (core_uid, newrecid));
+         ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN strategyid INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
+         ALTER TABLE orders_rep ADD COLUMN comment TEXT;",
+    )
+    .expect("extend the typed replica");
+    super::super::test_support::rep_init(&conn);
+    conn.execute("ATTACH DATABASE ':memory:' AS strat", [])
+        .expect("attach strategy metadata");
+    conn.execute_batch(
+        "CREATE TABLE strat.strategies (core_uid INTEGER NOT NULL, strategy_id INTEGER NOT NULL,
+             name TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);",
+    )
+    .expect("create strategy metadata");
+    conn
+}
+
+/// Seed one typed report row.
+fn seed_row(
+    conn: &Connection,
+    core_uid: i64,
+    rec_id: i64,
+    strategy_id: Option<i64>,
+    deleted: i64,
+    channel: &str,
+    comment: &str,
+) {
+    conn.execute(
+        "INSERT INTO orders_rep (core_uid, core_name, newrecid, closedate, strategyid, deleted,
+             channelname, comment) VALUES (?1, 'CORE', ?2, 1000, ?3, ?4, ?5, ?6)",
+        rusqlite::params![core_uid, rec_id, strategy_id, deleted, channel, comment],
+    )
+    .expect("seed report row");
+}
+
+/// Scoping the purge by core alone, or forgetting the core half of the key, would hand one core's
+/// rec ids to another core's soft-delete command and hide trades the user never chose.
+#[test]
+fn only_the_named_core_and_strategy_are_returned() {
+    let conn = purge_fixture();
+    seed_row(&conn, 1, 10, Some(7), 0, "", "");
+    seed_row(&conn, 1, 11, Some(8), 0, "", "");
+    seed_row(&conn, 2, 12, Some(7), 0, "", "");
+
+    let rows = super::strategy_purge_rows(
+        &conn,
+        ReportStrategyKey {
+            core_uid: 1,
+            strategy_id: 7,
+        },
+    )
+    .expect("a healthy replica reads");
+
+    assert_eq!(rows.rec_ids, vec![10]);
+    assert_eq!(rows.legacy_rows, 0);
+}
+
+/// Rows already soft-deleted are gone from the user's report, so re-addressing them would inflate
+/// the count the confirmation promises above what actually disappears.
+#[test]
+fn already_deleted_rows_are_excluded() {
+    let conn = purge_fixture();
+    seed_row(&conn, 1, 20, Some(7), 0, "", "");
+    seed_row(&conn, 1, 21, Some(7), 1, "", "");
+
+    let rows = super::strategy_purge_rows(
+        &conn,
+        ReportStrategyKey {
+            core_uid: 1,
+            strategy_id: 7,
+        },
+    )
+    .expect("a healthy replica reads");
+
+    assert_eq!(rows.rec_ids, vec![20]);
+}
+
+/// A liquidation physically carries `strategyid = 0` and is attributed by name. Matching the raw
+/// column would leave it behind, so the strategy would keep a non-zero trade count after a
+/// "complete" purge and its losses would reappear under "Manual".
+#[test]
+fn attributed_liquidation_rows_are_included() {
+    let conn = purge_fixture();
+    conn.execute(
+        "INSERT INTO strat.strategies (core_uid, strategy_id, name) VALUES (1, 7, 'EMA_01')",
+        [],
+    )
+    .expect("name the strategy");
+    seed_row(&conn, 1, 30, Some(7), 0, "", "");
+    seed_row(&conn, 1, 31, Some(0), 0, "LIQUIDATION", "EMA_01");
+    // A liquidation naming a different strategy must stay out of this purge.
+    seed_row(&conn, 1, 32, Some(0), 0, "LIQUIDATION", "OTHER");
+
+    let rows = super::strategy_purge_rows(
+        &conn,
+        ReportStrategyKey {
+            core_uid: 1,
+            strategy_id: 7,
+        },
+    )
+    .expect("a healthy replica reads");
+
+    assert_eq!(rows.rec_ids, vec![30, 31]);
+}
+
+/// Legacy rows have no rec id, so the protocol cannot address them. Returning their `0` placeholder
+/// as a rec id would build a soft-delete command for a row that does not exist.
+#[test]
+fn legacy_rows_are_counted_and_never_returned() {
+    let conn = purge_fixture();
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL,
+             closedate INTEGER, strategyid INTEGER, deleted INTEGER,
+             PRIMARY KEY (core_uid, db_id));
+         INSERT INTO closed_sell_reports (core_uid, db_id, closedate, strategyid, deleted)
+             VALUES (1, 5, 1000, 7, 0);",
+    )
+    .expect("create a legacy source");
+    seed_row(&conn, 1, 40, Some(7), 0, "", "");
+
+    let rows = super::strategy_purge_rows(
+        &conn,
+        ReportStrategyKey {
+            core_uid: 1,
+            strategy_id: 7,
+        },
+    )
+    .expect("a healthy replica reads");
+
+    assert_eq!(
+        rows.rec_ids,
+        vec![40],
+        "no zero placeholder may leak through"
+    );
+    assert_eq!(rows.legacy_rows, 1);
+}

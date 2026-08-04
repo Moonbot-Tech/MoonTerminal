@@ -857,3 +857,153 @@ fn a_tuner_shell_title_clips_itself_before_its_trailing_buttons() {
         "the old trailing spacer must not return after the title"
     );
 }
+
+/// Deleting one strategy from Analytics must never stop the whole core's trading.
+///
+/// `apply_strategies`' third argument is a CORE-WIDE start/stop, not a per-strategy switch. The
+/// plausible edit is "unifying" this call with the Strategies window's `apply_start_stop`, which
+/// legitimately passes `Some(false)` because there the user asked to stop the checked strategies.
+/// Here that would stop every strategy on the core.
+#[test]
+fn strategy_purge_never_stops_the_whole_core() {
+    let purge = read_src("analytics/purge.rs");
+    let body = code_only(braced_body(&purge, "async fn run("));
+
+    assert!(
+        body.contains("apply_strategies(core_uid, vec![(sid, false)], None)"),
+        "the disable step must pass `None` as start_stop"
+    );
+    // Scoped to the call itself, not to the whole body: `Some(true)` / `Some(false)` legitimately
+    // appear when the sequence matches on an `Option`, and a bare substring ban would fail on
+    // those while proving nothing about the argument that matters.
+    assert_eq!(
+        body.matches("apply_strategies(").count(),
+        1,
+        "one disable call — a second one would escape the assertion above"
+    );
+}
+
+/// The initial hide, disable, and final delete run in the order the confirmation promises.
+///
+/// The plausible edit is firing all three commands together while "simplifying away" the waits —
+/// which reads as a harmless cleanup and is not: the delete command is High priority while the
+/// other two are Sliced, so it reaches the core FIRST and the strategy is deleted while still
+/// enabled and still holding its trades.
+#[test]
+fn strategy_purge_hides_trades_before_disabling_and_deleting() {
+    let purge = read_src("analytics/purge.rs");
+    let body = code_only(braced_body(&purge, "async fn run("));
+    let at = |needle: &str| {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("{needle} must be part of the purge sequence"))
+    };
+
+    // Asserted on the step names and the commands, never on the shape of the code around them: a
+    // later refactor of the sequence's plumbing must not redden a test about its ORDER.
+    assert!(
+        at("PurgeStep::Rows") < at("PurgeStep::Disable")
+            && at("PurgeStep::Disable") < at("PurgeStep::Delete"),
+        "trades are hidden, then the strategy is disabled, then it is deleted"
+    );
+    assert!(
+        at("apply_strategies") < at("delete_strategy"),
+        "the delete may not be issued before the disable"
+    );
+    assert!(
+        body.contains("await_strategy("),
+        "each core-side step must be waited for; a fire-and-forget sequence loses its order on \
+         the wire because the delete travels at a higher priority than the other two"
+    );
+}
+
+/// A row step confirms the ids IT sent, never a globally empty re-read.
+///
+/// The strategy is still live during the first pass, so trades keep closing into it while the
+/// batch is in flight. Waiting for the whole re-read to come back empty would therefore time out
+/// on rows the step never sent — a correct purge reporting a false failure on exactly the busy
+/// strategies the user most wants gone. The outer `PURGE_PASSES` loop is what picks those up.
+///
+/// The plausible edit is "the step is done when there is nothing left", which reads as the
+/// stronger condition and is unreachable on a trading core.
+///
+/// Pinned at the source level: the wait is an `async` method on a private struct driven by an
+/// `AsyncApp` and a live core session, and this binary crate exposes no library target a test
+/// could construct one from.
+#[test]
+fn a_row_step_waits_only_for_the_ids_it_sent() {
+    let purge = read_src("analytics/purge.rs");
+    let wait = code_only(braced_body(&purge, "async fn await_rows_gone("));
+    let pass = code_only(braced_body(&purge, "async fn purge_rows("));
+
+    assert!(
+        wait.contains("sent.contains("),
+        "the wait must test the re-read against the ids the pass actually sent"
+    );
+    assert!(
+        !wait.contains(".is_empty()"),
+        "waiting for a globally empty re-read never completes on a strategy that is still \
+         closing trades"
+    );
+    assert!(
+        pass.contains("await_rows_gone(cx, step, &sent"),
+        "each pass must hand its own sent set to the wait, not a shared or recomputed one"
+    );
+    assert!(
+        pass.contains("for pass in 0..PURGE_PASSES"),
+        "the rows that arrive DURING a pass are picked up by the bounded outer loop, which is \
+         what makes the per-batch wait sufficient"
+    );
+}
+
+/// The row menu and its confirmation belong to MoonUI's Root, not to a panel-owned overlay.
+///
+/// The plausible edit is hand-rolling an absolutely positioned menu or modal while chasing a
+/// z-order bug, which is exactly what the Root ownership rule exists to prevent.
+#[test]
+fn the_strategy_row_menu_and_dialog_go_through_moonui_root() {
+    let menu = read_src("analytics/tuner/list/menu.rs");
+    let purge = read_src("analytics/purge.rs");
+
+    assert!(
+        menu.contains("window.open_moon_context_menu("),
+        "the row menu opens through MoonUI's context-menu extension"
+    );
+    assert!(
+        purge.contains("window.open_unique_moon_dialog("),
+        "the confirmation opens as a unique MoonUI dialog"
+    );
+    for (name, source) in [("menu.rs", &menu), ("purge.rs", &purge)] {
+        assert!(
+            !source.contains(".absolute()"),
+            "{name} must not position its own overlay"
+        );
+    }
+}
+
+/// Right-clicking a row opens a menu; it must not also re-scope the whole tuner.
+///
+/// The plausible edit is copying the left-click handler's dispatch into the right-click one so
+/// "the row you act on is the row that is selected" — which reloads the suggestion scope, the
+/// time grid and the coin tables as a side effect of opening a menu.
+#[test]
+fn right_clicking_a_strategy_row_does_not_move_the_selection() {
+    let table = read_src("analytics/tuner/list/table.rs");
+    let handler = braced_body(&table, "on_mouse_down(MouseButton::Right,");
+    let handler = code_only(handler);
+
+    assert!(
+        handler.contains("open_strategy_row_menu("),
+        "the right button opens the row menu"
+    );
+    for banned in [
+        "select_single(",
+        "select_range(",
+        "toggle_multi(",
+        "select_for_report(",
+    ] {
+        assert!(
+            !handler.contains(banned),
+            "{banned} must not run from the right-click handler"
+        );
+    }
+}

@@ -882,6 +882,18 @@ pub(super) fn run(
                             is_short: strat.map(|st| st.is_short()).unwrap_or(false),
                         });
                     }
+                    // The core committed a checkbox delta. Published as its own message because the
+                    // strategy SNAPSHOT cannot carry this fact: the protocol library applies a
+                    // local `set_checked` to its own snapshot before anything is sent, and the
+                    // echo it later receives updates only an acknowledgement field the snapshot
+                    // does not expose. Anything that must not proceed until the core agreed —
+                    // deleting a strategy after disabling it — waits on this.
+                    Event::Strat(
+                        moonproto::state::StratEvent::CheckedEcho { .. }
+                        | moonproto::state::StratEvent::CheckedSynced { .. },
+                    ) => {
+                        let _ = tx.send(FeedMsg::StrategiesAck);
+                    }
                     // Typed report-database replica: send schema, rows, catch-up state, and
                     // reconciliation results to the SQLite writer, the sole write-connection owner.
                     Event::Report(rev) if server.feed.reports => {

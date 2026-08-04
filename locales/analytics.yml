@@ -1144,3 +1144,89 @@ analytics.coins.save_moved:
   ru: "Списки изменились, пока готовилась запись — правка не отправлена. Повторите."
   en: "The lists moved while the write was being prepared — nothing was sent. Try again."
   es: "Las listas cambiaron mientras se preparaba la escritura — no se envió nada."
+
+# Right-click on a strategy row: hide its trades from the report, disable it, then delete it.
+# The three steps are confirmed one by one against the core, so the wording says "step", never
+# "done" — the terminal only ever learns that the core committed each one.
+analytics.purge.menu:
+  ru: "Удалить стратегию и её сделки из отчёта"
+  en: "Delete the strategy and its trades from the report"
+  es: "Eliminar la estrategia y sus operaciones del informe"
+analytics.purge.gate_manual:
+  ru: "это ручные ордера, не стратегия"
+  en: "these are manual orders, not a strategy"
+  es: "son órdenes manuales, no una estrategia"
+analytics.purge.gate_offline:
+  ru: "ядро не на связи"
+  en: "the core is not connected"
+  es: "el núcleo no está conectado"
+analytics.purge.gate_deleted:
+  ru: "стратегия уже удалена из ядра"
+  en: "the strategy is already deleted from the core"
+  es: "la estrategia ya está eliminada del núcleo"
+analytics.purge.gate_no_report_feed:
+  ru: "у этого ядра выключена репликация отчёта"
+  en: "report replication is disabled for this core"
+  es: "la replicación del informe está desactivada en este núcleo"
+
+analytics.purge.title:
+  ru: "Удалить стратегию и её сделки?"
+  en: "Delete the strategy and its trades?"
+  es: "¿Eliminar la estrategia y sus operaciones?"
+analytics.purge.counting:
+  ru: "Считаем сделки…"
+  en: "Counting trades…"
+  es: "Contando operaciones…"
+analytics.purge.counts:
+  ru: "Будет скрыто сделок: %{total} (за выбранный период: %{period})"
+  en: "Trades to hide: %{total} (in the selected period: %{period})"
+  es: "Operaciones a ocultar: %{total} (en el periodo seleccionado: %{period})"
+analytics.purge.no_rows:
+  ru: "Сделок к удалению нет — будет удалена только сама стратегия."
+  en: "No trades to delete — only the strategy itself will be removed."
+  es: "No hay operaciones que eliminar — solo se eliminará la estrategia."
+analytics.purge.legacy_note:
+  ru: "Ещё %{n} строк из старой таблицы отчёта удалить нельзя — они останутся."
+  en: "Another %{n} rows from the old report table cannot be deleted and will remain."
+  es: "Otras %{n} filas de la tabla antigua del informe no se pueden eliminar y permanecerán."
+analytics.purge.steps:
+  ru: "По шагам: скрыть сделки в отчёте, выключить стратегию, удалить её. Каждый шаг ждёт подтверждения от ядра."
+  en: "Step by step: hide the trades, disable the strategy, delete it. Each step waits for the core to confirm."
+  es: "Paso a paso: ocultar las operaciones, desactivar la estrategia y eliminarla. Cada paso espera la confirmación del núcleo."
+analytics.purge.ok:
+  ru: "Удалить"
+  en: "Delete"
+  es: "Eliminar"
+
+analytics.purge.step_rows:
+  ru: "Скрываем сделки в отчёте"
+  en: "Hiding the trades in the report"
+  es: "Ocultando las operaciones en el informe"
+analytics.purge.step_disable:
+  ru: "Выключаем стратегию"
+  en: "Disabling the strategy"
+  es: "Desactivando la estrategia"
+analytics.purge.step_sweep:
+  ru: "Добираем сделки, закрывшиеся по ходу"
+  en: "Picking up trades that closed along the way"
+  es: "Recogiendo operaciones cerradas durante el proceso"
+analytics.purge.step_delete:
+  ru: "Удаляем стратегию"
+  en: "Deleting the strategy"
+  es: "Eliminando la estrategia"
+analytics.purge.done:
+  ru: "Готово: стратегия удалена, её сделки скрыты в отчёте"
+  en: "Done: the strategy is deleted and its trades are hidden in the report"
+  es: "Listo: la estrategia fue eliminada y sus operaciones están ocultas en el informe"
+analytics.purge.send_failed:
+  ru: "Шаг не отправлен: %{step}. Предыдущие шаги остались в силе."
+  en: "Step not sent: %{step}. The earlier steps stand."
+  es: "Paso no enviado: %{step}. Los pasos anteriores siguen en pie."
+analytics.purge.timeout:
+  ru: "Ядро не подтвердило шаг: %{step}. Предыдущие шаги остались в силе."
+  en: "The core did not confirm this step: %{step}. The earlier steps stand."
+  es: "El núcleo no confirmó este paso: %{step}. Los pasos anteriores siguen en pie."
+analytics.purge.core_lost:
+  ru: "Ядро пропало со связи — дальше ничего не отправлено."
+  en: "The core went offline — nothing further was sent."
+  es: "El núcleo se desconectó — no se envió nada más."

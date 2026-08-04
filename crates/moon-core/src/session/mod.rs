@@ -17,6 +17,7 @@ pub mod store;
 
 mod commands;
 mod lifecycle;
+mod rec_ranges;
 
 /// Re-exported from `feed` (its producer): `CoreData::sys` is this type, so the
 /// session facade keeps `session::CoreSysStatus` valid for the "Core status" panel.

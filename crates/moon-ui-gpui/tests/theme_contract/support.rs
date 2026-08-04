@@ -108,3 +108,25 @@ pub fn chain_between<'a>(source: &'a str, anchor: &str, stop: &str, what: &str) 
         .unwrap_or_else(|| panic!("{what}: expected `{stop}` after `{anchor}`"))
         .0
 }
+
+/// Strip line comments so a substring ban cannot be satisfied by the prose explaining it.
+///
+/// Every ban written as a substring search has the same gotcha: `braced_body` returns COMMENTS
+/// too, and the comment explaining why a call is load-bearing usually names that call — so the
+/// assertion passes with the call deleted. Any subject module asserting on code text should run
+/// its slice through here first.
+///
+/// Args:
+///     body: Source slice to strip.
+///
+/// Returns:
+///     The same text with everything from each `//` to end of line removed.
+pub fn code_only(body: &str) -> String {
+    body.lines()
+        .map(|line| match line.find("//") {
+            Some(at) => &line[..at],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
