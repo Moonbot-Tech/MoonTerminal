@@ -48,7 +48,8 @@ pub(super) fn count_badge(n: usize, color: u32) -> impl IntoElement {
         .render()
 }
 
-/// Format Unix ms as `HH:MM:SS.mmm` UTC time-of-day, by manual arithmetic like the header clock.
+/// Format Unix ms as `HH:MM:SS.mmm` UTC time-of-day, by manual arithmetic. Always UTC: a news
+/// item's stamp is compared against the feed, not read as local wall time.
 pub(super) fn hms_ms(ms: i64) -> String {
     let day = ms.rem_euclid(86_400_000);
     let (h, m, s, milli) = (

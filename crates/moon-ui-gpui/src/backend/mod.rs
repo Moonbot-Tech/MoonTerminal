@@ -881,15 +881,27 @@ impl Backend {
         }
     }
 
-    /// Return the header clock offset in minutes from UTC; the default zero means UTC.
-    pub(crate) fn header_clock_offset_min(&self) -> i32 {
-        self.layout.header_clock_offset_min
+    /// The IANA zone id of the city the header clock shows, or `None` when none was ever picked.
+    ///
+    /// Returns the raw id rather than a resolved city: the city table lives in the chrome layer,
+    /// which already depends on `Backend`, and returning its type from here would close that loop.
+    pub(crate) fn header_clock_zone(&self) -> Option<&str> {
+        self.layout.header_clock_zone.as_deref()
     }
 
-    /// Store the header clock offset selected in the time-zone popup and mark layout persistence dirty.
-    pub(crate) fn set_header_clock_offset_min(&mut self, off_min: i32) {
-        if self.layout.header_clock_offset_min != off_min {
-            self.layout.header_clock_offset_min = off_min;
+    /// Store the zone picked in the header clock's city popup and mark layout persistence dirty.
+    ///
+    /// `offset_min` is that city's current offset, mirrored into the compatibility field so readers
+    /// that understand only fixed offsets still show the right clock. Such a reader can rewrite the
+    /// layout without the zone field, so a stale mirror would also lose the selection on its next
+    /// save. A mirror-only change marks the layout dirty because summer time can move the offset
+    /// while the zone remains stable; `chrome::clock` derives both values from one city.
+    pub(crate) fn set_header_clock_zone(&mut self, zone: &str, offset_min: i32) {
+        if self.layout.header_clock_zone.as_deref() != Some(zone)
+            || self.layout.header_clock_offset_min != offset_min
+        {
+            self.layout.header_clock_zone = Some(zone.to_string());
+            self.layout.header_clock_offset_min = offset_min;
             self.layout_dirty = true;
         }
     }

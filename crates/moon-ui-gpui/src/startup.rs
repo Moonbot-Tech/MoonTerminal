@@ -517,6 +517,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
             quitting: false,
         });
         backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
+        // Settle the header clock fields ONCE before any window reads them: derive a missing city
+        // zone from the compatibility seed and refresh the chosen city's current offset mirror.
+        crate::chrome::clock::reconcile_clock_zone(&backend, cx);
 
         // Register panel factories used to restore dock layouts (PanelRegistry is global).
         dock_persist::register_panels(cx, backend.clone(), epoch);

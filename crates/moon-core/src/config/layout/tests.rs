@@ -399,3 +399,54 @@ fn report_window_geometry_survives_restart_without_endangering_layout() {
         );
     }
 }
+
+/// The header clock's compatibility offset must survive as the seed city migration reads.
+///
+/// Breakage this pins: deleting `layout.rs:header_clock_offset_min` as dead code once
+/// `header_clock_zone` exists. Layouts without a zone need the offset to recover their clock
+/// selection, while layouts with a zone keep it updated as a fixed-offset compatibility mirror.
+#[test]
+fn a_pre_city_clock_choice_survives_as_the_migration_seed() {
+    let doc = "analytics_period = \"p-cur-month\"\nheader_clock_offset_min = 120\n";
+    let decoded: WindowLayout = toml::from_str(doc).expect("a legacy layout still loads");
+
+    assert_eq!(decoded.header_clock_offset_min, 120, "the seed was dropped");
+    assert!(
+        decoded.header_clock_zone.is_none(),
+        "a legacy layout has no zone yet; migration is what supplies it"
+    );
+}
+
+/// A hand-written clock zone of the wrong type must cost that one key, not the whole document.
+///
+/// Breakage this pins: dropping `deserialize_with = "de_lenient"` from
+/// `layout.rs:header_clock_zone`. `layout.toml` is hand-editable and holds every window's
+/// geometry, so a zone written as a bare number would take all of it down.
+#[test]
+fn a_mistyped_clock_zone_cannot_discard_the_saved_layout() {
+    for (written, expected) in [
+        (
+            "header_clock_zone = \"Europe/Warsaw\"",
+            Some("Europe/Warsaw"),
+        ),
+        ("header_clock_zone = 42", None),
+        ("header_clock_zone = true", None),
+        ("header_clock_zone = [\"Europe/Warsaw\"]", None),
+        ("", None),
+    ] {
+        let doc = format!("analytics_period = \"p-cur-month\"\n{written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|e| panic!("{written:?} must not fail the whole document: {e}"));
+
+        assert_eq!(
+            decoded.header_clock_zone.as_deref(),
+            expected,
+            "{written:?} was read as the wrong zone"
+        );
+        assert_eq!(
+            decoded.analytics_period.as_deref(),
+            Some("p-cur-month"),
+            "{written:?} discarded a neighbouring setting"
+        );
+    }
+}

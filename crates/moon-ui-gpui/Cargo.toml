@@ -44,6 +44,15 @@ log = "0.4"
 # NaiveDate <-> Unix conversions for the "from"/"to" fields (MoonCalendar in Analytics);
 # compatible Cargo resolution with MoonUI shares the NaiveDate type used by MoonDate.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# IANA time zones for the header clock's city picker: summer-time transitions come from the tz
+# database instead of rules of our own. The database is compiled INTO the binary, which is what
+# makes it work on Windows (no system tzdata) — and what freezes it at build time, so a zone whose
+# government moves a transition needs a dependency bump and a release. Zones are compile-time
+# constants, so a mistyped zone fails the build rather than falling back to UTC at runtime.
+# `filter-by-regex` is deliberately not used: it is driven by a build-time environment variable
+# this repo has no tracked mechanism for, and it makes every zone outside the filter unparsable —
+# a live hazard, since layout.toml holds a hand-editable zone id.
+chrono-tz = "0.10"
 env_logger = "0.11"
 # UI localization: dictionaries in the root `locales/*.yml` (see locales/README.md).
 # Compatible Cargo resolution with MoonUI shares the global locale backend.
@@ -57,8 +66,9 @@ serde_json = "1"
 # Excel (.xlsx) export from the Report panel's save menu (report/export.rs).
 rust_xlsxwriter = "0.96.0"
 
-# Local time offset (hour labels) and our own-pass DX11 chart renderer (chartdx).
-# Windows only; other platforms use UTC. moon-chart is intentionally Windows-free, so tz/DX11 live here.
+# Local time offset for the chart's hour labels (chartdx/axes.rs) and our own-pass DX11 chart
+# renderer (chartdx). Windows only; other platforms use UTC. moon-chart is intentionally
+# Windows-free, so tz/DX11 live here.
 # Version 0.61 aligns with MoonUI's windows dependency to share the same windows-rs types.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

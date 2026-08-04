@@ -205,9 +205,9 @@ fn header_ticker_popup_accounts_for_the_clock_beside_it() {
 
     // And the measurement must still agree with what the clock draws. Asserting on the two
     // BODIES, not merely that the functions exist: either one could quietly stop calling
-    // `clock_parts` and reimplement the strings or the timezone-visibility rule for itself, which
-    // is exactly the drift that puts the popup off its trigger, and a name-only check stays green
-    // through it.
+    // `clock_parts` and reimplement the time and city-code strings for itself — or reintroduce a
+    // rule that hides the code, which changes the clock's width — and that is exactly the drift
+    // that puts the popup off its trigger, while a name-only check stays green through it.
     let clock = read_src("chrome/clock.rs");
     for signature in ["fn header_clock_width", "fn header_clock("] {
         let body = fn_body(&clock, signature);
