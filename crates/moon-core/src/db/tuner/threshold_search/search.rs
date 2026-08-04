@@ -168,8 +168,8 @@ struct RestartGroup {
 /// Split one restart budget into non-empty, independently seeded, disjoint ranges.
 ///
 /// Group zero preserves the ordinary search stream exactly. Later groups derive a separate base
-/// seed and start above restart zero, so the deterministic greedy start is never repeated and a
-/// three-way composition vote represents three genuinely different searches.
+/// seed and start above restart zero, so the deterministic greedy start is never repeated and an
+/// N-way composition vote represents N genuinely different searches.
 ///
 /// Args:
 ///     restarts: Total work budget across every group.

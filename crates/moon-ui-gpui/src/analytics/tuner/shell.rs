@@ -124,13 +124,17 @@ impl AnalyticsView {
             .py(design::ui_px(cx, 8.0))
             .items_center()
             .gap(design::ui_px(cx, 6.0))
+            // Let the title yield before the hosting card clips the trailing controls.
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
                     .text_size(design::t_title(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title),
-            )
-            .child(div().flex_1());
+            );
         // Rounding the result affects the SUGGESTION — always shown (the suggestion is
         // available without a selected strategy too, over the current scope).
         if let Some(round) = round {
@@ -687,7 +691,10 @@ impl AnalyticsView {
             .when_some(
                 moon_core::db::tuner::threshold_search::composition_budget(),
                 |el, budget| {
-                    let help = SharedString::from(t!("analytics.tuner.compose_help").to_string());
+                    // Interpolation keeps the help aligned with the search budget.
+                    let help = SharedString::from(
+                        t!("analytics.tuner.compose_help", seeds = budget.seed_groups).to_string(),
+                    );
                     let metrics = compose_budget_labels(&budget);
                     el.child(
                         // One contained block makes the mode, its short explanation, and its real

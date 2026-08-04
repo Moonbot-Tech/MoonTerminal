@@ -73,6 +73,9 @@ pub(super) struct SaveDialog {
 /// A card with a title and a subtitle (the shared look of the Analytics cards). `accessory`
 /// is an optional element pinned to the RIGHT of the title bar (e.g. the KPI collapse caret);
 /// `None` leaves the header exactly as the plain cards have it.
+///
+/// The text clips inside one shrinking box so a narrow card never pushes the accessory beyond its
+/// `overflow_hidden` root.
 pub(super) fn card(
     title: String,
     sub: String,
@@ -81,30 +84,39 @@ pub(super) fn card(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
+    // One clipping box keeps the accessory outside the width that may yield.
+    let mut text = h_flex()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .child(
+            div()
+                .flex_none()
+                .text_size(design::t_title(cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        );
+    if !sub.is_empty() {
+        text = text.child(
+            div()
+                .flex_none()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text_muted))
+                .child(sub),
+        );
+    }
     let mut head = h_flex()
         .w_full()
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 8.0))
         .items_center()
         .gap(design::ui_px(cx, 8.0))
-        .child(
-            div()
-                .text_size(design::t_title(cx))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
-        );
-    if !sub.is_empty() {
-        head = head.child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(moon(p.text_muted))
-                .child(sub),
-        );
-    }
-    // A flex spacer eats the middle so the accessory sits at the right edge regardless of
-    // the title/subtitle width.
+        .child(text);
     if let Some(acc) = accessory {
-        head = head.child(div().flex_1()).child(acc);
+        head = head.child(div().flex_none().child(acc));
     }
     v_flex()
         .w_full()

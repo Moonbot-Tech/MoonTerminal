@@ -13,8 +13,13 @@ pub(super) enum Tab {
 }
 
 impl Tab {
-    // Tab order: Summary → Calendar → Strategy tuning (last).
-    pub(super) const ALL: [Tab; 3] = [Tab::Summary, Tab::Calendar, Tab::Strategies];
+    /// Tab order: Summary → Strategy tuning → Calendar (last, behind a rule).
+    ///
+    /// The first two answer "how did it go" through the window's own filters and period bar; the
+    /// Calendar answers "when", browsing time by its own navigation and hiding that period bar
+    /// entirely. `tabs_bar` draws the boundary between the two kinds, so this order is what the
+    /// rule divides — reordering here moves the rule with it.
+    pub(super) const ALL: [Tab; 3] = [Tab::Summary, Tab::Strategies, Tab::Calendar];
     pub(super) fn id(self) -> &'static str {
         match self {
             Tab::Summary => "an-summary",

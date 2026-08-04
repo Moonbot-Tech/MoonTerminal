@@ -190,35 +190,35 @@ fn seed_votes_cannot_outvote_the_chronological_fold_hierarchy() {
 
 /// Production fold scoring must carry every requested seed group into the vote hierarchy.
 ///
-/// The fixture uses exactly three ranking restarts, so each group owns one distinct restart and
-/// the returned evidence shape is observable without relying on a tuned profit answer.
+/// The fixture spends exactly [`SEED_GROUPS`] ranking restarts, so each group owns one distinct
+/// restart and the returned evidence shape is observable without relying on a tuned profit answer.
 ///
 /// Breakage this pins: replacing `requested_groups` with `1` in `compose.rs:score_set`. The pure
 /// consensus tests would still pass on hand-built evidence, while real composition silently
 /// reverted to a single seed.
 #[test]
-fn score_set_uses_three_seed_groups_in_production_scoring() {
+fn score_set_uses_every_budgeted_seed_group_in_production_scoring() {
     let (profits, vals, closes) = sample(600, 20260731);
     let cols = Arc::new(Columns { profits, vals });
     let locked = vec![None; FIELDS.len()];
     let folds = super::super::build_folds(&cols, &locked, &slot_flags(), &closes, 10, 16, 500, 3);
     let p = ComposeParams {
-        ranking_restarts: 3,
-        gate_restarts: 3,
+        ranking_restarts: SEED_GROUPS,
+        gate_restarts: SEED_GROUPS,
         seed: 0x5EED,
         round: false,
         max_fields: FIELDS.len(),
         beam_width_min: 8,
         beam_width_max: 16,
-        seed_groups: 3,
+        seed_groups: SEED_GROUPS,
     };
     let mut mask = vec![false; FIELDS.len()];
     mask[0] = true;
-    let scores = score_set(&folds, &mask, &p, 3, 1, &SearchHandle::new())
-        .expect("an uncancelled three-group score answers");
+    let scores = score_set(&folds, &mask, &p, SEED_GROUPS, 1, &SearchHandle::new())
+        .expect("an uncancelled full-group score answers");
     assert!(
-        scores.iter().all(|fold| fold.seeds.len() == 3),
-        "every production fold must preserve all three seed votes"
+        scores.iter().all(|fold| fold.seeds.len() == SEED_GROUPS),
+        "every production fold must preserve all {SEED_GROUPS} seed votes"
     );
 }
 
@@ -578,10 +578,10 @@ fn the_outer_gate_reports_each_distinct_decision() {
 /// `max_fields: 6` would silently make larger admitted sets unreachable again. Restoring
 /// `beam_width_min: 4` would discard half the competing interactions the widened search promises;
 /// losing the 16-branch ceiling would make ambiguity either invisible or unbounded. Reducing
-/// `seed_groups` would restore dependence on one restart stream. Finally, `ranking_restarts`
-/// dividing without the `RESTARTS_MIN` floor would request zero restarts at low settings and
-/// report "this period has no answer" rather than a set; reducing `RANKING_RESTARTS_MAX` back to
-/// 256 would discard half the requested evidence for every Beam candidate.
+/// `seed_groups` would restore dependence on fewer restart streams. Finally, `ranking_restarts`
+/// dividing without its one-restart floor would report "this period has no answer" at low settings;
+/// reducing `RANKING_RESTARTS_MAX` back to 256 would discard half the requested evidence for every
+/// Beam candidate.
 #[test]
 fn composition_has_a_budget_exactly_above_the_core_bar() {
     let bar = super::super::search::HEAVY_SEARCH_MIN_CORES;
@@ -606,7 +606,7 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
         );
         assert_eq!(
             (b.beam_width_min, b.beam_width_max, b.seed_groups),
-            (8, 16, 3),
+            (8, 16, 5),
             "cores {cores}: composition must expose its adaptive beam and seed consensus"
         );
         for restarts in [1usize, 2, 7, 100, 20_000] {

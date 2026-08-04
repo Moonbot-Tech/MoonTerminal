@@ -1,12 +1,12 @@
 //! "Profit calendar" tab of the "Analytics" window.
-//! Three modes (toggle buttons, like the Summary period presets):
+//! Three modes (one segmented control, like the Summary period presets):
+//! - "Year" — every year at once, each one a grid of 12 month squares (current
+//!   year on top, future months greyed out). Clicking a month switches to
+//!   "Month" mode. See `year`;
 //! - "Month" — large day cards (date on the left, PnL + trades + W/L + winrate
 //!   on the right), grey background + red/green overlay whose alpha tracks
 //!   |PnL|; a KPI row on top (with the delta to the previous month), a
 //!   plus/minus-day bar below. Clicking a day switches to "Day" mode;
-//! - "Year" — every year at once, each one a grid of 12 month squares (current
-//!   year on top, future months greyed out). Clicking a month switches to
-//!   "Month" mode. See `year`;
 //! - "Day" — hour-by-hour detail of a single day. See `day`.
 //! Each mode builds its own query (`cal_query` in mod.rs); the window's period
 //! bar is hidden here.
@@ -17,7 +17,10 @@ mod year;
 
 use chrono::{Datelike, NaiveDate};
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex, v_flex};
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::{AnalyticsView, ProfitLoadState};
@@ -70,7 +73,16 @@ fn apply_calendar_results(
     }
 }
 
-/// Calendar mode (the tab's toggle buttons).
+/// Base floor for a calendar mode cell's fitted width.
+const CAL_MODE_CELL_MIN_W: f32 = 44.0;
+
+/// Base ceiling for a calendar mode cell's fitted width.
+///
+/// A long localized label cannot stretch the strip across the window; MoonUI truncates the visible
+/// label, and the item's tooltip still carries the whole of it.
+const CAL_MODE_CELL_MAX_W: f32 = 104.0;
+
+/// Calendar mode (the tab's zoom level).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CalMode {
     Day,
@@ -307,6 +319,9 @@ impl AnalyticsView {
 
     /// Render Calendar mode, period navigation, exact quote badge, and title.
     ///
+    /// The segmented control expresses one zoom choice, navigation keeps its disabled actions, and
+    /// the badge/title pair remains shrinkable; a narrow host wraps only between those groups.
+    ///
     /// Args:
     ///     p: Active MoonUI palette.
     ///     cx: Analytics view context.
@@ -343,32 +358,29 @@ impl AnalyticsView {
                 .on_click(cx.listener(move |this, _, _, cx| this.cal_shift(forward, cx)))
                 .render()
         };
-        let mode_btn = |mode: CalMode| {
-            let on = self.cal_mode == mode;
-            MoonButton::new(SharedString::from(format!("cm-{}", mode.id())))
-                .variant(if on {
-                    MoonButtonVariant::Amber
-                } else {
-                    MoonButtonVariant::Soft
-                })
-                .size(MoonButtonSize::Micro)
-                .selected(on)
-                .label(mode.title())
-                .on_click(cx.listener(move |this, _, _, cx| this.set_cal_mode(mode, cx)))
-                .render()
-        };
-        // Left: Year · Month · Day · Prev · <period> · Next; title on the right.
-        h_flex()
-            .flex_none()
-            .w_full()
-            .px(design::ui_px(cx, 10.0))
-            .py(design::ui_px(cx, 8.0))
-            .items_center()
-            .gap(design::ui_px(cx, 4.0))
-            .child(mode_btn(CalMode::Year))
-            .child(mode_btn(CalMode::Month))
-            .child(mode_btn(CalMode::Day))
-            .child(div().w(design::ui_px(cx, 8.0)))
+        // The control takes a plain indexed `Fn`, so capture the entity and update it through the
+        // app context. `CalMode::ALL` supplies both display order and click lookup to keep them equal.
+        let view = cx.entity();
+        let modes = MoonSegmentedControl::new("cal-mode-presets")
+            .items(CalMode::ALL.map(|mode| {
+                // The tooltip carries the untruncated title, since `fit_width` elides the label.
+                let title = mode.title();
+                MoonSegmentItem::new("", title.clone())
+                    .fit_width(cx, CAL_MODE_CELL_MIN_W, CAL_MODE_CELL_MAX_W)
+                    .tooltip(title)
+                    .selected(self.cal_mode == mode)
+            }))
+            .on_click(move |ix, _, _window, app| {
+                let Some(mode) = CalMode::ALL.get(ix).copied() else {
+                    return;
+                };
+                view.update(app, |this, cx| this.set_cal_mode(mode, cx));
+            })
+            .render();
+        // Plain buttons preserve the navigation actions' independent disabled states. Keep the
+        // divider inside their group so it cannot wrap onto a line by itself.
+        let nav = design::chrome_section(cx)
+            .child(design::chrome_divider(cx, p))
             .child(nav_btn(
                 "cal-prev",
                 t!("analytics.cal.prev").to_string(),
@@ -377,7 +389,6 @@ impl AnalyticsView {
             ))
             .child(
                 div()
-                    .px(design::ui_px(cx, 8.0))
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(moon(p.text))
@@ -388,8 +399,14 @@ impl AnalyticsView {
                 t!("analytics.cal.next").to_string(),
                 true,
                 next_off,
-            ))
-            .child(div().flex_1())
+            ));
+        // One auto margin keeps badge and title together. Avoid `chrome_section`'s `flex_none` so
+        // the title can give width back and truncate without pushing the strip wider.
+        let trailing = h_flex()
+            .items_center()
+            .gap(design::ui_px(cx, design::CHROME_GAP))
+            .ml_auto()
+            .min_w_0()
             .children(self.cal_days.unit().and_then(|unit| {
                 match unit {
                     ProfitUnit::Quote(currency) => Some(
@@ -407,11 +424,29 @@ impl AnalyticsView {
             }))
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .text_size(design::t_title(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(moon(p.text))
                     .child(t!("analytics.cal.title").to_string()),
-            )
+            );
+        // Wrap only between groups; clipping a zoom or navigation control would remove a function.
+        h_flex()
+            .flex_none()
+            .w_full()
+            .min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
+            .flex_wrap()
+            .px(design::ui_px(cx, 10.0))
+            .py(design::ui_px(cx, 8.0))
+            .gap_x(design::ui_px(cx, design::CHROME_GAP))
+            .gap_y(design::ui_px(cx, 4.0))
+            .items_center()
+            .border_b_1()
+            .border_color(moon(p.border))
+            .child(modes)
+            .child(nav)
+            .child(trailing)
     }
 }
 

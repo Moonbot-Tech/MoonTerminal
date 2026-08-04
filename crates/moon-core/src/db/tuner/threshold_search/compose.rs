@@ -2,7 +2,7 @@
 //!
 //! Composition stays inside the fitting region. Anchored walk-forward folds fit thresholds on a
 //! growing prefix and score them on the unseen stretch that follows, leaving the UI's final
-//! holdout untouched. Each fold divides one fixed restart budget among up to three independent
+//! holdout untouched. Each fold divides one fixed restart budget among up to five independent
 //! seed groups. Seeds vote inside their fold before folds vote, so one lucky time stretch cannot
 //! dominate the temporal evidence.
 //!
@@ -37,7 +37,10 @@ const BEAM_WIDTH_MIN: usize = 8;
 const BEAM_WIDTH_MAX: usize = 16;
 
 /// Independent restart groups used for each fold score when the budget can supply them.
-const SEED_GROUPS: usize = 3;
+///
+/// The groups divide one fixed budget. An odd maximum prevents a tie when all groups run; smaller
+/// budgets vote over only the groups they can supply.
+const SEED_GROUPS: usize = 5;
 
 /// Profit differences inside this share of the compared risk scale let secondary metrics decide.
 const PROFIT_BAND_FRAC: f64 = 0.05;
@@ -131,6 +134,9 @@ impl ComposeBudget {
     /// ranking restarts. Never zero — a run of no restarts finds nothing and would read as "this
     /// scope has no answer" rather than as a budget too small to say. The outer gate and final
     /// refit are not scaled here.
+    ///
+    /// The floor stays at one restart rather than one per seed group so this stage never spends
+    /// work the user did not request. Small settings therefore vote with fewer groups.
     ///
     /// Args:
     ///     user_restarts: Restart count used by the later full-budget gate and refit.
@@ -414,6 +420,9 @@ fn seed_consensus(incumbent: &FoldScores, candidate: &FoldScores) -> bool {
 }
 
 /// Resolve which fields a strict majority of one fold's seed outcomes applied.
+///
+/// Counted over the groups that actually ran, never over [`SEED_GROUPS`] — a fold the restart
+/// budget could not supply in full votes with the groups it got.
 ///
 /// Args:
 ///     field_count: Number of tuner fields.

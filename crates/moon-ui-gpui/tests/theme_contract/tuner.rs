@@ -792,3 +792,68 @@ fn strategy_row_clicks_route_through_the_pure_gesture_decision() {
         );
     }
 }
+
+/// A tuner card's header clips its own text before it ever pushes the collapse caret out.
+///
+/// Breakage this pins: removing the clipping box or restoring a second grow spacer in
+/// `analytics/tuner/shared.rs:card` would hide the caret in a narrow card.
+#[test]
+fn a_tuner_card_header_clips_its_text_before_its_accessory() {
+    let shared = read_src("analytics/tuner/shared.rs");
+    let card = braced_body(&shared, "pub(super) fn card(");
+
+    for needle in [".min_w_0()", ".overflow_hidden()", ".whitespace_nowrap()"] {
+        assert!(
+            card.contains(needle),
+            "the header's text box must carry `{needle}` or it cannot yield width at all"
+        );
+    }
+    assert_eq!(
+        card.matches(".flex_1()").count(),
+        1,
+        "exactly one grow candidate — the text box; a second one stops it eating the middle and \
+         the accessory drifts past the card's clip box"
+    );
+    assert!(
+        card.contains(".child(div().flex_none().child(acc))"),
+        "the accessory must sit OUTSIDE the clipping box and never shrink"
+    );
+    assert_eq!(
+        card.matches(".flex_none()").count(),
+        4,
+        "exactly four pinned elements: the card root (it must not shrink inside a scrolling \
+         column), the title, the subtitle, and the accessory — the two texts so the box clips \
+         them by order rather than shrinking both, the accessory so it never yields"
+    );
+    assert!(
+        !card.contains(".flex_wrap()"),
+        "the header is a fixed-height strip — wrapping would grow it and push the body down"
+    );
+}
+
+/// A tuner shell toolbar's title clips itself before it ever pushes the trailing buttons out.
+///
+/// Breakage this pins: removing the title's clipping styles or restoring the trailing spacer in
+/// `analytics/tuner/shell.rs:shell_toolbar` would hide Copy/Save in a narrow card.
+#[test]
+fn a_tuner_shell_title_clips_itself_before_its_trailing_buttons() {
+    let shell = read_src("analytics/tuner/shell.rs");
+    let toolbar = braced_body(&shell, "pub(super) fn shell_toolbar(");
+
+    for needle in [".min_w_0()", ".overflow_hidden()", ".whitespace_nowrap()"] {
+        assert!(
+            toolbar.contains(needle),
+            "the toolbar's title box must carry `{needle}` or it cannot yield width at all"
+        );
+    }
+    assert_eq!(
+        toolbar.matches(".flex_1()").count(),
+        1,
+        "exactly one grow candidate — the title itself; a trailing spacer would take the grow \
+         away from the title and let it push the Copy/Save buttons past the card's clip edge"
+    );
+    assert!(
+        !toolbar.contains(".child(div().flex_1());"),
+        "the old trailing spacer must not return after the title"
+    );
+}

@@ -7,7 +7,8 @@ use std::collections::HashSet;
 use gpui::*;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex,
+    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
+    MoonSegmentedControl, h_flex,
 };
 use rust_i18n::t;
 
@@ -27,6 +28,15 @@ const KIND_TRIGGER_W: f32 = 102.0;
 const METRIC_TRIGGER_W: f32 = 116.0;
 /// Unscaled horizontal spacing between neighboring toolbar controls.
 const TOOLBAR_GAP: f32 = 6.0;
+
+/// Base floor for a period preset's fitted cell width.
+const PRESET_CELL_MIN_W: f32 = 44.0;
+
+/// Base ceiling for a period preset's fitted cell width.
+///
+/// A long localized label cannot stretch the strip across the window; MoonUI truncates the visible
+/// label, and the item's tooltip still carries the whole of it.
+const PRESET_CELL_MAX_W: f32 = 104.0;
 
 #[cfg(test)]
 mod tests;
@@ -171,6 +181,12 @@ impl AnalyticsView {
         for t in Tab::ALL {
             let on = self.tab == t;
             let title = t.title();
+            // The Calendar is the one tab that browses time by its own navigation and hides the
+            // period bar, so a rule separates it from the two that share the window's filters —
+            // `Tab::ALL` puts it last precisely so this stands between the two kinds.
+            if t == Tab::Calendar {
+                row = row.child(design::chrome_divider(cx, p));
+            }
             // MoonButton's custom size has no horizontal padding, so give each localized title
             // measured breathing room while retaining a useful click target for short labels.
             let tab_width = (design::ui_text_width(cx, &title, 10.5, 400.0, true)
@@ -709,6 +725,9 @@ impl AnalyticsView {
     /// Summary and Tuning retain independent periods, so selection and count both read from the
     /// currently visible tab.
     ///
+    /// Presets and the custom range remain atomic groups so a narrow host wraps between controls
+    /// instead of clipping one away.
+    ///
     /// Args:
     ///     p: Active MoonUI palette.
     ///     cx: Analytics view context.
@@ -716,29 +735,38 @@ impl AnalyticsView {
     /// Returns:
     ///     Period controls and exact scoped trade count.
     pub(super) fn period_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
-        let mut seg = h_flex().gap(design::ui_px(cx, 4.0)).items_center();
         // Highlight follows the ACTIVE tab's period (Summary/Tuning are independent).
         let active = self.active_period();
-        for per in Period::ALL {
-            let on = active == per;
-            seg = seg.child(
-                MoonButton::new(per.id())
-                    .variant(if on {
-                        MoonButtonVariant::Amber
-                    } else {
-                        MoonButtonVariant::Soft
-                    })
-                    .size(MoonButtonSize::Micro)
-                    .selected(on)
-                    .label(per.title())
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.set_period(per, window, cx)),
-                    )
-                    .render(),
-            );
-        }
-        // Custom range: two "from"/"to" popover fields backed by MoonCalendar.
-        seg = seg
+        // The segmented control's handler is a plain indexed `Fn`, not a listener type, so the
+        // view is reached the documented other way — `cx.entity()` plus `update`.
+        let view = cx.entity();
+        let presets = MoonSegmentedControl::new("an-period-presets")
+            .items(Period::ALL.map(|per| {
+                // The tooltip carries the untruncated title, since `fit_width` elides the label
+                // and an elided preset is otherwise unreadable with no way to recover it.
+                let title = per.title();
+                MoonSegmentItem::new("", title.clone())
+                    .fit_width(cx, PRESET_CELL_MIN_W, PRESET_CELL_MAX_W)
+                    .tooltip(title)
+                    .selected(active == per)
+            }))
+            .on_click(move |ix, _, window, app| {
+                let Some(per) = Period::ALL.get(ix).copied() else {
+                    return;
+                };
+                view.update(app, |this, cx| this.set_period(per, window, cx));
+            })
+            .render();
+        // Keep the divider inside the custom-range group so it cannot wrap onto a line by itself.
+        let custom = design::chrome_section(cx)
+            .child(design::chrome_divider(cx, p))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .child(t!("analytics.period.custom_lbl").to_string()),
+            )
             .child(self.date_field(false, p, cx))
             .child(self.date_field(true, p, cx));
         // Split scopes carry the real count outside the deliberately empty scalar payload.
@@ -788,14 +816,25 @@ impl AnalyticsView {
         h_flex()
             .flex_none()
             .w_full()
+            // A minimum rather than fixed height leaves room for a wrapped second line.
+            .min_h(design::fit_h_px(cx, 34.0, 13.0, 10.5))
+            .flex_wrap()
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 8.0))
-            .gap(design::ui_px(cx, 8.0))
+            .gap_x(design::ui_px(cx, design::CHROME_GAP))
+            .gap_y(design::ui_px(cx, 4.0))
             .items_center()
-            .child(seg)
-            .child(div().flex_1())
+            // The bottom rule separates the controls from the muted notice below.
+            .border_b_1()
+            .border_color(moon(p.border))
+            .child(presets)
+            .child(custom)
             .child(
+                // A margin avoids adding a spacer that could take its own line when the row wraps.
                 div()
+                    .ml_auto()
+                    .min_w_0()
+                    .truncate()
                     .text_size(design::t_body(cx))
                     .text_color(moon(if counter_failed {
                         p.orange
