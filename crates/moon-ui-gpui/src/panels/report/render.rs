@@ -306,9 +306,17 @@ impl Render for ReportPanel {
                         .child(t!("report.filter.from").to_string()),
                 )
                 .child(
+                    // `whitespace_nowrap` inherits into the picker's label: its field clips but
+                    // wraps first, and a wrapped value hides the time half on a second line.
                     div()
-                        .w(px(110.0))
-                        .child(MoonInput::new("rep-from").state(&self.from).small()),
+                        .w(px(date_range::field_width(cx)))
+                        .whitespace_nowrap()
+                        .child(
+                            MoonDateTimePicker::new("rep-from", &self.from)
+                                .placeholder(t!("report.filter.date_ph").to_string())
+                                .cleanable(true)
+                                .render(),
+                        ),
                 )
                 .child(
                     div()
@@ -317,9 +325,17 @@ impl Render for ReportPanel {
                         .child(t!("report.filter.to").to_string()),
                 )
                 .child(
+                    // `whitespace_nowrap` inherits into the picker's label: its field clips but
+                    // wraps first, and a wrapped value hides the time half on a second line.
                     div()
-                        .w(px(110.0))
-                        .child(MoonInput::new("rep-to").state(&self.to).small()),
+                        .w(px(date_range::field_width(cx)))
+                        .whitespace_nowrap()
+                        .child(
+                            MoonDateTimePicker::new("rep-to", &self.to)
+                                .placeholder(t!("report.filter.date_ph").to_string())
+                                .cleanable(true)
+                                .render(),
+                        ),
                 )
             })
             // Export and the field selector sit at the RIGHT edge, away from the filters. The row

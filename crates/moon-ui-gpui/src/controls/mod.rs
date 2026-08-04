@@ -16,11 +16,13 @@
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
 //! - [`strips`] provides size and sell preset strips with native MoonUI interaction;
 //! - [`scale`] provides price-scale dropdowns for tabs and AddToChart stacks;
+//! - [`date_range`] provides the shared from/to date+time bounds of Report and Analytics;
 //! - [`toolbar`] composes the toolbar row.
 
 mod coin_menu;
 pub(crate) mod coin_search;
 mod core_combo;
+pub(crate) mod date_range;
 mod fmt;
 mod manual_strat;
 mod metric;

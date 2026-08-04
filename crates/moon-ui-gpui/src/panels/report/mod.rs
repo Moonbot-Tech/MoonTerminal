@@ -47,14 +47,16 @@ use moon_ui::{
     DockArea, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonCombobox, MoonComboboxEvent, MoonComboboxMenuChrome, MoonComboboxState,
     MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState,
-    MoonDataTableWidthPolicy, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState,
-    MoonMenuItem, MoonMenuSize, MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone,
-    MoonWindowFrame, Panel, PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
+    MoonDataTableWidthPolicy, MoonDateTimePicker, MoonDateTimePickerEvent, MoonDateTimePickerState,
+    MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem, MoonMenuSize,
+    MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone, MoonWindowFrame, Panel,
+    PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
 };
 use rusqlite::Connection;
 use rusqlite::types::Value;
 use rust_i18n::t;
 
+use crate::controls::date_range::{self, Bound};
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
 use crate::{Backend, design};
@@ -285,12 +287,19 @@ pub struct ReportPanel {
     coin_query: String,
     /// Whether the shared `controls::coin_search` match popup is open.
     coin_popup_open: bool,
-    from: Entity<MoonInputState>,
-    /// Mirror of the From input, used to suppress duplicate scoped-update queries.
-    from_query: String,
-    to: Entity<MoonInputState>,
-    /// Mirror of the To input, used to suppress duplicate scoped-update queries.
-    to_query: String,
+    from: Entity<MoonDateTimePickerState>,
+    /// Mirror of the From field in UTC unix seconds, used to suppress duplicate scoped-update
+    /// queries. The field picks whole minutes, so this is the first second of the picked minute.
+    from_query: Option<i64>,
+    to: Entity<MoonDateTimePickerState>,
+    /// Mirror of the To field in UTC unix seconds, on the same whole-minute grid as `from_query`.
+    /// The inclusive filter bound is derived from it in `filter()`, not stored here.
+    to_query: Option<i64>,
+    /// Whether a bound changed while its popup was open and still owes a query.
+    ///
+    /// Every clock-drum step emits `Change`; the mirrors follow it immediately, but the read is
+    /// issued once, when the popup closes.
+    bounds_pending: bool,
     pub(super) side: SideFilter,
     /// Period preset, defaulting to Today as in Moonbot.
     ///
