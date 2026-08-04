@@ -239,6 +239,8 @@ impl Render for TradeLog {
                 &self.hscroll,
                 &self.scroll,
                 content_w,
+                window,
+                cx,
             )
             .into_any_element()
         };

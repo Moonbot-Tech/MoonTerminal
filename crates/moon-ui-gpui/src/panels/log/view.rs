@@ -10,12 +10,12 @@ impl Render for LogPanel {
     /// Renders the panel and activates direct detached-window hosts on their first frame.
     ///
     /// Args:
-    ///     _window: Host window; rendering needs no direct window operations.
+    ///     window: Host window, which the row viewport's scrollbars keep their drag state in.
     ///     cx: Panel context used for backend reads, controls, and deferred reloads.
     ///
     /// Returns:
     ///     The complete responsive Log panel element tree.
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.refresh.is_active() {
             self.set_refresh_active(true, cx);
         } else if self.refresh.take_observed_reload() {
@@ -182,10 +182,27 @@ impl Render for LogPanel {
                     &self.hscroll,
                     &scroll,
                     content_w,
+                    window,
+                    cx,
                 ))
                 // Any wheel event over the list pauses effective following and starts its timer.
                 .on_scroll_wheel(cx.listener(|t, _e: &ScrollWheelEvent, _w, cx| {
                     t.pause_follow(cx);
+                }))
+                // So does grabbing a scrollbar, or the next reload would yank the list back down.
+                // Capture phase, because a bar stops propagation on its own mouse-down. Left button
+                // only — a right-click opens the row's copy menu and moves nothing — and an already
+                // paused panel is left alone, as a row press leaves it, so a burst arms one timer.
+                .capture_any_mouse_down(cx.listener(|t, ev: &MouseDownEvent, _w, cx| {
+                    if ev.button != MouseButton::Left {
+                        return;
+                    }
+                    // Held for as long as the button is, so a drag longer than the resume delay
+                    // does not hand the list back to the tail mid-gesture.
+                    t.press_held = true;
+                    if !t.scroll_pause {
+                        t.pause_follow(cx);
+                    }
                 }))
                 .into_any_element()
         };
@@ -206,13 +223,15 @@ impl Render for LogPanel {
             // Both halves are needed: `on_mouse_up` only fires over the panel's own hitbox, so a
             // drag released elsewhere would leave the gesture live and let any later left-drag
             // passing over a row rewrite the selection.
+            // Releasing also ends the follow-resume hold, which then runs out its own delay from
+            // here rather than from the press.
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|t, _ev: &MouseUpEvent, _w, _cx| t.selection.release()),
+                cx.listener(|t, _ev: &MouseUpEvent, _w, _cx| t.release_press()),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|t, _ev: &MouseUpEvent, _w, _cx| t.selection.release()),
+                cx.listener(|t, _ev: &MouseUpEvent, _w, _cx| t.release_press()),
             )
             .child(controls)
             .child(div().w_full().h(px(1.0)).bg(rgb(p.border)))

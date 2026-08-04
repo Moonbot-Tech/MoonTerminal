@@ -9,7 +9,10 @@
 //! panel draws (see `panels/log/row.rs`), and everything about sources, filters, and files.
 
 use gpui::*;
-use moon_ui::{MoonPalette, MoonScrollableElement, MoonVirtualListScrollHandle, rgba_from};
+use moon_ui::{
+    MoonPalette, MoonScrollAxis, MoonScrollableElement, MoonScrollbarVisibility,
+    MoonVirtualListScrollHandle, moon_scrollbar_overlay_with_palette, rgba_from,
+};
 use std::ops::Range;
 
 /// Line severity, which determines a row's base text color.
@@ -172,12 +175,20 @@ pub(crate) fn content_width(widest_chars: usize, cx: &App) -> f32 {
 ///     for the same reason, but it builds the scroll area itself and leaves no way to set the axis
 ///     restriction — which is why this is assembled by hand.
 ///
+/// The two bars come from different places on purpose. Horizontal is MoonUI's overlay at `Always`,
+/// as the Report's table draws its own: the axis restriction above leaves the bar and Shift+wheel as
+/// the only ways sideways, and a bar that appears only WHILE scrolling can never start the gesture.
+/// An axis with no overflow draws none at all. Vertical stays the plain scrollbar layer — the wheel
+/// already reaches it, and the overlay's track paints a lasting gutter over the rows' right edge.
+///
 /// Args:
-///     id: Element id of the scrolling box; unique per surface.
+///     id: Element id of the scrolling box; unique per surface, and the stem of both bars' ids.
 ///     list: The vertical (virtualized) row list, whose own vertical scrollbar must be hidden.
 ///     hscroll: Sideways offset, owned by the caller so it survives rebuilds.
 ///     vscroll: The list's vertical handle, which the viewport's scrollbar drives.
 ///     content_w: Width of the widest row, from [`content_width`].
+///     window: Window the bars' drag state lives in.
+///     cx: Application context, which also supplies the palette both bars paint with.
 ///
 /// Returns:
 ///     The viewport element.
@@ -187,7 +198,20 @@ pub(crate) fn hscroll_viewport(
     hscroll: &ScrollHandle,
     vscroll: &MoonVirtualListScrollHandle,
     content_w: f32,
+    window: &mut Window,
+    cx: &mut App,
 ) -> impl IntoElement {
+    let p = MoonPalette::active(cx);
+    // The overlay is built from geometry the scroll container only writes during its own prepaint,
+    // so on a surface's FIRST frame there is none and it draws no bar; `Always` schedules no
+    // animation of its own, so the bar would sit out until something else repainted. One extra
+    // frame fixes that — and it is taken ONCE, because a viewport that is legitimately zero-wide
+    // (a collapsed dock) would otherwise ask again every frame and pin the window at 60 Hz.
+    let primed = window.use_keyed_state((id, 2usize), cx, |_, _| false);
+    if hscroll.bounds().size.width == px(0.0) && !*primed.read(cx) {
+        primed.update(cx, |primed, _| *primed = true);
+        window.request_animation_frame();
+    }
     div()
         .relative()
         .size_full()
@@ -200,19 +224,23 @@ pub(crate) fn hscroll_viewport(
                 .track_scroll(hscroll)
                 .child(div().min_w(px(content_w)).h_full().child(list)),
         )
-        // Each scrollbar goes in its own id'd box: MoonUI gives every scrollbar layer the same
-        // hardcoded element id (`scrollbar_layer`), so two of them under one parent would resolve to
-        // one `GlobalElementId` and share a single hover/drag state.
+        // The bar's id must differ from the scroll container's: MoonUI names the overlay root with
+        // exactly what it is given, and two `Name` ids under one parent share an element state.
+        .children(moon_scrollbar_overlay_with_palette(
+            format!("{id}:hbar"),
+            hscroll,
+            MoonScrollAxis::Horizontal,
+            MoonScrollbarVisibility::Always,
+            p,
+            window,
+            cx,
+        ))
+        // The vertical layer sits in a box of its own because it must be a SIBLING of the scrolling
+        // container, not its child — a child would slide away with the content. The id is the
+        // viewport's own, numbered, so two surfaces on screen at once stay distinct.
         .child(
             div()
-                .id("hbar")
-                .absolute()
-                .inset_0()
-                .child(div().size_full().horizontal_scrollbar(hscroll)),
-        )
-        .child(
-            div()
-                .id("vbar")
+                .id((id, 1usize))
                 .absolute()
                 .inset_0()
                 .child(div().size_full().vertical_scrollbar(vscroll)),
