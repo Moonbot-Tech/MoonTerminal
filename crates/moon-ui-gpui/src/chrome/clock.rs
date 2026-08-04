@@ -1,12 +1,25 @@
-//! Clock in the header's right corner, formatted as `HH:MM:SS (UTC+/-N)`. It displays current UTC
-//! plus the selected timezone offset and advances once per second with the shell rerender. Clicking
-//! it opens a `MoonPopover` listing UTC-12 through UTC+14 plus a fractional system offset when
-//! applicable. The selection persists in the layout through
-//! `Backend::set_header_clock_offset_min` and is shared by all windows.
+//! Clock in the header's right corner, formatted as `HH:MM:SS CODE`. It shows the selected city's
+//! wall clock and advances once per second with the shell rerender. Clicking it opens a
+//! `MoonPopover` listing the curated cities of [`cities`], each with its own current time. The
+//! selection persists in the layout as the city's IANA zone id through
+//! `Backend::set_header_clock_zone` and is shared by all windows.
 //!
-//! When the selected offset matches the system timezone, the displayed time is already local, so
-//! the `(UTC...)` label is omitted.
+//! Summer time needs no handling here: the zone answers every conversion, so a city that has just
+//! moved its clocks reads correctly without an update or a restart.
+//!
+//! The city code is always drawn because it identifies WHICH city's rules drive the clock and is
+//! the only visible selection indicator while the picker is closed. Keeping both time and code
+//! present also gives the ticker's hand-summed popup offset a stable clock shape to measure.
+//!
+//! Search is intentionally deferred until this popup is hosted on `Shell`, like
+//! `core_settings_content` in `shell/render.rs`. `MoonPopover` takes content eagerly, so the
+//! inline design builds every row on every header render, and MoonUI's searchable list requires an
+//! `Entity<MoonComboboxState<_>>` created with a `&mut Window`; this free function receives only
+//! `&App`. Moving the popup state solves both constraints without a hand-rolled filter input.
 
+use std::rc::Rc;
+
+use chrono::{DateTime, Utc};
 use gpui::*;
 use moon_ui::{
     MoonMenuItem, MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu,
@@ -17,44 +30,32 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::design;
 
-/// Inclusive menu range of whole-hour timezones. A fractional offset such as India +5:30 or Nepal
-/// +5:45 is added separately only when it matches the system timezone, because the whole-hour list
-/// cannot otherwise select it.
-const TZ_MIN_H: i32 = -12;
-const TZ_MAX_H: i32 = 14;
+mod cities;
 
-/// Returns current UTC as cross-platform epoch seconds without external crates.
-fn now_unix_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+use cities::City;
+
+/// The current instant, as the type every zone conversion takes.
+///
+/// Not `Utc::now()`: this crate pins `chrono` without its clock feature. The system clock is read
+/// through `moon_core::util::now_unix_ms_i64`, which holds the one copy of that formula, and only a
+/// timestamp outside chrono's year range can fail the conversion — the epoch fallback keeps the
+/// header drawing rather than panicking a window on it.
+fn now_utc() -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(moon_core::util::now_unix_ms_i64())
+        .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
-/// Formats current UTC plus the minute offset `off_min` as `HH:MM:SS`. `rem_euclid` preserves the
-/// correct time of day for negative offsets and midnight crossings.
-fn hms(off_min: i32) -> String {
-    let day = (now_unix_secs() + off_min as i64 * 60).rem_euclid(86_400);
-    let (h, m, s) = (day / 3600, (day % 3600) / 60, day % 60);
-    format!("{h:02}:{m:02}:{s:02}")
+/// Resolve the saved zone to a curated city, falling back to UTC so an unknown hand-edited zone
+/// cannot leave the header without a stable label or clock.
+fn selected_city(backend: &Entity<Backend>, cx: &App) -> &'static City {
+    backend
+        .read(cx)
+        .header_clock_zone()
+        .and_then(cities::by_zone_id)
+        .unwrap_or_else(cities::utc_city)
 }
 
-/// Formats a timezone label such as `UTC`, `UTC+3`, or `UTC-5:30`.
-fn tz_label(off_min: i32) -> String {
-    if off_min == 0 {
-        return "UTC".to_string();
-    }
-    let sign = if off_min > 0 { '+' } else { '-' };
-    let a = off_min.abs();
-    let (h, m) = (a / 60, a % 60);
-    if m == 0 {
-        format!("UTC{sign}{h}")
-    } else {
-        format!("UTC{sign}{h}:{m:02}")
-    }
-}
-
-/// Gap between the time and the optional timezone label.
+/// Gap between the time and the city code.
 ///
 /// Shared by [`header_clock`] and [`header_clock_width`] rather than written twice: the ticker
 /// popup is positioned by summing what sits between its trigger and the window edge, and the clock
@@ -62,52 +63,17 @@ fn tz_label(off_min: i32) -> String {
 /// off its trigger — with nothing to catch it at compile time.
 const CLOCK_GAP: f32 = 5.0;
 
-/// Font weight of the clock's time text.
 const CLOCK_TIME_WEIGHT: f32 = 600.0;
 
-/// Font weight of the clock's optional timezone label.
 const CLOCK_TZ_WEIGHT: f32 = 400.0;
 
-/// The strings the header clock shows: the time, plus the timezone label when it is displayed.
+/// The two strings the header clock shows: the city's time and its code.
 ///
-/// One source for the renderer and the width measurement, including the label rule — the label is
-/// hidden when the selected offset already matches the system one, since then the readout is just
-/// local time.
-fn clock_parts(off_min: i32, sys_min: i32) -> (String, Option<String>) {
-    let tz = (off_min != sys_min).then(|| format!("({})", tz_label(off_min)));
-    (hms(off_min), tz)
+/// One source for the renderer and the width measurement, so they cannot drift apart.
+fn clock_parts(city: &City, now: DateTime<Utc>) -> (String, &'static str) {
+    (cities::local_hms(city.zone, now), city.code)
 }
 
-/// Returns the system timezone offset from UTC in minutes, positive eastward. This supports hiding
-/// the label when the selected offset matches the system offset.
-#[cfg(windows)]
-fn system_offset_min() -> i32 {
-    use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTime};
-    // Since windows 0.61, both functions return SYSTEMTIME by value. Adjacent calls keep the hour
-    // and minute stable in normal operation.
-    let (utc, loc) = unsafe { (GetSystemTime(), GetLocalTime()) };
-    let utc_min = utc.wHour as i32 * 60 + utc.wMinute as i32;
-    let loc_min = loc.wHour as i32 * 60 + loc.wMinute as i32;
-    let mut diff = loc_min - utc_min;
-    // Local and UTC dates can differ, for example UTC 23:30 versus local 01:30, so unwrap the day.
-    if diff > 14 * 60 {
-        diff -= 24 * 60;
-    } else if diff < -14 * 60 {
-        diff += 24 * 60;
-    }
-    // Real timezones use 15-minute increments. Rounding suppresses jitter if the calls straddle a minute.
-    ((diff as f32 / 15.0).round() as i32) * 15
-}
-
-/// Uses UTC as the system timezone outside Windows because `moon-chart` intentionally provides no
-/// platform-specific timezone lookup. The clock still works, but the `(UTC)` label remains visible.
-#[cfg(not(windows))]
-fn system_offset_min() -> i32 {
-    0
-}
-
-/// The corresponding top-right header clock shows the time and an optional timezone label; clicking
-/// it opens the timezone-selection popup.
 /// Rendered width of the header clock, in the units the header lays its children out with.
 ///
 /// `shell::ticker` positions the rate ticker's popup by summing everything between the ticker and
@@ -117,53 +83,88 @@ fn system_offset_min() -> i32 {
 ///
 /// Glyph advances only, no kerning (see `design::ui_text_width`) — a close estimate, not an exact
 /// measurement.
-pub fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
-    let off = backend.read(cx).header_clock_offset_min();
-    let (time, tz) = clock_parts(off, system_offset_min());
-    let mut width = design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT);
-    if let Some(tz) = tz {
-        width += design::ui_value(cx, CLOCK_GAP)
-            + design::mono_body_text_width(cx, &tz, CLOCK_TZ_WEIGHT);
-    }
-    width
+pub(crate) fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
+    let (time, code) = clock_parts(selected_city(backend, cx), now_utc());
+    design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT)
+        + design::ui_value(cx, CLOCK_GAP)
+        + design::mono_body_text_width(cx, code, CLOCK_TZ_WEIGHT)
 }
 
-/// Render the header clock and its timezone-selection popover.
+/// Write a city into the layout, deriving its compatibility offset mirror from the same instant.
 ///
-/// The timezone label is omitted when the selected offset matches the system offset; both the
-/// rendered strings and [`header_clock_width`] are derived through [`clock_parts`].
-pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl IntoElement {
-    let off = backend.read(cx).header_clock_offset_min();
-    let sys = system_offset_min();
-    let (time, tz) = clock_parts(off, sys);
+/// The click path's writer; the startup path pairs the same two fields through
+/// [`cities::reconcile_target`]. `Backend` cannot derive an offset from a zone — the city table
+/// lives up here — so the pairing has to happen on this side, and both paths derive it the one
+/// way, through `cities::current_offset_min`. Any new writer goes through one of these two.
+fn commit_city(b: &mut Backend, city: &City, now: DateTime<Utc>) {
+    b.set_header_clock_zone(city.zone.name(), cities::current_offset_min(city.zone, now));
+}
 
-    // List whole-hour offsets plus a fractional system timezone not already present, allowing India
-    // or Nepal system zones to be selected exactly and thereby hide the label.
-    let mut offsets: Vec<i32> = (TZ_MIN_H..=TZ_MAX_H).map(|h| h * 60).collect();
-    if !offsets.contains(&sys) {
-        offsets.push(sys);
-        offsets.sort_unstable();
-    }
+/// Settle both persisted clock fields once at startup, before any window draws.
+///
+/// A layout with only the compatibility offset receives a city here rather than during rendering,
+/// because lazy resolution would let later city-table ordering decide a persisted selection. A
+/// layout that names a city also gets its offset mirror refreshed: the mirror is DERIVED and can
+/// become an hour stale at the city's next summer-time transition. Both cases are decided by
+/// [`cities::reconcile_target`], so this must run even when a zone is already saved.
+pub(crate) fn reconcile_clock_zone(backend: &Entity<Backend>, cx: &mut App) {
+    backend.update(cx, |b, _| {
+        let now = now_utc();
+        let target = cities::reconcile_target(
+            b.layout.header_clock_zone.as_deref(),
+            b.layout.header_clock_offset_min,
+            now,
+        );
+        if let Some((city, offset_min)) = target {
+            b.set_header_clock_zone(city.zone.name(), offset_min);
+        }
+    });
+}
 
-    let mut items = Vec::with_capacity(offsets.len());
-    for m in offsets {
+/// Render the header clock and its city-selection popover.
+///
+/// Both the drawn strings and [`header_clock_width`] are derived through [`clock_parts`].
+pub(crate) fn header_clock(
+    backend: &Entity<Backend>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let selected = selected_city(backend, cx);
+    // One instant for the header and every menu row, so no row can straddle a second and disagree
+    // with the clock above it. `MoonPopover` builds its content eagerly, so this loop runs whether
+    // the popup is open or not — reading the system clock per row would be that cost per frame.
+    let now = now_utc();
+    let (time, code) = clock_parts(selected, now);
+
+    // One shared handle for all 47 rows: cloning an `Entity` takes a read lock on the entity map,
+    // so a clone per row is not the refcount bump it reads as.
+    let backend = Rc::new(backend.clone());
+    let mut items = Vec::with_capacity(cities::CITIES.len());
+    for city in cities::CITIES {
+        // Both rows and the header come from the same `CITIES` slice, so identity IS the selection
+        // test — no string comparison stands in for it.
+        let is_selected = std::ptr::eq(city, selected);
         let backend = backend.clone();
         items.push(
-            MoonMenuItem::with_key(format!("tz-{m}"), tz_label(m))
-                // Snapshot the time in this zone; it advances with shell rerenders while the popup is open.
-                .right_label(hms(m))
-                .selected(m == off)
-                .checked(m == off)
-                .on_click(move |_, _, cx| {
-                    backend.update(cx, |b, bcx| {
-                        b.set_header_clock_offset_min(m);
-                        bcx.notify();
-                    });
-                }),
+            MoonMenuItem::with_key(
+                format!("tz-{}", city.code),
+                format!("{}  {}", city.code, city.name()),
+            )
+            .right_label(cities::local_hms(city.zone, now))
+            .selected(is_selected)
+            .checked(is_selected)
+            .on_click(move |_, _, cx| {
+                backend.update(cx, |b, bcx| {
+                    // `now_utc()` again rather than the captured snapshot: a popup left open across
+                    // a transition would otherwise mirror an offset that has since moved.
+                    commit_city(b, city, now_utc());
+                    bcx.notify();
+                });
+            }),
         );
     }
 
-    let mut row = h_flex()
+    let row = h_flex()
         .id("header-clock")
         .flex_none()
         .items_center()
@@ -180,15 +181,13 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
                 .text_color(rgb(p.text))
                 .font_weight(FontWeight(CLOCK_TIME_WEIGHT))
                 .child(time),
-        );
-    if let Some(tz) = tz {
-        row = row.child(
+        )
+        .child(
             div()
                 .text_color(rgb(p.text_soft))
                 .font_weight(FontWeight(CLOCK_TZ_WEIGHT))
-                .child(tz),
+                .child(code),
         );
-    }
 
     MoonPopover::new("header-clock-popover")
         .placement(MoonPopoverPlacement::BottomEnd)
@@ -197,10 +196,12 @@ pub fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> impl
         .trigger(row)
         .content(
             MoonPopupMenu::new("header-clock-menu")
-                .fit_width(156.0, 560.0)
+                .header(t!("header.clock_pick").to_string())
+                .fit_width(200.0, 560.0)
                 .size(MoonMenuSize::Compact)
                 .mono(true)
-                // Show about 11 of the 27 or more zones at once and scroll the remainder.
+                // Cap the viewport at about 11 cities so the full curated list cannot overrun a
+                // short window; the remaining rows stay reachable by scrolling.
                 .max_height_ui(300.0)
                 .items(items)
                 .render(),

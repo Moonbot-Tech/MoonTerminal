@@ -425,7 +425,8 @@ fn x_axis_row(now_sec: i64, window: ChartWindow, p: MoonPalette, cx: &App) -> im
     )
 }
 
-/// Format a Unix second as `HH:MM:SS` (UTC), matching the header clock's day-of arithmetic.
+/// Format a Unix second as `HH:MM:SS` (UTC) by day-of arithmetic. Always UTC: this axis labels a
+/// core's own timeline, which no display timezone applies to.
 fn hms(unix_sec: i64) -> String {
     let day = unix_sec.rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", day / 3600, (day % 3600) / 60, day % 60)

@@ -294,9 +294,19 @@ pub struct WindowLayout {
     /// (first connected core; BTCUSDT, or UBTCUSDC on Hyperliquid-like exchanges).
     #[serde(default)]
     pub header_ticker: Option<HeaderTicker>,
-    /// Clock in the header's right corner: displayed-time offset from UTC in minutes.
-    /// 0 = UTC (default → "(UTC)" label). If it matches the system timezone (displayed time =
-    /// system time), the timezone label is hidden. Shared by all windows.
+    /// Clock in the header's right corner: the IANA zone id of the selected city, such as
+    /// `Europe/Warsaw`. `None` = never chosen, which reads as UTC. Shared by all windows.
+    ///
+    /// The zone id rather than the city's three-letter code: it is canonical, unambiguous and
+    /// meaningful to anyone editing this file by hand, while the code is presentation the terminal
+    /// derives from its own city table. `de_lenient` because this document is hand-editable and a
+    /// value of the wrong type must not take every window position down with it.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub header_clock_zone: Option<String>,
+    /// Fixed UTC offset in minutes, retained as the migration seed when
+    /// [`Self::header_clock_zone`] is absent and as a compatibility mirror when it is present.
+    /// Startup refreshes it from the chosen city's current offset so fixed-offset readers show the
+    /// same wall clock; zero is the neutral UTC default and does not seed a city selection.
     #[serde(default)]
     pub header_clock_offset_min: i32,
     /// Candle/trade display on charts (timeframe, mode, trade zone, outline, etc.) —

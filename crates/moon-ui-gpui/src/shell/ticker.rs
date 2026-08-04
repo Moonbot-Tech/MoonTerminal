@@ -106,9 +106,10 @@ impl Shell {
         } else {
             0.0
         };
-        // The clock's rendered width floats with the selected timezone and the Font slider, so it
-        // is measured rather than assumed. `vline` is a fixed `px(1.0)` and is deliberately NOT
-        // font-scaled, so the divider term stays raw.
+        // The clock's rendered width floats with the Font slider, so it is measured rather than
+        // assumed — and measured through the clock's own model, so a change to what it draws
+        // cannot leave this arithmetic behind. `vline` is a fixed `px(1.0)` and is deliberately
+        // NOT font-scaled, so the divider term stays raw.
         let right = f32::from(design::ui_px(cx, design::HEADER_PAD_X))
             + controls_w
             + crate::chrome::clock::header_clock_width(&self.backend, cx)

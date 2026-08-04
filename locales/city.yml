@@ -1,0 +1,200 @@
+# City names for the header clock's time-zone picker, keyed by the three-letter code the header
+# shows. The CODES are not translated (see README); the names are proper nouns that genuinely
+# differ across the three languages.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+city.UTC:
+  ru: "Всемирное время"
+  en: "Coordinated time"
+  es: "Tiempo universal"
+
+# --- Americas ---
+city.HNL:
+  ru: "Гонолулу"
+  en: "Honolulu"
+  es: "Honolulu"
+city.ANC:
+  ru: "Анкоридж"
+  en: "Anchorage"
+  es: "Anchorage"
+city.LAX:
+  ru: "Лос-Анджелес"
+  en: "Los Angeles"
+  es: "Los Ángeles"
+city.DEN:
+  ru: "Денвер"
+  en: "Denver"
+  es: "Denver"
+city.MEX:
+  ru: "Мехико"
+  en: "Mexico City"
+  es: "Ciudad de México"
+city.CHI:
+  ru: "Чикаго"
+  en: "Chicago"
+  es: "Chicago"
+city.BOG:
+  ru: "Богота"
+  en: "Bogotá"
+  es: "Bogotá"
+city.NYC:
+  ru: "Нью-Йорк"
+  en: "New York"
+  es: "Nueva York"
+city.TOR:
+  ru: "Торонто"
+  en: "Toronto"
+  es: "Toronto"
+city.SCL:
+  ru: "Сантьяго"
+  en: "Santiago"
+  es: "Santiago"
+city.BUE:
+  ru: "Буэнос-Айрес"
+  en: "Buenos Aires"
+  es: "Buenos Aires"
+city.SAO:
+  ru: "Сан-Паулу"
+  en: "São Paulo"
+  es: "São Paulo"
+
+# --- Europe and Africa ---
+city.LIS:
+  ru: "Лиссабон"
+  en: "Lisbon"
+  es: "Lisboa"
+city.DUB:
+  ru: "Дублин"
+  en: "Dublin"
+  es: "Dublín"
+city.LON:
+  ru: "Лондон"
+  en: "London"
+  es: "Londres"
+city.AMS:
+  ru: "Амстердам"
+  en: "Amsterdam"
+  es: "Ámsterdam"
+city.BER:
+  ru: "Берлин"
+  en: "Berlin"
+  es: "Berlín"
+city.MAD:
+  ru: "Мадрид"
+  en: "Madrid"
+  es: "Madrid"
+city.PAR:
+  ru: "Париж"
+  en: "Paris"
+  es: "París"
+city.ROM:
+  ru: "Рим"
+  en: "Rome"
+  es: "Roma"
+city.ZRH:
+  ru: "Цюрих"
+  en: "Zurich"
+  es: "Zúrich"
+city.ATH:
+  ru: "Афины"
+  en: "Athens"
+  es: "Atenas"
+city.HEL:
+  ru: "Хельсинки"
+  en: "Helsinki"
+  es: "Helsinki"
+city.KIE:
+  ru: "Киев"
+  en: "Kyiv"
+  es: "Kiev"
+city.WAW:
+  ru: "Варшава"
+  en: "Warsaw"
+  es: "Varsovia"
+city.CAI:
+  ru: "Каир"
+  en: "Cairo"
+  es: "El Cairo"
+city.JNB:
+  ru: "Йоханнесбург"
+  en: "Johannesburg"
+  es: "Johannesburgo"
+city.IST:
+  ru: "Стамбул"
+  en: "Istanbul"
+  es: "Estambul"
+city.MOW:
+  ru: "Москва"
+  en: "Moscow"
+  es: "Moscú"
+city.RUH:
+  ru: "Эр-Рияд"
+  en: "Riyadh"
+  es: "Riad"
+
+# --- Asia and Oceania ---
+city.DXB:
+  ru: "Дубай"
+  en: "Dubai"
+  es: "Dubái"
+city.KHI:
+  ru: "Карачи"
+  en: "Karachi"
+  es: "Karachi"
+city.BOM:
+  ru: "Мумбаи"
+  en: "Mumbai"
+  es: "Bombay"
+city.ALA:
+  ru: "Алматы"
+  en: "Almaty"
+  es: "Almaty"
+city.BKK:
+  ru: "Бангкок"
+  en: "Bangkok"
+  es: "Bangkok"
+city.JKT:
+  ru: "Джакарта"
+  en: "Jakarta"
+  es: "Yakarta"
+city.PER:
+  ru: "Перт"
+  en: "Perth"
+  es: "Perth"
+city.SIN:
+  ru: "Сингапур"
+  en: "Singapore"
+  es: "Singapur"
+city.HKG:
+  ru: "Гонконг"
+  en: "Hong Kong"
+  es: "Hong Kong"
+city.SHA:
+  ru: "Шанхай"
+  en: "Shanghai"
+  es: "Shanghái"
+city.TPE:
+  ru: "Тайбэй"
+  en: "Taipei"
+  es: "Taipéi"
+city.SEL:
+  ru: "Сеул"
+  en: "Seoul"
+  es: "Seúl"
+city.TYO:
+  ru: "Токио"
+  en: "Tokyo"
+  es: "Tokio"
+city.BNE:
+  ru: "Брисбен"
+  en: "Brisbane"
+  es: "Brisbane"
+city.SYD:
+  ru: "Сидней"
+  en: "Sydney"
+  es: "Sídney"
+city.AKL:
+  ru: "Окленд"
+  en: "Auckland"
+  es: "Auckland"
