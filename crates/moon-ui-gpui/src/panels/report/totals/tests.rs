@@ -86,8 +86,8 @@ fn the_head_is_the_caption_and_one_money_figure() {
     );
     assert_eq!(tones(&facts.essential)[1], FactTone::Positive);
     assert!(
-        !facts.tail.is_empty(),
-        "the counts must stay clippable rather than joining the head"
+        !facts.trailing.is_empty(),
+        "the shown-rows tally must stay outside the head rather than joining it"
     );
 }
 
@@ -113,7 +113,7 @@ fn a_clipped_facts_diagnostic_survives_in_the_row_tooltip() {
     );
 }
 
-/// A stall warning outranks every tally, and the two counts close the tail.
+/// A stall warning outranks every tally, and the money facts close the tail.
 ///
 /// The order IS the contract: facts are laid out from highest to lowest priority, and clipping at
 /// the right edge removes the later facts first. Breakage: inserting the stall marker after a tally,
@@ -135,15 +135,160 @@ fn a_stall_leads_the_tail_and_the_counts_close_it() {
             FactTone::Negative,
             // Rows whose currency could not be identified at all.
             FactTone::Warn,
-            // Order count, then shown rows: tallies the table itself already shows.
-            FactTone::Soft,
-            FactTone::Soft,
         ]
     );
     assert!(
         facts.tail[0].tip.is_some(),
         "the stall marker must carry its diagnostic codes"
     );
+}
+
+/// The tooltip spells out what the caption's bare number counts.
+///
+/// The row is one fixed-height line, so it can only afford "Total (7):"; the tooltip is not
+/// constrained that way and names the unit. Breakage: building the tooltip from `fact.text` alone,
+/// which silently drops every spelled-out form the moment one is introduced — the count then reads
+/// as an unlabelled number in the one place there was room to explain it.
+#[test]
+fn the_tooltip_spells_out_the_caption_count() {
+    let snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 4)], 2);
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+
+    let spelled = facts.essential[0]
+        .spelled
+        .as_deref()
+        .expect("the caption carries a spelled-out form");
+    assert!(spelled.contains('7'), "got {spelled:?}");
+    assert_ne!(
+        spelled, facts.essential[0].text,
+        "the spelled form must differ from the row's abbreviation"
+    );
+
+    let tip = footer_tooltip(&facts);
+    assert!(tip.contains(spelled), "the tooltip states it, got {tip:?}");
+    assert!(
+        !tip.contains(facts.essential[0].text.as_str()),
+        "and not the abbreviation as well, got {tip:?}"
+    );
+}
+
+/// The shown-rows tally leaves the clipping tail and holds the row's right edge.
+///
+/// It describes the grid, not the money, so it is not competing for the same space as the figures.
+/// Breakage: pushing it back onto `tail`, where it both trails the amounts and is clipped away by a
+/// narrow dock — and where the row's right edge goes empty.
+#[test]
+fn the_shown_rows_tally_is_pinned_right_rather_than_clipped() {
+    let snapshot = data(vec![(Some(0), 12.5, 3)], 5);
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+
+    assert_eq!(facts.trailing.len(), 1, "exactly the shown-rows tally");
+    assert!(
+        facts.trailing[0].text.contains('5'),
+        "got {:?}",
+        facts.trailing[0].text
+    );
+    assert!(
+        !facts
+            .tail
+            .iter()
+            .chain(&facts.essential)
+            .any(|fact| fact.text == facts.trailing[0].text),
+        "and it is stated once, not in two groups"
+    );
+    assert!(
+        footer_tooltip(&facts).contains(facts.trailing[0].text.as_str()),
+        "a pinned fact must still reach the row tooltip"
+    );
+}
+
+/// The order count rides in the caption, where clipping cannot reach it.
+///
+/// The caption states what the money figure beside it is a total OF. Breakage: pushing the count
+/// back into the tail, where a narrow dock drops it first and leaves a sum with no denominator —
+/// which is exactly the fact a user reads the footer for.
+#[test]
+fn the_caption_states_the_order_count_and_the_tail_no_longer_does() {
+    // 3 + 4 orders over 2 shown rows: the count "7" appears in no amount and in no other tally,
+    // so finding it is evidence about the caption rather than about the fixture.
+    let snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 4)], 2);
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+
+    let caption = &facts.essential[0].text;
+    assert!(
+        caption.contains('7'),
+        "the caption must carry the 7 summed orders, got {caption:?}"
+    );
+    assert!(
+        !facts.tail.iter().any(|fact| fact.text.contains('7')),
+        "and no tail fact may restate it, got {:?}",
+        facts
+            .tail
+            .iter()
+            .map(|fact| fact.text.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The per-currency totals read as ONE bracketed breakdown of the figure above them.
+///
+/// The row states "Total (401): +500 USDT (+600 USDT -100 USDC)", so the brackets belong to the
+/// group, not to each amount. Breakage: bracketing every currency separately, or gluing both
+/// brackets onto the first one — either turns the breakdown into a list of parenthesised asides
+/// that no longer reads as the decomposition of the headline figure.
+#[test]
+fn the_currency_breakdown_is_wrapped_in_one_pair_of_brackets() {
+    let mut snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
+    snapshot.totals = snapshot.totals.with_valuation(ValuationCoverage {
+        eligible_orders: 5,
+        valued_orders: 5,
+        unavailable_orders: 0,
+        usdt: Some(moon_core::db::UsdtTotal {
+            profit: 99.0,
+            spent: None,
+        }),
+    });
+
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+    let breakdown: Vec<&str> = facts
+        .tail
+        .iter()
+        .map(|fact| fact.text.as_str())
+        .filter(|text| text.contains("12.5") || text.contains("0.25"))
+        .collect();
+
+    assert_eq!(breakdown.len(), 2, "got {breakdown:?}");
+    assert!(
+        breakdown[0].starts_with('(') && !breakdown[0].ends_with(')'),
+        "the first amount opens the group, got {:?}",
+        breakdown[0]
+    );
+    assert!(
+        breakdown[1].ends_with(')') && !breakdown[1].starts_with('('),
+        "the last amount closes it, got {:?}",
+        breakdown[1]
+    );
+}
+
+/// A lone currency total in the breakdown carries BOTH brackets.
+///
+/// Reached with two currencies and no unified figure: the first is promoted into the head, leaving
+/// exactly one behind. Breakage: opening the group on the first fact and closing it on a separately
+/// tracked "previous" index, which for a one-element breakdown applies only one of the two and
+/// ships a stray unmatched bracket into the footer.
+#[test]
+fn a_single_currency_breakdown_is_bracketed_on_both_sides() {
+    let snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
+
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+    let only = facts
+        .tail
+        .iter()
+        .find(|fact| fact.text.contains("0.25"))
+        .map(|fact| fact.text.as_str())
+        .expect("the second currency total is the whole breakdown");
+
+    assert!(only.starts_with('(') && only.ends_with(')'), "got {only:?}");
 }
 
 /// A healthy worker states nothing, and a stall is stated whether or not the money is comparable.
@@ -181,7 +326,10 @@ fn an_absent_snapshot_states_the_read_rather_than_a_zero() {
         tones(&failed.essential),
         vec![FactTone::Soft, FactTone::Warn]
     );
-    assert!(failed.tail.is_empty(), "there is nothing to qualify");
+    assert!(
+        failed.tail.is_empty() && failed.trailing.is_empty(),
+        "there is nothing to qualify, and no row count to pin either"
+    );
 
     let pending = historical_facts(None, false, &ValuationStatus::default(), T0);
     assert_eq!(pending.essential[1].text, "—");
