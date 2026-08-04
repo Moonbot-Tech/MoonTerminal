@@ -4,6 +4,8 @@
 //! filters/sort/columns never change what is written, only what the list shows.
 //! The table itself (card, rows, sortable header) renders in `table`.
 
+/// The strategy row's right-click menu and the gate deciding whether its action can run.
+mod menu;
 /// Pure selection arithmetic: the drawn row order and the Shift-click range over it.
 mod select;
 /// The list card, its rows and the sortable header row.

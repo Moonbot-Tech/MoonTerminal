@@ -15,6 +15,8 @@ mod bg;
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
 mod period;
+/// Deleting a strategy and its report trades, in a core-confirmed order.
+mod purge;
 /// Generation-aware load shedding for automatic report-driven refreshes.
 mod refresh;
 mod summary;
@@ -362,6 +364,14 @@ pub struct AnalyticsView {
     /// reloaded and put the strategy's OLD values back — which is exactly what a successful
     /// write looks like. The edit was gone and the user had been told it was saved.
     pub(super) write_error: Option<String>,
+    /// The open "delete the strategy and its trades from the report" confirmation, if any.
+    pub(in crate::analytics) strat_purge: Option<purge::PurgeOp>,
+    /// Identity handed to each purge operation.
+    ///
+    /// Retained across close/reopen on purpose: a background count belonging to a dialog the user
+    /// already dismissed must not publish into the next one, and only a counter that keeps moving
+    /// can tell two operations on the same row apart.
+    purge_seq: u64,
     /// Count of background operations: values above zero enable the blocking Loading overlay.
     /// Without it, long scans of a large database are invisible while filter and strategy clicks
     /// accumulate in the queue.
@@ -647,6 +657,8 @@ impl AnalyticsView {
             undated_error: None,
             undated_expanded: session.undated_expanded,
             write_error: None,
+            strat_purge: None,
+            purge_seq: 0,
             busy_ops: 0,
             db_ops: 0,
             busy_since: None,

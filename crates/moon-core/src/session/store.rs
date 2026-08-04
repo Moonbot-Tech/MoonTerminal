@@ -159,6 +159,13 @@ pub struct CoreData {
     pub order_lines_rev_ms: i64,
     pub detects_rev: u64,
     pub strategies_rev: u64,
+    /// Advances on each core acknowledgement of a checkbox delta.
+    ///
+    /// Separate from `strategies_rev` on purpose: that counter also advances for a snapshot the
+    /// protocol library rebuilt from its OWN locally-applied change, so it cannot distinguish
+    /// "we asked" from "the core agreed". Anything that must not act until the core has committed
+    /// a checkbox change waits on this one.
+    pub strategies_ack_rev: u64,
     pub schema_rev: u64,
     pub assets_rev: u64,
     pub transfer_rev: u64,
@@ -207,6 +214,7 @@ impl CoreData {
             order_lines_rev_ms: 0,
             detects_rev: 0,
             strategies_rev: 0,
+            strategies_ack_rev: 0,
             schema_rev: 0,
             assets_stale: false,
             assets_rev: 0,
@@ -324,6 +332,9 @@ impl CoreData {
             FeedMsg::Strategies(strategies) => {
                 self.strategies = strategies;
                 self.strategies_rev = self.strategies_rev.wrapping_add(1);
+            }
+            FeedMsg::StrategiesAck => {
+                self.strategies_ack_rev = self.strategies_ack_rev.wrapping_add(1);
             }
             FeedMsg::StrategySchema(schema) => {
                 self.schema = Some(schema);

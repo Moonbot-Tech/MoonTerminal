@@ -362,6 +362,31 @@ impl SessionManager {
         )
     }
 
+    /// Soft-delete or restore report rows addressed by a bare list of `newrecid`s.
+    ///
+    /// The list is folded into ranges plus singles by [`super::compress_rec_ids`] rather than by the
+    /// caller: a strategy's whole history is thousands of mostly consecutive ids, and duplicating
+    /// that folding at call sites risks inconsistent normalization or ranges widened across gaps.
+    /// Centralizing it keeps every caller on the exact-set invariant.
+    ///
+    /// Args:
+    ///     core: Core owning the rows.
+    ///     deleted: `true` soft-deletes, `false` restores.
+    ///     rec_ids: Rec ids to address; consumed, sorted, and deduplicated.
+    ///
+    /// Returns:
+    ///     `Ok` once the command is queued on the local session channel — never a core
+    ///     acknowledgement. An empty list is a no-op.
+    pub fn set_report_rows_deleted_ids(
+        &self,
+        core: CoreId,
+        deleted: bool,
+        mut rec_ids: Vec<i64>,
+    ) -> Result<()> {
+        let (ranges, singles) = super::rec_ranges::compress_rec_ids(&mut rec_ids);
+        self.set_report_rows_deleted(core, deleted, ranges, singles)
+    }
+
     /// Move an order's stop or take-profit line by dragging it on the chart. The absolute `price`
     /// sets SL or TS to a fixed-price stop, or sets take profit to an absolute price; the other
     /// stops are preserved. A non-positive `price` is ignored.

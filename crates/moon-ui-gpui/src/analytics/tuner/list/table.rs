@@ -308,6 +308,8 @@ fn strategy_row(
         }
     });
     let core_text = core_label(g);
+    // Cloned before the column consumes it: the context menu names the same core the row shows.
+    let menu_core_name = core_text.clone();
     // Name on the left (flexible, truncated), all fixed columns in one rigid
     // cluster on the right (justify_between): when flex distribution glitches on
     // resize, the columns do not drift out of alignment between rows.
@@ -386,6 +388,30 @@ fn strategy_row(
                         .child(g.lastedit.clone())
                 })),
         )
+        .on_mouse_down(MouseButton::Right, {
+            // Opening a menu must not move the selection: making the clicked row the anchor would
+            // invalidate the tuner, reset the time grid and trigger a reload as a side effect. The
+            // menu names its strategy explicitly instead.
+            let weak = weak.clone();
+            let (key, name, alive, trades) = (g.key.clone(), name.clone(), g.alive, g.n);
+            let core_name = menu_core_name;
+            move |ev: &MouseDownEvent, window, app| {
+                app.stop_propagation();
+                let (key, name, core_name) = (key.clone(), name.clone(), core_name.clone());
+                let _ = weak.update(app, |this, cx| {
+                    this.open_strategy_row_menu(
+                        key,
+                        name,
+                        core_name,
+                        alive,
+                        trades,
+                        ev.position,
+                        window,
+                        cx,
+                    );
+                });
+            }
+        })
         .on_click({
             let weak = weak.clone();
             move |ev: &ClickEvent, window, app| {

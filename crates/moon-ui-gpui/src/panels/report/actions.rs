@@ -460,7 +460,9 @@ impl ReportPanel {
                 let count = rec_ids.len();
                 if backend
                     .session
-                    .set_report_rows_deleted(core_uid, deleted, Vec::new(), rec_ids)
+                    // Folded into ranges by the session: a large filtered selection can have the
+                    // same mostly-consecutive id shape as a strategy purge.
+                    .set_report_rows_deleted_ids(core_uid, deleted, rec_ids)
                     .is_ok()
                 {
                     queued += count;

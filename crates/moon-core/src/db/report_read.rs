@@ -535,6 +535,103 @@ fn append_strategy_filter(
     sql.push_str(&format!(" AND ({groups})"));
 }
 
+/// SQL projecting the rec id the soft-delete protocol addresses a row by.
+///
+/// `newrecid` is a real column only on the typed replica; a legacy source projects `0`, which
+/// marks its rows as not soft-deletable — `0` is never a real rec id. Both the Report table and
+/// the strategy purge read go through here, so a source that gains or loses the column cannot end
+/// up soft-deletable in one reader and not the other.
+fn rec_id_expr(src: &ReadSource) -> &'static str {
+    if src.cols.contains("newrecid") {
+        "r.newrecid"
+    } else {
+        "0"
+    }
+}
+
+/// Rows of one strategy that a report purge can address, plus the ones it cannot.
+pub struct StrategyPurgeRows {
+    /// Soft-deletable `newrecid`s from the typed replica.
+    pub rec_ids: Vec<i64>,
+    /// Rows matching the same strategy in a legacy source, which carries no rec id and therefore
+    /// cannot be addressed by the protocol. Counted so the confirmation can say so; never deleted.
+    pub legacy_rows: i64,
+}
+
+/// Collect every soft-deletable row of one strategy, across the strategy's whole report history.
+///
+/// The scope is deliberately NOT the Analytics period: deleting only in-period trades would strand
+/// rows attributed to a strategy the user can no longer find in the table to clean up. Only closed
+/// trades are addressed, matching the closed-trade universe the Analytics row counts — an open
+/// trade is still in flight and is not the caller's to hide.
+///
+/// Strategy matching goes through `build_where`'s exact-key predicate, which resolves the
+/// EFFECTIVE strategy id (`effective_sid_expr`): liquidation rows physically carry `strategyid = 0`
+/// and are attributed by name, and the Analytics row already counts them. Matching the raw column
+/// instead would leave those rows behind, so the strategy would keep a non-zero trade count after a
+/// "complete" purge.
+///
+/// Args:
+///     conn: Open report reader; `strat` is expected to be attached for liquidation attribution.
+///     key: Exact strategy identity to purge.
+///
+/// Returns:
+///     Addressable rec ids and the count of unaddressable legacy rows.
+///
+/// Errors:
+///     Returns `Failed` for source discovery, SQL, or row conversion errors. A read failure is
+///     never collapsed into an empty result — an empty purge and an unreadable one must not look
+///     the same to a confirmation dialog.
+pub fn strategy_purge_rows(
+    conn: &Connection,
+    key: ReportStrategyKey,
+) -> ReadResult<StrategyPurgeRows> {
+    const CTX: &str = "reports: strategy_purge_rows";
+    let has_strategy_names = super::analytics::strategies_attached(conn);
+    let filter = ReportFilter {
+        strategies: Some(vec![key]),
+        closed_only: true,
+        ..ReportFilter::default()
+    };
+
+    let mut out = StrategyPurgeRows {
+        rec_ids: Vec::new(),
+        legacy_rows: 0,
+    };
+    for src in read_sources_res(conn)? {
+        // `build_where` already turns a source without the identity columns into a no-match
+        // constraint, so a partial schema contributes nothing instead of failing to prepare.
+        let (mut where_sql, params) = build_where(&filter, &src.cols, has_strategy_names);
+        // A narrowing clause the strategy predicate already implies, added so the index can serve
+        // it. `append_strategy_filter` matches the EFFECTIVE id, whose `CASE` expression is not
+        // sargable, leaving only the `core_uid` prefix of `idx_rep_strat` usable — and this read
+        // has no `LIMIT`, so that means scanning a core's whole report history. A row can only
+        // match the effective id by carrying it raw, or by being an attributed liquidation, which
+        // by construction carries `strategyid` 0 or NULL. So this excludes no matching row.
+        if src.cols.contains("strategyid") {
+            where_sql.push_str(&format!(
+                " AND (COALESCE(r.strategyid, 0) = {sid} OR COALESCE(r.strategyid, 0) = 0)",
+                sid = key.strategy_id
+            ));
+        }
+        let rec_id = rec_id_expr(&src);
+        let sql = format!("SELECT {rec_id} FROM {} r{where_sql}", src.table);
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|value| value.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail(CTX, e))?;
+        let rows = stmt
+            .query_map(refs.as_slice(), |row| row.get::<_, i64>(0))
+            .map_err(|e| read_fail(CTX, e))?;
+        for row in rows {
+            match row.map_err(|e| read_fail(CTX, e))? {
+                0 => out.legacy_rows += 1,
+                rec_id => out.rec_ids.push(rec_id),
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Aggregate profit and order count over the complete filter, not only the top N.
 ///
 /// Returns `Failed` when source discovery or any aggregate query fails; only a
@@ -758,13 +855,7 @@ fn query_reports_attempt(
             .map(|parts| parts.per_row.joins.as_str())
             .unwrap_or("");
         let select = source_select(src, pass.cols, valuation.as_ref());
-        // `newrecid` is a real column only on the typed replica; a legacy source projects 0, which
-        // marks its rows as not soft-deletable (0 is never a real rec id).
-        let rec_id_select = if src.cols.contains("newrecid") {
-            "r.newrecid"
-        } else {
-            "0"
-        };
+        let rec_id_select = rec_id_expr(src);
         // Sort in SQL only if this source can express the column; otherwise source order is
         // irrelevant, because the merge below reorders everything anyway.
         let order = match source_sort_expression(src, pass.sort_col, valuation.as_ref()) {

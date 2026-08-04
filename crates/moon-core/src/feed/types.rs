@@ -910,6 +910,14 @@ pub enum FeedMsg {
     ServerLog(Vec<CoreLogLine>),
     /// Core strategy snapshot sent when its signature changes.
     Strategies(Vec<StrategyRow>),
+    /// The core acknowledged a checkbox delta this terminal sent (`TStratCheckedEcho` /
+    /// `TStratCheckedSync`).
+    ///
+    /// This is the ONLY evidence that a checkbox change was committed by the core.
+    /// `Strategies` cannot serve: the protocol library flips its own snapshot the moment
+    /// `set_checked` is called — before a single byte is sent — so a `checked` flag read back from
+    /// `Strategies` only proves the terminal asked, never that the core agreed.
+    StrategiesAck,
     /// Core strategy schema with sections and fields by kind, sent when its revision changes.
     StrategySchema(StrategySchemaModel),
     /// Core asset and position snapshot for the Assets window, sent after domain events at most
