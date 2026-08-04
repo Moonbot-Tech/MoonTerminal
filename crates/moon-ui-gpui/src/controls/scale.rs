@@ -103,7 +103,9 @@ fn scale_dropdown(
         })
         .child(
             MoonDropdown::new(dropdown_id)
-                .trigger_width_scaled(72.0)
+                // Narrowed 20% from 72: the trigger only ever carries the magnifier plus "A" or a
+                // three-character percentage, so the freed width goes to the tab strip beside it.
+                .trigger_width_scaled(58.0)
                 .trigger_variant(MoonButtonVariant::Neutral)
                 .trigger_size(trigger_size)
                 .menu_width_scaled(116.0)
