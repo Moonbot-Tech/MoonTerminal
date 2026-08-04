@@ -208,6 +208,9 @@ fn report_group_for_core(backend: &Entity<Backend>, core_uid: u64, cx: &App) -> 
 }
 
 /// Database column names visible by default.
+///
+/// Listed in `db::DISPLAY_COLUMNS` order for readability only: the set is collapsed into a
+/// name-keyed `HashSet`, and render order comes from that constant, never from here.
 const DEFAULT_VISIBLE: &[&str] = &[
     "buydate",
     "closedate",
@@ -218,8 +221,8 @@ const DEFAULT_VISIBLE: &[&str] = &[
     "buyprice",
     "sellprice",
     "profitbtc",
-    "profitpct",
     "valuation_profit_usdt",
+    "profitpct",
     "lev",
     "sellreason",
     "comment",

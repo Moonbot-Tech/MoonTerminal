@@ -1037,3 +1037,39 @@ fn current_rate_coverage_survives_an_unavailable_historical_cache() {
         "the historical conversion has nothing to report without its cache"
     );
 }
+
+/// The USDT profit column is offered BEFORE the percentage one.
+///
+/// Breakage this pins: swapping the entries in `report_read.rs:DISPLAY_COLUMNS` would move the
+/// amount to the right in the table, Columns menu, and CSV export. The runtime schema-derived list
+/// is the shared consumer rather than a second reading of the constant.
+#[test]
+fn the_usdt_profit_column_precedes_the_percentage_one() {
+    let conn = Connection::open_in_memory().expect("open column-order fixture");
+    super::super::init_db(&conn).expect("initialize report database");
+    // The two synthetic columns are offered on their INPUTS, so the fixture carries exactly those.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS orders_rep (
+             core_uid INTEGER NOT NULL,
+             core_name TEXT NOT NULL,
+             newrecid INTEGER NOT NULL,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;
+         ALTER TABLE orders_rep ADD COLUMN profitbtc REAL;
+         ALTER TABLE orders_rep ADD COLUMN spentbtc REAL;",
+    )
+    .expect("create typed report source");
+
+    let cols = super::display_columns(&conn).expect("a healthy schema lists its columns");
+    let at = |name: &str| {
+        cols.iter()
+            .position(|col| col == name)
+            .unwrap_or_else(|| panic!("{name} must be offered on a schema carrying its inputs"))
+    };
+    assert!(
+        at(super::VALUATION_PROFIT_COLUMN) < at(super::PROFIT_PERCENT_COLUMN),
+        "the USDT amount reads first and the percentage sits to its right: {cols:?}"
+    );
+}
