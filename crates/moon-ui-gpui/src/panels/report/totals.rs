@@ -42,8 +42,14 @@ pub(super) enum FactTone {
 
 /// One rendered footer item, already localized.
 pub(super) struct FooterFact {
-    /// Exactly the text the row renders, and exactly what the tooltip repeats.
+    /// Exactly the text the row renders.
     pub(super) text: String,
+    /// What the tooltip states in place of [`Self::text`], when the row abbreviates.
+    ///
+    /// The row is one fixed-height line and spells a count as a bare number; the tooltip has the
+    /// space to say what that number counts. `None` means the two are identical, which is the
+    /// case for every fact that is already a whole sentence.
+    pub(super) spelled: Option<String>,
     /// Colour role.
     pub(super) tone: FactTone,
     /// Whether the figure carries the row's bold weight.
@@ -77,6 +83,7 @@ pub(super) struct FooterFacts {
 fn fact(text: String, tone: FactTone, bold: bool) -> FooterFact {
     FooterFact {
         text,
+        spelled: None,
         tone,
         bold,
         tip: None,
@@ -163,10 +170,22 @@ pub(super) fn footer_facts(
     // The caption carries the order count, so the tally the row is a total OF can never be the
     // thing a narrow dock clips away. Without a snapshot there is no count to state.
     let caption = match data {
-        Some(data) => t!("report.totals_n", n = data.totals.orders).to_string(),
-        None => t!("report.totals").to_string(),
+        Some(data) => {
+            let orders = data.totals.orders;
+            FooterFact {
+                // The row has one line and states the count as a bare number; the tooltip says
+                // what it counts.
+                spelled: Some(t!("report.totals_n_tip", n = orders).to_string()),
+                ..fact(
+                    t!("report.totals_n", n = orders).to_string(),
+                    FactTone::Soft,
+                    false,
+                )
+            }
+        }
+        None => fact(t!("report.totals").to_string(), FactTone::Soft, false),
     };
-    let mut essential = vec![fact(caption, FactTone::Soft, false)];
+    let mut essential = vec![caption];
     let mut tail = Vec::new();
 
     let Some(data) = data else {
@@ -324,7 +343,10 @@ pub(super) fn footer_tooltip(facts: &FooterFacts) -> String {
         .iter()
         .chain(&facts.tail)
         .chain(&facts.trailing)
-        .flat_map(|fact| std::iter::once(fact.text.as_str()).chain(fact.tip.as_deref()))
+        .flat_map(|fact| {
+            std::iter::once(fact.spelled.as_deref().unwrap_or(&fact.text))
+                .chain(fact.tip.as_deref())
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

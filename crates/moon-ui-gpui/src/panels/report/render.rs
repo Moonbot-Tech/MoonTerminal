@@ -449,9 +449,15 @@ impl Render for ReportPanel {
         // Pinned right: the shown-rows tally describes the grid, not the money, so it sits at the
         // far edge. `ml_auto` inside the row, not inside the tail — nested in the clipping box it
         // would be pushed out of view instead of holding the edge.
-        let shown = fact_group("rep-totals-shown", tip, facts.trailing)
-            .flex_none()
-            .ml_auto();
+        //
+        // It yields that edge entirely while rows are selected: the selection commands take it,
+        // and the width the tally gives back goes to the clipping tail, which is where the money
+        // that a selection is about to act on lives. The fact still reaches the row tooltip.
+        let shown = selection_actions.is_none().then(|| {
+            fact_group("rep-totals-shown", tip, facts.trailing)
+                .flex_none()
+                .ml_auto()
+        });
         let totals = h_flex()
             .w_full()
             .gap_2()
@@ -463,7 +469,7 @@ impl Render for ReportPanel {
             })
             .child(essential)
             .child(clipping)
-            .child(shown)
+            .children(shown)
             // No commands in the no-data arms: a read that fails or has not landed clears the
             // selection first (`query.rs`, the `Err` arm), so this is `None` there.
             .children(selection_actions);

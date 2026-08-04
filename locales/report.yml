@@ -189,6 +189,11 @@ report.totals_n:
   ru: "Итого (%{n}):"
   en: "Total (%{n}):"
   es: "Total (%{n}):"
+# The same caption in the row tooltip, which has room to say what the number counts.
+report.totals_n_tip:
+  ru: "Итого (%{n} ордеров)"
+  en: "Total (%{n} orders)"
+  es: "Total (%{n} órdenes)"
 report.unknown_quote_orders:
   ru: "валюта неизвестна: %{n}"
   en: "unknown quote: %{n}"

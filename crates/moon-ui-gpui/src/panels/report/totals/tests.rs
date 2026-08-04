@@ -143,6 +143,35 @@ fn a_stall_leads_the_tail_and_the_counts_close_it() {
     );
 }
 
+/// The tooltip spells out what the caption's bare number counts.
+///
+/// The row is one fixed-height line, so it can only afford "Total (7):"; the tooltip is not
+/// constrained that way and names the unit. Breakage: building the tooltip from `fact.text` alone,
+/// which silently drops every spelled-out form the moment one is introduced — the count then reads
+/// as an unlabelled number in the one place there was room to explain it.
+#[test]
+fn the_tooltip_spells_out_the_caption_count() {
+    let snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 4)], 2);
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+
+    let spelled = facts.essential[0]
+        .spelled
+        .as_deref()
+        .expect("the caption carries a spelled-out form");
+    assert!(spelled.contains('7'), "got {spelled:?}");
+    assert_ne!(
+        spelled, facts.essential[0].text,
+        "the spelled form must differ from the row's abbreviation"
+    );
+
+    let tip = footer_tooltip(&facts);
+    assert!(tip.contains(spelled), "the tooltip states it, got {tip:?}");
+    assert!(
+        !tip.contains(facts.essential[0].text.as_str()),
+        "and not the abbreviation as well, got {tip:?}"
+    );
+}
+
 /// The shown-rows tally leaves the clipping tail and holds the row's right edge.
 ///
 /// It describes the grid, not the money, so it is not competing for the same space as the figures.
