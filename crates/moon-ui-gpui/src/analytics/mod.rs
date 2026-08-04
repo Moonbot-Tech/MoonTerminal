@@ -26,7 +26,9 @@ mod toolbar;
 mod tuner;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
-pub(in crate::analytics) use period::{Period, Tab, day_of_secs, fmt_day, secs_of_day};
+pub(in crate::analytics) use period::{
+    Period, Tab, custom_bounds, day_of_secs, fmt_day, secs_of_day,
+};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -35,12 +37,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonBackgroundPolicy, MoonCalendarEvent, MoonCalendarState, MoonDate,
+    MoonAlert, MoonBackgroundPolicy, MoonDateTimePickerEvent, MoonDateTimePickerState,
     MoonInputState, MoonPalette, MoonVirtualListScrollHandle, MoonWindowFrame, Root, h_flex,
     v_flex,
 };
 use rust_i18n::t;
 
+use crate::controls::date_range::{self, Bound};
 use crate::design::{moon, moon_alpha};
 use crate::valuation_health;
 use crate::{Backend, design};
@@ -462,12 +465,18 @@ pub struct AnalyticsView {
     /// The By time mode: v1/v2 schedule bounds, the loaded profiles/KPI and their
     /// staleness — the whole axis state lives in one struct, like `coins`.
     time_tuner: tuner::TimeTunerState,
-    /// Calendars for the custom from/to range (MoonUI `MoonCalendar` popups); selecting a date
-    /// switches the period to `Period::Custom`.
-    cal_from: Entity<MoonCalendarState>,
-    cal_to: Entity<MoonCalendarState>,
-    cal_from_open: bool,
-    cal_to_open: bool,
+    /// Date+time fields of the custom from/to range (MoonUI `MoonDateTimePicker`); picking a day
+    /// or spinning the clock switches the period to `Period::Custom`.
+    ///
+    /// The picker owns its own popup-open flag, so the view keeps none of its own.
+    cal_from: Entity<MoonDateTimePickerState>,
+    cal_to: Entity<MoonDateTimePickerState>,
+    /// Whether a bound changed while its popup was open and still has to be applied.
+    ///
+    /// Every clock-drum step emits `Change`, and applying one reloads Summary, the tuner and every
+    /// tuning axis. So an open popup only marks the range dirty; it is committed once, when the
+    /// popup closes.
+    range_dirty: bool,
     /// Whether the single delayed integrity-status poll is armed.
     integrity_poll_armed: bool,
     _cal_subs: Vec<Subscription>,
@@ -589,29 +598,45 @@ impl AnalyticsView {
             .unwrap_or(calendar::CalMode::Month);
         let session = backend.read(cx).ui_session.analytics.clone();
 
-        // From/to calendars: selecting a day closes the popup and switches the period.
-        let cal_from = cx.new(|cx| MoonCalendarState::new(window, cx));
-        let cal_to = cx.new(|cx| MoonCalendarState::new(window, cx));
+        // From/to date+time fields: any day or clock change switches the period to Custom. The
+        // popup stays open after a day is clicked so the clock drums under the calendar remain
+        // reachable — that is the picker's own contract, not something the window drives.
+        let cal_from = cx.new(|cx| date_range::bound_picker(Bound::From, window, cx));
+        let cal_to = cx.new(|cx| date_range::bound_picker(Bound::To, window, cx));
         if let Some(Period::Custom(f, t)) = saved_period {
-            if let Some(d) = (f >= 0).then(|| day_of_secs(f)).flatten() {
-                cal_from.update(cx, |s, cx| s.set_date(d, window, cx));
+            if let Some(d) = (f >= 0).then(|| date_range::dt_of_secs(f)).flatten() {
+                cal_from.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
-            if let Some(d) = day_of_secs(t - 86_400) {
-                cal_to.update(cx, |s, cx| s.set_date(d, window, cx));
+            if let Some(d) = date_range::field_of_exclusive(t) {
+                cal_to.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
         }
-        let cal_subs = vec![
-            cx.subscribe_in(&cal_from, window, |this, _, ev, window, cx| {
-                let MoonCalendarEvent::Selected(_) = ev;
-                this.cal_from_open = false;
+        let mut cal_subs = Vec::new();
+        for picker in [&cal_from, &cal_to] {
+            cal_subs.push(cx.subscribe_in(
+                picker,
+                window,
+                |this, picker, ev: &MoonDateTimePickerEvent, window, cx| {
+                    let MoonDateTimePickerEvent::Change(_) = ev;
+                    // While the popup is open the user is still composing the bound — every drum
+                    // step would otherwise reload every axis.
+                    if picker.read(cx).is_open() {
+                        this.range_dirty = true;
+                        return;
+                    }
+                    this.apply_custom_range(window, cx);
+                },
+            ));
+            // The picker only repaints on open/close, so the commit rides its notify rather than
+            // an event of its own.
+            cal_subs.push(cx.observe_in(picker, window, |this, picker, window, cx| {
+                if picker.read(cx).is_open() || !this.range_dirty {
+                    return;
+                }
+                this.range_dirty = false;
                 this.apply_custom_range(window, cx);
-            }),
-            cx.subscribe_in(&cal_to, window, |this, _, ev, window, cx| {
-                let MoonCalendarEvent::Selected(_) = ev;
-                this.cal_to_open = false;
-                this.apply_custom_range(window, cx);
-            }),
-        ];
+            }));
+        }
         // Armed probe → open straight on the surface under observation, so the channel
         // reports the coin table rather than the summary nobody asked about.
         let probe = probe_enabled();
@@ -697,8 +722,7 @@ impl AnalyticsView {
             time_tuner: tuner::TimeTunerState::load(),
             cal_from,
             cal_to,
-            cal_from_open: false,
-            cal_to_open: false,
+            range_dirty: false,
             integrity_poll_armed: false,
             _cal_subs: cal_subs,
             focus: cx.focus_handle(),
@@ -1323,9 +1347,8 @@ impl AnalyticsView {
         }
         // A preset supersedes the custom range, so clear the from/to fields.
         if !matches!(p, Period::Custom(..)) {
-            for cal in [&self.cal_from, &self.cal_to] {
-                cal.update(cx, |s, cx| s.set_date(MoonDate::Single(None), window, cx));
-            }
+            self.write_bound(Bound::From, None, window, cx);
+            self.write_bound(Bound::To, None, window, cx);
         }
         // Persist the selection under its OWN key so the window reopens with it next time.
         let id = Some(p.persist_id());
@@ -1344,47 +1367,99 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// Synchronize the shared `MoonCalendarState` from/to fields with the active tab's period,
-    /// so after a tab switch the period bar shows that tab's OWN range rather than the previous
-    /// tab's range.
+    /// Synchronize the shared from/to pickers with the active tab's period, so after a tab switch
+    /// the period bar shows that tab's OWN range rather than the previous tab's range.
     fn sync_period_pickers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (from_date, to_date) = match self.active_period() {
+        let (from, to) = match self.active_period() {
             Period::Custom(f, t) => (
-                if f >= 0 { day_of_secs(f) } else { None },
-                day_of_secs(t - 86_400),
+                if f >= 0 {
+                    date_range::dt_of_secs(f)
+                } else {
+                    None
+                },
+                date_range::field_of_exclusive(t),
             ),
             _ => (None, None),
         };
-        self.cal_from.update(cx, |s, cx| {
-            s.set_date(MoonDate::Single(from_date), window, cx)
-        });
-        self.cal_to.update(cx, |s, cx| {
-            s.set_date(MoonDate::Single(to_date), window, cx)
+        self.write_bound(Bound::From, from, window, cx);
+        self.write_bound(Bound::To, to, window, cx);
+    }
+
+    /// The picker holding one edge of the custom range.
+    fn bound_picker(&self, bound: Bound) -> Entity<MoonDateTimePickerState> {
+        match bound {
+            Bound::From => self.cal_from.clone(),
+            Bound::To => self.cal_to.clone(),
+        }
+    }
+
+    /// Write one bound into its picker, restoring that field's default clock time when cleared.
+    ///
+    /// Args:
+    ///     bound: Which edge is being written.
+    ///     value: New bound, or `None` to empty the field.
+    ///     window: Window forwarded to the picker's calendar.
+    ///     cx: View context.
+    fn write_bound(
+        &mut self,
+        bound: Bound,
+        value: Option<chrono::NaiveDateTime>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.bound_picker(bound).update(cx, |state, cx| {
+            state.set_value(value, window, cx);
+            if value.is_none() {
+                // Clearing resets the picker's clock to midnight; the "to" field must go back to
+                // the END of a day, or the next day picked there would select one minute of it.
+                state.set_time(bound.default_time(), cx);
+            }
         });
     }
 
-    /// Recompute the period from the from/to calendars. If both are empty, keep the existing
-    /// period. Otherwise, an empty from means all history, an empty to means until tomorrow, and
-    /// bounds are swapped if to precedes from.
+    /// Put a cleared field's default clock time back after the user emptied it themselves.
+    ///
+    /// Guarded on the current time so the `Change` this emits cannot re-enter forever.
+    fn restore_default_time(&mut self, bound: Bound, cx: &mut Context<Self>) {
+        let picker = self.bound_picker(bound);
+        let default = bound.default_time();
+        let state = picker.read(cx);
+        if state.date().is_some() || state.time() == default {
+            return;
+        }
+        picker.update(cx, |state, cx| state.set_time(default, cx));
+    }
+
+    /// Recompute the period from the from/to pickers. If both are empty, keep the existing period.
+    /// Otherwise, an empty from means all history, an empty to means until tomorrow, and bounds are
+    /// swapped if to precedes from.
     fn apply_custom_range(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut f = self.cal_from.read(cx).date().start();
-        let mut t = self.cal_to.read(cx).date().start();
-        if let (Some(a), Some(b)) = (f, t) {
-            if b < a {
-                (f, t) = (Some(b), Some(a));
-                self.cal_from.update(cx, |s, cx| s.set_date(b, window, cx));
-                self.cal_to.update(cx, |s, cx| s.set_date(a, window, cx));
-            }
+        self.restore_default_time(Bound::From, cx);
+        self.restore_default_time(Bound::To, cx);
+        let mut f = self.cal_from.read(cx).value();
+        let mut t = self.cal_to.read(cx).value();
+        if let (Some(a), Some(b)) = (f, t)
+            && b < a
+        {
+            (f, t) = (Some(b), Some(a));
+            self.write_bound(Bound::From, f, window, cx);
+            self.write_bound(Bound::To, t, window, cx);
         }
         if f.is_none() && t.is_none() {
             return;
         }
         let now = moon_core::util::now_unix_ms_i64() / 1000;
         let tomorrow = now.div_euclid(86_400) * 86_400 + 86_400;
-        let from = f.map(secs_of_day).unwrap_or(-1);
-        // The to date is inclusive, so the range ends at the following midnight.
-        let to = t.map(|d| secs_of_day(d) + 86_400).unwrap_or(tomorrow);
-        self.set_period(Period::Custom(from, to), window, cx);
+        let next = {
+            let (from, to) = custom_bounds(f, t, tomorrow);
+            Period::Custom(from, to)
+        };
+        // Programmatic writes (tab switch, preset reset, the swap above) emit `Change` too, so
+        // without this the window would re-apply the period it already holds and loop.
+        if self.active_period() == next {
+            return;
+        }
+        self.set_period(next, window, cx);
     }
 
     /// Toggle one core or the All row in the multi-selection.

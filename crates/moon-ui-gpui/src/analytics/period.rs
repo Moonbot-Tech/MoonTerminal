@@ -3,6 +3,8 @@
 
 use rust_i18n::t;
 
+use crate::controls::date_range;
+
 /// Window tabs. The placeholders (Coins/Leverage) will come back as the stages are implemented.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Tab {
@@ -51,6 +53,9 @@ pub(super) enum Period {
     All,
     /// An arbitrary range from the "from"/"to" fields: `[from, to)` in UTC unix seconds;
     /// from = -1 — "from" is unset (the whole history up to "to").
+    ///
+    /// Both bounds carry a clock time, not only a day: the fields are `MoonDateTimePicker`s and
+    /// resolve to whole minutes, so `to` is the exclusive end of the minute the user picked.
     Custom(i64, i64),
 }
 
@@ -101,8 +106,16 @@ impl Period {
             Period::Year => t!("analytics.period.year"),
             Period::All => t!("analytics.period.all"),
             Period::Custom(f, t) => {
-                let a = if f < 0 { "—".to_string() } else { fmt_day(f) };
-                return format!("{a} – {}", fmt_day((t - 86_400).max(f.max(0))));
+                let a = if f < 0 {
+                    "—".to_string()
+                } else {
+                    fmt_minute(f)
+                };
+                // `t` is exclusive, so the label names the last minute INSIDE the range.
+                return format!(
+                    "{a} – {}",
+                    fmt_minute((t - date_range::MINUTE).max(f.max(0)))
+                );
             }
         }
         .to_string()
@@ -149,3 +162,37 @@ pub(super) fn fmt_day(secs: i64) -> String {
         .map(|d| d.format("%d.%m.%y").to_string())
         .unwrap_or_default()
 }
+
+/// "dd.mm.yy HH:MM" for the period label; the bounds carry a clock time, so the label shows it.
+pub(super) fn fmt_minute(secs: i64) -> String {
+    date_range::dt_of_secs(secs)
+        .map(|d| d.format("%d.%m.%y %H:%M").to_string())
+        .unwrap_or_default()
+}
+
+/// Build the `[from, to)` bounds of a custom period out of the two picked field values.
+///
+/// Args:
+///     from: Lower bound as picked, or `None` while the field is empty.
+///     to: Upper bound as picked, or `None` while the field is empty.
+///     tomorrow: Midnight after today, used when the upper field is empty.
+///
+/// Returns:
+///     `(from, to)` in UTC unix seconds, `from = -1` for unbounded history. The upper bound is
+///     exclusive and ends the picked minute, so an equal pair spans that one minute rather than
+///     an empty range. An empty upper field never lands before the lower one, which would make
+///     a bound picked past today select nothing.
+pub(super) fn custom_bounds(
+    from: Option<chrono::NaiveDateTime>,
+    to: Option<chrono::NaiveDateTime>,
+    tomorrow: i64,
+) -> (i64, i64) {
+    let lower = from.map(date_range::secs_of_dt).unwrap_or(-1);
+    let upper = to
+        .map(|dt| date_range::exclusive_end(date_range::secs_of_dt(dt)))
+        .unwrap_or_else(|| tomorrow.max(lower + date_range::MINUTE));
+    (lower, upper)
+}
+
+#[cfg(test)]
+mod tests;

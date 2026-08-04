@@ -267,8 +267,11 @@ impl ReportPanel {
         // but "All" sets the lower one; only "Yesterday" sets the upper one — for the rest
         // `to = None`, and then the upper edge comes from the "To:" field if it holds a date.
         let (pfrom, pto) = self.period.range();
-        let date_from = pfrom.or_else(|| db::parse_ymd(&self.from_query));
-        let date_to = pto.or_else(|| db::parse_ymd(&self.to_query).map(|d| d + 86_399));
+        let date_from = pfrom.or(self.from_query);
+        // The upper field names a whole minute and the SQL bound is inclusive, so it reaches that
+        // minute's last second: "from 04.08 00:00 to 04.08 23:59" is the whole day, and an equal
+        // pair is that one minute rather than an empty range.
+        let date_to = pto.or_else(|| self.to_query.map(date_range::inclusive_end));
         ReportFilter {
             core_uids: self.sel_cores.iter().copied().collect(),
             date_from,

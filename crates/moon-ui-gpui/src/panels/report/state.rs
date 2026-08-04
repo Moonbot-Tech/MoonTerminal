@@ -201,30 +201,36 @@ impl ReportPanel {
         .detach();
 
         let coin_query = String::new();
+        // Both fields sit on the picker's whole-minute grid: the lower bound as picked, the upper
+        // one floored into the range it came from.
         let from_query = scope
             .as_ref()
             .and_then(|scope| scope.date_from)
-            .map(db::fmt_unix_date)
-            .unwrap_or_default();
+            .and_then(date_range::field_of_inclusive)
+            .map(date_range::secs_of_dt);
         let to_query = scope
             .as_ref()
             .and_then(|scope| scope.date_to)
-            .map(db::fmt_unix_date)
-            .unwrap_or_default();
+            .and_then(date_range::field_of_inclusive)
+            .map(date_range::secs_of_dt);
         let coin = cx.new(|cx| {
             MoonInputState::new(window, cx)
                 .default_value(coin_query.clone())
                 .placeholder(t!("report.filter.coin_ph").to_string())
         });
         let from = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(from_query.clone())
-                .placeholder(t!("report.filter.date_ph").to_string())
+            let mut state = date_range::bound_picker(Bound::From, window, cx);
+            if let Some(value) = from_query.and_then(date_range::dt_of_secs) {
+                state.set_value(Some(value), window, cx);
+            }
+            state
         });
         let to = cx.new(|cx| {
-            MoonInputState::new(window, cx)
-                .default_value(to_query.clone())
-                .placeholder(t!("report.filter.date_ph").to_string())
+            let mut state = date_range::bound_picker(Bound::To, window, cx);
+            if let Some(value) = to_query.and_then(date_range::dt_of_secs) {
+                state.set_value(Some(value), window, cx);
+            }
+            state
         });
         let selected_strategies = scope.as_ref().map(|scope| HashSet::from([scope.strategy]));
         // Scoped labels are seeded before the first metadata snapshot, so they are display choices
@@ -283,32 +289,28 @@ impl ReportPanel {
         })
         .detach();
         // A non-empty manual date switches to All so a preset cannot silently take precedence.
-        cx.subscribe(&from, |t, e, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                let value = e.read(cx).value().to_string();
-                if t.from_query != value {
-                    t.from_query = value;
-                    if !t.from_query.trim().is_empty() {
-                        t.period = Period::All;
-                    }
-                    t.request_requery(cx);
-                }
-            }
+        cx.subscribe(&from, |t, picker, ev: &MoonDateTimePickerEvent, cx| {
+            let MoonDateTimePickerEvent::Change(value) = ev;
+            t.apply_bound_change(Bound::From, *value, picker, cx);
         })
         .detach();
-        cx.subscribe(&to, |t, e, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
-                let value = e.read(cx).value().to_string();
-                if t.to_query != value {
-                    t.to_query = value;
-                    if !t.to_query.trim().is_empty() {
-                        t.period = Period::All;
-                    }
-                    t.request_requery(cx);
-                }
-            }
+        cx.subscribe(&to, |t, picker, ev: &MoonDateTimePickerEvent, cx| {
+            let MoonDateTimePickerEvent::Change(value) = ev;
+            t.apply_bound_change(Bound::To, *value, picker, cx);
         })
         .detach();
+        // A bound composed inside an open popup owes its query on close; the picker repaints then,
+        // so the deferred read rides that notify.
+        for picker in [&from, &to] {
+            cx.observe(picker, |t, picker, cx| {
+                if picker.read(cx).is_open() || !t.bounds_pending {
+                    return;
+                }
+                t.bounds_pending = false;
+                t.request_requery(cx);
+            })
+            .detach();
+        }
         // The dedicated report-revision channel avoids repainting every shell on each commit.
         let report_revision = backend.read(cx).report_revision.clone();
         cx.observe(&report_revision, |this, _revision, cx| {
@@ -391,6 +393,7 @@ impl ReportPanel {
             from_query,
             to,
             to_query,
+            bounds_pending: false,
             side: scope
                 .as_ref()
                 .map(|scope| scope.side)
@@ -458,20 +461,95 @@ impl ReportPanel {
         self.selection.clear();
         self.coin_query.clear();
         self.coin_popup_open = false;
-        self.from_query = scope.date_from.map(db::fmt_unix_date).unwrap_or_default();
-        self.to_query = scope.date_to.map(db::fmt_unix_date).unwrap_or_default();
+        // The scope's bounds are exact seconds; the fields pick whole minutes, so the lower one is
+        // floored and the upper one keeps the minute its inclusive bound ends in.
+        let from_value = scope.date_from.and_then(date_range::field_of_inclusive);
+        let to_value = scope.date_to.and_then(date_range::field_of_inclusive);
+        self.from_query = from_value.map(date_range::secs_of_dt);
+        self.to_query = to_value.map(date_range::secs_of_dt);
 
         self.coin.update(cx, |input, input_cx| {
             input.set_value(String::new(), window, input_cx)
         });
-        let from = self.from_query.clone();
-        self.from.update(cx, |input, input_cx| {
-            input.set_value(from, window, input_cx)
-        });
-        let to = self.to_query.clone();
-        self.to
-            .update(cx, |input, input_cx| input.set_value(to, window, input_cx));
+        self.write_bound(Bound::From, from_value, window, cx);
+        self.write_bound(Bound::To, to_value, window, cx);
         self.request_requery(cx);
+    }
+
+    /// Write one bound into its field, restoring that edge's default clock time when cleared.
+    ///
+    /// Args:
+    ///     bound: Which edge is being written.
+    ///     value: New bound, or `None` to empty the field.
+    ///     window: Window forwarded to the picker's calendar.
+    ///     cx: Panel context.
+    ///
+    /// Returns:
+    ///     Nothing; the `Change` this emits is absorbed by `apply_bound_change`, which sees the
+    ///     mirror already matching and requests no extra query.
+    pub(super) fn write_bound(
+        &mut self,
+        bound: Bound,
+        value: Option<chrono::NaiveDateTime>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let picker = match bound {
+            Bound::From => self.from.clone(),
+            Bound::To => self.to.clone(),
+        };
+        picker.update(cx, |state, state_cx| {
+            state.set_value(value, window, state_cx);
+            if value.is_none() {
+                state.set_time(bound.default_time(), state_cx);
+            }
+        });
+    }
+
+    /// Mirror a bound field's new value into the filter and requery.
+    ///
+    /// Args:
+    ///     bound: Which edge changed.
+    ///     value: The field's new value, or `None` while it is empty.
+    ///     picker: The field itself, used to restore its default clock time after a clear.
+    ///     cx: Panel context.
+    ///
+    /// Returns:
+    ///     Nothing; an unchanged value requests no query, which is what keeps a programmatic
+    ///     write from queueing a second read of the same filter.
+    pub(super) fn apply_bound_change(
+        &mut self,
+        bound: Bound,
+        value: Option<chrono::NaiveDateTime>,
+        picker: Entity<MoonDateTimePickerState>,
+        cx: &mut Context<Self>,
+    ) {
+        let secs = value.map(date_range::secs_of_dt);
+        let slot = match bound {
+            Bound::From => &mut self.from_query,
+            Bound::To => &mut self.to_query,
+        };
+        if *slot != secs {
+            *slot = secs;
+            if secs.is_some() {
+                self.period = Period::All;
+            }
+            // While the popup is open the user is still composing the bound; the query waits for
+            // the close so a spun drum cannot issue one read per step.
+            if picker.read(cx).is_open() {
+                self.bounds_pending = true;
+                cx.notify();
+            } else {
+                self.request_requery(cx);
+            }
+        }
+        // Clearing resets the picker's clock to midnight; the "to" field must go back to the END
+        // of a day, or the next day picked there would select only its first minute. Guarded on
+        // the current time so the `Change` this emits cannot re-enter forever.
+        let default = bound.default_time();
+        if value.is_none() && picker.read(cx).time() != default {
+            picker.update(cx, |state, state_cx| state.set_time(default, state_cx));
+        }
     }
 
     /// Schedule synchronization of the retained strategy combobox on its next render.

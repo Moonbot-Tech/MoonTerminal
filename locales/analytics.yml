@@ -549,6 +549,11 @@ analytics.period.to_lbl:
   ru: "по"
   en: "to"
   es: "hasta"
+# Placeholder of an empty custom-range bound: that edge is not limited yet.
+analytics.period.any_date:
+  ru: "дата и время"
+  en: "date and time"
+  es: "fecha y hora"
 analytics.trades_count:
   ru: "%{n} закрытых сделок"
   en: "%{n} closed trades"

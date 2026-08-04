@@ -56,9 +56,9 @@ report.filter.coin_ph:
   en: "all"
   es: "todas"
 report.filter.date_ph:
-  ru: "ГГГГ-ММ-ДД"
-  en: "YYYY-MM-DD"
-  es: "AAAA-MM-DD"
+  ru: "дата и время"
+  en: "date and time"
+  es: "fecha y hora"
 # Last row of the merged scope field. Off (default) hides trades soft-deleted in the core's
 # report; on shows ONLY them. Export follows the same filter.
 report.filter.deleted:

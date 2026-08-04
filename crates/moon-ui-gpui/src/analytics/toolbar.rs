@@ -6,9 +6,8 @@ use std::collections::HashSet;
 
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCalendar, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
-    MoonSegmentedControl, h_flex,
+    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDateTimePicker, MoonDropdown,
+    MoonMenuSize, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex,
 };
 use rust_i18n::t;
 
@@ -476,60 +475,37 @@ impl AnalyticsView {
             .items(items)
     }
 
-    /// One bound of a custom period: a "from/to dd.mm.yy" button plus a popover
-    /// holding the moonui calendar (the ready MoonCalendar; MoonDatePicker won't
-    /// shrink to Micro chip height — Sizable is not in the moon_ui facade).
-    fn date_field(&self, is_to: bool, _p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
-        let (cal, open) = if is_to {
-            (&self.cal_to, self.cal_to_open)
-        } else {
-            (&self.cal_from, self.cal_from_open)
-        };
-        let date_txt = cal
-            .read(cx)
-            .date()
-            .format("%d.%m.%y")
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "—".to_string());
+    /// One bound of a custom period: a "с"/"по" caption plus the moonui date+time field, which
+    /// carries the calendar and the clock drums in ONE popup.
+    ///
+    /// The caption stays outside the field because the picker replaces its label with the picked
+    /// value; without it a filled field would no longer say which edge it is.
+    fn date_field(&self, is_to: bool, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+        let picker = if is_to { &self.cal_to } else { &self.cal_from };
         let lbl = if is_to {
             t!("analytics.period.to_lbl")
         } else {
             t!("analytics.period.from_lbl")
         };
-        let set = cal.read(cx).date().is_some();
-        let custom_on = matches!(self.active_period(), Period::Custom(..)) && set;
-        let view = cx.entity();
-        MoonPopover::new(if is_to { "an-date-to" } else { "an-date-from" })
-            .placement(MoonPopoverPlacement::BottomStart)
-            .fit_content()
-            .open(open)
-            .on_open_change(move |o, _, app| {
-                view.update(app, |t, cx| {
-                    if is_to {
-                        t.cal_to_open = o;
-                    } else {
-                        t.cal_from_open = o;
-                    }
-                    cx.notify();
-                });
-            })
-            .trigger(
-                MoonButton::new(if is_to {
-                    "an-date-to-btn"
-                } else {
-                    "an-date-from-btn"
-                })
-                .variant(if custom_on {
-                    MoonButtonVariant::Amber
-                } else {
-                    MoonButtonVariant::Soft
-                })
-                .size(MoonButtonSize::Micro)
-                .selected(custom_on)
-                .label(format!("{lbl} {date_txt}"))
-                .render(),
+        h_flex()
+            .gap_1()
+            .items_center()
+            // The picker's field clips its label but wraps first, and a wrapped value hides the
+            // time half on an invisible second line. Text style inherits, so this reaches it.
+            .whitespace_nowrap()
+            .child(
+                div()
+                    .text_size(design::t_body(cx))
+                    .text_color(moon(p.text_soft))
+                    .child(lbl.to_string()),
             )
-            .content(MoonCalendar::new(cal))
+            .child(
+                MoonDateTimePicker::new(if is_to { "an-date-to" } else { "an-date-from" }, picker)
+                    .placeholder(t!("analytics.period.any_date").to_string())
+                    .cleanable(true)
+                    .width(crate::controls::date_range::field_width(cx))
+                    .render(),
+            )
     }
 
     /// Return the startup-recovery or background-integrity note as `(title, detail)`.

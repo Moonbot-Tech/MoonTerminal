@@ -372,8 +372,8 @@ impl ReportPanel {
 
     /// Build the CSV/XLSX export menu for the visible or full schema.
     ///
-    /// Export uses the panel's current filter and sort order; the period may be a preset or
-    /// dates entered in the From/To MoonInput fields and parsed with `db::parse_ymd`.
+    /// Export uses the panel's current filter and sort order; the period may be a preset or the
+    /// timestamps picked in the From/To date+time fields.
     pub(super) fn export_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let item =
