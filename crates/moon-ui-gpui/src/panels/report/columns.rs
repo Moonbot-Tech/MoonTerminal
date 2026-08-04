@@ -187,8 +187,9 @@ fn coin_cell(
         .flex()
         .items_center()
         .cursor_pointer()
-        // Inherit font styling from the cell's MoonUI cascade.
+        // Tone and weight make the scanned coin column the row's visual anchor.
         .text_color(rgb(MoonTone::Accent.color(p)))
+        .font_weight(FontWeight::BOLD)
         .child(coin.clone())
         .on_click(move |_, window, app| {
             // A Shift or Ctrl click is a selection gesture wherever it lands, so let those bubble
