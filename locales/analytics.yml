@@ -264,9 +264,9 @@ analytics.tuner.compose_run:
   en: "Compose set"
   es: "Componer conjunto"
 analytics.tuner.compose_help:
-  ru: "Сравнивает три равноправных пути: отдельный состав, совместный поиск по всем разрешённым полям и отсутствие дополнительных фильтров. До трёх независимых seed проверяют каждый временной срез; решает большинство seed внутри среза, затем большинство срезов. Beam держит 8 ветвей при ясной границе и расширяется до 16 при спорной. Большая разница прибыли решает сразу, а при близкой прибыли учитываются PF, меньшая просадка и число сделок. Галочки остаются границей поиска. Нужна выбранная стратегия."
-  en: "Compares three equal paths: a distinct field set, joint search across every admitted field, and no additional filters. Up to three independent seeds check each time fold; seeds vote inside the fold, then folds vote. The beam keeps 8 branches at a clear boundary and expands to 16 when it is ambiguous. A material profit gap remains decisive; close profits also use PF, lower drawdown, and trade count. The checkboxes remain the search boundary. A strategy must be selected."
-  es: "Compara tres caminos equivalentes: un conjunto propio, la búsqueda conjunta en todos los campos permitidos y ningún filtro adicional. Hasta tres seeds independientes comprueban cada corte temporal; primero votan los seeds dentro del corte y después los cortes. El beam conserva 8 ramas con un límite claro y se amplía hasta 16 cuando es ambiguo. Una diferencia material de beneficio sigue siendo decisiva; con beneficios cercanos también se usan PF, menor drawdown y número de operaciones. Las casillas siguen siendo el límite. Debe seleccionarse una estrategia."
+  ru: "Сравнивает три равноправных пути: отдельный состав, совместный поиск по всем разрешённым полям и отсутствие дополнительных фильтров. До %{seeds} независимых seed проверяют каждый временной срез; решает большинство seed внутри среза, затем большинство срезов. Beam держит 8 ветвей при ясной границе и расширяется до 16 при спорной. Большая разница прибыли решает сразу, а при близкой прибыли учитываются PF, меньшая просадка и число сделок. Галочки остаются границей поиска. Нужна выбранная стратегия."
+  en: "Compares three equal paths: a distinct field set, joint search across every admitted field, and no additional filters. Up to %{seeds} independent seeds check each time fold; seeds vote inside the fold, then folds vote. The beam keeps 8 branches at a clear boundary and expands to 16 when it is ambiguous. A material profit gap remains decisive; close profits also use PF, lower drawdown, and trade count. The checkboxes remain the search boundary. A strategy must be selected."
+  es: "Compara tres caminos equivalentes: un conjunto propio, la búsqueda conjunta en todos los campos permitidos y ningún filtro adicional. Hasta %{seeds} seeds independientes comprueban cada corte temporal; primero votan los seeds dentro del corte y después los cortes. El beam conserva 8 ramas con un límite claro y se amplía hasta 16 cuando es ambiguo. Una diferencia material de beneficio sigue siendo decisiva; con beneficios cercanos también se usan PF, menor drawdown y número de operaciones. Las casillas siguen siendo el límite. Debe seleccionarse una estrategia."
 analytics.tuner.compose_budget_fields:
   ru: "полей: %{n}"
   en: "fields: %{n}"
@@ -537,6 +537,10 @@ analytics.period.all:
   ru: "Все"
   en: "All"
   es: "Todo"
+analytics.period.custom_lbl:
+  ru: "Свой период"
+  en: "Custom range"
+  es: "Rango personalizado"
 analytics.period.from_lbl:
   ru: "с"
   en: "from"
