@@ -381,6 +381,10 @@ chart.layout.apply_all_charts:
   ru: "Применить ко всем чартам"
   en: "Apply to all charts"
   es: "Aplicar a todos los gráficos"
+chart.gather_windows.tip:
+  ru: "Собрать окна графиков этой группы"
+  en: "Gather this group's chart windows"
+  es: "Reunir las ventanas de gráficos de este grupo"
 chart.candles.title:
   ru: "Свечи и трейды"
   en: "Candles & trades"

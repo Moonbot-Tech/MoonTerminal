@@ -184,8 +184,10 @@ impl Render for DetachedChartHost {
                             .child(common::layout_popup_host(
                                 self,
                                 "detached-chart-layout",
+                                // Icon, not a "⚙" label, for the same reason as the dock strip's
+                                // gear: only a button with no label takes MoonUI's square path.
                                 MoonButton::new("detached-layout-settings")
-                                    .label("⚙")
+                                    .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
                                     .tooltip(t!("chart.layout.tip").to_string())
                                     .size(MoonButtonSize::Micro)
                                     .variant(if popup_open {
@@ -202,8 +204,14 @@ impl Render for DetachedChartHost {
                     .child(design::chrome_divider(cx, p))
                     .child(
                         design::chrome_section(cx).child(
+                            // The one button in this row that keeps a glyph: MoonUI ships no bin
+                            // icon (its `delete.svg` is a backspace key), and an X would read as
+                            // "close the window" beside the real window controls. So it is squared
+                            // the way the column selectors are — a rendered width equal to the
+                            // size's own drawn height — instead of by the icon-only path.
                             MoonButton::new("detached-close-all")
                                 .label("🗑")
+                                .width(design::micro_control_h_value(cx))
                                 .tooltip(t!("chartwin.clear").to_string())
                                 .size(MoonButtonSize::Micro)
                                 .variant(MoonButtonVariant::Ghost)
