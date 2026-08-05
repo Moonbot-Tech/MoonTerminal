@@ -3,7 +3,7 @@
 //! and Custom panels share these paths. Split from `chart.rs`.
 
 use gpui::*;
-use moon_core::figures::FigNode;
+use moon_core::figures::Proj;
 
 use super::ChartPanel;
 
@@ -21,28 +21,25 @@ pub(super) struct PaneMap {
     pub range: f32,
 }
 
-impl PaneMap {
-    pub fn time_at_x(&self, x: f32) -> f64 {
+/// The projection every figure hit test runs through. Implementing the core trait here — rather
+/// than duplicating the arithmetic in `moon-core` — keeps ONE description of where a moment sits
+/// on screen: figures, news marks and warning badges all read this map.
+impl Proj for PaneMap {
+    fn time_at_x(&self, x: f32) -> f64 {
         let rel = self.left_rel + (x - self.plot.x) / self.plot.w.max(1.0) * self.window_ms;
         self.epoch_ms + rel as f64
     }
-    pub fn x_of_time(&self, time_ms: f64) -> f32 {
+    fn x_of_time(&self, time_ms: f64) -> f32 {
         let rel = (time_ms - self.epoch_ms) as f32;
         self.plot.x + (rel - self.left_rel) / self.window_ms.max(1e-3) * self.plot.w
     }
-    pub fn price_at_y(&self, y: f32) -> f64 {
+    fn price_at_y(&self, y: f32) -> f64 {
         let rel_y = ((y - self.plot.y) / self.plot.h.max(1.0)).clamp(0.0, 1.0);
         (self.center + (0.5 - rel_y) * self.range) as f64
     }
-    pub fn y_of_price(&self, price: f64) -> f32 {
+    fn y_of_price(&self, price: f64) -> f32 {
         let rel_y = 0.5 - (price as f32 - self.center) / self.range.max(1e-9);
         self.plot.y + rel_y * self.plot.h
-    }
-    pub fn node_at(&self, pos: (f32, f32)) -> FigNode {
-        FigNode {
-            time_ms: self.time_at_x(pos.0),
-            price: self.price_at_y(pos.1),
-        }
     }
 }
 

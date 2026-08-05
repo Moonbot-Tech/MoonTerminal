@@ -24,6 +24,7 @@
 //! under a resting cursor can trip it from `revalidate_news_hover`, but only as often as the mark
 //! under the cursor actually changes, which is a scroll of a whole mark's width.
 
+use moon_core::figures::Proj;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;

@@ -549,13 +549,9 @@ fn cell(text: String, w: f32) -> Div {
     div().w(px(w)).child(text)
 }
 
+/// Display name of a figure's tool, taken from its registry row so a new tool names itself.
 fn figure_label(kind: &FigureKind) -> String {
-    match kind {
-        FigureKind::HLine { .. } => t!("alerts.fig.hline").to_string(),
-        FigureKind::Segment { .. } => t!("alerts.fig.line").to_string(),
-        FigureKind::Triangle { .. } => t!("alerts.fig.triangle").to_string(),
-        FigureKind::Channel { .. } => t!("alerts.fig.channel").to_string(),
-    }
+    t!(kind.tool().def().locale_key).to_string()
 }
 
 fn fmt_price(price: f64) -> String {

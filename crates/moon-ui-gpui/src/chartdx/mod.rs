@@ -336,6 +336,10 @@ struct PaneRender {
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
     /// `prepare_text` draws them and maps Y through `view` each frame.
     order_labels: Vec<OrderLabel>,
+    /// Readouts of the hovered and draft figures, rebuilt with figure userdata and drawn by
+    /// `prepare_text`. Empty unless a figure is under the cursor or one is being drawn, so an idle
+    /// chart pays nothing.
+    figure_labels: Vec<moon_chart::figures::FigureLabel>,
     /// Stable priority order for `order_labels`, rebuilt together with order labels.
     /// Cursor-only text frames must not allocate/sort it again.
     order_label_order: Vec<usize>,
@@ -450,6 +454,7 @@ impl PaneRender {
             last_news_sig: u64::MAX,
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
+            figure_labels: Vec::new(),
             order_label_order: Vec::new(),
             orderbook_labels: Vec::new(),
             prospective_usd: None,

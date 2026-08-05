@@ -1,0 +1,118 @@
+//! User-defined chart figures (the drawing layer): the model, the per-tool registry, the store
+//! and the primitives each tool emits.
+//!
+//! **One tool = one module** under [`tools`]. A tool owns its own data struct, its geometry, its
+//! hit test and its handles. Everything generic about a figure — style, store, persistence,
+//! dragging, handle picking — lives here and is shared by every tool, so adding a tool is a new
+//! module, one [`FigureKind`] arm and one [`tools::REGISTRY`] row: no edit to the chart panel,
+//! the renderer or the toolbar. Only two lists outside the layer still name tools one by one, and
+//! both are meant to: the per-tool hotkey fields in `hotkeys.toml`, and the core's chart-object
+//! types in [`crate::alert_blob`], which a tool the core does not know simply does not join.
+//!
+//! Rendering and input stay OUT of this crate, in both directions:
+//! - a tool emits primitives into a [`sink::GeomSink`], which `moon-chart` implements over its
+//!   GPU instance buffers, so a tool never names a GPU type;
+//! - a tool hit-tests through [`proj::Proj`], which the UI implements over its pane mapping, so
+//!   a tool never names a GPUI type and its math is unit-testable without a window.
+//!
+//! Both trait objects are called from mouse events and from the geometry rebuild that
+//! `figures_sig` gates — never per frame per figure.
+//!
+//! Figures drawn in the terminal are local and persist in `figures.json`; only figures with the
+//! "Alert" checkbox enabled are sent to the core as upserted `TChartObject` blobs, and only for
+//! the tools the core knows ([`tools::ToolDef::alertable`]). Server-originated alert figures are
+//! merged into the same store but are not persisted locally.
+
+mod kind;
+mod node;
+pub mod proj;
+pub mod sink;
+mod store;
+mod style;
+pub mod tools;
+
+pub use kind::FigureKind;
+pub use node::FigNode;
+pub use proj::Proj;
+pub use sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
+pub use store::{FigureKey, FigureStore};
+pub use style::{DrawStyle, LineKind};
+pub use tools::{
+    build_figure, drag_figure, pick_figure, pick_handle, FigureTool, Grab, GrabMode, ToolDef,
+    ToolShape,
+};
+
+use serde::{Deserialize, Serialize};
+
+/// A single chart figure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Figure {
+    /// Local ID, monotonically increasing within the store. For alerts, the same ID becomes
+    /// `obj_uid` when upserted to the core.
+    pub id: u64,
+    pub kind: FigureKind,
+    /// Line color in RGBA format.
+    pub color: [u8; 4],
+    /// Thickness in pixels before pixels-per-point scaling.
+    pub thickness: f32,
+    /// Line style (Solid/Dash/Dot/DashDot/DashDotDot), stored at blob offset 13.
+    #[serde(default)]
+    pub line_kind: LineKind,
+    /// Creation time in Unix milliseconds, shown in the alert list's Time column.
+    pub created_ms: i64,
+    /// Whether the "Alert" checkbox is enabled and the figure is sent to the core as a chart alert.
+    pub alert: bool,
+    /// Associated strategy ID of the "Alerts" type; 0 means no strategy. Stored at blob offset 32.
+    #[serde(default)]
+    pub strategy_id: u64,
+    /// Whether the figure is shown on this market for EVERY core rather than only for the core it
+    /// was drawn on.
+    ///
+    /// The figure still belongs to its owning core's set — sharing only widens who sees it, so
+    /// un-sharing cannot lose it. A shared figure cannot be an alert: an alert is upserted to one
+    /// specific core, and there is no core to upsert to when the figure belongs to all of them.
+    #[serde(default)]
+    pub shared: bool,
+    /// Whether the figure CAME FROM THE CORE (an alert drawn in Moonbot) and was decoded from
+    /// a server blob rather than drawn locally. Such figures are NOT persisted because the
+    /// server owns them, and they disappear when the server removes them. They can still be
+    /// selected and moved, with edits re-upserted to the core. This field is not serialized,
+    /// so figures loaded from disk are always local.
+    #[serde(default, skip)]
+    pub from_server: bool,
+}
+
+impl Figure {
+    /// Builds a local figure of `kind` in the current drawing style.
+    pub fn new(kind: FigureKind, style: DrawStyle, created_ms: i64) -> Self {
+        Self {
+            id: 0,
+            kind,
+            color: style.color,
+            thickness: style.thickness,
+            line_kind: style.kind,
+            created_ms,
+            alert: false,
+            strategy_id: 0,
+            shared: false,
+            from_server: false,
+        }
+    }
+
+    /// The tool that draws this figure.
+    pub fn tool(&self) -> FigureTool {
+        self.kind.tool()
+    }
+
+    /// Whether this figure can be armed as a core alert: the core must know the figure type, and a
+    /// shared figure has no single core to arm it on.
+    pub fn can_alert(&self) -> bool {
+        !self.shared && self.tool().def().alertable
+    }
+
+    /// Whether this figure can be shared across cores: an armed alert belongs to its core, and a
+    /// server-owned figure is not ours to widen.
+    pub fn can_share(&self) -> bool {
+        !self.alert && !self.from_server
+    }
+}

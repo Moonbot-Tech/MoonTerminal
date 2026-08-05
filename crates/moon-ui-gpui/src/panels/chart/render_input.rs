@@ -382,6 +382,7 @@ pub(super) fn mouse_move(
             // On leaving the chart, clear the threshold probe so returning within the same <1 px
             // neighborhood still recomputes hover instead of getting stuck.
             this.order_hover_probe = None;
+            this.fig_hover_probe = None;
             this.set_order_interaction(None, cx)
         };
         if order_hover_changed {

@@ -12,7 +12,10 @@ use moon_core::session::CoreId;
 use crate::Backend;
 
 /// Encodes a figure for a chart-alert upsert, using the figure ID as `obj_uid`.
-fn figure_blob(fig: &Figure) -> Vec<u8> {
+///
+/// `None` for a tool the core has no chart-object type for; such a figure is drawn locally and is
+/// never armed (`Figure::can_alert`).
+fn figure_blob(fig: &Figure) -> Option<Vec<u8>> {
     alert_blob::encode(
         &fig.kind,
         fig.color,
@@ -55,6 +58,20 @@ impl Backend {
         let Some((core, market, id)) = self.fig_selected.clone() else {
             return false;
         };
+        // Arming is refused for a figure the core cannot represent — a tool it has no type for, or
+        // a figure shared across cores, which has no single core to arm it on. Disarming always
+        // runs: it only deletes whatever alert is out there.
+        let Some((armed, can_alert)) = self
+            .figures
+            .borrow()
+            .get(core, &market, id)
+            .map(|f| (f.alert, f.can_alert()))
+        else {
+            return false;
+        };
+        if !armed && !can_alert {
+            return false;
+        }
         let def_strategy = self.alert_def_strategy(core);
         let mut upsert_blob = None;
         let mut disarm = false;
@@ -65,7 +82,7 @@ impl Backend {
                 if fig.strategy_id == 0 && def_strategy != 0 {
                     fig.strategy_id = def_strategy;
                 }
-                upsert_blob = Some(figure_blob(fig));
+                upsert_blob = figure_blob(fig);
             } else {
                 disarm = true;
             }
@@ -102,6 +119,37 @@ impl Backend {
         }
     }
 
+    /// Shares a figure with every core on its market, or takes the sharing back.
+    ///
+    /// A shared figure is drawn on this market's chart whichever core the chart belongs to, while
+    /// still being owned — and persisted — by the core it was drawn on. Refused for an armed or
+    /// server-owned figure; see `Figure::can_share`.
+    pub(crate) fn set_figure_shared(&mut self, core: CoreId, market: &str, id: u64, shared: bool) {
+        if !self
+            .figures
+            .borrow_mut()
+            .set_shared(core, market, id, shared)
+        {
+            return;
+        }
+        // Un-sharing from a chart that does not own the figure makes it vanish there. Drop the
+        // selection with it, or the Delete/Alert hotkeys would keep pointing at a figure this
+        // chart can no longer see and silently do nothing.
+        let still_visible = self
+            .figures
+            .borrow()
+            .visible(core, market)
+            .any(|f| f.id == id);
+        if !still_visible
+            && self
+                .fig_selected
+                .as_ref()
+                .is_some_and(|(c, m, i)| *c == core && m == market && *i == id)
+        {
+            self.fig_selected = None;
+        }
+    }
+
     /// Reconciles chart alerts created by a core or Moonbot into the render store. It decodes the
     /// current blobs from every core into a fresh set of `from_server` figures, skipping unsupported
     /// or malformed blobs. `FigureStore::set_server_figures` then preserves local figures and omits
@@ -126,6 +174,7 @@ impl Backend {
                         created_ms: d.created_ms as i64,
                         alert: true,
                         strategy_id: d.strategy_id,
+                        shared: false,
                         from_server: true,
                     });
             }
@@ -165,7 +214,7 @@ impl Backend {
             store
                 .get(core, market, id)
                 .filter(|f| f.alert)
-                .map(figure_blob)
+                .and_then(figure_blob)
         };
         if let Some(blob) = blob {
             let _ = self

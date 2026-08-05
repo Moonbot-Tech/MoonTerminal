@@ -1,9 +1,6 @@
 //! Order-line geometry: logical time_rel/price plus the orders style into the line, segment,
 //! marker and zone instances the GPU pass draws.
 
-const SEG_PATTERN_SOLID: f32 = 0.0;
-const SEG_PATTERN_DASH_DOT_DOT: f32 = 1.0;
-const SEG_PATTERN_DOT: f32 = 2.0;
 /// Moonbot: `ShowLightLines := T.RangeT > 0.02`, where RangeT is measured in Delphi days.
 const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
 /// Moonbot draws MoonShot area with fixed 0.15 opacity, independent from order line alpha.
@@ -11,6 +8,7 @@ const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
 
 use crate::layers::{
     LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT,
+    SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT, SEG_PATTERN_SOLID,
 };
 
 use moon_core::config::{LineStyle, OrdersStyle};

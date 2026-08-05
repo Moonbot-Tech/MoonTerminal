@@ -1,16 +1,26 @@
-//! Geometry for user-defined chart figures (drawing layer): figures from
-//! `moon_core::figures` → own-pass line instances. APPENDS to the buffers (does not clear them):
-//! called after `build_order_geometry`, with figures using the same userdata layers.
+//! Renderer side of the drawing layer: figures from `moon_core::figures` → own-pass instances.
+//! APPENDS to the buffers (does not clear them): called after `build_order_geometry`, with
+//! figures using the same userdata layers.
+//!
+//! The geometry of a figure belongs to its tool (`moon_core::figures::tools`); this module owns
+//! only what a tool must not know — the theme-facing decision of how a figure LOOKS in each
+//! interaction state, and the mapping of the tool's primitives onto GPU instances. Adding a tool
+//! therefore never touches this file; adding a PRIMITIVE touches it and nothing else.
 //!
 //! Visual language (to distinguish figures from order lines and make their state visible):
 //! - regular figure — THIN BASE-STYLE LINE;
 //! - armed (alert) figure — THICK BASE-STYLE LINE (clearly shows that it is armed);
-//! - hovered / selected figure — SOLID, THICK, and bright (it sharply "comes alive"),
-//!   with square knots at the editable points of selected segments and triangles.
+//! - hovered / selected figure — SOLID, THICK, and bright (it sharply "comes alive"), with square
+//!   knots at the editable points of a SELECTED figure and a readout beside a HOVERED one.
 
-use moon_core::figures::{FigNode, Figure, FigureKind, LineKind};
+use moon_core::figures::{
+    build_figure, BuildCtx, FigNode, Figure, GeomSink, LabelPlace, LabelText, LineKind, Stroke,
+};
 
-use crate::layers::{LineInstance, MarkerInstance, SegInstance, MARKER_SHAPE_KNOT};
+use crate::layers::{
+    LineInstance, MarkerInstance, SegInstance, MARKER_SHAPE_KNOT, SEG_PATTERN_DASH_DOT_DOT,
+    SEG_PATTERN_DOT, SEG_PATTERN_SOLID,
+};
 
 /// Opacity of an idle (inactive) figure.
 const FIG_IDLE_ALPHA: f32 = 0.85;
@@ -21,9 +31,38 @@ const FIG_ARMED_THICKNESS: f32 = 2.2;
 const FIG_KNOT_SIZE: f32 = 4.5;
 /// Outline thickness of that knot, in pixels.
 const FIG_KNOT_THICKNESS: f32 = 1.5;
-const SEG_PATTERN_SOLID: f32 = 0.0;
-const SEG_PATTERN_DASH: f32 = 1.0; // DashDotDot in the shader is the closest available dashed pattern.
-const SEG_PATTERN_DOT: f32 = 2.0;
+/// A figure's text readout, drawn by the chart's text pass.
+///
+/// Carries a VALUE rather than a finished string: the text pass formats a price with the same
+/// precision as the axis it sits beside. Only the figure under the cursor and the one being drawn
+/// produce labels, so an idle chart carries none.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FigureLabel {
+    /// Time relative to the chart epoch, in milliseconds; unused by [`LabelPlace::RightEdge`].
+    pub t_rel: f32,
+    pub price: f32,
+    pub place: LabelPlace,
+    pub text: LabelText,
+    /// `0xRRGGBB` for the text layer, which has no alpha of its own.
+    pub color: u32,
+}
+
+/// Buffers the figure layer appends into.
+pub struct FigureBuffers<'a> {
+    pub hlines: &'a mut Vec<LineInstance>,
+    pub segs: &'a mut Vec<SegInstance>,
+    pub markers: &'a mut Vec<MarkerInstance>,
+    pub labels: &'a mut Vec<FigureLabel>,
+}
+
+/// Interaction state of the figure layer for one pane.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FigureView {
+    /// Chart epoch the instance time fields are relative to.
+    pub epoch_ms: f64,
+    pub hovered: Option<u64>,
+    pub selected: Option<u64>,
+}
 
 /// Segment pattern (shader: 0 solid / 1 dashdotdot / 2 dot) based on the Moonbot line kind.
 /// The shader has fewer than five dashed variants → Dash/DashDot/DashDotDot share one pattern.
@@ -31,18 +70,8 @@ fn seg_pattern(kind: LineKind) -> f32 {
     match kind {
         LineKind::Solid => SEG_PATTERN_SOLID,
         LineKind::Dot => SEG_PATTERN_DOT,
-        _ => SEG_PATTERN_DASH,
+        _ => SEG_PATTERN_DASH_DOT_DOT,
     }
-}
-
-/// Describes how a specific figure is drawn in the current frame.
-struct FigStyle {
-    color: [f32; 4],
-    thickness: f32,
-    /// Line kind (or Solid when hovered/selected).
-    line_kind: LineKind,
-    /// Whether to draw knots/handles for a selected figure.
-    knots: bool,
 }
 
 fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
@@ -54,138 +83,139 @@ fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
     ]
 }
 
-/// Builds chart figure geometry. `draft` is a preview of the figure being drawn; `hovered`/
-/// `selected` figures are highlighted (selected segments/triangles have draggable endpoint knots).
-pub fn build_figure_geometry(
-    figures: &[Figure],
-    draft: Option<&Figure>,
-    hovered: Option<u64>,
-    selected: Option<u64>,
+/// Packs a float color into the `0xRRGGBB` the text layer takes.
+fn rgb_u32(c: [f32; 4]) -> u32 {
+    let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (ch(c[0]) << 16) | (ch(c[1]) << 8) | ch(c[2])
+}
+
+/// Turns a tool's primitives into own-pass instances.
+struct Sink<'a, 'b> {
     epoch_ms: f64,
-    hlines: &mut Vec<LineInstance>,
-    segs: &mut Vec<SegInstance>,
-    markers: &mut Vec<MarkerInstance>,
-) {
-    for fig in figures {
-        let is_sel = selected == Some(fig.id);
-        let is_hot = is_sel || hovered == Some(fig.id);
-        let style = fig_style(fig, is_hot, is_sel);
-        push_figure(fig, &style, epoch_ms, hlines, segs);
-        if style.knots {
-            push_knots(fig, style.color, epoch_ms, markers);
-        }
-    }
-    if let Some(d) = draft {
-        // Preview of the figure being drawn: brighter and thicker, using the style's base line kind.
-        let style = FigStyle {
-            color: rgba(d.color, 1.0),
-            thickness: d.thickness * FIG_ACTIVE_THICKNESS,
-            line_kind: d.line_kind,
-            knots: false,
-        };
-        push_figure(d, &style, epoch_ms, hlines, segs);
+    out: &'a mut FigureBuffers<'b>,
+}
+
+impl Sink<'_, '_> {
+    fn to_rel(&self, time_ms: f64) -> f32 {
+        (time_ms - self.epoch_ms) as f32
     }
 }
 
-/// Figure style by state:
-/// - idle — thin base style from `fig.line_kind`;
-/// - hovered/selected — thick SOLID line (sharply "comes alive"), plus knots when selected;
-/// - armed (alert) — thick base style (thickness indicates that it is armed).
-fn fig_style(fig: &Figure, is_hot: bool, is_selected: bool) -> FigStyle {
-    if is_hot {
-        FigStyle {
-            color: rgba(fig.color, 1.0),
-            thickness: fig.thickness * FIG_ACTIVE_THICKNESS,
-            line_kind: LineKind::Solid,
-            knots: is_selected,
-        }
-    } else if fig.alert {
-        FigStyle {
-            color: rgba(fig.color, 1.0),
-            thickness: fig.thickness * FIG_ARMED_THICKNESS,
-            line_kind: fig.line_kind,
-            knots: false,
-        }
-    } else {
-        FigStyle {
-            color: rgba(fig.color, FIG_IDLE_ALPHA),
-            thickness: fig.thickness,
-            line_kind: fig.line_kind,
-            knots: false,
-        }
-    }
-}
-
-fn push_figure(
-    fig: &Figure,
-    style: &FigStyle,
-    epoch_ms: f64,
-    hlines: &mut Vec<LineInstance>,
-    segs: &mut Vec<SegInstance>,
-) {
-    let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
-    let pattern = seg_pattern(style.line_kind);
-    let mut push_seg = |a: &FigNode, b: &FigNode, dp: f64| {
-        segs.push(SegInstance {
-            t0_rel: to_rel(a.time_ms),
-            p0: (a.price + dp) as f32,
-            t1_rel: to_rel(b.time_ms),
-            p1: (b.price + dp) as f32,
-            thickness: style.thickness,
-            pattern,
-            extend: 0.0,
-            color: style.color,
-        });
-    };
-    let mut push_hline = |price: f64| {
-        hlines.push(LineInstance {
+impl GeomSink for Sink<'_, '_> {
+    fn hline(&mut self, price: f64, stroke: &Stroke) {
+        self.out.hlines.push(LineInstance {
             price: price as f32,
-            color: style.color,
-            style: if style.line_kind.is_solid() { 0.0 } else { 1.0 },
-            thickness: style.thickness,
+            color: stroke.color,
+            style: if stroke.kind.is_solid() { 0.0 } else { 1.0 },
+            thickness: stroke.thickness,
         });
-    };
-    match &fig.kind {
-        FigureKind::HLine { price } => push_hline(*price),
-        FigureKind::Segment { a, b } => push_seg(a, b, 0.0),
-        FigureKind::Triangle { a, b, c } => {
-            // Three edges: a-b, b-c, c-a.
-            push_seg(a, b, 0.0);
-            push_seg(b, c, 0.0);
-            push_seg(c, a, 0.0);
-        }
-        FigureKind::Channel { price1, price2 } => {
-            push_hline(*price1);
-            push_hline(*price2);
-        }
     }
-}
 
-/// Editing knots for a selected figure (segment/triangle endpoints act as drag handles).
-/// Horizontal lines and channels have no knots: drag them anywhere along the line (hover → thick → drag).
-fn push_knots(fig: &Figure, color: [f32; 4], epoch_ms: f64, markers: &mut Vec<MarkerInstance>) {
-    let to_rel = |t_ms: f64| (t_ms - epoch_ms) as f32;
-    let mut knot = |t_rel: f32, price: f64| {
-        markers.push(MarkerInstance::at_price(
-            t_rel,
-            price as f32,
+    fn seg(&mut self, a: FigNode, b: FigNode, stroke: &Stroke) {
+        self.out.segs.push(SegInstance {
+            t0_rel: self.to_rel(a.time_ms),
+            p0: a.price as f32,
+            t1_rel: self.to_rel(b.time_ms),
+            p1: b.price as f32,
+            thickness: stroke.thickness,
+            pattern: seg_pattern(stroke.kind),
+            extend: 0.0,
+            color: stroke.color,
+        });
+    }
+
+    fn handle(&mut self, at: FigNode, color: [f32; 4]) {
+        self.out.markers.push(MarkerInstance::at_price(
+            self.to_rel(at.time_ms),
+            at.price as f32,
             FIG_KNOT_SIZE,
             FIG_KNOT_THICKNESS,
             MARKER_SHAPE_KNOT,
             color,
         ));
-    };
-    match &fig.kind {
-        // Horizontal lines and channels have no knots; drag the line itself (hover → thick → drag).
-        FigureKind::HLine { .. } | FigureKind::Channel { .. } => {}
-        FigureKind::Segment { a, b } => {
-            knot(to_rel(a.time_ms), a.price);
-            knot(to_rel(b.time_ms), b.price);
-        }
-        FigureKind::Triangle { a, b, c } => {
-            knot(to_rel(a.time_ms), a.price);
-            knot(to_rel(b.time_ms), b.price);
-            knot(to_rel(c.time_ms), c.price);
-        }
+    }
+
+    fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, color: [f32; 4]) {
+        self.out.labels.push(FigureLabel {
+            t_rel: self.to_rel(at.time_ms),
+            price: at.price as f32,
+            place,
+            text,
+            color: rgb_u32(color),
+        });
     }
 }
+
+/// Builds chart figure geometry. `draft` is a preview of the figure being drawn; `hovered`/
+/// `selected` figures are highlighted, and a selected knot-grabbed figure gains endpoint knots.
+pub fn build_figure_geometry<'a>(
+    figures: impl IntoIterator<Item = &'a Figure>,
+    draft: Option<&Figure>,
+    view: FigureView,
+    out: &mut FigureBuffers<'_>,
+) {
+    let mut sink = Sink {
+        epoch_ms: view.epoch_ms,
+        out,
+    };
+    for fig in figures {
+        let is_sel = view.selected == Some(fig.id);
+        let is_hovered = view.hovered == Some(fig.id);
+        let ctx = fig_ctx(fig, is_hovered, is_sel);
+        build_figure(&fig.kind, &ctx, &mut sink);
+    }
+    if let Some(d) = draft {
+        // Preview of the figure being drawn: brighter and thicker, using the style's base line
+        // kind, and already showing its readout so a trend line can be aimed while drawing.
+        let ctx = BuildCtx {
+            stroke: Stroke {
+                color: rgba(d.color, 1.0),
+                thickness: d.thickness * FIG_ACTIVE_THICKNESS,
+                kind: d.line_kind,
+            },
+            hot: true,
+            handles: false,
+        };
+        build_figure(&d.kind, &ctx, &mut sink);
+    }
+}
+
+/// Build context for a figure by state:
+/// - idle — thin base style from `fig.line_kind`;
+/// - hovered/selected — thick SOLID line (sharply "comes alive"), plus knots when selected;
+/// - armed (alert) — thick base style (thickness indicates that it is armed).
+///
+/// The READOUT follows the cursor, not the selection: selection is sticky, and a label that
+/// outlives the pointer would keep the text pass formatting and re-shaping it every frame for as
+/// long as a figure stays selected. Hover and the draft are transient by nature, which is what
+/// makes "an idle chart pays nothing for labels" true.
+fn fig_ctx(fig: &Figure, is_hovered: bool, is_selected: bool) -> BuildCtx {
+    let is_hot = is_hovered || is_selected;
+    let stroke = if is_hot {
+        Stroke {
+            color: rgba(fig.color, 1.0),
+            thickness: fig.thickness * FIG_ACTIVE_THICKNESS,
+            kind: LineKind::Solid,
+        }
+    } else if fig.alert {
+        Stroke {
+            color: rgba(fig.color, 1.0),
+            thickness: fig.thickness * FIG_ARMED_THICKNESS,
+            kind: fig.line_kind,
+        }
+    } else {
+        Stroke {
+            color: rgba(fig.color, FIG_IDLE_ALPHA),
+            thickness: fig.thickness,
+            kind: fig.line_kind,
+        }
+    };
+    BuildCtx {
+        stroke,
+        hot: is_hovered,
+        handles: is_selected,
+    }
+}
+
+#[cfg(test)]
+mod tests;

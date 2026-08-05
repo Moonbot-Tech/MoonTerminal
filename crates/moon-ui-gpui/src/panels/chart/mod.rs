@@ -190,6 +190,8 @@ pub struct ChartPanel {
     /// Point of the most recent order-line hover hit-test. The Delphi-style movement threshold keeps
     /// subpixel raw mouse movement from scanning the lines again.
     order_hover_probe: Option<(f32, f32)>,
+    /// Last position the FIGURE hover hit-test ran at; see `trade::hover_probe_due`.
+    fig_hover_probe: Option<(f32, f32)>,
     /// News marks for this chart's coin plus their hover state; see [`news`].
     news: news::NewsState,
     warn: warn::WarnState,
@@ -368,6 +370,7 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             order_hover_probe: None,
+            fig_hover_probe: None,
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             fig_draft: None,
@@ -488,6 +491,7 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             order_hover_probe: None,
+            fig_hover_probe: None,
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             fig_draft: None,
