@@ -136,6 +136,12 @@ pub(crate) struct Shell {
     /// Whether the controlled `MoonPopover` on the core-settings button is open.
     /// The popover handles outside-click dismissal, while opening seeds its editor fields.
     core_settings_open: bool,
+    /// The core the core-settings editors were seeded from, and the only core they may write to.
+    ///
+    /// `None` while the popup is closed, and also while it is open over a core that had nothing to
+    /// seed from — in which case every write is refused rather than aimed at whatever core is
+    /// active. See `core_settings::resolve_core_settings_write`.
+    core_settings_target: Option<moon_core::session::CoreId>,
     /// Confirmation stage for Cancel All Orders: the first click arms it and the second sends it.
     core_settings_cancel_confirm: bool,
     /// Whether the core-settings coin blacklist uses its fixed-height multiline editor instead of

@@ -242,11 +242,18 @@ impl Shell {
         });
     }
 
-    /// Send a core-settings-popover edit to the window group's currently active trading core.
-    /// Does nothing when the group has no active core.
+    /// Send a core-settings-popover edit to the core that popover's editors were seeded from.
+    ///
+    /// One guard for all six of `init.rs`'s subscriptions — the Global TP, Trailing and V-Stop
+    /// sliders and their fields. Each carries a value seeded when the popup opened, so the write is
+    /// refused once the active core no longer matches; see
+    /// [`super::core_settings::resolve_core_settings_write`].
     pub(super) fn commit_client_edit(&self, edit: ClientSettingsEdit, cx: &mut Context<Self>) {
         let b = self.backend.read(cx);
-        let Some(core) = b.active_trade_core(&self.group) else {
+        let Some(core) = super::core_settings::resolve_core_settings_write(
+            self.core_settings_target,
+            b.active_trade_core(&self.group),
+        ) else {
             return;
         };
         if let Err(error) = b.session.edit_client_settings(core, edit) {

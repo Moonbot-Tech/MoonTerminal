@@ -547,6 +547,7 @@ impl Shell {
             window_active: true,
             header_core_selector_open: false,
             core_settings_open: false,
+            core_settings_target: None,
             core_settings_cancel_confirm: false,
             core_settings_bl_expanded: false,
             ticker_popup_open: false,

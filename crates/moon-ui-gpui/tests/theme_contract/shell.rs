@@ -931,3 +931,52 @@ fn the_movers_suggestion_offers_each_market_once() {
         "and must not fan a mover out across every consuming core"
     );
 }
+
+/// Protects every core-settings write handler from bypassing its seeded-target guard.
+///
+/// `shell/core_settings.rs::resolve_core_settings_write` is a pure decision the unit tests in
+/// `shell/core_settings/tests.rs` exercise directly, but a call SITE reverted to a bare
+/// `b.active_trade_core(&group)` compiles and is invisible from there — the pure function stays
+/// green while the popup writes to whatever core is active at commit time instead of the one it
+/// was seeded from. This pins every call site instead.
+///
+/// Comments are stripped first: the doc comments beside these guards name
+/// `resolve_core_settings_write` in prose, so a raw substring search would stay green with the
+/// call itself deleted.
+#[test]
+fn core_settings_writes_all_go_through_the_seeded_target_guard() {
+    let popup = code_only(&read_src("shell/core_settings_popup.rs"));
+    let reads = popup.matches("active_trade_core(&group)").count();
+    let guarded = popup.matches("resolve_core_settings_write(seeded").count();
+    assert!(
+        reads > 0,
+        "expected at least one active-core read in core_settings_popup.rs"
+    );
+    assert_eq!(
+        guarded, reads,
+        "every core_settings_popup.rs handler reading the active core must pass it through \
+         resolve_core_settings_write(seeded, ..); found {reads} active-core reads but only \
+         {guarded} guarded by the seeded-target check"
+    );
+
+    let core_settings = code_only(&read_src("shell/core_settings.rs"));
+    for signature in [
+        "pub(super) fn reconcile_core_settings_popup(",
+        "pub(super) fn commit_blacklist_text(",
+        "pub(super) fn core_settings_cancel_all_click(",
+    ] {
+        let body = braced_body(&core_settings, signature);
+        assert!(
+            body.contains("resolve_core_settings_write("),
+            "{signature} must resolve its write address through resolve_core_settings_write"
+        );
+    }
+
+    let metrics = code_only(&read_src("shell/metrics.rs"));
+    let commit = braced_body(&metrics, "pub(super) fn commit_client_edit(");
+    assert!(
+        commit.contains("core_settings::resolve_core_settings_write("),
+        "commit_client_edit must resolve its write address through resolve_core_settings_write, \
+         not a bare b.active_trade_core(&self.group)"
+    );
+}
