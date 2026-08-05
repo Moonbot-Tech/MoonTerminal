@@ -160,6 +160,9 @@ impl Backend {
         for (core, data) in self.session.store().cores() {
             for ((market, obj_uid), blob) in &data.chart_alerts {
                 let Some(d) = alert_blob::decode(blob) else {
+                    // The raw bytes of every incoming object are already logged as hex by the feed
+                    // (`feed::live`, for exactly this reverse engineering), so an undecodable one
+                    // needs no second copy here — only skipping.
                     continue;
                 };
                 server
@@ -205,6 +208,35 @@ impl Backend {
         if changed {
             self.reupsert_figure_alert(core, market, id);
         }
+    }
+
+    /// Edits one figure in place — its style or its tool's own switches — and puts the result
+    /// everywhere it has to go: the store marks itself dirty for `figures.json`, and an ARMED
+    /// figure re-upserts its blob so the core's copy does not keep the old look.
+    ///
+    /// The single write path for the per-figure settings, so no caller can change a figure and
+    /// forget one of those two. `edit` returns whether anything actually changed; an unchanged
+    /// figure costs no save and no round trip to the core.
+    ///
+    /// A figure that came FROM the core is edited like any other, because dragging one already
+    /// works that way: the edit goes back as a re-encoded blob. That round trip keeps only the
+    /// fields `alert_blob` decodes, which is a property of the format work being unfinished rather
+    /// than of this call — and refusing it here while the drag path does it anyway would only make
+    /// the two disagree. One field is not merely dropped but rewritten: a thickness the wire could
+    /// not have meant is repaired on decode and the repair goes back with the next edit. What such a figure must NOT be offered is a fill: the blob has no field
+    /// for one, so it would be reverted by the next reconcile; the settings panel drops that row.
+    pub(crate) fn edit_figure(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        id: u64,
+        f: impl FnOnce(&mut moon_core::figures::Figure) -> bool,
+    ) -> bool {
+        if !self.figures.borrow_mut().edit(core, market, id, f) {
+            return false;
+        }
+        self.reupsert_figure_alert(core, market, id);
+        true
     }
 
     /// Re-upserts an armed figure with its current data after an edit. Drag handling calls this on

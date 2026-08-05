@@ -481,6 +481,20 @@ impl Render for ChartPanel {
         // like the news card, reusing the same live modifier state.
         self.revalidate_warn_hover(cx);
         let warn_card = self.warn_card(ppp, news_ctrl, palette, cx);
+        // Per-figure settings panel, opened from a right-click on a figure. Rendered here beside
+        // the other overlays rather than as a context menu: it holds swatches and switches, which
+        // a menu of text items cannot draw.
+        let fig_settings = self.fig_settings.clone().and_then(|target| {
+            let (slot_w, slot_h) = self.chart.slot_dev_size();
+            let backend = self.backend.clone();
+            crate::figstyle::render(
+                &backend,
+                &target,
+                (slot_w as f32 / ppp, slot_h as f32 / ppp),
+                ppp,
+                cx,
+            )
+        });
 
         let show_empty_logo = axis_panes.is_empty();
         let (slot_w, _) = self.chart.slot_dev_size();
@@ -702,5 +716,10 @@ impl Render for ChartPanel {
                 },
             ))
             .children(action_overlay)
+            // LAST of the overlays: the settings panel is opened deliberately and edits what is
+            // under it, so a close/pin/broom button painting over its top rows — and taking the
+            // clicks meant for them — would make it unusable exactly where a figure is easiest to
+            // right-click, near the top of a pane.
+            .children(fig_settings)
     }
 }

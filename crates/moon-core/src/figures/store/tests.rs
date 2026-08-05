@@ -62,6 +62,9 @@ fn a_ratio_scale_survives_a_save_and_load() {
     let drawn = FibRetracement {
         a: FigNode::new(1_700_000_000_000.0, 63_713.5),
         b: FigNode::new(1_700_000_600_000.0, 61_240.25),
+        // NOT the serde default: a field that only ever round-trips its default value is a field
+        // whose serialization nobody tested. Levels 1 and 4 switched off.
+        hidden_levels: 0b1_0010,
     };
     let id = store.add(1, "BTCUSDT", fig(FigureKind::FibRetracement(drawn)));
     let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
@@ -70,6 +73,22 @@ fn a_ratio_scale_survives_a_save_and_load() {
         back.get(1, "BTCUSDT", id).map(|f| f.kind.clone()),
         Some(FigureKind::FibRetracement(drawn)),
         "the scale came back a different figure: {json}"
+    );
+    // And an OLD file, written before levels could be switched off, must load with the whole
+    // scale rather than with some levels silently missing.
+    let older = json.replace(",\"hidden_levels\":18", "");
+    assert!(
+        !older.contains("hidden_levels"),
+        "the field was not dropped: {older}"
+    );
+    let back = FigureStore::from_json(&older);
+    assert_eq!(
+        back.get(1, "BTCUSDT", id).map(|f| f.kind.clone()),
+        Some(FigureKind::FibRetracement(FibRetracement {
+            hidden_levels: 0,
+            ..drawn
+        })),
+        "an older file did not load with every level shown: {older}"
     );
 }
 

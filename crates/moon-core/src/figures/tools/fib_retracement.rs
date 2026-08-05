@@ -7,17 +7,24 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::kind::FigureKind;
-use super::super::levels::{price_at, Emphasis, Level, FIB_LEVELS};
+use super::super::levels::{fmt_ratio, price_at, Emphasis, Level, FIB_LEVELS};
 use super::super::node::FigNode;
 use super::super::proj::{seg_dist, Proj, PxPoint};
 use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
-use super::{FigureTool, ToolDef, ToolShape};
+use super::{FigureTool, ToolDef, ToolSetting, ToolShape};
 
 /// A move whose retracement levels are drawn: `a` is where it started, `b` where it ended.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FibRetracement {
     pub a: FigNode,
     pub b: FigNode,
+    /// Levels the user switched OFF, as a bit per index into [`FIB_LEVELS`].
+    ///
+    /// Stored as what is HIDDEN rather than what is shown, so the default is 0 — a figure saved
+    /// before levels could be switched off loads with the whole scale, and a level added to the
+    /// scale later appears on old figures instead of silently staying off.
+    #[serde(default)]
+    pub hidden_levels: u16,
 }
 
 pub(super) const DEF: ToolDef = ToolDef {
@@ -32,13 +39,21 @@ pub(super) const DEF: ToolDef = ToolDef {
     // this tool stays local until it is; sending a blob we cannot read back would be a guess.
     alertable: false,
     make: |nodes| match nodes {
-        [a, b, ..] => Some(FigureKind::FibRetracement(FibRetracement { a: *a, b: *b })),
+        [a, b, ..] => Some(FigureKind::FibRetracement(FibRetracement {
+            a: *a,
+            b: *b,
+            hidden_levels: 0,
+        })),
         _ => None,
     },
     preview: |placed, cursor| {
-        placed
-            .first()
-            .map(|a| FigureKind::FibRetracement(FibRetracement { a: *a, b: cursor }))
+        placed.first().map(|a| {
+            FigureKind::FibRetracement(FibRetracement {
+                a: *a,
+                b: cursor,
+                hidden_levels: 0,
+            })
+        })
     },
 };
 
@@ -64,6 +79,21 @@ impl FibRetracement {
     /// Price of one level of the scale.
     fn price(&self, ratio: f64) -> f64 {
         price_at(self.a.price, self.b.price, ratio)
+    }
+
+    /// Whether level `i` of [`FIB_LEVELS`] is switched off for this figure.
+    fn is_hidden(&self, i: usize) -> bool {
+        // Indices past the mask's width cannot be hidden — a scale grown beyond 16 levels shows
+        // its new ones rather than reading a bit that does not exist.
+        i < u16::BITS as usize && self.hidden_levels & (1 << i) != 0
+    }
+
+    /// The levels this figure actually draws, with their index in the scale.
+    fn shown(&self) -> impl Iterator<Item = (usize, &'static Level)> + '_ {
+        FIB_LEVELS
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !self.is_hidden(*i))
     }
 }
 
@@ -106,12 +136,18 @@ impl ToolShape for FibRetracement {
         true
     }
 
-    /// Distance to the nearest LEVEL, not to the move that defines them: the levels are what the
-    /// figure is, and a retracement is grabbed by the line the cursor is reading.
+    /// Distance to the nearest LEVEL, or to the move itself — the levels are what the figure is,
+    /// and a retracement is grabbed by the line the cursor is reading, but the move is always
+    /// drawn and so must always be grabbable.
     fn hit(&self, pos: PxPoint, proj: &dyn Proj) -> f32 {
         let (t0, t1) = self.span();
-        let mut best = f32::INFINITY;
-        for level in FIB_LEVELS {
+        // The move itself is always grabbable, because it is always drawn. Switching every level
+        // off would otherwise leave a figure on the chart that nothing can pick: not to select,
+        // not to right-click, not to delete — one click away, through its own settings panel.
+        let mut best = seg_dist(pos, proj.px_of(self.a), proj.px_of(self.b));
+        // A level switched off is not drawn, so it must not be grabbable either — the same rule
+        // the zero-crossing skip below follows.
+        for (_, level) in self.shown() {
             let price = self.price(level.ratio);
             // Skipped by `build` as well: a level that crossed zero is not drawn, so it must not
             // be grabbable either. `is_finite` also catches a NaN, which no comparison would.
@@ -123,6 +159,40 @@ impl ToolShape for FibRetracement {
             best = best.min(seg_dist(pos, a, b));
         }
         best
+    }
+
+    /// One switch per level, labelled with the ratio itself and keyed by its INDEX in the scale.
+    ///
+    /// Keyed by index rather than by the ratio's text so the key survives a formatting change; the
+    /// label is what the ratio reads as, which is the only thing a trader recognises a level by.
+    fn settings(&self) -> Vec<ToolSetting> {
+        FIB_LEVELS
+            .iter()
+            .enumerate()
+            .map(|(i, level)| ToolSetting {
+                key: format!("level.{i}"),
+                label: fmt_ratio(level.ratio),
+                on: !self.is_hidden(i),
+            })
+            .collect()
+    }
+
+    fn set_setting(&mut self, key: &str, on: bool) -> bool {
+        let Some(i) = key
+            .strip_prefix("level.")
+            .and_then(|n| n.parse::<usize>().ok())
+            .filter(|i| *i < FIB_LEVELS.len().min(u16::BITS as usize))
+        else {
+            return false;
+        };
+        let before = self.hidden_levels;
+        let bit = 1u16 << i;
+        if on {
+            self.hidden_levels &= !bit;
+        } else {
+            self.hidden_levels |= bit;
+        }
+        self.hidden_levels != before
     }
 
     fn build(&self, ctx: &BuildCtx, sink: &mut dyn GeomSink) {
@@ -157,9 +227,12 @@ impl ToolShape for FibRetracement {
         if self.a.price == self.b.price {
             return;
         }
-        // The previous level in RATIO order, carried forward so the band can take ITS hue.
+        // The previous SHOWN level in ratio order, carried forward so the band can take ITS hue.
+        // Switching a level off closes the ranks rather than punching a hole: the band then runs
+        // from one visible line to the next, which is what a hidden level means — remove the line,
+        // not the range between the lines that are left.
         let mut prev: Option<(f64, &Level)> = None;
-        for level in FIB_LEVELS {
+        for (_, level) in self.shown() {
             let price = self.price(level.ratio);
             // A level far enough past the move's start crosses zero. A negative price is not a
             // level, it is arithmetic: drop it rather than draw and label it. `is_finite` also

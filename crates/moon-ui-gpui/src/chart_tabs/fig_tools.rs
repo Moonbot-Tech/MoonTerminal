@@ -18,34 +18,10 @@ use rust_i18n::t;
 use super::ChartTabs;
 use crate::design;
 
-/// Popup swatch palette with the blue default and a practical set, stored as RGBA with `a=255`.
-const SWATCHES: [[u8; 4]; 8] = [
-    [64, 196, 255, 255],  // blue (default)
-    [80, 220, 120, 255],  // green
-    [240, 90, 90, 255],   // red
-    [250, 200, 60, 255],  // yellow
-    [245, 150, 40, 255],  // orange
-    [200, 110, 240, 255], // purple
-    [240, 240, 240, 255], // white
-    [150, 160, 175, 255], // gray
-];
-
-/// Step opacity by 5%, snapping to whole percentage points.
-///
-/// The previous +/-24-of-255 arithmetic jumped from 100 to 91 to 81 and made values such as 15%
-/// unreachable. Every multiple of five in `5..=100` is now reachable.
-fn opacity_step(a: u8, up: bool) -> u8 {
-    let pct = (a as f32 / 255.0 * 100.0).round() as i32;
-    let next = if up {
-        pct / 5 * 5 + 5
-    } else if pct % 5 == 0 {
-        pct - 5
-    } else {
-        pct / 5 * 5
-    }
-    .clamp(5, 100);
-    (next as f32 / 100.0 * 255.0).round() as u8
-}
+/// The swatch palette and the opacity arithmetic live with the per-figure settings panel: the two
+/// surfaces must offer the same colours and move by the same step, or "the same" style set here and
+/// there would not be the same style.
+use crate::figstyle::{SWATCHES, opacity_step};
 
 /// One tool button, generated from the registry row: a new tool appears in the strip and in the
 /// style popup by existing, with its element id and glyph coming from its own module.

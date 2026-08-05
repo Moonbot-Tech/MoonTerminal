@@ -105,6 +105,22 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
+    // The click was not the figure layer's — but a click that landed on no figure still ends the
+    // selection, which is what every editor does and what the handles left on screen otherwise
+    // contradict. Deliberately here rather than inside `try_fig_click`: that path returns early
+    // without the modifier, and this must hold for the ordinary clicks that make up most of them.
+    // The settings panel swallows its own input, so a click arriving here landed outside it — the
+    // dismissal every popup on this chart uses. It CONSUMES the click: the first click outside an
+    // open panel closes it and does nothing else, or dismissing the panel could cancel a live
+    // order, place one, or start a drag, depending on where it happened to land.
+    if within && e.click_count <= 1 && this.fig_settings.take().is_some() {
+        cx.notify();
+        cx.stop_propagation();
+        return;
+    }
+    if within && e.click_count <= 1 {
+        this.fig_clear_selection_on_miss(pos, cx);
+    }
     if within
         && this.try_place_order_click(TradeMouseButton::Left, e.modifiers, e.click_count, pos, cx)
     {

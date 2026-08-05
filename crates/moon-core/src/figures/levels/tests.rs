@@ -140,3 +140,14 @@ fn the_pickers_swatch_is_one_of_the_scales_own_hues() {
         "the scale swatch {swatch:?} belongs to no level"
     );
 }
+
+#[test]
+fn a_ratio_reads_as_a_trader_names_it() {
+    // The switch labels and the on-chart readouts both go through this, so a change here renames
+    // levels in two places at once.
+    assert_eq!(super::fmt_ratio(0.618), "0.618");
+    assert_eq!(super::fmt_ratio(0.5), "0.5", "trailing zeros must go");
+    assert_eq!(super::fmt_ratio(1.0), "1", "a whole ratio keeps no point");
+    assert_eq!(super::fmt_ratio(4.236), "4.236");
+    assert_eq!(super::fmt_ratio(-0.0), "0", "-0 must not print as a level");
+}

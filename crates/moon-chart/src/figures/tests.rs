@@ -242,6 +242,7 @@ fn a_fill_reaches_the_zone_layer_bounded_in_time() {
         FigureKind::FibRetracement(FibRetracement {
             a: FigNode::new(EPOCH, 100.0),
             b: FigNode::new(EPOCH + 60_000.0, 80.0),
+            hidden_levels: 0,
         }),
         DrawStyle::default(),
         0,
@@ -287,6 +288,7 @@ fn a_fill_never_reacts_to_hover_or_selection() {
         FigureKind::FibRetracement(FibRetracement {
             a: FigNode::new(EPOCH, 100.0),
             b: FigNode::new(EPOCH + 60_000.0, 80.0),
+            hidden_levels: 0,
         }),
         DrawStyle::default(),
         7,
@@ -306,6 +308,7 @@ fn a_level_readout_is_rendered_to_text_once_not_every_frame() {
         FigureKind::FibRetracement(FibRetracement {
             a: FigNode::new(EPOCH, 63_713.5),
             b: FigNode::new(EPOCH + 60_000.0, 61_240.25),
+            hidden_levels: 0,
         }),
         DrawStyle::default(),
         0,
@@ -353,6 +356,7 @@ fn the_figure_being_dragged_paints_no_fill() {
         FigureKind::FibRetracement(FibRetracement {
             a: FigNode::new(EPOCH, 100.0),
             b: FigNode::new(EPOCH + 60_000.0, 80.0),
+            hidden_levels: 0,
         }),
         DrawStyle::default(),
         0,

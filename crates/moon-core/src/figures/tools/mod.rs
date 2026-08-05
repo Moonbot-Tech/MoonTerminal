@@ -52,6 +52,22 @@ pub enum GrabMode {
     PriceLines,
 }
 
+/// One switch a tool offers in the per-figure settings, beyond the style every figure has.
+///
+/// Toggles only, deliberately: what a tool needs to expose today is "draw this part or not" — the
+/// levels of a ratio scale — and a settings surface that can only render one control kind cannot
+/// grow a per-tool special case. A tool needing a number or a choice adds a variant here, and the
+/// one settings module learns to draw it once for every tool.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolSetting {
+    /// Stable key the UI passes back to [`ToolShape::set_setting`]. Never localized.
+    pub key: String,
+    /// What to show beside the switch. A ratio scale labels its levels with the ratios themselves,
+    /// which are numbers rather than words, so this is TEXT and not a locale key.
+    pub label: String,
+    pub on: bool,
+}
+
 /// Geometry, handles and hit test of one drawing tool.
 ///
 /// Implementations are pure math on figure coordinates: no GPU type, no UI type, no clock.
@@ -83,6 +99,19 @@ pub trait ToolShape {
 
     fn grab_mode(&self) -> GrabMode {
         GrabMode::Knots
+    }
+
+    /// Switches this tool adds to the per-figure settings. Empty for a tool whose whole appearance
+    /// is the shared style, which is most of them.
+    fn settings(&self) -> Vec<ToolSetting> {
+        Vec::new()
+    }
+
+    /// Applies one switch by its key. Returns whether anything changed, so the caller knows
+    /// whether to persist and redraw. An unknown key is ignored rather than panicking: the UI and
+    /// the tool are versioned together, but a stale popup must not take the app down.
+    fn set_setting(&mut self, _key: &str, _on: bool) -> bool {
+        false
     }
 }
 

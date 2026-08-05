@@ -27,6 +27,7 @@ mod design;
 mod diag;
 mod diagnostics;
 mod display_text;
+mod figstyle;
 mod firetest;
 mod hotkeys;
 mod load_state;
