@@ -1,8 +1,8 @@
 //! Rectangle: an area between two corners, outlined and filled.
 //!
 //! The general filled figure — a consolidation, a zone of interest, the box a setup lives in.
-//! Two clicks place opposite corners; the fill is the drawing style's, like every other tool with
-//! an area.
+//! Two clicks place opposite corners, and the fill is the drawing style's, shared with the price
+//! channel and the Fibonacci scale.
 
 use serde::{Deserialize, Serialize};
 
@@ -118,9 +118,13 @@ impl ToolShape for Rect {
             sink.seg(c[i], c[(i + 1) % 4], &ctx.stroke);
         }
         if ctx.hot {
-            // What a box is drawn to answer: how far it reaches, in percent.
+            // What a box is drawn to answer: how far it reaches, in percent. Anchored to the TOP
+            // edge whichever way the box was drawn, so the readout never lands inside the fill.
             sink.label(
-                FigNode::new(self.b.time_ms.max(self.a.time_ms), self.b.price),
+                FigNode::new(
+                    self.b.time_ms.max(self.a.time_ms),
+                    self.a.price.max(self.b.price),
+                ),
                 LabelPlace::Above,
                 LabelText::PctDelta {
                     from: self.a.price,

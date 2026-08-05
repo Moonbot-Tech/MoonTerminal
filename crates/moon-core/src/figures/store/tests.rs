@@ -74,6 +74,21 @@ fn a_ratio_scale_survives_a_save_and_load() {
 }
 
 #[test]
+fn a_fill_survives_a_save_and_load() {
+    let mut store = FigureStore::default();
+    let mut f = hline(10.0);
+    f.fill = [9, 8, 7, 123];
+    let id = store.add(1, "BTCUSDT", f);
+    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let back = FigureStore::from_json(&json);
+    assert_eq!(
+        back.get(1, "BTCUSDT", id).map(|f| f.fill),
+        Some([9, 8, 7, 123]),
+        "the chosen fill did not come back: {json}"
+    );
+}
+
+#[test]
 fn a_figure_saved_before_fills_existed_keeps_its_look() {
     // Painting one on would be a one-way rewrite of a file the user cannot edit back.
     let store = FigureStore::from_json(V1_FILE);

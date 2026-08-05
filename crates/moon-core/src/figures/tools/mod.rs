@@ -101,9 +101,11 @@ pub struct ToolDef {
     /// Whether the core's `TChartObject` blob can carry this figure, i.e. whether it can be armed
     /// as an alert. A tool the core does not know is drawn locally only.
     pub alertable: bool,
-    /// Whether the tool encloses an area and therefore reads the style's fill. A line does not,
-    /// and the pencil popup hides the fill controls while such a tool is selected rather than
-    /// offering a setting that changes nothing.
+    /// Whether the tool READS the style's fill. The pencil popup hides the fill controls while a
+    /// tool that does not is selected, rather than offering a setting that changes nothing.
+    ///
+    /// Not the same as "encloses an area": a triangle does, but the fill primitive paints an
+    /// axis-aligned band and a triangle needs a polygon, so it joins them when that lands.
     pub fills: bool,
     /// Builds the finished figure from exactly `clicks` placed nodes. Returns `None` when given
     /// fewer, so a caller cannot construct a half-placed figure.

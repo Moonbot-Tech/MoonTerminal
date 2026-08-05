@@ -221,9 +221,9 @@ impl GeomSink for Sink<'_, '_> {
         // The order path refuses a non-finite or non-positive band (`build_order_geometry`), and
         // figure fills share ONE draw call with it: a NaN from a hand-edited file would take the
         // whole call down, not just this band.
-        // No epsilon on the height: an absolute one drops a band that is many pixels tall on a
-        // market priced at 1e-8 (the pitfall `view.rs` documents), and a truly flat band simply
-        // draws nothing.
+        // Exactly flat is dropped — it would rasterize to nothing at any zoom — but no EPSILON
+        // above that: an absolute one discards a band many pixels tall on a market priced at 1e-8,
+        // the pitfall `view.rs` documents.
         if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0) || p0 == p1 {
             return;
         }
