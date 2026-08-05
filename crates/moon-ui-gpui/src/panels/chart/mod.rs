@@ -197,7 +197,7 @@ pub struct ChartPanel {
     /// News marks for this chart's coin plus their hover state; see [`news`].
     news: news::NewsState,
     warn: warn::WarnState,
-    /// Figure-drawing state for this panel: pencil draft, hover, and drag.
+    /// Figure-drawing state for this panel: draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
     /// Screen point where the latest draft node was placed. Releasing sufficiently far away
     /// distinguishes a drag-release gesture from a click and completes the figure.
@@ -234,7 +234,7 @@ impl ChartPanel {
             let b = self.backend.read(cx);
             self.chart.sync_orders_if_visible(&b.session, false);
         }
-        // Pencil and selection state changes in the tab strip or through hotkeys reach this panel
+        // Tool and selection state changes in the tab strip or through hotkeys reach this panel
         // through the backend observer; propagate them into the figure engine.
         self.sync_fig_visual(cx);
         // A figure EDITED anywhere — this window's settings panel, another window's, a hotkey —

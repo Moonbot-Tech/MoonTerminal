@@ -415,15 +415,29 @@ struct Backend {
     /// chart engines. Persisted to `figures.json`; the coordination loop debounces saves via the
     /// store's `dirty` flag.
     figures: std::rc::Rc<std::cell::RefCell<moon_core::figures::FigureStore>>,
-    /// Whether drawing mode is enabled, represented by the pressed pencil button and enabled by
-    /// default. In this mode the platform secondary modifier plus left-click, Ctrl on Windows and
-    /// Linux or Cmd on macOS, draws with `fig_tool` or selects and moves an existing figure.
-    /// When disabled, figures are hidden and frozen.
+    /// Whether a drawing tool is ARMED, shown by the toolbar's tool picker and armed by default.
+    /// With one armed, the platform secondary modifier plus left-click — Ctrl on Windows and Linux,
+    /// Cmd on macOS — places nodes for `fig_tool`.
+    ///
+    /// It gates NOTHING else: figures stay visible, hoverable, selectable, draggable and
+    /// right-clickable with no tool armed, which is what the picker's Cursor entry leaves behind.
     fig_draw_mode: bool,
-    /// Selected drawing tool used by Ctrl+left-click and chosen from the pencil popup.
+    /// Selected drawing tool used by Ctrl+left-click and chosen from the settings panel.
     fig_tool: moon_core::figures::FigureTool,
-    /// Style for new figures, including color, thickness, and dash pattern, edited in the pencil popup.
-    fig_style: moon_core::figures::DrawStyle,
+    /// Style for new figures — colour, thickness, dash pattern and fill — PER TOOL, keyed by
+    /// `ToolDef::key`. A tool absent from the map has never been styled and draws in
+    /// `DrawStyle::default()`; read it through `Backend::fig_style`.
+    ///
+    /// Per tool and not global because that is what a drawing toolbar means everywhere: a red
+    /// segment does not make the next Fibonacci red.
+    fig_styles: std::collections::HashMap<&'static str, moon_core::figures::DrawStyle>,
+    /// Per-tool switch defaults, keyed the same way: what a Fibonacci drawn next will have switched
+    /// off, and so on for any tool that offers switches.
+    ///
+    /// Sparse — only what was changed away from the tool's own default — and, like `fig_styles`,
+    /// held for the session rather than persisted: the two are one setting to a user, and half of
+    /// it surviving a restart would be worse than neither.
+    fig_tool_settings: std::collections::HashMap<&'static str, moon_core::figures::ToolSettings>,
     /// Application-wide selected figure as `(core, market, id)`, used for chart highlighting and
     /// handles as well as Shell deletion and alert hotkeys.
     fig_selected: Option<(CoreId, String, u64)>,

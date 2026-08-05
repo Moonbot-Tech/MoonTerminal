@@ -293,6 +293,22 @@ impl Render for ChartTabs {
                     ),
             )
             .children(coin_popup);
+        // The tool-settings panel closes the same way the market list does: a layer below the
+        // cluster catches every click that missed it. Without one the panel stays parked over the
+        // chart until its own button is pressed again.
+        let fig_dismiss = self.fig_style_popup_open.then(|| {
+            div()
+                .id("tabs-fig-dismiss")
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _w, cx| {
+                        this.fig_style_popup_open = false;
+                        cx.notify();
+                    }),
+                )
+        });
         // Catch clicks outside the market list on a layer below the cluster to dismiss it.
         let coin_dismiss = self.coin_popup_open.then(|| {
             div()
@@ -355,6 +371,7 @@ impl Render for ChartTabs {
             // Keep `coin_dismiss` below the cluster: list rows handle their own clicks, while this
             // layer catches clicks elsewhere and closes the list.
             .children(coin_dismiss)
+            .children(fig_dismiss)
             .child(right_cluster)
     }
 }

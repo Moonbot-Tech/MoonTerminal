@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use moon_core::alert_blob;
-use moon_core::figures::{Figure, FigureKey};
+use moon_core::figures::{DrawStyle, Figure, FigureKey, FigureTool, ToolSetting, ToolSettings};
 use moon_core::session::CoreId;
 
 use crate::Backend;
@@ -28,6 +28,67 @@ fn figure_blob(fig: &Figure) -> Option<Vec<u8>> {
 }
 
 impl Backend {
+    /// The style the next figure of `tool` will be drawn in.
+    ///
+    /// A tool that has never been styled reads the shared default rather than an empty value, so a
+    /// first figure looks like every other tool's first figure.
+    pub(crate) fn fig_style(&self, tool: FigureTool) -> DrawStyle {
+        self.fig_styles
+            .get(tool.def().key)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The style of `tool`, for editing. Materialises the default on first use.
+    pub(crate) fn fig_style_mut(&mut self, tool: FigureTool) -> &mut DrawStyle {
+        self.fig_styles.entry(tool.def().key).or_default()
+    }
+
+    /// The switch defaults for `tool`, as a settings surface shows them.
+    pub(crate) fn tool_settings(&self, tool: FigureTool) -> Vec<ToolSetting> {
+        moon_core::figures::settings_of(tool, self.tool_switches(tool))
+    }
+
+    /// The raw stored overrides for `tool`, for snapshotting into a draft. Empty when the tool has
+    /// never been touched, which is also what "everything at its own default" means.
+    pub(crate) fn tool_switches(&self, tool: FigureTool) -> &ToolSettings {
+        static NONE: std::sync::LazyLock<ToolSettings> = std::sync::LazyLock::new(ToolSettings::new);
+        match self.fig_tool_settings.get(tool.def().key) {
+            Some(map) => map,
+            // Only the miss pays for the shared empty map; a hit never touches the lock.
+            None => &NONE,
+        }
+    }
+
+    /// Sets one switch default for `tool`, returning whether it changed.
+    ///
+    /// Stored SPARSELY: a value the tool would give anyway removes the entry instead of recording
+    /// it. Otherwise a switch added to the tool later would be pinned by a map written before it
+    /// existed, and "reset" would have no meaning. A key the tool does not offer is refused
+    /// outright rather than stored, so nothing can accumulate that `settings_of` will never render
+    /// and no map is allocated for a write that stores nothing.
+    pub(crate) fn set_tool_setting(&mut self, tool: FigureTool, key: &str, on: bool) -> bool {
+        let default = moon_core::figures::settings_of(tool, &ToolSettings::new());
+        let Some(def_on) = default.iter().find(|s| s.key == key).map(|s| s.on) else {
+            return false;
+        };
+        if def_on == on {
+            let Some(map) = self.fig_tool_settings.get_mut(tool.def().key) else {
+                return false;
+            };
+            let changed = map.remove(key).is_some();
+            if map.is_empty() {
+                self.fig_tool_settings.remove(tool.def().key);
+            }
+            return changed;
+        }
+        self.fig_tool_settings
+            .entry(tool.def().key)
+            .or_default()
+            .insert(key.to_string(), on)
+            != Some(on)
+    }
+
     /// Returns the core's default Alerts-strategy ID from `ServerConfig`, or zero when the core is
     /// absent. The setting is persisted as per-server metadata in `cfg/settings.toml`.
     pub(crate) fn alert_def_strategy(&self, core: CoreId) -> u64 {

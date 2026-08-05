@@ -291,7 +291,7 @@ pub fn apply(
         }
         A::SwitchFigure => {
             // Cycle through tools and keep drawing mode enabled, matching Moonbot's switch-figure
-            // action. This action never exits drawing mode; the pencil or active-tool toggle does.
+            // action. This action never exits drawing mode; the Cursor entry or the active-tool toggle does.
             b.fig_tool = b.fig_tool.next();
             b.fig_draw_mode = true;
             bcx.notify();

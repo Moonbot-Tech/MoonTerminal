@@ -192,7 +192,7 @@ fn every_level_wears_its_own_hue_in_both_its_line_and_its_readout() {
     let sink = build(&FigureKind::FibRetracement(fib()), c);
     for (i, level) in FIB_LEVELS.iter().enumerate() {
         // `+ 1`: the move itself is emitted first and keeps the FIGURE's colour, which is what
-        // makes the pencil's colour still visible on this tool.
+        // makes the drawing colour still visible on this tool.
         let expected = hue(level, c.stroke.color[3] * level.emphasis.line_alpha());
         assert_eq!(
             sink.seg_colors[i + 1],

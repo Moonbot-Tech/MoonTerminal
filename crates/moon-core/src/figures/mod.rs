@@ -39,8 +39,8 @@ pub use sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
 pub use store::{FigureKey, FigureStore};
 pub use style::{DrawStyle, LineKind, DEFAULT_FILL_ALPHA};
 pub use tools::{
-    build_figure, drag_figure, pick_figure, pick_handle, FigureTool, Grab, GrabMode, ToolDef,
-    ToolSetting, ToolShape,
+    apply_settings, build_figure, drag_figure, pick_figure, pick_handle, settings_of, FigureTool,
+    Grab, GrabMode, ToolDef, ToolSetting, ToolSettings, ToolShape,
 };
 
 use serde::{Deserialize, Serialize};
@@ -114,6 +114,34 @@ impl Figure {
         self.kind.tool()
     }
 
+    /// This figure's style as one value.
+    ///
+    /// A figure stores the four style fields flat, because that is what it is persisted and drawn
+    /// as; a surface that edits "a style" should not have to know which of a figure's fields carry
+    /// it. Paired with [`Self::set_style`] so the mapping is written once and in one place.
+    pub fn style(&self) -> DrawStyle {
+        DrawStyle {
+            color: self.color,
+            thickness: self.thickness,
+            kind: self.line_kind,
+            fill: self.fill,
+        }
+    }
+
+    /// Applies a style, returning whether anything changed. The return value is what the callers'
+    /// edit paths use to decide whether to persist and re-upsert, so an unchanged style costs
+    /// neither a save nor a round trip to the core.
+    pub fn set_style(&mut self, style: DrawStyle) -> bool {
+        if self.style() == style {
+            return false;
+        }
+        self.color = style.color;
+        self.thickness = style.thickness;
+        self.line_kind = style.kind;
+        self.fill = style.fill;
+        true
+    }
+
     /// Whether this figure can be armed as a core alert: the core must know the figure type, and a
     /// shared figure has no single core to arm it on.
     pub fn can_alert(&self) -> bool {
@@ -126,3 +154,6 @@ impl Figure {
         !self.alert && !self.from_server
     }
 }
+
+#[cfg(test)]
+mod tests;

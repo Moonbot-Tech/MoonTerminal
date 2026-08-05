@@ -16,8 +16,6 @@ use super::ChartDataState;
 /// Any change increments `rev` and triggers a userdata rebuild.
 #[derive(Default, Clone, PartialEq)]
 pub(crate) struct FigureVisual {
-    /// Drawing mode. Figures are visible and interactive only while the pencil is enabled.
-    pub draw_mode: bool,
     /// Core and market identifying the chart whose interactions are represented. A `ChartEngine`
     /// represents one current core and market, and this key restricts previews and highlights to it.
     pub key: Option<(CoreId, String)>,
@@ -65,8 +63,8 @@ impl ChartDataState {
     }
 
     /// Appends figure geometry for a core and market to userdata buffers, and REPLACES the pane's
-    /// figure labels. Figures are visible only in pencil drawing mode; otherwise this layer is not
-    /// built and the label list is left empty.
+    /// figure labels. Figures are always built — arming a tool changes what a CLICK does, not what
+    /// is drawn.
     pub(super) fn append_figure_geometry(
         &self,
         core: CoreId,
@@ -75,9 +73,6 @@ impl ChartDataState {
         out: &mut moon_chart::figures::FigureBuffers<'_>,
     ) {
         out.labels.clear();
-        if !self.figure_visual.draw_mode {
-            return;
-        }
         let Some(store) = self.figures.as_ref() else {
             return;
         };

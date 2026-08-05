@@ -128,3 +128,45 @@ fn the_zone_layer_is_drawn_after_the_grid_that_would_paint_over_it() {
         );
     }
 }
+
+/// Both figure-settings frames float over the chart, so BOTH must swallow the input the chart would
+/// otherwise act on — a wheel zooms, a left-press can move an order, a right-press opens the chart's
+/// own menu. The guards therefore live in the one frame builder every host goes through.
+///
+/// The regression this exists for actually happened: the toolbar frame was written without them on
+/// the belief that the tab strip does not overlap the plot, and a click on a colour swatch reached
+/// the chart underneath. Adding a second frame that builds its own container, or dropping a guard
+/// from `shell`, must fail here.
+#[test]
+fn every_figure_settings_frame_swallows_the_charts_input() {
+    let src = read_src("figstyle/mod.rs");
+    let shell = code_only(braced_body(
+        &src,
+        "fn shell<V: 'static>(id: &'static str, cx: &mut Context<V>) -> Stateful<Div>",
+    ));
+    for guard in [
+        "on_mouse_down(MouseButton::Left",
+        "on_mouse_down(MouseButton::Right",
+        "on_mouse_up(MouseButton::Left",
+        "on_mouse_up(MouseButton::Right",
+        "on_mouse_move(",
+        "on_scroll_wheel(",
+    ] {
+        assert!(
+            shell.contains(guard),
+            "the settings frame no longer stops {guard} before the chart sees it"
+        );
+    }
+    assert_eq!(
+        shell.matches("stop_propagation").count(),
+        6,
+        "every guard in the settings frame must stop propagation"
+    );
+    // One frame builder, so no host can grow a container that forgets the guards above.
+    let code = code_only(&src);
+    assert_eq!(
+        code.matches(".absolute()").count(),
+        1,
+        "a figure-settings frame is built outside `shell`"
+    );
+}

@@ -1,4 +1,4 @@
-//! Drawing style: the palette the pencil popup edits and the stroke a tool draws with.
+//! Drawing style: the palette the settings panel edits and the stroke a tool draws with.
 
 use serde::{Deserialize, Serialize};
 
@@ -61,7 +61,7 @@ impl LineKind {
 }
 
 /// Current drawing style (color, thickness, line style and fill), applied to NEW figures and
-/// edited in the pencil popup. Stored in the UI backend.
+/// edited in the settings panel. Stored in the UI backend.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DrawStyle {
     /// RGBA color of the LINES; `a` is the "Opacity" value from the popup.

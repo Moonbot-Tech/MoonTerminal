@@ -1,4 +1,4 @@
-//! Chart-panel figure-layer interaction: pencil mode, Command/Ctrl-left-click drawing, hover,
+//! Chart-panel figure-layer interaction: drawing mode, Command/Ctrl-left-click drawing, hover,
 //! selection, handle/body dragging, and the right-click menu. The selected tool
 //! (`Backend::fig_tool`), mode (`fig_draw_mode`), and selection (`fig_selected`) are global. New
 //! drawing, selection, and hit testing start only in the chart area; an active draft or drag may
@@ -54,20 +54,18 @@ impl ChartPanel {
 
     /// Handle a left-button press for the figure layer.
     ///
-    /// Interaction requires pencil mode and a true `draw_mod` gate. The caller sets this gate when
-    /// the secondary modifier is held—Command on macOS or Ctrl on Windows/Linux—or when a draft is
-    /// already active, allowing later nodes without a held modifier. With no draft, an existing
-    /// figure is grabbed first; otherwise the click places the next node. Returns whether the
-    /// figure layer consumed it.
+    /// Interaction requires a true `draw_mod` gate. The caller sets this gate when the secondary
+    /// modifier is held—Command on macOS or Ctrl on Windows/Linux—or when a draft is already
+    /// active, allowing later nodes without a held modifier. With no draft, an existing figure is
+    /// grabbed first — which needs no armed tool, since a figure is grabbable whenever it is drawn;
+    /// otherwise the click places the next node, which does. Returns whether the figure layer
+    /// consumed it.
     pub(super) fn try_fig_click(
         &mut self,
         pos: (f32, f32),
         draw_mod: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.backend.read(cx).fig_draw_mode {
-            return false;
-        }
         // Match Moonbot: starting a draft or grabbing a figure requires the secondary modifier.
         // The caller also keeps this gate true for an existing draft, so its later clicks continue
         // without the modifier. An unmodified click with no draft continues to trading/navigation.
@@ -89,6 +87,12 @@ impl ChartPanel {
         if self.fig_draft.is_none() && self.try_fig_grab(pane, pos, &map, cx) {
             return true;
         }
+        // Grabbing works with no tool armed — that is what the Cursor entry leaves behind — but
+        // PLACING a node needs one. Without this the click would fall through to trading, which is
+        // exactly right: with no tool selected a modifier-click that hits nothing is not a draw.
+        if !self.backend.read(cx).fig_draw_mode {
+            return false;
+        }
         let tool = self.backend.read(cx).fig_tool;
         let node = map.node_at(pos);
         self.fig_draw_click(pane, tool, node, cx);
@@ -97,7 +101,7 @@ impl ChartPanel {
         true
     }
 
-    /// Place a node in pencil mode, completing the figure once the tool has all its clicks.
+    /// Place a node in drawing mode, completing the figure once the tool has all its clicks.
     fn fig_draw_click(
         &mut self,
         pane: usize,
@@ -119,19 +123,29 @@ impl ChartPanel {
         let draft = match self.fig_draft.as_mut() {
             Some(d) => d,
             None => {
-                let style = self.backend.read(cx).fig_style;
-                self.fig_draft
-                    .insert(FigDraft::new(pane, core, market.clone(), tool, style, node))
+                let (style, switches) = {
+                    let b = self.backend.read(cx);
+                    (b.fig_style(tool), b.tool_switches(tool).clone())
+                };
+                self.fig_draft.insert(FigDraft::new(
+                    pane,
+                    core,
+                    market.clone(),
+                    tool,
+                    style,
+                    switches,
+                    node,
+                ))
             }
         };
         // Every click, including the first, goes through `place`: a one-click tool simply finishes
         // on it.
+        // The style the draft captured when it started, so a style edited mid-draw does not reach
+        // the figure being placed. Read before the draft is dropped: it is the only source there
+        // has ever been for a finished figure.
+        let style = draft.style;
         let finished = draft.place(node);
         if let Some(kind) = finished {
-            let style = self
-                .fig_draft
-                .as_ref()
-                .map_or_else(|| self.backend.read(cx).fig_style, |d| d.style);
             self.fig_draft = None;
             let fig = Figure::new(kind, style, moon_core::util::now_unix_ms_i64());
             let id = self
@@ -256,7 +270,7 @@ impl ChartPanel {
     /// Update draft preview, active dragging, and figure hover from a mouse-move event.
     ///
     /// `pressed_left` reports whether the left button remains held. The return value reports an
-    /// active drag or a later preview/hover change; cancelling a draft after pencil mode is disabled
+    /// active drag or a later preview/hover change; cancelling a draft after drawing mode is disabled
     /// synchronizes visuals but can still return `false`, especially when outside the chart.
     pub(super) fn update_fig_pointer(
         &mut self,
@@ -265,7 +279,9 @@ impl ChartPanel {
         pressed_left: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        // Cancel the draft when Escape or the toolbar disables pencil mode.
+        // Cancel the draft when the tool was disarmed while the cursor sat still. `sync_fig_visual`
+        // already does this the moment it happens; this is the second guard, for a draft started
+        // before that path could run.
         if !self.backend.read(cx).fig_draw_mode && self.fig_draft.is_some() {
             self.fig_draft = None;
             self.sync_fig_visual(cx);
@@ -349,19 +365,11 @@ impl ChartPanel {
                 _ => {}
             }
         }
-        // Pencil-mode hover previews which figure a modifier-click would select or drag. Gated by
+        // Drawing-mode hover previews which figure a modifier-click would select or drag. Gated by
         // the same cursor-movement threshold as order lines (docs-internal/INPUT_HOTPATH_NORMS.md
         // §1): raw MouseMove arrives far more often than the cursor actually moves, and this walks
         // every visible figure.
-        if !self.backend.read(cx).fig_draw_mode {
-            // Leaving pencil mode drops the hover AND both probe points, so re-entering it
-            // hit-tests on the first move instead of waiting for the cursor to clear the threshold.
-            self.fig_hover_probe = None;
-            self.fig_draft_probe = None;
-            if self.fig_hover.take().is_some() {
-                changed = true;
-            }
-        } else if super::trade::hover_probe_due(self.fig_hover_probe, pos) {
+        if super::trade::hover_probe_due(self.fig_hover_probe, pos) {
             self.fig_hover_probe = Some(pos);
             let hover = self.fig_hit_at(pos, cx);
             if hover != self.fig_hover {
@@ -397,12 +405,9 @@ impl ChartPanel {
     /// sitting on the chart, and Delete/Alert kept pointing at a figure the user had stopped
     /// working on. Never consumes the click; the caller carries on with it.
     pub(super) fn fig_clear_selection_on_miss(&mut self, pos: (f32, f32), cx: &mut Context<Self>) {
-        // Only where figures are drawn and only for a selection made on THIS chart. `fig_selected`
-        // is global: a click in another panel, in a detached window, or in a chart with the pencil
-        // off would otherwise silently drop a selection its user can still see.
-        if !self.backend.read(cx).fig_draw_mode {
-            return;
-        }
+        // Only for a selection made on THIS chart. `fig_selected` is global: a click in another
+        // panel or in a detached window would otherwise silently drop a selection its user can
+        // still see.
         let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
             return;
         };
@@ -430,7 +435,7 @@ impl ChartPanel {
         self.sync_fig_visual(cx);
     }
 
-    /// Open the context menu for a right-clicked figure in pencil mode: arm it as a core alert,
+    /// Open the context menu for a right-clicked figure: arm it as a core alert,
     /// share it with every core on this market, or delete it.
     ///
     /// This is limited to the chart area. Returns `true` when the menu opened so the caller can
@@ -442,9 +447,6 @@ impl ChartPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.backend.read(cx).fig_draw_mode {
-            return false;
-        }
         // `fig_hit_at` excludes the order-book zone through `glass_pane_at`.
         let Some(id) = self.fig_hit_at(local_pos, cx) else {
             return false;
@@ -567,17 +569,18 @@ impl ChartPanel {
         true
     }
 
-    /// Closes the per-figure settings panel when what it edits stops existing: the pencil switched
-    /// off (it was only reachable through it), the figure deleted, or the pane it was opened on
-    /// gone or showing another market. Called from the backend-notify path, so an edit made in
-    /// another window closes it here too.
+    /// Closes the per-figure settings panel when what it edits stops existing: the figure deleted,
+    /// or the pane it was opened on gone or showing another market. Called from the backend-notify
+    /// path, so an edit made in
+    /// another window closes it here too. Disarming the tool does NOT close it: the figure it
+    /// edits is still on the chart, still selected and still editable.
     pub(super) fn drop_stale_fig_settings(&mut self, cx: &mut Context<Self>) {
         let Some(target) = self.fig_settings.clone() else {
             return;
         };
         let b = self.backend.read(cx);
-        let alive = b.fig_draw_mode
-            && b.figures
+        let alive = b
+            .figures
                 .borrow()
                 .get(target.core, &target.market, target.id)
                 .is_some()
@@ -592,19 +595,28 @@ impl ChartPanel {
         }
     }
 
-    /// Publish pencil mode, draft preview, hover, and selection to the chart engine.
+    /// Publish drawing mode, draft preview, hover, and selection to the chart engine.
     ///
-    /// Mouse events and the Backend observer both call this so toggling pencil mode immediately
-    /// hides or shows the interactive layer.
+    /// Mouse events and the Backend observer both call this so a tool switch, a finished draft or a
+    /// new selection reaches the engine on the same frame it happens.
     pub(super) fn sync_fig_visual(&mut self, cx: &mut Context<Self>) {
         // A tool switch abandons the draft: its placed nodes belong to the tool that started it,
-        // and its preview would otherwise keep drawing until the next click discards it.
-        let tool = self.backend.read(cx).fig_tool;
-        if self.fig_draft.as_ref().is_some_and(|d| d.tool != tool) {
+        // and its preview would otherwise keep drawing until the next click discards it. Choosing
+        // Cursor abandons it for the same reason, and HERE rather than on the next mouse move over
+        // the chart — this runs from the backend observer, so the half-placed nodes go the moment
+        // the tool is disarmed instead of lingering until the cursor happens to pass over them.
+        let (tool, armed) = {
+            let b = self.backend.read(cx);
+            (b.fig_tool, b.fig_draw_mode)
+        };
+        if self
+            .fig_draft
+            .as_ref()
+            .is_some_and(|d| d.tool != tool || !armed)
+        {
             self.fig_draft = None;
         }
         let b = self.backend.read(cx);
-        let draw_mode = b.fig_draw_mode;
         let key = self
             .fig_draft
             .as_ref()
@@ -618,7 +630,6 @@ impl ChartPanel {
             .filter(|(c, m, _)| key.as_ref().is_some_and(|(kc, km)| kc == c && km == m))
             .map(|(_, _, id)| *id);
         let visual = FigureVisual {
-            draw_mode,
             key,
             draft,
             hovered: self.fig_hover,
