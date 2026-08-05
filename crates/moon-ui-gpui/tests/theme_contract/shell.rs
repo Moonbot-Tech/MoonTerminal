@@ -538,6 +538,53 @@ fn toolbar_row_budget_counts_every_rule_it_draws() {
     );
 }
 
+/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its fixed icon
+/// multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
+/// Main-window widths.
+#[test]
+fn toolbar_budget_includes_every_singleton_launcher() {
+    let text = read_src("controls/toolbar.rs");
+    let budget = fn_body(&text, "fn row_fit(");
+    let toolbar = fn_body(&text, "pub fn toolbar(");
+    let drawn = toolbar.matches("open_window_button(").count();
+    let budgeted = budget
+        .split_once("ICON_BTN_W * ")
+        .and_then(|(_, rest)| rest.split_once(';'))
+        .and_then(|(value, _)| value.trim().parse::<f32>().ok())
+        .expect("row_fit must state its launcher multiplier after `ICON_BTN_W *`");
+
+    assert_eq!(
+        budgeted, drawn as f32,
+        "row_fit must budget every open_window_button rendered by toolbar"
+    );
+    assert!(toolbar.contains("\"toolbar-profit-monitor\""));
+    assert!(toolbar.contains("crate::analytics::profit_monitor::open"));
+}
+
+/// `controls/toolbar.rs:toolbar` must place a divider between Screener and Profit Monitor. Removing
+/// that one rule merges operational tools with the two analytics launchers even though all five
+/// buttons and their width budget remain present.
+#[test]
+fn toolbar_separates_operational_and_analytics_launchers() {
+    let text = read_src("controls/toolbar.rs");
+    let toolbar = code_only(fn_body(&text, "pub fn toolbar("));
+    let screener = toolbar
+        .find("\"toolbar-screener\"")
+        .expect("Screener launcher must remain present");
+    let monitor = toolbar
+        .find("\"toolbar-profit-monitor\"")
+        .expect("Profit Monitor launcher must remain present");
+
+    assert!(
+        screener < monitor,
+        "Screener must remain left of Profit Monitor"
+    );
+    assert!(
+        toolbar[screener..monitor].contains(".child(design::chrome_divider(cx, p))"),
+        "Screener and Profit Monitor must sit in separate chrome sections"
+    );
+}
+
 /// `core_status/table.rs:core_status_row`, `server_view.rs:server_row` and `core_row` must keep
 /// each protocol-v4 field bound to its correctly scoped UI metric. Swapping process/system CPU or
 /// process/free memory compiles but gives the operator a believable number with the wrong scope.

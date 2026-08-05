@@ -2,6 +2,92 @@
 # rust-i18n `_version: 2` format: key -> locale-to-string map. Interpolation: %{var}.
 _version: 2
 
+# Independent desktop Profit Monitor.
+profit_monitor.window_title:
+  ru: "MoonTerminal — Монитор прибыли"
+  en: "MoonTerminal — Profit Monitor"
+  es: "MoonTerminal — Monitor de beneficios"
+toolbar.profit_monitor:
+  ru: "Монитор прибыли"
+  en: "Profit Monitor"
+  es: "Monitor de beneficios"
+profit_monitor.group.core:
+  ru: "По ядрам"
+  en: "By core"
+  es: "Por núcleo"
+profit_monitor.group.exchange:
+  ru: "По биржам"
+  en: "By exchange"
+  es: "Por exchange"
+profit_monitor.period.hour:
+  ru: "Час"
+  en: "Hour"
+  es: "Hora"
+profit_monitor.column.name:
+  ru: "Имя"
+  en: "Name"
+  es: "Nombre"
+profit_monitor.column.profit:
+  ru: "Прибыль"
+  en: "Profit"
+  es: "Beneficio"
+profit_monitor.column.trades:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Operac."
+profit_monitor.column.win_rate:
+  ru: "Доля побед"
+  en: "Win rate"
+  es: "Aciertos"
+profit_monitor.column.average_order:
+  ru: "Ср. ордер"
+  en: "Avg order"
+  es: "Orden prom."
+profit_monitor.total:
+  ru: "Итого"
+  en: "Total"
+  es: "Total"
+profit_monitor.core_fallback:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+profit_monitor.unknown_exchange:
+  ru: "Биржа неизвестна"
+  en: "Unknown exchange"
+  es: "Exchange desconocido"
+profit_monitor.auto:
+  ru: "Обновляется автоматически"
+  en: "Updates automatically"
+  es: "Actualización automática"
+profit_monitor.refreshing:
+  ru: "Обновление…"
+  en: "Refreshing…"
+  es: "Actualizando…"
+profit_monitor.refresh_failed:
+  ru: "Ошибка обновления"
+  en: "Update failed"
+  es: "Error de actualización"
+profit_monitor.not_ready:
+  ru: "Жду первые данные отчёта"
+  en: "Waiting for the first report data"
+  es: "Esperando los primeros datos del informe"
+profit_monitor.read_failed:
+  ru: "Не удалось прочитать отчёт"
+  en: "Could not read the report"
+  es: "No se pudo leer el informe"
+profit_monitor.split_title:
+  ru: "Прибыль в разных валютах"
+  en: "Profit uses different currencies"
+  es: "El beneficio usa monedas diferentes"
+profit_monitor.split_detail:
+  ru: "Общий итог не показан, потому что складывать эти валюты небезопасно. Ниже — точные итоги отдельно."
+  en: "No combined total is shown because adding these currencies would be unsafe. Exact totals are listed separately below."
+  es: "No se muestra un total combinado porque sumar estas monedas no es seguro. Los totales exactos aparecen por separado."
+profit_monitor.trades_total:
+  ru: "Всего сделок: %{n}"
+  en: "Total trades: %{n}"
+  es: "Operaciones totales: %{n}"
+
 analytics.window_title:
   ru: "MoonTerminal — Аналитика"
   en: "MoonTerminal — Analytics"

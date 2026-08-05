@@ -1,8 +1,8 @@
 //! Platform-level window support: `WindowOptions` factories for every terminal window type
-//! (trading, tool, detached panel, detached chart, and debug), display selection from saved
-//! geometry or the owner window, theme-aware clear colors, Windows DWM frame configuration, and
-//! HWND/geometry helpers. It also provides Windows AppUserModelIDs and group icons embedded in
-//! the executable by `build.rs` through `embed_group_icons`.
+//! (trading, tool, independent Profit Monitor, detached panel, detached chart, and debug), display
+//! selection from saved geometry or the owner window, theme-aware clear colors, Windows DWM frame
+//! configuration, and HWND/geometry helpers. It also provides Windows AppUserModelIDs and group
+//! icons embedded in the executable by `build.rs` through `embed_group_icons`.
 
 use std::sync::Arc;
 
@@ -166,6 +166,39 @@ pub(crate) fn tool_window_options(
     owner: Option<AnyWindowHandle>,
 ) -> WindowOptions {
     owned_window_options(title, window_bounds, None, min_size, owner, true)
+}
+
+/// Build options for the independent desktop Profit Monitor.
+///
+/// Unlike owned tool windows, the monitor remains independently minimizable and restorable after
+/// every Main window is minimized. Its explicit taskbar entry is the user's route back to it.
+///
+/// Args:
+///     title: Native window title.
+///     window_bounds: Initial or restored geometry.
+///     display_id: Display chosen from saved geometry or the launching window.
+///     min_size: Smallest responsive monitor size.
+///
+/// Returns:
+///     Independent normal-window options with a visible taskbar entry.
+pub(crate) fn profit_monitor_window_options(
+    title: impl Into<SharedString>,
+    window_bounds: WindowBounds,
+    display_id: Option<DisplayId>,
+    min_size: Option<Size<Pixels>>,
+) -> WindowOptions {
+    let mut options = app_window_options(
+        title,
+        window_bounds,
+        display_id,
+        min_size,
+        APP_ID.to_string(),
+        app_icon(0),
+        true,
+    );
+    options.relationship = WindowRelationship::default();
+    options.taskbar_visibility = WindowTaskbarVisibility::Visible;
+    options
 }
 
 /// Build options for a detached non-chart panel such as Orders, Assets, Log, or Report.

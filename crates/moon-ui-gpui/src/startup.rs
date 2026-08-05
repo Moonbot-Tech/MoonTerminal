@@ -483,6 +483,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             assets_window: None,
             screener_window: None,
             analytics_window: None,
+            profit_monitor_window: None,
             report_window: None,
             report_window_view: None,
             firetest: firetest_config.clone().map(firetest::Runtime::new),

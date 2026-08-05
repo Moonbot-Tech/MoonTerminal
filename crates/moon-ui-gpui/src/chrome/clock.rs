@@ -1,5 +1,5 @@
-//! Clock in the header's right corner, formatted as `HH:MM:SS CODE`. It shows the selected city's
-//! wall clock and advances once per second with the shell rerender. Clicking it opens a
+//! Shared terminal clock, formatted as `HH:MM:SS CODE`. It shows the selected city's wall clock
+//! and advances whenever its host view rerenders. Clicking it opens a
 //! `MoonPopover` listing the curated cities of [`cities`], each with its own current time. The
 //! selection persists in the layout as the city's IANA zone id through
 //! `Backend::set_header_clock_zone` and is shared by all windows.
@@ -121,7 +121,7 @@ pub(crate) fn reconcile_clock_zone(backend: &Entity<Backend>, cx: &mut App) {
     });
 }
 
-/// Render the header clock and its city-selection popover.
+/// Render the shared terminal clock and its city-selection popover.
 ///
 /// Both the drawn strings and [`header_clock_width`] are derived through [`clock_parts`].
 pub(crate) fn header_clock(

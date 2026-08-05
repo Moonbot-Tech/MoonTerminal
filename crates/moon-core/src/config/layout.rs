@@ -178,6 +178,21 @@ pub struct WindowLayout {
     /// "Analytics" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub analytics_window: Option<GeomRect>,
+    /// Independent desktop Profit Monitor geometry.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_window: Option<GeomRect>,
+    /// Selected Profit Monitor period id.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_period: Option<String>,
+    /// Selected Profit Monitor grouping id (`core` or `exchange`).
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_group: Option<String>,
+    /// Profit Monitor sort as `(stable column key, descending)`.
+    ///
+    /// `None` preserves the grouping's natural order. Read leniently because a malformed
+    /// hand-edited widget preference must never discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_sort: Option<(String, bool)>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

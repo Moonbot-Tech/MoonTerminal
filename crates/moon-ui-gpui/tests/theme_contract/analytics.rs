@@ -3,6 +3,253 @@
 
 use super::support::*;
 
+/// The Profit Monitor must keep large core sets scrollable, fixed around one virtualized body,
+/// while every visible heading remains clickable and numeric values stay on one line.
+///
+/// Breakage: replacing `MoonVirtualList` with eager children or dropping its retained handle makes
+/// a 52-core window impossible to traverse reliably; moving header/footer into the list scrolls
+/// context away; removing the numeric-cell nowrap lets a large profit split across two rows.
+#[test]
+fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
+    let source = read_src("analytics/profit_monitor/mod.rs");
+    let state = code_only(braced_body(&source, "pub(crate) struct ProfitMonitorView"));
+    let construction = code_only(braced_body(
+        &source,
+        "fn new(backend: Entity<Backend>, window:",
+    ));
+    let table = code_only(braced_body(&source, "fn table("));
+    let header = code_only(braced_body(&source, "fn table_header("));
+    let numeric = code_only(braced_body(&source, "fn numeric_cell("));
+
+    assert!(
+        state.contains("scroll: MoonVirtualListScrollHandle")
+            && construction.contains("scroll: MoonVirtualListScrollHandle::new()"),
+        "the monitor view must retain one virtual-list scroll handle across renders"
+    );
+    assert!(
+        table.contains("MoonVirtualList::new(")
+            && table.contains(".track_scroll(scroll)")
+            && table.contains(".scrollbar_visibility(MoonScrollbarVisibility::Always)")
+            && table.contains(".child(div().flex_1().min_h_0().w_full().child(body))"),
+        "the bounded table viewport must use the retained virtual list and an exposed scrollbar"
+    );
+    let header_at = table
+        .find(".child(header)")
+        .expect("the fixed header must be outside the virtual list");
+    let body_at = table
+        .find(".child(div().flex_1().min_h_0().w_full().child(body))")
+        .expect("the virtual body must occupy the bounded middle slot");
+    let footer_at = table
+        .find(".child(footer)")
+        .expect("the fixed total footer must be outside the virtual list");
+    assert!(
+        header_at < body_at && body_at < footer_at,
+        "the header and total must stay fixed around the scrolling rows"
+    );
+    assert!(
+        header.contains(".cursor_pointer()")
+            && header.contains("this.toggle_sort(column, cx)")
+            && header.contains("MonitorSortColumn::Name")
+            && header.contains("MonitorSortColumn::Profit")
+            && header.contains("MonitorSortColumn::Trades")
+            && header.contains("MonitorSortColumn::WinRate")
+            && header.contains("MonitorSortColumn::AverageOrder"),
+        "every responsive header must route clicks through the shared persisted sort action"
+    );
+    assert!(
+        numeric.contains(".flex_none()")
+            && numeric.contains(".overflow_hidden()")
+            && numeric.contains(".whitespace_nowrap()")
+            && numeric.contains(".text_ellipsis()"),
+        "fixed numeric cells must never wrap and alter the virtual row height"
+    );
+}
+
+/// The Profit Monitor clock must share the terminal's selected city without making the entire
+/// table repaint every second.
+///
+/// Breakage: moving `SECOND_MS` into `ProfitMonitorView` looks simpler but rebuilds, regroups, and
+/// sorts every visible row once per second. Constructing another clock inside `controls` leaks
+/// timers across rerenders instead of retaining one child entity. Removing `size_full()` from the
+/// inner `v_flex` in `ProfitMonitorBodyView::render` sizes its root to the header and footer, so the
+/// virtual viewport collapses and hides every grouped row while the nonzero total remains visible.
+#[test]
+fn profit_monitor_clock_ticks_in_one_retained_child_view() {
+    let source = read_src("analytics/profit_monitor/mod.rs");
+    let state = code_only(braced_body(&source, "pub(crate) struct ProfitMonitorView"));
+    let construction = code_only(braced_body(
+        &source,
+        "fn new(backend: Entity<Backend>, window:",
+    ));
+    let clock_construction =
+        code_only(braced_body(&source, "fn new(backend: Entity<Backend>, cx:"));
+    let clock_render = code_only(braced_body(&source, "impl Render for MonitorClockView"));
+    let controls = code_only(braced_body(&source, "fn controls("));
+    let body_render = code_only(braced_body(
+        &source,
+        "impl Render for ProfitMonitorBodyView",
+    ));
+    let parent_render = code_only(braced_body(&source, "impl Render for ProfitMonitorView"));
+    let invalidate = code_only(braced_body(&source, "fn invalidate_content("));
+
+    assert!(
+        state.contains("clock: Entity<MonitorClockView>")
+            && construction
+                .matches("cx.new(|cx| MonitorClockView::new(backend.clone(), cx))")
+                .count()
+                == 1
+            && controls.contains(".child(self.clock.clone())"),
+        "the monitor must retain one child clock instead of constructing it while rendering"
+    );
+    assert!(
+        clock_construction.contains("duration_until_wall_clock_boundary(")
+            && clock_construction.contains("SECOND_MS")
+            && clock_construction.contains("this.update(cx, |_this, cx| cx.notify())")
+            && source.matches("SECOND_MS").count() == 2,
+        "only MonitorClockView may own the wall-clock-aligned second repaint"
+    );
+    assert!(
+        clock_render.contains("crate::chrome::clock::header_clock(&self.backend, palette, cx)"),
+        "the monitor clock must use the terminal's selected-city renderer and picker"
+    );
+    assert!(
+        state.contains("content: Entity<ProfitMonitorBodyView>")
+            && construction.contains("owner: content_owner")
+            && body_render.contains(".read(cx)")
+            && parent_render.contains("AnyView::from(self.content.clone())")
+            && parent_render.contains(".cached(")
+            && parent_render.contains("StyleRefinement::default()")
+            && parent_render.contains(".flex_1()")
+            && parent_render.contains(".min_h(px(0.0))")
+            && parent_render.contains(".w_full()")
+            && !parent_render.contains("div().flex_1().min_h_0().w_full().child("),
+        "the cached body must remain the direct flex child that receives the parent's remaining bounds"
+    );
+    assert!(
+        body_render.contains("let body = owner")
+            && body_render.contains(".read(cx)")
+            && body_render.contains("v_flex()")
+            && body_render.contains(".size_full()")
+            && body_render.contains(".min_h_0()")
+            && body_render.contains(".child(body)")
+            && body_render.matches("v_flex()").count() == 1,
+        "the cached view's inner vertical root must fill its allocated bounds before laying out the elastic table"
+    );
+    assert!(
+        invalidate.contains("self.content.update(cx, |_content, cx| cx.notify())"),
+        "body-state writers need a dedicated cached-child invalidation path"
+    );
+    for writer in [
+        "fn sync_context(",
+        "fn reload(",
+        "fn set_group(",
+        "fn toggle_sort(",
+    ] {
+        assert!(
+            code_only(braced_body(&source, writer)).contains("invalidate_content(cx)"),
+            "{writer} must invalidate the cached body after changing one of its inputs"
+        );
+    }
+}
+
+/// Profit Monitor values must carry their rounded sign into the semantic palette, while the fixed
+/// total row is visibly stronger than ordinary data rows.
+///
+/// Breakage: recolouring from the raw value turns a displayed zero red; dropping the footer height,
+/// weight, background, or accent border makes `Total` indistinguishable from the final data row.
+#[test]
+fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
+    let source = read_src("analytics/profit_monitor/mod.rs");
+    let table = code_only(braced_body(&source, "fn table("));
+    let row = code_only(braced_body(&source, "fn table_row("));
+    let split = code_only(braced_body(&source, "fn split_body("));
+
+    assert!(
+        table.matches("format_profit(").count() == 2
+            && table.contains("profit_sign,")
+            && table.contains("total_profit_sign,"),
+        "body and total rows must pass the sign returned beside their formatted profit"
+    );
+    assert!(
+        row.contains("profit_sign.pick(")
+            && row.contains("design::positive_color(palette)")
+            && row.contains("design::danger_color(palette)")
+            && row.contains("palette.text")
+            && row.contains(".text_color(moon(profit_color))"),
+        "the profit cell must use the theme's semantic positive, danger, and neutral tones"
+    );
+    assert!(
+        split.contains("design::positive_color(palette)")
+            && split.contains("design::danger_color(palette)")
+            && split.contains("palette.text"),
+        "split-currency profit chips must use the same theme-safe semantic tones"
+    );
+    for marker in [
+        ".h(design::fit_h_px(cx, 42.0, 14.0, 10.0))",
+        ".bg(moon(palette.table_head))",
+        ".text_size(design::t_title(cx))",
+        ".font_weight(FontWeight::SEMIBOLD)",
+        ".border_t(px(2.0))",
+        ".border_color(moon_alpha(palette.amber, 0.7))",
+    ] {
+        assert!(table.contains(marker), "the total row lost `{marker}`");
+    }
+}
+
+/// Profit Monitor control types and every persisted choice must stay coupled to their restore and
+/// writer paths instead of becoming session-only view state.
+///
+/// Breakage: replacing the period dropdown with another segmented strip recreates the crowded
+/// header; deleting any layout assignment or constructor restore silently resets that choice after
+/// restart even though the layout serializer's isolated round-trip remains green.
+#[test]
+fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
+    let source = read_src("analytics/profit_monitor/mod.rs");
+    let construction = code_only(braced_body(
+        &source,
+        "fn new(backend: Entity<Backend>, window:",
+    ));
+    let controls = code_only(braced_body(&source, "fn controls("));
+    let period_dropdown = code_only(braced_body(&source, "fn period_dropdown("));
+    let set_period = code_only(braced_body(&source, "fn set_period("));
+    let set_group = code_only(braced_body(&source, "fn set_group("));
+    let toggle_sort = code_only(braced_body(&source, "fn toggle_sort("));
+
+    assert!(
+        period_dropdown.contains("MoonDropdown::new(\"profit-monitor-period\")")
+            && controls
+                .matches("period_dropdown(self.period, cx.entity())")
+                .count()
+                == 1
+            && controls.contains("let groups = [GroupMode::Core, GroupMode::Exchange];")
+            && controls
+                .matches("MoonSegmentedControl::new(\"profit-monitor-groups\")")
+                .count()
+                == 1,
+        "period must use one dropdown while Core/Exchange remain exactly two segmented buttons"
+    );
+    for key in [
+        "profit_monitor_period",
+        "profit_monitor_group",
+        "profit_monitor_sort",
+    ] {
+        assert!(
+            construction.contains(key),
+            "the monitor constructor must restore {key}"
+        );
+    }
+    for (name, body, key) in [
+        ("period", set_period, "profit_monitor_period"),
+        ("group", set_group, "profit_monitor_group"),
+        ("sort", toggle_sort, "profit_monitor_sort"),
+    ] {
+        assert!(
+            body.contains(key) && body.contains("backend.layout_dirty = true"),
+            "the {name} choice must update {key} and mark the layout dirty"
+        );
+    }
+}
+
 /// The per-core Summary ranking must stay virtualized in both modes and use MoonUI's progress
 /// primitive for magnitude bars.
 ///
