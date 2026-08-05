@@ -50,71 +50,32 @@ impl Query {
         }
     }
 
-    /// Build the period-and-filter WHERE clause for ONE source, referencing only columns
-    /// that source HAS (like the Report window's `build_where`; filtering on a missing
-    /// column would fail the entire SELECT). Placeholders ?1/?2 are from/to; cores, side,
-    /// and emulator are integer literals from configuration, so injection is impossible.
-    pub(super) fn where_sql(&self, cols: &std::collections::HashSet<String>, sid: &str) -> String {
-        self.where_with_alias(WHERE_PERIOD, cols, sid, None)
-    }
-
-    /// Build the standard filter with every physical report column qualified by one row alias.
+    /// Build mutually exclusive filters for one physical report source.
     ///
-    /// Args:
-    ///     cols: Columns available on the physical source.
-    ///     sid: Effective strategy-id expression, already qualified when needed.
-    ///     alias: SQL alias of the physical report table.
-    ///
-    /// Returns:
-    ///     Filter safe to append after valuation joins carrying overlapping column names.
-    fn where_sql_qualified(
-        &self,
-        cols: &std::collections::HashSet<String>,
-        sid: &str,
-        alias: &str,
-    ) -> String {
-        let period =
-            format!("{alias}.closedate >= ?1 AND {alias}.closedate < ?2 AND {alias}.closedate > 0");
-        self.where_with_alias(&period, cols, sid, Some(alias))
-    }
-
-    /// The same filters under a DIFFERENT row predicate.
-    ///
-    /// Split out because one reader asks the opposite question of every other: which rows the
-    /// period predicate throws away (see [`undated_closes`]). Sharing the filter tail is what
-    /// keeps that count describing the same cores, side and emulator setting the figures
-    /// beside it were computed under.
-    /// `sid` is the SQL that yields a row's strategy id — plain `COALESCE(strategyid,0)`, or
-    /// the liquidation-aware form. It is passed in rather than built here so the scope filter
-    /// and the projected column cannot disagree about which strategy a row belongs to: a row
-    /// attributed in the projection but not in the filter would show up in a strategy's list
-    /// and vanish from its own detail.
-    pub(super) fn where_with(
-        &self,
-        period: &str,
-        cols: &std::collections::HashSet<String>,
-        sid: &str,
-    ) -> String {
-        self.where_with_alias(period, cols, sid, None)
-    }
-
-    /// Assemble shared row filters with optional physical-column qualification.
+    /// A strategy selection becomes separate raw `strategyid = value`, `strategyid = 0`, and
+    /// `strategyid IS NULL` branches. This lets SQLite search the physical strategy key before
+    /// evaluating the effective-id expression for liquidation attribution. Duplicate scopes and
+    /// core-specific scopes shadowed by the same any-core key are removed before expansion. IDs
+    /// sharing a core are folded into one `IN` predicate, keeping each source at three branches
+    /// even when Ctrl/Shift selection contains hundreds of strategies.
     ///
     /// Args:
     ///     period: Caller-supplied period predicate.
     ///     cols: Columns available on the physical source.
-    ///     sid: Effective strategy-id expression.
-    ///     alias: Optional table alias used for every ordinary report column.
+    ///     sid: Effective strategy-id expression used for liquidation candidates.
+    ///     alias: Optional table alias used for every physical report column.
+    ///     attribution: Whether the expression can reassign a zero/NULL liquidation row.
     ///
     /// Returns:
-    ///     Complete period, deletion, core, side, emulator, and strategy predicate.
-    fn where_with_alias(
+    ///     One complete predicate per disjoint raw-strategy branch.
+    pub(super) fn where_branches(
         &self,
         period: &str,
         cols: &std::collections::HashSet<String>,
         sid: &str,
         alias: Option<&str>,
-    ) -> String {
+        attribution: bool,
+    ) -> Vec<String> {
         let has = |n: &str| cols.contains(n);
         let column = |name: &str| match alias {
             Some(alias) => format!("{alias}.{name}"),
@@ -125,6 +86,10 @@ impl Query {
             w.push_str(&format!(" AND COALESCE({},0) = 0", column("deleted")));
         }
         if !self.cores.is_empty() {
+            if !has("core_uid") {
+                w.push_str(" AND 1=0");
+                return vec![w];
+            }
             let list = self
                 .cores
                 .iter()
@@ -151,33 +116,77 @@ impl Query {
                 Some(true) => w.push_str(&format!(" AND COALESCE({},0) = 1", column("emulator"))),
             }
         }
-        // Scope of the SELECTED strategies: rows matching any of the (strategy × its core)
-        // pairs. One row can satisfy only one pair, so no aggregate double-counts.
-        if !self.strategies.is_empty() {
-            if has("strategyid") {
-                let terms: Vec<String> = self
-                    .strategies
-                    .iter()
-                    .map(|(want, core)| match core {
-                        Some(c) => {
-                            format!(
-                                "(COALESCE({sid},0) = {want} AND {} = {})",
-                                column("core_uid"),
-                                *c as i64
-                            )
-                        }
-                        None => format!("COALESCE({sid},0) = {want}"),
-                    })
-                    .collect();
-                w.push_str(&format!(" AND ({})", terms.join(" OR ")));
-            } else {
-                // This source cannot say which strategy a row belongs to, so it cannot
-                // satisfy a strategy-scoped query: it contributes nothing, rather than
-                // every row it holds.
-                w.push_str(" AND 1=0");
+        if self.strategies.is_empty() {
+            return vec![w];
+        }
+        if !has("strategyid") {
+            w.push_str(" AND 1=0");
+            return vec![w];
+        }
+
+        let raw_sid = column("strategyid");
+        let core_uid = column("core_uid");
+        let mut any_core = std::collections::BTreeSet::new();
+        for &(want, core) in &self.strategies {
+            if core.is_none() {
+                any_core.insert(want);
             }
         }
-        w
+        let mut by_core: std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>> =
+            std::collections::BTreeMap::new();
+        if has("core_uid") {
+            for &(want, core) in &self.strategies {
+                if let Some(core) = core.filter(|_| !any_core.contains(&want)) {
+                    by_core.entry(core).or_default().insert(want);
+                }
+            }
+        }
+        let scoped_predicate = |value: &str, keep: fn(i64) -> bool| {
+            let render_ids = |ids: Vec<i64>| match ids.as_slice() {
+                [] => None,
+                [id] => Some(format!("{value} = {id}")),
+                _ => Some(format!(
+                    "{value} IN ({})",
+                    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+                )),
+            };
+            let mut terms = Vec::new();
+            if let Some(term) =
+                render_ids(any_core.iter().copied().filter(|id| keep(*id)).collect())
+            {
+                terms.push(term);
+            }
+            for (core, ids) in &by_core {
+                if let Some(term) = render_ids(ids.iter().copied().filter(|id| keep(*id)).collect())
+                {
+                    terms.push(format!("({core_uid} = {} AND {term})", *core as i64));
+                }
+            }
+            match terms.as_slice() {
+                [] => None,
+                [term] => Some(term.clone()),
+                _ => Some(format!("({})", terms.join(" OR "))),
+            }
+        };
+
+        let mut branches = Vec::new();
+        if let Some(direct) = scoped_predicate(&raw_sid, |want| want != 0) {
+            branches.push(format!("{w} AND {direct}"));
+        }
+        let residual = if attribution {
+            scoped_predicate(&format!("COALESCE({sid}, 0)"), |_| true)
+        } else {
+            scoped_predicate(&format!("COALESCE({raw_sid}, 0)"), |want| want == 0)
+        };
+        if let Some(residual) = residual {
+            branches.push(format!("{w} AND {raw_sid} = 0 AND {residual}"));
+            branches.push(format!("{w} AND {raw_sid} IS NULL AND {residual}"));
+        }
+        if branches.is_empty() {
+            vec![format!("{w} AND 1=0")]
+        } else {
+            branches
+        }
     }
 }
 
@@ -329,8 +338,9 @@ fn quote_breakdown_attempt(
             continue;
         }
         let sid = effective_sid_expr("r", &src.cols, has_names);
-        let where_sql = q.where_sql(&src.cols, &sid);
-        let coverage_where_sql = q.where_sql_qualified(&src.cols, &sid, "r");
+        let attribution = liquidation_attribution_available(&src.cols, has_names);
+        let period = "r.closedate >= ?1 AND r.closedate < ?2 AND r.closedate > 0";
+        let where_branches = q.where_branches(period, &src.cols, &sid, Some("r"), attribution);
         let (quote, group_by) = super::super::quote::trusted_quote_group(
             "r.basecurrency",
             src.cols.contains("basecurrency"),
@@ -351,16 +361,17 @@ fn quote_breakdown_attempt(
             .as_ref()
             .map(|parts| format!(", {}", parts.aggregate_columns()))
             .unwrap_or_default();
-        let active_where = if valuation.is_some() {
-            &coverage_where_sql
-        } else {
-            &where_sql
-        };
-        let sql = format!(
-            "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0.0), COUNT(*){coverage_columns} \
-             FROM {} r{joins} WHERE {active_where}{group_by}",
-            src.table,
-        );
+        let sql = where_branches
+            .iter()
+            .map(|where_sql| {
+                format!(
+                    "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0.0), COUNT(*){coverage_columns} \
+                     FROM {} r{joins} WHERE {where_sql}{group_by}",
+                    src.table,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(rusqlite::params![q.from, q.to])?;
         while let Some(row) = rows.next()? {
@@ -382,6 +393,22 @@ fn quote_breakdown_attempt(
     } else {
         totals
     })
+}
+
+/// Decide whether a source can attribute liquidation rows through strategy metadata.
+///
+/// Args:
+///     cols: Columns available on the physical report source.
+///     on: Whether the strategy metadata database is attached.
+///
+/// Returns:
+///     Whether every routing column and at least one owner-name column are available.
+fn liquidation_attribution_available(cols: &std::collections::HashSet<String>, on: bool) -> bool {
+    const NEEDED: [&str; 3] = ["strategyid", "channelname", "core_uid"];
+    on && NEEDED.iter().all(|column| cols.contains(*column))
+        && ["signaltype", "comment"]
+            .iter()
+            .any(|column| cols.contains(*column))
 }
 
 /// A row's strategy id, with LIQUIDATION rows attributed to the strategy named in them.
@@ -421,8 +448,7 @@ pub(in crate::db) fn effective_sid_expr(
     // source can lack it (the projection right below emits `NULL AS "core_uid"` for exactly
     // that case), and naming it anyway makes the branch fail to PREPARE — sinking the whole
     // window the moment the switch is turned on.
-    const NEEDED: [&str; 3] = ["strategyid", "channelname", "core_uid"];
-    if !on || NEEDED.iter().any(|c| !cols.contains(*c)) {
+    if !liquidation_attribution_available(cols, on) {
         return plain;
     }
     let mut sources = Vec::new();
@@ -543,6 +569,7 @@ pub(in crate::db) fn unified_from_mode(
         // OUTER row explicitly. Unqualified `core_uid` inside it would bind to `strat.strategies`
         // and silently match every strategy of that name on any core.
         let sid = effective_sid_expr("r", &src.cols, has_names);
+        let attribution = liquidation_attribution_available(&src.cols, has_names);
         let source = super::super::report_read::source_partition(&src);
         // `true` for attachment: a USDT projection is only ever chosen after `scope_decision_on`
         // proved coverage on this same snapshot, and the current-rate mode needs no cache at all.
@@ -595,25 +622,23 @@ pub(in crate::db) fn unified_from_mode(
         } else {
             "r.\"profitbtc\" AS \"pnl\"".to_string()
         };
-        let mut where_sql = if valuation.is_some() {
-            q.where_sql_qualified(&src.cols, &sid, "r")
-        } else {
-            q.where_sql(&src.cols, &sid)
-        };
-        if pct {
-            where_sql.push_str(" AND spentbtc > 0");
-        }
-        if let Some(parts) = &valuation {
-            where_sql.push_str(&format!(" AND ({})", parts.valued));
-        }
         let joins = valuation
             .as_ref()
             .map(|parts| parts.joins.as_str())
             .unwrap_or("");
-        branches.push(format!(
-            "SELECT {proj}, {pnl} FROM {} r{joins} WHERE {where_sql}",
-            src.table,
-        ));
+        let period = "r.closedate >= ?1 AND r.closedate < ?2 AND r.closedate > 0";
+        for mut where_sql in q.where_branches(period, &src.cols, &sid, Some("r"), attribution) {
+            if pct {
+                where_sql.push_str(" AND r.spentbtc > 0");
+            }
+            if let Some(parts) = &valuation {
+                where_sql.push_str(&format!(" AND ({})", parts.valued));
+            }
+            branches.push(format!(
+                "SELECT {proj}, {pnl} FROM {} r{joins} WHERE {where_sql}",
+                src.table,
+            ));
+        }
     }
     if branches.is_empty() {
         Ok(None)
@@ -621,8 +646,6 @@ pub(in crate::db) fn unified_from_mode(
         Ok(Some(format!("({}) o", branches.join(" UNION ALL "))))
     }
 }
-
-const WHERE_PERIOD: &str = "closedate >= ?1 AND closedate < ?2 AND closedate > 0";
 
 /// Rows a period can never contain: the close date is absent or non-positive.
 pub(super) const WHERE_UNDATED: &str = "(closedate IS NULL OR closedate <= 0)";

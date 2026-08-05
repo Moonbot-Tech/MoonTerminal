@@ -381,6 +381,8 @@ pub(in crate::analytics) struct TunerState {
     pub(in crate::analytics::tuner) sugg_seq: u64,
     /// User-scope and draft revision guarding asynchronous confirmation-dialog preparation.
     pub(in crate::analytics::tuner) dialog_seq: u64,
+    /// Whether the replaceable KPI request should preserve a missing strategy baseline.
+    pub(in crate::analytics::tuner) read_after_report: bool,
 }
 
 impl TunerState {
@@ -441,6 +443,7 @@ impl TunerState {
             hist_seq: 0,
             sugg_seq: 0,
             dialog_seq: 0,
+            read_after_report: false,
         }
     }
 

@@ -671,6 +671,122 @@ fn rep_core_and_period_filter_uses_composite_index() {
     test_support::remove_db(&path);
 }
 
+/// A strategy-scoped period read must search all three filter columns in one index.
+///
+/// Removing `rep.rs:idx_rep_strategy_close` or wrapping the raw strategy column back in
+/// `COALESCE(effective_sid, 0)` makes SQLite fall back to `idx_rep_core_close`, scanning every
+/// trade for the core in the period before it can discard other strategies.
+#[test]
+fn analytics_strategy_and_period_filter_uses_composite_index() {
+    let path = test_support::temp_db("strategy-close");
+    let conn = test_support::build_replica(&path, &test_support::spread_rows(1_700_000_000, 30));
+    conn.execute(
+        "UPDATE orders_rep SET strategyid = 8 WHERE newrecid > 1",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("ANALYZE").unwrap();
+    let q = analytics::Query {
+        from: 1_700_000_000,
+        to: 1_700_002_000,
+        cores: Vec::new(),
+        strategies: vec![(7, Some(1))],
+        ..Default::default()
+    };
+    let src = analytics::unified_from(&conn, &q)
+        .ok()
+        .flatten()
+        .expect("replica is a ready source");
+    assert!(
+        src.contains("r.strategyid = 7"),
+        "the physical strategy equality must remain visible to SQLite: {src}"
+    );
+    let mut stmt = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN SELECT o.closedate FROM {src}"))
+        .unwrap();
+    let plan = stmt
+        .query_map(rusqlite::params![q.from, q.to], |row| {
+            row.get::<_, String>(3)
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        plan.contains("idx_rep_strategy_close"),
+        "strategy and period escaped the composite index: {plan}; source: {src}"
+    );
+    assert!(
+        plan.contains("core_uid=? AND strategyid=? AND closedate>? AND closedate<?"),
+        "the plan did not search every composite-index column: {plan}"
+    );
+    assert!(
+        !plan.contains("idx_rep_core_close"),
+        "the core-only fallback scans unrelated strategies: {plan}"
+    );
+    drop(stmt);
+    drop(conn);
+    test_support::remove_db(&path);
+}
+
+/// The still-present legacy source gets the same strategy-period search shape as the replica.
+///
+/// Removing `db/mod.rs:idx_csr_strategy_close` makes a transition-period installation scan all
+/// selected-core rows through `idx_csr_core`, even though the generated branch exposes exact
+/// core, strategy, and close-period predicates.
+#[test]
+fn legacy_analytics_strategy_filter_uses_composite_index() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports(
+             core_uid INTEGER, core_name TEXT, closedate INTEGER,
+             profitbtc REAL, strategyid INTEGER
+         );",
+    )
+    .unwrap();
+    init_db(&conn).unwrap();
+    conn.execute_batch(
+        "WITH RECURSIVE rows(n) AS (
+             SELECT 1 UNION ALL SELECT n + 1 FROM rows WHERE n < 30
+         )
+         INSERT INTO closed_sell_reports
+         SELECT 1, 'CORE-A', 1700000000 + n * 60, 1.0,
+                CASE WHEN n = 1 THEN 7 ELSE 8 END
+         FROM rows;
+         ANALYZE;",
+    )
+    .unwrap();
+    let q = analytics::Query {
+        from: 1_700_000_000,
+        to: 1_700_002_000,
+        strategies: vec![(7, Some(1))],
+        ..Default::default()
+    };
+    let src = analytics::unified_from(&conn, &q)
+        .ok()
+        .flatten()
+        .expect("legacy table is a ready source");
+    let mut stmt = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN SELECT o.closedate FROM {src}"))
+        .unwrap();
+    let plan = stmt
+        .query_map(rusqlite::params![q.from, q.to], |row| {
+            row.get::<_, String>(3)
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        plan.contains("idx_csr_strategy_close"),
+        "legacy strategy and period escaped the composite index: {plan}; source: {src}"
+    );
+    assert!(
+        plan.contains("core_uid=? AND strategyid=? AND closedate>? AND closedate<?"),
+        "the legacy plan did not search every composite-index column: {plan}"
+    );
+}
+
 /// Cores come out newest-first, each labelled by its CURRENT name.
 ///
 /// Both halves are caller-visible, though not equally: the UI re-ranks this list by config

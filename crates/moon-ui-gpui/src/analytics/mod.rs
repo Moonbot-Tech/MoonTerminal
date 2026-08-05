@@ -384,6 +384,8 @@ pub struct AnalyticsView {
     /// Automatic report refresh waits for this to reach zero so a burst cannot start a second
     /// full-period scan over an existing `overlay = false` task.
     db_ops: usize,
+    /// Cancellation ownership for replaceable background database destinations.
+    latest_reads: bg::LatestReads,
     /// Start and identity of the current operation batch. The overlay appears only after
     /// `BUSY_OVERLAY_DELAY`, so quick recomputations do not flash the dimmer.
     busy_since: Option<std::time::Instant>,
@@ -689,6 +691,7 @@ impl AnalyticsView {
             purge_seq: 0,
             busy_ops: 0,
             db_ops: 0,
+            latest_reads: bg::LatestReads::default(),
             busy_since: None,
             seq: 0,
             hover_daily_bucket: None,
@@ -1099,6 +1102,7 @@ impl AnalyticsView {
     /// Args:
     ///     cx: GPUI context used to start all required background reads.
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.cancel_latest_reads();
         self.report_busy_retries.reset();
         self.acknowledge_report_refresh();
         // The tuner uses the same filters: invalidate it and recompute immediately in the active
@@ -1172,7 +1176,8 @@ impl AnalyticsView {
         self.data_period = self.active_period();
         let q = self.query();
         let read_cores = self.core_metadata_due(cx);
-        self.spawn_db(
+        self.spawn_latest_db(
+            &[bg::ReadLane::Summary],
             show_overlay,
             cx,
             move || moon_core::db::analytics::summary_data(&q, read_cores),
@@ -1249,7 +1254,8 @@ impl AnalyticsView {
         self.strategy_data_period = self.strat_period;
         let q = self.query();
         let read_cores = self.core_metadata_due(cx);
-        self.spawn_db(
+        self.spawn_latest_db(
+            &[bg::ReadLane::StrategyBase],
             show_overlay,
             cx,
             move || moon_core::db::analytics::strategy_base_data(&q, read_cores),

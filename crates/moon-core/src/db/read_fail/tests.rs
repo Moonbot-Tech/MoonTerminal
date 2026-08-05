@@ -68,6 +68,83 @@ fn unproven_corruption_remains_fail_closed() {
     super::super::integrity::reset_test_state();
 }
 
+/// A requested `SQLITE_INTERRUPT` is supersession, not a database-health warning.
+///
+/// Removing `read_fail/mod.rs:cancelled_read` inserts this unique context into `WARN_SEEN` and
+/// would make rapid Analytics scope changes look like recurring database faults in the log.
+#[test]
+fn requested_interrupt_is_classified_without_logging() {
+    let cancellation = super::super::read_cancel::ReadCancellation::new();
+    let failure = super::super::read_cancel::with_read_cancellation(cancellation.clone(), || {
+        let connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
+        super::super::read_cancel::install_current(&connection)
+            .expect("install cancellation callback");
+        cancellation.cancel();
+        let error = connection
+            .query_row(
+                "WITH RECURSIVE n(value) AS (
+                     SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 1000000
+                 )
+                 SELECT SUM(value) FROM n",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect_err("cancelled query must be interrupted");
+        read_fail("requested-interrupt-test-unique-ctx", error)
+    });
+
+    assert_eq!(failure.kind(), Some(FailKind::Other));
+    let logged = WARN_SEEN.get().is_some_and(|seen| {
+        seen.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(&("requested-interrupt-test-unique-ctx", FailKind::Other))
+    });
+    assert!(
+        !logged,
+        "requested interruption must stay out of fault logs"
+    );
+}
+
+/// Nested cancellation scopes classify the token captured by the interrupted connection.
+///
+/// Consulting only the innermost TLS token makes an outer connection's requested interrupt look
+/// like a database fault when that connection is queried inside a nested database operation.
+#[test]
+fn nested_scope_classifies_the_connection_that_actually_interrupted() {
+    let outer = super::super::read_cancel::ReadCancellation::new();
+    let inner = super::super::read_cancel::ReadCancellation::new();
+    let failure = super::super::read_cancel::with_read_cancellation(outer.clone(), || {
+        let connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
+        super::super::read_cancel::install_current(&connection)
+            .expect("install outer cancellation callback");
+        outer.cancel();
+        super::super::read_cancel::with_read_cancellation(inner, || {
+            let error = connection
+                .query_row(
+                    "WITH RECURSIVE n(value) AS (
+                         SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 1000000
+                     )
+                     SELECT SUM(value) FROM n",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect_err("outer connection must be interrupted");
+            read_fail("nested-interrupt-test-unique-ctx", error)
+        })
+    });
+
+    assert_eq!(failure.kind(), Some(FailKind::Other));
+    let logged = WARN_SEEN.get().is_some_and(|seen| {
+        seen.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(&("nested-interrupt-test-unique-ctx", FailKind::Other))
+    });
+    assert!(
+        !logged,
+        "nested requested interruption must stay out of fault logs"
+    );
+}
+
 /// Repeated instances of the same failure are suppressed within the window.
 #[test]
 fn repeated_failures_are_throttled() {

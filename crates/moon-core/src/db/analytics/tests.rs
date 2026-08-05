@@ -138,6 +138,431 @@ fn healthy_summary_exact_values() {
     remove_db(&path);
 }
 
+/// Splitting `analytics/summary_stream.rs:read` back into independent current-period queries, or
+/// changing any accumulator rule, must differ from this independently calculated complete
+/// Summary snapshot and expose inconsistent KPI, ranking, group, or chart values to the user.
+#[test]
+fn one_current_stream_preserves_every_summary_field() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        r#"CREATE TABLE orders_rep(
+            core_uid INTEGER, core_name TEXT, coin TEXT, isshort INTEGER,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, strategyid INTEGER,
+            emulator INTEGER, spentbtc REAL, basecurrency INTEGER
+         );
+         ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies(
+            core_uid INTEGER, strategy_id INTEGER, name TEXT, deleted INTEGER, checked INTEGER
+         );
+         CREATE TABLE strat.strategy_versions(
+            core_uid INTEGER, strategy_id INTEGER, valid_to INTEGER, raw_json TEXT
+         );
+         INSERT INTO strat.strategies VALUES (1, 7, 'Seven', 0, 1);
+         INSERT INTO strat.strategies VALUES (2, 8, 'Eight', 1, 1);
+         INSERT INTO strat.strategy_versions VALUES (
+            1, 7, NULL,
+            '{"SignalType":"Pump","LastEditDate":"2026-08-01","CoinsBlackList":"BTC,btc_rp","CoinsWhiteList":"ETH"}'
+         );
+         INSERT INTO strat.strategy_versions VALUES (
+            2, 8, NULL,
+            '{"SignalType":"Dump","LastEditDate":"2026-08-02","CoinsBlackList":"SOL"}'
+         );"#,
+    )
+    .expect("summary fixture schema");
+    let day = 1_800_000_000i64.div_euclid(86_400) * 86_400;
+    let rows = [
+        (
+            1,
+            "alpha",
+            "BTC",
+            0,
+            day - 3_660,
+            day - 3_600,
+            3.0,
+            7,
+            100.0,
+        ),
+        (
+            1,
+            "alpha",
+            "BTC",
+            0,
+            day + 3_540,
+            day + 3_600,
+            10.0,
+            7,
+            100.0,
+        ),
+        (
+            1,
+            "alpha",
+            "BTC",
+            1,
+            day + 3_640,
+            day + 3_700,
+            -4.0,
+            7,
+            100.0,
+        ),
+        (2, "beta", "ETH", 0, day + 7_140, day + 7_200, 6.0, 8, 200.0),
+        (
+            2,
+            "beta",
+            "ETH",
+            1,
+            day + 17_940,
+            day + 18_000,
+            -2.0,
+            8,
+            200.0,
+        ),
+    ];
+    for row in rows {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,?9,1)",
+            rusqlite::params![row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8],
+        )
+        .expect("summary fixture row");
+    }
+    let actual = summary_on(&conn, &q(day, day + 86_400), true, false)
+        .expect("single-stream summary")
+        .data()
+        .expect("USDT fixture is comparable")
+        .clone();
+    let quote = QuoteScope::Single(QuoteCurrency::usdt());
+    let strategy_seven = GroupStat {
+        key: "7@1".into(),
+        name: "Seven".into(),
+        kind: "Pump".into(),
+        core: "alpha".into(),
+        cores_n: 1,
+        alive: Some(2),
+        n: 2,
+        profit: 6.0,
+        raw_profit: 6.0,
+        avg_order: 100.0,
+        quote: quote.clone(),
+        wins: 1,
+        pf: 2.5,
+        best: 10.0,
+        worst: -4.0,
+        lastedit: "2026-08-01".into(),
+        bl: 1,
+        wl: 1,
+    };
+    let strategy_eight = GroupStat {
+        key: "8@2".into(),
+        name: "Eight".into(),
+        kind: "Dump".into(),
+        core: "beta".into(),
+        cores_n: 1,
+        alive: Some(0),
+        n: 2,
+        profit: 4.0,
+        raw_profit: 4.0,
+        avg_order: 200.0,
+        quote,
+        wins: 1,
+        pf: 3.0,
+        best: 6.0,
+        worst: -2.0,
+        lastedit: "2026-08-02".into(),
+        bl: 0,
+        wl: 0,
+    };
+    let expected = Summary {
+        cur: PeriodStats {
+            n: 4,
+            wins: 2,
+            losses: 2,
+            profit: 10.0,
+            pf: 16.0 / 6.0,
+            avg: 2.5,
+            max_dd: 4.0,
+            win_streak: 1,
+            loss_streak: 1,
+            avg_dur_min: 1.0,
+        },
+        prev: Some(PeriodStats {
+            n: 1,
+            wins: 1,
+            losses: 0,
+            profit: 3.0,
+            pf: 99.0,
+            avg: 3.0,
+            max_dd: 0.0,
+            win_streak: 1,
+            loss_streak: 0,
+            avg_dur_min: 1.0,
+        }),
+        bucket_secs: 3_600,
+        days: vec![
+            DayPoint {
+                start: day + 3_600,
+                profit: 6.0,
+                trades: 2,
+            },
+            DayPoint {
+                start: day + 7_200,
+                profit: 6.0,
+                trades: 1,
+            },
+            DayPoint {
+                start: day + 10_800,
+                profit: 0.0,
+                trades: 0,
+            },
+            DayPoint {
+                start: day + 14_400,
+                profit: 0.0,
+                trades: 0,
+            },
+            DayPoint {
+                start: day + 18_000,
+                profit: -2.0,
+                trades: 1,
+            },
+        ],
+        best: vec![
+            TopTrade {
+                closedate: day + 3_600,
+                coin: "BTC".into(),
+                strategy: "Seven".into(),
+                core_name: "alpha".into(),
+                profit: 10.0,
+                is_short: false,
+            },
+            TopTrade {
+                closedate: day + 7_200,
+                coin: "ETH".into(),
+                strategy: "Eight".into(),
+                core_name: "beta".into(),
+                profit: 6.0,
+                is_short: false,
+            },
+            TopTrade {
+                closedate: day + 18_000,
+                coin: "ETH".into(),
+                strategy: "Eight".into(),
+                core_name: "beta".into(),
+                profit: -2.0,
+                is_short: true,
+            },
+            TopTrade {
+                closedate: day + 3_700,
+                coin: "BTC".into(),
+                strategy: "Seven".into(),
+                core_name: "alpha".into(),
+                profit: -4.0,
+                is_short: true,
+            },
+        ],
+        worst: vec![
+            TopTrade {
+                closedate: day + 3_700,
+                coin: "BTC".into(),
+                strategy: "Seven".into(),
+                core_name: "alpha".into(),
+                profit: -4.0,
+                is_short: true,
+            },
+            TopTrade {
+                closedate: day + 18_000,
+                coin: "ETH".into(),
+                strategy: "Eight".into(),
+                core_name: "beta".into(),
+                profit: -2.0,
+                is_short: true,
+            },
+            TopTrade {
+                closedate: day + 7_200,
+                coin: "ETH".into(),
+                strategy: "Eight".into(),
+                core_name: "beta".into(),
+                profit: 6.0,
+                is_short: false,
+            },
+            TopTrade {
+                closedate: day + 3_600,
+                coin: "BTC".into(),
+                strategy: "Seven".into(),
+                core_name: "alpha".into(),
+                profit: 10.0,
+                is_short: false,
+            },
+        ],
+        strategies: vec![strategy_seven.clone(), strategy_eight.clone()],
+        coins: vec![
+            GroupStat {
+                key: "BTC".into(),
+                name: "BTC".into(),
+                kind: String::new(),
+                alive: None,
+                lastedit: String::new(),
+                bl: 0,
+                wl: 0,
+                ..strategy_seven
+            },
+            GroupStat {
+                key: "ETH".into(),
+                name: "ETH".into(),
+                kind: String::new(),
+                alive: None,
+                lastedit: String::new(),
+                bl: 0,
+                wl: 0,
+                ..strategy_eight
+            },
+        ],
+        core_days: vec![
+            CoreSeries {
+                uid: 1,
+                name: "alpha".into(),
+                per_bucket: vec![6.0, 0.0, 0.0, 0.0, 0.0],
+                per_bucket_trades: vec![2, 0, 0, 0, 0],
+                total: 6.0,
+                trades: 2,
+            },
+            CoreSeries {
+                uid: 2,
+                name: "beta".into(),
+                per_bucket: vec![0.0, 6.0, 0.0, 0.0, -2.0],
+                per_bucket_trades: vec![0, 1, 0, 0, 1],
+                total: 4.0,
+                trades: 2,
+            },
+        ],
+        best_hour: Some((2, 6.0, 1)),
+        kinds: vec![
+            KindStat {
+                kind: "Pump".into(),
+                profit: 6.0,
+                trades: 2,
+                cores: vec![KindCore {
+                    uid: 1,
+                    name: "alpha".into(),
+                    profit: 6.0,
+                    trades: 2,
+                }],
+            },
+            KindStat {
+                kind: "Dump".into(),
+                profit: 4.0,
+                trades: 2,
+                cores: vec![KindCore {
+                    uid: 2,
+                    name: "beta".into(),
+                    profit: 4.0,
+                    trades: 2,
+                }],
+            },
+        ],
+        cores: Vec::new(),
+        from: day,
+        to: day + 86_400,
+    };
+
+    assert_eq!(format!("{actual:#?}"), format!("{expected:#?}"));
+}
+
+/// Reintroducing `scan_period`, `core_series`, `top_trades`, `groups`, or `kind_stats` inside
+/// `analytics/mod.rs:summary_on` must fail this routing contract because each call would reread
+/// the same current period instead of feeding the user-visible Summary from one stream.
+#[test]
+fn summary_routes_current_period_only_through_the_single_stream() {
+    let source = include_str!("mod.rs");
+    let body = source
+        .split_once("pub(super) fn summary_on")
+        .expect("Summary entry point")
+        .1
+        .split_once("/// Read a comparison period")
+        .expect("Summary function boundary")
+        .0;
+
+    assert_eq!(body.matches("summary_stream::read(").count(), 1);
+    for superseded in [
+        "scan_period(",
+        "core_series(",
+        "top_trades(",
+        "groups(",
+        "kind_stats(",
+    ] {
+        assert!(
+            !body.contains(superseded),
+            "superseded current scan: {superseded}"
+        );
+    }
+}
+
+/// Removing the `has_head` gate in `summary_stream.rs:finish_groups` must expose this orphan
+/// version's blacklist in Summary even though no live strategy head can supply the list to the
+/// coin tuner; the visible BL/WL markers must remain `(0, 0)`.
+#[test]
+fn summary_hides_lists_for_a_version_without_a_strategy_head() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        r#"CREATE TABLE orders_rep(
+            core_uid INTEGER, core_name TEXT, coin TEXT, isshort INTEGER,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, strategyid INTEGER,
+            emulator INTEGER, spentbtc REAL, basecurrency INTEGER
+         );
+         INSERT INTO orders_rep VALUES (1, 'alpha', 'BTC', 0, 90, 100, 2.0, 10, 0, 20.0, 1);
+         ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies(
+            core_uid INTEGER, strategy_id INTEGER, name TEXT, deleted INTEGER, checked INTEGER
+         );
+         CREATE TABLE strat.strategy_versions(
+            core_uid INTEGER, strategy_id INTEGER, valid_to INTEGER, raw_json TEXT
+         );
+         INSERT INTO strat.strategy_versions VALUES (
+            1, 10, NULL,
+            '{"SignalType":"Orphan","CoinsBlackList":"BTC,ETH","CoinsWhiteList":"SOL"}'
+         );"#,
+    )
+    .expect("orphan strategy fixture");
+
+    let scoped = summary_on(&conn, &q(1, 200), true, false).expect("orphan strategy summary");
+    let summary = scoped.data().expect("USDT fixture is comparable");
+    let orphan = summary
+        .strategies
+        .iter()
+        .find(|strategy| strategy.key == "10@1")
+        .expect("orphan strategy group");
+    assert_eq!((orphan.name.as_str(), orphan.alive), ("10", Some(0)));
+    assert_eq!(orphan.kind, "Orphan");
+    assert_eq!((orphan.bl, orphan.wl), (0, 0));
+}
+
+/// Discarding already loaded heads when `summary_stream.rs:read_version_metadata` fails must turn
+/// this top trade's independently readable `Head Name` back into numeric `7`, while group fields
+/// continue to degrade together because their version-enriched statement was unavailable.
+#[test]
+fn summary_keeps_top_names_when_version_metadata_is_unavailable() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(
+            core_uid INTEGER, core_name TEXT, coin TEXT, isshort INTEGER,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, strategyid INTEGER,
+            emulator INTEGER, spentbtc REAL, basecurrency INTEGER
+         );
+         INSERT INTO orders_rep VALUES (1, 'alpha', 'BTC', 0, 90, 100, 2.0, 7, 0, 20.0, 1);
+         ATTACH ':memory:' AS strat;
+         CREATE TABLE strat.strategies(
+            core_uid INTEGER, strategy_id INTEGER, name TEXT, deleted INTEGER, checked INTEGER
+         );
+         INSERT INTO strat.strategies VALUES (1, 7, 'Head Name', 0, 1);",
+    )
+    .expect("head-only metadata fixture");
+
+    let scoped = summary_on(&conn, &q(1, 200), true, false).expect("head-only summary");
+    let summary = scoped.data().expect("USDT fixture is comparable");
+    assert_eq!(summary.best[0].strategy, "Head Name");
+    assert_eq!(summary.worst[0].strategy, "Head Name");
+    assert_eq!(summary.strategies[0].name, "7");
+    assert_eq!(summary.strategies[0].alive, None);
+    assert_eq!(summary.strategies[0].kind, "");
+}
+
 /// A homogeneous USDC period must carry USDC through the typed summary boundary.
 ///
 /// Changing `analytics::scope_decision_on` back to the historical implicit-USDT assumption makes

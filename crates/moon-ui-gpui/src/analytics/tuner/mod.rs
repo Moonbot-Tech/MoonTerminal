@@ -224,6 +224,7 @@ impl AnalyticsView {
     ///     sel: New anchor strategy key and display name, or `None` for all strategies.
     ///     cx: GPUI context used to start replacement axis reads and repaint.
     fn set_sel_strategy(&mut self, sel: Option<(String, String)>, cx: &mut Context<Self>) {
+        self.cancel_axis_reads();
         self.sel_strategy = sel;
         // The tuner/profile scope changed — the old computations (suggest included) are wrong.
         self.tuner.invalidate();
@@ -355,6 +356,7 @@ impl AnalyticsView {
     /// Args:
     ///     cx: GPUI context used to start replacement axis reads and repaint.
     fn selection_scope_changed(&mut self, cx: &mut Context<Self>) {
+        self.cancel_axis_reads();
         self.tuner.invalidate();
         self.time_tuner.invalidate();
         // The coin table's numbers AND its lists are scoped to the whole selection, so
@@ -598,8 +600,7 @@ impl AnalyticsView {
     pub(super) fn reload_axis(&mut self, mode: StratMode, cx: &mut Context<Self>) {
         match mode {
             StratMode::Filters => {
-                self.reload_tuner(cx);
-                self.reload_hist(cx);
+                self.reload_filter_axis(cx);
             }
             StratMode::Time => self.reload_time(cx),
             StratMode::Coins => self.reload_coins(cx),

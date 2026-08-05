@@ -56,6 +56,10 @@ impl AnalyticsView {
         if !after_report {
             self.report_busy_retries.reset();
         }
+        self.latest_reads.cancel(&[
+            crate::analytics::bg::ReadLane::CoinKpi,
+            crate::analytics::bg::ReadLane::CoinPicked,
+        ]);
         self.coins.seq = self.coins.seq.wrapping_add(1);
         self.coins.kpi_seq = self.coins.kpi_seq.wrapping_add(1);
         let req = self.coins.seq;
@@ -91,7 +95,12 @@ impl AnalyticsView {
         self.coin_lists.rows.begin();
         self.coins.stats.begin();
         self.coins.kpi.begin();
-        self.spawn_db(
+        // The integrated read owns only the base Coins snapshot. A later list or pick edit makes
+        // only its KPI or highlight projection stale; table and saved-list work remains useful and
+        // must not be cancelled and repeated. Their separate generations suppress those portions,
+        // while the explicit cancellation above retires standalone narrow reads this pass replaces.
+        self.spawn_latest_db(
+            &[crate::analytics::bg::ReadLane::Coins],
             show_overlay,
             cx,
             move || {
@@ -256,6 +265,8 @@ impl AnalyticsView {
     /// Not wrapped in `op_started`: this is a selection cue, and blanking the window behind a
     /// "loading" overlay for it would make clicking a coin feel heavier than the answer is.
     fn reload_picked_strats(&mut self, cx: &mut Context<Self>) {
+        self.latest_reads
+            .cancel(&[crate::analytics::bg::ReadLane::CoinPicked]);
         self.coins.picked_seq = self.coins.picked_seq.wrapping_add(1);
         let req = self.coins.picked_seq;
         let report_req = self.current_report_generation();
@@ -266,7 +277,8 @@ impl AnalyticsView {
         let q = self.tuner_query_all();
         let mut coins: Vec<String> = self.coins.picked.iter().cloned().collect();
         coins.sort();
-        self.spawn_db(
+        self.spawn_latest_db(
+            &[crate::analytics::bg::ReadLane::CoinPicked],
             false,
             cx,
             move || moon_core::db::analytics::strategies_for_coins(&q, &coins),
@@ -311,6 +323,8 @@ impl AnalyticsView {
     /// for a scan. Every edit of the picks goes through here — a caller that armed its own
     /// rescan would be the one gesture that skips the debounce.
     pub(in crate::analytics::tuner) fn arm_coin_kpi(&mut self, cx: &mut Context<Self>) {
+        self.latest_reads
+            .cancel(&[crate::analytics::bg::ReadLane::CoinKpi]);
         let req = self.coins.bump_kpi();
         // Storing the task REPLACES the previous one, and dropping a gpui `Task` cancels it:
         // a burst of ticks leaves one live timer rather than one per click.
@@ -349,7 +363,8 @@ impl AnalyticsView {
         let plan = self.coins.plan(&universe);
         let (bl_n, wl_n) = (plan.bl, plan.wl);
         let variants = plan.variants;
-        self.spawn_db(
+        self.spawn_latest_db(
+            &[crate::analytics::bg::ReadLane::CoinKpi],
             false,
             cx,
             move || moon_core::db::tuner::variant_stats(&q, &variants),

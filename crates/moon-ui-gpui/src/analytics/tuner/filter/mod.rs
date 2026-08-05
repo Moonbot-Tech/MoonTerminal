@@ -86,18 +86,65 @@ impl AnalyticsView {
         q
     }
 
-    /// Recompute the per-variant KPI matrix and selected strategy thresholds.
+    /// Read numeric strategy-field defaults used to hide unconfigured threshold chips.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to read the backend schema store.
+    ///
+    /// Returns:
+    ///     Lowercase field names mapped to their first available core-schema default.
+    fn filter_defaults(&self, cx: &Context<Self>) -> HashMap<String, f64> {
+        let backend = self.backend.read(cx);
+        let store = backend.session.store();
+        let mut defaults = HashMap::new();
+        for (_, core) in store.cores() {
+            let Some(schema) = core.schema.as_ref() else {
+                continue;
+            };
+            for kind in &schema.kinds {
+                for section in &kind.sections {
+                    for field in &section.fields {
+                        let Some(default) = field.default.as_ref() else {
+                            continue;
+                        };
+                        if let Ok(value) = default
+                            .trim()
+                            .trim_end_matches('%')
+                            .replace(',', ".")
+                            .parse::<f64>()
+                        {
+                            defaults
+                                .entry(field.name.to_ascii_lowercase())
+                                .or_insert(value);
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        defaults
+    }
+
+    /// Recompute only KPI and selected strategy thresholds after a local tuner edit.
     ///
     /// Args:
     ///     cx: GPUI context used to run and publish the background read.
     pub(in crate::analytics) fn reload_tuner(&mut self, cx: &mut Context<Self>) {
-        self.reload_tuner_inner(false, true, cx);
+        self.reload_filter_kpi_inner(false, true, true, cx);
+    }
+
+    /// Recompute the complete Filters axis from one prepared report source.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to run and publish the background read.
+    pub(in crate::analytics) fn reload_filter_axis(&mut self, cx: &mut Context<Self>) {
+        self.reload_filter_axis_inner(false, true, cx);
     }
 
     /// Recompute report-derived filter data without invalidating a pending Save dialog.
     ///
-    /// The histogram starts only after this query completes so an automatic refresh never runs
-    /// two full-history filter scans concurrently.
+    /// KPI and histogram share one report snapshot and one prepared tuner source, so neither a
+    /// manual refresh nor an automatic refresh repeats quote preflight and source construction.
     ///
     /// Args:
     ///     show_overlay: Whether queued user work requires blocking progress feedback.
@@ -107,16 +154,16 @@ impl AnalyticsView {
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
-        self.reload_tuner_inner(true, show_overlay, cx);
+        self.reload_filter_axis_inner(true, show_overlay, cx);
     }
 
-    /// Start the KPI query with behavior selected by its reload cause.
+    /// Start the compound KPI and histogram query for a whole-axis refresh.
     ///
     /// Args:
-    ///     after_report: Whether to preserve the Save dialog and read KPI/histogram atomically.
+    ///     after_report: Whether to preserve the Save dialog and a missing strategy baseline.
     ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
     ///     cx: GPUI context used to execute and publish the reads.
-    fn reload_tuner_inner(
+    fn reload_filter_axis_inner(
         &mut self,
         after_report: bool,
         show_overlay: bool,
@@ -126,6 +173,7 @@ impl AnalyticsView {
             self.report_busy_retries.reset();
             self.tuner.mark_dialog_draft_changed();
         }
+        self.tuner.read_after_report = after_report;
         self.tuner.seq = self.tuner.seq.wrapping_add(1);
         let req = self.tuner.seq;
         let report_req = self.current_report_generation();
@@ -142,83 +190,44 @@ impl AnalyticsView {
         let core = anchor.and_then(|(_, c)| c);
         let variants = self.tuner.variants();
         let field = FIELDS[self.tuner.sel_field].col.to_string();
-        let hist_req = after_report.then(|| {
-            self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
-            self.tuner.hist_dirty = false;
-            self.tuner.hist_loading = true;
-            self.tuner.hist.begin();
-            self.tuner.hist_seq
-        });
-        // Core schema defaults (numeric fields): the chips hide values equal to the
-        // default — 'filter not configured' is not a threshold.
-        let defaults: HashMap<String, f64> = {
-            let b = self.backend.read(cx);
-            let store = b.session.store();
-            let mut out = HashMap::new();
-            for (_, cd) in store.cores() {
-                let Some(sch) = cd.schema.as_ref() else {
-                    continue;
-                };
-                for k in &sch.kinds {
-                    for s in &k.sections {
-                        for f in &s.fields {
-                            let Some(d) = f.default.as_ref() else {
-                                continue;
-                            };
-                            if let Ok(v) = d
-                                .trim()
-                                .trim_end_matches('%')
-                                .replace(',', ".")
-                                .parse::<f64>()
-                            {
-                                out.entry(f.name.to_ascii_lowercase()).or_insert(v);
-                            }
-                        }
-                    }
-                }
-                break; // the cores' schemas are identical — one is enough
-            }
-            out
-        };
+        self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
+        self.tuner.hist_dirty = false;
+        self.tuner.hist_loading = true;
+        self.tuner.hist.begin();
+        let hist_req = self.tuner.hist_seq;
+        let defaults = self.filter_defaults(cx);
         // Starting a KPI recomputation does not by itself retire the auto-suggestion. Input and
         // v1-destination edits retire it at their mutation sites, while unrelated refreshes may
         // carry the last completed verdict until one of those inputs changes.
         // Carry current numbers as stale during recomputation; any completed
         // non-data result drops them.
         self.tuner.stats.begin();
-        self.spawn_db(
+        self.spawn_latest_db(
+            &[
+                super::super::bg::ReadLane::FilterKpi,
+                super::super::bg::ReadLane::FilterHistogram,
+            ],
             show_overlay,
             cx,
             move || {
-                let (stats, histogram) = if after_report {
-                    let result = moon_core::db::tuner::filter_tuner_data(
-                        &q,
-                        &variants,
-                        &field,
-                        HIST_BUCKETS,
-                    );
-                    (result.stats, Some(result.histogram))
-                } else {
-                    (moon_core::db::tuner::variant_stats(&q, &variants), None)
-                };
+                let result =
+                    moon_core::db::tuner::filter_tuner_data(&q, &variants, &field, HIST_BUCKETS);
                 let sf = sid
                     .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
                     .unwrap_or_default();
-                (stats, histogram, sf)
+                (result.stats, result.histogram, sf)
             },
             move |this, (stats, histogram, strat), cx| {
                 let mut hist_error = None;
-                if let (Some(hist_req), Some(histogram)) = (hist_req, histogram) {
-                    if this.tuner.hist_seq == hist_req {
-                        this.tuner.hist_loading = false;
-                        hist_error = histogram.as_ref().err().cloned();
-                        this.tuner.hist.apply(histogram);
-                        this.tuner.hist_dirty = super::super::refresh::report_result_is_stale(
-                            report_req,
-                            this.current_report_generation(),
-                            hist_error.is_some(),
-                        );
-                    }
+                if this.tuner.hist_seq == hist_req {
+                    this.tuner.hist_loading = false;
+                    hist_error = histogram.as_ref().err().cloned();
+                    this.tuner.hist.apply(histogram);
+                    this.tuner.hist_dirty = super::super::refresh::report_result_is_stale(
+                        report_req,
+                        this.current_report_generation(),
+                        hist_error.is_some(),
+                    );
                 }
                 if this.tuner.seq != req {
                     if let Some(error) = hist_error.as_ref() {
@@ -254,19 +263,94 @@ impl AnalyticsView {
         );
     }
 
+    /// Start a KPI-only query while preserving an unrelated completed histogram.
+    ///
+    /// Args:
+    ///     after_report: Whether to preserve a missing strategy baseline and settle report retry.
+    ///     show_overlay: Whether this refresh must block interaction with visible progress feedback.
+    ///     user_edit: Whether this local edit invalidates a pending Save-dialog preview.
+    ///     cx: GPUI context used to execute and publish the read.
+    fn reload_filter_kpi_inner(
+        &mut self,
+        after_report: bool,
+        show_overlay: bool,
+        user_edit: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if user_edit {
+            self.report_busy_retries.reset();
+            self.tuner.mark_dialog_draft_changed();
+        }
+        let retired = self
+            .latest_reads
+            .cancel(&[super::super::bg::ReadLane::FilterKpi]);
+        let restart_histogram = retired.contains(&super::super::bg::ReadLane::FilterHistogram);
+        self.tuner.read_after_report = after_report;
+        self.tuner.seq = self.tuner.seq.wrapping_add(1);
+        let req = self.tuner.seq;
+        let report_req = self.current_report_generation();
+        let query = self.tuner_query();
+        let variants = self.tuner.variants();
+        let anchor = self
+            .sel_strategy
+            .as_ref()
+            .and_then(|(key, _)| super::parse_strat_key(key));
+        let sid = anchor.map(|(sid, _)| sid);
+        let core = anchor.and_then(|(_, core)| core);
+        let defaults = self.filter_defaults(cx);
+        self.tuner.stats.begin();
+        self.spawn_latest_db(
+            &[super::super::bg::ReadLane::FilterKpi],
+            show_overlay,
+            cx,
+            move || {
+                let stats = moon_core::db::tuner::variant_stats(&query, &variants);
+                let filters = sid
+                    .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
+                    .unwrap_or_default();
+                (stats, filters)
+            },
+            move |this, (stats, filters), cx| {
+                if this.tuner.seq != req {
+                    return;
+                }
+                let error = stats.as_ref().err().cloned();
+                this.tuner.stats.apply(stats);
+                this.tuner.apply_strategy_read(filters, after_report);
+                this.tuner.dirty = super::super::refresh::report_result_is_stale(
+                    report_req,
+                    this.current_report_generation(),
+                    error.is_some(),
+                );
+                if after_report {
+                    this.settle_report_refresh_retry(error.as_ref(), cx);
+                }
+                cx.notify();
+            },
+        );
+        if restart_histogram {
+            self.reload_hist_inner(false, cx);
+        }
+    }
+
     /// Recompute the selected field's histogram after a user-controlled change.
     ///
     /// Args:
     ///     cx: GPUI context used to run and publish the background read.
     pub(in crate::analytics) fn reload_hist(&mut self, cx: &mut Context<Self>) {
-        self.reload_hist_inner(cx);
+        self.reload_hist_inner(true, cx);
     }
 
     /// Start a user-requested histogram query.
     ///
     /// Args:
+    ///     show_overlay: Whether the user-requested read needs blocking progress feedback.
     ///     cx: GPUI context used to execute and publish the histogram read.
-    fn reload_hist_inner(&mut self, cx: &mut Context<Self>) {
+    fn reload_hist_inner(&mut self, show_overlay: bool, cx: &mut Context<Self>) {
+        let retired = self
+            .latest_reads
+            .cancel(&[super::super::bg::ReadLane::FilterHistogram]);
+        let restart_kpi = retired.contains(&super::super::bg::ReadLane::FilterKpi);
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         let req = self.tuner.hist_seq;
         let report_req = self.current_report_generation();
@@ -275,8 +359,9 @@ impl AnalyticsView {
         self.tuner.hist_dirty = false;
         self.tuner.hist_loading = true;
         self.tuner.hist.begin();
-        self.spawn_db(
-            true,
+        self.spawn_latest_db(
+            &[super::super::bg::ReadLane::FilterHistogram],
+            show_overlay,
             cx,
             move || moon_core::db::tuner::histogram(&q, &field, HIST_BUCKETS),
             move |this, hist, cx| {
@@ -294,6 +379,18 @@ impl AnalyticsView {
                 cx.notify();
             },
         );
+        if restart_kpi {
+            self.restart_filter_kpi_after_compound_cancel(cx);
+        }
+    }
+
+    /// Restart the KPI half when a histogram-only change cancels their compound SQLite scan.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to execute and publish the replacement KPI read.
+    fn restart_filter_kpi_after_compound_cancel(&mut self, cx: &mut Context<Self>) {
+        let after_report = self.tuner.read_after_report;
+        self.reload_filter_kpi_inner(after_report, false, false, cx);
     }
 
     /// Commit a bound (on input Blur/Enter): store it in the tuner state and recompute.
