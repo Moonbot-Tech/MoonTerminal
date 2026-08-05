@@ -215,6 +215,10 @@ impl ChartPanel {
                     grab: Grab::Handle(i),
                     last: map.node_at(pos),
                 });
+                // Publish the drag, as the body branch below does: the renderer suppresses a
+                // dragged figure's fill, and an unpublished drag would keep re-baking the base
+                // cache for the whole gesture.
+                self.sync_fig_visual(cx);
                 return true;
             }
         }
@@ -350,9 +354,10 @@ impl ChartPanel {
         // §1): raw MouseMove arrives far more often than the cursor actually moves, and this walks
         // every visible figure.
         if !self.backend.read(cx).fig_draw_mode {
-            // Leaving pencil mode drops the hover AND the probe point, so re-entering it hit-tests
-            // on the first move instead of waiting for the cursor to clear the threshold.
+            // Leaving pencil mode drops the hover AND both probe points, so re-entering it
+            // hit-tests on the first move instead of waiting for the cursor to clear the threshold.
             self.fig_hover_probe = None;
+            self.fig_draft_probe = None;
             if self.fig_hover.take().is_some() {
                 changed = true;
             }

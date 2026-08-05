@@ -350,6 +350,12 @@ pub(super) fn mouse_move(
             this.sync_native_cursor();
             cx.notify();
         }
+        // Same for a figure drag whose mouse-up was lost (a window switch, a capture steal):
+        // a stranded drag would move the figure on the next press and, until then, keep its fill
+        // suppressed.
+        if this.fig_drag.is_some() {
+            this.finish_fig_drag(cx);
+        }
         crate::diag::bump(&crate::diag::CHART_MOUSE_MOVE_FAST);
         let prev_cursor = this.input.cursor;
         let prev_hovered = this.input.hovered_pane;

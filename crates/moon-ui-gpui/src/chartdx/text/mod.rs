@@ -89,8 +89,11 @@ pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
 /// Used only to decide whether the real measurement is worth taking: a label nowhere near the
 /// plot's right edge cannot need flipping, and text shaping is the expensive call on this path.
 /// Scales with the font slider, unlike a fixed margin, so a large font still flips.
+///
+/// Deliberately an OVER-estimate: under-shooting would skip the measurement for a wide label and
+/// let it run past the plot, while over-shooting only costs a measurement that changes nothing.
 pub(in crate::chartdx) fn rough_label_width(text: &str, label_font_delta: f32) -> f32 {
-    text.chars().count() as f32 * label_font_px(label_font_delta) * 0.65
+    text.chars().count() as f32 * label_font_px(label_font_delta)
 }
 
 /// Formats cumulative order-book notional compactly with a K/M/B/T SI suffix for cursor labels.

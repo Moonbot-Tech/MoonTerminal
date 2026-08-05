@@ -22,7 +22,7 @@ pub enum Emphasis {
 
 impl Emphasis {
     /// Alpha multiplier applied to the figure's colour for this level's LINE.
-    pub fn line_alpha(self) -> f32 {
+    pub const fn line_alpha(self) -> f32 {
         match self {
             Emphasis::Anchor => 0.75,
             Emphasis::Key => 1.0,
@@ -54,6 +54,10 @@ pub const BAND_ALPHA_ALT: f32 = 0.04;
 // constants to each other.
 const _: () = assert!(BAND_ALPHA_ALT > 0.0);
 const _: () = assert!(BAND_ALPHA_ALT < BAND_ALPHA);
+// And no level may be drawn invisible or brighter than the figure it belongs to.
+const _: () = assert!(Emphasis::Anchor.line_alpha() >= 0.4 && Emphasis::Anchor.line_alpha() <= 1.0);
+const _: () = assert!(Emphasis::Key.line_alpha() >= 0.4 && Emphasis::Key.line_alpha() <= 1.0);
+const _: () = assert!(Emphasis::Minor.line_alpha() >= 0.4 && Emphasis::Minor.line_alpha() <= 1.0);
 
 /// The default Fibonacci scale, in ascending ratio order — the set every charting package ships
 /// with, and the one the reference terminal draws.

@@ -21,6 +21,10 @@ pub struct LineInstance {
 /// any real timestamp survives the multiply as a finite number and clamps the same way everywhere.
 pub const TIME_UNBOUNDED: f32 = 1e30;
 
+// Far past any real timestamp — a Unix millisecond stays under 1e13 for the next thousand years —
+// so no figure's own span can collide with the sentinel, and finite so Metal's fast math keeps it.
+const _: () = assert!(TIME_UNBOUNDED > 1e20);
+
 /// Instance of a filled band between two prices, bounded in time.
 ///
 /// `t0_rel`/`t1_rel` are relative-to-epoch milliseconds like every other instance here;

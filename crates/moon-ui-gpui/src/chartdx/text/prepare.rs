@@ -401,8 +401,8 @@ impl RenderState {
             // figure or one is being drawn — a merely selected figure has none — so an idle chart
             // with no scale on it does no work here.
             for li in 0..self.panes[idx].figure_labels.len() {
-                // Copied out: the label is four numbers, and holding a borrow of the pane would
-                // block measuring the text through `&mut self` below.
+                // Cloned out: a level's text is an `Arc<str>`, so this is a refcount bump, and
+                // holding a borrow of the pane would block measuring through `&mut self` below.
                 let label = self.panes[idx].figure_labels[li].clone();
                 let y = line_y(label.price);
                 if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
@@ -425,7 +425,7 @@ impl RenderState {
                     // readouts drawn without the pointer on the figure, so the per-tab "line
                     // labels" switch — which hides every other permanent label — hides them too.
                     FigLabelPlace::LineEnd { t0_ms, t1_ms } => {
-                        if !self.line_labels {
+                        if label.permanent && !self.line_labels {
                             continue;
                         }
                         let (x0, x1) = (

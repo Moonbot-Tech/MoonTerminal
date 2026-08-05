@@ -68,6 +68,12 @@ pub struct FigureLabel {
     pub price: f32,
     pub place: LabelPlace,
     pub text: LabelValue,
+    /// Whether this readout is drawn without the pointer on the figure.
+    ///
+    /// Only a ratio scale produces those. They are the labels the per-tab "line labels" switch
+    /// hides, exactly as it hides the order column; a readout that appears under the cursor is
+    /// interaction feedback and stays.
+    pub permanent: bool,
     /// `0xRRGGBB` for the text layer, which has no alpha of its own.
     pub color: u32,
 }
@@ -158,10 +164,14 @@ struct Sink<'a, 'b> {
     epoch_ms: f64,
     /// Whether fills are emitted at all.
     ///
-    /// Off for the DRAFT: it follows the cursor, and a fill entering the base-cache signature on
-    /// every mouse move would re-bake the background, grid, candles and book of every pane while
-    /// the user is still aiming. Lines and readouts are what aiming needs.
+    /// Off for the DRAFT and for the figure being DRAGGED: both follow the cursor, and a fill
+    /// entering the base-cache signature on every mouse move would re-bake the background, grid,
+    /// candles and book of every pane while the user is still aiming. Lines and readouts are what
+    /// aiming needs; the fill returns on release, in one bake.
     fills: bool,
+    /// Whether the figure being built is under the cursor or being drawn, so its labels are
+    /// interaction feedback rather than permanent ones.
+    hot: bool,
     out: &'a mut FigureBuffers<'b>,
 }
 
@@ -201,7 +211,7 @@ impl GeomSink for Sink<'_, '_> {
         // The order path refuses a non-finite or non-positive band (`build_order_geometry`), and
         // figure fills share ONE draw call with it: a NaN from a hand-edited file would take the
         // whole call down, not just this band.
-        if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0) {
+        if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0 && (p0 - p1).abs() > 1e-9) {
             return;
         }
         let (t0, t1) = (self.to_rel(t0_ms), self.to_rel(t1_ms));
@@ -229,6 +239,7 @@ impl GeomSink for Sink<'_, '_> {
     }
 
     fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, color: [f32; 4]) {
+        let permanent = !self.hot;
         let text = match text {
             LabelText::Price(p) => LabelValue::Price(p),
             LabelText::PctDelta { from, to } => LabelValue::PctDelta { from, to },
@@ -239,6 +250,7 @@ impl GeomSink for Sink<'_, '_> {
             price: at.price as f32,
             place,
             text,
+            permanent,
             color: rgb_u32(color),
         });
     }
@@ -255,6 +267,7 @@ pub fn build_figure_geometry<'a>(
     let mut sink = Sink {
         epoch_ms: view.epoch_ms,
         fills: true,
+        hot: false,
         out,
     };
     for fig in figures {
@@ -262,9 +275,9 @@ pub fn build_figure_geometry<'a>(
         let is_hovered = view.hovered == Some(fig.id);
         let ctx = fig_ctx(fig, is_hovered, is_sel);
         sink.fills = view.dragging != Some(fig.id);
+        sink.hot = ctx.hot;
         build_figure(&fig.kind, &ctx, &mut sink);
     }
-    sink.fills = false;
     if let Some(d) = draft {
         // Preview of the figure being drawn: brighter and thicker, using the style's base line
         // kind, and already showing its readout so a trend line can be aimed while drawing.
@@ -279,6 +292,7 @@ pub fn build_figure_geometry<'a>(
             handles: false,
         };
         sink.fills = false;
+        sink.hot = true;
         build_figure(&d.kind, &ctx, &mut sink);
     }
 }

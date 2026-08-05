@@ -116,6 +116,10 @@ fn a_hovered_figure_gains_its_readout() {
     assert!(markers.is_empty(), "hover alone shows no drag knots");
     assert_eq!(labels.len(), 1);
     assert_eq!(labels[0].text, LabelValue::Price(100.0));
+    assert!(
+        !labels[0].permanent,
+        "a hover readout is feedback, not a permanent label"
+    );
     assert_eq!(labels[0].place, LabelPlace::RightEdge);
     assert_eq!(labels[0].color, 0x0A_14_1E, "label takes the figure color");
 }
@@ -298,6 +302,10 @@ fn a_level_readout_is_rendered_to_text_once_not_every_frame() {
     let (_, _, _, _, labels) = build_one(&f, None, None);
     assert!(!labels.is_empty());
     for l in &labels {
+        assert!(
+            l.permanent,
+            "a scale's readouts are drawn without the pointer on it"
+        );
         match &l.text {
             LabelValue::Ready(s) => {
                 assert!(s.contains('('), "a level must name its price: {s}");
