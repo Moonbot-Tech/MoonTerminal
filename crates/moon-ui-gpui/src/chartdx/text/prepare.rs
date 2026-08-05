@@ -400,6 +400,20 @@ impl RenderState {
             // lines. For every tool but the scale the list is empty unless the pointer is on a
             // figure or one is being drawn — a merely selected figure has none — so an idle chart
             // with no scale on it does no work here.
+            // Room a ratio scale's readouts need, taken as the WIDEST of them: the side they sit
+            // on has to be decided for the whole column at once. Per label, the wide levels would
+            // flip while the narrow ones stayed, tearing the column the placement exists to make.
+            // Rough width only — it over-estimates, so the decision errs toward keeping the text
+            // inside the plot, and no text is shaped on this path.
+            let span_label_room = self.panes[idx]
+                .figure_labels
+                .iter()
+                .filter(|l| matches!(l.place, FigLabelPlace::LineSpan { .. }))
+                .map(|l| match &l.text {
+                    FigLabelValue::Ready(s) => rough_label_width(s, self.label_font_delta),
+                    _ => 0.0,
+                })
+                .fold(0.0f32, f32::max);
             for li in 0..self.panes[idx].figure_labels.len() {
                 // Cloned out: a level's text is an `Arc<str>`, so this is a refcount bump, and
                 // holding a borrow of the pane would block measuring through `&mut self` below.
@@ -479,19 +493,19 @@ impl RenderState {
                     // column of numbers sits where a row is read FROM, which is where every
                     // charting package puts a ratio scale's.
                     //
-                    // Flipped to the other side of the anchor when the text would otherwise run
+                    // Flipped to the other side of the anchor when the column would otherwise run
                     // past the plot — a scale drawn against the right edge would push ELEVEN
                     // readouts over the order book at once, and figure text is not clipped there.
-                    // Measured only near the edge, as the `Above` arm does and for the same reason.
+                    // Both room tests use the same `span_label_room`, so the whole column flips or
+                    // none of it does; a column with no room on EITHER side stays on the left,
+                    // where it overlaps the plot rather than the price axis beside it.
                     FigLabelPlace::LineSpan { .. } => {
-                        if node_x + rough_label_width(&text, self.label_font_delta)
-                            > plot_right - READOUT_PAD_X
-                            && node_x + self.measure_label_text(ctx, &text).width.as_f32()
-                                > plot_right
-                        {
-                            (node_x - READOUT_PAD_X, 1.0, y - LABEL_LINE_GAP, 1.0)
-                        } else {
+                        let fits_right = node_x + READOUT_PAD_X + span_label_room <= plot_right;
+                        let fits_left = node_x - READOUT_PAD_X - span_label_room >= plot_left;
+                        if fits_right || !fits_left {
                             (node_x + READOUT_PAD_X, 0.0, y - LABEL_LINE_GAP, 1.0)
+                        } else {
+                            (node_x - READOUT_PAD_X, 1.0, y - LABEL_LINE_GAP, 1.0)
                         }
                     }
                 };

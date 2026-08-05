@@ -58,7 +58,13 @@ fn every_readout_rides_the_line_it_names() {
     let f = fib();
     let sink = build(&FigureKind::FibRetracement(f), ctx(false, false));
     let (t0, t1) = (f.a.time_ms, f.b.time_ms);
-    for (_, place, _) in &sink.labels {
+    for (at, place, _) in &sink.labels {
+        // The anchor node names the end the readout is DRAWN at, which is the span's start. It is
+        // not what the renderer positions by today, so only a test keeps the two from drifting.
+        assert_eq!(
+            at.time_ms, t0,
+            "a readout anchored at the far end misnames where it sits"
+        );
         assert_eq!(
             *place,
             LabelPlace::LineSpan {
