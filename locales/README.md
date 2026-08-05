@@ -33,6 +33,7 @@ rust-i18n мёржит **все** файлы в этой папке в одно 
 Отраслевой стандарт / тех-метрики оставляем как есть на всех языках:
 
     BUY · SELL · Cancel Buy · PANIC SELL · LONG · SHORT · ON · OFF · Live
+    Spot · Futures (типы рынка в названиях бирж)
     Size · Sell · SL · TP · Lev · TS · VStop · Buy · Fill · Strat · Host · Port
     USDT eq. в подписи Size, USDT eq. — техническое обозначение эквивалента
     PRO · FREE (названия тарифов)

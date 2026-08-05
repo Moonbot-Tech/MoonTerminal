@@ -45,14 +45,40 @@ fn now_utc() -> DateTime<Utc> {
         .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
-/// Resolve the saved zone to a curated city, falling back to UTC so an unknown hand-edited zone
-/// cannot leave the header without a stable label or clock.
-fn selected_city(backend: &Entity<Backend>, cx: &App) -> &'static City {
-    backend
-        .read(cx)
-        .header_clock_zone()
+/// Resolve one persisted zone id through the curated header-clock city table.
+///
+/// Args:
+///     zone_id: Persisted IANA zone id, if the user selected one.
+///
+/// Returns:
+///     Matching curated city, or UTC for an absent, invalid, or unlisted id.
+fn city_for_zone_id(zone_id: Option<&str>) -> &'static City {
+    zone_id
         .and_then(cities::by_zone_id)
         .unwrap_or_else(cities::utc_city)
+}
+
+/// Resolve the exact IANA zone represented by the visible header clock.
+///
+/// Args:
+///     zone_id: Persisted IANA zone id, if the user selected one.
+///
+/// Returns:
+///     Curated city zone, or UTC under the header's fallback policy.
+pub(crate) fn resolved_header_clock_zone(zone_id: Option<&str>) -> chrono_tz::Tz {
+    city_for_zone_id(zone_id).zone
+}
+
+/// Resolve the saved zone to the city shown by the header clock.
+///
+/// Args:
+///     backend: Shared state containing the persisted header-clock zone.
+///     cx: Application context used to read the backend entity.
+///
+/// Returns:
+///     Matching curated city, or UTC when the saved value cannot be displayed.
+fn selected_city(backend: &Entity<Backend>, cx: &App) -> &'static City {
+    city_for_zone_id(backend.read(cx).header_clock_zone())
 }
 
 /// Gap between the time and the city code.

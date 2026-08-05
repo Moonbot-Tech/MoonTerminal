@@ -120,3 +120,59 @@ fn the_main_tab_row_labels_charts_from_the_panels_own_ticker() {
         "and must not re-derive a coin from the market name"
     );
 }
+
+/// Every current exchange-name surface must use the one Spot/Futures presentation policy.
+///
+/// Removing the formatter from `controls/core_combo.rs:core_combo`,
+/// `screener/view.rs:source_combo`, `chrome/terminal_chrome.rs:header`,
+/// `settings/connections/tab.rs:connections_tab`, `profit_monitor/rows.rs:grouped_rows`,
+/// `panels/log/controls.rs:source_combo`, `panels/detects/cards.rs:chip`, or
+/// `panels/news/mod.rs:open_coin` makes spot read as Hyper on that surface instead of Hyper Spot.
+/// The Log selector additionally keeps the raw name in state because membership compares raw
+/// identities; assigning `exchange_label` to its source makes the selected aggregate empty.
+#[test]
+fn current_exchange_surfaces_share_display_policy_without_changing_identity() {
+    for (rel, formatter) in [
+        ("controls/core_combo.rs", ".map(exchange_display_name)"),
+        ("screener/view.rs", "exchange_display_name(name)"),
+        (
+            "chrome/terminal_chrome.rs",
+            ".map(crate::controls::exchange_display_name)",
+        ),
+        (
+            "settings/connections/tab.rs",
+            ".map(crate::controls::exchange_display_name)",
+        ),
+        (
+            "analytics/profit_monitor/rows.rs",
+            "exchange_display_name_with_spot(",
+        ),
+        (
+            "panels/detects/cards.rs",
+            "exchange_display_name(&it.exchange_name)",
+        ),
+        ("panels/news/mod.rs", "exchange_display_name(ex)"),
+    ] {
+        let source = read_src(rel);
+        assert!(
+            source.contains(formatter),
+            "{rel}: every visible exchange name must pass through {formatter}"
+        );
+    }
+
+    let log = read_src("panels/log/controls.rs");
+    let source_combo = braced_body(&log, "pub(super) fn source_combo(");
+    assert!(
+        source_combo.contains("exchange_display_name(exchange)")
+            && source_combo.contains(".map(crate::controls::exchange_display_name)"),
+        "both the Log trigger and exchange menu labels must use the shared display policy"
+    );
+    assert!(
+        source_combo.contains("let source = exchange.to_string();"),
+        "LogSource::Exchange must retain the raw exchange identity"
+    );
+    assert!(
+        !source_combo.contains("LogSource::Exchange(exchange_label"),
+        "the formatted Log label must never become its membership key"
+    );
+}

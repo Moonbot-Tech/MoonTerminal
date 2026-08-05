@@ -1,7 +1,10 @@
 //! Regression tests for Profit Monitor row grouping and refresh decisions.
 
 use std::collections::HashMap;
+use std::time::{Duration, UNIX_EPOCH};
 
+use chrono::{NaiveDate, TimeZone, Utc};
+use chrono_tz::{Europe::Warsaw, Pacific::Apia, Tz};
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
 use moon_core::db::{ProfitUnit, QuoteCurrency};
 use moon_core::util::fmt::DeltaSign;
@@ -9,10 +12,9 @@ use moon_core::util::fmt::DeltaSign;
 use super::rows::{GroupMode, LiveContext, RowLabels, grouped_rows};
 use super::{
     ContextChange, MonitorPeriod, MonitorSort, MonitorSortColumn, VisibleColumns,
-    duration_until_period_refresh, format_profit, next_sort, retain_last_known_exchange_names,
-    sort_rows,
+    duration_until_period_refresh, format_profit, monitor_zone, next_sort,
+    retain_last_known_exchange_names, sort_rows, zoned_day_start,
 };
-use std::time::{Duration, UNIX_EPOCH};
 
 /// Return deterministic fallback labels for pure grouping tests.
 ///
@@ -22,6 +24,7 @@ fn labels() -> RowLabels<'static> {
     RowLabels {
         core: "Core",
         unknown_exchange: "Unknown exchange",
+        spot: "Spot",
     }
 }
 
@@ -88,6 +91,57 @@ fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
     assert_eq!(exchange_rows[0].trades, 6);
 }
 
+/// profit_monitor/rows.rs:grouped_rows must format only the visible exchange label while
+/// retaining raw identities for grouping and sorting; replacing sort_name with the display name
+/// reorders this equal-profit set, while grouping by display merges Hyper with Hyper Spot.
+#[test]
+fn exchange_spot_label_preserves_raw_grouping_and_sorting() {
+    let mut summary = summary();
+    for core in &mut summary.cores {
+        core.profit = 0.0;
+    }
+    summary.cores.push(ProfitMonitorCore {
+        core_uid: 3,
+        report_name: "Explicit spot".to_string(),
+        profit: 0.0,
+        trades: 7,
+        wins: 3,
+        positive_spent: 70.0,
+        positive_orders: 2,
+    });
+    let live = LiveContext {
+        exchange_names: HashMap::from([
+            (1, "Hyper".to_string()),
+            (2, "Hyper Futures".to_string()),
+            (3, "Hyper Spot".to_string()),
+        ]),
+        ..LiveContext::default()
+    };
+
+    let mut rows = grouped_rows(&summary, &live, GroupMode::Exchange, labels());
+    assert_eq!(
+        rows.len(),
+        3,
+        "equal display labels must not merge raw groups"
+    );
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["Hyper Spot", "Hyper Futures", "Hyper Spot"]
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.sort_name.as_str())
+            .collect::<Vec<_>>(),
+        ["Hyper", "Hyper Futures", "Hyper Spot"]
+    );
+
+    sort_rows(&mut rows, Some(next_sort(None, MonitorSortColumn::Name)));
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["Hyper Spot", "Hyper Futures", "Hyper Spot"]
+    );
+}
+
 /// `profit_monitor/mod.rs:context_change` must keep exchange-name changes out of the database
 /// reload path; returning `Reload` here makes a reconnect run another full-period SQLite scan even
 /// though cached per-core values can be regrouped immediately.
@@ -99,12 +153,28 @@ fn exchange_only_context_change_regroups_without_database_read() {
         ..LiveContext::default()
     };
     assert_eq!(
-        super::context_change(&before, &after, false),
+        super::context_change(&before, &after, false, false),
         ContextChange::Regroup
     );
     assert_eq!(
-        super::context_change(&after, &after, true),
-        ContextChange::Reload
+        super::context_change(&after, &after, true, false),
+        ContextChange::Reload {
+            restart_clock: false
+        }
+    );
+}
+
+/// `profit_monitor/mod.rs:context_change` must carry a zone change as one inseparable reload and
+/// clock-restart plan; treating it as a plain valuation reload leaves the old midnight timer armed
+/// after the user changes the header city.
+#[test]
+fn zone_change_reloads_and_restarts_the_calendar_timer() {
+    let context = LiveContext::default();
+    assert_eq!(
+        super::context_change(&context, &context, false, true),
+        ContextChange::Reload {
+            restart_clock: true
+        }
     );
 }
 
@@ -167,6 +237,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
     let rows = vec![
         super::rows::MonitorRow {
             name: "Alpha".to_string(),
+            sort_name: "Alpha".to_string(),
             profit: 5.0,
             trades: 4,
             wins: 1,
@@ -176,6 +247,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
         },
         super::rows::MonitorRow {
             name: "Beta".to_string(),
+            sort_name: "Beta".to_string(),
             profit: 12.0,
             trades: 2,
             wins: 2,
@@ -185,6 +257,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
         },
         super::rows::MonitorRow {
             name: "Gamma".to_string(),
+            sort_name: "Gamma".to_string(),
             profit: -3.0,
             trades: 8,
             wins: 4,
@@ -237,14 +310,66 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
     );
 }
 
-/// `profit_monitor/mod.rs:duration_until_period_refresh` must derive every wait from the next
-/// UTC boundary; using one fixed minute loop for every preset would rescan a full Year 1,440 times
-/// per day, while a process-relative interval would drift after executor delays.
+/// `profit_monitor/mod.rs:MonitorPeriod::range_at` must derive Today from the selected header-clock
+/// zone; replacing `zoned_day_start(zone, ...)` with UTC excludes a HyperLiquid close at 01:01
+/// Warsaw from the user's Today report.
 #[test]
-fn clock_refresh_uses_minute_midnight_or_no_timer_by_period() {
+fn today_includes_the_early_warsaw_hour() {
+    let now = Utc.with_ymd_and_hms(2026, 8, 5, 18, 16, 57).unwrap();
+    let hyperliquid_close = Utc.with_ymd_and_hms(2026, 8, 4, 23, 1, 18).unwrap();
+    let (from, to) = MonitorPeriod::Today.range_at(now, Warsaw);
+
+    assert_eq!((from, to), (1_785_880_800, 1_785_967_200));
+    assert!(from <= hyperliquid_close.timestamp() && hyperliquid_close.timestamp() < to);
+    assert_ne!(
+        (from, to),
+        MonitorPeriod::Today.range_at(now, Tz::UTC),
+        "the selected city must change the calendar query bounds"
+    );
+}
+
+/// `profit_monitor/mod.rs:monitor_zone` must share the header clock's curated-city fallback;
+/// parsing any valid IANA id directly makes this assertion red and lets the header show UTC while
+/// Profit Monitor silently queries Detroit calendar days.
+#[test]
+fn monitor_zone_matches_the_visible_header_fallback() {
+    assert_eq!(monitor_zone(Some("Europe/Warsaw")), Warsaw);
+    assert_eq!(monitor_zone(Some("America/Detroit")), Tz::UTC);
+    assert_eq!(monitor_zone(None), Tz::UTC);
+}
+
+/// `profit_monitor/mod.rs:zoned_day_start` must advance across a fully skipped civil date;
+/// restoring the three-hour search plus UTC reinterpretation makes this assertion red and invents
+/// a boundary fourteen hours after Apia's actual next local midnight.
+#[test]
+fn skipped_civil_date_advances_to_its_first_real_instant() {
+    let skipped = NaiveDate::from_ymd_opt(2011, 12, 30).unwrap();
+    assert_eq!(zoned_day_start(Apia, skipped), 1_325_239_200);
+}
+
+/// `profit_monitor/mod.rs:MonitorPeriod::range_at` must resolve both local midnights through the
+/// IANA zone; adding a fixed 86,400-second day makes these independent transition lengths red and
+/// shifts one edge of Profit Monitor Today around Warsaw daylight-saving changes.
+#[test]
+fn warsaw_calendar_days_follow_both_dst_transitions() {
+    let spring = Utc.with_ymd_and_hms(2026, 3, 29, 12, 0, 0).unwrap();
+    let autumn = Utc.with_ymd_and_hms(2026, 10, 25, 12, 0, 0).unwrap();
+    let (spring_from, spring_to) = MonitorPeriod::Today.range_at(spring, Warsaw);
+    let (autumn_from, autumn_to) = MonitorPeriod::Today.range_at(autumn, Warsaw);
+
+    assert_eq!(spring_to - spring_from, 23 * 60 * 60);
+    assert_eq!(autumn_to - autumn_from, 25 * 60 * 60);
+}
+
+/// `profit_monitor/mod.rs:duration_until_period_refresh` must arm calendar presets at the next
+/// selected-city midnight; restoring the UTC-day timer makes the Warsaw wait red and leaves Today
+/// stale for two hours after its query boundary moves in summer.
+#[test]
+fn clock_refresh_uses_minute_local_midnight_or_no_timer_by_period() {
     assert_eq!(
         duration_until_period_refresh(
             MonitorPeriod::Hour,
+            Warsaw,
             UNIX_EPOCH + Duration::from_millis(123_456)
         ),
         Some(Duration::from_millis(56_544))
@@ -252,13 +377,14 @@ fn clock_refresh_uses_minute_midnight_or_no_timer_by_period() {
     assert_eq!(
         duration_until_period_refresh(
             MonitorPeriod::Year,
-            UNIX_EPOCH + Duration::from_secs(43_230)
+            Warsaw,
+            UNIX_EPOCH + Duration::from_secs(1_785_953_817)
         ),
-        Some(Duration::from_secs(43_170)),
-        "calendar presets must wait for UTC midnight instead of polling every minute"
+        Some(Duration::from_secs(13_383)),
+        "calendar presets must wait for Warsaw midnight instead of UTC midnight"
     );
     assert_eq!(
-        duration_until_period_refresh(MonitorPeriod::All, UNIX_EPOCH),
+        duration_until_period_refresh(MonitorPeriod::All, Warsaw, UNIX_EPOCH),
         None
     );
 }

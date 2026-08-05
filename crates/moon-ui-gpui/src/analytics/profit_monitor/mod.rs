@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Datelike, Days, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::analytics::{ProfitMonitorSummary, Query};
@@ -23,8 +25,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::ProfitLoadState;
 use super::refresh::{BusyRetryBudget, RefreshGate, RefreshPlan, report_result_is_stale};
-use super::{Period, ProfitLoadState};
 use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
@@ -34,7 +36,6 @@ const HEADER_HEIGHT: f32 = 32.0;
 const CONTEXT_REFRESH_MS: u128 = 5_000;
 const SECOND_MS: u128 = 1_000;
 const MINUTE_MS: u128 = 60_000;
-const DAY_MS: u128 = 86_400_000;
 const PROFIT_COLUMN_WIDTH: f32 = 154.0;
 const TRADES_COLUMN_WIDTH: f32 = 72.0;
 const WIN_RATE_COLUMN_WIDTH: f32 = 76.0;
@@ -45,14 +46,14 @@ const AVERAGE_ORDER_COLUMN_WIDTH: f32 = 116.0;
 enum MonitorPeriod {
     /// Rolling hour ending now.
     Hour,
-    /// Current UTC calendar day.
+    /// Current calendar day in the header clock's selected city.
     #[default]
     Today,
-    /// Previous UTC calendar day.
+    /// Previous calendar day in the header clock's selected city.
     Yesterday,
-    /// Rolling seven days through tomorrow's UTC boundary.
+    /// Rolling seven calendar days through tomorrow in the selected city.
     Week,
-    /// Current UTC calendar month.
+    /// Current calendar month in the header clock's selected city.
     CurrentMonth,
     /// Rolling thirty days.
     Month,
@@ -121,26 +122,109 @@ impl MonitorPeriod {
         .to_string()
     }
 
-    /// Resolve the query's UTC Unix-second bounds.
+    /// Resolve the query's UTC Unix-second bounds in the selected header-clock zone.
+    ///
+    /// Args:
+    ///     now: Current UTC instant pinned for this calculation.
+    ///     zone: IANA zone selected by the window's header clock.
     ///
     /// Returns:
     ///     Inclusive lower and exclusive upper bound.
-    fn range(self) -> (i64, i64) {
+    fn range_at(self, now: DateTime<Utc>, zone: Tz) -> (i64, i64) {
         if self == Self::Hour {
-            let now = moon_core::util::now_unix_ms_i64() / 1000;
+            let now = now.timestamp();
             return (now.saturating_sub(3_600), now.saturating_add(1));
         }
+        let today = now.with_timezone(&zone).date_naive();
+        let tomorrow_date = shift_date(today, 1);
+        let today_start = zoned_day_start(zone, today);
+        let tomorrow = zoned_day_start(zone, tomorrow_date);
         match self {
-            Self::Today => Period::Today.range(),
-            Self::Yesterday => Period::Yesterday.range(),
-            Self::Week => Period::Week.range(),
-            Self::CurrentMonth => Period::CurMonth.range(),
-            Self::Month => Period::Month.range(),
-            Self::Year => Period::Year.range(),
-            Self::All => Period::All.range(),
+            Self::Today => (today_start, tomorrow),
+            Self::Yesterday => (zoned_day_start(zone, shift_date(today, -1)), today_start),
+            Self::Week => (zoned_day_start(zone, shift_date(today, -6)), tomorrow),
+            Self::CurrentMonth => {
+                let month_start =
+                    NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today);
+                (zoned_day_start(zone, month_start), tomorrow)
+            }
+            Self::Month => (zoned_day_start(zone, shift_date(today, -29)), tomorrow),
+            Self::Year => (zoned_day_start(zone, shift_date(today, -364)), tomorrow),
+            Self::All => (-1, tomorrow),
             Self::Hour => unreachable!("rolling hour returned above"),
         }
     }
+}
+
+/// Shift one civil date without assuming that its UTC day is always 86,400 seconds.
+///
+/// Args:
+///     date: Local calendar date to move.
+///     days: Signed number of civil dates.
+///
+/// Returns:
+///     Shifted date, or the input at chrono's representable boundary.
+fn shift_date(date: NaiveDate, days: i64) -> NaiveDate {
+    if days >= 0 {
+        date.checked_add_days(Days::new(days as u64))
+            .unwrap_or(date)
+    } else {
+        date.checked_sub_days(Days::new(days.unsigned_abs()))
+            .unwrap_or(date)
+    }
+}
+
+/// Resolve the first valid local instant at or after one civil date in an IANA zone.
+///
+/// A few zones have historically advanced at midnight, making `00:00` nonexistent; walking to
+/// the first valid minute preserves the correct civil-day boundary, including a date skipped
+/// completely by a dateline change. An ambiguous midnight uses its earlier occurrence so no real
+/// instant at the start of the date is omitted.
+///
+/// Args:
+///     zone: IANA time zone defining the civil date.
+///     date: Local calendar date whose start is required.
+///
+/// Returns:
+///     UTC Unix seconds at the first valid local minute at or after `date`.
+///
+/// Panics:
+///     When the zone has no valid local instant within the following 48 hours.
+fn zoned_day_start(zone: Tz, date: NaiveDate) -> i64 {
+    let midnight = date
+        .and_hms_opt(0, 0, 0)
+        .expect("a valid date always has midnight");
+    for minute in 0..=48 * 60 {
+        let Some(candidate) = midnight.checked_add_signed(chrono::Duration::minutes(minute)) else {
+            break;
+        };
+        match zone.from_local_datetime(&candidate) {
+            LocalResult::Single(value) => return value.timestamp(),
+            LocalResult::Ambiguous(first, second) => return first.min(second).timestamp(),
+            LocalResult::None => {}
+        }
+    }
+    panic!("no valid local instant within 48 hours of {date} in {zone}")
+}
+
+/// Read the current UTC instant through the terminal's shared system-clock source.
+///
+/// Returns:
+///     Current UTC time, or the Unix epoch when the platform clock is outside chrono's range.
+fn now_utc() -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(moon_core::util::now_unix_ms_i64())
+        .unwrap_or(DateTime::UNIX_EPOCH)
+}
+
+/// Resolve a saved header-clock zone through the same curated-city policy as the visible clock.
+///
+/// Args:
+///     zone_id: Persisted IANA zone id from the shared header clock.
+///
+/// Returns:
+///     Displayed city zone, or UTC when no valid curated selection exists.
+fn monitor_zone(zone_id: Option<&str>) -> Tz {
+    crate::chrome::clock::resolved_header_clock_zone(zone_id)
 }
 
 /// Effect of a non-report Backend update on the open monitor.
@@ -150,8 +234,11 @@ enum ContextChange {
     None,
     /// Cached database rows need only a new display grouping pass.
     Regroup,
-    /// Valuation changed, so projected database values must be re-read.
-    Reload,
+    /// Query inputs changed, so database values must be re-read and the clock may need re-arming.
+    Reload {
+        /// Whether a selected-zone change invalidated the current midnight timer.
+        restart_clock: bool,
+    },
 }
 
 /// Columns retained at one monitor width.
@@ -246,7 +333,10 @@ impl MonitorSortColumn {
     ///     Ascending column ordering.
     fn compare(self, left: &MonitorRow, right: &MonitorRow) -> SortOrdering {
         match self {
-            Self::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+            Self::Name => left
+                .sort_name
+                .to_lowercase()
+                .cmp(&right.sort_name.to_lowercase()),
             Self::Profit => left.profit.total_cmp(&right.profit),
             Self::Trades => left.trades.cmp(&right.trades),
             Self::WinRate => left.win_rate().total_cmp(&right.win_rate()),
@@ -316,7 +406,11 @@ fn sort_rows(rows: &mut [MonitorRow], sort: Option<MonitorSort>) {
             primary
         };
         primary
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| {
+                left.sort_name
+                    .to_lowercase()
+                    .cmp(&right.sort_name.to_lowercase())
+            })
             .then_with(|| left.primary_core.cmp(&right.primary_core))
     });
 }
@@ -343,16 +437,20 @@ fn sort_arrow(sort: Option<MonitorSort>, column: MonitorSortColumn) -> &'static 
 ///     before: Context represented by the current table.
 ///     after: Newly sampled context.
 ///     valuation_changed: Whether the application-wide projection mode changed.
+///     zone_changed: Whether the header clock selected a different curated zone.
 ///
 /// Returns:
-///     Nothing, a cheap regroup, or a database reload.
+///     Nothing, a cheap regroup, or a database reload plan with its timer effect.
 fn context_change(
     before: &LiveContext,
     after: &LiveContext,
     valuation_changed: bool,
+    zone_changed: bool,
 ) -> ContextChange {
-    if valuation_changed {
-        ContextChange::Reload
+    if valuation_changed || zone_changed {
+        ContextChange::Reload {
+            restart_clock: zone_changed,
+        }
     } else if before != after {
         ContextChange::Regroup
     } else {
@@ -405,11 +503,16 @@ fn duration_until_wall_clock_boundary(now: SystemTime, interval_ms: u128) -> Dur
 ///
 /// Args:
 ///     period: Active monitor preset.
+///     zone: IANA zone selected by the window's header clock.
 ///     now: Current system wall clock.
 ///
 /// Returns:
-///     Minute-boundary wait for Hour, next UTC midnight for calendar presets, or `None` for All.
-fn duration_until_period_refresh(period: MonitorPeriod, now: SystemTime) -> Option<Duration> {
+///     Minute-boundary wait for Hour, next local midnight for calendar presets, or `None` for All.
+fn duration_until_period_refresh(
+    period: MonitorPeriod,
+    zone: Tz,
+    now: SystemTime,
+) -> Option<Duration> {
     match period {
         MonitorPeriod::Hour => Some(duration_until_wall_clock_boundary(now, MINUTE_MS)),
         MonitorPeriod::All => None,
@@ -418,7 +521,17 @@ fn duration_until_period_refresh(period: MonitorPeriod, now: SystemTime) -> Opti
         | MonitorPeriod::Week
         | MonitorPeriod::CurrentMonth
         | MonitorPeriod::Month
-        | MonitorPeriod::Year => Some(duration_until_wall_clock_boundary(now, DAY_MS)),
+        | MonitorPeriod::Year => {
+            let since_epoch = now.duration_since(UNIX_EPOCH).ok()?;
+            let now_utc =
+                DateTime::from_timestamp_millis(i64::try_from(since_epoch.as_millis()).ok()?)?;
+            let (_, next_midnight) = MonitorPeriod::Today.range_at(now_utc, zone);
+            let target_ms = u128::try_from(next_midnight).ok()?.saturating_mul(1_000);
+            let remaining_ms = target_ms.saturating_sub(since_epoch.as_millis()).max(1);
+            Some(Duration::from_millis(
+                u64::try_from(remaining_ms).unwrap_or(u64::MAX),
+            ))
+        }
     }
 }
 
@@ -524,6 +637,7 @@ pub(crate) struct ProfitMonitorView {
     db_active: bool,
     seq: u64,
     period: MonitorPeriod,
+    zone: Tz,
     group: GroupMode,
     sort: Option<MonitorSort>,
     valuation: ValuationMode,
@@ -587,6 +701,7 @@ impl ProfitMonitorView {
             .as_deref()
             .and_then(MonitorPeriod::from_id)
             .unwrap_or_default();
+        let zone = monitor_zone(backend.read(cx).header_clock_zone());
         let group = backend
             .read(cx)
             .layout
@@ -620,6 +735,7 @@ impl ProfitMonitorView {
             db_active: false,
             seq: 0,
             period,
+            zone,
             group,
             sort,
             valuation,
@@ -682,16 +798,22 @@ impl ProfitMonitorView {
         let backend = self.backend.read(cx);
         let next = retain_last_known_exchange_names(&self.live, capture_live_context(backend));
         let valuation = backend.valuation_mode();
-        match context_change(&self.live, &next, self.valuation != valuation) {
+        let zone = monitor_zone(backend.header_clock_zone());
+        let zone_changed = self.zone != zone;
+        match context_change(&self.live, &next, self.valuation != valuation, zone_changed) {
             ContextChange::None => {}
             ContextChange::Regroup => {
                 self.live = next;
                 self.invalidate_content(cx);
                 cx.notify();
             }
-            ContextChange::Reload => {
+            ContextChange::Reload { restart_clock } => {
                 self.live = next;
                 self.valuation = valuation;
+                self.zone = zone;
+                if restart_clock {
+                    self.start_clock_refresh(cx);
+                }
                 self.reload(false, cx);
             }
         }
@@ -704,7 +826,8 @@ impl ProfitMonitorView {
     fn start_clock_refresh(&mut self, cx: &mut Context<Self>) {
         self.clock_timer_generation = self.clock_timer_generation.wrapping_add(1);
         let generation = self.clock_timer_generation;
-        let Some(wait) = duration_until_period_refresh(self.period, SystemTime::now()) else {
+        let Some(wait) = duration_until_period_refresh(self.period, self.zone, SystemTime::now())
+        else {
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -737,7 +860,7 @@ impl ProfitMonitorView {
     /// Returns:
     ///     Quote-profit query for the selected period and global valuation mode.
     fn query(&self) -> Query {
-        let (from, to) = self.period.range();
+        let (from, to) = self.period.range_at(now_utc(), self.zone);
         Query {
             from,
             to,
@@ -1020,6 +1143,7 @@ impl ProfitMonitorView {
             ProfitLoadState::Ready { unit, data } => {
                 let core_label = t!("profit_monitor.core_fallback").to_string();
                 let unknown_exchange = t!("profit_monitor.unknown_exchange").to_string();
+                let spot = t!("common.exchange_spot").to_string();
                 let mut rows = grouped_rows(
                     data,
                     &self.live,
@@ -1027,6 +1151,7 @@ impl ProfitMonitorView {
                     RowLabels {
                         core: &core_label,
                         unknown_exchange: &unknown_exchange,
+                        spot: &spot,
                     },
                 );
                 sort_rows(&mut rows, self.sort);

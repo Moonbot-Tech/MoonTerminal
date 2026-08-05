@@ -14,6 +14,7 @@ use std::rc::Rc;
 use gpui::App;
 use rust_i18n::t;
 
+use super::exchange_label::exchange_display_name;
 use crate::controls::CORE_COMBO_TRIGGER_W;
 use crate::core_order::OrderedCores;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
@@ -265,7 +266,9 @@ where
         menu = menu.item(MoonMenuItem::separator());
     }
     for (section_index, (exchange, members)) in sections.into_iter().enumerate() {
-        let exchange_label = exchange.unwrap_or(unknown_exchange.as_str());
+        let exchange_label = exchange
+            .map(exchange_display_name)
+            .unwrap_or_else(|| unknown_exchange.clone());
         if exchange.is_some() {
             let exchange_cores = section_core_ids(&members);
             let on_toggle_exchange = on_toggle_exchange.clone();
