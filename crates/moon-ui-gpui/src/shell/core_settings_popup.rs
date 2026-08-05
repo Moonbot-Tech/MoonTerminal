@@ -8,9 +8,14 @@
 //! synchronizes the two blacklist editors, commits when the expanded editor collapses, and handles
 //! Cancel All confirmation.
 //!
-//! Most edits resolve `active_trade_core(group)`, the same core used by the selector and toolbar.
-//! Default Alert Strategy instead captures the core rendered into its row. A missing core or
-//! settings snapshot produces the placeholder state.
+//! Every edit here goes to the core the popup was opened over, resolved through
+//! `core_settings::resolve_core_settings_write` at event time. None of these handlers may fall back
+//! to `active_trade_core(group)` alone: each commits either a RETAINED editor's value or a value
+//! read at RENDER time, and both belong to the core that was active then — which the stacked
+//! repaint throttles allow to differ from the core active when the click lands.
+//! Default Alert Strategy is the exception by construction: it captures the core rendered into its
+//! own row. A missing settings snapshot produces the placeholder state, and the popup stays open —
+//! it still belongs to that core.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -25,6 +30,7 @@ use moon_core::feed::{ClientSettingsEdit, LevManageEdit, RuntimeState};
 use moon_core::session::CoreId;
 
 use crate::panels::{icon_checkbox, popup_group, popup_title};
+use crate::shell::core_settings::resolve_core_settings_write;
 use crate::{Backend, design};
 
 /// Ordinal of the Alerts strategy kind, matching MoonProto `StrategyKindId::ALERTS = 22`.
@@ -140,13 +146,18 @@ pub const CORE_TRAILING_BOUNDS: (f32, f32, f32) = (-10.0, -0.1, 0.1);
 /// V-Stop bounds for negative, whole-percentage BID volume-drop levels in `vol_drop_level`.
 pub const CORE_VSTOP_BOUNDS: (f32, f32, f32) = (-50.0, 0.0, 1.0);
 
-/// Builds an active-core `ClientSettings` checkbox. `edit` constructs its boolean enum variant.
+/// Builds a `ClientSettings` checkbox for the popup's core. `edit` constructs its boolean variant.
+///
+/// The box the user clicks was drawn from `checked`, read at RENDER time from the core that was
+/// active then, so the toggled value belongs to that core and nowhere else — hence the same
+/// [`resolve_core_settings_write`] guard the retained editors use.
 fn cs_checkbox(
     id: &str,
     label: String,
     checked: bool,
     backend: &Entity<Backend>,
     group: &str,
+    seeded: Option<CoreId>,
     edit: fn(bool) -> ClientSettingsEdit,
 ) -> impl IntoElement {
     let backend = backend.clone();
@@ -158,7 +169,7 @@ fn cs_checkbox(
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             let b = backend.read(app);
-            if let Some(core) = b.active_trade_core(&group) {
+            if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group)) {
                 if let Err(e) = b.session.edit_client_settings(core, edit(on)) {
                     log::warn!("core settings edit failed: {e:#}");
                 }
@@ -166,13 +177,15 @@ fn cs_checkbox(
         })
 }
 
-/// Builds an active-core `LevManage` checkbox. `edit` constructs its boolean enum variant.
+/// Builds a `LevManage` checkbox for the popup's core. `edit` constructs its boolean variant.
+/// Guarded like [`cs_checkbox`], and for the same reason.
 fn lev_checkbox(
     id: &str,
     label: String,
     checked: bool,
     backend: &Entity<Backend>,
     group: &str,
+    seeded: Option<CoreId>,
     edit: fn(bool) -> LevManageEdit,
 ) -> impl IntoElement {
     let backend = backend.clone();
@@ -184,7 +197,7 @@ fn lev_checkbox(
         .on_change(move |ch: &bool, _w, app| {
             let on = *ch;
             let b = backend.read(app);
-            if let Some(core) = b.active_trade_core(&group) {
+            if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group)) {
                 if let Err(e) = b.session.edit_lev_manage(core, edit(on)) {
                     log::warn!("core lev edit failed: {e:#}");
                 }
@@ -258,6 +271,7 @@ fn param_row(
 ///     def_strategy_input: Default strategy filter input.
 ///     blacklist_expanded: Whether to render the multiline blacklist editor.
 ///     cancel_confirm: Whether Cancel All Orders is awaiting confirmation.
+///     seeded: Core the retained editors were seeded from; the only core they may write to.
 ///     backend: Shared terminal backend.
 ///     group: Active window group whose trade core is edited.
 ///     p: Active Moon palette.
@@ -280,6 +294,7 @@ pub fn core_settings_content(
     def_strategy_input: &Entity<MoonInputState>,
     blacklist_expanded: bool,
     cancel_confirm: bool,
+    seeded: Option<CoreId>,
     backend: &Entity<Backend>,
     group: &str,
     p: MoonPalette,
@@ -333,7 +348,10 @@ pub fn core_settings_content(
             .padding_x(7.0)
             .on_click(move |_, _w, app| {
                 let b = backend.read(app);
-                if let Some(core) = b.active_trade_core(&group) {
+                // Guarded like Cancel All beside it: the popup's two destructive actions must not
+                // disagree about which core they act on.
+                if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group))
+                {
                     if let Err(e) = b.session.restart_now(core) {
                         log::warn!("restart_now failed: {e:#}");
                     }
@@ -347,6 +365,7 @@ pub fn core_settings_content(
         cs.emu_mode,
         backend,
         group,
+        seeded,
         ClientSettingsEdit::EmuMode,
     );
     let header_row = v_flex()
@@ -391,7 +410,10 @@ pub fn core_settings_content(
             move |ch, _w, app| {
                 let on = *ch;
                 let b = backend.read(app);
-                if let Some(core) = b.active_trade_core(&group) {
+                // `pct` was read at render time from the then-active core; it may only go back to
+                // that same core.
+                if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group))
+                {
                     if let Err(e) = b.session.edit_client_settings(
                         core,
                         ClientSettingsEdit::GlobalTakeProfit { on, pct },
@@ -426,7 +448,10 @@ pub fn core_settings_content(
                     0.0
                 };
                 let b = backend.read(app);
-                if let Some(core) = b.active_trade_core(&group) {
+                // `val` can come from the retained slider, which holds the SEEDED core's value —
+                // so this write is addressed the same way the slider's own commits are.
+                if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group))
+                {
                     if let Err(e) = b
                         .session
                         .edit_client_settings(core, ClientSettingsEdit::TrailingDrop(val))
@@ -461,7 +486,10 @@ pub fn core_settings_content(
                     0
                 };
                 let b = backend.read(app);
-                if let Some(core) = b.active_trade_core(&group) {
+                // `n` can come from the retained slider — the seeded core's value; see the trailing
+                // toggle above.
+                if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group))
+                {
                     if let Err(e) = b
                         .session
                         .edit_client_settings(core, ClientSettingsEdit::VolDropLevel(n))
@@ -516,6 +544,7 @@ pub fn core_settings_content(
                 cs.buy_iceberg,
                 backend,
                 group,
+                seeded,
                 ClientSettingsEdit::BuyIceberg,
             ))
             .child(cs_checkbox(
@@ -524,6 +553,7 @@ pub fn core_settings_content(
                 cs.sell_iceberg,
                 backend,
                 group,
+                seeded,
                 ClientSettingsEdit::SellIceberg,
             )),
     );
@@ -541,7 +571,8 @@ pub fn core_settings_content(
             .on_change(move |ch: &bool, _w, app| {
                 let on = *ch;
                 let b = backend.read(app);
-                if let Some(core) = b.active_trade_core(&group) {
+                if let Some(core) = resolve_core_settings_write(seeded, b.active_trade_core(&group))
+                {
                     let text = b
                         .session
                         .store()
@@ -565,8 +596,8 @@ pub fn core_settings_content(
             .size(MoonCheckboxSize::Compact)
             .on_change(move |ch: &bool, _w, app| {
                 let on = *ch;
-                let core = backend.read(app).active_trade_core(&group);
-                if let Some(core) = core {
+                let active = backend.read(app).active_trade_core(&group);
+                if let Some(core) = resolve_core_settings_write(seeded, active) {
                     backend.update(app, |bk, _| bk.set_exclude_bl_delta(core, on));
                     if let Err(e) = backend
                         .read(app)
@@ -655,6 +686,7 @@ pub fn core_settings_content(
                 lev_max,
                 backend,
                 group,
+                seeded,
                 LevManageEdit::AutoMaxOrder,
             ))
             .child(lev_checkbox(
@@ -663,6 +695,7 @@ pub fn core_settings_content(
                 lev_up,
                 backend,
                 group,
+                seeded,
                 LevManageEdit::AutoLevUp,
             ))
             .child(lev_checkbox(
@@ -671,6 +704,7 @@ pub fn core_settings_content(
                 lev_iso,
                 backend,
                 group,
+                seeded,
                 LevManageEdit::AutoIsolated,
             ))
             .child(lev_checkbox(
@@ -679,6 +713,7 @@ pub fn core_settings_content(
                 lev_cross,
                 backend,
                 group,
+                seeded,
                 LevManageEdit::AutoCross,
             ))
             .child(lev_checkbox(
@@ -687,6 +722,7 @@ pub fn core_settings_content(
                 lev_tlg,
                 backend,
                 group,
+                seeded,
                 LevManageEdit::TlgReport,
             )),
     );

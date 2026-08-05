@@ -109,6 +109,10 @@ impl Render for Shell {
             .map(|(metric, _)| *metric)
             .zip(self.open_metric_content(p, cx));
 
+        // Drop the gear popup before building its content if the core it was seeded from is no
+        // longer the active one — its editors hold that core's values, not this one's.
+        self.reconcile_core_settings_popup(cx);
+
         // Build core-settings content only while the Shell-controlled `MoonPopover` is open; the
         // popover itself anchors the content to its button.
         let core_settings_content = self
