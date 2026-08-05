@@ -397,6 +397,9 @@ pub struct AnalyticsView {
     /// Hovered bar of the "by strategy type" chart (single-day periods only) — popup of the
     /// cores behind that type.
     pub(super) hover_kind: Option<usize>,
+    /// Whether the Summary's per-core card shows every ranked core instead of the compact
+    /// leaders/outsiders overview. This is a view-only choice and intentionally is not persisted.
+    pub(super) show_all_core_ranks: bool,
     /// Strategies tab: selected per-core row key (`strategyid@core_uid`), plus its name and
     /// details. Legacy bare strategy IDs remain parseable.
     pub(super) sel_strategy: Option<(String, String)>,
@@ -691,6 +694,7 @@ impl AnalyticsView {
             hover_daily_bucket: None,
             hover_cum_bucket: None,
             hover_kind: None,
+            show_all_core_ranks: false,
             sel_strategy: None,
             sel_extra: Vec::new(),
             strat_search: String::new(),

@@ -4,7 +4,10 @@
 //! analytics-mock artifact.
 
 use gpui::*;
-use moon_ui::{MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonTone, h_flex, v_flex};
+use moon_ui::{
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonPalette, MoonSegmentItem, MoonSegmentedControl,
+    MoonTone, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::AnalyticsView;
@@ -243,7 +246,7 @@ impl AnalyticsView {
                 h_flex()
                     .w_full()
                     .gap(design::ui_px(cx, 8.0))
-                    .items_start()
+                    .items_stretch()
                     .child(top_card(
                         t!("analytics.best_trades").to_string(),
                         &data.best,
@@ -272,10 +275,9 @@ impl AnalyticsView {
                     .overflow_y_scroll()
                     .child(top),
             )
-            // The bottom chart is ELASTIC: pinned to the bottom of the window
-            // and stretching up to the nearest card (flex_1); the bars are
-            // painted on canvas across the whole available height, with a
-            // minimum so it cannot collapse.
+            // The bottom ranking is ELASTIC and pinned to the bottom of the window. Both its
+            // overview and complete modes virtualize their rows, so the 170 px minimum remains
+            // usable instead of clipping a fixed ten-row column.
             .child(
                 div()
                     .flex_1()
@@ -283,13 +285,65 @@ impl AnalyticsView {
                     .w_full()
                     .px(design::ui_px(cx, 10.0))
                     .pb(design::ui_px(cx, 10.0))
-                    .child(chart_card(
-                        t!("analytics.cores_title").to_string(),
-                        t!("analytics.cores_sub").to_string(),
-                        charts::core_totals_bars(&data.core_days, &core_colors, p, cx),
-                        p,
-                        cx,
-                    )),
+                    .child({
+                        let stats = charts::core_rank_stats(&data.core_days);
+                        let subtitle = if let Some(share) = stats.leader_share_pct {
+                            t!(
+                                "analytics.cores_stats_leader",
+                                total = stats.total,
+                                profitable = stats.profitable,
+                                losing = stats.losing,
+                                share = compact(share, 0)
+                            )
+                            .to_string()
+                        } else {
+                            t!(
+                                "analytics.cores_stats",
+                                total = stats.total,
+                                profitable = stats.profitable,
+                                losing = stats.losing
+                            )
+                            .to_string()
+                        };
+                        let show_all = self.show_all_core_ranks;
+                        let view = cx.entity();
+                        let modes = MoonSegmentedControl::new("an-core-rank-mode")
+                            .items([
+                                MoonSegmentItem::new(
+                                    "",
+                                    t!("analytics.cores_overview").to_string(),
+                                )
+                                .fit_width(cx, 58.0, 92.0)
+                                .selected(!show_all),
+                                MoonSegmentItem::new("", t!("analytics.cores_all").to_string())
+                                    .fit_width(cx, 44.0, 72.0)
+                                    .selected(show_all),
+                            ])
+                            .on_click(move |ix, _, _, app| {
+                                let next = ix == 1;
+                                view.update(app, |this, cx| {
+                                    if this.show_all_core_ranks != next {
+                                        this.show_all_core_ranks = next;
+                                        cx.notify();
+                                    }
+                                });
+                            })
+                            .render()
+                            .into_any_element();
+                        chart_card_ex(
+                            t!("analytics.cores_title").to_string(),
+                            subtitle,
+                            Some(modes),
+                            charts::core_totals_rank(
+                                &data.core_days,
+                                self.show_all_core_ranks,
+                                p,
+                                cx,
+                            ),
+                            p,
+                            cx,
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -629,110 +683,272 @@ fn top_card(
         .child(list)
 }
 
-/// "Insights": automatic conclusions drawn from the period's aggregates.
-fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
-    let mut lines: Vec<String> = Vec::new();
-    if let Some(best) = d.strategies.first().filter(|g| g.profit > 0.0) {
-        lines.push(
-            t!(
-                "analytics.ins.best_strategy",
-                name = strat_display(&best.name),
-                profit = fmt_signed_unit(best.profit),
-                wr = format!("{:.1}", best.winrate())
-            )
-            .to_string(),
-        );
-    }
-    if d.cur.profit > 0.0 {
-        if let Some(top) = d.coins.first().filter(|g| g.profit > 0.0) {
-            let share = (top.profit / d.cur.profit * 100.0).round() as i64;
-            if share > 10 {
-                lines
-                    .push(t!("analytics.ins.top_coin", name = top.name, share = share).to_string());
-            }
-        }
-    }
-    if let Some(worst) = d.coins.last().filter(|g| g.profit < 0.0) {
-        lines.push(
-            t!(
-                "analytics.ins.worst_coin",
-                name = worst.name,
-                profit = fmt_signed_unit(worst.profit)
-            )
-            .to_string(),
-        );
-    }
-    let pf_verdict = if d.cur.pf >= 2.0 {
-        t!("analytics.ins.pf_great")
-    } else if d.cur.pf >= 1.3 {
-        t!("analytics.ins.pf_good")
-    } else if d.cur.pf >= 1.0 {
-        t!("analytics.ins.pf_edge")
-    } else {
-        t!("analytics.ins.pf_bad")
+/// One stable row in the Insights card.
+struct InsightRow {
+    /// Short localized category that makes the five-row scan predictable.
+    label: String,
+    /// Primary strategy, coin, verdict, or hour.
+    main: String,
+    /// Compact right-pinned metric preserved when the middle column truncates.
+    metric: String,
+    /// Semantic colour for the metric.
+    metric_color: u32,
+    /// Complete localized conclusion shown when the compact row needs explanation.
+    tooltip: Option<String>,
+}
+
+/// Build five insight slots without changing the existing eligibility rules or calculations.
+///
+/// Args:
+///     d: Summary aggregates for the selected period.
+///     p: Active Moon palette used to colour each metric by meaning.
+///
+/// Returns:
+///     Strategy, contribution, risk, quality, and hour rows in stable order. Optional facts become
+///     neutral placeholders so the card keeps the same scan pattern and height in every period.
+fn insight_rows(d: &Summary, p: MoonPalette) -> [InsightRow; 5] {
+    let missing = |label: String| InsightRow {
+        label,
+        main: "—".to_string(),
+        metric: String::new(),
+        metric_color: p.text_muted,
+        tooltip: None,
     };
-    lines.push(
-        t!(
-            "analytics.ins.pf",
-            pf = format!("{:.2}", d.cur.pf),
-            verdict = pf_verdict,
+
+    let strategy = d
+        .strategies
+        .first()
+        .filter(|group| group.profit > 0.0)
+        .map(|best| {
+            let name = strat_display(&best.name);
+            let profit = fmt_signed_unit(best.profit);
+            let wr = format!("{:.1}", best.winrate());
+            InsightRow {
+                label: t!("analytics.ins.label.strategy").to_string(),
+                main: name.clone(),
+                metric: t!("analytics.ins.metric.strategy", profit = profit, wr = wr).to_string(),
+                metric_color: p.green,
+                tooltip: Some(
+                    t!(
+                        "analytics.ins.best_strategy",
+                        name = name,
+                        profit = profit,
+                        wr = wr
+                    )
+                    .to_string(),
+                ),
+            }
+        })
+        .unwrap_or_else(|| missing(t!("analytics.ins.label.strategy").to_string()));
+
+    let contribution = (d.cur.profit > 0.0)
+        .then(|| d.coins.first().filter(|group| group.profit > 0.0))
+        .flatten()
+        .and_then(|top| {
+            let share = (top.profit / d.cur.profit * 100.0).round() as i64;
+            (share > 10).then(|| InsightRow {
+                label: t!("analytics.ins.label.contribution").to_string(),
+                main: top.name.clone(),
+                metric: t!("analytics.ins.metric.share", share = share).to_string(),
+                metric_color: p.green,
+                tooltip: Some(
+                    t!("analytics.ins.top_coin", name = top.name, share = share).to_string(),
+                ),
+            })
+        })
+        .unwrap_or_else(|| missing(t!("analytics.ins.label.contribution").to_string()));
+
+    let risk = d
+        .coins
+        .last()
+        .filter(|group| group.profit < 0.0)
+        .map(|worst| {
+            let profit = fmt_signed_unit(worst.profit);
+            InsightRow {
+                label: t!("analytics.ins.label.risk").to_string(),
+                main: worst.name.clone(),
+                metric: profit.clone(),
+                metric_color: p.orange,
+                tooltip: Some(
+                    t!(
+                        "analytics.ins.worst_coin",
+                        name = worst.name,
+                        profit = profit
+                    )
+                    .to_string(),
+                ),
+            }
+        })
+        .unwrap_or_else(|| missing(t!("analytics.ins.label.risk").to_string()));
+
+    let (pf_verdict, pf_color) = if d.cur.pf >= 2.0 {
+        (t!("analytics.ins.pf_great").to_string(), p.green)
+    } else if d.cur.pf >= 1.3 {
+        (t!("analytics.ins.pf_good").to_string(), p.green)
+    } else if d.cur.pf >= 1.0 {
+        (t!("analytics.ins.pf_edge").to_string(), p.amber)
+    } else {
+        (t!("analytics.ins.pf_bad").to_string(), p.orange)
+    };
+    let quality = InsightRow {
+        label: t!("analytics.ins.label.quality").to_string(),
+        main: format!("{:.2} | {pf_verdict}", d.cur.pf),
+        metric: t!(
+            "analytics.ins.metric.streaks",
             w = d.cur.win_streak,
             l = d.cur.loss_streak
         )
         .to_string(),
-    );
-    if let Some((h, profit, n)) = d.best_hour {
-        lines.push(
+        metric_color: pf_color,
+        tooltip: Some(
             t!(
-                "analytics.ins.best_hour",
-                hour = format!("{h:02}:00"),
-                profit = fmt_signed_unit(profit),
-                n = n
+                "analytics.ins.pf",
+                pf = format!("{:.2}", d.cur.pf),
+                verdict = pf_verdict,
+                w = d.cur.win_streak,
+                l = d.cur.loss_streak
             )
             .to_string(),
-        );
-    }
+        ),
+    };
 
-    let mut list = v_flex().w_full().gap(design::ui_px(cx, 7.0));
-    for line in lines {
-        list = list.child(
-            h_flex()
-                .items_start()
-                .gap(design::ui_px(cx, 8.0))
-                .child(
-                    div()
-                        .flex_none()
-                        .mt(design::ui_px(cx, 4.0))
-                        .w(design::ui_px(cx, 5.0))
-                        .h(design::ui_px(cx, 5.0))
-                        .rounded(px(1.0))
-                        .bg(moon(p.accent)),
+    let hour = d
+        .best_hour
+        .map(|(hour, profit, trades)| {
+            let profit = fmt_signed_unit(profit);
+            InsightRow {
+                label: t!("analytics.ins.label.hour").to_string(),
+                main: t!(
+                    "analytics.ins.metric.hour_utc",
+                    hour = format!("{hour:02}:00")
                 )
-                .child(div().flex_1().min_w_0().child(line)),
-        );
+                .to_string(),
+                metric: t!("analytics.ins.metric.hour", profit = profit, n = trades).to_string(),
+                metric_color: p.green,
+                tooltip: Some(
+                    t!(
+                        "analytics.ins.best_hour",
+                        hour = format!("{hour:02}:00"),
+                        profit = profit,
+                        n = trades
+                    )
+                    .to_string(),
+                ),
+            }
+        })
+        .unwrap_or_else(|| missing(t!("analytics.ins.label.hour").to_string()));
+
+    [strategy, contribution, risk, quality, hour]
+}
+
+/// Render structured automatic conclusions for the selected period.
+///
+/// Args:
+///     d: Summary aggregates for the selected period.
+///     p: Active Moon palette.
+///     cx: Analytics context used to resolve scaled row geometry.
+///
+/// Returns:
+///     A five-row table that shares the neighbouring trade cards' header, row, and typography
+///     rhythm while retaining each conclusion's full localized wording in a tooltip.
+fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> impl IntoElement {
+    let label_w = design::font_w_px(cx, 104.0);
+    let metric_w = design::font_w_px(cx, 190.0);
+    let row_h = design::fit_h_px(cx, 25.0, 14.0, 5.5);
+    let mut list = v_flex().w_full().gap_0().child(
+        h_flex()
+            .w_full()
+            .h(design::fit_h_px(cx, 22.0, 12.0, 5.0))
+            .px(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, 8.0))
+            .items_center()
+            .text_size(design::t_caption(cx))
+            .text_color(moon(p.text_soft))
+            .bg(moon(p.table_head))
+            .child(
+                div()
+                    .flex_1()
+                    .max_w(label_w)
+                    .min_w_0()
+                    .truncate()
+                    .child(t!("analytics.ins.col.insight").to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(t!("analytics.ins.col.detail").to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .max_w(metric_w)
+                    .min_w_0()
+                    .truncate()
+                    .text_right()
+                    .child(t!("analytics.ins.col.result").to_string()),
+            ),
+    );
+    for (ix, row) in insight_rows(d, p).into_iter().enumerate() {
+        let mut element = h_flex()
+            .id(("an-insight-row", ix))
+            .w_full()
+            .h(row_h)
+            .min_w_0()
+            .items_center()
+            .gap(design::ui_px(cx, 8.0))
+            .px(design::ui_px(cx, 8.0))
+            .bg(moon(p.table_body))
+            .border_t_1()
+            .border_color(moon_alpha(p.border, 0.6))
+            .child(
+                div()
+                    .flex_1()
+                    .max_w(label_w)
+                    .min_w_0()
+                    .truncate()
+                    .text_color(moon(p.text_soft))
+                    .child(row.label),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(moon(p.text_soft))
+                    .child(row.main),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .max_w(metric_w)
+                    .min_w_0()
+                    .truncate()
+                    .text_right()
+                    .text_color(moon(row.metric_color))
+                    .child(row.metric),
+            );
+        if let Some(tooltip) = row.tooltip {
+            element = element.tooltip(crate::panels::common::text_tooltip(tooltip));
+        }
+        list = list.child(element);
     }
     v_flex()
         .flex_1()
         .min_w_0()
-        .gap(design::ui_px(cx, 2.0))
-        .px(design::ui_px(cx, 12.0))
-        .py(design::ui_px(cx, 10.0))
         .rounded(design::ui_px(cx, 8.0))
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        .overflow_hidden()
         .child(
             div()
+                .px(design::ui_px(cx, 12.0))
+                .py(design::ui_px(cx, 8.0))
                 .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(t!("analytics.insights").to_string()),
-        )
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(moon(p.text_muted))
-                .mb(design::ui_px(cx, 6.0))
-                .child(t!("analytics.insights_sub").to_string()),
         )
         .child(list)
 }
