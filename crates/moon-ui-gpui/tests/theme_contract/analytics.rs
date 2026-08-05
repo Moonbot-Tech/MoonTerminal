@@ -3,6 +3,148 @@
 
 use super::support::*;
 
+/// The per-core Summary ranking must stay virtualized in both modes and use MoonUI's progress
+/// primitive for magnitude bars.
+///
+/// Breakage: replacing either `MoonVirtualList` with eager rows lets the elastic card clip its
+/// leaders at minimum window height; dropping `MoonScrollbarVisibility::Always` makes overflow
+/// undiscoverable until the pointer happens to cross it; hand-building the progress track forks
+/// MoonUI's scaling and theme behavior.
+#[test]
+fn per_core_summary_rankings_stay_virtualized_and_moonui_first() {
+    let charts = read_src("analytics/summary/charts.rs");
+    let overview = code_only(braced_body(&charts, "fn core_rank_overview("));
+    let all = code_only(braced_body(&charts, "fn core_rank_all("));
+    let row = code_only(braced_body(&charts, "fn core_rank_row("));
+
+    for (name, body, id) in [
+        ("overview", overview, "an-core-rank-overview"),
+        ("all", all, "an-core-rank-all"),
+    ] {
+        assert!(
+            body.contains(&format!("MoonVirtualList::new(\"{id}\""))
+                && body.contains(".scrollbar_visibility(MoonScrollbarVisibility::Always)"),
+            "the {name} ranking must use its own virtual list with an always-visible scrollbar"
+        );
+        assert_eq!(
+            body.matches(".pr(scrollbar_gutter)").count(),
+            1,
+            "the {name} ranking must reserve the overlay gutter once at its outer right edge"
+        );
+    }
+    assert!(
+        row.contains("MoonProgress::new(")
+            && row.contains(".value(row.magnitude_pct)")
+            && row.contains(".color(super::sign_color(p, row.total))"),
+        "each ranking row must delegate normalized, sign-aware bars to MoonProgress"
+    );
+}
+
+/// The Summary triptych must share one card height, while Insights mirrors the neighbouring trade
+/// tables and keeps the complete conclusion behind each populated row.
+///
+/// Breakage: restoring `items_start` makes the Insights border shorter than its two neighbours;
+/// changing `analytics/summary/mod.rs:insights_card` back to caption-sized semibold body cells makes
+/// the third card visibly diverge from Top/Worst; dropping a slot or tooltip hides period facts.
+#[test]
+fn summary_triptych_and_insight_rows_keep_their_visual_contract() {
+    let summary = read_src("analytics/summary/mod.rs");
+    let tab = code_only(braced_body(&summary, "pub(super) fn summary_tab("));
+    let rows = code_only(braced_body(&summary, "fn insight_rows("));
+    let card = code_only(braced_body(&summary, "fn insights_card("));
+    let header = chain_between(
+        &card,
+        "let mut list = v_flex().w_full().gap_0().child(",
+        ");\n    for (ix, row)",
+        "Insights table header",
+    );
+    let body = chain_between(
+        &card,
+        "let mut element = h_flex()",
+        "if let Some(tooltip)",
+        "Insights body row",
+    );
+    let shell = chain_between(
+        &card,
+        "v_flex()\n        .flex_1()",
+        ".child(list)",
+        "Insights card shell",
+    );
+
+    assert!(
+        tab.contains(
+            ".items_stretch()\n                    .child(top_card(\n                        t!(\"analytics.best_trades\")"
+        ) && tab.contains(".child(insights_card(&data, p, cx))"),
+        "the trade/insight triptych must stretch all three cards to one height"
+    );
+    assert!(
+        rows.contains("[strategy, contribution, risk, quality, hour]")
+            && rows.contains("main: \"—\".to_string()")
+            && rows.contains("metric: String::new()")
+            && rows.contains("metric_color: p.text_muted")
+            && rows.contains("tooltip: None"),
+        "Insights must retain five stable slots with fully neutral placeholders for missing facts"
+    );
+    for tooltip_key in [
+        "analytics.ins.best_strategy",
+        "analytics.ins.top_coin",
+        "analytics.ins.worst_coin",
+        "\"analytics.ins.pf\",",
+        "analytics.ins.best_hour",
+    ] {
+        assert!(
+            rows.contains(tooltip_key),
+            "the populated Insight row must retain the full {tooltip_key:?} tooltip"
+        );
+    }
+    assert!(
+        header.contains(".h(design::fit_h_px(cx, 22.0, 12.0, 5.0))")
+            && header.contains(".px(design::ui_px(cx, 8.0))")
+            && header.contains(".gap(design::ui_px(cx, 8.0))")
+            && header.contains(".text_size(design::t_caption(cx))")
+            && header.contains(".bg(moon(p.table_head))")
+            && header.contains(".max_w(label_w)")
+            && header.contains(".max_w(metric_w)")
+            && header.contains(".text_right()")
+            && header.contains("analytics.ins.col.insight")
+            && header.contains("analytics.ins.col.detail")
+            && header.contains("analytics.ins.col.result"),
+        "Insights must use a trade-table header with columns aligned to its body"
+    );
+    assert!(
+        body.contains(".h(row_h)")
+            && body.contains(".px(design::ui_px(cx, 8.0))")
+            && body.contains(".gap(design::ui_px(cx, 8.0))")
+            && body.contains(".bg(moon(p.table_body))")
+            && body.contains(".border_t_1()")
+            && body.contains(".max_w(label_w)")
+            && body.contains(".max_w(metric_w)")
+            && body.matches(".truncate()").count() == 3
+            && body.contains(".text_right()")
+            && body.contains(".text_color(moon(row.metric_color))")
+            && !body.contains(".text_size(design::t_caption(cx))")
+            && !body.contains(".font_weight(FontWeight::SEMIBOLD)"),
+        "Insights body rows must share trade-table geometry and normal body typography"
+    );
+    assert!(
+        shell.contains(".rounded(design::ui_px(cx, 8.0))")
+            && shell.contains(".bg(moon(p.panel))")
+            && shell.contains(".border_1()")
+            && shell.contains(".overflow_hidden()")
+            && shell.contains(".px(design::ui_px(cx, 12.0))")
+            && shell.contains(".py(design::ui_px(cx, 8.0))")
+            && shell.contains(".text_size(design::t_title(cx))")
+            && shell.contains(".font_weight(FontWeight::SEMIBOLD)")
+            && !shell.contains(".gap(")
+            && !shell.contains("analytics.insights_sub"),
+        "Insights must share the trade cards' frame and one-line title instead of an inset layout"
+    );
+    assert!(
+        card.contains("text_tooltip(tooltip)") && !card.contains(".flex_none()"),
+        "Insight truncation must stay safe and expose each complete conclusion on hover"
+    );
+}
+
 /// Report columns must preserve retained widths and expose their overflow through a visible bar.
 ///
 /// Replacing `Preserve` with `Fit` would silently compress long fields again. Restoring the old

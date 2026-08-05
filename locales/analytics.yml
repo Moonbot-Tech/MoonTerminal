@@ -440,10 +440,30 @@ analytics.cores_title:
   ru: "Прибыль по ядрам"
   en: "Profit by core"
   es: "Beneficio por núcleo"
-analytics.cores_sub:
-  ru: "итоговая прибыль каждого ядра за выбранный период"
-  en: "total profit of each core over the selected period"
-  es: "beneficio total de cada núcleo en el período"
+analytics.cores_overview:
+  ru: "Обзор"
+  en: "Overview"
+  es: "Resumen"
+analytics.cores_all:
+  ru: "Все"
+  en: "All"
+  es: "Todos"
+analytics.cores_leaders:
+  ru: "Лидеры"
+  en: "Leaders"
+  es: "Líderes"
+analytics.cores_outsiders:
+  ru: "Аутсайдеры"
+  en: "Outsiders"
+  es: "Peores"
+analytics.cores_stats:
+  ru: "Ядер: %{total}, в плюсе: %{profitable}, в минусе: %{losing}"
+  en: "Cores: %{total}, profitable: %{profitable}, losing: %{losing}"
+  es: "Núcleos: %{total}, con beneficio: %{profitable}, con pérdida: %{losing}"
+analytics.cores_stats_leader:
+  ru: "Ядер: %{total}, в плюсе: %{profitable}, в минусе: %{losing}, лидер: %{share}% чистого результата"
+  en: "Cores: %{total}, profitable: %{profitable}, losing: %{losing}, leader: %{share}% of net result"
+  es: "Núcleos: %{total}, con beneficio: %{profitable}, con pérdida: %{losing}, líder: %{share}% del resultado neto"
 # The popup lists the top cores by absolute contribution, not all of them — the tail is
 # labelled, or the rows would silently fail to add up to the total in the popup's header.
 analytics.popup_more:
@@ -721,10 +741,58 @@ analytics.insights:
   ru: "Инсайты"
   en: "Insights"
   es: "Conclusiones"
-analytics.insights_sub:
-  ru: "автоматические выводы по периоду"
-  en: "automatic conclusions for the period"
-  es: "conclusiones automáticas del período"
+analytics.ins.col.insight:
+  ru: "Показатель"
+  en: "Insight"
+  es: "Indicador"
+analytics.ins.col.detail:
+  ru: "Детали"
+  en: "Details"
+  es: "Detalles"
+analytics.ins.col.result:
+  ru: "Результат"
+  en: "Result"
+  es: "Resultado"
+analytics.ins.label.strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+analytics.ins.label.contribution:
+  ru: "Вклад монеты"
+  en: "Coin share"
+  es: "Aporte moneda"
+analytics.ins.label.risk:
+  ru: "Главный минус"
+  en: "Main loss"
+  es: "Mayor pérdida"
+analytics.ins.label.quality:
+  ru: "Качество"
+  en: "Quality"
+  es: "Calidad"
+analytics.ins.label.hour:
+  ru: "Лучший час"
+  en: "Best hour"
+  es: "Mejor hora"
+analytics.ins.metric.strategy:
+  ru: "%{profit} | WR %{wr}%"
+  en: "%{profit} | WR %{wr}%"
+  es: "%{profit} | WR %{wr}%"
+analytics.ins.metric.share:
+  ru: "%{share}% прибыли"
+  en: "%{share}% of profit"
+  es: "%{share}% del beneficio"
+analytics.ins.metric.streaks:
+  ru: "поб. %{w} / пор. %{l}"
+  en: "win %{w} / loss %{l}"
+  es: "gan. %{w} / pérd. %{l}"
+analytics.ins.metric.hour:
+  ru: "%{profit} | %{n} сделок"
+  en: "%{profit} | %{n} trades"
+  es: "%{profit} | %{n} operaciones"
+analytics.ins.metric.hour_utc:
+  ru: "%{hour} UTC"
+  en: "%{hour} UTC"
+  es: "%{hour} UTC"
 analytics.ins.best_strategy:
   ru: "Лучшая стратегия — %{name}: %{profit} при winrate %{wr}%."
   en: "Best strategy — %{name}: %{profit} at %{wr}% winrate."
