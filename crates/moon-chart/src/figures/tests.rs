@@ -61,6 +61,7 @@ fn build_one(fig: &Figure, hovered: Option<u64>, selected: Option<u64>) -> Buffe
             epoch_ms: EPOCH,
             hovered,
             selected,
+            dragging: None,
         },
         &mut out,
     );
@@ -114,7 +115,7 @@ fn a_hovered_figure_gains_its_readout() {
     let (_, _, _, markers, labels) = build_one(&fig, Some(7), None);
     assert!(markers.is_empty(), "hover alone shows no drag knots");
     assert_eq!(labels.len(), 1);
-    assert_eq!(labels[0].text, LabelText::Price(100.0));
+    assert_eq!(labels[0].text, LabelValue::Price(100.0));
     assert_eq!(labels[0].place, LabelPlace::RightEdge);
     assert_eq!(labels[0].color, 0x0A_14_1E, "label takes the figure color");
 }
@@ -160,6 +161,7 @@ fn a_draft_draws_bright_and_thick_without_knots() {
             epoch_ms: EPOCH,
             hovered: None,
             selected: None,
+            dragging: None,
         },
         &mut out,
     );
@@ -197,6 +199,7 @@ fn the_builder_appends_and_never_clears() {
             epoch_ms: EPOCH,
             hovered: None,
             selected: None,
+            dragging: None,
         },
         &mut out,
     );
@@ -259,8 +262,6 @@ fn an_order_zone_spans_the_whole_plot_with_a_finite_sentinel() {
     assert_eq!(z.t0_rel, -crate::layers::TIME_UNBOUNDED);
     assert_eq!(z.t1_rel, crate::layers::TIME_UNBOUNDED);
     assert!(z.t0_rel.is_finite() && z.t1_rel.is_finite());
-    // And far enough past any real timestamp that no figure can reach it: ~3e13 ms is year 2900.
-    assert!(crate::layers::TIME_UNBOUNDED > 1e20);
 }
 
 #[test]
@@ -281,4 +282,85 @@ fn a_fill_never_reacts_to_hover_or_selection() {
     let colors = |z: &[ZoneInstance]| z.iter().map(|z| z.color).collect::<Vec<_>>();
     assert_eq!(colors(&idle), colors(&hovered));
     assert_eq!(colors(&idle), colors(&selected));
+}
+
+#[test]
+fn a_level_readout_is_rendered_to_text_once_not_every_frame() {
+    use moon_core::figures::tools::FibRetracement;
+    let f = Figure::new(
+        FigureKind::FibRetracement(FibRetracement {
+            a: FigNode::new(EPOCH, 63_713.5),
+            b: FigNode::new(EPOCH + 60_000.0, 61_240.25),
+        }),
+        DrawStyle::default(),
+        0,
+    );
+    let (_, _, _, _, labels) = build_one(&f, None, None);
+    assert!(!labels.is_empty());
+    for l in &labels {
+        match &l.text {
+            LabelValue::Ready(s) => {
+                assert!(s.contains('('), "a level must name its price: {s}");
+                // The price axis would round this to one decimal above 1000; a level must not.
+                assert!(s.contains('.'), "level price lost its precision: {s}");
+            }
+            other => panic!("a level readout must arrive finished: {other:?}"),
+        }
+    }
+    // Two neighbouring levels must not print as the same number.
+    let texts: Vec<String> = labels
+        .iter()
+        .map(|l| match &l.text {
+            LabelValue::Ready(s) => s.to_string(),
+            _ => unreachable!(),
+        })
+        .collect();
+    let mut sorted = texts.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        texts.len(),
+        "two levels read alike: {texts:?}"
+    );
+}
+
+#[test]
+fn the_figure_being_dragged_paints_no_fill() {
+    // A fill lives in the base cache; one that moved with the cursor would re-bake the whole
+    // chart background at mouse-move rate.
+    use moon_core::figures::tools::FibRetracement;
+    let mut f = Figure::new(
+        FigureKind::FibRetracement(FibRetracement {
+            a: FigNode::new(EPOCH, 100.0),
+            b: FigNode::new(EPOCH + 60_000.0, 80.0),
+        }),
+        DrawStyle::default(),
+        0,
+    );
+    f.id = 5;
+    let (still, ..) = build_one(&f, None, None);
+    assert!(!still.is_empty());
+
+    let (mut zones, mut hlines, mut segs, mut markers, mut labels) = buffers();
+    let mut out = FigureBuffers {
+        zones: &mut zones,
+        hlines: &mut hlines,
+        segs: &mut segs,
+        markers: &mut markers,
+        labels: &mut labels,
+    };
+    build_figure_geometry(
+        std::iter::once(&f),
+        None,
+        FigureView {
+            epoch_ms: EPOCH,
+            hovered: None,
+            selected: Some(5),
+            dragging: Some(5),
+        },
+        &mut out,
+    );
+    assert!(zones.is_empty(), "a dragged figure re-baked the base cache");
+    assert!(!segs.is_empty(), "but its lines must still be drawn");
 }

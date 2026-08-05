@@ -190,9 +190,9 @@ fn a_figure_drawn_right_to_left_still_spans_a_forward_time_range() {
 #[test]
 fn it_is_grabbed_by_a_level_line_not_only_by_the_move() {
     let f = fib();
-    // 0.618 of the fall sits at 92.36 → y = (100 - 92.36) * 2 = 15.28 in the test projection,
-    // and x anywhere inside the span. The move itself is far from that point.
-    let on_level = (5.0, 15.28);
+    // Extension 2.618 of the fall sits at 152.36 → y = (100 - 152.36) * 2 = -104.72, far above
+    // the move itself, which runs between y=0 and y=40.
+    let on_level = (5.0, -104.72);
     assert!(
         f.hit(on_level, &TestProj) < 0.5,
         "{}",

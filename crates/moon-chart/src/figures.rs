@@ -17,6 +17,8 @@
 //! - hovered / selected figure — SOLID, THICK, and bright (it sharply "comes alive"), with square
 //!   knots at the editable points of a SELECTED figure and a readout beside a HOVERED one.
 
+use std::sync::Arc;
+
 use moon_core::figures::{
     build_figure, BuildCtx, FigNode, Figure, GeomSink, LabelPlace, LabelText, LineKind, Stroke,
 };
@@ -41,13 +43,31 @@ const FIG_KNOT_THICKNESS: f32 = 1.5;
 /// precision as the axis it sits beside. Most tools label only the figure under the cursor and
 /// the one being drawn; a ratio scale labels its levels always, because a level whose price shows
 /// only under the cursor cannot be read at a glance.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// What a figure's readout says, resolved for the renderer.
+///
+/// A price and a percentage stay VALUES so the text pass can format them with the price axis's
+/// own precision. A ratio level does not: its format is pure and deliberately unlike the axis, so
+/// it is rendered to text here — once per rebuild — and the per-frame pass only draws it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LabelValue {
+    Price(f64),
+    PctDelta {
+        from: f64,
+        to: f64,
+    },
+    /// Finished text; cloning it is a refcount bump, not an allocation.
+    Ready(Arc<str>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FigureLabel {
-    /// Time relative to the chart epoch, in milliseconds; unused by [`LabelPlace::RightEdge`].
+    /// Time relative to the chart epoch, in milliseconds. Unused by [`LabelPlace::RightEdge`] and
+    /// by [`LabelPlace::LineEnd`], which carries its own span — in ABSOLUTE milliseconds, as every
+    /// tool speaks, unlike this field.
     pub t_rel: f32,
     pub price: f32,
     pub place: LabelPlace,
-    pub text: LabelText,
+    pub text: LabelValue,
     /// `0xRRGGBB` for the text layer, which has no alpha of its own.
     pub color: u32,
 }
@@ -70,6 +90,12 @@ pub struct FigureView {
     pub epoch_ms: f64,
     pub hovered: Option<u64>,
     pub selected: Option<u64>,
+    /// Figure currently held by the mouse, if any.
+    ///
+    /// Its fills are suppressed for the duration: a fill lives in the chart's base cache, and one
+    /// that moved with the cursor would re-bake the background, grid, candles and order book of
+    /// every pane at mouse-move rate. They come back on release, in one bake.
+    pub dragging: Option<u64>,
 }
 
 /// Segment pattern (shader: 0 solid / 1 dashdotdot / 2 dot) based on the Moonbot line kind.
@@ -91,6 +117,36 @@ fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
     ]
 }
 
+/// Names a ratio-scale level and the price it sits at: `0.618 (6109.48)`.
+///
+/// The price keeps MORE precision than the axis carries. The axis rounds to one decimal above
+/// 1000 and four below 1 — enough to read the gutter, not enough to tell two neighbouring levels
+/// apart, and not enough to show any level of a coin priced at 0.00001234 at all. A level is a
+/// number the reader acts on.
+fn fmt_level(ratio: f64, price: f64) -> String {
+    // `+ 0.0` folds -0.0, which would otherwise print as "-0".
+    let r = format!("{:.3}", ratio + 0.0);
+    let r = r.trim_end_matches('0').trim_end_matches('.');
+    let a = price.abs();
+    let decimals = if a >= 1000.0 {
+        2
+    } else if a >= 1.0 {
+        4
+    } else if a > 0.0 {
+        // Push past the leading zeros of a sub-1 price instead of cutting them off.
+        (6 - a.log10().floor() as i32).clamp(4, 12) as usize
+    } else {
+        2
+    };
+    let p = format!("{price:.decimals$}");
+    let p = if p.contains('.') {
+        p.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        &p
+    };
+    format!("{r} ({p})")
+}
+
 /// Packs a float color into the `0xRRGGBB` the text layer takes.
 fn rgb_u32(c: [f32; 4]) -> u32 {
     let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
@@ -100,6 +156,12 @@ fn rgb_u32(c: [f32; 4]) -> u32 {
 /// Turns a tool's primitives into own-pass instances.
 struct Sink<'a, 'b> {
     epoch_ms: f64,
+    /// Whether fills are emitted at all.
+    ///
+    /// Off for the DRAFT: it follows the cursor, and a fill entering the base-cache signature on
+    /// every mouse move would re-bake the background, grid, candles and book of every pane while
+    /// the user is still aiming. Lines and readouts are what aiming needs.
+    fills: bool,
     out: &'a mut FigureBuffers<'b>,
 }
 
@@ -133,7 +195,19 @@ impl GeomSink for Sink<'_, '_> {
     }
 
     fn band(&mut self, t0_ms: f64, t1_ms: f64, p0: f64, p1: f64, color: [f32; 4]) {
+        if !self.fills {
+            return;
+        }
+        // The order path refuses a non-finite or non-positive band (`build_order_geometry`), and
+        // figure fills share ONE draw call with it: a NaN from a hand-edited file would take the
+        // whole call down, not just this band.
+        if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0) {
+            return;
+        }
         let (t0, t1) = (self.to_rel(t0_ms), self.to_rel(t1_ms));
+        if !(t0.is_finite() && t1.is_finite()) {
+            return;
+        }
         self.out.zones.push(ZoneInstance {
             price0: p0.min(p1) as f32,
             price1: p0.max(p1) as f32,
@@ -155,6 +229,11 @@ impl GeomSink for Sink<'_, '_> {
     }
 
     fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, color: [f32; 4]) {
+        let text = match text {
+            LabelText::Price(p) => LabelValue::Price(p),
+            LabelText::PctDelta { from, to } => LabelValue::PctDelta { from, to },
+            LabelText::Level { ratio, price } => LabelValue::Ready(fmt_level(ratio, price).into()),
+        };
         self.out.labels.push(FigureLabel {
             t_rel: self.to_rel(at.time_ms),
             price: at.price as f32,
@@ -175,14 +254,17 @@ pub fn build_figure_geometry<'a>(
 ) {
     let mut sink = Sink {
         epoch_ms: view.epoch_ms,
+        fills: true,
         out,
     };
     for fig in figures {
         let is_sel = view.selected == Some(fig.id);
         let is_hovered = view.hovered == Some(fig.id);
         let ctx = fig_ctx(fig, is_hovered, is_sel);
+        sink.fills = view.dragging != Some(fig.id);
         build_figure(&fig.kind, &ctx, &mut sink);
     }
+    sink.fills = false;
     if let Some(d) = draft {
         // Preview of the figure being drawn: brighter and thicker, using the style's base line
         // kind, and already showing its readout so a trend line can be aimed while drawing.
@@ -196,6 +278,7 @@ pub fn build_figure_geometry<'a>(
             hot: true,
             handles: false,
         };
+        sink.fills = false;
         build_figure(&d.kind, &ctx, &mut sink);
     }
 }
@@ -207,8 +290,9 @@ pub fn build_figure_geometry<'a>(
 ///
 /// The READOUT follows the cursor, not the selection: selection is sticky, and a label that
 /// outlives the pointer would keep the text pass formatting and re-shaping it every frame for as
-/// long as a figure stays selected. Hover and the draft are transient by nature, which is what
-/// makes "an idle chart pays nothing for labels" true.
+/// long as a figure stays selected. Hover and the draft are transient by nature, so for every tool
+/// that labels on `hot` an idle chart pays nothing. A ratio scale opts out and labels always — its
+/// levels ARE the reading — and pays for that on every frame it is on screen.
 fn fig_ctx(fig: &Figure, is_hovered: bool, is_selected: bool) -> BuildCtx {
     let is_hot = is_hovered || is_selected;
     let stroke = if is_hot {

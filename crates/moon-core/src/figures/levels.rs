@@ -49,6 +49,12 @@ pub const BAND_ALPHA: f32 = 0.10;
 /// Alpha of every other band, so two neighbours can be told apart.
 pub const BAND_ALPHA_ALT: f32 = 0.04;
 
+// A fill must stay behind the line that bounds it, and the two band alphas must differ or the
+// bands merge into one wash. Checked here, at compile time, rather than by a test comparing two
+// constants to each other.
+const _: () = assert!(BAND_ALPHA_ALT > 0.0);
+const _: () = assert!(BAND_ALPHA_ALT < BAND_ALPHA);
+
 /// The default Fibonacci scale, in ascending ratio order — the set every charting package ships
 /// with, and the one the reference terminal draws.
 ///

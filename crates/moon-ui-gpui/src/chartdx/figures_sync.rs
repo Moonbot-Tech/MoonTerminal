@@ -27,6 +27,8 @@ pub(crate) struct FigureVisual {
     pub hovered: Option<u64>,
     /// Selected figure to highlight and display control nodes for.
     pub selected: Option<u64>,
+    /// Figure the mouse is currently holding; its fills are suppressed while it moves.
+    pub dragging: Option<u64>,
 }
 
 impl ChartDataState {
@@ -102,6 +104,7 @@ impl ChartDataState {
                 epoch_ms,
                 hovered: if mine { v.hovered } else { None },
                 selected: if mine { v.selected } else { None },
+                dragging: if mine { v.dragging } else { None },
             },
             out,
         );

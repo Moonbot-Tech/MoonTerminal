@@ -50,7 +50,7 @@ pub enum LabelText {
     Price(f64),
     /// A signed percentage from `from` to `to`, e.g. `+1.25%`.
     PctDelta { from: f64, to: f64 },
-    /// A level of a ratio scale and the price it sits at, e.g. `0.618 (6 109.48)`.
+    /// A level of a ratio scale and the price it sits at, e.g. `0.618 (6109.48)`.
     Level { ratio: f64, price: f64 },
 }
 

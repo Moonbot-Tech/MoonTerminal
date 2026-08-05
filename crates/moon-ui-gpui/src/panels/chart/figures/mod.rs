@@ -325,6 +325,16 @@ impl ChartPanel {
             .as_ref()
             .map(|d| d.pane)
             .filter(|dp| self.input.pane_at(pos.0, pos.1) == Some(*dp));
+        let draft_pane = draft_pane.filter(|_| {
+            // Same Delphi threshold the hover hit-test uses (INPUT_HOTPATH_NORMS §1): raw
+            // MouseMove arrives far more often than the cursor moves, and each accepted move
+            // rebuilds this pane's whole figure geometry.
+            let due = super::trade::hover_probe_due(self.fig_draft_probe, pos);
+            if due {
+                self.fig_draft_probe = Some(pos);
+            }
+            due
+        });
         if let Some(map) = draft_pane.and_then(|dp| self.pane_map(dp)) {
             let node = map.node_at(pos);
             match &mut self.fig_draft {
@@ -522,6 +532,7 @@ impl ChartPanel {
             draft,
             hovered: self.fig_hover,
             selected,
+            dragging: self.fig_drag.as_ref().map(|d| d.id),
         };
         let _ = b;
         if self.chart.set_figure_visual(visual) {

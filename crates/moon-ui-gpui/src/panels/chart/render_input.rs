@@ -383,6 +383,7 @@ pub(super) fn mouse_move(
             // neighborhood still recomputes hover instead of getting stuck.
             this.order_hover_probe = None;
             this.fig_hover_probe = None;
+            this.fig_draft_probe = None;
             this.set_order_interaction(None, cx)
         };
         if order_hover_changed {

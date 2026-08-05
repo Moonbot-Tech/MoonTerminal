@@ -1,7 +1,8 @@
 //! Main `prepare_text` implementation for axes, order-line labels, and cursor readouts.
 
 use moon_chart::axes::price_decimals;
-use moon_core::figures::{LabelPlace as FigLabelPlace, LabelText as FigLabelText};
+use moon_chart::figures::LabelValue as FigLabelValue;
+use moon_core::figures::LabelPlace as FigLabelPlace;
 
 use super::*;
 
@@ -402,7 +403,7 @@ impl RenderState {
             for li in 0..self.panes[idx].figure_labels.len() {
                 // Copied out: the label is four numbers, and holding a borrow of the pane would
                 // block measuring the text through `&mut self` below.
-                let label = self.panes[idx].figure_labels[li];
+                let label = self.panes[idx].figure_labels[li].clone();
                 let y = line_y(label.price);
                 if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                     continue;
@@ -420,8 +421,13 @@ impl RenderState {
                         x
                     }
                     // The label rides the line's right end, clipped INTO the plot: a scale must
-                    // stay readable while any part of its lines is on screen.
+                    // stay readable while any part of its lines is on screen. These are the only
+                    // readouts drawn without the pointer on the figure, so the per-tab "line
+                    // labels" switch — which hides every other permanent label — hides them too.
                     FigLabelPlace::LineEnd { t0_ms, t1_ms } => {
+                        if !self.line_labels {
+                            continue;
+                        }
                         let (x0, x1) = (
                             x_of((t0_ms - epoch_ms) as f32),
                             x_of((t1_ms - epoch_ms) as f32),
@@ -432,22 +438,17 @@ impl RenderState {
                         x1.min(plot_right)
                     }
                 };
-                let text = match label.text {
-                    FigLabelText::Price(p) => format!("{p:.dec$}"),
-                    FigLabelText::PctDelta { from, to } => {
-                        if from == 0.0 {
+                // A ratio level's text was rendered once at the geometry rebuild — its format is
+                // pure and deliberately unlike the axis. A price and a percentage are formatted
+                // HERE, where the axis's own precision lives.
+                let text: std::borrow::Cow<'_, str> = match &label.text {
+                    FigLabelValue::Ready(s) => std::borrow::Cow::Borrowed(&**s),
+                    FigLabelValue::Price(p) => std::borrow::Cow::Owned(format!("{p:.dec$}")),
+                    FigLabelValue::PctDelta { from, to } => {
+                        if *from == 0.0 {
                             continue;
                         }
-                        fmt_pct(((to / from - 1.0) * 100.0) as f32)
-                    }
-                    // A ratio scale reads "0.618 (6 109.48)": the level names itself and the price
-                    // beside it is formatted like the axis, so the two can be compared directly.
-                    // NOT the axis precision: it caps at one decimal above 1000 and four below 1,
-                    // which prints neighbouring levels as the same number on a tight box and every
-                    // level of a sub-cent coin as "0.0000". A level is read to act on, so it keeps
-                    // its significant digits.
-                    FigLabelText::Level { ratio, price } => {
-                        format!("{} ({})", fmt_ratio(ratio), fmt_level_price(price))
+                        std::borrow::Cow::Owned(fmt_pct(((to / from - 1.0) * 100.0) as f32))
                     }
                 };
                 let (x, ax, dy, ay) = match label.place {
@@ -459,7 +460,8 @@ impl RenderState {
                         // otherwise run past the plot into the order-book zone. The real width is
                         // measured ONLY near the edge, where the answer can differ — text shaping
                         // is the expensive call on this path and every label would pay for it.
-                        let ax = if node_x + FIG_LABEL_FLIP_MARGIN > plot_right
+                        let ax = if node_x + rough_label_width(&text, self.label_font_delta)
+                            > plot_right - READOUT_PAD_X
                             && node_x + self.measure_label_text(ctx, &text).width.as_f32()
                                 > plot_right
                         {

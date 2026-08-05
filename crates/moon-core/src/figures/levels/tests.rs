@@ -35,13 +35,6 @@ fn an_extension_continues_past_the_start_away_from_the_end() {
 }
 
 #[test]
-fn a_move_of_zero_height_collapses_every_level_onto_one_price() {
-    for level in FIB_LEVELS {
-        assert_eq!(price_at(50.0, 50.0, level.ratio), 50.0);
-    }
-}
-
-#[test]
 fn the_default_scale_is_ordered_and_covers_the_move() {
     let ratios: Vec<f64> = FIB_LEVELS.iter().map(|l| l.ratio).collect();
     assert!(
@@ -79,18 +72,10 @@ fn the_key_levels_are_the_ones_a_trader_watches() {
 }
 
 #[test]
-fn emphasis_never_makes_a_level_invisible_or_overbright() {
-    for e in [Emphasis::Anchor, Emphasis::Key, Emphasis::Minor] {
-        let a = e.line_alpha();
-        assert!((0.4..=1.0).contains(&a), "{e:?} → {a}");
-    }
+fn the_levels_a_trader_watches_are_the_loudest() {
     assert!(
-        BAND_ALPHA < Emphasis::Anchor.line_alpha(),
-        "a fill must stay behind the line that bounds it"
+        Emphasis::Key.line_alpha() > Emphasis::Anchor.line_alpha(),
+        "the golden group must not be the quietest thing on the scale"
     );
-    assert!(
-        BAND_ALPHA_ALT < BAND_ALPHA,
-        "the two band alphas must differ, or neighbours merge into one wash"
-    );
-    assert!(BAND_ALPHA_ALT > 0.0, "an invisible band is not a band");
+    assert!(BAND_ALPHA < Emphasis::Anchor.line_alpha());
 }

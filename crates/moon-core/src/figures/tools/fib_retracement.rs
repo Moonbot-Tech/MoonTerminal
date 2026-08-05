@@ -101,6 +101,11 @@ impl ToolShape for FibRetracement {
         let mut best = f32::INFINITY;
         for level in FIB_LEVELS {
             let price = self.price(level.ratio);
+            // Skipped by `build` as well: a level that crossed zero is not drawn, so it must not
+            // be grabbable either. `is_finite` also catches a NaN, which no comparison would.
+            if !price.is_finite() || price <= 0.0 {
+                continue;
+            }
             let a = proj.px_of(FigNode::new(t0, price));
             let b = proj.px_of(FigNode::new(t1, price));
             best = best.min(seg_dist(pos, a, b));
@@ -117,9 +122,11 @@ impl ToolShape for FibRetracement {
             c
         };
         // A fill never reacts to hover or selection: it lives in the base cache (see `BuildCtx`).
+        // Its alpha MULTIPLIES the figure's own opacity, as a line's does — the pencil popup's
+        // opacity stepper must reach the fills too.
         let fill = |alpha: f32| {
             let mut c = ctx.fill;
-            c[3] = alpha;
+            c[3] *= alpha;
             c
         };
         // The move itself, dotted and dimmed: it is the scale's definition, not one of its levels.
@@ -142,8 +149,9 @@ impl ToolShape for FibRetracement {
         for level in FIB_LEVELS {
             let price = self.price(level.ratio);
             // A level far enough past the move's start crosses zero. A negative price is not a
-            // level, it is arithmetic: drop it rather than draw and label it.
-            if price <= 0.0 {
+            // level, it is arithmetic: drop it rather than draw and label it. `is_finite` also
+            // catches a NaN, which no comparison would.
+            if !price.is_finite() || price <= 0.0 {
                 prev = None;
                 continue;
             }
@@ -151,7 +159,7 @@ impl ToolShape for FibRetracement {
             // Fill the gap to the previous level, under the lines that bound it. Alternating alpha
             // keeps neighbouring bands apart instead of merging them into one wash.
             if let Some(prev_price) = prev {
-                let alpha = if band_i % 2 == 0 {
+                let alpha = if band_i.is_multiple_of(2) {
                     BAND_ALPHA
                 } else {
                     BAND_ALPHA_ALT

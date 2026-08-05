@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::tools::{Channel, HLine};
-use crate::figures::{DrawStyle, FigureKind};
+use crate::figures::{DrawStyle, FigNode, FigureKind};
 
 /// A `figures.json` written by the build that predates the tool modules: a bare array, figures as
 /// externally-tagged struct variants, and no `shared` field.
@@ -51,6 +51,26 @@ fn a_v1_file_still_loads_with_every_figure_type() {
         "shared defaults to off"
     );
     assert!(figs.iter().all(|f| !f.from_server));
+}
+
+#[test]
+fn a_ratio_scale_survives_a_save_and_load() {
+    // The tool is local-only (the core has no blob payload for it), so the file is the ONLY place
+    // it lives: a serialization that does not round-trip loses the drawing outright.
+    use crate::figures::tools::FibRetracement;
+    let mut store = FigureStore::default();
+    let drawn = FibRetracement {
+        a: FigNode::new(1_700_000_000_000.0, 63_713.5),
+        b: FigNode::new(1_700_000_600_000.0, 61_240.25),
+    };
+    let id = store.add(1, "BTCUSDT", fig(FigureKind::FibRetracement(drawn)));
+    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let back = FigureStore::from_json(&json);
+    assert_eq!(
+        back.get(1, "BTCUSDT", id).map(|f| f.kind.clone()),
+        Some(FigureKind::FibRetracement(drawn)),
+        "the scale came back a different figure: {json}"
+    );
 }
 
 #[test]
