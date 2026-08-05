@@ -494,8 +494,12 @@ vertex ZOut zone_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     GpuZone z = zones[iid];
     float y0 = cv.bounds.y + cv.bounds.w - (z.m.x - cv.view_price0) * cv.price_to_px;
     float y1 = cv.bounds.y + cv.bounds.w - (z.m.y - cv.view_price0) * cv.price_to_px;
-    float left = cv.bounds.x;
-    float right = cv.bounds.x + (cv.pad - cv.view_time0) * cv.time_to_px;
+    // Bounded in time by m.zw; the ±1e30 sentinel (an order zone) clamps to the plot's edges.
+    // `edge` can pan LEFT of the plot, which would make min > max; order the bounds first.
+    float lo = cv.bounds.x;
+    float hi = max(cv.bounds.x + (cv.pad - cv.view_time0) * cv.time_to_px, lo);
+    float left = clamp(cv.bounds.x + (z.m.z - cv.view_time0) * cv.time_to_px, lo, hi);
+    float right = clamp(cv.bounds.x + (z.m.w - cv.view_time0) * cv.time_to_px, lo, hi);
     float2 c = CORNERS_ALT[vid];
     float2 px = float2(mix(left, right, (c.x + 1.0) * 0.5), mix(y0, y1, (c.y + 1.0) * 0.5));
     return { to_clip(px, cv.resolution), z.color };

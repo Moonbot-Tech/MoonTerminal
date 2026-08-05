@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::tools::{Channel, FigureTool, HLine, Segment, ToolShape, Triangle};
+use super::tools::{Channel, FibRetracement, FigureTool, HLine, Segment, ToolShape, Triangle};
 
 /// Figure type. The JSON representation matches Moonbot's `TChartObject` names that were used
 /// before tools became modules: `{"HLine":{"price":…}}`, `{"Segment":{"a":…,"b":…}}` and so on,
@@ -18,6 +18,7 @@ pub enum FigureKind {
     Segment(Segment),
     Triangle(Triangle),
     Channel(Channel),
+    FibRetracement(FibRetracement),
 }
 
 impl FigureKind {
@@ -33,6 +34,7 @@ impl FigureKind {
             FigureKind::Segment(t) => t,
             FigureKind::Triangle(t) => t,
             FigureKind::Channel(t) => t,
+            FigureKind::FibRetracement(t) => t,
         }
     }
 
@@ -43,6 +45,7 @@ impl FigureKind {
             FigureKind::Segment(t) => t,
             FigureKind::Triangle(t) => t,
             FigureKind::Channel(t) => t,
+            FigureKind::FibRetracement(t) => t,
         }
     }
 

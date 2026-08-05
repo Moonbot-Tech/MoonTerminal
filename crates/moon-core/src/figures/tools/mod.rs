@@ -13,11 +13,13 @@
 //! because the core's chart-object types are its format, not ours.
 
 mod channel;
+mod fib_retracement;
 mod hline;
 mod segment;
 mod triangle;
 
 pub use channel::Channel;
+pub use fib_retracement::FibRetracement;
 pub use hline::HLine;
 pub use segment::Segment;
 pub use triangle::Triangle;
@@ -114,11 +116,20 @@ pub enum FigureTool {
     Segment,
     Triangle,
     Channel,
+    FibRetracement,
 }
 
-/// Every tool, in menu order. This is the ONE list; the toolbar, the hotkey cycle and the tests
-/// all read it.
-pub const REGISTRY: &[ToolDef] = &[hline::DEF, segment::DEF, triangle::DEF, channel::DEF];
+/// Every tool, in menu order. The toolbar, the hotkey CYCLE, the alerts list and the tests all
+/// read it; the per-tool hotkey fields in `hotkeys.toml` are the one list still written by hand,
+/// so a tool added here is reachable through the cycle but has no binding of its own until it is
+/// added there too.
+pub const REGISTRY: &[ToolDef] = &[
+    hline::DEF,
+    segment::DEF,
+    triangle::DEF,
+    channel::DEF,
+    fib_retracement::DEF,
+];
 
 /// `def()` and `next()` index the registry; an empty one would panic in the frame loop.
 const _: () = assert!(!REGISTRY.is_empty());

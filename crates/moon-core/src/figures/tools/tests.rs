@@ -40,6 +40,10 @@ impl Proj for TestProj {
 pub(super) struct RecSink {
     pub(super) hlines: Vec<f64>,
     pub(super) segs: Vec<(FigNode, FigNode)>,
+    /// `(t0_ms, t1_ms, p0, p1)` of each filled band.
+    pub(super) bands: Vec<(f64, f64, f64, f64)>,
+    /// Alpha each band was filled with, in the same order.
+    pub(super) band_alphas: Vec<f32>,
     pub(super) handles: Vec<FigNode>,
     pub(super) labels: Vec<(FigNode, LabelPlace, LabelText)>,
 }
@@ -51,6 +55,11 @@ impl GeomSink for RecSink {
 
     fn seg(&mut self, a: FigNode, b: FigNode, _stroke: &Stroke) {
         self.segs.push((a, b));
+    }
+
+    fn band(&mut self, t0_ms: f64, t1_ms: f64, p0: f64, p1: f64, color: [f32; 4]) {
+        self.bands.push((t0_ms, t1_ms, p0, p1));
+        self.band_alphas.push(color[3]);
     }
 
     fn handle(&mut self, at: FigNode, _color: [f32; 4]) {
@@ -70,6 +79,7 @@ pub(super) fn ctx(hot: bool, handles: bool) -> BuildCtx {
             thickness: 1.0,
             kind: LineKind::Solid,
         },
+        fill: [1.0, 1.0, 1.0, 1.0],
         hot,
         handles,
     }
@@ -80,6 +90,14 @@ pub(super) fn build(kind: &FigureKind, ctx: BuildCtx) -> RecSink {
     let mut sink = RecSink::default();
     build_figure(kind, &ctx, &mut sink);
     sink
+}
+
+/// `n` distinct nodes: a real figure, never a degenerate one. A tool may legitimately draw
+/// nothing for a zero-size figure, which would make a contract test pass for the wrong reason.
+fn nodes(n: usize) -> Vec<FigNode> {
+    (0..n)
+        .map(|i| FigNode::new(TestProj::T0_MS + i as f64 * 1_000.0, 100.0 + i as f64 * 5.0))
+        .collect()
 }
 
 fn figure(kind: FigureKind) -> Figure {
@@ -103,9 +121,8 @@ fn registry_rows_match_their_tool_and_are_uniquely_keyed() {
 
 #[test]
 fn make_refuses_a_half_placed_figure() {
-    let node = FigNode::new(TestProj::T0_MS, 100.0);
     for def in REGISTRY {
-        let short = vec![node; def.clicks as usize - 1];
+        let short = nodes(def.clicks as usize - 1);
         assert!(
             (def.make)(&short).is_none(),
             "{} built a figure from {} of {} nodes",
@@ -113,7 +130,7 @@ fn make_refuses_a_half_placed_figure() {
             short.len(),
             def.clicks
         );
-        let full = vec![node; def.clicks as usize];
+        let full = nodes(def.clicks as usize);
         let made = (def.make)(&full).expect("full node set must build");
         assert_eq!(
             made.tool(),
@@ -126,10 +143,9 @@ fn make_refuses_a_half_placed_figure() {
 
 #[test]
 fn every_tool_previews_before_its_last_click() {
-    let node = FigNode::new(TestProj::T0_MS, 100.0);
     let cursor = FigNode::new(TestProj::T0_MS + 5_000.0, 110.0);
     for def in REGISTRY {
-        let placed = vec![node; def.clicks as usize - 1];
+        let placed = nodes(def.clicks as usize - 1);
         assert!(
             (def.preview)(&placed, cursor).is_some(),
             "{} shows nothing under the cursor before its last click",
@@ -255,14 +271,16 @@ fn only_a_selected_knot_tool_emits_handles() {
 }
 
 #[test]
-fn an_idle_figure_emits_no_labels() {
+fn only_a_ratio_scale_labels_an_idle_chart() {
+    // A readout that appears on hover costs nothing at rest; a Fibonacci scale is the exception,
+    // because a level whose price shows only under the cursor cannot be read at a glance.
     for def in REGISTRY {
-        let nodes = vec![FigNode::new(TestProj::T0_MS, 100.0); def.clicks as usize];
-        let kind = (def.make)(&nodes).expect("full node set must build");
-        assert!(
-            build(&kind, ctx(false, false)).labels.is_empty(),
-            "{} labels an idle chart",
-            def.key
-        );
+        let kind = (def.make)(&nodes(def.clicks as usize)).expect("full node set must build");
+        let idle = build(&kind, ctx(false, false)).labels.len();
+        if def.tool == FigureTool::FibRetracement {
+            assert!(idle > 0, "a scale must name its levels at rest");
+        } else {
+            assert_eq!(idle, 0, "{} labels an idle chart", def.key);
+        }
     }
 }

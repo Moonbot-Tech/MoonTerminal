@@ -728,3 +728,7 @@ alerts.fig.channel:
   ru: "Канал"
   en: "Channel"
   es: "Canal"
+alerts.fig.fib_retracement:
+  ru: "Коррекция Фибоначчи"
+  en: "Fibonacci retracement"
+  es: "Retroceso de Fibonacci"

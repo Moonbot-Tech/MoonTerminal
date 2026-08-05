@@ -31,7 +31,9 @@ static const float2 CORNERS[6] = {
     float2(-1, -1), float2(1, 1), float2(-1, 1)
 };
 
-// ── Zone (ZoneInstance: color, m=(price0,price1,_,_)) ───────────────────────
+// ── Zone (ZoneInstance: color, m=(price0,price1,t0_rel,t1_rel)) ─────────────
+// A band is bounded in time by m.zw; ±INF (an order zone) clamps to the plot's left edge and to
+// the live edge, which is exactly what the fixed bounds used to be.
 struct Zone { float4 color; float4 m; };
 StructuredBuffer<Zone> zones : register(t1);
 struct ZOut { float4 pos : SV_Position; float4 color : COLOR0; };
@@ -40,8 +42,11 @@ ZOut zone_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     Zone z = zones[iid];
     float y0 = cv_bounds.y + cv_bounds.w - (z.m.x - cv_view_price0) * cv_price_to_px;
     float y1 = cv_bounds.y + cv_bounds.w - (z.m.y - cv_view_price0) * cv_price_to_px;
-    float left = cv_bounds.x;
-    float right = cv_bounds.x + (cv_pad - cv_view_time0) * cv_time_to_px;
+    // `edge` can pan LEFT of the plot, which would make min > max; order the bounds first.
+    float lo = cv_bounds.x;
+    float hi = max(cv_bounds.x + (cv_pad - cv_view_time0) * cv_time_to_px, lo);
+    float left = clamp(cv_bounds.x + (z.m.z - cv_view_time0) * cv_time_to_px, lo, hi);
+    float right = clamp(cv_bounds.x + (z.m.w - cv_view_time0) * cv_time_to_px, lo, hi);
     float2 corner = CORNERS[vid];
     float2 px = float2(lerp(left, right, (corner.x + 1.0) * 0.5), lerp(y0, y1, (corner.y + 1.0) * 0.5));
     ZOut o; o.pos = float4(to_clip(px), 0, 1); o.color = z.color; return o;

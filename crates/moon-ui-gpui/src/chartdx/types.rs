@@ -495,7 +495,7 @@ pub fn hl_of(h: &LineInstance) -> HLineGpu {
 pub fn zone_of(z: &ZoneInstance) -> ZoneGpu {
     ZoneGpu {
         color: z.color,
-        m: [z.price0, z.price1, 0.0, 0.0],
+        m: [z.price0, z.price1, z.t0_rel, z.t1_rel],
     }
 }
 

@@ -10,6 +10,7 @@ pub const SEG_PATTERN_SOLID: f32 = 0.0;
 pub const SEG_PATTERN_DASH_DOT_DOT: f32 = 1.0;
 pub const SEG_PATTERN_DOT: f32 = 2.0;
 
+pub use order_lines::TIME_UNBOUNDED;
 pub use order_lines::{
     LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_ANCHOR_BOTTOM,
     MARKER_ANCHOR_PRICE, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT,

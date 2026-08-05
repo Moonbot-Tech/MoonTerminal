@@ -13,13 +13,41 @@ pub struct LineInstance {
     pub thickness: f32,
 }
 
-/// Instance of an order price zone: a filled band between two prices extending to the right edge.
+/// Time value meaning "no bound on this side": the shader clamps it to the plot's own edge.
+///
+/// FINITE on purpose. The obvious sentinel is an infinity, but the Metal library is compiled with
+/// fast math enabled, where IEEE handling of infinities is explicitly not guaranteed — an order
+/// zone's full-width span would then be undefined on macOS. A value 17 orders of magnitude past
+/// any real timestamp survives the multiply as a finite number and clamps the same way everywhere.
+pub const TIME_UNBOUNDED: f32 = 1e30;
+
+/// Instance of a filled band between two prices, bounded in time.
+///
+/// `t0_rel`/`t1_rel` are relative-to-epoch milliseconds like every other instance here;
+/// ±[`TIME_UNBOUNDED`] means "to the plot's edge on that side", which is what an order zone wants.
+/// The two fields ride in the GPU struct's two spare floats, so no buffer layout changed to gain
+/// them.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ZoneInstance {
     pub price0: f32,
     pub price1: f32,
+    pub t0_rel: f32,
+    pub t1_rel: f32,
     pub color: [f32; 4],
+}
+
+impl ZoneInstance {
+    /// A band spanning the whole plot in time — an order zone, a price corridor.
+    pub fn full_width(price0: f32, price1: f32, color: [f32; 4]) -> Self {
+        Self {
+            price0,
+            price1,
+            t0_rel: -TIME_UNBOUNDED,
+            t1_rel: TIME_UNBOUNDED,
+            color,
+        }
+    }
 }
 
 /// Instance of a line segment.

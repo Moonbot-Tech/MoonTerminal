@@ -336,9 +336,11 @@ struct PaneRender {
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
     /// `prepare_text` draws them and maps Y through `view` each frame.
     order_labels: Vec<OrderLabel>,
-    /// Readouts of the hovered and draft figures, rebuilt with figure userdata and drawn by
-    /// `prepare_text`. Empty unless a figure is under the cursor or one is being drawn, so an idle
-    /// chart pays nothing.
+    /// Figure readouts, rebuilt with figure userdata and drawn by `prepare_text`.
+    ///
+    /// Most tools fill this only for the figure under the cursor and the one being drawn, so an
+    /// idle chart pays nothing. A ratio scale (Fibonacci) is the exception and always names its
+    /// levels — a level whose price appears only under the cursor cannot be read at a glance.
     figure_labels: Vec<moon_chart::figures::FigureLabel>,
     /// Stable priority order for `order_labels`, rebuilt together with order labels.
     /// Cursor-only text frames must not allocate/sort it again.

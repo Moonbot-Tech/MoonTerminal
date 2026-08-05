@@ -24,6 +24,7 @@
 //! merged into the same store but are not persisted locally.
 
 mod kind;
+pub mod levels;
 mod node;
 pub mod proj;
 pub mod sink;

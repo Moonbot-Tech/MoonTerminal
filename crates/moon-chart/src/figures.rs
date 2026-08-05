@@ -7,6 +7,10 @@
 //! interaction state, and the mapping of the tool's primitives onto GPU instances. Adding a tool
 //! therefore never touches this file; adding a PRIMITIVE touches it and nothing else.
 //!
+//! Fills go to the ORDER-ZONE layer, which is baked into the chart's base cache. Their colour is
+//! therefore resolved from the figure alone and never from hover or selection: a fill that
+//! brightened under the cursor would re-bake the background, grid, candles and book of every pane.
+//!
 //! Visual language (to distinguish figures from order lines and make their state visible):
 //! - regular figure — THIN BASE-STYLE LINE;
 //! - armed (alert) figure — THICK BASE-STYLE LINE (clearly shows that it is armed);
@@ -18,8 +22,8 @@ use moon_core::figures::{
 };
 
 use crate::layers::{
-    LineInstance, MarkerInstance, SegInstance, MARKER_SHAPE_KNOT, SEG_PATTERN_DASH_DOT_DOT,
-    SEG_PATTERN_DOT, SEG_PATTERN_SOLID,
+    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT,
+    SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT, SEG_PATTERN_SOLID,
 };
 
 /// Opacity of an idle (inactive) figure.
@@ -34,8 +38,9 @@ const FIG_KNOT_THICKNESS: f32 = 1.5;
 /// A figure's text readout, drawn by the chart's text pass.
 ///
 /// Carries a VALUE rather than a finished string: the text pass formats a price with the same
-/// precision as the axis it sits beside. Only the figure under the cursor and the one being drawn
-/// produce labels, so an idle chart carries none.
+/// precision as the axis it sits beside. Most tools label only the figure under the cursor and
+/// the one being drawn; a ratio scale labels its levels always, because a level whose price shows
+/// only under the cursor cannot be read at a glance.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FigureLabel {
     /// Time relative to the chart epoch, in milliseconds; unused by [`LabelPlace::RightEdge`].
@@ -49,6 +54,9 @@ pub struct FigureLabel {
 
 /// Buffers the figure layer appends into.
 pub struct FigureBuffers<'a> {
+    /// Filled bands. They ride the ORDER-ZONE layer, which draws below the grid, so a fill sits
+    /// behind the candles instead of over them.
+    pub zones: &'a mut Vec<ZoneInstance>,
     pub hlines: &'a mut Vec<LineInstance>,
     pub segs: &'a mut Vec<SegInstance>,
     pub markers: &'a mut Vec<MarkerInstance>,
@@ -124,6 +132,17 @@ impl GeomSink for Sink<'_, '_> {
         });
     }
 
+    fn band(&mut self, t0_ms: f64, t1_ms: f64, p0: f64, p1: f64, color: [f32; 4]) {
+        let (t0, t1) = (self.to_rel(t0_ms), self.to_rel(t1_ms));
+        self.out.zones.push(ZoneInstance {
+            price0: p0.min(p1) as f32,
+            price1: p0.max(p1) as f32,
+            t0_rel: t0.min(t1),
+            t1_rel: t0.max(t1),
+            color,
+        });
+    }
+
     fn handle(&mut self, at: FigNode, color: [f32; 4]) {
         self.out.markers.push(MarkerInstance::at_price(
             self.to_rel(at.time_ms),
@@ -173,6 +192,7 @@ pub fn build_figure_geometry<'a>(
                 thickness: d.thickness * FIG_ACTIVE_THICKNESS,
                 kind: d.line_kind,
             },
+            fill: rgba(d.color, 1.0),
             hot: true,
             handles: false,
         };
@@ -212,6 +232,9 @@ fn fig_ctx(fig: &Figure, is_hovered: bool, is_selected: bool) -> BuildCtx {
     };
     BuildCtx {
         stroke,
+        // Deliberately NOT `stroke.color`: see the module doc — a fill's colour must not depend on
+        // the interaction state, or hovering a figure re-bakes the base cache.
+        fill: rgba(fig.color, 1.0),
         hot: is_hovered,
         handles: is_selected,
     }

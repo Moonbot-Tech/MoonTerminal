@@ -9,6 +9,8 @@ fn hash_order_zones(zones: &[moon_chart::layers::ZoneInstance]) -> u64 {
     for z in zones {
         h = h.rotate_left(5) ^ z.price0.to_bits() as u64;
         h = h.rotate_left(7) ^ z.price1.to_bits() as u64;
+        h = h.rotate_left(9) ^ z.t0_rel.to_bits() as u64;
+        h = h.rotate_left(13) ^ z.t1_rel.to_bits() as u64;
         for c in z.color {
             h = h.rotate_left(11) ^ c.to_bits() as u64;
         }
@@ -129,12 +131,15 @@ impl ChartDataState {
                         &mut markers,
                     );
                     // Add user figures through the same userdata layers after orders, placing them
-                    // above order zones but below cursor markers.
+                    // above order zones but below cursor markers. Their FILLS join the zone layer
+                    // below the grid, before `hash_order_zones` reads it — a fill that appears or
+                    // moves must invalidate the base cache exactly like an order zone.
                     self.append_figure_geometry(
                         pane.core,
                         &pane.market,
                         pane.view.epoch_ms,
                         &mut moon_chart::figures::FigureBuffers {
+                            zones: &mut zones,
                             hlines: &mut hlines,
                             segs: &mut segs,
                             markers: &mut markers,
@@ -205,6 +210,7 @@ impl ChartDataState {
                     // text pass would otherwise keep drawing a label whose line is no longer there.
                     pr.figure_labels.clear();
                     pr.last_order_lines_rev = u64::MAX;
+                    pr.last_figures_sig = u64::MAX;
                     pr.last_order_lines_sync_ms = now;
                     pr.pending_order_gpu_rev = Some(u64::MAX);
                     pr.last_order_highlight_uid = None;

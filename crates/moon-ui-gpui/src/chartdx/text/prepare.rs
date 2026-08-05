@@ -394,10 +394,11 @@ impl RenderState {
                 }
             }
 
-            // Readout of the figure under the cursor, or of the one being drawn: a price at the
-            // right edge for a full-width line, or the move a trend line describes, at the end it
-            // points to. The list is EMPTY otherwise — a merely selected figure has none — so an
-            // idle chart does no work here and figures cost nothing per frame.
+            // Figure readouts: a price at the right edge for a full-width line, the move a trend
+            // line describes at the end it points to, and a ratio scale's level beside each of its
+            // lines. For every tool but the scale the list is empty unless the pointer is on a
+            // figure or one is being drawn — a merely selected figure has none — so an idle chart
+            // with no scale on it does no work here.
             for li in 0..self.panes[idx].figure_labels.len() {
                 // Copied out: the label is four numbers, and holding a borrow of the pane would
                 // block measuring the text through `&mut self` below.
@@ -408,14 +409,27 @@ impl RenderState {
                 }
                 // Cull on POSITION before formatting: a scrolled-off figure must not pay for a
                 // string it will never draw.
+                let x_of = |t_rel: f32| plot_left + (t_rel - view.view_time0) * time_to_px;
                 let node_x = match label.place {
                     FigLabelPlace::RightEdge => label_x,
                     FigLabelPlace::Above => {
-                        let x = plot_left + (label.t_rel - view.view_time0) * time_to_px;
+                        let x = x_of(label.t_rel);
                         if x < plot_left || x > plot_right {
                             continue;
                         }
                         x
+                    }
+                    // The label rides the line's right end, clipped INTO the plot: a scale must
+                    // stay readable while any part of its lines is on screen.
+                    FigLabelPlace::LineEnd { t0_ms, t1_ms } => {
+                        let (x0, x1) = (
+                            x_of((t0_ms - epoch_ms) as f32),
+                            x_of((t1_ms - epoch_ms) as f32),
+                        );
+                        if x1 < plot_left || x0 > plot_right {
+                            continue;
+                        }
+                        x1.min(plot_right)
                     }
                 };
                 let text = match label.text {
@@ -426,6 +440,15 @@ impl RenderState {
                         }
                         fmt_pct(((to / from - 1.0) * 100.0) as f32)
                     }
+                    // A ratio scale reads "0.618 (6 109.48)": the level names itself and the price
+                    // beside it is formatted like the axis, so the two can be compared directly.
+                    // NOT the axis precision: it caps at one decimal above 1000 and four below 1,
+                    // which prints neighbouring levels as the same number on a tight box and every
+                    // level of a sub-cent coin as "0.0000". A level is read to act on, so it keeps
+                    // its significant digits.
+                    FigLabelText::Level { ratio, price } => {
+                        format!("{} ({})", fmt_ratio(ratio), fmt_level_price(price))
+                    }
                 };
                 let (x, ax, dy, ay) = match label.place {
                     // Already in the label column, which sits outside the plot when the order book
@@ -433,11 +456,22 @@ impl RenderState {
                     FigLabelPlace::RightEdge => (label_x, 1.0, y - LABEL_LINE_GAP, 1.0),
                     FigLabelPlace::Above => {
                         // Anchored at the node, but flipped to the LEFT of it when the text would
-                        // otherwise run past the plot into the order-book zone. Measured, not
-                        // estimated: the width follows the theme's font-size slider.
-                        let w = self.measure_label_text(ctx, &text).width.as_f32();
-                        let ax = if node_x + w > plot_right { 1.0 } else { 0.0 };
+                        // otherwise run past the plot into the order-book zone. The real width is
+                        // measured ONLY near the edge, where the answer can differ — text shaping
+                        // is the expensive call on this path and every label would pay for it.
+                        let ax = if node_x + FIG_LABEL_FLIP_MARGIN > plot_right
+                            && node_x + self.measure_label_text(ctx, &text).width.as_f32()
+                                > plot_right
+                        {
+                            1.0
+                        } else {
+                            0.0
+                        };
                         (node_x, ax, y - LABEL_LINE_GAP, 1.0)
+                    }
+                    // Right-anchored at the line's end, sitting just above the line it names.
+                    FigLabelPlace::LineEnd { .. } => {
+                        (node_x - READOUT_PAD_X, 1.0, y - LABEL_LINE_GAP, 1.0)
                     }
                 };
                 let m = draw_label_text_run(

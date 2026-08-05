@@ -84,6 +84,50 @@ pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
 }
 
+/// Widest a figure label can be before the flip decision needs a real measurement, in logical px.
+///
+/// Below it the label cannot reach the plot's right edge whatever the font slider says, so the
+/// text-shaping call is skipped entirely.
+pub(in crate::chartdx) const FIG_LABEL_FLIP_MARGIN: f32 = 160.0;
+
+/// Formats the price of a ratio-scale level with SIGNIFICANT digits rather than axis decimals.
+///
+/// The axis rounds to one decimal above 1000 and four below 1 — enough to read a scale off the
+/// gutter, not enough to tell two neighbouring Fibonacci levels apart, and not enough to show any
+/// level of a coin priced at 0.00001234 at all. A level is a number the reader acts on.
+pub(in crate::chartdx) fn fmt_level_price(v: f64) -> String {
+    let a = v.abs();
+    // Six significant digits: 63713.5 keeps its cents, 0.00001234 keeps its digits.
+    let decimals = if a >= 1000.0 {
+        2
+    } else if a >= 1.0 {
+        4
+    } else if a > 0.0 {
+        // Push past the leading zeros of a sub-1 price instead of cutting them off.
+        (6 - a.log10().floor() as i32).clamp(4, 12) as usize
+    } else {
+        2
+    };
+    let s = format!("{v:.decimals$}");
+    // Trailing zeros carry no information here and crowd the column beside the lines.
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    }
+}
+
+/// Formats a ratio-scale level the way the chart names it: `0`, `0.5`, `0.618`, `1.618`.
+///
+/// Trailing zeros are dropped rather than padded to a fixed width — the levels of one scale carry
+/// different precisions (`0.5` next to `0.786`), and padding them all to three decimals reads as
+/// noise beside the price they label.
+pub(in crate::chartdx) fn fmt_ratio(v: f64) -> String {
+    // `+ 0.0` folds -0.0, which would otherwise print as "-0".
+    let s = format!("{:.3}", v + 0.0);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 /// Formats cumulative order-book notional compactly with a K/M/B/T SI suffix for cursor labels.
 fn fmt_amount(v: f32) -> String {
     moon_core::util::fmt::compact_si(v as f64)
