@@ -22,6 +22,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.channel",
     glyph: "☰",
     clicks: 2,
+    fills: true,
     alertable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::Channel(Channel {

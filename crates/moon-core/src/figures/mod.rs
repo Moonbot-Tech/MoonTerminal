@@ -54,9 +54,12 @@ pub struct Figure {
     pub kind: FigureKind,
     /// Line color in RGBA format.
     pub color: [u8; 4],
-    /// Fill color in RGBA format; zero alpha means the figure is not filled. Absent from a file
-    /// written before fills existed, where it defaults to no fill — an old drawing keeps looking
-    /// exactly as it did.
+    /// Fill color in RGBA format; **zero alpha means the figure is not filled**.
+    ///
+    /// A figure saved before fills existed loads with none, and keeps looking exactly as it did.
+    /// Giving it one would be a silent one-way rewrite of a file the user cannot edit back: there
+    /// is no per-figure style editor yet, so a fill applied behind their back could not be taken
+    /// off. A redrawn figure picks up the current style's fill like any other.
     #[serde(default)]
     pub fill: [u8; 4],
     /// Thickness in pixels before pixels-per-point scaling.

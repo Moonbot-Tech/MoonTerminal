@@ -1,7 +1,8 @@
 //! Figure-drawing tool cluster in the tab strip: a pencil button that toggles drawing mode, tools
 //! shown while that mode is enabled, an Alert button for the selected figure, and a style popup
-//! opened by right-clicking the pencil. The popup controls tool, color, thickness, opacity, and
-//! line kind: Solid, Dash, Dot, DashDot, or DashDotDot. Extracted from `strip.rs`.
+//! opened by right-clicking the pencil. The popup controls the tool, the line's colour, thickness,
+//! opacity and kind (Solid, Dash, Dot, DashDot, DashDotDot), and the FILL — its colour and its own
+//! opacity, where "no fill" is simply zero opacity. Extracted from `strip.rs`.
 
 use gpui::*;
 use moon_ui::{
@@ -26,12 +27,6 @@ const SWATCHES: [[u8; 4]; 8] = [
     [240, 240, 240, 255], // white
     [150, 160, 175, 255], // gray
 ];
-
-/// Step of the fill-opacity stepper, in raw alpha.
-///
-/// Coarser than the line's 5% steps: a fill is read as a wash, and the difference between 12% and
-/// 13% is not a decision anyone makes.
-const FILL_OPACITY_STEP: u8 = 13;
 
 /// Step opacity by 5%, snapping to whole percentage points.
 ///
@@ -138,7 +133,8 @@ impl ChartTabs {
             .children(tool_btns)
     }
 
-    /// Render the pencil style popup opened by right-click: tool, color, thickness, opacity, and kind.
+    /// Render the pencil style popup opened by right-click: tool, line colour, thickness, opacity
+    /// and kind, then the fill's colour and opacity.
     fn render_style_popup(
         &self,
         tool: FigureTool,
@@ -258,8 +254,10 @@ impl ChartTabs {
                     .cursor_pointer()
                     .on_click(move |_, _w, app| {
                         backend.update(app, |b, bcx| {
-                            // Picking a colour turns the fill on at its last strength; a fill that
-                            // stayed invisible after a deliberate click would read as broken.
+                            // Picking a colour turns the fill on: at its current strength, or at
+                            // the default when it was off, since the ∅ cell zeroes the alpha. A
+                            // fill that stayed invisible after a deliberate click would read as
+                            // broken.
                             let a = match b.fig_style.fill[3] {
                                 0 => DEFAULT_FILL_ALPHA,
                                 a => a,
@@ -315,7 +313,13 @@ impl ChartTabs {
             .gap(px(4.0))
             .child(label(&t!("chart.fig.fill_opacity")))
             .child(self.step_btn("fig-fop-dn", "−", cx, |s| {
-                s.fill[3] = s.fill[3].saturating_sub(FILL_OPACITY_STEP)
+                // Whole percentage points, like the line's opacity: raw-alpha steps make values
+                // such as 15% unreachable, which is the defect `opacity_step` exists to avoid.
+                s.fill[3] = if s.fill[3] == 0 {
+                    0
+                } else {
+                    opacity_step(s.fill[3], false)
+                }
             }))
             .child(
                 div()
@@ -325,7 +329,13 @@ impl ChartTabs {
                     .child(format!("{fill_pct}%")),
             )
             .child(self.step_btn("fig-fop-up", "+", cx, |s| {
-                s.fill[3] = s.fill[3].saturating_add(FILL_OPACITY_STEP)
+                // Stepping up from "no fill" turns it on at the default strength rather than at
+                // the 5% floor, which would look like nothing happened.
+                s.fill[3] = if s.fill[3] == 0 {
+                    DEFAULT_FILL_ALPHA
+                } else {
+                    opacity_step(s.fill[3], true)
+                }
             }));
 
         // Line kind dropdown over every `LineKind::ALL` value: Solid, Dash, Dot, DashDot, DashDotDot.
@@ -383,9 +393,10 @@ impl ChartTabs {
             .child(thickness_row)
             .child(opacity_row)
             .child(kind_row)
-            .child(label(&t!("chart.fig.fill")))
-            .child(fill_row)
-            .child(fill_op_row)
+            // A line has no area, so the fill controls would change nothing while one is chosen.
+            .children(tool.def().fills.then_some(label(&t!("chart.fig.fill"))))
+            .children(tool.def().fills.then_some(fill_row))
+            .children(tool.def().fills.then_some(fill_op_row))
     }
 
     /// Build a stepper button that edits `fig_style` through the `edit` closure.

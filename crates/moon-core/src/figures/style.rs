@@ -84,7 +84,8 @@ pub struct DrawStyle {
 pub const DEFAULT_FILL_ALPHA: u8 = 46;
 
 impl DrawStyle {
-    /// Whether a fill is drawn at all.
+    /// Whether the style carries a visible fill, for the popup's own "no fill" state. The render
+    /// path does not ask: an invisible fill is dropped where the band is built.
     pub fn has_fill(&self) -> bool {
         self.fill[3] > 0
     }

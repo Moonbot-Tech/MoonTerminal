@@ -101,6 +101,10 @@ pub struct ToolDef {
     /// Whether the core's `TChartObject` blob can carry this figure, i.e. whether it can be armed
     /// as an alert. A tool the core does not know is drawn locally only.
     pub alertable: bool,
+    /// Whether the tool encloses an area and therefore reads the style's fill. A line does not,
+    /// and the pencil popup hides the fill controls while such a tool is selected rather than
+    /// offering a setting that changes nothing.
+    pub fills: bool,
     /// Builds the finished figure from exactly `clicks` placed nodes. Returns `None` when given
     /// fewer, so a caller cannot construct a half-placed figure.
     pub make: fn(&[FigNode]) -> Option<FigureKind>,

@@ -58,14 +58,47 @@ fn it_is_grabbed_by_an_edge_and_not_by_its_middle() {
 }
 
 #[test]
-fn dragging_a_corner_moves_only_that_corner() {
-    let mut r = rect();
+fn every_drawn_corner_is_grabbable_and_drags_its_neighbours_with_it() {
+    let r = rect();
+    assert_eq!(
+        r.handle_count(),
+        4,
+        "a corner the user can see must be grabbable"
+    );
+    for i in 0..4 {
+        assert_eq!(r.handle(i), Some(r.corners()[i]));
+    }
+    assert_eq!(r.handle(4), None);
+
+    // Corner 2 is `b` itself: it moves alone.
+    let mut far = rect();
     let moved = FigNode::new(TestProj::T0_MS + 20_000.0, 70.0);
-    assert!(r.move_handle(1, moved));
-    assert_eq!(r.a, rect().a);
-    assert_eq!(r.b, moved);
-    assert!(!r.move_handle(1, moved));
-    assert!(!r.move_handle(7, moved));
+    assert!(far.move_handle(2, moved));
+    assert_eq!(far.a, rect().a);
+    assert_eq!(far.b, moved);
+    assert!(!far.move_handle(2, moved), "no change reports none");
+    assert!(!far.move_handle(7, moved));
+
+    // Corner 1 is made of b's time and a's price: dragging it must move exactly those, so the
+    // rectangle stays a rectangle instead of shearing.
+    let mut mixed = rect();
+    assert!(mixed.move_handle(1, FigNode::new(TestProj::T0_MS + 50_000.0, 111.0)));
+    assert_eq!(mixed.a.price, 111.0);
+    assert_eq!(mixed.b.time_ms, TestProj::T0_MS + 50_000.0);
+    assert_eq!(mixed.a.time_ms, rect().a.time_ms, "the far side stays put");
+    assert_eq!(mixed.b.price, rect().b.price);
+}
+
+#[test]
+fn a_box_with_no_height_still_draws_its_edges() {
+    // The user is mid-gesture and must see what they are placing. Whether the degenerate BAND
+    // reaches the GPU is the renderer's call, and its own tests pin it.
+    let flat = Rect {
+        a: FigNode::new(TestProj::T0_MS, 100.0),
+        b: FigNode::new(TestProj::T0_MS + 10_000.0, 100.0),
+    };
+    let sink = build(&FigureKind::Rect(flat), ctx(false, false));
+    assert_eq!(sink.segs.len(), 4);
 }
 
 #[test]

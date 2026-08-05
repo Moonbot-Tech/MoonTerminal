@@ -74,26 +74,15 @@ fn a_ratio_scale_survives_a_save_and_load() {
 }
 
 #[test]
-fn a_figure_drawn_before_fills_existed_gains_the_default_one() {
-    // "No `fill` field" cannot mean "the user turned it off": there was nothing to turn off.
+fn a_figure_saved_before_fills_existed_keeps_its_look() {
+    // Painting one on would be a one-way rewrite of a file the user cannot edit back.
     let store = FigureStore::from_json(V1_FILE);
-    let f = &store.figures(1, "BTCUSDT")[0];
-    assert_eq!(
-        f.fill[..3],
-        f.color[..3],
-        "the fill takes the figure's colour"
-    );
-    assert!(f.fill[3] > 0, "an existing figure lost its fill");
-
-    // An explicit zero alpha IS a deliberate "no fill" and must survive.
-    let off = r#"[{"core":1,"market":"BTCUSDT","figures":[
-        {"id":1,"kind":{"Channel":{"price1":1.0,"price2":2.0}},"color":[1,2,3,255],
-         "thickness":1.0,"created_ms":1,"alert":false,"fill":[1,2,3,0]}
-    ]}]"#;
-    assert_eq!(
-        FigureStore::from_json(off).figures(1, "BTCUSDT")[0].fill[3],
-        0
-    );
+    for f in store.figures(1, "BTCUSDT") {
+        assert_eq!(
+            f.fill[3], 0,
+            "an old figure was given a fill nobody can remove"
+        );
+    }
 }
 
 #[test]

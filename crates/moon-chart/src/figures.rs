@@ -212,13 +212,19 @@ impl GeomSink for Sink<'_, '_> {
         if !self.fills {
             return;
         }
+        // An invisible fill is not a fill: skipping it here keeps a figure with fills turned off
+        // out of the zone buffer entirely, so it neither uploads a quad nor changes the signature
+        // that re-bakes the chart's base cache.
+        if color[3] <= 0.0 {
+            return;
+        }
         // The order path refuses a non-finite or non-positive band (`build_order_geometry`), and
         // figure fills share ONE draw call with it: a NaN from a hand-edited file would take the
         // whole call down, not just this band.
         // No epsilon on the height: an absolute one drops a band that is many pixels tall on a
         // market priced at 1e-8 (the pitfall `view.rs` documents), and a truly flat band simply
         // draws nothing.
-        if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0) {
+        if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0) || p0 == p1 {
             return;
         }
         // A tool says "no bound on this side" with an infinity, which is the natural way to say it
@@ -304,7 +310,8 @@ pub fn build_figure_geometry<'a>(
                 thickness: d.thickness * FIG_ACTIVE_THICKNESS,
                 kind: d.line_kind,
             },
-            fill: rgba(d.fill, 1.0),
+            // The draft paints no fill (`sink.fills` below), so this only has to be a colour.
+            fill: [0.0; 4],
             hot: true,
             handles: false,
         };

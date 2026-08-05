@@ -38,8 +38,10 @@ struct ZOut {
 @vertex
 fn zone_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> ZOut {
     let z = zones[iid];
-    let y0 = cv.bounds.y + cv.bounds.w - (z.m.x - cv.view_price0) * cv.price_to_px;
-    let y1 = cv.bounds.y + cv.bounds.w - (z.m.y - cv.view_price0) * cv.price_to_px;
+    // Rounded like the line shaders: at fractional Y a band's edge sits up to a pixel off the
+    // line that bounds it, and the offset walks as view_price0 drifts between bakes.
+    let y0 = round(cv.bounds.y + cv.bounds.w - (z.m.x - cv.view_price0) * cv.price_to_px);
+    let y1 = round(cv.bounds.y + cv.bounds.w - (z.m.y - cv.view_price0) * cv.price_to_px);
     // Bounded in time by m.zw; the ±1e30 sentinel (an order zone) clamps to the plot's edges.
     // `edge` can pan LEFT of the plot, which would make min > max; order the bounds first.
     let lo = cv.bounds.x;

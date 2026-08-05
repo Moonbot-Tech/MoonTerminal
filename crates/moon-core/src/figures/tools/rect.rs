@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::super::kind::FigureKind;
 use super::super::node::FigNode;
 use super::super::proj::{seg_dist, Proj, PxPoint};
-use super::super::sink::{BuildCtx, GeomSink};
+use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText};
 use super::{FigureTool, ToolDef, ToolShape};
 
 /// Rectangle defined by two opposite corners.
@@ -25,6 +25,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.rect",
     glyph: "▭",
     clicks: 2,
+    fills: true,
     // The core's chart-object blob has no rectangle type.
     alertable: false,
     make: |nodes| match nodes {
@@ -56,28 +57,31 @@ impl ToolShape for Rect {
     }
 
     fn handle_count(&self) -> usize {
-        2
+        4
     }
 
     fn handle(&self, i: usize) -> Option<FigNode> {
-        match i {
-            0 => Some(self.a),
-            1 => Some(self.b),
-            _ => None,
-        }
+        self.corners().get(i).copied()
     }
 
+    /// Every drawn corner is grabbable, and dragging one moves the two stored corners it is made
+    /// of — the neighbours follow, as a rectangle's corners must.
     fn move_handle(&mut self, i: usize, to: FigNode) -> bool {
-        let n = match i {
-            0 => &mut self.a,
-            1 => &mut self.b,
+        let before = (self.a, self.b);
+        match i {
+            0 => self.a = to,
+            1 => {
+                self.b.time_ms = to.time_ms;
+                self.a.price = to.price;
+            }
+            2 => self.b = to,
+            3 => {
+                self.a.time_ms = to.time_ms;
+                self.b.price = to.price;
+            }
             _ => return false,
-        };
-        if *n == to {
-            return false;
         }
-        *n = to;
-        true
+        (self.a, self.b) != before
     }
 
     fn translate(&mut self, dt_ms: f64, dp: f64) -> bool {
@@ -92,11 +96,11 @@ impl ToolShape for Rect {
     /// Distance to the nearest EDGE. The filled interior is deliberately not a hit: a rectangle
     /// usually covers price action the user still needs to click through.
     fn hit(&self, pos: PxPoint, proj: &dyn Proj) -> f32 {
-        let c = self.corners();
+        // Project each corner once: this runs per figure on the hover path.
+        let c = self.corners().map(|n| proj.px_of(n));
         let mut best = f32::INFINITY;
         for i in 0..4 {
-            let (p, q) = (proj.px_of(c[i]), proj.px_of(c[(i + 1) % 4]));
-            best = best.min(seg_dist(pos, p, q));
+            best = best.min(seg_dist(pos, c[i], c[(i + 1) % 4]));
         }
         best
     }
@@ -112,6 +116,18 @@ impl ToolShape for Rect {
         let c = self.corners();
         for i in 0..4 {
             sink.seg(c[i], c[(i + 1) % 4], &ctx.stroke);
+        }
+        if ctx.hot {
+            // What a box is drawn to answer: how far it reaches, in percent.
+            sink.label(
+                FigNode::new(self.b.time_ms.max(self.a.time_ms), self.b.price),
+                LabelPlace::Above,
+                LabelText::PctDelta {
+                    from: self.a.price,
+                    to: self.b.price,
+                },
+                ctx.stroke.color,
+            );
         }
     }
 }

@@ -24,6 +24,7 @@ fn hline_fig(id: u64) -> Figure {
             color: [10, 20, 30, 255],
             thickness: 2.0,
             kind: LineKind::Dash,
+            fill: [10, 20, 30, 64],
         },
         0,
     );
@@ -375,4 +376,34 @@ fn the_figure_being_dragged_paints_no_fill() {
     );
     assert!(zones.is_empty(), "a dragged figure re-baked the base cache");
     assert!(!segs.is_empty(), "but its lines must still be drawn");
+}
+
+#[test]
+fn an_invisible_or_degenerate_fill_never_reaches_the_gpu() {
+    use moon_core::figures::tools::Rect;
+
+    // A fill turned off must cost nothing: no instance, so no upload and no change to the
+    // signature that re-bakes the chart's base cache.
+    let mut off = Figure::new(
+        FigureKind::Rect(Rect {
+            a: FigNode::new(EPOCH, 100.0),
+            b: FigNode::new(EPOCH + 60_000.0, 80.0),
+        }),
+        DrawStyle::default(),
+        0,
+    );
+    off.fill = [10, 20, 30, 0];
+    let (zones, _, segs, ..) = build_one(&off, None, None);
+    assert!(zones.is_empty(), "an invisible fill still uploaded a quad");
+    assert_eq!(segs.len(), 4, "its outline must still draw");
+
+    // A zero-height box rasterizes to nothing; it must not take an instance either.
+    let mut flat = off.clone();
+    flat.fill = [10, 20, 30, 200];
+    flat.kind = FigureKind::Rect(Rect {
+        a: FigNode::new(EPOCH, 100.0),
+        b: FigNode::new(EPOCH + 60_000.0, 100.0),
+    });
+    let (zones, ..) = build_one(&flat, None, None);
+    assert!(zones.is_empty(), "a zero-height band took a GPU instance");
 }

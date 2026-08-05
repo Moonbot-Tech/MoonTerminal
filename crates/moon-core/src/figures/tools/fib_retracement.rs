@@ -26,6 +26,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.fib_retracement",
     glyph: "≣",
     clicks: 2,
+    fills: true,
     // The core's chart-object blob has a Fibo type (3), but its payload is not decoded yet, so
     // this tool stays local until it is; sending a blob we cannot read back would be a guess.
     alertable: false,

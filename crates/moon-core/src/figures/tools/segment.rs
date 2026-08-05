@@ -21,6 +21,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.line",
     glyph: "╱",
     clicks: 2,
+    fills: false,
     alertable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::Segment(Segment { a: *a, b: *b })),

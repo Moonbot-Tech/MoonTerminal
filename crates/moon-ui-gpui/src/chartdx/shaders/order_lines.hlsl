@@ -40,8 +40,10 @@ struct ZOut { float4 pos : SV_Position; float4 color : COLOR0; };
 
 ZOut zone_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     Zone z = zones[iid];
-    float y0 = cv_bounds.y + cv_bounds.w - (z.m.x - cv_view_price0) * cv_price_to_px;
-    float y1 = cv_bounds.y + cv_bounds.w - (z.m.y - cv_view_price0) * cv_price_to_px;
+    // Rounded like `hline_vertex`/`seg_vertex`: at fractional Y a band's edge sits up to a pixel
+    // off the line that bounds it, and the offset walks as view_price0 drifts between bakes.
+    float y0 = round(cv_bounds.y + cv_bounds.w - (z.m.x - cv_view_price0) * cv_price_to_px);
+    float y1 = round(cv_bounds.y + cv_bounds.w - (z.m.y - cv_view_price0) * cv_price_to_px);
     // `edge` can pan LEFT of the plot, which would make min > max; order the bounds first.
     float lo = cv_bounds.x;
     float hi = max(cv_bounds.x + (cv_pad - cv_view_time0) * cv_time_to_px, lo);
