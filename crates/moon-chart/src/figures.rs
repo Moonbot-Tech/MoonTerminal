@@ -25,7 +25,7 @@ use moon_core::figures::{
 
 use crate::layers::{
     LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT,
-    SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT, SEG_PATTERN_SOLID,
+    SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT, SEG_PATTERN_SOLID, TIME_UNBOUNDED,
 };
 
 /// Opacity of an idle (inactive) figure.
@@ -221,7 +221,18 @@ impl GeomSink for Sink<'_, '_> {
         if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0) {
             return;
         }
-        let (t0, t1) = (self.to_rel(t0_ms), self.to_rel(t1_ms));
+        // A tool says "no bound on this side" with an infinity, which is the natural way to say it
+        // in figure coordinates; the instance carries the finite sentinel the shaders clamp.
+        let bound = |t_ms: f64| {
+            if t_ms == f64::NEG_INFINITY {
+                -TIME_UNBOUNDED
+            } else if t_ms == f64::INFINITY {
+                TIME_UNBOUNDED
+            } else {
+                self.to_rel(t_ms)
+            }
+        };
+        let (t0, t1) = (bound(t0_ms), bound(t1_ms));
         if !(t0.is_finite() && t1.is_finite()) {
             return;
         }
@@ -293,7 +304,7 @@ pub fn build_figure_geometry<'a>(
                 thickness: d.thickness * FIG_ACTIVE_THICKNESS,
                 kind: d.line_kind,
             },
-            fill: rgba(d.color, 1.0),
+            fill: rgba(d.fill, 1.0),
             hot: true,
             handles: false,
         };
@@ -336,9 +347,9 @@ fn fig_ctx(fig: &Figure, is_hovered: bool, is_selected: bool) -> BuildCtx {
     };
     BuildCtx {
         stroke,
-        // Deliberately NOT `stroke.color`: see the module doc — a fill's colour must not depend on
-        // the interaction state, or hovering a figure re-bakes the base cache.
-        fill: rgba(fig.color, 1.0),
+        // The figure's own fill, interaction state deliberately excluded: see the module doc —
+        // a fill that changed under the cursor would re-bake the base cache.
+        fill: rgba(fig.fill, 1.0),
         hot: is_hovered,
         handles: is_selected,
     }

@@ -39,21 +39,21 @@ pub struct Level {
     pub emphasis: Emphasis,
 }
 
-/// Alpha of the band filling the gap between two neighbouring levels.
+/// Share of the figure's own fill opacity a band takes.
 ///
-/// Deliberately faint: eleven stacked bands at a readable alpha would bury the candles they are
-/// drawn over, and the fill is there to group the levels, not to be read itself. Neighbouring
-/// bands alternate between this and [`BAND_ALPHA_ALT`] — one alpha for all of them reads as a
-/// single flat wash and groups nothing.
-pub const BAND_ALPHA: f32 = 0.10;
-/// Alpha of every other band, so two neighbours can be told apart.
-pub const BAND_ALPHA_ALT: f32 = 0.04;
+/// The strength itself is the user's, chosen once in the pencil popup; these only say how the
+/// scale spends it. Neighbouring bands alternate between this and [`BAND_TINT_ALT`] — one value
+/// for all of them reads as a single flat wash and groups nothing.
+pub const BAND_TINT: f32 = 1.0;
+/// Share every other band takes, so two neighbours can be told apart.
+pub const BAND_TINT_ALT: f32 = 0.45;
 
-// A fill must stay behind the line that bounds it, and the two band alphas must differ or the
-// bands merge into one wash. Checked here, at compile time, rather than by a test comparing two
+// The two band tints must differ or the bands merge into one wash, and neither may exceed the
+// opacity the user chose. Checked here, at compile time, rather than by a test comparing two
 // constants to each other.
-const _: () = assert!(BAND_ALPHA_ALT > 0.0);
-const _: () = assert!(BAND_ALPHA_ALT < BAND_ALPHA);
+const _: () = assert!(BAND_TINT_ALT > 0.0);
+const _: () = assert!(BAND_TINT_ALT < BAND_TINT);
+const _: () = assert!(BAND_TINT <= 1.0);
 // And no level may be drawn invisible or brighter than the figure it belongs to.
 const _: () = assert!(Emphasis::Anchor.line_alpha() >= 0.4 && Emphasis::Anchor.line_alpha() <= 1.0);
 const _: () = assert!(Emphasis::Key.line_alpha() >= 0.4 && Emphasis::Key.line_alpha() <= 1.0);

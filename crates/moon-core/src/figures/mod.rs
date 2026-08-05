@@ -37,7 +37,7 @@ pub use node::FigNode;
 pub use proj::Proj;
 pub use sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
 pub use store::{FigureKey, FigureStore};
-pub use style::{DrawStyle, LineKind};
+pub use style::{DrawStyle, LineKind, DEFAULT_FILL_ALPHA};
 pub use tools::{
     build_figure, drag_figure, pick_figure, pick_handle, FigureTool, Grab, GrabMode, ToolDef,
     ToolShape,
@@ -54,6 +54,11 @@ pub struct Figure {
     pub kind: FigureKind,
     /// Line color in RGBA format.
     pub color: [u8; 4],
+    /// Fill color in RGBA format; zero alpha means the figure is not filled. Absent from a file
+    /// written before fills existed, where it defaults to no fill — an old drawing keeps looking
+    /// exactly as it did.
+    #[serde(default)]
+    pub fill: [u8; 4],
     /// Thickness in pixels before pixels-per-point scaling.
     pub thickness: f32,
     /// Line style (Solid/Dash/Dot/DashDot/DashDotDot), stored at blob offset 13.
@@ -90,6 +95,7 @@ impl Figure {
             id: 0,
             kind,
             color: style.color,
+            fill: style.fill,
             thickness: style.thickness,
             line_kind: style.kind,
             created_ms,

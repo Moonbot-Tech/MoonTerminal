@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{paths, write_file_atomic};
 use crate::session::CoreId;
 
+use super::style::DEFAULT_FILL_ALPHA;
 use super::Figure;
 
 /// Figure-set key identifying the chart for a specific core and market. A figure always belongs
@@ -296,6 +297,13 @@ impl FigureStore {
                         // or foreign file can, and the alert is the half with a core to act on.
                         if f.alert && f.shared {
                             f.shared = false;
+                        }
+                        // A file written before fills existed carries no `fill` at all, which is
+                        // not the same as a fill deliberately turned off: nobody could turn one
+                        // off before there were any. Such a figure gets the default fill in its
+                        // own colour, so an existing corridor looks like a newly drawn one.
+                        if raw.get("fill").is_none() {
+                            f.fill = [f.color[0], f.color[1], f.color[2], DEFAULT_FILL_ALPHA];
                         }
                         figures.push(f);
                     }

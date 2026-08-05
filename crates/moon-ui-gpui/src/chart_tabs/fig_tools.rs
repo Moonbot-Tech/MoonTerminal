@@ -9,7 +9,7 @@ use moon_ui::{
     v_flex,
 };
 
-use moon_core::figures::{DrawStyle, FigureTool, LineKind};
+use moon_core::figures::{DEFAULT_FILL_ALPHA, DrawStyle, FigureTool, LineKind};
 use rust_i18n::t;
 
 use super::ChartTabs;
@@ -26,6 +26,12 @@ const SWATCHES: [[u8; 4]; 8] = [
     [240, 240, 240, 255], // white
     [150, 160, 175, 255], // gray
 ];
+
+/// Step of the fill-opacity stepper, in raw alpha.
+///
+/// Coarser than the line's 5% steps: a fill is read as a wash, and the difference between 12% and
+/// 13% is not a decision anyone makes.
+const FILL_OPACITY_STEP: u8 = 13;
 
 /// Step opacity by 5%, snapping to whole percentage points.
 ///
@@ -198,6 +204,73 @@ impl ChartTabs {
                 ),
         );
 
+        // Fill swatches, mirroring the line's: the same palette, but writing `fill` and keeping
+        // its own opacity. The leftmost cell is "no fill" — one control for the switch and the
+        // colour, because a fill at zero opacity IS no fill.
+        let mut fill_row = h_flex().items_center().gap(px(3.0)).flex_wrap();
+        let backend_off = self.backend.clone();
+        fill_row = fill_row.child(
+            div()
+                .id("fig-fill-off")
+                .w(px(16.0))
+                .h(px(16.0))
+                .rounded(design::ui_px(cx, 3.0))
+                .border_2()
+                .border_color(if style.has_fill() {
+                    rgb(p.border)
+                } else {
+                    rgb(p.accent)
+                })
+                .text_color(rgb(p.text_muted))
+                .text_center()
+                .child("∅")
+                .cursor_pointer()
+                .tooltip(|_window, cx| {
+                    cx.new(|_| moon_ui::MoonTooltipView::new(t!("chart.fig.no_fill").to_string()))
+                        .into()
+                })
+                .on_click(move |_, _w, app| {
+                    backend_off.update(app, |b, bcx| {
+                        b.fig_style.fill[3] = 0;
+                        bcx.notify();
+                    });
+                }),
+        );
+        for (i, sw) in SWATCHES.iter().enumerate() {
+            let backend = self.backend.clone();
+            let sw = *sw;
+            let selected = style.has_fill() && style.fill[..3] == sw[..3];
+            fill_row = fill_row.child(
+                div()
+                    .id(("fig-fill-swatch", i))
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(gpui::rgb(
+                        ((sw[0] as u32) << 16) | ((sw[1] as u32) << 8) | sw[2] as u32,
+                    ))
+                    .border_2()
+                    .border_color(if selected {
+                        rgb(p.accent)
+                    } else {
+                        rgb(p.border)
+                    })
+                    .cursor_pointer()
+                    .on_click(move |_, _w, app| {
+                        backend.update(app, |b, bcx| {
+                            // Picking a colour turns the fill on at its last strength; a fill that
+                            // stayed invisible after a deliberate click would read as broken.
+                            let a = match b.fig_style.fill[3] {
+                                0 => DEFAULT_FILL_ALPHA,
+                                a => a,
+                            };
+                            b.fig_style.fill = [sw[0], sw[1], sw[2], a];
+                            bcx.notify();
+                        });
+                    }),
+            );
+        }
+
         // Thickness and opacity steppers plus solid or dashed kind.
         let thickness_row = h_flex()
             .items_center()
@@ -234,6 +307,25 @@ impl ChartTabs {
             )
             .child(self.step_btn("fig-op-up", "+", cx, |s| {
                 s.color[3] = opacity_step(s.color[3], true)
+            }));
+
+        let fill_pct = (style.fill[3] as f32 / 255.0 * 100.0).round() as i32;
+        let fill_op_row = h_flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(label(&t!("chart.fig.fill_opacity")))
+            .child(self.step_btn("fig-fop-dn", "−", cx, |s| {
+                s.fill[3] = s.fill[3].saturating_sub(FILL_OPACITY_STEP)
+            }))
+            .child(
+                div()
+                    .w(design::font_w_px(cx, 34.0))
+                    .text_center()
+                    .text_color(rgb(p.text))
+                    .child(format!("{fill_pct}%")),
+            )
+            .child(self.step_btn("fig-fop-up", "+", cx, |s| {
+                s.fill[3] = s.fill[3].saturating_add(FILL_OPACITY_STEP)
             }));
 
         // Line kind dropdown over every `LineKind::ALL` value: Solid, Dash, Dot, DashDot, DashDotDot.
@@ -291,6 +383,9 @@ impl ChartTabs {
             .child(thickness_row)
             .child(opacity_row)
             .child(kind_row)
+            .child(label(&t!("chart.fig.fill")))
+            .child(fill_row)
+            .child(fill_op_row)
     }
 
     /// Build a stepper button that edits `fig_style` through the `edit` closure.

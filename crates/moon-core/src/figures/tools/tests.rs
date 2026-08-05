@@ -79,7 +79,7 @@ pub(super) fn ctx(hot: bool, handles: bool) -> BuildCtx {
             thickness: 1.0,
             kind: LineKind::Solid,
         },
-        fill: [1.0, 1.0, 1.0, 1.0],
+        fill: [1.0, 1.0, 1.0, 0.2],
         hot,
         handles,
     }

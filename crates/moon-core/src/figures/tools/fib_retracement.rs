@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::super::kind::FigureKind;
-use super::super::levels::{price_at, Emphasis, BAND_ALPHA, BAND_ALPHA_ALT, FIB_LEVELS};
+use super::super::levels::{price_at, Emphasis, BAND_TINT, BAND_TINT_ALT, FIB_LEVELS};
 use super::super::node::FigNode;
 use super::super::proj::{seg_dist, Proj, PxPoint};
 use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
@@ -122,11 +122,11 @@ impl ToolShape for FibRetracement {
             c
         };
         // A fill never reacts to hover or selection: it lives in the base cache (see `BuildCtx`).
-        // Its alpha MULTIPLIES the figure's own opacity, as a line's does — the pencil popup's
-        // opacity stepper must reach the fills too.
-        let fill = |alpha: f32| {
+        // `tint` is a SHARE of the opacity the user chose for fills, never an absolute alpha: the
+        // strength belongs to the pencil popup, the scale only says how it is spent.
+        let fill = |tint: f32| {
             let mut c = ctx.fill;
-            c[3] *= alpha;
+            c[3] *= tint;
             c
         };
         // The move itself, dotted and dimmed: it is the scale's definition, not one of its levels.
@@ -160,9 +160,9 @@ impl ToolShape for FibRetracement {
             // keeps neighbouring bands apart instead of merging them into one wash.
             if let Some(prev_price) = prev {
                 let alpha = if band_i.is_multiple_of(2) {
-                    BAND_ALPHA
+                    BAND_TINT
                 } else {
-                    BAND_ALPHA_ALT
+                    BAND_TINT_ALT
                 };
                 sink.band(t0, t1, prev_price, price, fill(alpha));
                 band_i += 1;

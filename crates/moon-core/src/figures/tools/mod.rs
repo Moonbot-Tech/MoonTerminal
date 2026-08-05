@@ -15,12 +15,14 @@
 mod channel;
 mod fib_retracement;
 mod hline;
+mod rect;
 mod segment;
 mod triangle;
 
 pub use channel::Channel;
 pub use fib_retracement::FibRetracement;
 pub use hline::HLine;
+pub use rect::Rect;
 pub use segment::Segment;
 pub use triangle::Triangle;
 
@@ -117,6 +119,7 @@ pub enum FigureTool {
     Triangle,
     Channel,
     FibRetracement,
+    Rect,
 }
 
 /// Every tool, in menu order. The toolbar, the hotkey CYCLE, the alerts list and the tests all
@@ -128,6 +131,7 @@ pub const REGISTRY: &[ToolDef] = &[
     segment::DEF,
     triangle::DEF,
     channel::DEF,
+    rect::DEF,
     fib_retracement::DEF,
 ];
 

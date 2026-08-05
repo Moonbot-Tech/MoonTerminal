@@ -77,5 +77,8 @@ fn the_levels_a_trader_watches_are_the_loudest() {
         Emphasis::Key.line_alpha() > Emphasis::Anchor.line_alpha(),
         "the golden group must not be the quietest thing on the scale"
     );
-    assert!(BAND_ALPHA < Emphasis::Anchor.line_alpha());
+    assert!(
+        BAND_TINT_ALT < BAND_TINT,
+        "two neighbouring bands must not spend the same share of the fill"
+    );
 }
