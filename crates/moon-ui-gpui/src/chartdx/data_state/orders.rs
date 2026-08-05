@@ -134,9 +134,12 @@ impl ChartDataState {
                         pane.core,
                         &pane.market,
                         pane.view.epoch_ms,
-                        &mut hlines,
-                        &mut segs,
-                        &mut markers,
+                        &mut moon_chart::figures::FigureBuffers {
+                            hlines: &mut hlines,
+                            segs: &mut segs,
+                            markers: &mut markers,
+                            labels: &mut pr.figure_labels,
+                        },
                     );
                     // News marks ride the same layer, last, so a mark is never hidden under an
                     // order line's cross.
@@ -198,6 +201,9 @@ impl ChartDataState {
                     pr.order_labels.clear();
                     pr.order_label_order.clear();
                     pr.orderbook_labels.clear();
+                    // Figure readouts live beside the order labels and must go with them: the
+                    // text pass would otherwise keep drawing a label whose line is no longer there.
+                    pr.figure_labels.clear();
                     pr.last_order_lines_rev = u64::MAX;
                     pr.last_order_lines_sync_ms = now;
                     pr.pending_order_gpu_rev = Some(u64::MAX);

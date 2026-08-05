@@ -298,11 +298,17 @@ pub fn apply(
             true
         }
         A::FigAlert => {
-            if b.toggle_selected_figure_alert() {
-                bcx.notify();
-                true
-            } else {
+            // Consumed whenever a figure is selected, even if arming was refused — a tool the core
+            // has no type for, or a figure shared across cores, refuses the toggle, and letting the
+            // key fall through would be a surprise rather than a refusal. With NO selection the key
+            // is not ours, exactly as `FigDelete` leaves it.
+            if b.fig_selected.is_none() {
                 false
+            } else {
+                if b.toggle_selected_figure_alert() {
+                    bcx.notify();
+                }
+                true
             }
         }
         A::FigDelete => {

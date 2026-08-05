@@ -62,17 +62,17 @@ impl ChartDataState {
         if sig == u64::MAX { 0 } else { sig }
     }
 
-    /// Appends figure geometry for a core and market to userdata buffers. Figures are visible only
-    /// in pencil drawing mode; otherwise this layer is not built.
+    /// Appends figure geometry for a core and market to userdata buffers, and REPLACES the pane's
+    /// figure labels. Figures are visible only in pencil drawing mode; otherwise this layer is not
+    /// built and the label list is left empty.
     pub(super) fn append_figure_geometry(
         &self,
         core: CoreId,
         market: &str,
         epoch_ms: f64,
-        hlines: &mut Vec<moon_chart::layers::LineInstance>,
-        segs: &mut Vec<moon_chart::layers::SegInstance>,
-        markers: &mut Vec<moon_chart::layers::MarkerInstance>,
+        out: &mut moon_chart::figures::FigureBuffers<'_>,
     ) {
+        out.labels.clear();
         if !self.figure_visual.draw_mode {
             return;
         }
@@ -80,8 +80,6 @@ impl ChartDataState {
             return;
         };
         let store = store.borrow();
-        // Treat local and server-provided figures as one fully interactive set.
-        let figures = store.figures(core, market);
         // Apply preview, hover, and selection only to the matching panel key. In a stack of
         // different markets, the draft appears only in the panel containing the cursor.
         let v = &self.figure_visual;
@@ -90,18 +88,22 @@ impl ChartDataState {
             .as_ref()
             .is_some_and(|(c, m)| *c == core && m == market);
         let draft = if mine { v.draft.as_ref() } else { None };
-        if figures.is_empty() && draft.is_none() {
+        // Treat local, shared and server-provided figures as one fully interactive set. The
+        // emptiness test peeks at the SAME iterator instead of asking the store twice: the store
+        // scans its key set for shared figures, and this runs per pane per rebuild.
+        let mut figures = store.visible(core, market).peekable();
+        if draft.is_none() && figures.peek().is_none() {
             return;
         }
         moon_chart::build_figure_geometry(
             figures,
             draft,
-            if mine { v.hovered } else { None },
-            if mine { v.selected } else { None },
-            epoch_ms,
-            hlines,
-            segs,
-            markers,
+            moon_chart::figures::FigureView {
+                epoch_ms,
+                hovered: if mine { v.hovered } else { None },
+                selected: if mine { v.selected } else { None },
+            },
+            out,
         );
     }
 }

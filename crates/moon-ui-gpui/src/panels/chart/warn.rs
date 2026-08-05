@@ -12,6 +12,7 @@
 //! The card carries the readings captured at detection (axis peaks, cores). The per-episode ±1 min
 //! graph is deliberately absent until the slice is written to `core_warning_series`.
 
+use moon_core::figures::Proj;
 use std::net::IpAddr;
 use std::rc::Rc;
 

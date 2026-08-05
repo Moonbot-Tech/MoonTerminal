@@ -1,6 +1,7 @@
 //! Main `prepare_text` implementation for axes, order-line labels, and cursor readouts.
 
 use moon_chart::axes::price_decimals;
+use moon_core::figures::{LabelPlace as FigLabelPlace, LabelText as FigLabelText};
 
 use super::*;
 
@@ -312,9 +313,10 @@ impl RenderState {
             // than disappearing. Offset labels by LABEL_LINE_GAP so badges do not cover the order
             // line. Draw `force` labels (drag/hover) last, above everything. A per-tab "line labels"
             // checkbox in the settings popup disables the entire column.
+            // Label row height follows the font size configured by the theme slider. Shared by
+            // the order-label column and the figure readouts below it.
+            let label_line_h = self.label_font_px() + 4.0;
             if self.line_labels {
-                // Label row height follows the font size configured by the theme slider.
-                let label_line_h = self.label_font_px() + 4.0;
                 let mut force_items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
                 for &li in &self.panes[idx].order_label_order {
                     let order_labels = &self.panes[idx].order_labels;
@@ -390,6 +392,75 @@ impl RenderState {
                         solid: false,
                     });
                 }
+            }
+
+            // Readout of the figure under the cursor, or of the one being drawn: a price at the
+            // right edge for a full-width line, or the move a trend line describes, at the end it
+            // points to. The list is EMPTY otherwise — a merely selected figure has none — so an
+            // idle chart does no work here and figures cost nothing per frame.
+            for li in 0..self.panes[idx].figure_labels.len() {
+                // Copied out: the label is four numbers, and holding a borrow of the pane would
+                // block measuring the text through `&mut self` below.
+                let label = self.panes[idx].figure_labels[li];
+                let y = line_y(label.price);
+                if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
+                    continue;
+                }
+                // Cull on POSITION before formatting: a scrolled-off figure must not pay for a
+                // string it will never draw.
+                let node_x = match label.place {
+                    FigLabelPlace::RightEdge => label_x,
+                    FigLabelPlace::Above => {
+                        let x = plot_left + (label.t_rel - view.view_time0) * time_to_px;
+                        if x < plot_left || x > plot_right {
+                            continue;
+                        }
+                        x
+                    }
+                };
+                let text = match label.text {
+                    FigLabelText::Price(p) => format!("{p:.dec$}"),
+                    FigLabelText::PctDelta { from, to } => {
+                        if from == 0.0 {
+                            continue;
+                        }
+                        fmt_pct(((to / from - 1.0) * 100.0) as f32)
+                    }
+                };
+                let (x, ax, dy, ay) = match label.place {
+                    // Already in the label column, which sits outside the plot when the order book
+                    // is off — never gate it on the plot's own right edge.
+                    FigLabelPlace::RightEdge => (label_x, 1.0, y - LABEL_LINE_GAP, 1.0),
+                    FigLabelPlace::Above => {
+                        // Anchored at the node, but flipped to the LEFT of it when the text would
+                        // otherwise run past the plot into the order-book zone. Measured, not
+                        // estimated: the width follows the theme's font-size slider.
+                        let w = self.measure_label_text(ctx, &text).width.as_f32();
+                        let ax = if node_x + w > plot_right { 1.0 } else { 0.0 };
+                        (node_x, ax, y - LABEL_LINE_GAP, 1.0)
+                    }
+                };
+                let m = draw_label_text_run(
+                    &mut self.text_runs,
+                    &mut self.text_run_cursor,
+                    ctx,
+                    self.label_font_delta,
+                    &text,
+                    x,
+                    dy,
+                    ax,
+                    ay,
+                    color(label.color),
+                )?;
+                placed.push(PlacedLabel {
+                    x,
+                    y: dy,
+                    ax,
+                    ay,
+                    w: m.width.as_f32(),
+                    h: m.line_height.as_f32(),
+                    solid: false,
+                });
             }
 
             // Moonbot `LastSellOrderPriceVol`: a separate order-book depth label at the sell line.

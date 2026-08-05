@@ -650,10 +650,22 @@ chart.fig_menu.alert_off:
   ru: "Alert: выключить"
   en: "Alert: off"
   es: "Alerta: desactivar"
+chart.fig_menu.share:
+  ru: "Показывать на всех ядрах"
+  en: "Show on every core"
+  es: "Mostrar en todos los núcleos"
+chart.fig_menu.unshare:
+  ru: "Только на этом ядре"
+  en: "Only on this core"
+  es: "Solo en este núcleo"
 chart.fig_menu.delete:
   ru: "Удалить фигуру"
   en: "Delete figure"
   es: "Eliminar figura"
+chart.fig_menu.delete_shared:
+  ru: "Удалить у всех ядер"
+  en: "Delete for every core"
+  es: "Eliminar en todos los núcleos"
 
 # --- Alerts window ---
 alerts.window_title:

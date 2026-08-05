@@ -24,6 +24,7 @@
 //! Node = `(TDateTime f64, price f64)`. Fibo (type 3) is not yet part of our figure model —
 //! `decode` skips it, and `encode` is never called for it.
 
+use crate::figures::tools::{Channel, HLine, Segment, Triangle};
 use crate::figures::{FigNode, FigureKind, LineKind};
 
 /// Figure type in the blob.
@@ -77,12 +78,18 @@ pub fn encode(
     created_ms: f64,
     strategy_id: u64,
     uid: u64,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
+    // A tool the core has no chart-object type for gets no blob at all: returning one of the
+    // wrong type would have the core draw something else entirely. The registry flag is the
+    // single source of that truth, checked HERE so no caller can bypass it.
+    if !kind.tool().def().alertable {
+        return None;
+    }
     let ty = match kind {
-        FigureKind::HLine { .. } => T_HLINE,
-        FigureKind::Segment { .. } => T_SEGMENT,
-        FigureKind::Triangle { .. } => T_TRIANGLE,
-        FigureKind::Channel { .. } => T_CHANNEL,
+        FigureKind::HLine(_) => T_HLINE,
+        FigureKind::Segment(_) => T_SEGMENT,
+        FigureKind::Triangle(_) => T_TRIANGLE,
+        FigureKind::Channel(_) => T_CHANNEL,
     };
     let mut out = Vec::with_capacity(96);
     out.push(ty);
@@ -102,26 +109,26 @@ pub fn encode(
         out.extend_from_slice(&n.price.to_le_bytes());
     };
     match kind {
-        FigureKind::HLine { price } => {
+        FigureKind::HLine(HLine { price }) => {
             out.extend_from_slice(&price.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes()); // Tail (= 0 in every hline sample).
         }
-        FigureKind::Segment { a, b } => {
+        FigureKind::Segment(Segment { a, b }) => {
             node(a, &mut out);
             node(b, &mut out);
         }
-        FigureKind::Triangle { a, b, c } => {
+        FigureKind::Triangle(Triangle { a, b, c }) => {
             node(a, &mut out);
             node(b, &mut out);
             node(c, &mut out);
         }
-        FigureKind::Channel { price1, price2 } => {
+        FigureKind::Channel(Channel { price1, price2 }) => {
             out.extend_from_slice(&price1.to_le_bytes());
             out.extend_from_slice(&price2.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes());
         }
     }
-    out
+    Some(out)
 }
 
 /// Decodes a chart-object blob. Returns `None` if it is too short or has a type absent from
@@ -148,22 +155,22 @@ pub fn decode(blob: &[u8]) -> Option<DecodedAlert> {
     let strategy_id = u64::from_le_bytes(blob[32..40].try_into().ok()?);
     let uid = u64::from_le_bytes(blob[40..48].try_into().ok()?);
     let kind = match ty {
-        T_HLINE => FigureKind::HLine {
+        T_HLINE => FigureKind::HLine(HLine {
             price: rd_f64(PAYLOAD_OFF)?,
-        },
-        T_SEGMENT => FigureKind::Segment {
+        }),
+        T_SEGMENT => FigureKind::Segment(Segment {
             a: rd_node(PAYLOAD_OFF)?,
             b: rd_node(PAYLOAD_OFF + 16)?,
-        },
-        T_TRIANGLE => FigureKind::Triangle {
+        }),
+        T_TRIANGLE => FigureKind::Triangle(Triangle {
             a: rd_node(PAYLOAD_OFF)?,
             b: rd_node(PAYLOAD_OFF + 16)?,
             c: rd_node(PAYLOAD_OFF + 32)?,
-        },
-        T_CHANNEL => FigureKind::Channel {
+        }),
+        T_CHANNEL => FigureKind::Channel(Channel {
             price1: rd_f64(PAYLOAD_OFF)?,
             price2: rd_f64(PAYLOAD_OFF + 8)?,
-        },
+        }),
         T_FIBO => return None,
         _ => return None,
     };

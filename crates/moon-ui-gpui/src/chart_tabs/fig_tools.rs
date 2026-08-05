@@ -44,12 +44,31 @@ fn opacity_step(a: u8, up: bool) -> u8 {
     (next as f32 / 100.0 * 255.0).round() as u8
 }
 
-const TOOLS: [(FigureTool, &str, &str); 4] = [
-    (FigureTool::HLine, "fig-tool-hline", "─"),
-    (FigureTool::Segment, "fig-tool-segment", "╱"),
-    (FigureTool::Triangle, "fig-tool-triangle", "△"),
-    (FigureTool::Channel, "fig-tool-channel", "☰"),
-];
+/// One tool button, generated from the registry row: a new tool appears in the strip and in the
+/// style popup by existing, with its element id and glyph coming from its own module.
+fn tool_button(
+    def: &'static moon_core::figures::ToolDef,
+    selected: bool,
+    backend: gpui::Entity<crate::Backend>,
+) -> MoonButton {
+    let tool = def.tool;
+    MoonButton::new(ElementId::Name(SharedString::new_static(def.key)))
+        .label(def.glyph)
+        .tooltip(t!(def.locale_key).to_string())
+        .size(MoonButtonSize::Micro)
+        .variant(if selected {
+            MoonButtonVariant::Blue
+        } else {
+            MoonButtonVariant::Ghost
+        })
+        .selected(selected)
+        .on_click(move |_, _w, app| {
+            backend.update(app, |b, bcx| {
+                b.fig_tool = tool;
+                bcx.notify();
+            });
+        })
+}
 
 impl ChartTabs {
     pub(super) fn render_fig_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -100,27 +119,8 @@ impl ChartTabs {
         // Tools shown only in drawing mode, with the active tool highlighted.
         let tool_btns = draw_mode.then(|| {
             let mut row = h_flex().items_center().gap(px(2.0));
-            for (t, id, label) in TOOLS {
-                let backend = self.backend.clone();
-                let on = tool == t;
-                row = row.child(
-                    MoonButton::new(id)
-                        .label(label)
-                        .size(MoonButtonSize::Micro)
-                        .variant(if on {
-                            MoonButtonVariant::Blue
-                        } else {
-                            MoonButtonVariant::Ghost
-                        })
-                        .selected(on)
-                        .on_click(move |_, _w, app| {
-                            backend.update(app, |b, bcx| {
-                                b.fig_tool = t;
-                                bcx.notify();
-                            });
-                        })
-                        .render(),
-                );
+            for def in moon_core::figures::tools::REGISTRY {
+                row = row.child(tool_button(def, tool == def.tool, self.backend.clone()).render());
             }
             row
         });
@@ -144,27 +144,9 @@ impl ChartTabs {
 
         // Tool row.
         let mut tool_row = h_flex().items_center().gap(px(3.0));
-        for (t, id, glyph) in TOOLS {
-            let backend = self.backend.clone();
-            let on = tool == t;
-            tool_row = tool_row.child(
-                MoonButton::new(id)
-                    .label(glyph)
-                    .size(MoonButtonSize::Micro)
-                    .variant(if on {
-                        MoonButtonVariant::Blue
-                    } else {
-                        MoonButtonVariant::Ghost
-                    })
-                    .selected(on)
-                    .on_click(move |_, _w, app| {
-                        backend.update(app, |b, bcx| {
-                            b.fig_tool = t;
-                            bcx.notify();
-                        });
-                    })
-                    .render(),
-            );
+        for def in moon_core::figures::tools::REGISTRY {
+            tool_row =
+                tool_row.child(tool_button(def, tool == def.tool, self.backend.clone()).render());
         }
 
         // Color swatches followed by the arbitrary Custom color picker.
