@@ -43,3 +43,7 @@ common.exchange_unknown:
   ru: "Биржа не определена"
   en: "Exchange not identified"
   es: "Bolsa sin identificar"
+common.exchange_spot:
+  ru: "Spot"
+  en: "Spot"
+  es: "Spot"

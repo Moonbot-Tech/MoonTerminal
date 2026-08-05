@@ -27,7 +27,7 @@ impl LogPanel {
             .map(|s| s.display.clone())
             .unwrap_or_else(|| match &self.source {
                 LogSource::Core(core) => format!("#{core}"),
-                LogSource::Exchange(exchange) => exchange.clone(),
+                LogSource::Exchange(exchange) => crate::controls::exchange_display_name(exchange),
                 LogSource::Aggregate | LogSource::Local => t!("log.source.local").to_string(),
             });
         let cores: Vec<(CoreId, String)> = sources
@@ -68,10 +68,13 @@ impl LogPanel {
             items.push(MoonMenuItem::separator());
         }
         for (section_index, (exchange, members)) in sections.into_iter().enumerate() {
-            let exchange_label = exchange.unwrap_or(unknown_exchange.as_str());
-            if exchange.is_some() {
-                let selected = matches!(&self.source, LogSource::Exchange(current) if current == exchange_label);
-                let source = exchange_label.to_string();
+            let exchange_label = exchange
+                .map(crate::controls::exchange_display_name)
+                .unwrap_or_else(|| unknown_exchange.clone());
+            if let Some(exchange) = exchange {
+                let selected =
+                    matches!(&self.source, LogSource::Exchange(current) if current == exchange);
+                let source = exchange.to_string();
                 let item_view = view.clone();
                 items.push(
                     MoonMenuItem::action_label(

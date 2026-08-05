@@ -265,7 +265,20 @@ fn delta_chip(val: f32, over: bool, decimals: usize, p: MoonPalette, cx: &App) -
 
 /// Build one configured slot field.
 ///
-/// Return `None` for an empty field, missing exchange text, or disabled detection-type badge.
+/// Args:
+///     field: Configured field kind for this card slot.
+///     over: Whether the field is drawn over a chart.
+///     it: Detection snapshot supplying field values.
+///     secs: Rounded detection age in seconds.
+///     coin_px: Available coin-label width.
+///     decimals: Percentage precision selected for the card.
+///     badges: Detection-type badge configuration.
+///     p: Active Moon palette.
+///     is_light: Whether the active palette is light.
+///     cx: Application context used for scaled dimensions.
+///
+/// Returns:
+///     Rendered field, or `None` for an empty field, blank exchange, or disabled type badge.
 #[allow(clippy::too_many_arguments)]
 fn chip(
     field: DetectField,
@@ -292,12 +305,11 @@ fn chip(
         DetectField::Delta24h => delta_chip(it.delta_24h, over, decimals, p, cx).into_any_element(),
         DetectField::Delta1h => delta_chip(it.delta_1h, over, decimals, p, cx).into_any_element(),
         DetectField::Exchange => {
-            if it.exchange_name.is_empty() {
+            let exchange = crate::controls::exchange_display_name(&it.exchange_name);
+            if exchange.is_empty() {
                 return None;
             }
-            soft(it.exchange_name.clone(), p)
-                .render()
-                .into_any_element()
+            soft(exchange, p).render().into_any_element()
         }
         DetectField::ExchangeKind => {
             if it.exchange_kind.is_empty() {

@@ -23,6 +23,7 @@ mod coin_menu;
 pub(crate) mod coin_search;
 mod core_combo;
 pub(crate) mod date_range;
+mod exchange_label;
 mod fmt;
 mod manual_strat;
 mod metric;
@@ -35,6 +36,7 @@ pub(crate) use core_combo::{
     core_combo, core_menu_sections, core_selection_is_all, normalized_core_filter_ids,
     toggle_all_core_selection, toggle_exchange_cores,
 };
+pub(crate) use exchange_label::{exchange_display_name, exchange_display_name_with_spot};
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;

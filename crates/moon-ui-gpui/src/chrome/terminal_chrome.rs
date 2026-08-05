@@ -407,8 +407,10 @@ fn core_selector(
         let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
         let mut items = Vec::with_capacity(cores.len() + sections.len());
         for (exchange, members) in sections {
-            let exchange = exchange.unwrap_or(unknown_exchange.as_str());
-            items.push(MoonMenuItem::label(exchange));
+            let exchange_label = exchange
+                .map(crate::controls::exchange_display_name)
+                .unwrap_or_else(|| unknown_exchange.clone());
+            items.push(MoonMenuItem::label(exchange_label));
             for (id, name) in members {
                 let backend = backend.clone();
                 let group = group.to_string();

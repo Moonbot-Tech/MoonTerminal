@@ -455,16 +455,18 @@ fn log_row_viewports_keep_a_reachable_horizontal_scrollbar() {
     );
 }
 
-/// `panels/log/controls.rs:source_combo` replacing the known exchange action with a label would
-/// leave the Log tab's exchange headings inert even though the shared core selectors still work.
+/// `panels/log/controls.rs:source_combo` must keep raw identity inside the known exchange action;
+/// replacing it with a label makes the heading inert, while storing the formatted label makes its
+/// live membership empty even though the selector still reads correctly.
 #[test]
 fn log_exchange_headers_select_a_live_exchange_aggregate() {
     let controls = read_src("panels/log/controls.rs");
     let combo = braced_body(&controls, "pub(super) fn source_combo(");
-    let known_exchange = braced_body(combo, "if exchange.is_some()");
+    let known_exchange = braced_body(combo, "if let Some(exchange) = exchange");
     let unknown_exchange = braced_body(combo, "} else {");
     assert!(
         known_exchange.contains("MoonMenuItem::action_label(")
+            && known_exchange.contains("let source = exchange.to_string();")
             && known_exchange.contains("this.set_source(LogSource::Exchange(source), cx);")
             && !known_exchange.contains("MoonMenuItem::label(exchange_label)")
             && unknown_exchange.contains("MoonMenuItem::label(exchange_label)")

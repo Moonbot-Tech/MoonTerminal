@@ -409,9 +409,10 @@ impl ScreenerView {
             items.push(MoonMenuItem::separator());
         }
         for (exchange, members) in &sections {
-            items.push(MoonMenuItem::label(
-                exchange.unwrap_or(unknown_exchange.as_str()),
-            ));
+            let exchange_label = exchange
+                .map(|name| crate::controls::exchange_display_name(name))
+                .unwrap_or_else(|| unknown_exchange.clone());
+            items.push(MoonMenuItem::label(exchange_label));
             for (id, name) in members {
                 let id = *id;
                 let item_view = view.clone();

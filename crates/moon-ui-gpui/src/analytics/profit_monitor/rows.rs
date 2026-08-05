@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
 use moon_core::session::CoreId;
 
+use crate::controls::exchange_display_name_with_spot;
+
 /// User-selected grouping axis for the monitor table.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum GroupMode {
@@ -59,6 +61,8 @@ pub(super) struct LiveContext {
 pub(super) struct MonitorRow {
     /// Visible group label.
     pub(super) name: String,
+    /// Unformatted identity used to preserve raw exchange-name sorting.
+    pub(super) sort_name: String,
     /// Projected profit.
     pub(super) profit: f64,
     /// Closed-trade count.
@@ -117,6 +121,8 @@ pub(super) struct RowLabels<'a> {
     pub(super) core: &'a str,
     /// One shared explicit label for missing exchange metadata.
     pub(super) unknown_exchange: &'a str,
+    /// Localized suffix for a known spot exchange.
+    pub(super) spot: &'a str,
 }
 
 /// Group per-core report aggregates into visible Core or Exchange rows.
@@ -144,7 +150,7 @@ pub(super) fn grouped_rows(
             .map(String::as_str)
             .filter(|name| !name.trim().is_empty());
         let report = (!source.report_name.trim().is_empty()).then_some(source.report_name.as_str());
-        let (key, name) = match mode {
+        let (key, name, sort_name) = match mode {
             GroupMode::Core => {
                 let name = configured
                     .or(report)
@@ -152,21 +158,29 @@ pub(super) fn grouped_rows(
                     .filter(|name| !name.is_empty())
                     .map(str::to_string)
                     .unwrap_or_else(|| format!("{} {core}", labels.core));
-                (format!("core:{core}"), name)
+                (format!("core:{core}"), name.clone(), name)
             }
-            GroupMode::Exchange => {
-                let name = live
-                    .exchange_names
-                    .get(&core)
-                    .cloned()
-                    .unwrap_or_else(|| labels.unknown_exchange.to_string());
-                (format!("exchange:{}", name.to_lowercase()), name)
-            }
+            GroupMode::Exchange => match live.exchange_names.get(&core) {
+                Some(exchange) => (
+                    format!("exchange:{}", exchange.to_lowercase()),
+                    exchange_display_name_with_spot(exchange, labels.spot),
+                    exchange.clone(),
+                ),
+                None => {
+                    let unknown = labels.unknown_exchange.to_string();
+                    (
+                        format!("exchange:{}", unknown.to_lowercase()),
+                        unknown.clone(),
+                        unknown,
+                    )
+                }
+            },
         };
         grouped
             .entry(key)
             .or_insert_with(|| MonitorRow {
                 name,
+                sort_name,
                 primary_core: core,
                 ..MonitorRow::default()
             })
@@ -191,7 +205,7 @@ pub(super) fn grouped_rows(
         rows.sort_by(|a, b| {
             b.profit
                 .total_cmp(&a.profit)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                .then_with(|| a.sort_name.to_lowercase().cmp(&b.sort_name.to_lowercase()))
         });
     }
     rows

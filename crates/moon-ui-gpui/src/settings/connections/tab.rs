@@ -511,7 +511,7 @@ impl SettingsView {
             {
                 let identified = exchange.is_some();
                 let exchange_name = exchange
-                    .map(str::to_string)
+                    .map(crate::controls::exchange_display_name)
                     .unwrap_or_else(|| t!("common.exchange_unknown").to_string());
                 list_col = list_col.child(Self::subsection_header_row(
                     SharedString::from(format!("exchange-{group_index}-{exchange_index}")),

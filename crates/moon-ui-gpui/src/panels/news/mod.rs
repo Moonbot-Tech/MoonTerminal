@@ -869,6 +869,15 @@ impl NewsView {
     /// open immediately; if several do, show a cores picker (core name · exchange) and open the
     /// chosen one; if none, no-op. Reuses `coin_search::search` for enumeration and
     /// `Backend::open_on_main` for the open, so the dedup/activation path matches every other panel.
+    ///
+    /// Args:
+    ///     coin: Display coin selected from one news item.
+    ///     pos: Window position used to anchor a multi-core picker.
+    ///     window: Owning window used to host the picker.
+    ///     cx: View context used to read and update terminal state.
+    ///
+    /// Returns:
+    ///     Nothing; the method opens a chart directly, opens a picker, or leaves state unchanged.
     fn open_coin(
         &mut self,
         coin: &str,
@@ -913,24 +922,27 @@ impl NewsView {
             }
             _ => {
                 let backend = self.backend.clone();
-                let items: Vec<MoonMenuItem> =
-                    rows.into_iter()
-                        .map(|(core, market, name)| {
-                            let label = match exchanges.get(&core) {
-                                Some(ex) if !ex.is_empty() => format!("{name} · {ex}"),
-                                _ => name,
-                            };
-                            let backend = backend.clone();
-                            MoonMenuItem::with_key(format!("news-coin-core-{core}"), label)
-                                .on_click(move |_, window, app| {
-                                    window.close_context_menu(app);
-                                    backend.update(app, |b, bcx| {
-                                        b.open_on_main((core, market.clone()), false);
-                                        bcx.notify();
-                                    });
-                                })
-                        })
-                        .collect();
+                let items: Vec<MoonMenuItem> = rows
+                    .into_iter()
+                    .map(|(core, market, name)| {
+                        let label = match exchanges.get(&core) {
+                            Some(ex) if !ex.is_empty() => {
+                                format!("{name} · {}", crate::controls::exchange_display_name(ex))
+                            }
+                            _ => name,
+                        };
+                        let backend = backend.clone();
+                        MoonMenuItem::with_key(format!("news-coin-core-{core}"), label).on_click(
+                            move |_, window, app| {
+                                window.close_context_menu(app);
+                                backend.update(app, |b, bcx| {
+                                    b.open_on_main((core, market.clone()), false);
+                                    bcx.notify();
+                                });
+                            },
+                        )
+                    })
+                    .collect();
                 window.open_moon_context_menu(cx, "news-coin-cores", pos, items, 240.0);
             }
         }
