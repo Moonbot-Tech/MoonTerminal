@@ -24,6 +24,7 @@
 //! merged into the same store but are not persisted locally.
 
 mod kind;
+pub mod levels;
 mod node;
 pub mod proj;
 pub mod sink;
@@ -36,7 +37,7 @@ pub use node::FigNode;
 pub use proj::Proj;
 pub use sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
 pub use store::{FigureKey, FigureStore};
-pub use style::{DrawStyle, LineKind};
+pub use style::{DrawStyle, LineKind, DEFAULT_FILL_ALPHA};
 pub use tools::{
     build_figure, drag_figure, pick_figure, pick_handle, FigureTool, Grab, GrabMode, ToolDef,
     ToolShape,
@@ -53,6 +54,14 @@ pub struct Figure {
     pub kind: FigureKind,
     /// Line color in RGBA format.
     pub color: [u8; 4],
+    /// Fill color in RGBA format; **zero alpha means the figure is not filled**.
+    ///
+    /// A figure saved before fills existed loads with none, and keeps looking exactly as it did.
+    /// Giving it one would be a silent one-way rewrite of a file the user cannot edit back: there
+    /// is no per-figure style editor yet, so a fill applied behind their back could not be taken
+    /// off. A redrawn figure picks up the current style's fill like any other.
+    #[serde(default)]
+    pub fill: [u8; 4],
     /// Thickness in pixels before pixels-per-point scaling.
     pub thickness: f32,
     /// Line style (Solid/Dash/Dot/DashDot/DashDotDot), stored at blob offset 13.
@@ -89,6 +98,7 @@ impl Figure {
             id: 0,
             kind,
             color: style.color,
+            fill: style.fill,
             thickness: style.thickness,
             line_kind: style.kind,
             created_ms,

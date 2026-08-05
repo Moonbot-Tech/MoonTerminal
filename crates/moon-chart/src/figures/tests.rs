@@ -5,13 +5,16 @@ use moon_core::figures::{DrawStyle, FigureKind};
 
 const EPOCH: f64 = 1_700_000_000_000.0;
 
-fn buffers() -> (
+type Buffers = (
+    Vec<ZoneInstance>,
     Vec<LineInstance>,
     Vec<SegInstance>,
     Vec<MarkerInstance>,
     Vec<FigureLabel>,
-) {
-    (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+);
+
+fn buffers() -> Buffers {
+    (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
 }
 
 fn hline_fig(id: u64) -> Figure {
@@ -21,6 +24,7 @@ fn hline_fig(id: u64) -> Figure {
             color: [10, 20, 30, 255],
             thickness: 2.0,
             kind: LineKind::Dash,
+            fill: [10, 20, 30, 64],
         },
         0,
     );
@@ -42,18 +46,10 @@ fn segment_fig(id: u64) -> Figure {
 }
 
 /// Runs the builder over one figure in the given interaction state.
-fn build_one(
-    fig: &Figure,
-    hovered: Option<u64>,
-    selected: Option<u64>,
-) -> (
-    Vec<LineInstance>,
-    Vec<SegInstance>,
-    Vec<MarkerInstance>,
-    Vec<FigureLabel>,
-) {
-    let (mut hlines, mut segs, mut markers, mut labels) = buffers();
+fn build_one(fig: &Figure, hovered: Option<u64>, selected: Option<u64>) -> Buffers {
+    let (mut zones, mut hlines, mut segs, mut markers, mut labels) = buffers();
     let mut out = FigureBuffers {
+        zones: &mut zones,
         hlines: &mut hlines,
         segs: &mut segs,
         markers: &mut markers,
@@ -66,16 +62,17 @@ fn build_one(
             epoch_ms: EPOCH,
             hovered,
             selected,
+            dragging: None,
         },
         &mut out,
     );
-    (hlines, segs, markers, labels)
+    (zones, hlines, segs, markers, labels)
 }
 
 #[test]
 fn an_idle_figure_is_thin_dimmed_and_keeps_its_line_kind() {
     let fig = hline_fig(1);
-    let (hlines, _, markers, labels) = build_one(&fig, None, None);
+    let (_, hlines, _, markers, labels) = build_one(&fig, None, None);
     assert_eq!(hlines.len(), 1);
     assert_eq!(
         hlines[0].thickness, fig.thickness,
@@ -95,9 +92,9 @@ fn arming_and_hovering_each_make_a_figure_stand_out_more_than_idle() {
     let fig = hline_fig(1);
     let mut armed = fig.clone();
     armed.alert = true;
-    let (idle, ..) = build_one(&fig, None, None);
-    let (armed_lines, ..) = build_one(&armed, None, None);
-    let (hovered, ..) = build_one(&fig, Some(1), None);
+    let (_, idle, ..) = build_one(&fig, None, None);
+    let (_, armed_lines, ..) = build_one(&armed, None, None);
+    let (_, hovered, ..) = build_one(&fig, Some(1), None);
 
     assert!(
         armed_lines[0].thickness > idle[0].thickness,
@@ -116,10 +113,14 @@ fn arming_and_hovering_each_make_a_figure_stand_out_more_than_idle() {
 #[test]
 fn a_hovered_figure_gains_its_readout() {
     let fig = hline_fig(7);
-    let (_, _, markers, labels) = build_one(&fig, Some(7), None);
+    let (_, _, _, markers, labels) = build_one(&fig, Some(7), None);
     assert!(markers.is_empty(), "hover alone shows no drag knots");
     assert_eq!(labels.len(), 1);
-    assert_eq!(labels[0].text, LabelText::Price(100.0));
+    assert_eq!(labels[0].text, LabelValue::Price(100.0));
+    assert!(
+        labels[0].permanent,
+        "a figure already on the chart carries permanent readouts, hovered or not"
+    );
     assert_eq!(labels[0].place, LabelPlace::RightEdge);
     assert_eq!(labels[0].color, 0x0A_14_1E, "label takes the figure color");
 }
@@ -129,7 +130,7 @@ fn selection_alone_carries_no_readout() {
     // Selection is sticky: a label kept alive by it would be re-formatted and re-shaped by the
     // text pass on every frame for as long as the figure stays selected.
     let fig = segment_fig(3);
-    let (_, _, markers, labels) = build_one(&fig, None, Some(3));
+    let (_, _, _, markers, labels) = build_one(&fig, None, Some(3));
     assert!(!markers.is_empty(), "a selected figure still shows handles");
     assert!(labels.is_empty());
 }
@@ -137,7 +138,7 @@ fn selection_alone_carries_no_readout() {
 #[test]
 fn a_selected_segment_gains_a_knot_per_end_at_epoch_relative_times() {
     let fig = segment_fig(3);
-    let (_, segs, markers, _) = build_one(&fig, None, Some(3));
+    let (_, _, segs, markers, _) = build_one(&fig, None, Some(3));
     assert_eq!(segs.len(), 1);
     assert_eq!(segs[0].t0_rel, 0.0);
     assert_eq!(segs[0].t1_rel, 60_000.0, "times are relative to the epoch");
@@ -149,8 +150,9 @@ fn a_selected_segment_gains_a_knot_per_end_at_epoch_relative_times() {
 
 #[test]
 fn a_draft_draws_bright_and_thick_without_knots() {
-    let (mut hlines, mut segs, mut markers, mut labels) = buffers();
+    let (mut zones, mut hlines, mut segs, mut markers, mut labels) = buffers();
     let mut out = FigureBuffers {
+        zones: &mut zones,
         hlines: &mut hlines,
         segs: &mut segs,
         markers: &mut markers,
@@ -164,6 +166,7 @@ fn a_draft_draws_bright_and_thick_without_knots() {
             epoch_ms: EPOCH,
             hovered: None,
             selected: None,
+            dragging: None,
         },
         &mut out,
     );
@@ -175,11 +178,15 @@ fn a_draft_draws_bright_and_thick_without_knots() {
     assert_eq!(hlines[0].color[3], 1.0);
     assert!(markers.is_empty());
     assert_eq!(labels.len(), 1, "a draft reads out while it is drawn");
+    assert!(
+        !labels[0].permanent,
+        "the figure being drawn keeps its numbers whatever the label switch says"
+    );
 }
 
 #[test]
 fn the_builder_appends_and_never_clears() {
-    let (mut hlines, mut segs, mut markers, mut labels) = buffers();
+    let (mut zones, mut hlines, mut segs, mut markers, mut labels) = buffers();
     hlines.push(LineInstance {
         price: 1.0,
         color: [0.0; 4],
@@ -187,6 +194,7 @@ fn the_builder_appends_and_never_clears() {
         thickness: 1.0,
     });
     let mut out = FigureBuffers {
+        zones: &mut zones,
         hlines: &mut hlines,
         segs: &mut segs,
         markers: &mut markers,
@@ -200,6 +208,7 @@ fn the_builder_appends_and_never_clears() {
             epoch_ms: EPOCH,
             hovered: None,
             selected: None,
+            dragging: None,
         },
         &mut out,
     );
@@ -223,4 +232,184 @@ fn seg_patterns_collapse_the_three_dashed_kinds() {
     assert_ne!(solid, dot);
     assert_ne!(solid, dashed[0]);
     assert_ne!(dot, dashed[0]);
+}
+
+#[test]
+fn a_fill_reaches_the_zone_layer_bounded_in_time() {
+    use moon_core::figures::tools::FibRetracement;
+
+    let f = Figure::new(
+        FigureKind::FibRetracement(FibRetracement {
+            a: FigNode::new(EPOCH, 100.0),
+            b: FigNode::new(EPOCH + 60_000.0, 80.0),
+        }),
+        DrawStyle::default(),
+        0,
+    );
+    let (zones, ..) = build_one(&f, None, None);
+    assert!(!zones.is_empty(), "the scale drew no fill");
+    for z in &zones {
+        assert_eq!(
+            (z.t0_rel, z.t1_rel),
+            (0.0, 60_000.0),
+            "fill is not bounded to the move"
+        );
+        assert!(
+            z.price0 < z.price1,
+            "band prices must be ordered for the shader"
+        );
+        // The DEFAULT strength, not a cap: the opacity is the user's and the stepper reaches 100%.
+        // What is pinned here is that a fill drawn with the default style stays a wash rather than
+        // a curtain over the plot.
+        assert!(
+            z.color[3] < 0.5,
+            "the default fill is no longer faint enough to read the chart through"
+        );
+    }
+}
+
+#[test]
+fn an_order_zone_spans_the_whole_plot_with_a_finite_sentinel() {
+    // The shader clamps the sentinel to the plot's edge, so order zones keep looking exactly as
+    // they did. It must stay FINITE: the Metal library is built with fast math, where an infinite
+    // operand is not guaranteed to survive `clamp`.
+    let z = ZoneInstance::full_width(1.0, 2.0, [0.0; 4]);
+    assert_eq!(z.t0_rel, -crate::layers::TIME_UNBOUNDED);
+    assert_eq!(z.t1_rel, crate::layers::TIME_UNBOUNDED);
+    assert!(z.t0_rel.is_finite() && z.t1_rel.is_finite());
+}
+
+#[test]
+fn a_fill_never_reacts_to_hover_or_selection() {
+    // A fill rides the base cache; re-tinting it on hover re-bakes the whole chart background.
+    use moon_core::figures::tools::FibRetracement;
+    let f = Figure::new(
+        FigureKind::FibRetracement(FibRetracement {
+            a: FigNode::new(EPOCH, 100.0),
+            b: FigNode::new(EPOCH + 60_000.0, 80.0),
+        }),
+        DrawStyle::default(),
+        7,
+    );
+    let (idle, ..) = build_one(&f, None, None);
+    let (hovered, ..) = build_one(&f, Some(7), None);
+    let (selected, ..) = build_one(&f, None, Some(7));
+    let colors = |z: &[ZoneInstance]| z.iter().map(|z| z.color).collect::<Vec<_>>();
+    assert_eq!(colors(&idle), colors(&hovered));
+    assert_eq!(colors(&idle), colors(&selected));
+}
+
+#[test]
+fn a_level_readout_is_rendered_to_text_once_not_every_frame() {
+    use moon_core::figures::tools::FibRetracement;
+    let f = Figure::new(
+        FigureKind::FibRetracement(FibRetracement {
+            a: FigNode::new(EPOCH, 63_713.5),
+            b: FigNode::new(EPOCH + 60_000.0, 61_240.25),
+        }),
+        DrawStyle::default(),
+        0,
+    );
+    let (_, _, _, _, labels) = build_one(&f, None, None);
+    assert!(!labels.is_empty());
+    for l in &labels {
+        assert!(
+            l.permanent,
+            "a scale's readouts are drawn without the pointer on it"
+        );
+        match &l.text {
+            LabelValue::Ready(s) => {
+                assert!(s.contains('('), "a level must name its price: {s}");
+                // The price axis would round this to one decimal above 1000; a level must not.
+                assert!(s.contains('.'), "level price lost its precision: {s}");
+            }
+            other => panic!("a level readout must arrive finished: {other:?}"),
+        }
+    }
+    // Two neighbouring levels must not print as the same number.
+    let texts: Vec<String> = labels
+        .iter()
+        .map(|l| match &l.text {
+            LabelValue::Ready(s) => s.to_string(),
+            _ => unreachable!(),
+        })
+        .collect();
+    let mut sorted = texts.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        texts.len(),
+        "two levels read alike: {texts:?}"
+    );
+}
+
+#[test]
+fn the_figure_being_dragged_paints_no_fill() {
+    // A fill lives in the base cache; one that moved with the cursor would re-bake the whole
+    // chart background at mouse-move rate.
+    use moon_core::figures::tools::FibRetracement;
+    let mut f = Figure::new(
+        FigureKind::FibRetracement(FibRetracement {
+            a: FigNode::new(EPOCH, 100.0),
+            b: FigNode::new(EPOCH + 60_000.0, 80.0),
+        }),
+        DrawStyle::default(),
+        0,
+    );
+    f.id = 5;
+    let (still, ..) = build_one(&f, None, None);
+    assert!(!still.is_empty());
+
+    let (mut zones, mut hlines, mut segs, mut markers, mut labels) = buffers();
+    let mut out = FigureBuffers {
+        zones: &mut zones,
+        hlines: &mut hlines,
+        segs: &mut segs,
+        markers: &mut markers,
+        labels: &mut labels,
+    };
+    build_figure_geometry(
+        std::iter::once(&f),
+        None,
+        FigureView {
+            epoch_ms: EPOCH,
+            hovered: None,
+            selected: Some(5),
+            dragging: Some(5),
+        },
+        &mut out,
+    );
+    assert!(zones.is_empty(), "a dragged figure re-baked the base cache");
+    assert!(!segs.is_empty(), "but its lines must still be drawn");
+}
+
+#[test]
+fn an_invisible_or_degenerate_fill_never_reaches_the_gpu() {
+    use moon_core::figures::tools::Rect;
+
+    // A fill turned off must cost nothing: no instance, so no upload and no change to the
+    // signature that re-bakes the chart's base cache.
+    let mut off = Figure::new(
+        FigureKind::Rect(Rect {
+            a: FigNode::new(EPOCH, 100.0),
+            b: FigNode::new(EPOCH + 60_000.0, 80.0),
+        }),
+        DrawStyle::default(),
+        0,
+    );
+    off.fill = [10, 20, 30, 0];
+    let (zones, _, segs, ..) = build_one(&off, None, None);
+    assert!(zones.is_empty(), "an invisible fill still uploaded a quad");
+    assert_eq!(segs.len(), 4, "its outline must still draw");
+
+    // A zero-height box rasterizes to nothing; it must not take an instance either.
+    let mut flat = off.clone();
+    flat.fill = [10, 20, 30, 200];
+    flat.kind = FigureKind::Rect(Rect {
+        a: FigNode::new(EPOCH, 100.0),
+        b: FigNode::new(EPOCH + 60_000.0, 100.0),
+    });
+    let (zones, ..) = build_one(&flat, None, None);
+    assert!(zones.is_empty(), "a zero-height band took a GPU instance");
 }

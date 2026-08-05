@@ -169,6 +169,8 @@ impl Backend {
                         id: *obj_uid,
                         kind: d.kind,
                         color: d.color,
+                        // The core's chart objects carry no fill; the blob has no field for one.
+                        fill: [0; 4],
                         thickness: d.thickness,
                         line_kind: d.line_kind,
                         created_ms: d.created_ms as i64,

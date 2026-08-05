@@ -22,6 +22,8 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.channel",
     glyph: "☰",
     clicks: 2,
+    level_palette: false,
+    fills: true,
     alertable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::Channel(Channel {
@@ -85,6 +87,15 @@ impl ToolShape for Channel {
     }
 
     fn build(&self, ctx: &BuildCtx, sink: &mut dyn GeomSink) {
+        // The corridor's body, spanning the whole plot like the lines that bound it. `band` orders
+        // its own prices, so a channel drawn upward fills the same as one drawn downward.
+        sink.band(
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            self.price1,
+            self.price2,
+            ctx.fill,
+        );
         sink.hline(self.price1, &ctx.stroke);
         sink.hline(self.price2, &ctx.stroke);
         if ctx.hot {

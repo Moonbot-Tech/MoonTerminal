@@ -38,10 +38,17 @@ struct ZOut {
 @vertex
 fn zone_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> ZOut {
     let z = zones[iid];
-    let y0 = cv.bounds.y + cv.bounds.w - (z.m.x - cv.view_price0) * cv.price_to_px;
-    let y1 = cv.bounds.y + cv.bounds.w - (z.m.y - cv.view_price0) * cv.price_to_px;
-    let left = cv.bounds.x;
-    let right = cv.bounds.x + (cv.pad - cv.view_time0) * cv.time_to_px;
+    // Rounded like the line shaders: at fractional Y a band's edge sits up to a pixel off the
+    // line that bounds it, and the offset walks as view_price0 drifts between bakes.
+    let y0 = round(cv.bounds.y + cv.bounds.w - (z.m.x - cv.view_price0) * cv.price_to_px);
+    let y1 = round(cv.bounds.y + cv.bounds.w - (z.m.y - cv.view_price0) * cv.price_to_px);
+    // Bounded in time by m.zw; the ±1e30 sentinel (an order zone) clamps to the plot's edges — the
+    // right one being the order book's, which blits over the band later in the same pass.
+    // `edge` can pan LEFT of the plot, which would make min > max; order the bounds first.
+    let lo = cv.bounds.x;
+    let hi = max(cv.bounds.x + (cv.pad - cv.view_time0) * cv.time_to_px, lo);
+    let left = clamp(cv.bounds.x + (z.m.z - cv.view_time0) * cv.time_to_px, lo, hi);
+    let right = clamp(cv.bounds.x + (z.m.w - cv.view_time0) * cv.time_to_px, lo, hi);
     let corner = CORNERS_PM_ALT[vid];
     let px = vec2<f32>(mix(left, right, (corner.x + 1.0) * 0.5), mix(y0, y1, (corner.y + 1.0) * 0.5));
     var out: ZOut;

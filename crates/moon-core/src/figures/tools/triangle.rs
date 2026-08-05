@@ -23,6 +23,8 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.triangle",
     glyph: "△",
     clicks: 3,
+    level_palette: false,
+    fills: false,
     alertable: true,
     make: |nodes| match nodes {
         [a, b, c, ..] => Some(FigureKind::Triangle(Triangle {
@@ -95,6 +97,9 @@ impl ToolShape for Triangle {
 
     /// No readout: a triangle marks a shape, not a level or a move, so there is no one number to
     /// put beside it. Its vertices carry the prices, and each is readable from the price axis.
+    ///
+    /// No fill either, though it encloses an area: the fill primitive paints an axis-aligned band,
+    /// and a triangle needs a polygon. It joins the filled tools when that primitive lands.
     fn build(&self, ctx: &BuildCtx, sink: &mut dyn GeomSink) {
         // Three edges: a-b, b-c, c-a.
         sink.seg(self.a, self.b, &ctx.stroke);

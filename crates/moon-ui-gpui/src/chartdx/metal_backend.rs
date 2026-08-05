@@ -610,16 +610,21 @@ impl MetalLayers {
         encoder.set_fragment_sampler_state(0, Some(pipelines.sampler.as_ref()));
         draw(encoder, &pipelines.background, 6, 1);
 
+        crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
+        set_uniform(encoder, 0, self.grid_uniform.buffer());
+        draw(encoder, &pipelines.grid, 6, 1);
+
+        // Zones come AFTER the grid: the grid pass paints the plot's background across its whole
+        // rect (`chart_native.metal` grid_fragment, alpha = `gp.bg_alpha`, which is 1 whenever the
+        // photo backdrop is off — its default), so a band drawn before it is erased. Unconditional
+        // on purpose: with a backdrop the grid draws lines only, and a fill over them is what every
+        // charting package does. Still below the candles, which is where a band belongs.
         if !self.zones.is_empty() {
             crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_uniform(encoder, 0, self.view_uniform.buffer());
             set_storage(encoder, 1, self.zone_buffer.buffer());
             draw(encoder, &pipelines.zone, 6, self.zones.len() as u64);
         }
-
-        crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
-        set_uniform(encoder, 0, self.grid_uniform.buffer());
-        draw(encoder, &pipelines.grid, 6, 1);
 
         // Candles render beneath trade crosses because combo blits over the base cache.
         if !self.candles.is_empty() {

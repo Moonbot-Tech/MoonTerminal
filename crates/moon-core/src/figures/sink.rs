@@ -26,7 +26,7 @@ pub struct Stroke {
 }
 
 /// Where a label sits relative to its anchor node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LabelPlace {
     /// Above the anchor point.
     Above,
@@ -34,6 +34,14 @@ pub enum LabelPlace {
     /// full-width line has no point to aim at, and pinning its label to the edge is where every
     /// price label on this chart already sits.
     RightEdge,
+    /// At the LEFT end of a horizontal line spanning `t0_ms..t1_ms`, clipped INTO the plot.
+    ///
+    /// A scale of eleven levels is read as a column of numbers; anchoring each to its own line
+    /// keeps that column beside the lines it names, and clipping keeps it on screen while any
+    /// part of the line is — panning the line's start away must not blank the whole scale. The
+    /// left end, because that is where the eye starts a row and where every charting package puts
+    /// a ratio scale's numbers; the whole span is carried so the renderer can clip.
+    LineSpan { t0_ms: f64, t1_ms: f64 },
 }
 
 /// What a label says. Formatting happens in the chart's text pass, with the same precision as the
@@ -44,6 +52,8 @@ pub enum LabelText {
     Price(f64),
     /// A signed percentage from `from` to `to`, e.g. `+1.25%`.
     PctDelta { from: f64, to: f64 },
+    /// A level of a ratio scale and the price it sits at, e.g. `0.618 (6109.48)`.
+    Level { ratio: f64, price: f64 },
 }
 
 /// Receiver for the primitives a figure is made of.
@@ -57,13 +67,23 @@ pub trait GeomSink {
     /// Line segment between two nodes.
     fn seg(&mut self, a: FigNode, b: FigNode, stroke: &Stroke);
 
+    /// Filled band between two prices, bounded in time by two nodes' times.
+    ///
+    /// The band is axis-aligned: it fills a price range over a time range, which is what a
+    /// Fibonacci zone, a rectangle, a range and a position box all are. A slanted or rotated fill
+    /// (a parallel channel, a pitchfork) needs a polygon primitive and is deliberately not this.
+    fn band(&mut self, t0_ms: f64, t1_ms: f64, p0: f64, p1: f64, color: [f32; 4]);
+
     /// Square drag handle at a node. Emitted by the generic build for a selected figure whose
     /// tool grabs by handle, so a tool does not push its own.
     fn handle(&mut self, at: FigNode, color: [f32; 4]);
 
-    /// Text anchored to a node. Only a figure under the cursor, or the one being drawn, emits a
-    /// label ([`BuildCtx::hot`]) — never a merely selected one, which is a sticky state — so an
-    /// idle chart pays nothing for them.
+    /// Text anchored to a node.
+    ///
+    /// Most tools label only a figure under the cursor or the one being drawn ([`BuildCtx::hot`])
+    /// — never a merely selected one, which is a sticky state — so an idle chart pays nothing for
+    /// them. A tool whose numbers ARE the reading, like a ratio scale, labels always and says so
+    /// by ignoring `hot`.
     fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, color: [f32; 4]);
 }
 
@@ -72,6 +92,13 @@ pub trait GeomSink {
 pub struct BuildCtx {
     /// Stroke resolved for this figure's current state.
     pub stroke: Stroke,
+    /// Colour a FILL must use, resolved from the figure's own colour and NOT from its interaction
+    /// state.
+    ///
+    /// Fills are drawn in the chart's base cache, which is re-baked whenever their signature
+    /// changes. A fill that brightened under the cursor would re-bake the background, the grid,
+    /// the candles and the order book of every pane on a mouse-over — for a tint nobody asked for.
+    pub fill: [f32; 4],
     /// Whether the figure is under the cursor or being drawn: it may emit a readout label.
     pub hot: bool,
     /// Whether the figure is selected: it emits its drag handles.

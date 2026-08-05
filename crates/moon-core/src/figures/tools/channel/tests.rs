@@ -45,6 +45,17 @@ fn it_draws_both_lines_and_labels_both_prices_when_hot() {
     let kind = FigureKind::Channel(c);
     let idle = build(&kind, ctx(false, false));
     assert_eq!(idle.hlines, vec![100.0, 110.0]);
+    assert_eq!(
+        idle.bands.len(),
+        1,
+        "a price corridor encloses an area and must fill it"
+    );
+    let (t0, t1, p0, p1) = idle.bands[0];
+    assert!(
+        t0.is_infinite() && t1.is_infinite(),
+        "the corridor spans the plot"
+    );
+    assert_eq!((p0.min(p1), p0.max(p1)), (100.0, 110.0));
 
     let hot = build(&kind, ctx(true, false));
     let prices: Vec<LabelText> = hot.labels.iter().map(|(_, _, t)| *t).collect();

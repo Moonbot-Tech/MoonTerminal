@@ -350,6 +350,13 @@ pub(super) fn mouse_move(
             this.sync_native_cursor();
             cx.notify();
         }
+        // Same for a figure drag whose mouse-up was lost (a window switch, a capture steal): a
+        // stranded drag would move the figure on the next press and, until then, keep its fill
+        // suppressed. Only from motion INSIDE the chart: the Windows fork reports a non-client
+        // mouse move with no pressed button, which happens during a perfectly live drag.
+        if within && this.fig_drag.is_some() {
+            this.finish_fig_drag(cx);
+        }
         crate::diag::bump(&crate::diag::CHART_MOUSE_MOVE_FAST);
         let prev_cursor = this.input.cursor;
         let prev_hovered = this.input.hovered_pane;
@@ -383,6 +390,7 @@ pub(super) fn mouse_move(
             // neighborhood still recomputes hover instead of getting stuck.
             this.order_hover_probe = None;
             this.fig_hover_probe = None;
+            this.fig_draft_probe = None;
             this.set_order_interaction(None, cx)
         };
         if order_hover_changed {

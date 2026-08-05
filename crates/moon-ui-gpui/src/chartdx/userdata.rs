@@ -143,7 +143,12 @@ impl UserDataLayer {
         }
     }
 
-    /// Draw order zones below the grid because they are background ranges.
+    /// Draw order zones and figure fills over the grid and under the candles.
+    ///
+    /// NOT before the grid, however much a background range belongs at the bottom: unless a photo
+    /// backdrop supplies the background, the grid pass paints it across the plot's whole rect and
+    /// erases whatever sits between the background layer and itself. The caller owns that
+    /// ordering; this only says which pass it is.
     pub fn render_zones(
         &mut self,
         view: &ChartViewGpu,
@@ -159,6 +164,11 @@ impl UserDataLayer {
         };
         update_dynamic(context, &pipe.view_cb, &[*view]);
         let vp = full_viewport(gpu);
+        // Deliberately NOT counted as `CHART_USER_DRAW`, unlike the Metal and wgpu zone draws: that
+        // counter carries a FireTest per-frame ceiling sized for the overlay pass alone, and a
+        // second bump per pane per base rebuild would eat its headroom. It would not have caught
+        // this layer's real failure either — the draw was issued all along; the pixels were painted
+        // over afterwards.
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
             context.RSSetViewports(Some(&[vp]));

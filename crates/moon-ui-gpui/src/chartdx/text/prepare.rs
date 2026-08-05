@@ -1,7 +1,8 @@
 //! Main `prepare_text` implementation for axes, order-line labels, and cursor readouts.
 
 use moon_chart::axes::price_decimals;
-use moon_core::figures::{LabelPlace as FigLabelPlace, LabelText as FigLabelText};
+use moon_chart::figures::LabelValue as FigLabelValue;
+use moon_core::figures::LabelPlace as FigLabelPlace;
 
 use super::*;
 
@@ -394,37 +395,78 @@ impl RenderState {
                 }
             }
 
-            // Readout of the figure under the cursor, or of the one being drawn: a price at the
-            // right edge for a full-width line, or the move a trend line describes, at the end it
-            // points to. The list is EMPTY otherwise — a merely selected figure has none — so an
-            // idle chart does no work here and figures cost nothing per frame.
+            // Figure readouts: a price at the right edge for a full-width line, the move a trend
+            // line describes at the end it points to, and a ratio scale's level beside each of its
+            // lines. For every tool but the scale the list is empty unless the pointer is on a
+            // figure or one is being drawn — a merely selected figure has none — so an idle chart
+            // with no scale on it does no work here.
+            // Room a ratio scale's readouts need, taken as the WIDEST of them: the side they sit
+            // on has to be decided for the whole column at once. Per label, the wide levels would
+            // flip while the narrow ones stayed, tearing the column the placement exists to make.
+            // Rough width only — it over-estimates, so the decision errs toward keeping the text
+            // inside the plot, and no text is shaped on this path.
+            let span_label_room = self.panes[idx]
+                .figure_labels
+                .iter()
+                .filter(|l| matches!(l.place, FigLabelPlace::LineSpan { .. }))
+                .map(|l| match &l.text {
+                    FigLabelValue::Ready(s) => rough_label_width(s, self.label_font_delta),
+                    _ => 0.0,
+                })
+                .fold(0.0f32, f32::max);
             for li in 0..self.panes[idx].figure_labels.len() {
-                // Copied out: the label is four numbers, and holding a borrow of the pane would
-                // block measuring the text through `&mut self` below.
-                let label = self.panes[idx].figure_labels[li];
+                // Cloned out: a level's text is an `Arc<str>`, so this is a refcount bump, and
+                // holding a borrow of the pane would block measuring through `&mut self` below.
+                let label = self.panes[idx].figure_labels[li].clone();
                 let y = line_y(label.price);
                 if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                     continue;
                 }
                 // Cull on POSITION before formatting: a scrolled-off figure must not pay for a
                 // string it will never draw.
+                let x_of = |t_rel: f32| plot_left + (t_rel - view.view_time0) * time_to_px;
                 let node_x = match label.place {
                     FigLabelPlace::RightEdge => label_x,
                     FigLabelPlace::Above => {
-                        let x = plot_left + (label.t_rel - view.view_time0) * time_to_px;
+                        let x = x_of(label.t_rel);
                         if x < plot_left || x > plot_right {
                             continue;
                         }
                         x
                     }
-                };
-                let text = match label.text {
-                    FigLabelText::Price(p) => format!("{p:.dec$}"),
-                    FigLabelText::PctDelta { from, to } => {
-                        if from == 0.0 {
+                    // The label rides the line's LEFT end, clipped INTO the plot: a scale must
+                    // stay readable while any part of its lines is on screen. A scale's levels are
+                    // the one readout that stays after the pointer leaves, so the per-tab "line
+                    // labels" switch hides them as it hides the order column — except on the
+                    // figure being DRAWN, whose numbers must stay on screen while it is aimed.
+                    // They sit at the box's anchor rather than under the pointer: with the left
+                    // end as the anchor, a box drawn rightward keeps its column still while the
+                    // prices in it change.
+                    FigLabelPlace::LineSpan { t0_ms, t1_ms } => {
+                        if label.permanent && !self.line_labels {
                             continue;
                         }
-                        fmt_pct(((to / from - 1.0) * 100.0) as f32)
+                        let (x0, x1) = (
+                            x_of((t0_ms - epoch_ms) as f32),
+                            x_of((t1_ms - epoch_ms) as f32),
+                        );
+                        if x1 < plot_left || x0 > plot_right {
+                            continue;
+                        }
+                        x0.max(plot_left)
+                    }
+                };
+                // A ratio level's text was rendered once at the geometry rebuild — its format is
+                // pure and deliberately unlike the axis. A price and a percentage are formatted
+                // HERE, where the axis's own precision lives.
+                let text: std::borrow::Cow<'_, str> = match &label.text {
+                    FigLabelValue::Ready(s) => std::borrow::Cow::Borrowed(&**s),
+                    FigLabelValue::Price(p) => std::borrow::Cow::Owned(format!("{p:.dec$}")),
+                    FigLabelValue::PctDelta { from, to } => {
+                        if *from == 0.0 {
+                            continue;
+                        }
+                        std::borrow::Cow::Owned(fmt_pct(((to / from - 1.0) * 100.0) as f32))
                     }
                 };
                 let (x, ax, dy, ay) = match label.place {
@@ -433,11 +475,38 @@ impl RenderState {
                     FigLabelPlace::RightEdge => (label_x, 1.0, y - LABEL_LINE_GAP, 1.0),
                     FigLabelPlace::Above => {
                         // Anchored at the node, but flipped to the LEFT of it when the text would
-                        // otherwise run past the plot into the order-book zone. Measured, not
-                        // estimated: the width follows the theme's font-size slider.
-                        let w = self.measure_label_text(ctx, &text).width.as_f32();
-                        let ax = if node_x + w > plot_right { 1.0 } else { 0.0 };
+                        // otherwise run past the plot into the order-book zone. The real width is
+                        // measured ONLY near the edge, where the answer can differ — text shaping
+                        // is the expensive call on this path and every label would pay for it.
+                        let ax = if node_x + rough_label_width(&text, self.label_font_delta)
+                            > plot_right - READOUT_PAD_X
+                            && node_x + self.measure_label_text(ctx, &text).width.as_f32()
+                                > plot_right
+                        {
+                            1.0
+                        } else {
+                            0.0
+                        };
                         (node_x, ax, y - LABEL_LINE_GAP, 1.0)
+                    }
+                    // LEFT-anchored at the line's start, sitting just above the line it names: the
+                    // column of numbers sits where a row is read FROM, which is where every
+                    // charting package puts a ratio scale's.
+                    //
+                    // Flipped to the other side of the anchor when the column would otherwise run
+                    // past the plot — a scale drawn against the right edge would push ELEVEN
+                    // readouts over the order book at once, and figure text is not clipped there.
+                    // Both room tests use the same `span_label_room`, so the whole column flips or
+                    // none of it does; a column with no room on EITHER side stays on the left,
+                    // where it overlaps the plot rather than the price axis beside it.
+                    FigLabelPlace::LineSpan { .. } => {
+                        let fits_right = node_x + READOUT_PAD_X + span_label_room <= plot_right;
+                        let fits_left = node_x - READOUT_PAD_X - span_label_room >= plot_left;
+                        if fits_right || !fits_left {
+                            (node_x + READOUT_PAD_X, 0.0, y - LABEL_LINE_GAP, 1.0)
+                        } else {
+                            (node_x - READOUT_PAD_X, 1.0, y - LABEL_LINE_GAP, 1.0)
+                        }
                     }
                 };
                 let m = draw_label_text_run(

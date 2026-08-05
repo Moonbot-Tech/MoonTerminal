@@ -105,11 +105,7 @@ pub fn build_order_geometry(
         if !closed {
             let mut push_zone = |a: f32, b: f32, color: [f32; 4]| {
                 if a.is_finite() && b.is_finite() && a > 0.0 && b > 0.0 && (a - b).abs() > 1e-9 {
-                    zones.push(ZoneInstance {
-                        price0: a.min(b),
-                        price1: a.max(b),
-                        color,
-                    });
+                    zones.push(ZoneInstance::full_width(a.min(b), a.max(b), color));
                 }
             };
             if ord.is_moon_shot {

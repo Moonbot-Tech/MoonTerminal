@@ -90,6 +90,9 @@ pub fn encode(
         FigureKind::Segment(_) => T_SEGMENT,
         FigureKind::Triangle(_) => T_TRIANGLE,
         FigureKind::Channel(_) => T_CHANNEL,
+        // The blob HAS a Fibo type (3), but its payload is not decoded yet — see the module doc.
+        // Until it is, a Fibonacci figure is local and its registry row says so.
+        FigureKind::FibRetracement(_) | FigureKind::Rect(_) => return None,
     };
     let mut out = Vec::with_capacity(96);
     out.push(ty);
@@ -127,6 +130,8 @@ pub fn encode(
             out.extend_from_slice(&price2.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes());
         }
+        // Unreachable: the type byte above already refused these kinds.
+        FigureKind::FibRetracement(_) | FigureKind::Rect(_) => return None,
     }
     Some(out)
 }

@@ -489,6 +489,22 @@ chart.fig.opacity:
   ru: "Прозр."
   en: "Opacity"
   es: "Opacidad"
+chart.fig.fill:
+  ru: "Заливка"
+  en: "Fill"
+  es: "Relleno"
+chart.fig.fill_opacity:
+  ru: "Прозр. заливки"
+  en: "Fill opacity"
+  es: "Opacidad relleno"
+chart.fig.scale_fill:
+  ru: "Цвета шкалы"
+  en: "Scale colours"
+  es: "Colores de la escala"
+chart.fig.no_fill:
+  ru: "Без заливки"
+  en: "No fill"
+  es: "Sin relleno"
 chart.fig.kind:
   ru: "Вид"
   en: "Style"
@@ -728,3 +744,11 @@ alerts.fig.channel:
   ru: "Канал"
   en: "Channel"
   es: "Canal"
+alerts.fig.fib_retracement:
+  ru: "Коррекция Фибоначчи"
+  en: "Fibonacci retracement"
+  es: "Retroceso de Fibonacci"
+alerts.fig.rect:
+  ru: "Прямоугольник"
+  en: "Rectangle"
+  es: "Rectángulo"

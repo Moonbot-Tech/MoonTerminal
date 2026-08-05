@@ -308,8 +308,9 @@ struct PaneRender {
     last_book_hi: f32,
     /// Last order revision uploaded into the userdata buffer.
     last_order_lines_rev: u64,
-    /// Last order-zone signature. Zones live in the base cache below the grid, while lines and traces
-    /// render as an overlay. Zone changes must invalidate base; line hover and drag must not.
+    /// Last order-zone signature. Zones live in the base cache, drawn over the grid and under the
+    /// candles, while lines and traces render as an overlay. Zone changes must invalidate base;
+    /// line hover and drag must not.
     last_order_zone_sig: u64,
     /// Local time when the userdata buffer was rebuilt from `order_lines_rev`.
     last_order_lines_sync_ms: f64,
@@ -336,9 +337,11 @@ struct PaneRender {
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
     /// `prepare_text` draws them and maps Y through `view` each frame.
     order_labels: Vec<OrderLabel>,
-    /// Readouts of the hovered and draft figures, rebuilt with figure userdata and drawn by
-    /// `prepare_text`. Empty unless a figure is under the cursor or one is being drawn, so an idle
-    /// chart pays nothing.
+    /// Figure readouts, rebuilt with figure userdata and drawn by `prepare_text`.
+    ///
+    /// Most tools fill this only for the figure under the cursor and the one being drawn, so an
+    /// idle chart pays nothing. A ratio scale (Fibonacci) is the exception and always names its
+    /// levels — a level whose price appears only under the cursor cannot be read at a glance.
     figure_labels: Vec<moon_chart::figures::FigureLabel>,
     /// Stable priority order for `order_labels`, rebuilt together with order labels.
     /// Cursor-only text frames must not allocate/sort it again.

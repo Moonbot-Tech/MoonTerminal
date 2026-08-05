@@ -1,7 +1,10 @@
 //! Figure-drawing tool cluster in the tab strip: a pencil button that toggles drawing mode, tools
 //! shown while that mode is enabled, an Alert button for the selected figure, and a style popup
-//! opened by right-clicking the pencil. The popup controls tool, color, thickness, opacity, and
-//! line kind: Solid, Dash, Dot, DashDot, or DashDotDot. Extracted from `strip.rs`.
+//! opened by right-clicking the pencil. The popup controls the tool, the line's colour, thickness,
+//! opacity and kind (Solid, Dash, Dot, DashDot, DashDotDot), and the FILL — its colour and its own
+//! opacity, where "no fill" is simply zero opacity. A tool that colours itself from a typed scale
+//! keeps the fill's on/off and its opacity, but not the colour: its levels bring their own.
+//! Extracted from `strip.rs`.
 
 use gpui::*;
 use moon_ui::{
@@ -9,7 +12,7 @@ use moon_ui::{
     v_flex,
 };
 
-use moon_core::figures::{DrawStyle, FigureTool, LineKind};
+use moon_core::figures::{DEFAULT_FILL_ALPHA, DrawStyle, FigureTool, LineKind};
 use rust_i18n::t;
 
 use super::ChartTabs;
@@ -132,7 +135,8 @@ impl ChartTabs {
             .children(tool_btns)
     }
 
-    /// Render the pencil style popup opened by right-click: tool, color, thickness, opacity, and kind.
+    /// Render the pencil style popup opened by right-click: tool, line colour, thickness, opacity
+    /// and kind, then the fill's colour and opacity.
     fn render_style_popup(
         &self,
         tool: FigureTool,
@@ -198,6 +202,119 @@ impl ChartTabs {
                 ),
         );
 
+        // Fill swatches, mirroring the line's: the same palette, but writing `fill` and keeping
+        // its own opacity. The leftmost cell is "no fill" — one control for the switch and the
+        // colour, because a fill at zero opacity IS no fill.
+        let mut fill_row = h_flex().items_center().gap(px(3.0)).flex_wrap();
+        let backend_off = self.backend.clone();
+        fill_row = fill_row.child(
+            div()
+                .id("fig-fill-off")
+                .w(px(16.0))
+                .h(px(16.0))
+                .rounded(design::ui_px(cx, 3.0))
+                .border_2()
+                .border_color(if style.has_fill() {
+                    rgb(p.border)
+                } else {
+                    rgb(p.accent)
+                })
+                .text_color(rgb(p.text_muted))
+                .text_center()
+                .child("∅")
+                .cursor_pointer()
+                .tooltip(|_window, cx| {
+                    cx.new(|_| moon_ui::MoonTooltipView::new(t!("chart.fig.no_fill").to_string()))
+                        .into()
+                })
+                .on_click(move |_, _w, app| {
+                    backend_off.update(app, |b, bcx| {
+                        b.fig_style.fill[3] = 0;
+                        bcx.notify();
+                    });
+                }),
+        );
+        // A tool that colours itself from a ratio scale gets no swatches — they would change
+        // nothing — but the row still has to be a two-state switch, so it gets an ON cell painted
+        // in one of the scale's own hues beside the "∅". Otherwise a fill turned off could only be
+        // brought back from the opacity stepper below, which is not where anyone looks for it.
+        if tool.def().level_palette {
+            let backend_on = self.backend.clone();
+            let [sw_r, sw_g, sw_b] = moon_core::figures::levels::scale_swatch();
+            fill_row = fill_row.child(
+                div()
+                    .id("fig-fill-scale")
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(gpui::rgb(
+                        ((sw_r as u32) << 16) | ((sw_g as u32) << 8) | sw_b as u32,
+                    ))
+                    .border_2()
+                    .border_color(if style.has_fill() {
+                        rgb(p.accent)
+                    } else {
+                        rgb(p.border)
+                    })
+                    .cursor_pointer()
+                    .tooltip(|_window, cx| {
+                        cx.new(|_| {
+                            moon_ui::MoonTooltipView::new(t!("chart.fig.scale_fill").to_string())
+                        })
+                        .into()
+                    })
+                    .on_click(move |_, _w, app| {
+                        backend_on.update(app, |b, bcx| {
+                            if b.fig_style.fill[3] == 0 {
+                                b.fig_style.fill[3] = DEFAULT_FILL_ALPHA;
+                            }
+                            bcx.notify();
+                        });
+                    }),
+            );
+        }
+        let fill_swatches: &[[u8; 4]] = if tool.def().level_palette {
+            &[]
+        } else {
+            &SWATCHES
+        };
+        for (i, sw) in fill_swatches.iter().enumerate() {
+            let backend = self.backend.clone();
+            let sw = *sw;
+            let selected = style.has_fill() && style.fill[..3] == sw[..3];
+            fill_row = fill_row.child(
+                div()
+                    .id(("fig-fill-swatch", i))
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(gpui::rgb(
+                        ((sw[0] as u32) << 16) | ((sw[1] as u32) << 8) | sw[2] as u32,
+                    ))
+                    .border_2()
+                    .border_color(if selected {
+                        rgb(p.accent)
+                    } else {
+                        rgb(p.border)
+                    })
+                    .cursor_pointer()
+                    .on_click(move |_, _w, app| {
+                        backend.update(app, |b, bcx| {
+                            // Picking a colour turns the fill on: at its current strength, or at
+                            // the default when it was off, since the ∅ cell zeroes the alpha. A
+                            // fill that stayed invisible after a deliberate click would read as
+                            // broken.
+                            let a = match b.fig_style.fill[3] {
+                                0 => DEFAULT_FILL_ALPHA,
+                                a => a,
+                            };
+                            b.fig_style.fill = [sw[0], sw[1], sw[2], a];
+                            bcx.notify();
+                        });
+                    }),
+            );
+        }
+
         // Thickness and opacity steppers plus solid or dashed kind.
         let thickness_row = h_flex()
             .items_center()
@@ -234,6 +351,37 @@ impl ChartTabs {
             )
             .child(self.step_btn("fig-op-up", "+", cx, |s| {
                 s.color[3] = opacity_step(s.color[3], true)
+            }));
+
+        let fill_pct = (style.fill[3] as f32 / 255.0 * 100.0).round() as i32;
+        let fill_op_row = h_flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(label(&t!("chart.fig.fill_opacity")))
+            .child(self.step_btn("fig-fop-dn", "−", cx, |s| {
+                // Whole percentage points, like the line's opacity: raw-alpha steps make values
+                // such as 15% unreachable, which is the defect `opacity_step` exists to avoid.
+                s.fill[3] = if s.fill[3] == 0 {
+                    0
+                } else {
+                    opacity_step(s.fill[3], false)
+                }
+            }))
+            .child(
+                div()
+                    .w(design::font_w_px(cx, 34.0))
+                    .text_center()
+                    .text_color(rgb(p.text))
+                    .child(format!("{fill_pct}%")),
+            )
+            .child(self.step_btn("fig-fop-up", "+", cx, |s| {
+                // Stepping up from "no fill" turns it on at the default strength rather than at
+                // the 5% floor, which would look like nothing happened.
+                s.fill[3] = if s.fill[3] == 0 {
+                    DEFAULT_FILL_ALPHA
+                } else {
+                    opacity_step(s.fill[3], true)
+                }
             }));
 
         // Line kind dropdown over every `LineKind::ALL` value: Solid, Dash, Dot, DashDot, DashDotDot.
@@ -291,6 +439,10 @@ impl ChartTabs {
             .child(thickness_row)
             .child(opacity_row)
             .child(kind_row)
+            // A line has no area, so the fill controls would change nothing while one is chosen.
+            .children(tool.def().fills.then_some(label(&t!("chart.fig.fill"))))
+            .children(tool.def().fills.then_some(fill_row))
+            .children(tool.def().fills.then_some(fill_op_row))
     }
 
     /// Build a stepper button that edits `fig_style` through the `edit` closure.
