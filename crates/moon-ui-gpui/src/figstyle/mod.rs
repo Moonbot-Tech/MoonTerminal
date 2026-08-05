@@ -1,30 +1,41 @@
-//! The per-figure settings surface: one panel that styles ANY figure already on a chart.
+//! The figure settings surface: ONE panel, two things it can be aimed at.
 //!
-//! Universal by construction. What every figure has — line colour, opacity, thickness, line kind,
-//! and a fill for the tools that enclose an area — is rendered here once. What differs per tool
-//! comes from the tool itself as a list of switches ([`moon_core::figures::ToolSetting`]), so a
-//! ratio scale offers its eleven levels and a rectangle offers nothing, and neither this module
-//! nor the chart panel names a tool to make that happen. A tool that grows a setting grows it in
-//! its own module; this panel draws it without being touched.
+//! Universal by construction, in both directions. Across tools: what every figure has — line
+//! colour, opacity, thickness, line kind, and a fill for the tools that enclose an area — is
+//! rendered here once, and what differs per tool comes from the tool itself as a list of switches
+//! ([`moon_core::figures::ToolSetting`]), so a ratio scale offers its levels and a rectangle offers
+//! nothing without this module or the chart panel naming either. Across targets: the same rows
+//! serve a figure already drawn ([`Target::Figure`], opened by right-click) and the style the NEXT
+//! figure will be drawn with ([`Target::ToolDefaults`], opened from the toolbar's settings button).
 //!
-//! Writes go through `Backend::edit_figure`, which persists the store and re-upserts an armed
-//! figure's blob, so a change made here reaches the file and the core as well as the screen.
+//! Only the WRITE differs between the two, and it differs in exactly two functions — [`edit_style`]
+//! and [`edit_switch`]. A figure's edit goes through `Backend::edit_figure`, which persists the
+//! store and re-upserts an armed figure's blob; a tool default goes to `Backend::fig_style_mut` and
+//! `Backend::set_tool_setting`, where the next draft picks it up. Every row of this module calls
+//! one of those two and knows nothing else about where it is writing.
 //!
-//! Distinct from the pencil popup in `chart_tabs::fig_tools`, which edits the style the NEXT
-//! figure will be drawn with. Same vocabulary, different target: that one changes nothing already
-//! on the chart, this one changes nothing about the next figure.
+//! Two asymmetries between the targets are deliberate and are NOT "the same rows drifting apart":
+//! a host may inject an arbitrary-colour wheel (`custom_color`), which needs an `Entity` only the
+//! host can own, and only the tab strip has one today; and a figure the core owns is offered no
+//! fill, because the alert blob has no field for one and the next reconcile would revert it.
+//!
+//! The CONTAINER is the host's, not this module's: over a chart the panel is placed at the clicked
+//! point and kept inside the slot that clips it, while in the tab strip it hangs under its button.
+//! [`rows`] is the shared content; the two `render*` functions are the two frames around it.
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonTooltipView, h_flex, v_flex,
+    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonTooltipView,
 };
 
-use moon_core::figures::{DEFAULT_FILL_ALPHA, DrawStyle, Figure, LineKind, ToolSetting};
+use moon_core::figures::{
+    DrawStyle, Figure, FigureTool, LineKind, ToolSetting, DEFAULT_FILL_ALPHA,
+};
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
-use crate::Backend;
 use crate::design;
+use crate::Backend;
 
 /// Which figure the panel edits, and where it was opened.
 #[derive(Clone, PartialEq)]
@@ -38,6 +49,16 @@ pub(crate) struct FigStyleTarget {
     pub at: (f32, f32),
 }
 
+/// What the panel is aimed at.
+#[derive(Clone, PartialEq)]
+pub(crate) enum Target {
+    /// One figure already on a chart. Edits reach the store, the file and the core.
+    Figure(FigStyleTarget),
+    /// The style and switches the next figure of this tool will be drawn with. Edits reach nothing
+    /// already on the chart.
+    ToolDefaults(FigureTool),
+}
+
 /// Everything the panel draws, read once per render so the store is not borrowed while building
 /// elements that will want to write to it.
 struct Snapshot {
@@ -47,28 +68,36 @@ struct Snapshot {
     switches: Vec<ToolSetting>,
 }
 
-fn snapshot(backend: &Backend, target: &FigStyleTarget) -> Option<Snapshot> {
-    let store = backend.figures.borrow();
-    let fig: &Figure = store.get(target.core, &target.market, target.id)?;
-    let def = fig.tool().def();
-    Some(Snapshot {
-        style: DrawStyle {
-            color: fig.color,
-            thickness: fig.thickness,
-            kind: fig.line_kind,
-            fill: fig.fill,
-        },
-        // A figure the core owns has no fill in its blob (`sync_remote_alerts` reads none), so one
-        // set here would be reverted by the next reconcile — a control that changes nothing.
-        fills: def.fills && !fig.from_server,
-        level_palette: def.level_palette,
-        switches: fig.kind.shape().settings(),
-    })
+fn snapshot(backend: &Backend, target: &Target) -> Option<Snapshot> {
+    match target {
+        Target::Figure(t) => {
+            let store = backend.figures.borrow();
+            let fig: &Figure = store.get(t.core, &t.market, t.id)?;
+            let def = fig.tool().def();
+            Some(Snapshot {
+                style: fig.style(),
+                // A figure the core owns has no fill in its blob (`sync_remote_alerts` reads none),
+                // so one set here would be reverted by the next reconcile — a control that changes
+                // nothing.
+                fills: def.fills && !fig.from_server,
+                level_palette: def.level_palette,
+                switches: fig.kind.shape().settings(),
+            })
+        }
+        Target::ToolDefaults(tool) => {
+            let def = tool.def();
+            Some(Snapshot {
+                style: backend.fig_style(*tool),
+                fills: def.fills,
+                level_palette: def.level_palette,
+                switches: backend.tool_settings(*tool),
+            })
+        }
+    }
 }
 
-/// The swatch palette both figure-style surfaces offer: this panel and the pencil popup, which
-/// imports it from here. One list, so a figure can always be given the colour the pencil drew it in.
-pub(crate) const SWATCHES: [[u8; 4]; 8] = [
+/// The swatch palette every settings surface offers, whichever target it is aimed at.
+const SWATCHES: [[u8; 4]; 8] = [
     [64, 196, 255, 255],  // blue (default)
     [80, 220, 120, 255],  // green
     [240, 90, 90, 255],   // red
@@ -81,10 +110,9 @@ pub(crate) const SWATCHES: [[u8; 4]; 8] = [
 
 /// Step opacity by 5%, snapping to whole percentage points.
 ///
-/// Shared with the pencil popup so the two surfaces cannot disagree about what one press does. The
-/// previous +/-24-of-255 arithmetic jumped from 100 to 91 to 81 and made values such as 15%
+/// The previous +/-24-of-255 arithmetic jumped from 100 to 91 to 81 and made values such as 15%
 /// unreachable; every multiple of five in `5..=100` is now reachable.
-pub(crate) fn opacity_step(a: u8, up: bool) -> u8 {
+fn opacity_step(a: u8, up: bool) -> u8 {
     let pct = (a as f32 / 255.0 * 100.0).round() as i32;
     let next = if up {
         pct / 5 * 5 + 5
@@ -97,44 +125,66 @@ pub(crate) fn opacity_step(a: u8, up: bool) -> u8 {
     (next as f32 / 100.0 * 255.0).round() as u8
 }
 
-/// Renders the panel for `target`, or nothing when the figure is gone — deleted from another
-/// window, or dropped when its core disconnected while the panel was open.
-pub(crate) fn render<V: 'static>(
+/// Applies a style edit to whichever target the panel is aimed at.
+///
+/// The single write path for everything but the tool's own switches, so no row can reach past it
+/// and edit one target while the panel is showing the other.
+/// Returns whether anything changed, so a click that moved nothing wakes no observer.
+fn edit_style(b: &mut Backend, target: &Target, f: impl FnOnce(&mut DrawStyle) -> bool) -> bool {
+    match target {
+        Target::Figure(t) => b.edit_figure(t.core, &t.market, t.id, |fig| {
+            let mut style = fig.style();
+            f(&mut style) && fig.set_style(style)
+        }),
+        Target::ToolDefaults(tool) => f(b.fig_style_mut(*tool)),
+    }
+}
+
+/// Applies one of the tool's own switches to whichever target the panel is aimed at.
+fn edit_switch(b: &mut Backend, target: &Target, key: &str, on: bool) -> bool {
+    match target {
+        Target::Figure(t) => b.edit_figure(t.core, &t.market, t.id, |fig| {
+            fig.kind.shape_mut().set_setting(key, on)
+        }),
+        Target::ToolDefaults(tool) => b.set_tool_setting(*tool, key, on),
+    }
+}
+
+/// The panel's content: every row, in the order a reader looks for them.
+///
+/// `None` when there is nothing to show — the figure was deleted from another window, or dropped
+/// when its core disconnected while the panel was open.
+/// `custom_color` is the host's arbitrary-colour picker, placed at the end of the swatch row. It
+/// needs an `Entity` of its own to hold the open/closed wheel, which belongs to the view that hosts
+/// the panel rather than to the panel; a host without one passes `None` and offers the swatches.
+pub(crate) fn rows<V: 'static>(
     backend: &Entity<Backend>,
-    target: &FigStyleTarget,
-    slot: (f32, f32),
-    ppp: f32,
+    target: &Target,
+    custom_color: Option<AnyElement>,
     cx: &mut Context<V>,
 ) -> Option<AnyElement> {
     let p = MoonPalette::active(cx);
     let snap = snapshot(backend.read(cx), target)?;
     let label = |s: &str| div().text_color(rgb(p.text_muted)).child(s.to_string());
 
-    // Device pixels — what the click was measured in — into the logical ones layout uses.
-    let at = (target.at.0 / ppp.max(0.1), target.at.1 / ppp.max(0.1));
-    // Kept inside the chart slot, which clips its children: a panel opened near an edge would
-    // otherwise be cut in half. The width scales with the font like the pencil popup's, and the
-    // height is not guessed — the panel is capped at the room below it and scrolls inside that,
-    // so a Fibonacci's eleven switches stay reachable in a short pane.
-    let w = f32::from(design::font_w_px(cx, 232.0));
-    // Enough of the panel has to be ON screen to use: opened near the bottom it moves UP rather
-    // than hanging into a slot that clips its children, and only then is capped to what is left.
-    const MIN_H: f32 = 180.0;
-    let left = at.0.min((slot.0 - w).max(0.0)).max(0.0);
-    let top = at.1.min((slot.1 - MIN_H).max(0.0)).max(0.0);
-    let max_h = (slot.1 - top - 8.0).max(MIN_H.min(slot.1));
-
-    let mut rows = v_flex().gap(px(6.0));
+    let mut rows = v_flex().gap(design::ui_px(cx, 6.0));
     rows = rows
         .child(label(&t!("chart.fig.color")))
-        .child(swatch_row(
-            backend,
-            target,
-            "figset-color",
-            snap.style.color,
-            true,
-            cx,
-        ))
+        .child(
+            h_flex()
+                .items_center()
+                .gap(design::ui_px(cx, 3.0))
+                .flex_wrap()
+                .child(swatch_row(
+                    backend,
+                    target,
+                    "figset-color",
+                    snap.style.color,
+                    true,
+                    cx,
+                ))
+                .children(custom_color),
+        )
         .child(stepper_row(
             backend,
             target,
@@ -143,14 +193,14 @@ pub(crate) fn render<V: 'static>(
             format!("{:.1}", snap.style.thickness),
             p,
             cx,
-            |f, up| {
+            |s, up| {
                 let next = if up {
-                    (f.thickness + 0.5).min(6.0)
+                    (s.thickness + 0.5).min(6.0)
                 } else {
-                    (f.thickness - 0.5).max(0.5)
+                    (s.thickness - 0.5).max(0.5)
                 };
-                let changed = next != f.thickness;
-                f.thickness = next;
+                let changed = next != s.thickness;
+                s.thickness = next;
                 changed
             },
         ))
@@ -165,10 +215,10 @@ pub(crate) fn render<V: 'static>(
             ),
             p,
             cx,
-            |f, up| {
-                let next = opacity_step(f.color[3], up);
-                let changed = next != f.color[3];
-                f.color[3] = next;
+            |s, up| {
+                let next = opacity_step(s.color[3], up);
+                let changed = next != s.color[3];
+                s.color[3] = next;
                 changed
             },
         ))
@@ -190,21 +240,21 @@ pub(crate) fn render<V: 'static>(
             ),
             p,
             cx,
-            |f, up| {
-                let next = match (f.fill[3], up) {
+            |s, up| {
+                let next = match (s.fill[3], up) {
                     (0, false) => 0,
                     (0, true) => DEFAULT_FILL_ALPHA,
                     (a, up) => opacity_step(a, up),
                 };
-                let changed = next != f.fill[3];
-                f.fill[3] = next;
+                let changed = next != s.fill[3];
+                s.fill[3] = next;
                 changed
             },
         ));
     }
 
-    // The tool's own switches, last: they are what makes this figure's settings different from
-    // every other figure's, and a reader looks for the shared controls first.
+    // The tool's own switches, last: they are what makes this tool's settings different from every
+    // other tool's, and a reader looks for the shared controls first.
     if !snap.switches.is_empty() {
         rows = rows.child(label(&t!("chart.fig.parts"))).child(switch_row(
             backend,
@@ -212,39 +262,99 @@ pub(crate) fn render<V: 'static>(
             &snap.switches,
         ));
     }
+    Some(rows.into_any_element())
+}
+
+/// The shared look of the panel's frame: surface, border, radius, shadow, text size.
+fn shell<V: 'static>(id: &'static str, cx: &mut Context<V>) -> Stateful<Div> {
+    let p = MoonPalette::active(cx);
+    div()
+        .id(id)
+        .absolute()
+        .p(design::ui_px(cx, 8.0))
+        .bg(rgb(p.surface))
+        .border_1()
+        .border_color(rgb(p.border))
+        .rounded(design::r_container(cx))
+        .shadow_lg()
+        .text_size(design::t_body(cx))
+        // The chart under the panel must take none of the panel's input, and BOTH frames float
+        // over it: the tab strip's cluster is painted after the chart, so its copy of the panel
+        // hangs over the plot exactly like the chart's own. Every button matters here — left-down
+        // places a figure node, starts a pan or moves an ORDER, left-up finishes a draft,
+        // right-down opens the chart's menu, and the wheel zooms the chart out from under a panel
+        // still pinned to the old coordinates.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        // The right-button RELEASE too: the chart only suppresses that release when it saw the
+        // press, and the press stops here — so without this the Main stack would leave fullscreen
+        // when someone right-clicks the panel.
+        .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+        // And movement, or the crosshair, the figure hover and the draft preview would keep
+        // tracking a cursor that is over a panel, not over the chart.
+        .on_mouse_move(|_, _, cx| cx.stop_propagation())
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+}
+
+/// Renders the panel over a chart, anchored at the point it was opened from.
+pub(crate) fn render<V: 'static>(
+    backend: &Entity<Backend>,
+    target: &FigStyleTarget,
+    slot: (f32, f32),
+    ppp: f32,
+    cx: &mut Context<V>,
+) -> Option<AnyElement> {
+    let content = rows(backend, &Target::Figure(target.clone()), None, cx)?;
+
+    // Device pixels — what the click was measured in — into the logical ones layout uses.
+    let at = (target.at.0 / ppp.max(0.1), target.at.1 / ppp.max(0.1));
+    // Kept inside the chart slot, which clips its children: a panel opened near an edge would
+    // otherwise be cut in half. The width scales with the font like the toolbar popup's, and the
+    // height is not guessed — the panel is capped at the room below it and scrolls inside that,
+    // so a Fibonacci's eleven switches stay reachable in a short pane.
+    let w = f32::from(design::font_w_px(cx, 232.0));
+    // Enough of the panel has to be ON screen to use: opened near the bottom it moves UP rather
+    // than hanging into a slot that clips its children, and only then is capped to what is left.
+    const MIN_H: f32 = 180.0;
+    let left = at.0.min((slot.0 - w).max(0.0)).max(0.0);
+    let top = at.1.min((slot.1 - MIN_H).max(0.0)).max(0.0);
+    let max_h = (slot.1 - top - 8.0).max(MIN_H.min(slot.1));
 
     Some(
-        div()
-            .id("figstyle-panel")
-            .absolute()
+        shell("figstyle-panel", cx)
             .left(px(left))
             .top(px(top))
             .w(px(w))
             .max_h(px(max_h))
             .overflow_y_scroll()
-            .p(design::ui_px(cx, 8.0))
-            .bg(rgb(p.surface))
-            .border_1()
-            .border_color(rgb(p.border))
-            .rounded(design::r_container(cx))
-            .shadow_lg()
-            .text_size(design::t_body(cx))
-            // The chart under the panel must take none of the panel's input. Every button matters
-            // here: left-down places a figure node or starts a pan, left-UP finishes a draft,
-            // right-down opens the chart's own menu, and the wheel zooms the chart out from under
-            // a panel still pinned to the old coordinates.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // The right-button RELEASE too: the chart only suppresses that release when it saw the
-            // press, and the press stops here — so without this the Main stack would leave
-            // fullscreen when someone right-clicks the panel.
-            .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-            // And movement, or the crosshair, the figure hover and the draft preview would keep
-            // tracking a cursor that is over a panel, not over the chart.
-            .on_mouse_move(|_, _, cx| cx.stop_propagation())
-            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-            .child(rows)
+            .child(content)
+            .into_any_element(),
+    )
+}
+
+/// Renders the panel under the toolbar button that opened it, for the tool's own defaults.
+///
+/// The strip cannot measure the window, so the height cap is a fixed one rather than the chart
+/// frame's "what is left below the click"; the content scrolls inside it either way, which is what
+/// keeps a ratio scale's eleven switches reachable in a short window.
+pub(crate) fn render_tool_defaults<V: 'static>(
+    backend: &Entity<Backend>,
+    tool: FigureTool,
+    custom_color: Option<AnyElement>,
+    cx: &mut Context<V>,
+) -> Option<AnyElement> {
+    let content = rows(backend, &Target::ToolDefaults(tool), custom_color, cx)?;
+    Some(
+        shell("figstyle-tool-panel", cx)
+            .top_full()
+            .left_0()
+            .mt(design::ui_px(cx, 4.0))
+            // Grow with font size; otherwise labels and values wrap at +6.
+            .w(design::font_w_px(cx, 232.0))
+            .max_h(design::ui_px(cx, 420.0))
+            .overflow_y_scroll()
+            .child(content)
             .into_any_element(),
     )
 }
@@ -252,7 +362,7 @@ pub(crate) fn render<V: 'static>(
 /// A row of colour swatches writing either the line colour or the fill colour.
 fn swatch_row<V: 'static>(
     backend: &Entity<Backend>,
-    target: &FigStyleTarget,
+    target: &Target,
     id_prefix: &'static str,
     current: [u8; 4],
     line: bool,
@@ -283,26 +393,31 @@ fn swatch_row<V: 'static>(
                 .cursor_pointer()
                 .on_click(move |_, _w, app| {
                     backend.update(app, |b, bcx| {
-                        b.edit_figure(target.core, &target.market, target.id, |f| {
+                        let changed = edit_style(b, &target, |s| {
                             // Opacity is a separate control; picking a colour must not reset it.
                             if line {
-                                let a = f.color[3];
-                                let next = [sw[0], sw[1], sw[2], a];
-                                let changed = f.color != next;
-                                f.color = next;
+                                let next = [sw[0], sw[1], sw[2], s.color[3]];
+                                let changed = s.color != next;
+                                s.color = next;
                                 changed
                             } else {
-                                let a = match f.fill[3] {
+                                // Picking a colour turns the fill on: at its current strength, or
+                                // at the default when it was off, since the ∅ cell zeroes the
+                                // alpha. A fill that stayed invisible after a deliberate click
+                                // would read as broken.
+                                let a = match s.fill[3] {
                                     0 => DEFAULT_FILL_ALPHA,
                                     a => a,
                                 };
                                 let next = [sw[0], sw[1], sw[2], a];
-                                let changed = f.fill != next;
-                                f.fill = next;
+                                let changed = s.fill != next;
+                                s.fill = next;
                                 changed
                             }
                         });
-                        bcx.notify();
+                        if changed {
+                            bcx.notify();
+                        }
                     });
                 }),
         );
@@ -314,7 +429,7 @@ fn swatch_row<V: 'static>(
 /// from a typed scale, a single cell that switches the fill back on in the scale's own hues.
 fn fill_row<V: 'static>(
     backend: &Entity<Backend>,
-    target: &FigStyleTarget,
+    target: &Target,
     snap: &Snapshot,
     p: MoonPalette,
     cx: &mut Context<V>,
@@ -344,12 +459,13 @@ fn fill_row<V: 'static>(
             })
             .on_click(move |_, _w, app| {
                 backend_off.update(app, |b, bcx| {
-                    b.edit_figure(target_off.core, &target_off.market, target_off.id, |f| {
-                        let changed = f.fill[3] != 0;
-                        f.fill[3] = 0;
+                    if edit_style(b, &target_off, |s| {
+                        let changed = s.fill[3] != 0;
+                        s.fill[3] = 0;
                         changed
-                    });
-                    bcx.notify();
+                    }) {
+                        bcx.notify();
+                    }
                 });
             }),
     );
@@ -377,14 +493,15 @@ fn fill_row<V: 'static>(
                 })
                 .on_click(move |_, _w, app| {
                     backend_on.update(app, |b, bcx| {
-                        b.edit_figure(target_on.core, &target_on.market, target_on.id, |f| {
-                            if f.fill[3] != 0 {
+                        if edit_style(b, &target_on, |s| {
+                            if s.fill[3] != 0 {
                                 return false;
                             }
-                            f.fill[3] = DEFAULT_FILL_ALPHA;
+                            s.fill[3] = DEFAULT_FILL_ALPHA;
                             true
-                        });
-                        bcx.notify();
+                        }) {
+                            bcx.notify();
+                        }
                     });
                 }),
         );
@@ -405,16 +522,15 @@ fn fill_row<V: 'static>(
 #[allow(clippy::too_many_arguments)]
 fn stepper_row<V: 'static>(
     backend: &Entity<Backend>,
-    target: &FigStyleTarget,
+    target: &Target,
     id_prefix: &'static str,
     text: &str,
     value: String,
     p: MoonPalette,
     cx: &mut Context<V>,
-    edit: fn(&mut Figure, bool) -> bool,
+    edit: fn(&mut DrawStyle, bool) -> bool,
 ) -> impl IntoElement {
-    // MoonButton rather than a bespoke div: hover and press states, sizing and theming come with
-    // it, and the pencil popup's own steppers are built the same way.
+    // MoonButton rather than a bespoke div: hover and press states, sizing and theming come with it.
     let btn = |glyph: &'static str, up: bool| {
         let backend = backend.clone();
         let target = target.clone();
@@ -427,8 +543,9 @@ fn stepper_row<V: 'static>(
         .variant(MoonButtonVariant::Ghost)
         .on_click(move |_, _w, app| {
             backend.update(app, |b, bcx| {
-                b.edit_figure(target.core, &target.market, target.id, |f| edit(f, up));
-                bcx.notify();
+                if edit_style(b, &target, |s| edit(s, up)) {
+                    bcx.notify();
+                }
             });
         })
         .render()
@@ -450,11 +567,7 @@ fn stepper_row<V: 'static>(
 
 /// The five line kinds as buttons rather than a dropdown: five is few enough to show at once, and
 /// a row of chips needs no state of its own to live in the view that hosts this panel.
-fn kind_row(
-    backend: &Entity<Backend>,
-    target: &FigStyleTarget,
-    current: LineKind,
-) -> impl IntoElement {
+fn kind_row(backend: &Entity<Backend>, target: &Target, current: LineKind) -> impl IntoElement {
     let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap();
     for (i, kind) in LineKind::ALL.into_iter().enumerate() {
         let backend = backend.clone();
@@ -474,12 +587,13 @@ fn kind_row(
             .selected(selected)
             .on_click(move |_, _w, app| {
                 backend.update(app, |b, bcx| {
-                    b.edit_figure(target.core, &target.market, target.id, |f| {
-                        let changed = f.line_kind != kind;
-                        f.line_kind = kind;
+                    if edit_style(b, &target, |s| {
+                        let changed = s.kind != kind;
+                        s.kind = kind;
                         changed
-                    });
-                    bcx.notify();
+                    }) {
+                        bcx.notify();
+                    }
                 });
             })
             .render(),
@@ -492,7 +606,7 @@ fn kind_row(
 /// row draws a ratio scale's levels without knowing what a level is.
 fn switch_row(
     backend: &Entity<Backend>,
-    target: &FigStyleTarget,
+    target: &Target,
     switches: &[ToolSetting],
 ) -> impl IntoElement {
     let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap();
@@ -515,10 +629,9 @@ fn switch_row(
             .selected(on)
             .on_click(move |_, _w, app| {
                 backend.update(app, |b, bcx| {
-                    b.edit_figure(target.core, &target.market, target.id, |f| {
-                        f.kind.shape_mut().set_setting(&key, !on)
-                    });
-                    bcx.notify();
+                    if edit_switch(b, &target, &key, !on) {
+                        bcx.notify();
+                    }
                 });
             })
             .render(),
@@ -526,3 +639,6 @@ fn switch_row(
     }
     row
 }
+
+#[cfg(test)]
+mod tests;

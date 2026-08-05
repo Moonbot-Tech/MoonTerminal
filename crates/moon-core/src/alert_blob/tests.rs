@@ -209,6 +209,30 @@ fn roundtrip_values() {
     }
 }
 
+/// The tools the core knows are registered in ITS order — line, segment, fibo, triangle, channel.
+///
+/// The toolbar shows that group in registry order and calls it "the ones Moonbot draws too", so a
+/// reorder there silently changes what a Moonbot user reads. The oracle is the type byte the core
+/// itself assigns, not a list repeated in the test.
+#[test]
+fn alertable_tools_are_registered_in_the_cores_type_order() {
+    use crate::figures::FigNode;
+    let node = FigNode::new(1.0, 2.0);
+    let types: Vec<u8> = crate::figures::tools::REGISTRY
+        .iter()
+        .filter(|d| d.alertable)
+        .map(|d| {
+            let kind = (d.make)(&vec![node; d.clicks as usize]).expect("full node set must build");
+            let blob = encode(&kind, [1, 2, 3, 4], 1.0, LineKind::Dash, 0.0, 0, 1)
+                .expect("an alertable tool encodes");
+            blob[0]
+        })
+        .collect();
+    let mut sorted = types.clone();
+    sorted.sort_unstable();
+    assert_eq!(types, sorted, "registry order no longer follows the blob types");
+}
+
 /// The registry's `alertable` flag and this codec must agree: a tool marked alertable that the
 /// blob refuses would arm locally and send nothing, and a blob for a tool the core does not know
 /// would make it draw something else.

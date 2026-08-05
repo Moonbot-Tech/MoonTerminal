@@ -194,8 +194,8 @@ pub struct HotkeysConfig {
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
 
-    /// Figure drawing layer (pencil): toggles tools. Pressing the same hotkey again
-    /// (or Esc) exits the mode. Defaults use Ctrl (Windows intercepts Alt combinations for the
+    /// Figure drawing layer: arms a tool. Pressing the same hotkey again disarms it, leaving the
+    /// drawn figures in place. Defaults use Ctrl (Windows intercepts Alt combinations for the
     /// window menu, so they never reach the handler and produce only a system sound).
     #[serde(default = "default_draw_hline")]
     pub draw_hline: String,

@@ -90,10 +90,10 @@ pub(super) fn mouse_down_left(
         None
     };
     this.sync_native_cursor();
-    // The figure layer reacts only in pencil mode and only to the secondary modifier when starting
+    // The figure layer reacts only in drawing mode and only to the secondary modifier when starting
     // or grabbing a figure. An ordinary unmodified left click makes try_fig_click return false and
-    // continues to trading/navigation, matching Moonbot even while the pencil is enabled. Outside
-    // pencil mode it also returns false immediately. secondary() is Command on macOS and Ctrl on
+    // continues to trading/navigation, matching Moonbot even while drawing mode is enabled. Outside
+    // drawing mode it also returns false immediately. secondary() is Command on macOS and Ctrl on
     // Windows/Linux; macOS Ctrl cannot be used because the OS converts Ctrl+left-click to a right
     // click before the drawing event arrives. An active draft continues without a modifier, so
     // Command/Ctrl is required only on the first click.
@@ -237,7 +237,7 @@ pub(super) fn mouse_down_right(
         None
     };
     this.sync_native_cursor();
-    // Right-clicking a drawn figure in pencil mode opens its Alert/Delete menu. This has highest
+    // Right-clicking a drawn figure in drawing mode opens its Alert/Delete menu. This has highest
     // priority; suppress_rmb_up consumes the paired release so fullscreen remains intact.
     if within && this.try_open_figure_menu(pos, e.position, window, cx) {
         this.suppress_rmb_up = true;

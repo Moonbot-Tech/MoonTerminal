@@ -125,7 +125,7 @@ pub struct ChartTabs {
     /// and restoring detached windows must happen outside `render()`.
     window_handle: AnyWindowHandle,
     focus: FocusHandle,
-    /// Whether the pencil-style popup is open for tool, color, width, opacity, and line-style selection.
+    /// Whether the selected tool's settings panel is open under its toolbar button.
     fig_style_popup_open: bool,
     /// Anchored layout-settings popup for the active tab.
     /// Chart text renders below the regular GPUI scene, so this popup needs no separate OS window.
@@ -145,7 +145,7 @@ pub struct ChartTabs {
     coin_query: String,
     /// Whether the market-match dropdown is open.
     coin_popup_open: bool,
-    /// Arbitrary drawing-color picker opened from Custom in the pencil-style popup.
+    /// Arbitrary drawing-color picker offered at the end of the settings panel's swatch row.
     fig_color_picker: Entity<MoonColorPickerState>,
 }
 
@@ -329,6 +329,13 @@ impl ChartTabs {
             this.drain_apply_all(cx);
             // Shift+middle-click in this window applies its scale to every stack and persists it.
             this.drain_x_sync(cx);
+            // The tool-settings panel belongs to an ARMED tool. Disarming — through the picker's
+            // Cursor entry or a per-tool hotkey — closes it HERE, before the signature early return
+            // below, so the flag cannot survive to re-open a panel nobody asked for the next time a
+            // tool is armed.
+            if !backend.read(cx).fig_draw_mode {
+                this.fig_style_popup_open = false;
+            }
             let sig = chart_tabs_sig(backend.read(cx), &this.group);
             if sig == this.last_sig {
                 return;
@@ -388,10 +395,13 @@ impl ChartTabs {
             },
         )
         .detach();
-        // The custom drawing-color picker writes RGB into `fig_style` while preserving alpha,
-        // which is controlled by the opacity stepper.
+        // The custom drawing-color picker writes RGB into the SELECTED TOOL's style while
+        // preserving alpha, which is controlled by the opacity stepper. It seeds from whichever
+        // tool is selected at startup; later selections repaint the wheel from the panel's swatches
+        // rather than through this state.
         let fig_color_picker = {
-            let init = backend.read(cx).fig_style.color;
+            let b = backend.read(cx);
+            let init = b.fig_style(b.fig_tool).color;
             let hsla: Hsla =
                 gpui::rgb(crate::design::rgb_to_u32([init[0], init[1], init[2]])).into();
             cx.new(|cx| MoonColorPickerState::new(window, cx).default_value(hsla))
@@ -402,8 +412,9 @@ impl ChartTabs {
                 let MoonColorPickerEvent::Change(h) = ev;
                 let c = crate::design::hsla_to_rgb8(*h);
                 this.backend.update(cx, |b, bcx| {
-                    let a = b.fig_style.color[3];
-                    b.fig_style.color = [c[0], c[1], c[2], a];
+                    let tool = b.fig_tool;
+                    let style = b.fig_style_mut(tool);
+                    style.color = [c[0], c[1], c[2], style.color[3]];
                     bcx.notify();
                 });
             },

@@ -68,6 +68,52 @@ pub struct ToolSetting {
     pub on: bool,
 }
 
+/// A tool's switches as the user left them, keyed by [`ToolSetting::key`].
+///
+/// Sparse on purpose: only what was changed away from the tool's own default is stored, so a switch
+/// added to a tool later starts at that tool's default rather than at whatever an older map happens
+/// to hold. `BTreeMap` and not `HashMap` because the order is then stable to read and to compare.
+pub type ToolSettings = std::collections::BTreeMap<String, bool>;
+
+/// A throwaway figure of `tool`, used to ask a tool about itself before any figure of it exists.
+///
+/// The nodes are arbitrary but distinct: `settings()` describes the tool, not the geometry, and a
+/// degenerate figure could make a tool refuse to build. Never drawn, never stored.
+fn proto(tool: FigureTool) -> Option<FigureKind> {
+    let def = tool.def();
+    let nodes: Vec<FigNode> = (0..def.clicks)
+        .map(|i| FigNode::new(i as f64, 1.0 + i as f64))
+        .collect();
+    (def.make)(&nodes)
+}
+
+/// The switches `tool` offers, with `stored` already applied — what a settings surface for the TOOL
+/// (rather than for one figure) draws.
+///
+/// Goes through the same [`ToolShape::settings`] a live figure answers with, so the toolbar and the
+/// right-click panel cannot end up offering different switches for the same tool.
+pub fn settings_of(tool: FigureTool, stored: &ToolSettings) -> Vec<ToolSetting> {
+    let Some(mut kind) = proto(tool) else {
+        return Vec::new();
+    };
+    apply_settings(&mut kind, stored);
+    kind.shape().settings()
+}
+
+/// Applies stored switches to a figure. Returns whether any of them changed it.
+///
+/// The one place a tool's defaults reach a new figure, so a tool cannot be given switches that are
+/// offered in the toolbar and then ignored by what is drawn. Unknown keys are dropped by
+/// [`ToolShape::set_setting`] itself.
+pub fn apply_settings(kind: &mut FigureKind, stored: &ToolSettings) -> bool {
+    let shape = kind.shape_mut();
+    let mut changed = false;
+    for (key, on) in stored {
+        changed |= shape.set_setting(key, *on);
+    }
+    changed
+}
+
 /// Geometry, handles and hit test of one drawing tool.
 ///
 /// Implementations are pure math on figure coordinates: no GPU type, no UI type, no clock.
@@ -130,7 +176,7 @@ pub struct ToolDef {
     /// Whether the core's `TChartObject` blob can carry this figure, i.e. whether it can be armed
     /// as an alert. A tool the core does not know is drawn locally only.
     pub alertable: bool,
-    /// Whether the tool READS the style's fill. The pencil popup hides the fill controls while a
+    /// Whether the tool READS the style's fill. The settings panel hides the fill controls while a
     /// tool that does not is selected, rather than offering a setting that changes nothing.
     ///
     /// Not the same as "encloses an area": a triangle does, but the fill primitive paints an
@@ -138,7 +184,7 @@ pub struct ToolDef {
     pub fills: bool,
     /// Whether the tool colours itself from a TYPED SCALE rather than from the style — a Fibonacci
     /// level is recognised by its hue, the same one every charting package uses, so the scale owns
-    /// the colours and the style contributes only the opacity. The pencil popup drops its fill
+    /// the colours and the style contributes only the opacity. The settings panel drops its fill
     /// swatches for such a tool instead of offering a colour that would change nothing.
     pub level_palette: bool,
     /// Builds the finished figure from exactly `clicks` placed nodes. Returns `None` when given
@@ -149,7 +195,7 @@ pub struct ToolDef {
     pub preview: fn(&[FigNode], FigNode) -> Option<FigureKind>,
 }
 
-/// Drawing tool selected in the pencil popup; the application-wide selection lives in the UI
+/// Drawing tool selected in the settings panel; the application-wide selection lives in the UI
 /// backend. The enum is the stable handle used by hotkeys and state; everything else about a tool
 /// is read from its [`ToolDef`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,13 +212,23 @@ pub enum FigureTool {
 /// read it; the per-tool hotkey fields in `hotkeys.toml` are the one list still written by hand,
 /// so a tool added here is reachable through the cycle but has no binding of its own until it is
 /// added there too.
+///
+/// Ordered by the core's own chart-object types — line, segment, fibo, triangle, channel — then by
+/// what only we have, so the tools a Moonbot user already knows read in the order they know them.
+/// The toolbar splits its two groups on [`ToolDef::alertable`] and not on a position here, so a
+/// tool changes group by becoming sendable rather than by being moved.
+///
+/// Fibonacci therefore sits at its TYPE position while still appearing in the second group: the
+/// core has a type 3 for it, but its payload is not encoded yet, so it is not sendable today. The
+/// slot is where it belongs the day it is. Note that this order is also the `switch_figure` hotkey
+/// CYCLE order, which is the one thing the placement changes today.
 pub const REGISTRY: &[ToolDef] = &[
     hline::DEF,
     segment::DEF,
+    fib_retracement::DEF,
     triangle::DEF,
     channel::DEF,
     rect::DEF,
-    fib_retracement::DEF,
 ];
 
 /// `def()` and `next()` index the registry; an empty one would panic in the frame loop.

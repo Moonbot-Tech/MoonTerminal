@@ -199,14 +199,14 @@ impl ToolShape for FibRetracement {
         let (t0, t1) = self.span();
         // Each level wears its OWN hue; the figure's colour keeps only what a state can change —
         // the opacity, which hover and selection raise. Hence hue from the level, alpha from the
-        // figure. The pencil's colour therefore paints the move line and nothing else on this tool,
+        // figure. The drawing colour therefore paints the move line and nothing else on this tool,
         // exactly as a coloured ratio scale works everywhere else.
         let level_line =
             |level: &Level| hue(level, ctx.stroke.color[3] * level.emphasis.line_alpha());
         // A fill never reacts to hover or selection: it lives in the base cache (see `BuildCtx`).
         // A band takes the hue of the level with the SMALLER RATIO of the two it joins — by ratio,
         // never by price: 0 sits at the END of the move, so on a rise the smaller ratio is the
-        // HIGHER price. The opacity stays the user's, chosen once in the pencil popup; the scale
+        // HIGHER price. The opacity stays the user's, chosen once in the settings panel; the scale
         // only says which colour spends it.
         let level_fill = |level: &Level| hue(level, ctx.fill[3]);
         // The move itself, dotted and dimmed: it is the scale's definition, not one of its levels,

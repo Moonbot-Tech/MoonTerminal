@@ -353,15 +353,15 @@ hotkeys.manual_strategy_hint:
   en: "Select the %{n}th strategy of the MS list and enable the mode."
   es: "Selecciona la estrategia %{n} de la lista MS y activa el modo."
 
-# --- Figure drawing layer (pencil) ---
+# --- Figure drawing layer ---
 hotkeys.group.draw:
   ru: "Рисование"
   en: "Drawing"
   es: "Dibujo"
 hotkeys.group.draw_hint:
-  ru: "Фигуры на чарте (как карандаш Moonbot). Хоткей выбирает инструмент и включает режим рисования (повтор/Esc — выкл). В режиме: Ctrl+ЛКМ рисует, простой ЛКМ выделяет/двигает фигуру. Кнопка-карандаш в полоске вкладок: ЛКМ — режим, ПКМ — стиль (цвет/толщина/Solid-Dash)."
-  en: "Chart figures (Moonbot-style pencil). Hotkey selects the tool and enters draw mode (again/Esc turns it off). In draw mode: Ctrl+LMB draws, plain LMB selects/moves a figure. Pencil button in the tab strip: LMB — mode, RMB — style (color/thickness/Solid-Dash)."
-  es: "Figuras en el gráfico: la tecla activa la herramienta (repetir o Esc la desactiva), clic izquierdo coloca nodos. Clic en una figura fuera del modo la selecciona; arrastre nodos/cuerpo para editar."
+  ru: "Фигуры на чарте (как в Moonbot). Хоткей выбирает инструмент, повтор того же — снимает его. Ctrl+ЛКМ рисует и захватывает фигуру, простой ЛКМ торгует, как обычно. В полоске вкладок: список инструментов («Курсор» — не рисовать) и ⚙ — стиль выбранного инструмента. ПКМ по нарисованной фигуре — те же настройки для неё."
+  en: "Chart figures (as in Moonbot). A hotkey arms its tool; the same key again disarms it. Ctrl+LMB draws and grabs a figure, plain LMB keeps trading as usual. In the tab strip: the tool list (\"Cursor\" draws nothing) and ⚙ for the armed tool's style. Right-clicking a drawn figure opens the same settings for it."
+  es: "Figuras en el gráfico (como en Moonbot). La tecla activa su herramienta; la misma tecla la desactiva. Ctrl+clic izq. dibuja y agarra una figura; el clic izq. normal sigue operando. En la barra de pestañas: la lista de herramientas («Cursor» no dibuja) y ⚙ para el estilo de la herramienta activa. Clic derecho sobre una figura abre esos mismos ajustes para ella."
 hotkeys.draw_hline:
   ru: "Горизонтальная линия"
   en: "Horizontal line"

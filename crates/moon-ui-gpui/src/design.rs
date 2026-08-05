@@ -226,7 +226,7 @@ pub fn picker_palette() -> Vec<Hsla> {
 
 /// Convert a `MoonColorPicker` `Hsla` value to 8-bit sRGB for byte-backed color fields.
 ///
-/// The alpha channel is intentionally omitted. Consumers include `fig_style` and strategy hex
+/// The alpha channel is intentionally omitted. Consumers include `fig_styles` and strategy hex
 /// fields, which retain or encode alpha separately.
 ///
 /// Args:

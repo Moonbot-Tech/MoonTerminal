@@ -4,7 +4,7 @@
 //! the last one are read from its registry row (`ToolDef::clicks` / `make` / `preview`), so a new
 //! tool draws here without a line of code.
 
-use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind, FigureTool};
+use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind, FigureTool, ToolSettings};
 use moon_core::session::CoreId;
 
 /// Figure currently being drawn on this panel.
@@ -16,6 +16,10 @@ pub(crate) struct FigDraft {
     /// Style snapshot captured from `Backend::fig_style` at draw start, so editing the style
     /// mid-draw does not change the figure already being placed.
     pub style: DrawStyle,
+    /// The tool's switch defaults, snapshotted with the style and for the same reason. Applied to
+    /// the preview as well as to the finished figure, so what is drawn under the cursor is what
+    /// lands — a Fibonacci with levels switched off must not preview all eleven of them.
+    switches: ToolSettings,
     /// Nodes placed so far, in click order. Always shorter than the tool's click count: the click
     /// that would complete it creates the figure instead.
     pub nodes: Vec<FigNode>,
@@ -32,6 +36,7 @@ impl FigDraft {
         market: String,
         tool: FigureTool,
         style: DrawStyle,
+        switches: ToolSettings,
         cursor: FigNode,
     ) -> Self {
         Self {
@@ -40,6 +45,7 @@ impl FigDraft {
             market,
             tool,
             style,
+            switches,
             nodes: Vec::new(),
             cursor,
         }
@@ -66,12 +72,15 @@ impl FigDraft {
         if self.nodes.len() < def.clicks as usize {
             return None;
         }
-        (def.make)(&self.nodes)
+        let mut kind = (def.make)(&self.nodes)?;
+        moon_core::figures::apply_settings(&mut kind, &self.switches);
+        Some(kind)
     }
 
     /// Transient preview figure drawn under the cursor.
     pub(super) fn preview(&self) -> Option<Figure> {
-        let kind = (self.tool.def().preview)(&self.nodes, self.cursor)?;
+        let mut kind = (self.tool.def().preview)(&self.nodes, self.cursor)?;
+        moon_core::figures::apply_settings(&mut kind, &self.switches);
         Some(Figure::new(kind, self.style, 0))
     }
 }

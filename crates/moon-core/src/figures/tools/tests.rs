@@ -119,7 +119,7 @@ fn registry_rows_match_their_tool_and_are_uniquely_keyed() {
         assert!(def.clicks >= 1, "{} places no node", def.key);
         assert!(!def.locale_key.is_empty(), "{} has no name key", def.key);
         // A typed scale colours what it FILLS. Claiming a palette without filling anything would
-        // strip the pencil popup's fill swatches for a tool that has no fill to colour — a control
+        // strip the settings panel's fill swatches for a tool that has no fill to colour — a control
         // removed for a tool that never had it.
         assert!(
             !def.level_palette || def.fills,
@@ -297,5 +297,67 @@ fn only_a_ratio_scale_labels_an_idle_chart() {
         } else {
             assert_eq!(idle, 0, "{} labels an idle chart", def.key);
         }
+    }
+}
+
+/// A switch stored for a TOOL reaches the next figure drawn with it.
+///
+/// The two halves of the tool-defaults path meet here: `settings_of` is what the toolbar renders,
+/// `apply_settings` is what the draft applies, and if they disagreed the toolbar would offer a
+/// switch that changed nothing on the chart. Fibonacci is the tool that has switches; the assertion
+/// is on its own `settings()`, not on the bitmask behind them.
+#[test]
+fn a_switch_stored_for_a_tool_reaches_the_next_figure() {
+    let tool = FigureTool::FibRetracement;
+    let key = settings_of(tool, &ToolSettings::new())
+        .first()
+        .expect("a ratio scale offers switches")
+        .key
+        .clone();
+
+    let mut stored = ToolSettings::new();
+    stored.insert(key.clone(), false);
+    assert!(
+        settings_of(tool, &stored).iter().any(|s| s.key == key && !s.on),
+        "the toolbar must show the switch as off"
+    );
+
+    let mut kind = (tool.def().make)(&nodes(tool.def().clicks as usize)).expect("builds");
+    assert!(apply_settings(&mut kind, &stored), "the figure must take it");
+    assert!(
+        kind.shape().settings().iter().any(|s| s.key == key && !s.on),
+        "the drawn figure must have the switch off"
+    );
+}
+
+/// An unknown key in a stored map is dropped rather than panicking or being invented as a switch.
+///
+/// Stored maps outlive the tools they describe: a tool can lose a switch while a session still
+/// holds one for it.
+#[test]
+fn an_unknown_stored_switch_is_ignored() {
+    let mut stored = ToolSettings::new();
+    stored.insert("level.99999".to_string(), false);
+    stored.insert("nonsense".to_string(), true);
+    for def in REGISTRY {
+        let before = settings_of(def.tool, &ToolSettings::new());
+        assert_eq!(settings_of(def.tool, &stored), before, "{}", def.key);
+    }
+}
+
+/// Every tool can be asked about itself before one has been drawn.
+///
+/// `settings_of` builds a throwaway figure to do that; a tool whose `make` refused the throwaway
+/// would silently offer no switches in the toolbar while offering them on a real figure.
+#[test]
+fn every_tool_answers_the_toolbar_the_same_as_a_drawn_figure() {
+    for def in REGISTRY {
+        let drawn = (def.make)(&nodes(def.clicks as usize)).expect("full node set must build");
+        assert_eq!(
+            settings_of(def.tool, &ToolSettings::new()),
+            drawn.shape().settings(),
+            "{} describes itself differently before it is drawn",
+            def.key
+        );
     }
 }

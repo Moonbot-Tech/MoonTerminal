@@ -477,10 +477,18 @@ chart.candles.colors_hint:
   ru: "Цвета свечей — в Настройках → «Интерфейс» (общие для всех окон)"
   en: "Candle colors — Settings → Interface (shared by all windows)"
   es: "Colores de velas — Ajustes → Interfaz (comunes a todas las ventanas)"
-chart.fig.pencil_tip:
-  ru: "Рисование фигур: ЛКМ — вкл/выкл режим, ПКМ — стиль. Держи Ctrl для рисования/захвата фигур (Ctrl+ЛКМ); обычный ЛКМ при этом торгует, как обычно."
-  en: "Draw figures: LMB — toggle mode, RMB — style. Hold Ctrl to draw/grab figures (Ctrl+LMB); plain LMB keeps trading as usual."
-  es: "Dibujo de figuras: clic izq. — activar/desactivar modo, clic der. — estilo. Mantén Ctrl para dibujar/agarrar figuras (Ctrl+clic izq.); el clic izq. normal sigue operando."
+chart.fig.draw_tip:
+  ru: "Инструмент рисования. Держи Ctrl для рисования и захвата фигур (Ctrl+ЛКМ); обычный ЛКМ при этом торгует, как обычно. «Курсор» — фигуры остаются на месте, новые не рисуются."
+  en: "Drawing tool. Hold Ctrl to draw and grab figures (Ctrl+LMB); plain LMB keeps trading as usual. \"Cursor\" leaves the drawn figures in place and stops creating new ones."
+  es: "Herramienta de dibujo. Mantén Ctrl para dibujar y agarrar figuras (Ctrl+clic izq.); el clic izq. normal sigue operando. «Cursor» deja las figuras dibujadas y deja de crear nuevas."
+chart.fig.cursor:
+  ru: "Курсор"
+  en: "Cursor"
+  es: "Cursor"
+chart.fig.tool_settings:
+  ru: "Настройки инструмента: цвет, толщина, тип линии, заливка и части фигуры. Те же, что по ПКМ на нарисованной фигуре."
+  en: "Tool settings: colour, thickness, line kind, fill and the figure's parts. The same panel a right-click on a drawn figure opens."
+  es: "Ajustes de la herramienta: color, grosor, tipo de línea, relleno y partes de la figura. El mismo panel que abre el clic derecho sobre una figura dibujada."
 chart.fig.thickness:
   ru: "Толщина"
   en: "Width"
