@@ -110,7 +110,7 @@ const SIZE_UNIT: &str = "USDT eq.";
 /// Yield order, most expendable first. Every rung sheds a LABEL; no control ever leaves the row.
 /// 1. **the `Sell` caption** — its strip stands against the `TP` button, which names the same
 ///    concept one control away;
-/// 2. **the Settings button's label** — it is the only label among four otherwise identical window
+/// 2. **the Settings button's label** — it is the only label among five otherwise identical window
 ///    launchers, so dropping it makes that cluster more uniform, not less legible, and the gear
 ///    glyph keeps its tooltip;
 /// 3. **the `Size, ` noun** — six numeric presets at the head of a trading toolbar are recognisable
@@ -122,6 +122,15 @@ const SIZE_UNIT: &str = "USDT eq.";
 /// than from constant thresholds: a fixed threshold cannot model a width that varies. The budget
 /// includes the TRAILING CLUSTER — comparing against the window width alone would keep labels
 /// visible while the window buttons are already pushed off the right edge.
+///
+/// Args:
+///     cx: Application context supplying theme-aware scale and text measurements.
+///     chrome_width: Available toolbar width in logical pixels.
+///     size: Pre-fitted manual-size cells.
+///     sell: Pre-fitted sell-percentage cells.
+///
+/// Returns:
+///     Optional-label visibility and Settings-button width for the current row.
 fn row_fit(
     cx: &App,
     chrome_width: f32,
@@ -141,17 +150,18 @@ fn row_fit(
         + design::ui_value(cx, SL_TOGGLE_TRACK_W)
         + fw(SL_TOGGLE_LABEL_W)
         + fw(LIVE_W)
-        + ICON_BTN_W * 4.0;
-    // Five 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
+        + ICON_BTN_W * 5.0;
+    // Six 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
     // against the row itself by `toolbar_row_budget_counts_every_rule_it_draws` in
     // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
     // until the trailing cluster clips off the edge of some narrow window.
-    let rules = 5.0;
-    // Row gaps: 11 between the 12 root children (both sides of the zero-width spacer included)
-    // plus 5 inside sections — one in Risk, one in Exit, three between the four window buttons.
+    let rules = 6.0;
+    // Row gaps: 13 between the 14 root children (both sides of the zero-width spacer included)
+    // plus 5 inside sections — one in Risk, one in Exit, one between the first two launchers, and
+    // two between the final three launchers.
     // Count them ALL: an undercount moves every threshold, so a label stays visible after the row's
     // fixed part has already outgrown the window — and the spacer cannot shrink past zero.
-    let gaps = gap * 16.0;
+    let gaps = gap * 18.0;
     let base = design::ui_value(cx, design::HEADER_PAD_X) * 2.0 + controls + rules + gaps;
     // A caption costs its own width plus the gap separating it from its strip.
     let caption_w = |text: &str| design::ui_text_width(cx, text, CAPTION_SIZE, 400.0, true) + gap;
@@ -239,6 +249,21 @@ pub(crate) fn effective_manual_strategy_core(
 /// `chrome_width` is the window width. The row's controls are all `flex_none`, so nothing shrinks:
 /// its optional labels collapse against that width by an explicit priority ([`row_fit`]), because
 /// the row would otherwise push the trailing window buttons off the edge.
+///
+/// Args:
+///     backend: Shared terminal state and singleton-window registry.
+///     group: Main-window group whose trading controls are rendered.
+///     size_edit: Active manual-size editor text and cell index, when any.
+///     size_input: Shared input state for the active size editor.
+///     sell_edit: Active sell-percentage editor text and cell index, when any.
+///     sell_input: Shared input state for the active sell editor.
+///     shell: Owning shell entity receiving toolbar actions.
+///     metric_popup: Active trade metric and its popup contents, when open.
+///     chrome_width: Available toolbar width in logical pixels.
+///     cx: Application context used for state reads and rendering.
+///
+/// Returns:
+///     The complete responsive trading toolbar row.
 #[allow(clippy::too_many_arguments)]
 pub fn toolbar(
     backend: &Entity<Backend>,
@@ -510,9 +535,8 @@ pub fn toolbar(
                 .render(),
         ),
     );
-    // Trailing edge: the buttons that open singleton windows. All four do the same kind of thing,
-    // so they share one section behind one rule — fenced off from Live and from the trading
-    // parameters, which are not launchers at all.
+    // Trailing edge: operational launchers stay together, while monitoring and configuration
+    // windows form a second section so the two categories are visually scannable.
     row.child(div().flex_1())
         .child(design::chrome_divider(cx, p))
         .child(
@@ -533,6 +557,19 @@ pub fn toolbar(
                     None,
                     backend.clone(),
                     crate::screener::open,
+                    p,
+                )),
+        )
+        .child(design::chrome_divider(cx, p))
+        .child(
+            section()
+                .child(open_window_button(
+                    "toolbar-profit-monitor",
+                    t!("toolbar.profit_monitor").to_string(),
+                    "icons/chart-candlestick.svg",
+                    None,
+                    backend.clone(),
+                    crate::analytics::profit_monitor::open,
                     p,
                 ))
                 .child(open_window_button(
@@ -559,11 +596,22 @@ pub fn toolbar(
         )
 }
 
-/// A toolbar button that opens a singleton window (Strategies/Screener/Settings), styled like Live
+/// A toolbar button that opens a singleton window, styled like Live
 /// (Soft/ToolbarCompact). `labeled_width = None` renders the icon alone with its name as a tooltip;
-/// `Some(w)` renders icon + label inside the fixed width `w`. `open` is `strategies::open` /
-/// `screener::open` / `settings::open` — one shared signature, each deduplicating and focusing
-/// its own window.
+/// `Some(w)` renders icon + label inside the fixed width `w`. Every destination uses one shared
+/// open signature and deduplicates or focuses its own singleton window.
+///
+/// Args:
+///     id: Stable button element identity.
+///     label: Localized visible label or icon tooltip.
+///     icon: MoonUI asset path for the launcher glyph.
+///     labeled_width: Fixed labeled width, or `None` for an icon-only button.
+///     backend: Shared terminal state passed to the destination.
+///     open: Singleton-window entry point invoked by the click.
+///     p: Active palette used for icon and text colors.
+///
+/// Returns:
+///     One rendered compact launcher button.
 #[allow(clippy::too_many_arguments)]
 fn open_window_button(
     id: &'static str,

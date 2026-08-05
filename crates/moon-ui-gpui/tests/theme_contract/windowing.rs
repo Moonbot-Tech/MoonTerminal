@@ -75,6 +75,25 @@ fn terminal_secondary_tool_windows_use_tool_window_options() {
     );
 }
 
+/// `windowing.rs:profit_monitor_window_options` must remain independent and taskbar-visible;
+/// changing either assignment makes this assertion red and causes the desktop monitor to minimize
+/// with a Main window or disappear without a restore route.
+#[test]
+fn profit_monitor_is_an_independent_taskbar_window() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let windowing = fs::read_to_string(root.join("window").join("windowing.rs")).unwrap();
+    let monitor =
+        fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
+    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let factory = braced_body(&windowing, "fn profit_monitor_window_options(");
+
+    assert!(factory.contains("options.relationship = WindowRelationship::default()"));
+    assert!(factory.contains("WindowTaskbarVisibility::Visible"));
+    assert!(monitor.contains("profit_monitor_window_options("));
+    assert!(monitor.contains("MoonWindowFrame::tool("));
+    assert!(!startup.contains("group_windows.insert(\"profit_monitor\""));
+}
+
 /// Decorative animation goes through `crate::pulse`, never `with_animation`.
 ///
 /// GPUI drives `with_animation` from `request_animation_frame`, which notifies the OWNER VIEW and

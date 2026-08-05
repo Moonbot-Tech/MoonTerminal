@@ -462,6 +462,53 @@ fn report_window_geometry_survives_restart_without_endangering_layout() {
     }
 }
 
+/// `layout.rs:WindowLayout::profit_monitor_*` must survive restart and ignore malformed hand edits;
+/// removing any lenient deserializer makes this assertion red and lets one widget preference erase
+/// every neighbouring saved window position.
+#[test]
+fn profit_monitor_preferences_round_trip_without_endangering_layout() {
+    let saved = WindowLayout {
+        profit_monitor_window: Some(GeomRect {
+            x: 240,
+            y: 160,
+            w: 720,
+            h: 520,
+        }),
+        profit_monitor_period: Some("m-week".to_string()),
+        profit_monitor_group: Some("core".to_string()),
+        profit_monitor_sort: Some(("trades".to_string(), true)),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load");
+    let geometry = decoded
+        .profit_monitor_window
+        .expect("monitor geometry must survive restart");
+    assert_eq!(
+        (geometry.x, geometry.y, geometry.w, geometry.h),
+        (240, 160, 720, 520)
+    );
+    assert_eq!(decoded.profit_monitor_period.as_deref(), Some("m-week"));
+    assert_eq!(decoded.profit_monitor_group.as_deref(), Some("core"));
+    assert_eq!(
+        decoded.profit_monitor_sort,
+        Some(("trades".to_string(), true))
+    );
+
+    for written in ["true", "17", "[240, 160, 720]", "{ x = 240 }"] {
+        let doc = format!(
+            "analytics_period = \"p-cur-month\"\nprofit_monitor_window = {written}\nprofit_monitor_period = {written}\nprofit_monitor_group = {written}\nprofit_monitor_sort = {written}\n"
+        );
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+        assert!(decoded.profit_monitor_window.is_none());
+        assert!(decoded.profit_monitor_period.is_none());
+        assert!(decoded.profit_monitor_group.is_none());
+        assert!(decoded.profit_monitor_sort.is_none());
+    }
+}
+
 /// The header clock's compatibility offset must survive as the seed city migration reads.
 ///
 /// Breakage this pins: deleting `layout.rs:header_clock_offset_min` as dead code once

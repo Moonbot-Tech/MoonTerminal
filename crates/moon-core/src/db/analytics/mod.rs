@@ -24,6 +24,7 @@ use super::{
 
 mod calendar;
 mod groups;
+mod profit_monitor;
 mod query;
 mod summary_stream;
 
@@ -31,6 +32,7 @@ pub use calendar::{
     calendar_cells, calendar_hours, hourly_profiles, CalendarPeriod, DayCell, HourStat,
 };
 pub use groups::{coin_groups, strategies_for_coins, GroupStat, KindCore, KindStat, TopTrade};
+pub use profit_monitor::{profit_monitor, ProfitMonitorCore, ProfitMonitorSummary};
 pub use query::Query;
 
 use groups::groups;

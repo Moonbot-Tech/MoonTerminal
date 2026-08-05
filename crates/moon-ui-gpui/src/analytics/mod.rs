@@ -15,6 +15,7 @@ mod bg;
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
 mod period;
+pub(crate) mod profit_monitor;
 /// Deleting a strategy and its report trades, in a core-confirmed order.
 mod purge;
 /// Generation-aware load shedding for automatic report-driven refreshes.

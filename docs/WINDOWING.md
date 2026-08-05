@@ -23,6 +23,8 @@ decorations, owner, taskbar policy или min size, и снова получит
 - `detached_chart_window_options` - открепленные chart windows; намеренно
   independent от main/group окна.
 - `debug_window_options` - debug/perf/chart diagnostic windows.
+- `profit_monitor_window_options` - independent desktop Profit Monitor with an explicit taskbar
+  entry; minimizing a Main/group window never minimizes it.
 
 ## MoonUI native contract
 
@@ -180,6 +182,11 @@ independent, а отдельная taskbar-кнопка подавляется �
 экран визуально использует `MoonWindowFrame::tool(...)`, но открывается через
 самостоятельную `WindowOptions`-ветку, это архитектурная ошибка: окно выглядит
 как часть терминала, но ОС ведет его как отдельное приложение.
+
+Profit Monitor is the deliberate exception to the usual visual-tool ownership rule. It keeps
+`MoonWindowFrame::tool(...)` chrome because it is visually part of MoonTerminal, but its product
+role is a separately placeable desktop widget. Its centralized factory therefore carries no owner
+and forces a visible taskbar entry. Do not copy that OS policy to ordinary tool windows.
 
 ## Chart windows и UnderScene
 

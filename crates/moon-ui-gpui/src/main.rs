@@ -300,6 +300,8 @@ struct Backend {
     screener_window: Option<WindowHandle<Root>>,
     /// Singleton Analytics window containing report analyzers, retained for deduplication and focus.
     analytics_window: Option<WindowHandle<Root>>,
+    /// Independent singleton Profit Monitor desktop window.
+    profit_monitor_window: Option<WindowHandle<Root>>,
     /// Singleton Report window opened from an Analytics strategy row.
     report_window: Option<WindowHandle<Root>>,
     /// Live scoped Report panel retained weakly so repeated double-clicks can replace its filter.
