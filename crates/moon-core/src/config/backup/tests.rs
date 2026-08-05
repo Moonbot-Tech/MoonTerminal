@@ -1,254 +1,151 @@
-//! Snapshot behavior on paths where an error can cost user data.
+//! Daily settings-backup regression tests.
+
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
 
-/// Create a unique temporary root for one test without a dev-dependency on `tempfile`.
+/// Test-only sequence for isolated temporary roots.
+static TEST_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// Create a unique temporary root without an extra test dependency.
 fn temp_root(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "moonterminal-backup-{}-{tag}-{}",
+    let root = std::env::temp_dir().join(format!(
+        "moonterminal-settings-backup-{}-{tag}-{}",
         std::process::id(),
-        STAGING_SEQ.fetch_add(1, Ordering::Relaxed)
+        TEST_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp root");
-    dir
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    root
 }
 
-/// Write a file after creating its parent directory.
+/// Write one source after creating its parent.
 fn write(path: &Path, body: &str) {
-    if let Some(p) = path.parent() {
-        std::fs::create_dir_all(p).expect("parent");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
     }
-    std::fs::write(path, body).expect("write");
+    std::fs::write(path, body).unwrap();
 }
 
-/// Return the sorted snapshot names in a directory.
-fn snapshot_names(backups: &Path) -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir(backups)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| is_snapshot_name(n))
-                .collect()
-        })
-        .unwrap_or_default();
-    v.sort();
-    v
+/// Create one completed settings snapshot.
+fn create_snapshot(backups: &Path, name: &str) {
+    let directory = backups.join(name);
+    std::fs::create_dir_all(&directory).unwrap();
+    write(&directory.join("settings.toml"), name);
+    std::fs::write(directory.join(COMPLETION_NAME), COMPLETION_CONTENT).unwrap();
 }
 
-/// Every snapshot must reread the file rather than reuse previously read contents.
-///
-/// The plausible mutation this catches is caching source contents, for example by moving the
-/// read outside the loop or storing it statically to avoid reading the disk twice. The second
-/// snapshot would then preserve the FIRST snapshot's bytes, leaving every backup one save
-/// behind and restoring a different state from the one the user expects.
+/// Naming the slot from process launch instead of UTC noon would create repeated catch-up copies.
 #[test]
-fn each_snapshot_rereads_the_file_from_disk() {
-    let root = temp_root("bytes");
-    let src = root.join("settings.toml");
+fn a_late_start_fills_the_canonical_noon_slot_once() {
+    let root = temp_root("catch-up");
+    let settings = root.join("settings.toml");
+    let servers = root.join("servers.enc");
+    let backups = root.join("backups");
+    write(&settings, "settings-v1");
+    write(&servers, "servers-v1");
+    let noon = 20_000 * DAY_MS + 12 * 60 * 60 * 1_000;
+
+    let first = backup_due_into(&[&servers, &settings], &backups, noon + 3_600_000).unwrap();
+    let second = backup_due_into(&[&servers, &settings], &backups, noon + 3_601_000).unwrap();
+
+    let destination = backups.join(utc_stamp_compact(noon));
+    assert_eq!(first, DueOutcome::Created(destination.clone()));
+    assert_eq!(second, DueOutcome::Current(destination.clone()));
+    assert_eq!(
+        std::fs::read_to_string(destination.join("settings.toml")).unwrap(),
+        "settings-v1"
+    );
+    assert_eq!(
+        std::fs::read_to_string(destination.join("servers.enc")).unwrap(),
+        "servers-v1"
+    );
+    assert!(destination.join(COMPLETION_NAME).is_file());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Treating absent sources as a completed day would permanently miss a first-launch backup.
+#[test]
+fn absent_sources_leave_the_daily_slot_pending() {
+    let root = temp_root("missing");
     let backups = root.join("backups");
 
-    write(&src, "v1");
-    let first = snapshot_into(&[&src], &backups, 1_753_100_000_000, 30)
-        .expect("first snapshot")
-        .expect("a file existed");
-    write(&src, "v2");
-    let second = snapshot_into(&[&src], &backups, 1_753_100_001_000, 30)
-        .expect("second snapshot")
-        .expect("a file existed");
+    let outcome = backup_due_into(&[&root.join("settings.toml")], &backups, 0).unwrap();
 
-    assert_eq!(
-        std::fs::read_to_string(first.join("settings.toml")).unwrap(),
-        "v1"
-    );
-    assert_eq!(
-        std::fs::read_to_string(second.join("settings.toml")).unwrap(),
-        "v2"
-    );
-    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(outcome, DueOutcome::SourceMissing);
+    assert!(!backups.exists());
+    let _ = std::fs::remove_dir_all(root);
 }
 
-/// Retention prunes by NAME rather than modification time.
-///
-/// Directories are created in REVERSE chronological order, making mtime order the opposite of
-/// name order. An implementation that prunes by mtime would remove the three NEWEST snapshots.
-/// This construction also catches any reliance on the enumeration order of `read_dir`.
+/// Publishing when only one pair member exists would make a transient sync gap permanent for the
+/// whole UTC period.
 #[test]
-fn retention_keeps_the_newest_by_name_not_by_mtime() {
+fn one_missing_pair_member_leaves_the_daily_slot_pending() {
+    let root = temp_root("partial-missing");
+    let settings = root.join("settings.toml");
+    let servers = root.join("servers.enc");
+    let backups = root.join("backups");
+    write(&settings, "settings-v1");
+
+    let outcome = backup_due_into(&[&servers, &settings], &backups, 0).unwrap();
+
+    assert_eq!(outcome, DueOutcome::SourceMissing);
+    assert!(!backups.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Silently skipping a non-file source would publish a torn config pair without its API data.
+#[test]
+fn a_non_file_source_rejects_the_entire_snapshot() {
+    let root = temp_root("invalid-source");
+    let settings = root.join("settings.toml");
+    let servers = root.join("servers.enc");
+    let backups = root.join("backups");
+    write(&settings, "settings-v1");
+    std::fs::create_dir_all(&servers).unwrap();
+
+    let result = backup_due_into(&[&servers, &settings], &backups, 0);
+
+    assert!(result.is_err());
+    assert!(!backups.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Using an eight-day cutoff or count-based pruning would violate seven-period retention.
+#[test]
+fn retention_keeps_every_snapshot_in_the_latest_seven_periods() {
     let root = temp_root("retention");
     let backups = root.join("backups");
-    std::fs::create_dir_all(&backups).unwrap();
-
-    // Real consecutive dates spanning July and early August ensure that names are valid
-    // timestamps rather than merely increasing strings.
-    let names: Vec<String> = (0..33)
-        .map(|i| {
-            let (mo, d) = if i < 31 { (7, i + 1) } else { (8, i - 30) };
-            format!("2026{mo:02}{d:02}-120000")
-        })
-        .collect();
-    for name in names.iter().rev() {
-        let dir = backups.join(name);
-        std::fs::create_dir_all(&dir).unwrap();
-        write(&dir.join("settings.toml"), name);
+    let current = 20_000 * DAY_MS + 12 * 60 * 60 * 1_000;
+    for age in 0..=7 {
+        create_snapshot(&backups, &utc_stamp_compact(current - age * DAY_MS));
     }
+    let expected = ["settings.toml", COMPLETION_NAME];
 
-    let removed = prune(&backups, 30, &["settings.toml"]);
-    assert_eq!(removed, 3, "33 snapshots minus keep=30");
+    let removed = prune(&backups, current, &["settings.toml"], &expected);
 
-    let survivors = snapshot_names(&backups);
-    assert_eq!(
-        survivors,
-        names[3..].to_vec(),
-        "the three OLDEST must be gone"
-    );
-    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(removed, 1);
+    assert!(!backups
+        .join(utc_stamp_compact(current - 7 * DAY_MS))
+        .exists());
+    assert!(backups
+        .join(utc_stamp_compact(current - 6 * DAY_MS))
+        .exists());
+    let _ = std::fs::remove_dir_all(root);
 }
 
-/// Pruning never touches anything the application did not create.
-///
-/// The plausible mutation is weakening `is_snapshot_name` to "starts with a digit" to support
-/// an older naming scheme, which would delete the user's `2026-07-21` directory.
+/// Deleting a timestamp-looking directory before validating ownership could destroy user files.
 #[test]
-fn pruning_never_touches_what_the_app_did_not_write() {
+fn retention_preserves_a_snapshot_with_foreign_content() {
     let root = temp_root("foreign");
     let backups = root.join("backups");
-    std::fs::create_dir_all(&backups).unwrap();
+    let current = 20_000 * DAY_MS + 12 * 60 * 60 * 1_000;
+    let old = utc_stamp_compact(current - 7 * DAY_MS);
+    create_snapshot(&backups, &old);
+    write(&backups.join(&old).join("notes.txt"), "keep");
+    let expected = ["settings.toml", COMPLETION_NAME];
 
-    write(&backups.join("notes.txt"), "мои заметки");
-    std::fs::create_dir_all(backups.join("2026-07-21")).unwrap();
-    std::fs::create_dir_all(backups.join("backup")).unwrap();
-    std::fs::create_dir_all(backups.join("20260721-1345")).unwrap();
-    let ours = backups.join("20260721-134501");
-    std::fs::create_dir_all(&ours).unwrap();
-    write(&ours.join("settings.toml"), "x");
-
-    prune(&backups, 0, &["settings.toml"]);
-
-    assert!(!ours.exists(), "our own snapshot must be prunable");
-    assert!(backups.join("notes.txt").exists());
-    assert!(backups.join("2026-07-21").exists());
-    assert!(backups.join("backup").exists());
-    assert!(backups.join("20260721-1345").exists());
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// A snapshot containing an unexpected file is not removed wholesale.
-///
-/// Non-recursive `remove_dir` refuses to remove a non-empty directory, so a file placed there
-/// by the user or a cloud client preserves both itself and the snapshot. The plausible mutation
-/// is replacing it with `remove_dir_all`.
-#[test]
-fn a_snapshot_holding_an_unexpected_file_survives_pruning() {
-    let root = temp_root("unexpected");
-    let backups = root.join("backups");
-    let dir = backups.join("20260721-134501");
-    std::fs::create_dir_all(&dir).unwrap();
-    write(&dir.join("settings.toml"), "x");
-    write(&dir.join("заметка.txt"), "не трогать");
-
-    let removed = prune(&backups, 0, &["settings.toml"]);
-
-    assert_eq!(removed, 0, "the directory was not empty, so it must remain");
-    assert!(
-        dir.join("заметка.txt").exists(),
-        "the foreign file must survive"
-    );
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// Two snapshots taken in the same second do not overwrite each other.
-///
-/// The plausible mutation is removing the collision suffix: `create_dir_all` accepts an
-/// existing directory and `fs::copy` overwrites files, so the second save would destroy the
-/// snapshot taken by the first. The defect becomes visible only when that snapshot is needed.
-#[test]
-fn two_snapshots_in_one_second_do_not_overwrite_each_other() {
-    let root = temp_root("collision");
-    let src = root.join("settings.toml");
-    let backups = root.join("backups");
-    let ms = 1_753_100_000_000;
-
-    write(&src, "first");
-    let a = snapshot_into(&[&src], &backups, ms, 30).unwrap().unwrap();
-    write(&src, "second");
-    let b = snapshot_into(&[&src], &backups, ms, 30).unwrap().unwrap();
-
-    assert_ne!(a, b, "the second snapshot must take a different directory");
-    assert_eq!(
-        std::fs::read_to_string(a.join("settings.toml")).unwrap(),
-        "first"
-    );
-    assert_eq!(
-        std::fs::read_to_string(b.join("settings.toml")).unwrap(),
-        "second"
-    );
-    assert_eq!(snapshot_names(&backups).len(), 2);
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// A missing config is not a failure and does not create the `backups/` directory.
-///
-/// The plausible mutation is an unconditional `fs::copy(src, dst)?`. It turns EVERY first
-/// launch, and every launch after a corrupt file is moved to `.bak`, into a logged error. A
-/// later author may then "fix" it by propagating the error with `?` from saving, causing a
-/// failed backup to break the very save it must protect.
-#[test]
-fn a_missing_config_is_not_a_backup_failure() {
-    let root = temp_root("absent");
-    let backups = root.join("backups");
-
-    let made = snapshot_into(&[&root.join("settings.toml")], &backups, 0, 30)
-        .expect("an absent source is not an error");
-
-    assert!(made.is_none(), "nothing to copy means no snapshot");
-    assert!(
-        !backups.exists(),
-        "backups/ must not be created speculatively"
-    );
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// A source that EXISTS but is not a readable file must fail the entire snapshot rather than
-/// disappear from it silently.
-///
-/// The plausible mutation this catches, and one that existed here, is filtering sources with
-/// `p.is_file()`. It returns `false` both when a file is absent and when metadata cannot be
-/// read, so an unreadable `servers.enc` silently disappeared while a ONE-file snapshot was
-/// published as successful. Saving then overwrote both files, leaving the rollback copy without
-/// API keys precisely when it was needed.
-///
-/// A directory in place of a file is a portable way to produce "exists, but is not a file."
-#[test]
-fn an_unreadable_source_fails_instead_of_publishing_a_partial_snapshot() {
-    let root = temp_root("partial");
-    let good = root.join("settings.toml");
-    let backups = root.join("backups");
-    write(&good, "v1");
-    let bogus = root.join("servers.enc");
-    std::fs::create_dir_all(&bogus).unwrap();
-
-    let res = snapshot_into(&[&good, &bogus], &backups, 0, 30);
-
-    assert!(
-        res.is_err(),
-        "a source that exists but is not a file must fail the snapshot"
-    );
-    assert!(
-        snapshot_names(&backups).is_empty(),
-        "nothing may be published when a source could not be read"
-    );
-    let leftovers: Vec<String> = std::fs::read_dir(&backups)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.starts_with(STAGING_PREFIX))
-                .collect()
-        })
-        .unwrap_or_default();
-    assert!(
-        leftovers.is_empty(),
-        "staging dirs must never survive: {leftovers:?}"
-    );
-    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(prune(&backups, current, &["settings.toml"], &expected), 0);
+    assert!(backups.join(old).join("notes.txt").exists());
+    let _ = std::fs::remove_dir_all(root);
 }

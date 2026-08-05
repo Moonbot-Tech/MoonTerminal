@@ -17,7 +17,7 @@ mod market_role;
 mod tests;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,31 @@ use super::{
 use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportStart, ReportTx};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
+
+/// Return whether one normalized strategy generation still needs database delivery.
+fn strategy_db_export_due(
+    schema_ready: bool,
+    schema_revision: u64,
+    strategy_signature: u64,
+    delivered: Option<(u64, u64)>,
+) -> bool {
+    schema_ready && Some((schema_revision, strategy_signature)) != delivered
+}
+
+/// Apply one writer acknowledgement without consuming a failed strategy generation.
+fn apply_strategy_delivery_ack(
+    generation: (u64, u64),
+    committed: bool,
+    delivered: &mut Option<(u64, u64)>,
+    retry_due: &mut bool,
+    initial: &mut bool,
+) {
+    *retry_due = !committed;
+    if committed {
+        *delivered = Some(generation);
+        *initial = false;
+    }
+}
 
 use account_reconciliation::AccountReconciliation;
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
@@ -291,6 +316,9 @@ pub(super) fn run(
     // changes because strategy fields are expensive and need not be sent every second.
     let mut last_schema_rev: u64 = u64::MAX;
     let mut last_strat_sig: u64 = u64::MAX;
+    let mut last_strat_db_generation: Option<(u64, u64)> = None;
+    let mut pending_strat_db_delivery: Option<((u64, u64), Receiver<bool>)> = None;
+    let mut strat_db_retry_due = false;
     // strat_db: per-kind defaults for dump normalization, a 30-second timestamp heuristic for
     // `origin=local`, and the flag for the first set published by this run, whose origins can
     // predate the run. Recent remote changes can look local, delayed local echoes can look remote,
@@ -1102,7 +1130,7 @@ pub(super) fn run(
 
         // Core strategies for the Strategies window: check on domain events at no more than about
         // 1 Hz and publish only changes.
-        if had_domain_event
+        if (had_domain_event || pending_strat_db_delivery.is_some() || strat_db_retry_due)
             && server.feed.strategies
             && last_strats.elapsed() >= Duration::from_secs(1)
         {
@@ -1135,6 +1163,24 @@ pub(super) fn run(
                         .wrapping_add((s.strategy_ver as u32 as u64).wrapping_shl(1))
                         .wrapping_add(s.last_date)
                         .wrapping_add(s.checked as u64);
+                }
+                let delivery_result =
+                    pending_strat_db_delivery
+                        .as_ref()
+                        .and_then(|(generation, ack)| match ack.try_recv() {
+                            Ok(committed) => Some((*generation, committed)),
+                            Err(TryRecvError::Empty) => None,
+                            Err(TryRecvError::Disconnected) => Some((*generation, false)),
+                        });
+                if let Some((generation, committed)) = delivery_result {
+                    pending_strat_db_delivery = None;
+                    apply_strategy_delivery_ack(
+                        generation,
+                        committed,
+                        &mut last_strat_db_generation,
+                        &mut strat_db_retry_due,
+                        &mut strat_db_initial,
+                    );
                 }
                 if sig != last_strat_sig {
                     last_strat_sig = sig;
@@ -1175,31 +1221,42 @@ pub(super) fn run(
                     if tx.send(FeedMsg::Strategies(strategies)).is_err() {
                         break;
                     }
-
-                    // Send the same snapshot to the local strat_db (head plus versions based on
-                    // content diffs; the writer deduplicates echoes and cosmetic changes). Wait for
-                    // the schema because dumps are incomplete until its defaults are materialized,
-                    // which would create phantom versions when the schema arrives.
-                    if !strat_schema_defaults.is_empty() {
-                        if let Some(sink) = crate::strat_db::sink() {
-                            local_strat_edits.prune();
-                            let dumps: Vec<crate::strat_db::StratDump> = strats
-                                .snapshots()
-                                .map(|s| {
-                                    strat_db_dump(
-                                        s,
-                                        &strat_schema_defaults,
-                                        local_strat_edits.is_local(s.strategy_id),
-                                    )
-                                })
-                                .collect();
-                            sink.send(crate::strat_db::StratMsg::FullSet {
-                                core_uid: server.uid,
-                                core_name: server.name.clone(),
-                                initial: strat_db_initial,
-                                strategies: dumps,
-                            });
-                            strat_db_initial = false;
+                }
+                // The database cursor is separate from the UI cursor: schema defaults can arrive
+                // after an unchanged strategy set, and a full writer queue must leave the set due
+                // for retry. Dumps are incomplete until defaults are available.
+                if pending_strat_db_delivery.is_none()
+                    && strategy_db_export_due(
+                        !strat_schema_defaults.is_empty(),
+                        sr,
+                        sig,
+                        last_strat_db_generation,
+                    )
+                {
+                    if let Some(sink) = crate::strat_db::sink() {
+                        local_strat_edits.prune();
+                        let dumps: Vec<crate::strat_db::StratDump> = strats
+                            .snapshots()
+                            .map(|s| {
+                                strat_db_dump(
+                                    s,
+                                    &strat_schema_defaults,
+                                    local_strat_edits.is_local(s.strategy_id),
+                                )
+                            })
+                            .collect();
+                        let (ack, ack_rx) = sync_channel(1);
+                        if sink.send(crate::strat_db::StratMsg::FullSet {
+                            core_uid: server.uid,
+                            core_name: server.name.clone(),
+                            initial: strat_db_initial,
+                            strategies: dumps,
+                            ack,
+                        }) {
+                            pending_strat_db_delivery = Some(((sr, sig), ack_rx));
+                            strat_db_retry_due = false;
+                        } else {
+                            strat_db_retry_due = true;
                         }
                     }
                 }

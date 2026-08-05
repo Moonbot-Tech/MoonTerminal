@@ -234,3 +234,29 @@ fn a_map_describing_another_catch_up_is_refused() {
     );
     assert_eq!(recreated, AliveAction::Wipe);
 }
+
+/// Advancing the database cursor with the UI cursor would suppress the first complete set when
+/// schema defaults arrive later, leaving a fresh scheduled backup empty.
+#[test]
+fn strategy_database_delivery_waits_for_schema_without_consuming_its_cursor() {
+    assert!(!strategy_db_export_due(false, 7, 42, None));
+    assert!(strategy_db_export_due(true, 7, 42, None));
+    assert!(!strategy_db_export_due(true, 7, 42, Some((7, 42))));
+    assert!(strategy_db_export_due(true, 8, 42, Some((7, 42))));
+}
+
+/// Advancing on queue acceptance instead of this durable acknowledgement would strand a fresh
+/// backup after one transient SQLite write failure.
+#[test]
+fn a_failed_strategy_commit_keeps_the_same_generation_due() {
+    let mut delivered = None;
+    let mut retry_due = false;
+    let mut initial = true;
+
+    apply_strategy_delivery_ack((7, 42), false, &mut delivered, &mut retry_due, &mut initial);
+
+    assert_eq!(delivered, None);
+    assert!(retry_due);
+    assert!(initial);
+    assert!(strategy_db_export_due(true, 7, 42, delivered));
+}

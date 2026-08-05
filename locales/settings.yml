@@ -11,10 +11,6 @@ settings.saved:
   ru: "Сохранено"
   en: "Saved"
   es: "Guardado"
-settings.saved_no_backup:
-  ru: "Сохранено, но резервную копию создать не удалось — отката не будет"
-  en: "Saved, but the backup copy failed — no rollback available"
-  es: "Guardado, pero la copia de seguridad falló — no habrá reversión"
 settings.window_title:
   ru: "MoonTerminal — Настройки"
   en: "MoonTerminal — Settings"

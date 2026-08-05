@@ -123,6 +123,11 @@ pub fn servers_path() -> PathBuf {
     data_dir().join("servers.enc")
 }
 
+/// Marker proving a two-file config replacement did not finish cleanly.
+pub(crate) fn config_pair_pending_path() -> PathBuf {
+    cfg_dir().join(".config-pair-pending")
+}
+
 /// Remaining config (groups, etc.) as plaintext TOML without secrets.
 pub fn settings_path() -> PathBuf {
     cfg_dir().join("settings.toml")
@@ -369,8 +374,11 @@ pub(crate) fn valuation_recovery_archive_in(
 /// SQLite database for strategies and their versions (`strat_db`). DELIBERATELY separate from
 /// `reports.sqlite`: the report replica is a recoverable cache resynchronized from the core,
 /// while strategy version history is the only copy and must survive replica resets/resyncs.
+pub(crate) const STRATEGIES_DB_FILE: &str = "strategies.sqlite";
+
+/// Return the canonical strategy-history database path.
 pub fn strategies_db_path() -> PathBuf {
-    db_dir().join("strategies.sqlite")
+    db_dir().join(STRATEGIES_DB_FILE)
 }
 
 /// SQLite database for core warning episodes (sustained CPU / memory growth / connectivity), kept
@@ -399,16 +407,31 @@ pub fn panic_log() -> PathBuf {
     PathBuf::from("panic.log")
 }
 
-/// Snapshot directory for irreplaceable config files; see `config::backup`.
+/// Parent directory for application-managed backups.
 ///
 /// Lives in the `data_dir` root beside `logs/` and `servers.enc`, NOT inside `cfg/`: a snapshot
-/// contains a file FROM `cfg/`, so nesting it there would make the next snapshot copy its predecessor.
+/// contains files from `cfg/` and `data/`, so nesting it in either source directory would make a
+/// later snapshot copy its predecessor.
 ///
 /// Unlike [`cfg_dir`], deliberately does NOT create the directory. On Windows, `data_dir` is beside
 /// the executable and is often cloud-synchronized, so an empty `backups/` is unnecessary before
-/// the first snapshot. `config::backup` creates it lazily only when there is something to write.
+/// the first snapshot. Each backup domain creates its own child lazily when it has data to write.
 pub fn backups_dir() -> PathBuf {
     data_dir().join(BACKUPS_DIR_NAME)
+}
+
+/// Directory containing timestamped snapshots of the encrypted servers and settings metadata.
+///
+/// The directory is created lazily by `config::backup` only when a source file exists.
+pub fn settings_backups_dir() -> PathBuf {
+    backups_dir().join("settings")
+}
+
+/// Directory containing manual and scheduled snapshots of the strategy database.
+///
+/// The directory is created lazily by `strat_db::backup` only when the database exists.
+pub fn strategies_backups_dir() -> PathBuf {
+    backups_dir().join("strategies")
 }
 
 /// Snapshot directory name, kept as a constant so a test can prove that migration lists exclude it.
