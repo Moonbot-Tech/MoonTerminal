@@ -10,7 +10,9 @@
 
 use rusqlite::Connection;
 
-use super::analytics::{coin_groups_on, strategies_for_coins_on, GroupStat, HourStat, Query};
+use super::analytics::{
+    coin_groups_from_source, strategies_for_coins_on, GroupStat, HourStat, Query,
+};
 use super::metrics::{improvement_margin, winrate, Tally};
 use super::read_fail::read_fail_on;
 use super::{ReadFail, ReadResult};
@@ -340,9 +342,17 @@ pub fn coin_tuner_data(
 ) -> CoinTunerData {
     let compound = super::open_reader().and_then(|conn| {
         super::with_read_snapshot(&conn, |snapshot| {
+            let source = tuner_source_on(snapshot, q);
+            let (stats, kpi) = match source {
+                Ok((query, source)) => (
+                    coin_groups_from_source(snapshot, &query, &source),
+                    variant_stats_from_source(snapshot, &query, &source, variants),
+                ),
+                Err(error) => (Err(error.clone()), Err(error)),
+            };
             Ok(CoinTunerData {
-                stats: coin_groups_on(snapshot, q),
-                kpi: variant_stats_on(snapshot, q, variants),
+                stats,
+                kpi,
                 picked_strategies: strategies_for_coins_on(snapshot, picked_q, picked),
             })
         })
@@ -540,60 +550,90 @@ fn variant_stats_from_source(
     src: &str,
     variants: &[Variant],
 ) -> ReadResult<Vec<VarStats>> {
-    variants
-        .iter()
-        .map(|variant| one_variant(conn, src, q, variant))
-        .collect()
-}
-
-/// Scan one variant in `closedate` order, failing if any metric row is unreadable.
-///
-/// The ordering carries a TOTAL tie-break, not just the timestamp. `max_dd` measures the
-/// cumulative curve, so it depends on the order trades arrive in, and this source is a UNION with
-/// no unique key — trades sharing a `closedate` would otherwise be returned in whatever order the
-/// query plan produced, and the same matrix could report a different drawdown between runs. The
-/// two extra keys are the only values this scan reads, so rows still tied after them are
-/// interchangeable in every figure below.
-fn one_variant(conn: &Connection, src: &str, q: &Query, v: &Variant) -> ReadResult<VarStats> {
-    const CTX: &str = "tuner: one_variant";
-    let wh = v.where_sql();
-    let sql = format!(
-        "SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)
-         FROM {src} WHERE 1=1{wh}
-         ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
-    );
+    const CTX: &str = "tuner: variant_stats";
+    if variants.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = variant_stats_sql(src, variants);
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?))
+        .query_map(rusqlite::params![q.from, q.to], |row| {
+            let mut matched = Vec::with_capacity(variants.len());
+            for index in 0..variants.len() {
+                matched.push(row.get::<_, i64>(index + 2)? != 0);
+            }
+            Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, matched))
         })
         .map_err(|e| read_fail_on(conn, CTX, e))?;
-    // The ORDER BY above is what makes the shared tally's drawdown meaningful: it measures the
-    // cumulative curve, so it only describes this variant if the trades arrive chronologically.
-    let mut tally = Tally::default();
-    let mut spent = 0.0f64;
+    let mut tallies = vec![Tally::default(); variants.len()];
+    let mut spent = vec![0.0f64; variants.len()];
     for row in rows {
-        // profit/spent are the whole point of the variant KPI — never skip.
-        let (profit, sp) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
-        tally.push(profit);
-        spent += sp;
+        let (profit, row_spent, matched) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        for (index, is_match) in matched.into_iter().enumerate() {
+            if is_match {
+                tallies[index].push(profit);
+                spent[index] += row_spent;
+            }
+        }
     }
-    let mut st = VarStats {
+    Ok(tallies
+        .into_iter()
+        .zip(spent)
+        .map(|(tally, spent)| stats_from_tally(tally, spent))
+        .collect())
+}
+
+/// Build the single ordered statement that evaluates every tuner variant.
+///
+/// Args:
+///     src: Unified active-lens report source.
+///     variants: Ordered baseline and counterfactual definitions.
+///
+/// Returns:
+///     SQL with one source scan and a Boolean match column per variant.
+fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
+    let matches = variants
+        .iter()
+        .enumerate()
+        .map(|(index, variant)| {
+            format!(
+                "CASE WHEN 1=1{} THEN 1 ELSE 0 END AS v{index}",
+                variant.where_sql()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0), {matches}
+         FROM {src}
+         ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
+    )
+}
+
+/// Finalize one variant tally with its independently accumulated entry spend.
+///
+/// Args:
+///     tally: Chronological profit sequence aggregate.
+///     spent: Sum of entry sizes for the same matched rows.
+///
+/// Returns:
+///     Complete KPI values for one variant.
+fn stats_from_tally(tally: Tally, spent: f64) -> VarStats {
+    let mut stats = VarStats {
         n: tally.n,
         wins: tally.wins,
         profit: tally.profit,
         max_dd: tally.max_dd,
         ..VarStats::default()
     };
-    if st.n > 0 {
-        st.avg = tally.avg();
-        st.avg_win = tally.avg_win();
-        st.avg_loss = tally.avg_loss();
-        st.pf = tally.profit_factor();
-        // The one figure the tally has no business knowing: entry size is not a trade RESULT.
-        st.avg_spent = spent / st.n as f64;
+    if stats.n > 0 {
+        stats.avg = tally.avg();
+        stats.avg_win = tally.avg_win();
+        stats.avg_loss = tally.avg_loss();
+        stats.pf = tally.profit_factor();
+        stats.avg_spent = spent / stats.n as f64;
     }
-    Ok(st)
+    stats
 }
 
 /// Histogram bucket: `[lo, hi)`, with the last bucket including `hi`.

@@ -153,6 +153,16 @@ fn fixture() -> Connection {
     c
 }
 
+/// Build the historical per-trade strategy-name expression used by the SQL reference below.
+fn strategy_name_expr(has_names: bool) -> String {
+    name_expr(
+        has_names,
+        "o.core_uid",
+        "o.strategyid",
+        "CAST(o.strategyid AS TEXT)",
+    )
+}
+
 /// Reference statement with every enrichment lookup wrapped in `MAX(...)` inside the aggregate.
 ///
 /// Both forms include the `, 1` tie-break so this comparison isolates enrichment placement rather
@@ -269,6 +279,35 @@ fn assert_same(label: &str, old: &[GroupStat], new: &[GroupStat]) {
             o.key
         );
     }
+}
+
+/// Routing Coin Tuner back through `groups.rs:coin_groups_on` would repeat quote preflight and
+/// reject this deliberately mixed fixture before the already-validated source can publish its
+/// split-aware coin rows.
+#[test]
+fn source_consuming_coin_groups_do_not_repeat_scope_preflight() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE coin_rows(
+            closedate INTEGER, pnl REAL, profitbtc REAL, spentbtc REAL,
+            basecurrency INTEGER, coin TEXT, core_uid INTEGER, core_name TEXT
+         );
+         INSERT INTO coin_rows VALUES (10, 2.0, 2.0, 20.0, 1, 'BTC', 1, 'alpha');
+         INSERT INTO coin_rows VALUES (20, 3.0, 3.0, 30.0, 8, 'BTC', 1, 'alpha');",
+    )
+    .expect("mixed coin fixture");
+    let query = Query {
+        from: 1,
+        to: 30,
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM coin_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+
+    let groups = coin_groups_from_source(&conn, &query, source)
+        .expect("source was validated by the compound caller");
+    assert_eq!(groups.len(), 1);
+    assert_eq!((groups[0].key.as_str(), groups[0].n), ("BTC", 2));
+    assert!(matches!(groups[0].quote, QuoteScope::Mixed));
 }
 
 /// Outer enrichment must match the aggregate-level reference in all four `groups` query shapes.

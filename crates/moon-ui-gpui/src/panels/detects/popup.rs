@@ -10,8 +10,8 @@
 use gpui::*;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown,
-    MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
-    MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
+    MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonSegmentItem, MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 

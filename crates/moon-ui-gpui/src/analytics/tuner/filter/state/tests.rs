@@ -12,6 +12,117 @@ use moon_core::db::tuner::threshold_search::{
     EDGES_MAX, EDGES_MAX_LIGHT, EDGES_MIN, RESTARTS_MIN, SearchHandle, restarts_max,
 };
 
+/// Manual Filters refreshes must use the same compound source as report-driven refreshes.
+///
+/// Restoring separate `reload_tuner(cx)` and `reload_hist(cx)` calls, or routing the manual branch
+/// through `variant_stats`, repeats quote preflight and source preparation for one visible update.
+#[test]
+fn manual_filter_refresh_uses_one_compound_database_entry_point() {
+    let axis_source = include_str!("../../mod.rs");
+    let reload_axis = axis_source
+        .split_once("pub(super) fn reload_axis(")
+        .expect("manual axis reload")
+        .1
+        .split_once("pub(super) fn reload_axis_after_report")
+        .expect("manual reload boundary")
+        .0;
+    let filters_arm = reload_axis
+        .split_once("StratMode::Filters =>")
+        .expect("Filters reload arm")
+        .1
+        .split_once("StratMode::Coins =>")
+        .expect("Filters arm boundary")
+        .0;
+    assert_eq!(filters_arm.matches("reload_filter_axis(cx)").count(), 1);
+    assert!(!filters_arm.contains("reload_tuner(cx)"));
+    assert!(!filters_arm.contains("reload_hist(cx)"));
+
+    let filter_source = include_str!("../mod.rs");
+    let reload = filter_source
+        .split_once("fn reload_filter_axis_inner")
+        .expect("compound Filters loader")
+        .1
+        .split_once("fn reload_filter_kpi_inner")
+        .expect("compound loader boundary")
+        .0;
+    assert_eq!(reload.matches("filter_tuner_data(").count(), 1);
+    assert!(!reload.contains("variant_stats(&q"));
+}
+
+/// Local tuner edits must refresh KPI without recomputing the unchanged trade histogram.
+///
+/// Routing `filter/mod.rs:reload_tuner` back through the compound loader makes each bound edit and
+/// each post-Save echo read repeat a full histogram scan, even though neither changes past trades.
+#[test]
+fn local_filter_refresh_keeps_the_histogram_out_of_its_query() {
+    let filter_source = include_str!("../mod.rs");
+    let entry = filter_source
+        .split_once("pub(in crate::analytics) fn reload_tuner(")
+        .expect("local Filters entry point")
+        .1
+        .split_once("pub(in crate::analytics) fn reload_filter_axis")
+        .expect("local Filters entry boundary")
+        .0;
+    assert!(entry.contains("reload_filter_kpi_inner(false, true, true, cx)"));
+
+    let kpi = filter_source
+        .split_once("fn reload_filter_kpi_inner")
+        .expect("KPI-only Filters loader")
+        .1
+        .split_once("pub(in crate::analytics) fn reload_hist")
+        .expect("KPI-only loader boundary")
+        .0;
+    assert_eq!(kpi.matches("variant_stats(&query").count(), 1);
+    assert!(!kpi.contains("filter_tuner_data("));
+    let request_lanes = kpi
+        .split_once("self.spawn_latest_db(")
+        .expect("KPI-only background read")
+        .1
+        .split_once("show_overlay,")
+        .expect("KPI overlay boundary")
+        .0;
+    assert!(!request_lanes.contains("ReadLane::FilterHistogram"));
+    assert!(kpi.contains(
+        "let restart_histogram = retired.contains(&super::super::bg::ReadLane::FilterHistogram)"
+    ));
+    let companion_restart = kpi
+        .split_once("if restart_histogram {")
+        .expect("conditional histogram restart")
+        .1
+        .split_once("\n        }")
+        .expect("histogram restart boundary")
+        .0;
+    assert!(companion_restart.contains("self.reload_hist_inner(false, cx)"));
+}
+
+/// A histogram-only replacement must restart KPI only when it retired their compound owner.
+///
+/// Removing the conditional restart in `filter/mod.rs:reload_hist_inner` lets a field change cancel
+/// a shared request and leave KPI loading forever; making it unconditional adds a duplicate scan.
+#[test]
+fn histogram_refresh_conditionally_restores_a_retired_compound_kpi() {
+    let filter_source = include_str!("../mod.rs");
+    let histogram = filter_source
+        .split_once("fn reload_hist_inner")
+        .expect("histogram loader")
+        .1
+        .split_once("fn restart_filter_kpi_after_compound_cancel")
+        .expect("histogram loader boundary")
+        .0;
+    assert!(
+        histogram
+            .contains("let restart_kpi = retired.contains(&super::super::bg::ReadLane::FilterKpi)")
+    );
+    let companion_restart = histogram
+        .split_once("if restart_kpi {")
+        .expect("conditional KPI restart")
+        .1
+        .split_once("\n        }")
+        .expect("KPI restart boundary")
+        .0;
+    assert!(companion_restart.contains("self.restart_filter_kpi_after_compound_cancel(cx)"));
+}
+
 /// `filter/state.rs:TunerState::mark_report_stale` preserves drafts and the running search.
 ///
 /// Breakage this pins: adding an `invalidate_suggest()` call would cancel the `SearchHandle`, clear

@@ -1,5 +1,6 @@
 use super::{
-    effective_sid_expr, strategies_attached, unified_from, unified_from_mode, ProjectionMode, Query,
+    effective_sid_expr, quote_breakdown_on, strategies_attached, unified_from, unified_from_mode,
+    ProjectionMode, Query,
 };
 use std::collections::HashSet;
 
@@ -11,7 +12,7 @@ fn cols(list: &[&str]) -> HashSet<String> {
 }
 
 // ============================================================================
-//  Strategy scope of a query — the tuner's Ctrl multi-select depends on it entirely.
+//  Strategy scope of a query - the tuner's Ctrl multi-select depends on it entirely.
 // ============================================================================
 
 /// Every selected strategy has to be in scope, not just the first. Scoping to one was
@@ -19,36 +20,40 @@ fn cols(list: &[&str]) -> HashSet<String> {
 #[test]
 fn scope_covers_every_selected_strategy() {
     let c = cols(&["closedate", "profitbtc", "strategyid", "core_uid"]);
+    let period = "closedate >= ?1 AND closedate < ?2 AND closedate > 0";
 
     let one = Query {
         strategies: vec![(5, Some(7))],
         ..Default::default()
     };
-    let w = one.where_sql(&c, "strategyid");
-    assert!(w.contains("COALESCE(strategyid,0) = 5"), "{w}");
-    assert!(w.contains("core_uid = 7"), "{w}");
+    let branches = one.where_branches(period, &c, "strategyid", None, false);
+    assert_eq!(branches.len(), 1);
+    assert!(branches[0].contains("strategyid = 5"), "{branches:#?}");
+    assert!(branches[0].contains("core_uid = 7"), "{branches:#?}");
 
     let many = Query {
         strategies: vec![(5, Some(7)), (9, Some(8)), (11, None)],
         ..Default::default()
     };
-    let w = many.where_sql(&c, "strategyid");
+    let branches = many.where_branches(period, &c, "strategyid", None, false);
+    assert_eq!(branches.len(), 1);
+    let sql = branches.join(" UNION ALL ");
     for sid in ["= 5", "= 9", "= 11"] {
         assert!(
-            w.contains(sid),
-            "strategy {sid} missing from the scope: {w}"
+            sql.contains(sid),
+            "strategy {sid} missing from the scope: {sql}"
         );
     }
-    assert_eq!(w.matches(" OR ").count(), 2, "three terms → two ORs: {w}");
     // The same strategy on ANOTHER core must not come along: each term pins its core.
-    assert!(w.contains("core_uid = 8"), "{w}");
+    assert!(sql.contains("core_uid = 8"), "{sql}");
 
     // No selection = every strategy: no strategy predicate at all.
     let all = Query::default();
-    let w = all.where_sql(&c, "strategyid");
+    let branches = all.where_branches(period, &c, "strategyid", None, false);
+    assert_eq!(branches.len(), 1);
     assert!(
-        !w.contains("strategyid"),
-        "unscoped query must not filter: {w}"
+        !branches[0].contains("strategyid"),
+        "unscoped query must not filter: {branches:#?}"
     );
 }
 
@@ -61,11 +66,12 @@ fn scope_excludes_a_source_that_cannot_attribute() {
         strategies: vec![(5, Some(7))],
         ..Default::default()
     };
-    let w = q.where_sql(&c, "strategyid");
-    assert!(w.contains("1=0"), "{w}");
+    let branches = q.where_branches("closedate > 0", &c, "strategyid", None, false);
+    assert_eq!(branches.len(), 1);
+    assert!(branches[0].contains("1=0"), "{branches:#?}");
     assert!(
-        !w.contains("strategyid"),
-        "no such column may be referenced: {w}"
+        !branches[0].contains("strategyid"),
+        "no such column may be referenced: {branches:#?}"
     );
 }
 
@@ -233,6 +239,24 @@ fn projected_sids(c: &Connection, src: &str) -> Vec<i64> {
     rows.map(|r| r.expect("row")).collect()
 }
 
+/// Aggregate the rows selected from a generated Analytics source.
+///
+/// Args:
+///     connection: Database holding the source's physical tables.
+///     source: Generated unified source SQL.
+///
+/// Returns:
+///     Selected row count and exact profit sum.
+fn selected_count_and_profit(connection: &Connection, source: &str) -> (i64, f64) {
+    connection
+        .query_row(
+            &format!("SELECT COUNT(*), COALESCE(SUM(o.pnl), 0.0) FROM {source}"),
+            rusqlite::params![0_i64, i64::MAX],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("aggregate generated source")
+}
+
 /// The assertion that matters: a liquidation really is re-attributed to the strategy
 /// named in the row, and nothing else moves.
 ///
@@ -286,6 +310,99 @@ fn a_deleted_strategy_does_not_reclaim_its_liquidations() {
 
     let src = unified_from(&c, &q()).expect("read").expect("a source");
     assert_eq!(projected_sids(&c, &src), vec![0]);
+}
+
+/// Strategy scopes must cover direct and attributed rows without duplicating a physical trade.
+///
+/// Replacing `Query::where_branches` with one `COALESCE(effective_sid, 0)` predicate makes the
+/// planner lose the physical strategy key. Dropping a zero/NULL branch omits a liquidation or a
+/// Manual row; using overlapping branches counts it twice. This fixture proves the same exact
+/// sets through both the quote preflight and payload source, across typed and legacy tables.
+/// Expanding one compound branch per selected strategy makes the 300-key case exceed SQLite's
+/// 500-term limit instead of returning the same scoped result.
+#[test]
+fn strategy_branches_are_disjoint_and_semantically_complete() {
+    let connection = conn_with_orders();
+    connection
+        .execute_batch(
+            "ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;
+             ALTER TABLE orders_rep ADD COLUMN deleted INTEGER;
+             CREATE TABLE closed_sell_reports AS SELECT * FROM orders_rep WHERE 0;
+             CREATE INDEX typed_strategy_close
+                 ON orders_rep(core_uid, strategyid, closedate);
+             CREATE INDEX legacy_strategy_close
+                 ON closed_sell_reports(core_uid, strategyid, closedate);",
+        )
+        .expect("two-source schema");
+    attach_strategies(&connection);
+    connection
+        .execute_batch(
+            "INSERT INTO strat.strategies VALUES (7, 42, 'Owner', 0);
+             INSERT INTO strat.strategies VALUES (7, 43, 'DeletedOwner', 1);
+             INSERT INTO orders_rep VALUES
+                 (7,'c','BTCUSDT',0,900,1000,1.0,42,0,100.0,'','','',1,0),
+                 (7,'c','BTCUSDT',0,900,2000,2.0,0,0,100.0,'LIQUIDATION','Owner','',1,0),
+                 (7,'c','BTCUSDT',0,900,3000,3.0,NULL,0,100.0,'LIQUIDATION','Owner','',1,0),
+                 (7,'c','BTCUSDT',0,900,4000,4.0,0,0,100.0,'LIQUIDATION','Ghost','',1,0),
+                 (7,'c','BTCUSDT',0,900,5000,5.0,NULL,0,100.0,'LIQUIDATION','Ghost','',1,0),
+                 (7,'c','BTCUSDT',0,900,6000,6.0,0,0,100.0,'LIQUIDATION','DeletedOwner','',1,0),
+                 (7,'c','BTCUSDT',0,900,7000,7.0,0,0,100.0,'ORDINARY','','',1,0),
+                 (7,'c','BTCUSDT',0,900,8000,8.0,NULL,0,100.0,'ORDINARY','','',1,0),
+                 (9,'c','BTCUSDT',0,900,9000,9.0,42,0,100.0,'','','',1,0);
+             INSERT INTO closed_sell_reports SELECT * FROM orders_rep;",
+        )
+        .expect("strategy branch fixture");
+
+    let selected = Query {
+        strategies: vec![(42, Some(7))],
+        ..q()
+    };
+    let source = unified_from(&connection, &selected)
+        .expect("strategy source")
+        .expect("strategy tables");
+    assert_eq!(selected_count_and_profit(&connection, &source), (6, 12.0));
+    let preflight = quote_breakdown_on(&connection, &selected).expect("strategy quote preflight");
+    assert_eq!(preflight.orders, 6);
+    assert_eq!(preflight.totals[0].profit, 12.0);
+
+    let manual = Query {
+        strategies: vec![(0, Some(7))],
+        ..q()
+    };
+    let source = unified_from(&connection, &manual)
+        .expect("manual source")
+        .expect("manual tables");
+    assert_eq!(selected_count_and_profit(&connection, &source), (10, 60.0));
+    let preflight = quote_breakdown_on(&connection, &manual).expect("manual quote preflight");
+    assert_eq!(preflight.orders, 10);
+    assert_eq!(preflight.totals[0].profit, 60.0);
+
+    let any_core_deduplicated = Query {
+        strategies: vec![(42, Some(7)), (42, Some(7)), (42, None), (42, Some(9))],
+        ..q()
+    };
+    let source = unified_from(&connection, &any_core_deduplicated)
+        .expect("any-core source")
+        .expect("strategy tables");
+    assert_eq!(selected_count_and_profit(&connection, &source), (8, 30.0));
+
+    let large_selection = Query {
+        strategies: (1..=300).map(|sid| (sid, Some(7))).collect(),
+        ..q()
+    };
+    let source = unified_from(&connection, &large_selection)
+        .expect("large strategy source")
+        .expect("strategy tables");
+    assert_eq!(
+        source.matches(" UNION ALL ").count(),
+        5,
+        "two sources must stay bounded at three raw-id branches each"
+    );
+    assert_eq!(selected_count_and_profit(&connection, &source), (6, 12.0));
+    let preflight =
+        quote_breakdown_on(&connection, &large_selection).expect("large strategy quote preflight");
+    assert_eq!(preflight.orders, 6);
+    assert_eq!(preflight.totals[0].profit, 12.0);
 }
 
 /// Without the strategy database there is nothing to match against, so the expression

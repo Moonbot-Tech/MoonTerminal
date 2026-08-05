@@ -112,6 +112,9 @@ static WARN_SEEN: OnceLock<Mutex<HashMap<(&'static str, FailKind), (Option<Insta
 /// Returns:
 ///     Classified failure suitable for propagation to the UI.
 pub(crate) fn read_fail(ctx: &'static str, error: rusqlite::Error) -> ReadFail {
+    if let Some(cancelled) = cancelled_read(&error) {
+        return cancelled;
+    }
     let kind = classify(&error);
     if kind == FailKind::Corrupt {
         super::integrity::record_corruption(&error);
@@ -141,6 +144,9 @@ pub(crate) fn read_fail_on(
     ctx: &'static str,
     error: rusqlite::Error,
 ) -> ReadFail {
+    if let Some(cancelled) = cancelled_read(&error) {
+        return cancelled;
+    }
     if super::valuation::prove_derived_corruption(conn, &error) {
         log_throttled(ctx, FailKind::Other, &error);
         return ReadFail::Failed {
@@ -149,6 +155,28 @@ pub(crate) fn read_fail_on(
         };
     }
     read_fail(ctx, error)
+}
+
+/// Recognize the expected SQLite interrupt of an explicitly superseded read.
+///
+/// The request generation still prevents publication; this classification keeps the discarded
+/// completion from logging a database fault or probing attached-cache corruption.
+///
+/// Args:
+///     error: SQLite failure produced by the interrupted statement.
+///
+/// Returns:
+///     Silent ordinary failure for a requested interrupt, or `None` for every real fault.
+fn cancelled_read(error: &rusqlite::Error) -> Option<ReadFail> {
+    let interrupted = matches!(
+        error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if failure.code == ErrorCode::OperationInterrupted
+    );
+    (interrupted && super::read_cancel::take_requested_interrupt()).then(|| ReadFail::Failed {
+        kind: FailKind::Other,
+        msg: Arc::from("database read superseded"),
+    })
 }
 
 /// Map a SQLite error onto the granularity the UI branches on.

@@ -1,6 +1,41 @@
 //! Filter-tuner query, snapshot, and predicate regression tests.
 
+use std::sync::{Mutex, MutexGuard};
+
+use rusqlite::trace::{TraceEvent, TraceEventCodes};
+
 use super::*;
+
+/// Serializes the process-global function-pointer trace sink used by rusqlite.
+static TRACE_GUARD: Mutex<()> = Mutex::new(());
+/// SQL statements executed while a tuner test connection has tracing enabled.
+static TRACE_SQL: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Record one statement reported by SQLite's execution trace.
+fn record_sql(event: TraceEvent<'_>) {
+    if let TraceEvent::Stmt(statement, _) = event {
+        TRACE_SQL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(
+                statement
+                    .expanded_sql()
+                    .unwrap_or_else(|| statement.sql().into_owned()),
+            );
+    }
+}
+
+/// Acquire the trace sink and clear statements from an earlier failed test.
+fn start_trace() -> MutexGuard<'static, ()> {
+    let guard = TRACE_GUARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    TRACE_SQL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+    guard
+}
 
 /// Raw tuner scans reject mixed quotes before optimization, while Percent scans remain valid.
 ///
@@ -79,6 +114,144 @@ fn tuner_materialization_cannot_cross_the_quote_preflight_snapshot() {
     drop(reader);
     drop(writer);
     super::super::test_support::remove_db(&path);
+}
+
+/// Replacing `tuner/mod.rs:variant_stats_from_source` with one statement per variant must make
+/// this parity check fail when any filtered subsequence or total ordering differs from the
+/// independently evaluated reference matrix shown to the user.
+#[test]
+fn one_ordered_variant_statement_matches_independent_variant_scans() {
+    let _trace = start_trace();
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE trades(
+            closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL, d1h REAL, coin TEXT
+         );
+         INSERT INTO trades VALUES (300, 100,  4.0, 40.0,  3.0, 'BTC');
+         INSERT INTO trades VALUES (100,  50, -5.0, 25.0, -2.0, 'ETH');
+         INSERT INTO trades VALUES (200, 150,  2.0, 20.0,  1.0, 'BTC');
+         INSERT INTO trades VALUES (200, 150, -1.0, 10.0,  4.0, 'SOL');",
+    )
+    .expect("variant fixture");
+    let query = Query {
+        from: 1,
+        to: 400,
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
+    let variants = vec![
+        Variant::default(),
+        Variant {
+            bounds: vec![Bound {
+                field: "d1h".into(),
+                from: Some(1.0),
+                to: Some(3.0),
+            }],
+            ..Default::default()
+        },
+        Variant {
+            coins_in: Some(vec!["BTC".into()]),
+            ..Default::default()
+        },
+        Variant {
+            tod: Some(TimeWindow::Hour(30, 50)),
+            ..Default::default()
+        },
+    ];
+
+    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
+    let actual = variant_stats_from_source(&conn, &query, source, &variants);
+    conn.trace_v2(TraceEventCodes::empty(), None);
+    let actual = actual.expect("single ordered variant scan");
+    let statements = TRACE_SQL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    assert_eq!(statements.len(), 1, "variant statements: {statements:#?}");
+    let expected = vec![
+        VarStats {
+            n: 4,
+            wins: 2,
+            profit: 0.0,
+            pf: 1.0,
+            avg: 0.0,
+            avg_win: 3.0,
+            avg_loss: 3.0,
+            avg_spent: 23.75,
+            max_dd: 6.0,
+        },
+        VarStats {
+            n: 2,
+            wins: 2,
+            profit: 6.0,
+            pf: 99.0,
+            avg: 3.0,
+            avg_win: 3.0,
+            avg_loss: 0.0,
+            avg_spent: 30.0,
+            max_dd: 0.0,
+        },
+        VarStats {
+            n: 2,
+            wins: 2,
+            profit: 6.0,
+            pf: 99.0,
+            avg: 3.0,
+            avg_win: 3.0,
+            avg_loss: 0.0,
+            avg_spent: 30.0,
+            max_dd: 0.0,
+        },
+        VarStats::default(),
+    ];
+
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    let sql = variant_stats_sql("trades o", &variants);
+    assert_eq!(sql.matches("FROM trades o").count(), 1, "one source scan");
+    assert_eq!(sql.matches("ORDER BY").count(), 1, "one shared sort");
+    assert_eq!(sql.matches("CASE WHEN").count(), variants.len());
+}
+
+/// Replacing the source-consuming calls inside `tuner/mod.rs:coin_tuner_data` with
+/// `coin_groups_on` or `variant_stats_on` must fail this routing contract because the Coin Tuner
+/// would repeat quote preflight and unified-source construction before showing one refresh.
+#[test]
+fn coin_tuner_reuses_one_validated_source_for_table_and_kpi() {
+    let source = include_str!("mod.rs");
+    let body = source
+        .split_once("pub fn coin_tuner_data")
+        .expect("coin tuner entry point")
+        .1
+        .split_once("/// Build the unified tuner source")
+        .expect("coin tuner function boundary")
+        .0;
+
+    assert_eq!(body.matches("tuner_source_on(").count(), 1);
+    assert_eq!(body.matches("coin_groups_from_source(").count(), 1);
+    assert_eq!(body.matches("variant_stats_from_source(").count(), 1);
+    assert!(!body.contains("coin_groups_on("));
+    assert!(!body.contains("variant_stats_on("));
+}
+
+/// Replacing either source-consuming call in `tuner/mod.rs:filter_tuner_data` with the public
+/// standalone reader must fail this routing contract because one Filters refresh would repeat
+/// quote preflight and unified-source construction for KPI and histogram.
+#[test]
+fn filter_tuner_reuses_one_validated_source_for_kpi_and_histogram() {
+    let source = include_str!("mod.rs");
+    let body = source
+        .split_once("pub fn filter_tuner_data")
+        .expect("filter tuner entry point")
+        .1
+        .split_once("/// Read every report-derived By-time result")
+        .expect("filter tuner function boundary")
+        .0;
+
+    assert_eq!(body.matches("tuner_source_on(").count(), 1);
+    assert_eq!(body.matches("variant_stats_from_source(").count(), 1);
+    assert_eq!(body.matches("histogram_from_source(").count(), 1);
+    assert!(!body.contains("variant_stats("));
+    assert!(!body.contains("histogram("));
 }
 
 #[test]

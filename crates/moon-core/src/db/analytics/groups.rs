@@ -117,72 +117,6 @@ pub struct KindStat {
     pub cores: Vec<KindCore>,
 }
 
-/// Profit per strategy type (`SignalType`) with the per-core split behind each one, in ONE
-/// pass: the bars and their popups can never disagree about a number.
-///
-/// Without the strategies DB the type expression is a constant empty string, so every trade
-/// folds into one unnamed group instead of the chart vanishing.
-pub(super) fn kind_stats(
-    conn: &Connection,
-    src: &str,
-    q: &Query,
-    has_names: bool,
-) -> ReadResult<Vec<KindStat>> {
-    const CTX: &str = "analytics: kind_stats";
-    let kind = if has_names {
-        "COALESCE((SELECT json_extract(v.raw_json, '$.SignalType')
-                   FROM strat.strategy_versions v
-                   WHERE v.core_uid = o.core_uid
-                     AND v.strategy_id = o.strategyid
-                     AND v.valid_to IS NULL), '')"
-    } else {
-        "''"
-    };
-    let sql = format!(
-        "SELECT {kind} AS k, o.core_uid, MAX(COALESCE(o.core_name,'')),
-                COUNT(*), COALESCE(SUM(o.pnl),0)
-         FROM {src} GROUP BY k, o.core_uid"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((
-                r.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                // NULL core_uid: a source without the column projects it as NULL, and a
-                // hard read would abort the whole summary over one unattributable row.
-                r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u64,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, f64>(4)?,
-            ))
-        })
-        .map_err(|e| read_fail_on(conn, CTX, e))?;
-    let mut map: std::collections::HashMap<String, KindStat> = std::collections::HashMap::new();
-    for row in rows {
-        let (kind, uid, name, trades, profit) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
-        let e = map.entry(kind.clone()).or_insert_with(|| KindStat {
-            kind,
-            profit: 0.0,
-            trades: 0,
-            cores: Vec::new(),
-        });
-        e.profit += profit;
-        e.trades += trades;
-        e.cores.push(KindCore {
-            uid,
-            name,
-            profit,
-            trades,
-        });
-    }
-    let mut out: Vec<KindStat> = map.into_values().collect();
-    for k in &mut out {
-        k.cores.sort_by(|a, b| b.profit.total_cmp(&a.profit));
-    }
-    out.sort_by(|a, b| b.profit.total_cmp(&a.profit));
-    Ok(out)
-}
-
 /// Which STRATEGIES traded any of `coins`, as the very keys the strategy list rows carry
 /// (`strategyid@core_uid`).
 ///
@@ -280,6 +214,23 @@ pub(in crate::db) fn coin_groups_on(conn: &Connection, q: &Query) -> ReadResult<
     let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Err(ReadFail::NotReady);
     };
+    coin_groups_from_source(conn, &q, &src)
+}
+
+/// Aggregate coins from a source already validated for the supplied query and snapshot.
+///
+/// Args:
+///     conn: Pinned report snapshot.
+///     q: Floored query used to build `src`.
+///     src: Unified active-lens source whose quote scope was already validated.
+///
+/// Returns:
+///     Per-coin aggregates or a classified raw-enrichment failure.
+pub(in crate::db) fn coin_groups_from_source(
+    conn: &Connection,
+    q: &Query,
+    src: &str,
+) -> ReadResult<Vec<GroupStat>> {
     let raw_src = raw_source(conn, &q)?;
     groups(conn, &src, raw_src.as_deref(), &q, false, false)
 }
@@ -354,7 +305,12 @@ fn group_from_row(r: &rusqlite::Row) -> rusqlite::Result<GroupStat> {
 ///
 /// Returns:
 ///     Empty, one known quote, mixed known quotes, or unknown.
-fn group_quote_scope(min: Option<i64>, max: Option<i64>, integral: i64, rows: i64) -> QuoteScope {
+pub(super) fn group_quote_scope(
+    min: Option<i64>,
+    max: Option<i64>,
+    integral: i64,
+    rows: i64,
+) -> QuoteScope {
     if rows == 0 {
         return QuoteScope::Empty;
     }
@@ -376,16 +332,14 @@ fn group_quote_scope(min: Option<i64>, max: Option<i64>, integral: i64, rows: i6
 }
 
 /// Distinct coins named by a raw `CoinsBlackList` / `CoinsWhiteList` field value.
-fn count_list(text: Option<String>) -> i64 {
+pub(super) fn count_list(text: Option<String>) -> i64 {
     text.map_or(0, |t| crate::symbol::parse_coin_list(&t).len() as i64)
 }
 
 /// Strategy name in SQL: the head's name, or the bare id when the strategy DB cannot supply one.
 ///
-/// The correlation columns are parameters because the same rule serves two shapes — `top_trades`
-/// resolves it per TRADE (`o.core_uid`/`o.strategyid`), `groups` per GROUP over its aggregate
-/// (`a.cid`/`a.sid`). One function so a change to the rule — a `deleted` filter, a different
-/// fallback — cannot reach one surface and leave the other naming the same strategy differently.
+/// The correlation columns are parameters because group enrichment resolves metadata from the
+/// aggregate pair (`a.cid`/`a.sid`) while retaining the exact numeric-id fallback.
 fn name_expr(has_names: bool, core: &str, sid: &str, fallback: &str) -> String {
     if has_names {
         format!(
@@ -396,16 +350,6 @@ fn name_expr(has_names: bool, core: &str, sid: &str, fallback: &str) -> String {
     } else {
         fallback.to_string()
     }
-}
-
-/// Per-TRADE form of [`name_expr`], for the statements that select rows rather than groups.
-fn strategy_name_expr(has_names: bool) -> String {
-    name_expr(
-        has_names,
-        "o.core_uid",
-        "o.strategyid",
-        "CAST(o.strategyid AS TEXT)",
-    )
 }
 
 /// Group the period by strategy id or coin, sorted by descending profit.
@@ -620,46 +564,6 @@ pub(super) fn groups(
     for row in rows {
         // Each row carries the group's COUNT/SUM, so dropping one would
         // understate the table the user reads as complete.
-        out.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
-    }
-    Ok(out)
-}
-
-/// Return the five best or worst period trades, failing if any ranked row is unreadable.
-pub(super) fn top_trades(
-    conn: &Connection,
-    src: &str,
-    q: &Query,
-    has_names: bool,
-    best: bool,
-) -> ReadResult<Vec<TopTrade>> {
-    const CTX: &str = "analytics: top_trades";
-    let order = if best { "DESC" } else { "ASC" };
-    let name = strategy_name_expr(has_names);
-    let sql = format!(
-        "SELECT o.closedate, COALESCE(o.coin,''), {name}, o.core_name,
-                COALESCE(o.pnl,0), COALESCE(o.isshort,0)
-         FROM {src} WHERE o.pnl IS NOT NULL
-         ORDER BY o.pnl {order} LIMIT 5"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok(TopTrade {
-                closedate: r.get(0)?,
-                coin: r.get(1)?,
-                strategy: r.get(2)?,
-                core_name: r.get(3)?,
-                profit: r.get(4)?,
-                is_short: r.get::<_, i64>(5)? != 0,
-            })
-        })
-        .map_err(|e| read_fail_on(conn, CTX, e))?;
-    let mut out = Vec::new();
-    for row in rows {
-        // The ranked row carries closedate/profitbtc/isshort, so it is metric-
-        // bearing end to end: skipping it would silently drop the extreme trade
-        // the user opened this widget to see.
         out.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
     }
     Ok(out)

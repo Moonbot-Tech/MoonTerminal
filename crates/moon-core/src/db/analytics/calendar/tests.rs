@@ -161,6 +161,29 @@ fn calendar_period_keeps_current_and_comparison_scopes_distinct() {
     assert_eq!(period.previous, Some((-5.0, 1, 0)));
 }
 
+/// Adding daily `GROUP BY` back to `calendar/mod.rs:calendar_total_from` makes `query_row` return
+/// only the first seeded day and turns the visible previous-period KPI from `(6, 3, 2)` into
+/// `(4, 1, 1)`.
+#[test]
+fn previous_period_total_aggregates_multiple_days_directly() {
+    let conn = seed(&[
+        (D0 - 3 * 86_400 + 100, 1, 4.0),
+        (D0 - 2 * 86_400 + 100, 1, -3.0),
+        (D0 - 86_400 + 100, 1, 5.0),
+    ]);
+    let previous = Query {
+        from: D0 - 3 * 86_400,
+        to: D0,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        calendar_total_from(&conn, &previous, ProjectionMode::Native)
+            .expect("direct previous-period total"),
+        (6.0, 3, 2)
+    );
+}
+
 /// Calendar raw money uses the same split boundary as Summary, without blocking Percent mode.
 ///
 /// Removing the preflight in `calendar_period_from` exposes a scalar 15.0 across USDT and USDC;

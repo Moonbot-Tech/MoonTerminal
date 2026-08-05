@@ -85,7 +85,8 @@ impl AnalyticsView {
             .and_then(|(k, _)| super::parse_strat_key(k));
         let sid = sid_core.map(|(s, _)| s);
         let core = sid_core.and_then(|(_, c)| c);
-        self.spawn_db(
+        self.spawn_latest_db(
+            &[crate::analytics::bg::ReadLane::Time],
             show_overlay,
             cx,
             move || {

@@ -551,7 +551,8 @@ impl AnalyticsView {
         // "Day" loads HOURLY cells (a 24×N grid); the other modes load daily.
         let hourly = self.cal_mode == CalMode::Day;
         let refresh_cores = self.core_metadata_due(cx);
-        self.spawn_db(
+        self.spawn_latest_db(
+            &[super::bg::ReadLane::Calendar],
             show_overlay,
             cx,
             move || {

@@ -246,10 +246,16 @@ pub(super) struct RepState {
 ///   rows, against ten seconds on every filter change.
 /// - `idx_rep_strat` — strategy-version analytics (`strat_db`): select one strategy's trades
 ///   and range-join `buydate` against the version's `valid_from` and `valid_to`.
+/// - `idx_rep_strategy_close` — strategy-scoped Analytics reads: select one strategy on one core
+///   and apply the visible `closedate` period inside the same index search.
 pub(super) const REP_INDEXES: &[(&str, &[&str])] = &[
     ("idx_rep_closedate", &["closedate"]),
     ("idx_rep_core_close", &["core_uid", "closedate"]),
     ("idx_rep_strat", &["core_uid", "strategyid", "buydate"]),
+    (
+        "idx_rep_strategy_close",
+        &["core_uid", "strategyid", "closedate"],
+    ),
 ];
 
 /// Create every [`REP_INDEXES`] entry whose columns the replica already has.

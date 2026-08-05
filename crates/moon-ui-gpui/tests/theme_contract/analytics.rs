@@ -677,7 +677,7 @@ fn liquidation_attribution_has_no_user_switch() {
 
 /// Automatic report reads must reuse stale Analytics content without dimming the whole window.
 ///
-/// The plausible regression is replacing `show_overlay` with `true` at any `spawn_db` call below:
+/// The plausible regression is replacing `show_overlay` with `true` at any cancellable read below:
 /// every trade burst then raises the delayed busy overlay and Strategy Tuning visibly flashes
 /// every 5-10 seconds even though its old snapshot is still safe to display.
 #[test]
@@ -693,7 +693,7 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
         ),
         (
             "analytics/tuner/filter/mod.rs",
-            &["fn reload_tuner_inner("][..],
+            &["fn reload_filter_axis_inner("][..],
         ),
         (
             "analytics/tuner/time/mod.rs",
@@ -711,13 +711,17 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
                 .unwrap_or_else(|| panic!("{rel} must contain {signature}"))
                 .1;
             let spawn_args = after_signature
-                .split_once("self.spawn_db(")
+                .split_once("self.spawn_latest_db(")
                 .unwrap_or_else(|| panic!("{rel}: {signature} must start its database read"))
                 .1
                 .trim_start();
+            let policy_args = spawn_args
+                .split_once("move ||")
+                .unwrap_or_else(|| panic!("{rel}: {signature} must supply its database work"))
+                .0;
             assert!(
-                spawn_args.starts_with("show_overlay,"),
-                "{rel}: {signature} must pass the explicit presentation policy to spawn_db"
+                policy_args.contains("show_overlay,"),
+                "{rel}: {signature} must pass the explicit presentation policy to spawn_latest_db"
             );
         }
     }

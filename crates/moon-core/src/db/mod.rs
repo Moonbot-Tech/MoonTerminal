@@ -23,6 +23,7 @@ pub mod integrity;
 pub mod maint;
 pub mod metrics;
 mod quote;
+mod read_cancel;
 pub(crate) mod read_fail;
 mod rep;
 mod report_read;
@@ -37,6 +38,7 @@ pub use quote::{
     ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal, UsdtTotal,
     ValuationCoverage,
 };
+pub use read_cancel::{with_read_cancellation, ReadCancellation};
 pub use read_fail::{FailKind, ReadFail, ReadResult};
 pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
@@ -144,6 +146,19 @@ fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             "CREATE INDEX IF NOT EXISTS idx_csr_core ON closed_sell_reports(core_uid)",
             [],
         )?;
+        let strategy_close_columns: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('closed_sell_reports')
+             WHERE name IN ('core_uid', 'strategyid', 'closedate')",
+            [],
+            |row| row.get(0),
+        )?;
+        if strategy_close_columns == 3 {
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_csr_strategy_close
+                 ON closed_sell_reports(core_uid, strategyid, closedate)",
+                [],
+            )?;
+        }
     }
     Ok(())
 }
@@ -867,9 +882,9 @@ fn metadata_gate(path: &std::path::Path, ctx: &'static str) -> ReadResult<()> {
 /// `page_size`).
 ///
 /// The default is ~2 MiB against a replica of hundreds of MB, so a reader starts
-/// evicting pages inside a single period scan and re-reads them for the next
-/// statement of the same batch — and one Analytics read is a batch: the summary
-/// alone runs seven statements over the same rows.
+/// evicting pages inside a long period scan. Analytics compound reads also perform
+/// quote preflight, comparison, and optional lens-neutral work on the same snapshot,
+/// so retaining their recently visited index and table pages still matters.
 ///
 /// The budget is per connection, and concurrent readers are not bounded. Peak
 /// page-cache memory therefore scales as 16 MiB times the number of overlapping
@@ -925,6 +940,7 @@ pub fn open_reader() -> ReadResult<Connection> {
     // is a read failure, never silently interpreted as zero coverage. Startup initializes the file
     // before report-derived views can open readers; an absent file remains a normal not-ready state.
     let _ = valuation::attach(&conn)?;
+    read_cancel::install_current(&conn)?;
     Ok(conn)
 }
 

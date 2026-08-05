@@ -25,6 +25,7 @@ use super::{
 mod calendar;
 mod groups;
 mod query;
+mod summary_stream;
 
 pub use calendar::{
     calendar_cells, calendar_hours, hourly_profiles, CalendarPeriod, DayCell, HourStat,
@@ -32,8 +33,8 @@ pub use calendar::{
 pub use groups::{coin_groups, strategies_for_coins, GroupStat, KindCore, KindStat, TopTrade};
 pub use query::Query;
 
-pub(in crate::db) use groups::{coin_groups_on, strategies_for_coins_on};
-use groups::{groups, kind_stats, top_trades};
+use groups::groups;
+pub(in crate::db) use groups::{coin_groups_from_source, strategies_for_coins_on};
 use query::ProjectionMode;
 use query::WHERE_UNDATED;
 pub(in crate::db) use query::{
@@ -128,7 +129,7 @@ pub struct Summary {
 
 /// Closed trades the core never dated, split safely by quote currency.
 ///
-/// Every analytics figure is computed under [`WHERE_PERIOD`], which ends in `closedate > 0`.
+/// Every analytics figure uses a period predicate ending in `closedate > 0`.
 /// So these rows are in NO period — not even "all history" — and their profit is simply
 /// absent from every number this window shows. One measured USDT replica had 370 such trades
 /// carrying -434 USDT: closed for certain (they carry a sell price and a sell reason) and
@@ -224,12 +225,18 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
         let sid = effective_sid_expr("r", &src.cols, false);
         let (quote, group_by) =
             super::quote::trusted_quote_group("r.basecurrency", src.cols.contains("basecurrency"));
-        let sql = format!(
-            "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0), COUNT(*) \
-             FROM {} r WHERE {}{group_by}",
-            src.table,
-            q.where_with(WHERE_UNDATED, &src.cols, &sid)
-        );
+        let sql = q
+            .where_branches(WHERE_UNDATED, &src.cols, &sid, Some("r"), false)
+            .iter()
+            .map(|where_sql| {
+                format!(
+                    "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0), COUNT(*) \
+                     FROM {} r WHERE {where_sql}{group_by}",
+                    src.table,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
         let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
         let rows = stmt
             .query_map([], |row| {
@@ -536,10 +543,9 @@ pub fn summary(q: &Query) -> ReadResult<ProfitScope<Summary>> {
     let conn = super::open_reader()?;
     // `open_reader` has already attached it (a second ATTACH under the same alias fails).
     let has_strat_names = strategies_attached(&conn);
-    // One snapshot for the whole summary. Its counters, series, top trades and
-    // group tables are separate statements, and the writer commits between them
-    // during catch-up — without this they could disagree about which trades the
-    // period contains while being published as one coherent result.
+    // One snapshot for the whole summary. Current rows share one stream, while quote
+    // preflight, the comparison period, metadata, and optional lens-neutral money are
+    // separate reads that must agree on one committed report generation.
     // The current-rate snapshot is pinned for the same span and the same reason — `with_read_snapshot`
     // does this for the compound readers; this one takes its snapshot by hand and must too.
     let _rates = super::valuation::pin_current_rates();
@@ -585,8 +591,7 @@ pub(super) fn summary_on(
     let len = (q.to - q.from).max(1);
     // A day or less: a daily series would be a single bar and a cumulative curve a single
     // point, so the grid drops to HOURS — the same series, the same charts, just a scale
-    // that has something to show. `core_series` follows this bucket, so the per-core lines
-    // and every popup come along for free.
+    // that has something to show. Per-core lines use the same bucket grid.
     let one_day = len <= 86_400;
     // The series uses hourly buckets for periods up to a day, daily buckets normally, and
     // weekly buckets for a multi-year All period to avoid thousands of bars.
@@ -598,45 +603,31 @@ pub(super) fn summary_on(
         86_400
     };
 
-    let (cur, days, hours) = scan_period(conn, &src, q.from, q.to, bucket)?;
     // The comparison is best-effort because it must not hide a readable current
     // period; see `Summary::prev`.
     let prev = previous_stats(conn, &src, &q, len, bucket, &decision);
-
-    let best_hour = hours
-        .iter()
-        .enumerate()
-        .filter(|(_, (p, n))| *n > 0 && *p > 0.0)
-        .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
-        .map(|(h, (p, n))| (h as u32, *p, *n));
-
-    let core_days = core_series(conn, &src, &q, &days, bucket)?;
-    // Shared latch: the first name-related failure turns enrichment off for the
-    // remaining aggregations of THIS summary.
-    let mut names = has_strat_names;
     let raw_src = groups::raw_source(conn, &q)?;
+    let parts = summary_stream::read(
+        conn,
+        &src,
+        raw_src.as_deref(),
+        &q,
+        bucket,
+        one_day,
+        has_strat_names,
+    )?;
     let data = Summary {
-        cur,
+        cur: parts.cur,
         prev,
         bucket_secs: bucket,
-        days,
-        core_days,
-        best: with_name_fallback(&mut names, |n| top_trades(conn, &src, &q, n, true))?,
-        worst: with_name_fallback(&mut names, |n| top_trades(conn, &src, &q, n, false))?,
-        strategies: with_name_fallback(&mut names, |n| {
-            groups(conn, &src, raw_src.as_deref(), &q, n, true)
-        })?,
-        coins: with_name_fallback(&mut names, |n| {
-            groups(conn, &src, raw_src.as_deref(), &q, n, false)
-        })?,
-        best_hour,
-        // Only for a day or less — on a longer period the daily chart works and this
-        // aggregation's per-row subquery would be paid for nothing.
-        kinds: if one_day {
-            with_name_fallback(&mut names, |n| kind_stats(conn, &src, &q, n))?
-        } else {
-            Vec::new()
-        },
+        days: parts.days,
+        core_days: parts.core_days,
+        best: parts.best,
+        worst: parts.worst,
+        strategies: parts.strategies,
+        coins: parts.coins,
+        best_hour: parts.best_hour,
+        kinds: parts.kinds,
         cores: if read_cores {
             super::distinct_cores(conn)?
         } else {
@@ -708,7 +699,7 @@ fn previous_stats(
 ///
 /// `strategies.sqlite` is optional enrichment: a successful ATTACH does not
 /// prove it is readable, and a failing scalar subquery against it must degrade
-/// strategy labels to bare ids — not sink an otherwise healthy reports summary.
+/// strategy labels to bare ids — not sink an otherwise healthy Strategies base.
 /// A failure of the reports DB itself simply fails again on the retry.
 fn with_name_fallback<T>(
     names: &mut bool,
@@ -719,11 +710,10 @@ fn with_name_fallback<T>(
         // these statements also read the ATTACHed strategies DB, and the error
         // carries no database provenance, so corruption first met there would
         // otherwise sink a perfectly readable reports summary. The latch below
-        // caps the cost at ONE extra scan per summary, not four.
+        // caps the cost at one retry for this Strategies-base batch.
         Err(e) if *names => {
             log::warn!("analytics: strategy names unavailable, retrying with bare ids: {e}");
-            // Latch it off: without this, all four aggregations of one summary
-            // each pay a failed scan before falling back.
+            // Latch it off so the remaining grouping does not repeat the failed enrichment.
             *names = false;
             run(false)
         }
@@ -856,76 +846,6 @@ fn scan_period(
         days = filled;
     }
     Ok((st, days, hours))
-}
-
-/// Scan core profit AND trade count into the `days` buckets, sorting profitable cores
-/// first. Both series share one pass and one grid, so a bucket's profit and its count can
-/// never come from different rows.
-///
-/// Any query or row-conversion failure aborts the complete series.
-fn core_series(
-    conn: &Connection,
-    src: &str,
-    q: &Query,
-    days: &[DayPoint],
-    bucket: i64,
-) -> ReadResult<Vec<CoreSeries>> {
-    const CTX: &str = "analytics: core_series";
-    let Some(t0) = days.first().map(|d| d.start) else {
-        return Ok(Vec::new());
-    };
-    let nb = days.len();
-    let sql = format!(
-        "SELECT o.core_uid, COALESCE(o.core_name,''), o.closedate,
-                COALESCE(o.pnl,0)
-         FROM {src}"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
-    let rows = stmt
-        .query_map(rusqlite::params![q.from, q.to], |r| {
-            // core_uid as Option: `unified_from` projects NULL for a source that has no
-            // such column, and a hard i64 read there aborts core_series — which throws the
-            // WHOLE summary away, `days` included, over one unattributable row.
-            Ok((
-                r.get::<_, Option<i64>>(0)?.unwrap_or(0) as u64,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, f64>(3)?,
-            ))
-        })
-        .map_err(|e| read_fail_on(conn, CTX, e))?;
-    let mut map: std::collections::HashMap<u64, (String, Vec<f64>, Vec<i64>)> =
-        std::collections::HashMap::new();
-    for row in rows {
-        // core_uid / closedate / profitbtc all move numbers here.
-        let (uid, name, close, profit) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
-        let idx = (((close - t0) / bucket).max(0) as usize).min(nb - 1);
-        let e = map
-            .entry(uid)
-            .or_insert_with(|| (name.clone(), vec![0.0; nb], vec![0i64; nb]));
-        if e.0.is_empty() {
-            e.0 = name;
-        }
-        e.1[idx] += profit;
-        e.2[idx] += 1;
-    }
-    let mut out: Vec<CoreSeries> = map
-        .into_iter()
-        .map(|(uid, (name, per_bucket, per_bucket_trades))| {
-            let total = per_bucket.iter().sum();
-            let trades = per_bucket_trades.iter().sum();
-            CoreSeries {
-                uid,
-                name,
-                per_bucket,
-                per_bucket_trades,
-                total,
-                trades,
-            }
-        })
-        .collect();
-    out.sort_by(|a, b| b.total.total_cmp(&a.total));
-    Ok(out)
 }
 
 /// Regression tests for the read-failure contract: a damaged replica must

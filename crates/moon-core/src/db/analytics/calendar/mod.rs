@@ -73,21 +73,39 @@ pub(super) fn calendar_period_from(
         .transpose()?
         .flatten();
     let previous = match (previous, previous_projection) {
-        (Some(query), Some(projection)) => {
-            Some(calendar_cells_from(conn, query, projection)?.iter().fold(
-                (0.0f64, 0i64, 0i64),
-                |total, day| {
-                    (
-                        total.0 + day.profit,
-                        total.1 + day.trades,
-                        total.2 + day.wins,
-                    )
-                },
-            ))
-        }
+        (Some(query), Some(projection)) => Some(calendar_total_from(conn, query, projection)?),
         (Some(_), None) | (None, _) => None,
     };
     Ok(scoped(decision, CalendarPeriod { current, previous }))
+}
+
+/// Aggregate one comparison period without constructing and folding daily cells.
+///
+/// Args:
+///     conn: Existing SQLite connection or pinned snapshot.
+///     q: Comparison scope and time range.
+///     projection: Money projection compatible with the current period.
+///
+/// Returns:
+///     Period profit, trade count, and win count, or a classified read failure.
+fn calendar_total_from(
+    conn: &Connection,
+    q: &Query,
+    projection: ProjectionMode,
+) -> ReadResult<(f64, i64, i64)> {
+    const CTX: &str = "analytics: calendar_total";
+    let mut q = q.clone();
+    if q.from < 0 {
+        q.from = min_closedate(conn)?;
+    }
+    let Some(src) = unified_from_mode(conn, &q, projection)? else {
+        return Ok((0.0, 0, 0));
+    };
+    let sql = format!("SELECT {CELL_AGG} FROM {src}");
+    conn.query_row(&sql, rusqlite::params![q.from, q.to], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })
+    .map_err(|error| read_fail_on(conn, CTX, error))
 }
 
 /// Decide whether a Calendar comparison period shares the current profit unit.
