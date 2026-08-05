@@ -222,7 +222,8 @@ impl Backend {
     /// works that way: the edit goes back as a re-encoded blob. That round trip keeps only the
     /// fields `alert_blob` decodes, which is a property of the format work being unfinished rather
     /// than of this call — and refusing it here while the drag path does it anyway would only make
-    /// the two disagree. What such a figure must NOT be offered is a fill: the blob has no field
+    /// the two disagree. One field is not merely dropped but rewritten: a thickness the wire could
+    /// not have meant is repaired on decode and the repair goes back with the next edit. What such a figure must NOT be offered is a fill: the blob has no field
     /// for one, so it would be reverted by the next reconcile; the settings panel drops that row.
     pub(crate) fn edit_figure(
         &mut self,
