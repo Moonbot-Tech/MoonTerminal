@@ -297,9 +297,15 @@ impl PlatformLayers {
         crate::diag::bump(&crate::diag::CHART_BG_DRAW);
         self.background
             .render(background_params, device, context, rtv, gpu);
-        self.userdata.render_zones(view, context, rtv, gpu);
         crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
         self.grid.render(grid_params, device, context, rtv, gpu);
+        // Zones come AFTER the grid, not before it: the grid pass paints the plot's background
+        // across its whole rect (`grid.hlsl`, alpha = `g_bg_alpha`, which is 1 whenever the photo
+        // backdrop is off — its default), so anything drawn between the background layer and the
+        // grid is erased. Measured: an order zone drawn before the grid never reached the screen.
+        // Unconditional on purpose — with a backdrop the grid draws lines only, and a fill over
+        // them is what every charting package does. Still below the candles, where a band belongs.
+        self.userdata.render_zones(view, context, rtv, gpu);
         // Draw candles below trade crosses; the combo layer is blitted on top.
         crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
         self.candles.render(view, context, rtv, gpu, panel_clip);

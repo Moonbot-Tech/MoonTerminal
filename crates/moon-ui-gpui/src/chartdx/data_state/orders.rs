@@ -132,8 +132,9 @@ impl ChartDataState {
                     );
                     // Add user figures through the same userdata layers after orders, placing them
                     // above order zones but below cursor markers. Their FILLS join the zone layer
-                    // below the grid, before `hash_order_zones` reads it — a fill that appears or
-                    // moves must invalidate the base cache exactly like an order zone.
+                    // (drawn over the grid, under the candles) before `hash_order_zones` reads it —
+                    // a fill that appears or moves must invalidate the base cache exactly like an
+                    // order zone.
                     self.append_figure_geometry(
                         pane.core,
                         &pane.market,

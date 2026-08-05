@@ -32,8 +32,10 @@ static const float2 CORNERS[6] = {
 };
 
 // ── Zone (ZoneInstance: color, m=(price0,price1,t0_rel,t1_rel)) ─────────────
-// A band is bounded in time by m.zw; the +-1e30 sentinel (an order zone) clamps to the plot's own
-// edges, which is exactly what the fixed bounds used to be.
+// A band is bounded in time by m.zw; the +-1e30 sentinel (an order zone) clamps to the plot's
+// edges, which is exactly what the fixed bounds used to be. The right one is `cv_pad`, the edge of
+// the order-book column rather than of the plot — a full-width band runs under the book, which
+// blits over it later in the same pass.
 struct Zone { float4 color; float4 m; };
 StructuredBuffer<Zone> zones : register(t1);
 struct ZOut { float4 pos : SV_Position; float4 color : COLOR0; };

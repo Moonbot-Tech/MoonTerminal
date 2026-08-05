@@ -42,7 +42,8 @@ fn zone_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u3
     // line that bounds it, and the offset walks as view_price0 drifts between bakes.
     let y0 = round(cv.bounds.y + cv.bounds.w - (z.m.x - cv.view_price0) * cv.price_to_px);
     let y1 = round(cv.bounds.y + cv.bounds.w - (z.m.y - cv.view_price0) * cv.price_to_px);
-    // Bounded in time by m.zw; the ±1e30 sentinel (an order zone) clamps to the plot's edges.
+    // Bounded in time by m.zw; the ±1e30 sentinel (an order zone) clamps to the plot's edges — the
+    // right one being the order book's, which blits over the band later in the same pass.
     // `edge` can pan LEFT of the plot, which would make min > max; order the bounds first.
     let lo = cv.bounds.x;
     let hi = max(cv.bounds.x + (cv.pad - cv.view_time0) * cv.time_to_px, lo);

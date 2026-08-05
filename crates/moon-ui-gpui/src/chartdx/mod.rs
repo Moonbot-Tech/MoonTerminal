@@ -308,8 +308,9 @@ struct PaneRender {
     last_book_hi: f32,
     /// Last order revision uploaded into the userdata buffer.
     last_order_lines_rev: u64,
-    /// Last order-zone signature. Zones live in the base cache below the grid, while lines and traces
-    /// render as an overlay. Zone changes must invalidate base; line hover and drag must not.
+    /// Last order-zone signature. Zones live in the base cache, drawn over the grid and under the
+    /// candles, while lines and traces render as an overlay. Zone changes must invalidate base;
+    /// line hover and drag must not.
     last_order_zone_sig: u64,
     /// Local time when the userdata buffer was rebuilt from `order_lines_rev`.
     last_order_lines_sync_ms: f64,

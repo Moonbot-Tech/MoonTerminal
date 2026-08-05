@@ -40,9 +40,11 @@ GridOut grid_vertex(uint vid : SV_VertexID) {
 }
 
 float4 grid_fragment(GridOut i) : SV_Target {
-    // Chart base: OPAQUE background with grid lines above it. This is the bottom own-pass layer;
-    // the combo bitmap of crosses is TRANSPARENT above it (the background is not duplicated),
-    // so the grid remains visible between crosses. With a photo backdrop (Background layer),
+    // Chart base: OPAQUE background with grid lines above it. Whenever it supplies that background
+    // (g_bg_alpha = 1, i.e. no photo backdrop) this pass ERASES whatever sits under it, which is
+    // why the zone layer (order zones, figure fills) is drawn after it and not before; the combo
+    // bitmap of crosses is TRANSPARENT above it (the background is not duplicated), so the grid
+    // remains visible between crosses. With a photo backdrop (Background layer),
     // that layer supplies the background and this pass leaves only the lines.
     // Backbuffer target = B8G8R8A8_UNORM (NOT sRGB): GPUI and crosses write sRGB values DIRECTLY
     // because the GPU does not encode linear→sRGB. Do the same WITHOUT converting to linear;

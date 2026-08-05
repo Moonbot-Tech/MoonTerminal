@@ -52,6 +52,13 @@ impl WgpuLayers {
         let binds = self.prepared_binds.as_ref().unwrap();
         crate::diag::bump(&crate::diag::CHART_BG_DRAW);
         draw_pipeline(pass, &pipelines.background, &binds.bg, 6, 1);
+        crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
+        draw_pipeline(pass, &pipelines.grid, &binds.grid, 6, 1);
+        // Zones come AFTER the grid: the grid pass paints the plot's background across its whole
+        // rect (`native_grid.wgsl`, alpha = `g_bg_alpha`, which is 1 whenever the photo backdrop is
+        // off — its default), so a band drawn before it is erased. Unconditional on purpose: with a
+        // backdrop the grid draws lines only, and a fill over them is what every charting package
+        // does. Still below the candles, which is where a band belongs.
         if !self.zones.is_empty() {
             crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
@@ -62,8 +69,6 @@ impl WgpuLayers {
                 self.zones.len() as u32,
             );
         }
-        crate::diag::bump(&crate::diag::CHART_GRID_DRAW);
-        draw_pipeline(pass, &pipelines.grid, &binds.grid, 6, 1);
         // Candles render beneath trade crosses; combo is blitted over the base cache.
         if !self.candles.is_empty() {
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
