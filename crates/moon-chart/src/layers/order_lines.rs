@@ -23,7 +23,7 @@ pub const TIME_UNBOUNDED: f32 = 1e30;
 
 // Far past any real timestamp — a Unix millisecond stays under 1e13 for the next thousand years —
 // so no figure's own span can collide with the sentinel, and finite so Metal's fast math keeps it.
-const _: () = assert!(TIME_UNBOUNDED > 1e20);
+const _: () = assert!(TIME_UNBOUNDED > 1e20 && TIME_UNBOUNDED < f32::MAX);
 
 /// Instance of a filled band between two prices, bounded in time.
 ///

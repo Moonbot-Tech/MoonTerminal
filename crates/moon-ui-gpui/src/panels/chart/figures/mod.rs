@@ -494,7 +494,8 @@ impl ChartPanel {
 
     /// Finish a figure drag and re-upsert its changed coordinates when it is armed as an alert.
     ///
-    /// Returns whether an active drag consumed the mouse-up event.
+    /// Called on mouse-up, and from the no-button motion path for a drag whose mouse-up was lost.
+    /// Returns whether there was an active drag to finish.
     pub(super) fn finish_fig_drag(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(drag) = self.fig_drag.take() else {
             return false;

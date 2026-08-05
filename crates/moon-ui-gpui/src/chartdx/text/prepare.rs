@@ -421,9 +421,10 @@ impl RenderState {
                         x
                     }
                     // The label rides the line's right end, clipped INTO the plot: a scale must
-                    // stay readable while any part of its lines is on screen. These are the only
-                    // readouts drawn without the pointer on the figure, so the per-tab "line
-                    // labels" switch — which hides every other permanent label — hides them too.
+                    // stay readable while any part of its lines is on screen. A scale's levels are
+                    // the one readout that stays after the pointer leaves, so the per-tab "line
+                    // labels" switch hides them as it hides the order column — except on the
+                    // figure being drawn, where the numbers are what the user is aiming with.
                     FigLabelPlace::LineEnd { t0_ms, t1_ms } => {
                         if label.permanent && !self.line_labels {
                             continue;

@@ -68,11 +68,12 @@ pub struct FigureLabel {
     pub price: f32,
     pub place: LabelPlace,
     pub text: LabelValue,
-    /// Whether this readout is drawn without the pointer on the figure.
+    /// Whether this readout belongs to a figure that is already on the chart, rather than to the
+    /// one being drawn.
     ///
-    /// Only a ratio scale produces those. They are the labels the per-tab "line labels" switch
-    /// hides, exactly as it hides the order column; a readout that appears under the cursor is
-    /// interaction feedback and stays.
+    /// A permanent readout is what the per-tab "line labels" switch hides, exactly as it hides the
+    /// order column. The figure being DRAWN keeps its readout regardless: the numbers are what the
+    /// user is aiming with.
     pub permanent: bool,
     /// `0xRRGGBB` for the text layer, which has no alpha of its own.
     pub color: u32,
@@ -169,9 +170,12 @@ struct Sink<'a, 'b> {
     /// candles and book of every pane while the user is still aiming. Lines and readouts are what
     /// aiming needs; the fill returns on release, in one bake.
     fills: bool,
-    /// Whether the figure being built is under the cursor or being drawn, so its labels are
-    /// interaction feedback rather than permanent ones.
-    hot: bool,
+    /// Whether the figure being built is the DRAFT, whose labels are transient by nature.
+    ///
+    /// Everything else's labels are permanent: they stay on the chart after the pointer leaves,
+    /// which is what the per-tab "line labels" switch is for. Deriving this from hover instead
+    /// would let pointing at a figure defeat that switch.
+    draft: bool,
     out: &'a mut FigureBuffers<'b>,
 }
 
@@ -211,7 +215,10 @@ impl GeomSink for Sink<'_, '_> {
         // The order path refuses a non-finite or non-positive band (`build_order_geometry`), and
         // figure fills share ONE draw call with it: a NaN from a hand-edited file would take the
         // whole call down, not just this band.
-        if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0 && (p0 - p1).abs() > 1e-9) {
+        // No epsilon on the height: an absolute one drops a band that is many pixels tall on a
+        // market priced at 1e-8 (the pitfall `view.rs` documents), and a truly flat band simply
+        // draws nothing.
+        if !(p0.is_finite() && p1.is_finite() && p0 > 0.0 && p1 > 0.0) {
             return;
         }
         let (t0, t1) = (self.to_rel(t0_ms), self.to_rel(t1_ms));
@@ -239,7 +246,7 @@ impl GeomSink for Sink<'_, '_> {
     }
 
     fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, color: [f32; 4]) {
-        let permanent = !self.hot;
+        let permanent = !self.draft;
         let text = match text {
             LabelText::Price(p) => LabelValue::Price(p),
             LabelText::PctDelta { from, to } => LabelValue::PctDelta { from, to },
@@ -267,7 +274,7 @@ pub fn build_figure_geometry<'a>(
     let mut sink = Sink {
         epoch_ms: view.epoch_ms,
         fills: true,
-        hot: false,
+        draft: false,
         out,
     };
     for fig in figures {
@@ -275,7 +282,6 @@ pub fn build_figure_geometry<'a>(
         let is_hovered = view.hovered == Some(fig.id);
         let ctx = fig_ctx(fig, is_hovered, is_sel);
         sink.fills = view.dragging != Some(fig.id);
-        sink.hot = ctx.hot;
         build_figure(&fig.kind, &ctx, &mut sink);
     }
     if let Some(d) = draft {
@@ -292,7 +298,7 @@ pub fn build_figure_geometry<'a>(
             handles: false,
         };
         sink.fills = false;
-        sink.hot = true;
+        sink.draft = true;
         build_figure(&d.kind, &ctx, &mut sink);
     }
 }

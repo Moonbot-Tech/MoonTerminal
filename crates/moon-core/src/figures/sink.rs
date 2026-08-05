@@ -76,9 +76,12 @@ pub trait GeomSink {
     /// tool grabs by handle, so a tool does not push its own.
     fn handle(&mut self, at: FigNode, color: [f32; 4]);
 
-    /// Text anchored to a node. Only a figure under the cursor, or the one being drawn, emits a
-    /// label ([`BuildCtx::hot`]) — never a merely selected one, which is a sticky state — so an
-    /// idle chart pays nothing for them.
+    /// Text anchored to a node.
+    ///
+    /// Most tools label only a figure under the cursor or the one being drawn ([`BuildCtx::hot`])
+    /// — never a merely selected one, which is a sticky state — so an idle chart pays nothing for
+    /// them. A tool whose numbers ARE the reading, like a ratio scale, labels always and says so
+    /// by ignoring `hot`.
     fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, color: [f32; 4]);
 }
 

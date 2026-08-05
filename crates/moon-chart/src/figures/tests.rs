@@ -117,8 +117,8 @@ fn a_hovered_figure_gains_its_readout() {
     assert_eq!(labels.len(), 1);
     assert_eq!(labels[0].text, LabelValue::Price(100.0));
     assert!(
-        !labels[0].permanent,
-        "a hover readout is feedback, not a permanent label"
+        labels[0].permanent,
+        "a figure already on the chart carries permanent readouts, hovered or not"
     );
     assert_eq!(labels[0].place, LabelPlace::RightEdge);
     assert_eq!(labels[0].color, 0x0A_14_1E, "label takes the figure color");
@@ -177,6 +177,10 @@ fn a_draft_draws_bright_and_thick_without_knots() {
     assert_eq!(hlines[0].color[3], 1.0);
     assert!(markers.is_empty());
     assert_eq!(labels.len(), 1, "a draft reads out while it is drawn");
+    assert!(
+        !labels[0].permanent,
+        "the figure being drawn keeps its numbers whatever the label switch says"
+    );
 }
 
 #[test]
