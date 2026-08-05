@@ -308,7 +308,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
     let figures = moon_core::figures::FigureStore::load();
     let uid_floor = observed_uid_floor(&layout, &saved_chart_specs, &figures);
 
-    let cfg = AppConfig::load(uid_floor)?;
+    let cfg = AppConfig::load(uid_floor, firetest_config.is_none())?;
+    // FireTest drives production surfaces but must not create durable backups. Normal startup
+    // starts the shared UTC-noon scheduler before sessions can initialize a fresh strategy database.
+    if firetest_config.is_none() {
+        moon_core::backups::start_daily(&cfg);
+    }
     // Apply the configured UI language to the global rust-i18n locale used by t! here and in MoonUI.
     rust_i18n::set_locale(cfg.language.code());
     // Configure file logging from the config and purge old log files once at startup.

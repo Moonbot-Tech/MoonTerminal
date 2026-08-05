@@ -5,7 +5,7 @@
 //!
 //! This module also owns the crate's single Gregorian calendar implementation
 //! (`civil_from_days`), consumed by `db` for report timestamps, `strat_db` for compact version
-//! labels, and `config::backup` for snapshot directory names.
+//! labels, and the config/strategy backup domains for every snapshot directory name.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -52,7 +52,7 @@ const STAMP_MAX: &str = "99991231-235959";
 
 /// Convert Unix milliseconds to a filename-safe UTC timestamp, `YYYYMMDD-HHMMSS`.
 ///
-/// Two properties are required by `config::backup`:
+/// Two properties are required by the config and strategy backup domains:
 /// - **Windows compatibility**, because `:` is forbidden and rules out `HH:MM:SS`.
 /// - **Lexicographic order equals chronological order**, provided by fixed width, leading zeroes,
 ///   and most-significant components first. Snapshot pruning therefore sorts by NAME instead of

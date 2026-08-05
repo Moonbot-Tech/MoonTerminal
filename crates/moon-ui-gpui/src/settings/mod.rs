@@ -2,9 +2,8 @@
 //! The separate OS window gives draft-backed tabs a live `Backend.preview`; closing the window
 //! discards unsaved changes, while the Storage tab applies its separately persisted settings
 //! immediately.
-//! Save writes to disk through `AppConfig::save_with_snapshot`, a deliberate save preceded by a
-//! config copy in `backups/`; ordinary `save` without a snapshot serves the routine `config_dirty`
-//! drain.
+//! Save writes to disk through `AppConfig::save`; the shared daily scheduler independently owns
+//! recovery copies in `backups/settings/`.
 //!
 //! The window is split into tabs like the egui original. This module owns the `SettingsView`
 //! state and `open`; tab state and `impl SettingsView` blocks live in submodules. [`render`] owns

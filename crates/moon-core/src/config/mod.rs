@@ -13,7 +13,7 @@
 //! - `store` reads and writes files, including encryption and damaged-settings backups;
 //! - `reconcile` merges file data into runtime state and assigns stable uids;
 //! - `migrate` performs one-time migrations from legacy formats;
-//! - `backup` snapshots both files in `backups/` before migration and deliberate saves;
+//! - `backup` creates daily snapshots in `backups/settings/` and protects schema migrations;
 //! - `uid_counter` requires every counter construction path to name the optional store floor.
 
 pub mod badges;
@@ -79,29 +79,9 @@ pub fn write_file_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Resu
     toml_io::write_atomic(path, bytes, label)
 }
 
-/// Outcome of the snapshot accompanying a save.
-///
-/// Kept separate from `Result`: snapshot failure does NOT cancel the config write, but it must not
-/// disappear either, because reporting success without a rollback copy would mislead the user.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnapshotOutcome {
-    /// A copy was taken, or nothing existed to copy on first launch.
-    Ok,
-    /// The copy failed. The config was written, but no rollback is available.
-    Failed,
-}
-
-/// Intent of a config write: a routine drain or a deliberate save.
-///
-/// Named after PURPOSE rather than mechanism ("whether to take a snapshot"): snapshots are the
-/// current consequence of this distinction, not its essence. The core cannot infer intent, so the
-/// caller supplies it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SaveKind {
-    /// Background write from the `config_dirty` drain, application exit, or a header edit.
-    Routine,
-    /// A deliberate user save for which rollback may be needed.
-    Deliberate,
+/// Bring the latest due settings slot current for the unified backup scheduler.
+pub(crate) fn backup_due_at(now_ms: i64) -> anyhow::Result<crate::backups::DueOutcome> {
+    backup::backup_due_at(now_ms)
 }
 
 /// Add a default [`GroupConfig`] for every server group that has no persisted row yet.
@@ -257,7 +237,8 @@ impl AppConfig {
     /// none and persists them, so a floor applied later would arrive after the collision it
     /// exists to prevent. `None` means no durable store contributed a uid, whether because the
     /// stores were absent, empty, or unreadable.
-    pub fn load(uid_floor: Option<u64>) -> anyhow::Result<Self> {
+    /// `backups_allowed` is false for FireTest, whose run must not create durable backups.
+    pub fn load(uid_floor: Option<u64>, backups_allowed: bool) -> anyhow::Result<Self> {
         // On macOS/Linux, the first launch after the storage move migrates configs from the
         // bundle beside the executable to the user-data directory. On Windows this is a no-op
         // because data_dir == exe_dir.
@@ -293,8 +274,8 @@ impl AppConfig {
             let schema_upgrade = meta.version < schema::SCHEMA_VERSION;
             // Snapshot BEFORE any write on this path: the save below replaces both files by atomic
             // rename, after which the pre-migration bytes cannot be recovered.
-            if schema_upgrade {
-                backup::snapshot(backup::Trigger::SchemaMigration);
+            if schema_upgrade && backups_allowed {
+                backup::backup_before_schema_migration();
             }
             let merged = reconcile::merge(sf, meta, uid_floor);
             // hotkeys.toml takes precedence. If absent, migrate the legacy settings.toml
@@ -344,7 +325,7 @@ impl AppConfig {
             // FAIL CLOSED: `save` itself rejects `settings_unreadable` (see `save_impl`). This
             // explicit log makes the reason visible instead of presenting a mysterious write
             // failure.
-            if merged.dirty {
+            if merged.dirty || backup::pair_write_pending() {
                 if cfg.settings_unreadable {
                     log::error!(
                         "settings.toml не прочитался — запись конфига отключена на весь сеанс, \
@@ -564,30 +545,16 @@ impl AppConfig {
     /// files. Assigns stable uids and validates unique names and API keys.
     /// Takes `&mut self` because it may assign uids to new cores.
     ///
-    /// WITHOUT a snapshot: this path serves the routine `config_dirty` drain (the 100-ms loop,
-    /// application exit, and header edits), which fires for small changes and would evict useful
-    /// snapshots from retention within minutes. Deliberate saves use [`Self::save_with_snapshot`].
+    /// Daily recovery snapshots are owned by the unified scheduler, not by individual saves.
     pub fn save(&mut self) -> anyhow::Result<()> {
-        self.save_impl(SaveKind::Routine).map(|_| ())
+        self.save_impl()
     }
 
-    /// Like [`Self::save`], but first copies the current files into `backups/`.
-    ///
-    /// Used for deliberate saves from Settings where the user may need a rollback. The name
-    /// describes write BEHAVIOR rather than a UI surface because `moon-core` knows nothing about
-    /// windows.
-    ///
-    /// `Ok(SnapshotOutcome::Failed)` means the config WAS WRITTEN but no rollback copy exists. The
-    /// caller must surface this or a success message would falsely promise protection.
-    pub fn save_with_snapshot(&mut self) -> anyhow::Result<SnapshotOutcome> {
-        self.save_impl(SaveKind::Deliberate)
-    }
-
-    /// Shared save implementation; `kind` decides whether to snapshot before writing.
+    /// Shared save implementation for every config persistence path.
     ///
     /// This is the ONLY config write point, so the write block belongs here. It covers Settings,
     /// the timer drain, the exit write, and migration rather than only one remembered path.
-    fn save_impl(&mut self, kind: SaveKind) -> anyhow::Result<SnapshotOutcome> {
+    fn save_impl(&mut self) -> anyhow::Result<()> {
         if self.settings_unreadable {
             anyhow::bail!(
                 "settings.toml не был прочитан при старте — запись запрещена, чтобы не \
@@ -619,23 +586,22 @@ impl AppConfig {
             self.report_valuation_mode,
             self.next_uid.get(),
         );
-        // Snapshot AFTER validation and immediately before the first write. Taking it earlier
-        // would consume a retention slot for every rejected save without writing anything: the
-        // button is always enabled and duplicate core names fail only in `validate`. Thirty such
-        // attempts would be enough to evict a migration snapshot.
-        let outcome = match kind {
-            SaveKind::Deliberate => backup::snapshot(backup::Trigger::SettingsSave),
-            SaveKind::Routine => SnapshotOutcome::Ok,
-        };
-        store::write_servers(&sf)?;
-        store::write_settings(&meta)?;
+        // Hold one pair lock across both atomic replacements so a background snapshot cannot mix
+        // servers from one config generation with settings metadata from another.
+        backup::with_config_pair(|| -> anyhow::Result<()> {
+            backup::begin_pair_write()?;
+            store::write_servers(&sf)?;
+            store::write_settings(&meta)?;
+            backup::finish_pair_write()?;
+            Ok(())
+        })?;
         // Theme, line styles, detect badges, and hotkeys each use their own portable file,
         // independently of settings.toml.
         self.theme.save()?;
         self.orders.save()?;
         self.badges.save();
         self.hotkeys.save()?;
-        Ok(outcome)
+        Ok(())
     }
 
     /// Chart theme for the active UI mode (dark/light according to `ui_theme_mode`).

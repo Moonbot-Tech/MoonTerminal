@@ -18,6 +18,7 @@ mod analytics;
 mod chart;
 mod naming;
 mod shell;
+mod startup;
 mod strategies;
 mod theme;
 mod tuner;

@@ -24,6 +24,7 @@
 //! Dumps arrive normalized: the server omits fields whose values equal schema defaults, so the
 //! feed materializes defaults before sending them, preventing phantom versions from "vanished" fields.
 
+pub mod backup;
 pub mod stats;
 mod write;
 
@@ -67,6 +68,8 @@ pub enum StratMsg {
         core_name: String,
         initial: bool,
         strategies: Vec<StratDump>,
+        /// One-shot durable-commit result consumed by the originating feed.
+        ack: SyncSender<bool>,
     },
 }
 
@@ -81,15 +84,17 @@ pub struct StratSink {
 }
 
 impl StratSink {
-    pub fn send(&self, msg: StratMsg) {
+    /// Queue one complete set, returning whether the writer accepted it.
+    pub fn send(&self, msg: StratMsg) -> bool {
         match self.tx.try_send(msg) {
-            Ok(()) => {}
+            Ok(()) => true,
             Err(TrySendError::Full(_)) => {
                 log::warn!(
                     "стратегии(db): очередь writer'а полна — набор пропущен (догонит следующий)"
                 );
+                false
             }
-            Err(TrySendError::Disconnected(_)) => {}
+            Err(TrySendError::Disconnected(_)) => false,
         }
     }
 
@@ -162,6 +167,7 @@ pub fn generation() -> u64 {
         .unwrap_or(0)
 }
 
+/// Initialize lazy strategy storage and start its writer.
 fn spawn_writer() -> Option<StratSink> {
     let path = paths::strategies_db_path();
     let conn = match Connection::open(&path) {
@@ -194,8 +200,9 @@ fn spawn_writer() -> Option<StratSink> {
                         core_name,
                         initial,
                         strategies,
+                        ack,
                     } => {
-                        match write::apply_full_set(
+                        let committed = match write::apply_full_set(
                             &conn,
                             &mut state,
                             core_uid,
@@ -205,12 +212,21 @@ fn spawn_writer() -> Option<StratSink> {
                         ) {
                             Ok(n) if n > 0 => {
                                 gen_writer.fetch_add(1, Ordering::Relaxed);
+                                crate::backups::notify_strategy_commit(core_uid);
+                                true
                             }
-                            Ok(_) => {}
-                            Err(e) => log::error!(
-                                "стратегии(db): набор ядра {core_uid} не записался: {e:#}"
-                            ),
-                        }
+                            Ok(_) => {
+                                crate::backups::notify_strategy_commit(core_uid);
+                                true
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "стратегии(db): набор ядра {core_uid} не записался: {e:#}"
+                                );
+                                false
+                            }
+                        };
+                        let _ = ack.try_send(committed);
                     }
                 }
             }

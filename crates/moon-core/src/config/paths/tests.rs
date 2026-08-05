@@ -1,6 +1,9 @@
 //! Checks for one-time migration lists.
 
-use super::{BACKUPS_DIR_NAME, CFG_FILES, DAMAGED_REPORTS_DIR_NAME, ROOT_FILES};
+use super::{
+    backups_dir, settings_backups_dir, strategies_backups_dir, BACKUPS_DIR_NAME, CFG_FILES,
+    DAMAGED_REPORTS_DIR_NAME, ROOT_FILES,
+};
 
 /// No migration list may contain a protected snapshot DIRECTORY.
 ///
@@ -25,4 +28,17 @@ fn the_migration_lists_never_carry_the_backup_directory() {
             );
         }
     }
+}
+
+/// Removing either `.join(...)` in `paths.rs` would mix settings and strategy snapshots in the
+/// shared parent, letting one subsystem's retention inspect the other subsystem's files.
+#[test]
+fn backup_subsystems_have_distinct_children_of_the_canonical_root() {
+    let root = backups_dir();
+    let settings = settings_backups_dir();
+    let strategies = strategies_backups_dir();
+
+    assert_eq!(settings.parent(), Some(root.as_path()));
+    assert_eq!(strategies.parent(), Some(root.as_path()));
+    assert_ne!(settings, strategies);
 }

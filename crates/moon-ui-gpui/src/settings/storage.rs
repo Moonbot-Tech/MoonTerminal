@@ -343,14 +343,7 @@ impl SettingsView {
                         tool_btn("strat-backup", t!("storage.backup").to_string(), busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.storage_op(cx, "storage.op_backup", || {
-                                    let src = paths::strategies_db_path();
-                                    anyhow::ensure!(src.exists(), "БД стратегий ещё не создана");
-                                    let stamp = moon_core::util::utc_stamp_compact(
-                                        moon_core::util::now_unix_ms_i64(),
-                                    );
-                                    let dst = paths::db_dir()
-                                        .join(format!("strategies-backup-{stamp}.sqlite"));
-                                    moon_core::db::maint::backup_db(&src, &dst)
+                                    moon_core::strat_db::backup::backup_now().map(|_| ())
                                 });
                             }))
                             .render(),

@@ -4,8 +4,8 @@
 //! included here: it is reserved for preview and is not currently sent to cores.
 //!
 //! The function mutates the supplied config IN MEMORY and writes nothing to disk. The Save button
-//! calls `AppConfig::save_with_snapshot()` (spec section 12). A snapshot is required because import
-//! changes many settings at once, which is precisely when rollback is needed.
+//! calls `AppConfig::save()` (spec section 12). Daily recovery snapshots remain independent of the
+//! number of edits applied by one import.
 
 use std::collections::HashSet;
 

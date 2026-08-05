@@ -7,7 +7,7 @@ use gpui::*;
 use moon_ui::Root;
 
 use super::SettingsView;
-use moon_core::config::{AppConfig, SnapshotOutcome};
+use moon_core::config::AppConfig;
 
 /// One core, projected to exactly what the window decision reads.
 ///
@@ -171,9 +171,7 @@ impl SettingsView {
             // Commit the candidate only after validation and I/O succeed. Otherwise the config
             // would change without corresponding session and window reconciliation.
             let mut candidate = b.preview.as_ref().unwrap_or(&b.config).clone();
-            // Preserve the preceding on-disk files in `backups/` first: this is a deliberate user
-            // save for which rollback must be available.
-            let res = candidate.save_with_snapshot();
+            let res = candidate.save();
             if res.is_ok() {
                 // Propagate uid normalization from the save back into the draft so the next save
                 // cannot roll back `next_uid` and reuse an id from reports.sqlite history.
@@ -185,16 +183,10 @@ impl SettingsView {
             res
         });
         match res {
-            Ok(outcome) => {
-                // Snapshot failure does NOT cancel the save, but a normal success message would
-                // promise a nonexistent rollback copy precisely when the user relies on one.
-                let snapshot_failed = outcome == SnapshotOutcome::Failed;
-                let msg = if snapshot_failed {
-                    super::StatusMsg::Key("settings.saved_no_backup")
-                } else {
-                    super::StatusMsg::Key("settings.saved")
-                };
-                self.status = Some((msg, snapshot_failed));
+            Ok(()) => {
+                let after = self.backend.read(cx).config.clone();
+                moon_core::backups::update_daily_sources(&after);
+                self.status = Some((super::StatusMsg::Key("settings.saved"), false));
                 self.apply_settings(&before, cx);
             }
             Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),
