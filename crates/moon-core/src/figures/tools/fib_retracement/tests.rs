@@ -61,11 +61,11 @@ fn every_readout_rides_the_line_it_names() {
     for (_, place, _) in &sink.labels {
         assert_eq!(
             *place,
-            LabelPlace::LineEnd {
+            LabelPlace::LineSpan {
                 t0_ms: t0,
                 t1_ms: t1
             },
-            "a level label anchored anywhere but its own line vanishes with the box's end"
+            "a level label anchored anywhere but its own line vanishes with the box's edge"
         );
     }
 }
@@ -136,23 +136,94 @@ fn the_readout_names_the_level_and_the_price_it_sits_at() {
     }
 }
 
+/// Expected `[f32; 4]` for a level's own hue at `alpha`.
+///
+/// A deliberate COPY that shadows the production `hue` this module glob-imports: what the
+/// assertions below are for is the PAIRING of a level with its line, its band and its readout, and
+/// a shared conversion would make them pass by construction. The arithmetic itself is pinned once,
+/// against literals, by [`the_scale_reaches_the_sink_in_the_colour_it_declares`].
+fn hue(level: &crate::figures::levels::Level, alpha: f32) -> [f32; 4] {
+    let [r, g, b] = level.color;
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, alpha]
+}
+
 #[test]
-fn neighbouring_bands_differ_so_they_do_not_merge_into_one_wash() {
-    let f = fib();
-    let mut sink = crate::figures::tools::tests::RecSink::default();
-    let mut alphas = Vec::new();
-    crate::figures::build_figure(
-        &FigureKind::FibRetracement(f),
-        &ctx(false, false),
-        &mut sink,
+fn the_scale_reaches_the_sink_in_the_colour_it_declares() {
+    // The one assertion whose oracle is NOT the production conversion: 0.618 is teal #089981, and
+    // these are the floats a channel swap or a division by 256 would break while every pairing
+    // assertion below still passed.
+    let level = FIB_LEVELS
+        .iter()
+        .find(|l| l.ratio == 0.618)
+        .expect("0.618 left the scale");
+    assert_eq!(
+        level.color,
+        [0x08, 0x99, 0x81],
+        "0.618 is not teal any more"
     );
-    for a in sink.band_alphas.drain(..) {
-        alphas.push(a);
-    }
-    assert!(alphas.len() >= 2);
+    let sink = build(&FigureKind::FibRetracement(fib()), ctx(false, false));
+    let line = sink.seg_colors[1 + FIB_LEVELS.iter().position(|l| l.ratio == 0.618).unwrap()];
     assert!(
-        alphas.windows(2).all(|w| w[0] != w[1]),
-        "adjacent bands share an alpha: {alphas:?}"
+        (line[0] - 8.0 / 255.0).abs() < 1e-6,
+        "red channel: {line:?}"
+    );
+    assert!(
+        (line[1] - 153.0 / 255.0).abs() < 1e-6,
+        "green channel: {line:?}"
+    );
+    assert!(
+        (line[2] - 129.0 / 255.0).abs() < 1e-6,
+        "blue channel: {line:?}"
+    );
+}
+
+#[test]
+fn every_level_wears_its_own_hue_in_both_its_line_and_its_readout() {
+    let c = ctx(false, false);
+    let sink = build(&FigureKind::FibRetracement(fib()), c);
+    for (i, level) in FIB_LEVELS.iter().enumerate() {
+        // `+ 1`: the move itself is emitted first and keeps the FIGURE's colour, which is what
+        // makes the pencil's colour still visible on this tool.
+        let expected = hue(level, c.stroke.color[3] * level.emphasis.line_alpha());
+        assert_eq!(
+            sink.seg_colors[i + 1],
+            expected,
+            "level {} line is not its own hue",
+            level.ratio
+        );
+        assert_eq!(
+            sink.label_colors[i], expected,
+            "level {} readout does not match the line it names",
+            level.ratio
+        );
+    }
+    assert_ne!(
+        sink.seg_colors[0], sink.seg_colors[1],
+        "the move must not be repainted in the first level's hue"
+    );
+}
+
+#[test]
+fn a_band_takes_the_hue_of_the_smaller_ratio_it_joins_and_the_users_own_opacity() {
+    let c = ctx(false, false);
+    let sink = build(&FigureKind::FibRetracement(fib()), c);
+    // Band `i` joins levels `i` and `i + 1` only while every level is drawn; a fixture that
+    // dropped one would shift the mapping and quietly weaken every assertion below.
+    assert_eq!(
+        sink.band_colors.len(),
+        FIB_LEVELS.len() - 1,
+        "the fixture skipped a level, so band i no longer starts at level i"
+    );
+    for (i, band_color) in sink.band_colors.iter().enumerate() {
+        assert_eq!(
+            *band_color,
+            hue(&FIB_LEVELS[i], c.fill[3]),
+            "band {i} does not take the hue of the smaller of the two ratios it joins"
+        );
+    }
+    assert!(
+        sink.band_colors.windows(2).all(|w| w[0] != w[1]),
+        "neighbouring bands share a colour and merge into one wash"
     );
 }
 

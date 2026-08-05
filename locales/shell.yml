@@ -497,6 +497,10 @@ chart.fig.fill_opacity:
   ru: "Прозр. заливки"
   en: "Fill opacity"
   es: "Opacidad relleno"
+chart.fig.scale_fill:
+  ru: "Цвета шкалы"
+  en: "Scale colours"
+  es: "Colores de la escala"
 chart.fig.no_fill:
   ru: "Без заливки"
   en: "No fill"

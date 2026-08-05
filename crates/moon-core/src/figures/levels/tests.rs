@@ -73,8 +73,70 @@ fn the_key_levels_are_the_ones_a_trader_watches() {
 
 #[test]
 fn the_levels_a_trader_watches_are_the_loudest() {
+    // About OPACITY alone. Since every level gained its own hue, what the eye lands on first is
+    // mostly colour — emphasis now decides the tie between two levels, not the whole ranking.
     assert!(
         Emphasis::Key.line_alpha() > Emphasis::Anchor.line_alpha(),
         "the golden group must not be the quietest thing on the scale"
+    );
+}
+
+#[test]
+fn neighbouring_levels_never_share_a_hue() {
+    // Two levels of the same colour that touch cannot be told apart, and the band between them
+    // takes the smaller ratio's hue — so a repeated colour also merges two bands into one wash.
+    // Levels FAR apart may repeat (0 and 1 are both grey on purpose); adjacent ones may not.
+    for pair in FIB_LEVELS.windows(2) {
+        assert_ne!(
+            pair[0].color, pair[1].color,
+            "levels {} and {} share a colour",
+            pair[0].ratio, pair[1].ratio
+        );
+    }
+}
+
+#[test]
+fn the_moves_two_ends_are_the_same_colour_as_each_other() {
+    // 0 and 1 bound the move itself rather than retrace it, and reading them as a pair is the
+    // point of giving them one hue; a palette edit that splits them loses that.
+    let anchors: Vec<[u8; 3]> = FIB_LEVELS
+        .iter()
+        .filter(|l| l.emphasis == Emphasis::Anchor)
+        .map(|l| l.color)
+        .collect();
+    assert_eq!(anchors.len(), 2);
+    assert_eq!(anchors[0], anchors[1], "the move's two ends read as a pair");
+}
+
+#[test]
+fn no_level_is_drawn_in_a_colour_either_theme_swallows() {
+    // The palette is fixed in both themes (see `Level::color`), so it has to survive both: a
+    // near-black level disappears on the dark chart and a near-white one on the light chart, and
+    // either reads as a missing line rather than a quiet one.
+    for level in FIB_LEVELS {
+        let [r, g, b] = level.color;
+        assert!(
+            r.max(g).max(b) >= 0x60,
+            "level {} at {:?} is too dark for a dark chart",
+            level.ratio,
+            level.color
+        );
+        assert!(
+            r.min(g).min(b) <= 0xC8,
+            "level {} at {:?} is too pale for a light chart",
+            level.ratio,
+            level.color
+        );
+    }
+}
+
+#[test]
+fn the_pickers_swatch_is_one_of_the_scales_own_hues() {
+    // The popup shows ONE cell for a scale of eleven colours; if that cell drifts to a colour the
+    // scale never draws, it stops being a preview and becomes a lie about what is about to appear.
+    let swatch = super::scale_swatch();
+    assert!(
+        FIB_LEVELS.iter().any(|l| l.color == swatch),
+        "the scale swatch {swatch:?} belongs to no level"
     );
 }

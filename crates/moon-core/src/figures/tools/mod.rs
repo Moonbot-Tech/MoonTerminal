@@ -107,6 +107,11 @@ pub struct ToolDef {
     /// Not the same as "encloses an area": a triangle does, but the fill primitive paints an
     /// axis-aligned band and a triangle needs a polygon, so it joins them when that lands.
     pub fills: bool,
+    /// Whether the tool colours itself from a TYPED SCALE rather than from the style — a Fibonacci
+    /// level is recognised by its hue, the same one every charting package uses, so the scale owns
+    /// the colours and the style contributes only the opacity. The pencil popup drops its fill
+    /// swatches for such a tool instead of offering a colour that would change nothing.
+    pub level_palette: bool,
     /// Builds the finished figure from exactly `clicks` placed nodes. Returns `None` when given
     /// fewer, so a caller cannot construct a half-placed figure.
     pub make: fn(&[FigNode]) -> Option<FigureKind>,

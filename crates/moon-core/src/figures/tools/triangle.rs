@@ -23,6 +23,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.triangle",
     glyph: "△",
     clicks: 3,
+    level_palette: false,
     fills: false,
     alertable: true,
     make: |nodes| match nodes {

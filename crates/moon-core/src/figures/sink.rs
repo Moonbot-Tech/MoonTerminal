@@ -34,12 +34,14 @@ pub enum LabelPlace {
     /// full-width line has no point to aim at, and pinning its label to the edge is where every
     /// price label on this chart already sits.
     RightEdge,
-    /// At the right end of a horizontal line spanning `t0_ms..t1_ms`, clipped INTO the plot.
+    /// At the LEFT end of a horizontal line spanning `t0_ms..t1_ms`, clipped INTO the plot.
     ///
     /// A scale of eleven levels is read as a column of numbers; anchoring each to its own line
     /// keeps that column beside the lines it names, and clipping keeps it on screen while any
-    /// part of the line is — panning the line's end away must not blank the whole scale.
-    LineEnd { t0_ms: f64, t1_ms: f64 },
+    /// part of the line is — panning the line's start away must not blank the whole scale. The
+    /// left end, because that is where the eye starts a row and where every charting package puts
+    /// a ratio scale's numbers; the whole span is carried so the renderer can clip.
+    LineSpan { t0_ms: f64, t1_ms: f64 },
 }
 
 /// What a label says. Formatting happens in the chart's text pass, with the same precision as the

@@ -2,7 +2,9 @@
 //! shown while that mode is enabled, an Alert button for the selected figure, and a style popup
 //! opened by right-clicking the pencil. The popup controls the tool, the line's colour, thickness,
 //! opacity and kind (Solid, Dash, Dot, DashDot, DashDotDot), and the FILL — its colour and its own
-//! opacity, where "no fill" is simply zero opacity. Extracted from `strip.rs`.
+//! opacity, where "no fill" is simply zero opacity. A tool that colours itself from a typed scale
+//! keeps the fill's on/off and its opacity, but not the colour: its levels bring their own.
+//! Extracted from `strip.rs`.
 
 use gpui::*;
 use moon_ui::{
@@ -232,7 +234,51 @@ impl ChartTabs {
                     });
                 }),
         );
-        for (i, sw) in SWATCHES.iter().enumerate() {
+        // A tool that colours itself from a ratio scale gets no swatches — they would change
+        // nothing — but the row still has to be a two-state switch, so it gets an ON cell painted
+        // in one of the scale's own hues beside the "∅". Otherwise a fill turned off could only be
+        // brought back from the opacity stepper below, which is not where anyone looks for it.
+        if tool.def().level_palette {
+            let backend_on = self.backend.clone();
+            let [sw_r, sw_g, sw_b] = moon_core::figures::levels::scale_swatch();
+            fill_row = fill_row.child(
+                div()
+                    .id("fig-fill-scale")
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(gpui::rgb(
+                        ((sw_r as u32) << 16) | ((sw_g as u32) << 8) | sw_b as u32,
+                    ))
+                    .border_2()
+                    .border_color(if style.has_fill() {
+                        rgb(p.accent)
+                    } else {
+                        rgb(p.border)
+                    })
+                    .cursor_pointer()
+                    .tooltip(|_window, cx| {
+                        cx.new(|_| {
+                            moon_ui::MoonTooltipView::new(t!("chart.fig.scale_fill").to_string())
+                        })
+                        .into()
+                    })
+                    .on_click(move |_, _w, app| {
+                        backend_on.update(app, |b, bcx| {
+                            if b.fig_style.fill[3] == 0 {
+                                b.fig_style.fill[3] = DEFAULT_FILL_ALPHA;
+                            }
+                            bcx.notify();
+                        });
+                    }),
+            );
+        }
+        let fill_swatches: &[[u8; 4]] = if tool.def().level_palette {
+            &[]
+        } else {
+            &SWATCHES
+        };
+        for (i, sw) in fill_swatches.iter().enumerate() {
             let backend = self.backend.clone();
             let sw = *sw;
             let selected = style.has_fill() && style.fill[..3] == sw[..3];

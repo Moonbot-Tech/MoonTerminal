@@ -8,8 +8,10 @@
 //! therefore never touches this file; adding a PRIMITIVE touches it and nothing else.
 //!
 //! Fills go to the ORDER-ZONE layer, which is baked into the chart's base cache. Their colour is
-//! therefore resolved from the figure alone and never from hover or selection: a fill that
-//! brightened under the cursor would re-bake the background, grid, candles and book of every pane.
+//! therefore resolved from the figure and its tool alone — never from hover or selection: a fill
+//! that brightened under the cursor would re-bake the background, grid, candles and book of every
+//! pane. (A tool with a typed scale takes the hue from its own level and only the OPACITY from the
+//! figure; the rule that matters here is the same — no interaction state reaches a fill.)
 //!
 //! Visual language (to distinguish figures from order lines and make their state visible):
 //! - regular figure — THIN BASE-STYLE LINE;
@@ -62,7 +64,7 @@ pub enum LabelValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FigureLabel {
     /// Time relative to the chart epoch, in milliseconds. Unused by [`LabelPlace::RightEdge`] and
-    /// by [`LabelPlace::LineEnd`], which carries its own span — in ABSOLUTE milliseconds, as every
+    /// by [`LabelPlace::LineSpan`], which carries its own span — in ABSOLUTE milliseconds, as every
     /// tool speaks, unlike this field.
     pub t_rel: f32,
     pub price: f32,
@@ -81,8 +83,8 @@ pub struct FigureLabel {
 
 /// Buffers the figure layer appends into.
 pub struct FigureBuffers<'a> {
-    /// Filled bands. They ride the ORDER-ZONE layer, which draws below the grid, so a fill sits
-    /// behind the candles instead of over them.
+    /// Filled bands. They ride the ORDER-ZONE layer, which draws over the grid and under the
+    /// candles, so a fill tints the plot without burying the price action on it.
     pub zones: &'a mut Vec<ZoneInstance>,
     pub hlines: &'a mut Vec<LineInstance>,
     pub segs: &'a mut Vec<SegInstance>,

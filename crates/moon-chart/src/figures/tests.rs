@@ -258,7 +258,13 @@ fn a_fill_reaches_the_zone_layer_bounded_in_time() {
             z.price0 < z.price1,
             "band prices must be ordered for the shader"
         );
-        assert!(z.color[3] < 0.5, "a fill must stay behind the candles");
+        // The DEFAULT strength, not a cap: the opacity is the user's and the stepper reaches 100%.
+        // What is pinned here is that a fill drawn with the default style stays a wash rather than
+        // a curtain over the plot.
+        assert!(
+            z.color[3] < 0.5,
+            "the default fill is no longer faint enough to read the chart through"
+        );
     }
 }
 

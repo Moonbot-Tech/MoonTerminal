@@ -420,12 +420,15 @@ impl RenderState {
                         }
                         x
                     }
-                    // The label rides the line's right end, clipped INTO the plot: a scale must
+                    // The label rides the line's LEFT end, clipped INTO the plot: a scale must
                     // stay readable while any part of its lines is on screen. A scale's levels are
                     // the one readout that stays after the pointer leaves, so the per-tab "line
                     // labels" switch hides them as it hides the order column — except on the
-                    // figure being drawn, where the numbers are what the user is aiming with.
-                    FigLabelPlace::LineEnd { t0_ms, t1_ms } => {
+                    // figure being DRAWN, whose numbers must stay on screen while it is aimed.
+                    // They sit at the box's anchor rather than under the pointer: with the left
+                    // end as the anchor, a box drawn rightward keeps its column still while the
+                    // prices in it change.
+                    FigLabelPlace::LineSpan { t0_ms, t1_ms } => {
                         if label.permanent && !self.line_labels {
                             continue;
                         }
@@ -436,7 +439,7 @@ impl RenderState {
                         if x1 < plot_left || x0 > plot_right {
                             continue;
                         }
-                        x1.min(plot_right)
+                        x0.max(plot_left)
                     }
                 };
                 // A ratio level's text was rendered once at the geometry rebuild — its format is
@@ -472,9 +475,24 @@ impl RenderState {
                         };
                         (node_x, ax, y - LABEL_LINE_GAP, 1.0)
                     }
-                    // Right-anchored at the line's end, sitting just above the line it names.
-                    FigLabelPlace::LineEnd { .. } => {
-                        (node_x - READOUT_PAD_X, 1.0, y - LABEL_LINE_GAP, 1.0)
+                    // LEFT-anchored at the line's start, sitting just above the line it names: the
+                    // column of numbers sits where a row is read FROM, which is where every
+                    // charting package puts a ratio scale's.
+                    //
+                    // Flipped to the other side of the anchor when the text would otherwise run
+                    // past the plot — a scale drawn against the right edge would push ELEVEN
+                    // readouts over the order book at once, and figure text is not clipped there.
+                    // Measured only near the edge, as the `Above` arm does and for the same reason.
+                    FigLabelPlace::LineSpan { .. } => {
+                        if node_x + rough_label_width(&text, self.label_font_delta)
+                            > plot_right - READOUT_PAD_X
+                            && node_x + self.measure_label_text(ctx, &text).width.as_f32()
+                                > plot_right
+                        {
+                            (node_x - READOUT_PAD_X, 1.0, y - LABEL_LINE_GAP, 1.0)
+                        } else {
+                            (node_x + READOUT_PAD_X, 0.0, y - LABEL_LINE_GAP, 1.0)
+                        }
                     }
                 };
                 let m = draw_label_text_run(

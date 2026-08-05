@@ -40,12 +40,17 @@ impl Proj for TestProj {
 pub(super) struct RecSink {
     pub(super) hlines: Vec<f64>,
     pub(super) segs: Vec<(FigNode, FigNode)>,
+    /// Colour of each segment, in the same order: a coloured ratio scale is wrong if the hues are
+    /// wrong, and geometry alone cannot see that.
+    pub(super) seg_colors: Vec<[f32; 4]>,
     /// `(t0_ms, t1_ms, p0, p1)` of each filled band.
     pub(super) bands: Vec<(f64, f64, f64, f64)>,
-    /// Alpha each band was filled with, in the same order.
-    pub(super) band_alphas: Vec<f32>,
+    /// Colour each band was filled with, in the same order.
+    pub(super) band_colors: Vec<[f32; 4]>,
     pub(super) handles: Vec<FigNode>,
     pub(super) labels: Vec<(FigNode, LabelPlace, LabelText)>,
+    /// Colour of each label, in the same order.
+    pub(super) label_colors: Vec<[f32; 4]>,
 }
 
 impl GeomSink for RecSink {
@@ -53,21 +58,23 @@ impl GeomSink for RecSink {
         self.hlines.push(price);
     }
 
-    fn seg(&mut self, a: FigNode, b: FigNode, _stroke: &Stroke) {
+    fn seg(&mut self, a: FigNode, b: FigNode, stroke: &Stroke) {
         self.segs.push((a, b));
+        self.seg_colors.push(stroke.color);
     }
 
     fn band(&mut self, t0_ms: f64, t1_ms: f64, p0: f64, p1: f64, color: [f32; 4]) {
         self.bands.push((t0_ms, t1_ms, p0, p1));
-        self.band_alphas.push(color[3]);
+        self.band_colors.push(color);
     }
 
     fn handle(&mut self, at: FigNode, _color: [f32; 4]) {
         self.handles.push(at);
     }
 
-    fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, _color: [f32; 4]) {
+    fn label(&mut self, at: FigNode, place: LabelPlace, text: LabelText, color: [f32; 4]) {
         self.labels.push((at, place, text));
+        self.label_colors.push(color);
     }
 }
 
@@ -111,6 +118,14 @@ fn registry_rows_match_their_tool_and_are_uniquely_keyed() {
         assert_eq!(def.tool.def().key, def.key, "def() must find its own row");
         assert!(def.clicks >= 1, "{} places no node", def.key);
         assert!(!def.locale_key.is_empty(), "{} has no name key", def.key);
+        // A typed scale colours what it FILLS. Claiming a palette without filling anything would
+        // strip the pencil popup's fill swatches for a tool that has no fill to colour — a control
+        // removed for a tool that never had it.
+        assert!(
+            !def.level_palette || def.fills,
+            "{} claims a level palette but fills nothing",
+            def.key
+        );
         keys.push(def.key);
     }
     keys.sort_unstable();
