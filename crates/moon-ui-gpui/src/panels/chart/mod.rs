@@ -204,6 +204,14 @@ pub struct ChartPanel {
     fig_draw_down: Option<(f32, f32)>,
     fig_hover: Option<u64>,
     fig_drag: Option<figures::FigDrag>,
+    /// Per-figure settings panel: the figure it edits and the point it was opened at, or `None`
+    /// when it is closed. One at a time on purpose — it is opened from a right-click on a figure,
+    /// and a second panel would edit a figure the first one is already showing.
+    fig_settings: Option<crate::figstyle::FigStyleTarget>,
+    /// Figure-store revision this panel last rebuilt geometry for. An edit bumps the store but no
+    /// order does, and the userdata rebuild is gated on the order signature — this is what makes a
+    /// restyled figure repaint at once instead of on the next order tick.
+    last_fig_store_rev: u64,
     /// Whether right-button down opened an order context menu, suppressing the matching button-up
     /// so the Main-stack parent cannot interpret it as a fullscreen toggle.
     suppress_rmb_up: bool,
@@ -229,6 +237,16 @@ impl ChartPanel {
         // Pencil and selection state changes in the tab strip or through hotkeys reach this panel
         // through the backend observer; propagate them into the figure engine.
         self.sync_fig_visual(cx);
+        // A figure EDITED anywhere — this window's settings panel, another window's, a hotkey —
+        // bumps the store's revision but no order does, and the userdata rebuild above is gated on
+        // the order signature. Without this the new colour would wait for an unrelated order tick;
+        // on a quiet market that is a long time to look at a stale figure.
+        let fig_rev = self.backend.read(cx).figures.borrow().rev();
+        if self.last_fig_store_rev != fig_rev {
+            self.last_fig_store_rev = fig_rev;
+            self.fig_resync(cx);
+        }
+        self.drop_stale_fig_settings(cx);
         // News arrives on the same observer; the signature gate makes the common case a no-op. Its
         // gems are own-pass and present themselves, so a news item never wakes the GPUI scene — an
         // open hover card catches up on the next repaint.
@@ -377,6 +395,8 @@ impl ChartPanel {
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             fig_draft: None,
+            fig_settings: None,
+            last_fig_store_rev: 0,
             fig_draw_down: None,
             fig_hover: None,
             fig_drag: None,
@@ -499,6 +519,8 @@ impl ChartPanel {
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             fig_draft: None,
+            fig_settings: None,
+            last_fig_store_rev: 0,
             fig_draw_down: None,
             fig_hover: None,
             fig_drag: None,

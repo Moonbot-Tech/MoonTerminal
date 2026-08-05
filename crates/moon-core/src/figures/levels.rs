@@ -141,6 +141,14 @@ pub fn scale_swatch() -> [u8; 3] {
         .map_or(TEAL, |l| l.color)
 }
 
+/// A level's ratio as it is READ: `0.618`, `1`, `4.236` — three decimals with the trailing zeros
+/// dropped, which is how every charting package writes them and how a trader names them out loud.
+pub fn fmt_ratio(ratio: f64) -> String {
+    // `+ 0.0` folds -0.0, which would otherwise print as "-0".
+    let s = format!("{:.3}", ratio + 0.0);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 /// Price of `ratio` on the scale spanned by a move from `start` to `end`.
 ///
 /// The convention is the charting one and it is NOT symmetric: **0 sits at the END of the move

@@ -40,7 +40,7 @@ pub use store::{FigureKey, FigureStore};
 pub use style::{DrawStyle, LineKind, DEFAULT_FILL_ALPHA};
 pub use tools::{
     build_figure, drag_figure, pick_figure, pick_handle, FigureTool, Grab, GrabMode, ToolDef,
-    ToolShape,
+    ToolSetting, ToolShape,
 };
 
 use serde::{Deserialize, Serialize};

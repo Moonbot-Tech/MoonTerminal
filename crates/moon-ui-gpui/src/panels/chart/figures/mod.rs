@@ -389,6 +389,47 @@ impl ChartPanel {
         pick_figure(store.visible(core, &market), pos, &map, threshold)
     }
 
+    /// Drop the selection when a click lands on no figure at all.
+    ///
+    /// Called for clicks the figure layer did NOT consume — which is most of them, since grabbing
+    /// a figure needs the secondary modifier and an ordinary click belongs to trading and
+    /// navigation. Without this a selection outlived every click that missed it: its handles kept
+    /// sitting on the chart, and Delete/Alert kept pointing at a figure the user had stopped
+    /// working on. Never consumes the click; the caller carries on with it.
+    pub(super) fn fig_clear_selection_on_miss(&mut self, pos: (f32, f32), cx: &mut Context<Self>) {
+        // Only where figures are drawn and only for a selection made on THIS chart. `fig_selected`
+        // is global: a click in another panel, in a detached window, or in a chart with the pencil
+        // off would otherwise silently drop a selection its user can still see.
+        if !self.backend.read(cx).fig_draw_mode {
+            return;
+        }
+        let Some(pane) = self.input.pane_at(pos.0, pos.1) else {
+            return;
+        };
+        let Some((core, market)) = self.fig_pane_key(pane) else {
+            return;
+        };
+        if !self
+            .backend
+            .read(cx)
+            .fig_selected
+            .as_ref()
+            .is_some_and(|(c, m, _)| *c == core && *m == market)
+        {
+            return;
+        }
+        // A click ON a figure is not a miss, modifier or not: pointing at a figure and losing its
+        // handles for it would read as the click having gone somewhere else.
+        if self.fig_hit_at(pos, cx).is_some() {
+            return;
+        }
+        self.backend.update(cx, |b, bcx| {
+            b.fig_selected = None;
+            bcx.notify();
+        });
+        self.sync_fig_visual(cx);
+    }
+
     /// Open the context menu for a right-clicked figure in pencil mode: arm it as a core alert,
     /// share it with every core on this market, or delete it.
     ///
@@ -432,6 +473,25 @@ impl ChartPanel {
         });
         self.sync_fig_visual(cx);
         let mut items: Vec<MoonMenuItem> = Vec::new();
+        // First item: this is what a right-click on a figure is FOR most of the time. Arming,
+        // sharing and deleting are one-shot actions; the look is what gets fiddled with.
+        let view = cx.entity();
+        let settings_target = crate::figstyle::FigStyleTarget {
+            core,
+            market: market.clone(),
+            id,
+            at: local_pos,
+        };
+        items.push(
+            MoonMenuItem::with_key("fig-settings", t!("chart.fig_menu.settings").to_string())
+                .on_click(move |_, window, app| {
+                    window.close_context_menu(app);
+                    view.update(app, |this: &mut Self, vcx| {
+                        this.fig_settings = Some(settings_target.clone());
+                        vcx.notify();
+                    });
+                }),
+        );
         // A tool the core has no chart-object type for cannot be armed at all: offer the item only
         // where it would work, instead of failing after the click.
         if armed || can_alert {
@@ -507,6 +567,31 @@ impl ChartPanel {
         true
     }
 
+    /// Closes the per-figure settings panel when what it edits stops existing: the pencil switched
+    /// off (it was only reachable through it), the figure deleted, or the pane it was opened on
+    /// gone or showing another market. Called from the backend-notify path, so an edit made in
+    /// another window closes it here too.
+    pub(super) fn drop_stale_fig_settings(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.fig_settings.clone() else {
+            return;
+        };
+        let b = self.backend.read(cx);
+        let alive = b.fig_draw_mode
+            && b.figures
+                .borrow()
+                .get(target.core, &target.market, target.id)
+                .is_some()
+            && self.chart.with_container(|c| {
+                c.panes()
+                    .iter()
+                    .any(|p| p.core == target.core && p.market == target.market)
+            });
+        if !alive {
+            self.fig_settings = None;
+            cx.notify();
+        }
+    }
+
     /// Publish pencil mode, draft preview, hover, and selection to the chart engine.
     ///
     /// Mouse events and the Backend observer both call this so toggling pencil mode immediately
@@ -552,7 +637,7 @@ impl ChartPanel {
     /// Immediately rebuild userdata, where figures travel with the order layers.
     ///
     /// Force the rebuild as for order dragging so the normal gate cannot skip drag frames.
-    fn fig_resync(&mut self, cx: &Context<Self>) {
+    pub(super) fn fig_resync(&mut self, cx: &Context<Self>) {
         let b = self.backend.read(cx);
         self.chart.sync_orders_if_visible(&b.session, true);
     }

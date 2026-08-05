@@ -8,6 +8,7 @@ fn fib() -> FibRetracement {
     FibRetracement {
         a: FigNode::new(TestProj::T0_MS, 100.0),
         b: FigNode::new(TestProj::T0_MS + 10_000.0, 80.0),
+        hidden_levels: 0,
     }
 }
 
@@ -82,6 +83,7 @@ fn a_level_that_crosses_zero_is_dropped_rather_than_drawn() {
     let f = FibRetracement {
         a: FigNode::new(TestProj::T0_MS, 10.0),
         b: FigNode::new(TestProj::T0_MS + 10_000.0, 100.0),
+        hidden_levels: 0,
     };
     assert!(
         crate::figures::levels::price_at(10.0, 100.0, 4.236) < 0.0,
@@ -110,6 +112,7 @@ fn a_move_with_no_height_draws_no_scale_at_all() {
     let flat = FibRetracement {
         a: FigNode::new(TestProj::T0_MS, 100.0),
         b: FigNode::new(TestProj::T0_MS + 10_000.0, 100.0),
+        hidden_levels: 0,
     };
     let sink = build(&FigureKind::FibRetracement(flat), ctx(false, false));
     assert!(
@@ -255,6 +258,7 @@ fn a_figure_drawn_right_to_left_still_spans_a_forward_time_range() {
     let f = FibRetracement {
         a: FigNode::new(TestProj::T0_MS + 10_000.0, 100.0),
         b: FigNode::new(TestProj::T0_MS, 80.0),
+        hidden_levels: 0,
     };
     let sink = build(&FigureKind::FibRetracement(f), ctx(false, false));
     for band in &sink.bands {
@@ -299,5 +303,96 @@ fn the_first_click_previews_the_scale_under_the_cursor() {
     assert!(
         (DEF.make)(&[a]).is_none(),
         "one node cannot finish the figure"
+    );
+}
+
+#[test]
+fn a_switched_off_level_takes_its_line_its_readout_and_its_band_with_it() {
+    let mut f = fib();
+    // 0.382 is level 2 of the scale — the band it starts (2 → 3) must go with it, not stretch
+    // across the gap and fill a range the user just asked not to see.
+    assert!(
+        f.set_setting("level.2", false),
+        "the switch reported no change"
+    );
+    let sink = build(&FigureKind::FibRetracement(f), ctx(false, false));
+    assert_eq!(sink.labels.len(), FIB_LEVELS.len() - 1);
+    for (_, _, text) in &sink.labels {
+        match text {
+            LabelText::Level { ratio, .. } => assert_ne!(*ratio, 0.382, "a hidden level was drawn"),
+            other => panic!("unexpected label {other:?}"),
+        }
+    }
+    // The ranks close: ten shown levels leave nine bands, and the one that now spans the hidden
+    // level takes the hue of the level it starts at — a hole between two visible lines would read
+    // as a bug, not as a setting.
+    assert_eq!(sink.bands.len(), FIB_LEVELS.len() - 2);
+}
+
+#[test]
+fn a_hidden_level_cannot_be_grabbed() {
+    let mut f = fib();
+    let price = crate::figures::levels::price_at(f.a.price, f.b.price, 0.5);
+    // Near the level's RIGHT end, deliberately far from the move's diagonal: the move is always
+    // grabbable (see the all-levels-off test), and taking the midpoint would measure that instead.
+    let on_it = (9.0, TestProj.y_of_price(price));
+    assert!(
+        f.hit(on_it, &TestProj) < 1.0,
+        "the fixture misses the level"
+    );
+    assert!(
+        f.set_setting("level.3", false),
+        "0.5 is not level 3 any more"
+    );
+    assert!(
+        f.hit(on_it, &TestProj) > 1.0,
+        "a level nobody can see is still grabbable"
+    );
+}
+
+#[test]
+fn the_switches_name_every_level_and_survive_a_round_trip() {
+    let mut f = fib();
+    let settings = f.settings();
+    assert_eq!(settings.len(), FIB_LEVELS.len());
+    assert!(settings.iter().all(|s| s.on), "a fresh scale hides nothing");
+    assert_eq!(settings[4].label, "0.618", "a level is named by its ratio");
+    // An unknown key is ignored rather than corrupting the mask: the popup and the tool ship
+    // together, but a stale one must not switch off some other level.
+    assert!(!f.set_setting("level.99", false));
+    assert!(!f.set_setting("nonsense", false));
+    assert_eq!(f.hidden_levels, 0);
+    f.set_setting("level.4", false);
+    assert!(!f.settings()[4].on, "the switch did not read back");
+    assert!(
+        f.set_setting("level.4", true),
+        "it cannot be switched on again"
+    );
+    assert_eq!(f.hidden_levels, 0);
+    assert!(
+        !f.set_setting("level.4", true),
+        "no change must report none"
+    );
+}
+
+#[test]
+fn a_scale_with_every_level_off_is_still_grabbable_by_its_move() {
+    // Reachable in one pass through the settings panel. A figure nothing can pick cannot be
+    // selected, right-clicked or deleted — it would be stuck on the chart for good.
+    let mut f = fib();
+    for i in 0..FIB_LEVELS.len() {
+        f.set_setting(&format!("level.{i}"), false);
+    }
+    let sink = build(&FigureKind::FibRetracement(f), ctx(false, false));
+    assert!(sink.labels.is_empty(), "a hidden level was still labelled");
+    assert_eq!(sink.segs.len(), 1, "only the move itself is left");
+    // The move runs from (T0, 100) to (T0+10s, 80); its midpoint in test pixels.
+    let mid = (
+        (TestProj.x_of_time(f.a.time_ms) + TestProj.x_of_time(f.b.time_ms)) * 0.5,
+        (TestProj.y_of_price(f.a.price) + TestProj.y_of_price(f.b.price)) * 0.5,
+    );
+    assert!(
+        f.hit(mid, &TestProj) < 1.0,
+        "the figure can no longer be picked at all"
     );
 }

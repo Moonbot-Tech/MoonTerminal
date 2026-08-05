@@ -497,6 +497,14 @@ chart.fig.fill_opacity:
   ru: "Прозр. заливки"
   en: "Fill opacity"
   es: "Opacidad relleno"
+chart.fig.parts:
+  ru: "Части"
+  en: "Parts"
+  es: "Partes"
+chart.fig.color:
+  ru: "Цвет"
+  en: "Colour"
+  es: "Color"
 chart.fig.scale_fill:
   ru: "Цвета шкалы"
   en: "Scale colours"
@@ -674,6 +682,10 @@ chart.fig_menu.unshare:
   ru: "Только на этом ядре"
   en: "Only on this core"
   es: "Solo en este núcleo"
+chart.fig_menu.settings:
+  ru: "Настройки"
+  en: "Settings"
+  es: "Ajustes"
 chart.fig_menu.delete:
   ru: "Удалить фигуру"
   en: "Delete figure"

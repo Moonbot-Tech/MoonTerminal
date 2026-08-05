@@ -133,9 +133,9 @@ fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
 /// apart, and not enough to show any level of a coin priced at 0.00001234 at all. A level is a
 /// number the reader acts on.
 fn fmt_level(ratio: f64, price: f64) -> String {
-    // `+ 0.0` folds -0.0, which would otherwise print as "-0".
-    let r = format!("{:.3}", ratio + 0.0);
-    let r = r.trim_end_matches('0').trim_end_matches('.');
+    // The ratio's own formatting belongs to the scale that defines it: the settings panel labels
+    // its switches with the same call, and two copies would drift.
+    let r = moon_core::figures::levels::fmt_ratio(ratio);
     let a = price.abs();
     let decimals = if a >= 1000.0 {
         2
