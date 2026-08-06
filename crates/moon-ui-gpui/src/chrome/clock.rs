@@ -1,5 +1,6 @@
-//! Shared terminal clock, formatted as `HH:MM:SS CODE`. It shows the selected city's wall clock
-//! and advances whenever its host view rerenders. Clicking it opens a
+//! Shared terminal clock, normally formatted as `HH:MM:SS CODE` and compacted to `HH:MM CODE` in
+//! narrow hosts. It shows the selected city's wall clock and advances whenever its host rerenders.
+//! Clicking it opens a
 //! `MoonPopover` listing the curated cities of [`cities`], each with its own current time. The
 //! selection persists in the layout as the city's IANA zone id through
 //! `Backend::set_header_clock_zone` and is shared by all windows.
@@ -31,6 +32,9 @@ use crate::Backend;
 use crate::design;
 
 mod cities;
+
+#[cfg(test)]
+mod tests;
 
 use cities::City;
 
@@ -93,11 +97,36 @@ const CLOCK_TIME_WEIGHT: f32 = 600.0;
 
 const CLOCK_TZ_WEIGHT: f32 = 400.0;
 
-/// The two strings the header clock shows: the city's time and its code.
+/// Time precision requested by one clock host.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClockPrecision {
+    /// Hours, minutes, and seconds for normal-width headers.
+    Seconds,
+    /// Hours and minutes for narrow hosts.
+    Minutes,
+}
+
+/// The two strings one clock host shows: the city's time and its code.
 ///
 /// One source for the renderer and the width measurement, so they cannot drift apart.
-fn clock_parts(city: &City, now: DateTime<Utc>) -> (String, &'static str) {
-    (cities::local_hms(city.zone, now), city.code)
+///
+/// Args:
+///     city: Selected city whose IANA zone determines the wall clock.
+///     now: UTC instant converted into the selected zone.
+///     precision: Whether the host has room for seconds.
+///
+/// Returns:
+///     Local time text and the stable city code.
+fn clock_parts(
+    city: &City,
+    now: DateTime<Utc>,
+    precision: ClockPrecision,
+) -> (String, &'static str) {
+    let mut time = cities::local_hms(city.zone, now);
+    if precision == ClockPrecision::Minutes {
+        time.truncate(5);
+    }
+    (time, city.code)
 }
 
 /// Rendered width of the header clock, in the units the header lays its children out with.
@@ -109,8 +138,19 @@ fn clock_parts(city: &City, now: DateTime<Utc>) -> (String, &'static str) {
 ///
 /// Glyph advances only, no kerning (see `design::ui_text_width`) — a close estimate, not an exact
 /// measurement.
+///
+/// Args:
+///     backend: Shared state containing the selected clock city.
+///     cx: Application context used to measure the active typography.
+///
+/// Returns:
+///     Full `HH:MM:SS CODE` trigger width used by the main-header ticker offset.
 pub(crate) fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
-    let (time, code) = clock_parts(selected_city(backend, cx), now_utc());
+    let (time, code) = clock_parts(
+        selected_city(backend, cx),
+        now_utc(),
+        ClockPrecision::Seconds,
+    );
     design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT)
         + design::ui_value(cx, CLOCK_GAP)
         + design::mono_body_text_width(cx, code, CLOCK_TZ_WEIGHT)
@@ -147,20 +187,60 @@ pub(crate) fn reconcile_clock_zone(backend: &Entity<Backend>, cx: &mut App) {
     });
 }
 
-/// Render the shared terminal clock and its city-selection popover.
+/// Render the full shared terminal clock and its city-selection popover.
 ///
 /// Both the drawn strings and [`header_clock_width`] are derived through [`clock_parts`].
-pub(crate) fn header_clock(
+///
+/// Args:
+///     backend: Shared state containing the selected clock city.
+///     p: Active palette.
+///     cx: Application context used to build the shared popover.
+///
+/// Returns:
+///     `HH:MM:SS CODE` trigger backed by the shared city picker.
+pub(crate) fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) -> AnyElement {
+    render_header_clock(backend, p, ClockPrecision::Seconds, cx)
+}
+
+/// Render the minute-precision shared clock and its unchanged city-selection popover.
+///
+/// Args:
+///     backend: Shared state containing the selected clock city.
+///     p: Active palette.
+///     cx: Application context used to build the shared popover.
+///
+/// Returns:
+///     `HH:MM CODE` trigger backed by the same picker as the full clock.
+pub(crate) fn compact_header_clock(
     backend: &Entity<Backend>,
     p: MoonPalette,
     cx: &App,
-) -> impl IntoElement {
+) -> AnyElement {
+    render_header_clock(backend, p, ClockPrecision::Minutes, cx)
+}
+
+/// Render one clock precision through the single selected-city and popover implementation.
+///
+/// Args:
+///     backend: Shared state containing the selected clock city.
+///     p: Active palette.
+///     precision: Time fields retained by the host.
+///     cx: Application context used to build the shared popover.
+///
+/// Returns:
+///     Clock trigger and eagerly prepared city-selection popover.
+fn render_header_clock(
+    backend: &Entity<Backend>,
+    p: MoonPalette,
+    precision: ClockPrecision,
+    cx: &App,
+) -> AnyElement {
     let selected = selected_city(backend, cx);
     // One instant for the header and every menu row, so no row can straddle a second and disagree
     // with the clock above it. `MoonPopover` builds its content eagerly, so this loop runs whether
     // the popup is open or not — reading the system clock per row would be that cost per frame.
     let now = now_utc();
-    let (time, code) = clock_parts(selected, now);
+    let (time, code) = clock_parts(selected, now, precision);
 
     // One shared handle for all 47 rows: cloning an `Entity` takes a read lock on the entity map,
     // so a clone per row is not the refcount bump it reads as.

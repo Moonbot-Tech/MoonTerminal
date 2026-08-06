@@ -203,20 +203,26 @@ fn header_ticker_popup_accounts_for_the_clock_beside_it() {
          measured width — see terminal_chrome's header cluster order"
     );
 
-    // And the measurement must still agree with what the clock draws. Asserting on the two
-    // BODIES, not merely that the functions exist: either one could quietly stop calling
-    // `clock_parts` and reimplement the time and city-code strings for itself — or reintroduce a
-    // rule that hides the code, which changes the clock's width — and that is exactly the drift
-    // that puts the popup off its trigger, while a name-only check stays green through it.
+    // And the measurement must still agree with what the FULL clock draws. Asserting on the call
+    // chain, not merely that the functions exist: the width or shared renderer could stop calling
+    // `clock_parts`, or the full wrapper could select minute precision while the width keeps seconds.
+    // Either drift puts the popup off its trigger while a name-only check stays green.
     let clock = read_src("chrome/clock.rs");
-    for signature in ["fn header_clock_width", "fn header_clock("] {
-        let body = fn_body(&clock, signature);
-        assert!(
-            body.contains("clock_parts("),
-            "clock.rs: {signature} must derive its strings from clock_parts — the renderer and the \
-             width measurement share one model so they cannot drift apart"
-        );
-    }
+    let width = fn_body(&clock, "fn header_clock_width");
+    let full = fn_body(&clock, "fn header_clock(");
+    let renderer = fn_body(&clock, "fn render_header_clock(");
+    assert!(
+        width.contains("clock_parts(") && width.contains("ClockPrecision::Seconds"),
+        "header_clock_width must measure the shared full-precision clock parts"
+    );
+    assert!(
+        full.contains("render_header_clock(backend, p, ClockPrecision::Seconds, cx)"),
+        "header_clock must keep the same seconds precision measured beside the ticker"
+    );
+    assert!(
+        renderer.contains("clock_parts(selected, now, precision)"),
+        "both visible clock modes must derive their strings from the measured clock-parts model"
+    );
 }
 
 /// Protect every shared multi-select core picker from regressing to passive exchange labels.
