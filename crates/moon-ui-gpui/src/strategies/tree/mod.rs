@@ -11,6 +11,7 @@ pub(crate) mod ui;
 
 use super::*;
 
+use moon_ui::{MoonButtonIconSlot, MoonDisclosureDirection};
 use rust_i18n::t;
 
 impl StrategiesView {
@@ -104,7 +105,10 @@ impl StrategiesView {
                                 MoonButton::new("expand-all")
                                     .ghost()
                                     .size(MoonButtonSize::Micro)
-                                    .label(if collapsed { "▼" } else { "▲" })
+                                    .leading_icon(MoonButtonIconSlot::caret(
+                                        MoonDisclosureDirection::DownUp,
+                                        !collapsed,
+                                    ))
                                     .on_click({
                                         let cores = cores_owned.clone();
                                         cx.listener(move |this, _, _, cx| {

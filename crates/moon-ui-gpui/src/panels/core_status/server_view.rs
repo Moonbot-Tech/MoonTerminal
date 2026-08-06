@@ -9,11 +9,12 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonInput, MoonInputState, MoonListItem, MoonPalette, MoonTree, MoonTreeItem,
-    MoonTreeState, h_flex, v_flex,
+    MoonButton, MoonDisclosure, MoonInput, MoonInputState, MoonListItem, MoonPalette, MoonTree,
+    MoonTreeItem, MoonTreeState, h_flex, v_flex,
 };
 use rust_i18n::t;
 
+use crate::design;
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 
@@ -267,8 +268,6 @@ fn server_row(
     p: MoonPalette,
     app: &App,
 ) -> impl IntoElement {
-    // Chevron: down when expanded, right when collapsed.
-    let marker = if expanded { "\u{25BE}" } else { "\u{25B8}" };
     let dot_color = match group.connectivity {
         ServerConnectivity::Online => p.green,
         ServerConnectivity::Degraded => p.amber,
@@ -289,13 +288,18 @@ fn server_row(
                 .w(px(CHEVRON_W))
                 .flex_none()
                 .cursor_pointer()
-                .text_color(rgb(p.text_muted))
                 .on_mouse_down(MouseButton::Left, move |_, _, app| {
                     if let Some(view) = weak_view.upgrade() {
                         view.update(app, |this, cx| this.toggle_server_expand(key, cx));
                     }
                 })
-                .child(marker)
+                // Passive: this div owns the click, so the caret must not take a hitbox of its own
+                // and swallow it. Leave `box_size` unset because this raw-width gutter, matched by
+                // the header spacer and each core row's empty slot, is the alignment cell. The
+                // caret's default box scales from its smaller marker size; forcing the standard
+                // 12-unit box would scale that child from the gutter's full unscaled width while
+                // the three matching gutters stay fixed.
+                .child(MoonDisclosure::glyph(expanded).size(design::DISCLOSURE_GLYPH_MARKER))
         })
         // Clicking the body selects this server for the chart AND blocks the row's expand toggle
         // (only the chevron expands). Eye/pencil stop the event earlier, so they keep their own act.
