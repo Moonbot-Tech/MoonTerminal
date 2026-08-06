@@ -24,14 +24,19 @@ impl CoreStatusView {
     ///     Canonically ordered visible rows with CPU smoothed by the backend warning engine.
     fn collect(&self, b: &Backend) -> Vec<CoreStatusRow> {
         let store = b.session.store();
+        // One clock reading for the whole snapshot: a per-row `now` could classify two cores
+        // against different days in the same frame.
+        let now_ms = moon_core::util::now_unix_ms_i64();
         let mut out = Vec::new();
         for (id, name) in self.scope_cores(b) {
             if !self.sel_cores.is_empty() && !self.sel_cores.contains(&id) {
                 continue;
             }
-            let endpoint = store.core(id).and_then(|core| core.endpoint);
-            let (status, mut sys) = store
-                .core(id)
+            // One store lookup per core: this loop runs for every core on every cache rebuild.
+            let core = store.core(id);
+            let endpoint = core.and_then(|core| core.endpoint);
+            let api_expiry = core.and_then(|core| core.api_expiry);
+            let (status, mut sys) = core
                 .map(|c| (c.status.clone(), c.sys))
                 .unwrap_or((ConnStatus::Disconnected, CoreSysStatus::default()));
             // Smooth the displayed CPU with the engine's rolling average (computed backend-side).
@@ -52,6 +57,10 @@ impl CoreStatusView {
                 exch_warn: b.warn.core_exch_warn(id),
                 ping_sev: b.warn.core_ping_level(id),
                 exch_sev: b.warn.core_exch_level(id),
+                // Classified once here, against one clock reading, so every column, colour and sort
+                // in this frame agrees about the same key.
+                api_key: model::ApiKeyState::of(api_expiry, now_ms),
+                api_warn: b.warn.core_api_warn(id),
             });
         }
         out
@@ -92,8 +101,8 @@ impl CoreStatusView {
         // each partition; the default `(Name, ascending)` reproduces the former fixed order.
         let (field, ascending) = self.group_sort;
         groups.sort_by(|a, b| {
-            let aw = a.cpu_warn || a.mem_warn || a.conn_warn || a.ping_warn || a.exch_warn;
-            let bw = b.cpu_warn || b.mem_warn || b.conn_warn || b.ping_warn || b.exch_warn;
+            let aw = a.has_warn();
+            let bw = b.has_warn();
             let field_ord = compare_groups(a, b, field);
             let field_ord = if ascending {
                 field_ord
@@ -102,13 +111,7 @@ impl CoreStatusView {
             };
             bw.cmp(&aw).then(field_ord)
         });
-        self.has_warn = groups.iter().any(|group| {
-            group.cpu_warn
-                || group.mem_warn
-                || group.conn_warn
-                || group.ping_warn
-                || group.exch_warn
-        });
+        self.has_warn = groups.iter().any(|group| group.has_warn());
         self.cached_groups = Rc::new(groups);
         self.cached_rows = Rc::new(rows);
         self.rebuild_tree(cx);

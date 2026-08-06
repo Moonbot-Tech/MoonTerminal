@@ -8,11 +8,29 @@ use std::cmp::Ordering;
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreSysStatus;
 
-use super::{GroupSortField, compare_groups};
+use super::{GroupSortField, compare_flat_rows, compare_groups};
 use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{
-    CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup,
+    ApiKeyState, CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup,
 };
+
+/// Build one core row carrying only an API-key answer: `Some(days)` is a dated key, `None` is a
+/// key with no expiration (which is also how an unanswered check arrives).
+fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
+    CoreStatusRow {
+        id,
+        name: format!("Core {id}"),
+        status: ConnStatus::Ready,
+        sys: CoreSysStatus::default(),
+        endpoint: None,
+        ping_warn: false,
+        exch_warn: false,
+        ping_sev: LatencySeverity::Normal,
+        exch_sev: LatencySeverity::Normal,
+        api_key: days.map_or(ApiKeyState::Perpetual, ApiKeyState::Days),
+        api_warn: false,
+    }
+}
 
 /// Build a minimal server group with the fields the comparator reads; `rtts` sets each core's
 /// round-trip (and whether it is Ready), so `worst_latency`'s Ready gate can be exercised.
@@ -43,6 +61,8 @@ fn group(
             exch_warn: false,
             ping_sev: LatencySeverity::Normal,
             exch_sev: LatencySeverity::Normal,
+            api_key: ApiKeyState::Unknown,
+            api_warn: false,
         })
         .collect::<Vec<_>>();
     let ready_count = cores
@@ -57,6 +77,8 @@ fn group(
         conn_warn: false,
         ping_warn: false,
         exch_warn: false,
+        api_warn: false,
+        api_key: ApiKeyState::Unknown,
         address: None,
         cores,
         ready_count,
@@ -134,5 +156,64 @@ fn name_is_natural_and_the_tiebreak() {
         compare_groups(&s2, &s10, GroupSortField::Cpu),
         Ordering::Less,
         "equal CPU breaks the tie by name"
+    );
+}
+
+/// The key column shows text ("9 дн", "∞", "истёк"), but it must sort by the NUMBER behind it.
+/// Sorting the rendered string would put 9 days after 45 and bury the key that expires first.
+#[test]
+fn the_key_column_sorts_by_days_not_by_its_text() {
+    let soon = row_with_key(1, Some(9));
+    let later = row_with_key(2, Some(45));
+
+    assert_eq!(
+        compare_flat_rows(&soon, &later, "api_key"),
+        Ordering::Less,
+        "9 days is more urgent than 45"
+    );
+}
+
+/// A key with no expiration and a key with no answer carry no number, so they land at the SAME end
+/// of the ascending order as every other unreported metric in this table — which is the FRONT, as
+/// `None` sorts first. Spelled out because the wording is easy to flip while the assertion stands.
+#[test]
+fn keys_without_a_day_count_sort_as_unreported_metrics_do() {
+    let dated = row_with_key(1, Some(1));
+    let perpetual = row_with_key(2, None);
+
+    assert_eq!(
+        compare_flat_rows(&perpetual, &dated, "api_key"),
+        Ordering::Less,
+        "no number sorts before any number, as `None` does everywhere here"
+    );
+}
+
+/// An expired key is the most urgent thing this column can show, so it leads every live one instead
+/// of grouping with the keys that carry no number at all.
+#[test]
+fn an_expired_key_sorts_ahead_of_every_live_one() {
+    let expired = row_with_key(1, Some(-3));
+    let last_day = row_with_key(2, Some(0));
+
+    assert_eq!(
+        compare_flat_rows(&expired, &last_day, "api_key"),
+        Ordering::Less,
+        "expired leads the ascending order"
+    );
+}
+
+/// The server row sorts by the very key it displays — the one aggregation already picked — so the
+/// column cannot order by one number while showing another.
+#[test]
+fn a_server_sorts_by_the_key_it_displays() {
+    let mut urgent = group("a", None, None, None, &[]);
+    urgent.api_key = ApiKeyState::Days(3);
+    let mut relaxed = group("b", None, None, None, &[]);
+    relaxed.api_key = ApiKeyState::Days(20);
+
+    assert_eq!(
+        compare_groups(&urgent, &relaxed, GroupSortField::ApiKey),
+        Ordering::Less,
+        "3 days beats the other server's soonest (20)"
     );
 }

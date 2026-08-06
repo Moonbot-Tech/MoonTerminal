@@ -30,6 +30,35 @@ pub(crate) fn ms_axis_scale(max_ms: u16) -> f32 {
     (f32::from(max_ms) * 1.15 / 50.0).ceil().max(1.0) * 50.0
 }
 
+/// Human duration of a warning episode, shared by the Core Status list and the chart badge's card
+/// so the same episode never reads differently in the two places that show it.
+///
+/// Steps through seconds, minutes, hours and days: an episode can be a five-second CPU spike or an
+/// expiring API key that has been warning for weeks, and a minute-only format renders the latter as
+/// a five-digit number.
+///
+/// Args:
+///     start_ms: Unix ms the warning opened.
+///     end_ms: Unix ms it cleared, or `None` while it is still active.
+///
+/// Returns:
+///     Localized elapsed text, or the "ongoing" word for an open episode.
+pub(crate) fn warn_duration_text(start_ms: i64, end_ms: Option<i64>) -> String {
+    let Some(end) = end_ms else {
+        return rust_i18n::t!("core_status.warn_ongoing").to_string();
+    };
+    let secs = (end - start_ms).max(0) / 1000;
+    if secs < 60 {
+        rust_i18n::t!("core_status.ago_s", n = secs).to_string()
+    } else if secs < 3_600 {
+        rust_i18n::t!("core_status.ago_m", n = secs / 60).to_string()
+    } else if secs < 86_400 {
+        rust_i18n::t!("core_status.ago_h", n = secs / 3_600).to_string()
+    } else {
+        rust_i18n::t!("core_status.ago_d", n = secs / 86_400).to_string()
+    }
+}
+
 /// Localized word for one trade-direction filter value, shared by every panel that offers the
 /// filter (the Report scope field, the Analytics toolbar) so the three read identically.
 pub(crate) fn side_label(side: moon_core::db::SideFilter) -> String {

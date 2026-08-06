@@ -5,13 +5,14 @@
 //! second, keeps the rolling CPU/memory history the warnings need, and turns the SUSTAINED/trend
 //! signals into WARNING EPISODES with a start and an end time.
 //!
-//! Five axes:
+//! Six axes:
 //! - `SysCpu` — a machine's system CPU held at/above the threshold (per server IP).
 //! - `MemGrowth` — a core's used memory rising above its window minimum (per core).
 //! - `Unreachable` — a core that had reached Ready is now Disconnected/Failed — a real drop, on any
 //!   server (per server IP), including a single-core server going fully down.
 //! - `Ping` — the client↔core UDP round-trip held ABOVE THE CORE'S OWN BASELINE (per core).
 //! - `ExchPing` — the core→exchange order-API latency held ABOVE THE CORE'S OWN BASELINE (per core).
+//! - `ApiExpiry` — the core's exchange API key is inside the configured expiry horizon (per core).
 //!
 //! `SysCpu` and `MemGrowth` are ported verbatim from the panel so their displayed warnings do not
 //! change; `Unreachable` uses the same connectivity rule the panel showed, now sourced here (so it
@@ -58,6 +59,8 @@ const LATENCY_PCT_DEN: u32 = 100;
 const LATENCY_SUSTAIN_SECS: u32 = 3;
 /// Closed episodes kept in memory before the oldest is dropped (the disk store arrives with badges).
 const EPISODE_CAP: usize = 2048;
+/// An exchange API key warns from this many days before it expires, until it is replaced.
+const API_EXPIRY_WARN_DAYS: i32 = 7;
 
 /// Where a latency sample sits relative to its rolling baseline, higher = worse.
 ///
@@ -204,6 +207,8 @@ pub(crate) struct WarnEnabled {
     pub(crate) ping: bool,
     /// Core→exchange ping (order-API latency) axis on.
     pub(crate) exch: bool,
+    /// Expiring exchange API-key axis on.
+    pub(crate) api: bool,
 }
 
 impl Default for WarnEnabled {
@@ -215,6 +220,7 @@ impl Default for WarnEnabled {
             conn: true,
             ping: true,
             exch: true,
+            api: true,
         }
     }
 }
@@ -228,6 +234,7 @@ impl WarnEnabled {
             WarnAxis::Unreachable => self.conn,
             WarnAxis::Ping => self.ping,
             WarnAxis::ExchPing => self.exch,
+            WarnAxis::ApiExpiry => self.api,
         }
     }
 }
@@ -254,6 +261,10 @@ pub(crate) struct WarnTuning {
     pub(crate) exch_red_num: u32,
     pub(crate) exch_window: i64,
     pub(crate) exch_hold: u32,
+    /// Days before expiration at which the API-key warning starts. No hold: unlike every other
+    /// axis this one is a state, not a sustained measurement, so it fires on the first sample that
+    /// crosses it and stays on until the key is replaced.
+    pub(crate) api_days: i32,
 }
 
 impl Default for WarnTuning {
@@ -271,6 +282,7 @@ impl Default for WarnTuning {
             exch_red_num: LATENCY_WARN_NUM,
             exch_window: LATENCY_BASELINE_SECS,
             exch_hold: LATENCY_SUSTAIN_SECS,
+            api_days: API_EXPIRY_WARN_DAYS,
         }
     }
 }
@@ -285,6 +297,10 @@ pub(crate) struct CoreSample {
     pub(crate) status: ConnStatus,
     /// Latest process/machine telemetry.
     pub(crate) sys: CoreSysStatus,
+    /// Days left on this core's exchange API key, or `None` when there is nothing to judge: the
+    /// check has not answered, or it answered that the key has no expiration at all. Both must stay
+    /// silent — a key with no expiry is not a key expiring today.
+    pub(crate) api_days: Option<i32>,
 }
 
 /// Which trend a warning episode tracks.
@@ -300,6 +316,8 @@ pub(crate) enum WarnAxis {
     Ping,
     /// The core→exchange order-API latency held above the core's own baseline (per core).
     ExchPing,
+    /// The core's exchange API key is within the configured number of days of expiring (per core).
+    ApiExpiry,
 }
 
 /// The subject a chart-history ring sample belongs to.
@@ -466,6 +484,8 @@ enum WarnKey {
     Ping(CoreId),
     /// One core's core→exchange order-API latency.
     ExchPing(CoreId),
+    /// One core's expiring exchange API key.
+    ApiExpiry(CoreId),
 }
 
 /// The warning axis a live key belongs to.
@@ -476,7 +496,25 @@ fn axis_of(key: &WarnKey) -> WarnAxis {
         WarnKey::Conn(_) => WarnAxis::Unreachable,
         WarnKey::Ping(_) => WarnAxis::Ping,
         WarnKey::ExchPing(_) => WarnAxis::ExchPing,
+        WarnKey::ApiExpiry(_) => WarnAxis::ApiExpiry,
     }
+}
+
+/// Whether an axis's `peak` field records the LOWEST value seen rather than the highest.
+///
+/// Every measured axis gets worse as its number climbs, so "worst seen" is the maximum. Days left
+/// on a key runs the other way: the worst moment of an episode is its smallest day count.
+fn peak_is_lowest(axis: WarnAxis) -> bool {
+    matches!(axis, WarnAxis::ApiExpiry)
+}
+
+/// Whether an axis has a per-second history that a chart badge could draw.
+///
+/// A STRUCTURAL fact about the axis, unlike the user's "show on chart" preference: the sampled
+/// axes ride the CPU/memory/ping rings, while an expiring key is a standing state with nothing to
+/// plot against time.
+pub(crate) fn axis_has_series(axis: WarnAxis) -> bool {
+    !matches!(axis, WarnAxis::ApiExpiry)
 }
 
 /// Backend warning engine: rolling per-core history, current warning state, and the episode log.
@@ -521,6 +559,9 @@ pub(crate) struct CoreWarnEngine {
     ping_warn: HashSet<CoreId>,
     /// Cores whose core→exchange latency is sustained above their baseline (the exch-ping warning).
     exch_warn: HashSet<CoreId>,
+    /// Cores whose exchange API key is at or inside the warning horizon, with the day count that
+    /// triggered it (kept so the episode can record it without re-reading the store).
+    api_warn: HashMap<CoreId, i32>,
     /// Numeric detection thresholds, refreshed from the layout each tick.
     tuning: WarnTuning,
     /// Current per-core client↔core-ping colour severity (relative to its baseline and the axis
@@ -765,6 +806,19 @@ impl CoreWarnEngine {
                 self.enabled.exch,
             );
         }
+
+        // Expiring API key: a plain threshold on a value that changes once a day, so it has no
+        // window and no sustain counter. It is judged for EVERY core, Ready or not — a key keeps
+        // ageing while its core is down, and the last known day count remains the truth about it.
+        self.api_warn.clear();
+        for sample in samples {
+            let Some(days) = sample.api_days else {
+                continue;
+            };
+            if self.enabled.api && days <= t.api_days {
+                self.api_warn.insert(sample.id, days);
+            }
+        }
     }
 
     /// Open new episodes, extend open ones, and close those whose warning cleared or subject left.
@@ -835,12 +889,27 @@ impl CoreWarnEngine {
                 (ip_of.get(id).copied(), Some(*id), peak),
             );
         }
+        // API-key peak is the days left, clamped into the peak field: an already-expired key
+        // records 0 rather than wrapping to a huge positive count.
+        for (id, days) in &self.api_warn {
+            let peak = (*days).clamp(0, i32::from(u16::MAX)) as u16;
+            active.insert(
+                WarnKey::ApiExpiry(*id),
+                (ip_of.get(id).copied(), Some(*id), peak),
+            );
+        }
 
         // Open or extend.
         let mut opened: Vec<WarnAxis> = Vec::new();
         for (key, (server_ip, core_id, peak)) in &active {
             match self.open.get_mut(key) {
-                Some(open) => open.peak = open.peak.max(*peak),
+                Some(open) => {
+                    open.peak = if peak_is_lowest(axis_of(key)) {
+                        open.peak.min(*peak)
+                    } else {
+                        open.peak.max(*peak)
+                    }
+                }
                 None => {
                     let id = self.next_id;
                     self.next_id += 1;
@@ -929,6 +998,11 @@ impl CoreWarnEngine {
     /// Whether one core's core→exchange latency is sustained above its baseline (the exch warning).
     pub(crate) fn core_exch_warn(&self, id: CoreId) -> bool {
         self.exch_warn.contains(&id)
+    }
+
+    /// Whether one core's exchange API key is inside the warning horizon (the API-key warning).
+    pub(crate) fn core_api_warn(&self, id: CoreId) -> bool {
+        self.api_warn.contains_key(&id)
     }
 
     /// One core's current client↔core-ping colour severity (relative to its baseline and thresholds).

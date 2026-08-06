@@ -19,7 +19,7 @@ mod tests;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::mpsc::{sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use moonproto::state::{AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent};
 use moonproto::{
@@ -306,8 +306,9 @@ pub(super) fn run(
     // Assets snapshot rate cap: minimum 1 s between publishes while the Assets view is active,
     // otherwise 5 s. Publication still requires a domain event; this is not a periodic timer.
     let mut last_assets = Instant::now();
-    // Coalesced repair requests for account changes that need a fresh balance or wallet snapshot.
-    let mut account_reconciliation = AccountReconciliation::new();
+    // Coalesced repair requests for account changes that need a fresh balance or wallet snapshot,
+    // plus the recurring API-key expiration poll.
+    let mut account_reconciliation = AccountReconciliation::new(Instant::now());
     // Window for logging Balance events after our refresh, used to diagnose phantom Assets entries.
     let mut balance_refresh_log_until: Option<Instant> = None;
     // Transfer-assets cursor: publish only when the revision changes (request/response).
@@ -343,6 +344,11 @@ pub(super) fn run(
     let mut events = Vec::new();
     let mut lifecycle_events = Vec::new();
     let mut force_market_sample = false;
+    // Latest lifecycle state, and whether this core has already failed one API-key check: an older
+    // MoonBot never answers that method, and a warn per retry for the life of the session would be
+    // noise. The first failure is worth seeing; the rest are not.
+    let mut is_ready = false;
+    let mut api_expiry_failed_before = false;
     loop {
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
@@ -454,6 +460,14 @@ pub(super) fn run(
                 )),
                 LifecycleEvent::Disconnected => ConnStatus::Disconnected,
             };
+            // Tracked for the API-key poll below: an Engine API request sent to a core that is not
+            // Ready buys nothing but a pending timeout. Reaching Ready is also the moment to ask —
+            // the key may have been replaced while this core was away — subject to the poll's own
+            // cooldown, which is what keeps a flapping core from asking on every reconnect.
+            is_ready = st == ConnStatus::Ready;
+            if is_ready {
+                account_reconciliation.poll_api_expiry_on_ready(Instant::now());
+            }
             let _ = tx.send(FeedMsg::Status(st));
             if request_license_state {
                 if let Err(error) = client.settings().request_kernel_license_state() {
@@ -477,6 +491,10 @@ pub(super) fn run(
                         crate::feed::core_label(server.id)
                     );
                 }
+                // The API-key check is deliberately NOT fired from here. It reaches the exchange, and
+                // a flapping core would issue one per reconnect; the recurring poll below owns it and
+                // is due immediately on the first pass, so the first value still arrives at startup.
+
                 // Balances are NOT re-pushed on a reconnect: moonproto skips init, so the
                 // retained snapshot keeps feeding pre-outage figures while the status is already
                 // back to Ready — and `CoreData::balance_state()` would then classify them Live.
@@ -582,6 +600,26 @@ pub(super) fn run(
                 );
             }
             account_reconciliation.mark_spot_wallet_attempt(account_now);
+        }
+        // API-key expiration: a pure poll, since no event announces that a key aged a day. Gated on
+        // Ready — a request to a core that is not connected only buys a pending timeout — and the
+        // attempt is marked whether or not the request left, so a core stuck mid-connect cannot ask
+        // on every wake-up.
+        if account_reconciliation.api_expiry_due(account_now) {
+            if is_ready {
+                if let Err(error) = client.account().refresh_api_expiration_time() {
+                    log::debug!(
+                        "core {} api expiration poll not sent: {error}",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+                account_reconciliation.mark_api_expiry_attempt(account_now);
+            } else {
+                // A due deadline that the Ready gate declines must still move, or the wait below
+                // computes zero every pass and this thread spins on `recv_timeout(0)` for as long
+                // as the core stays down.
+                account_reconciliation.defer_api_expiry(account_now);
+            }
         }
         // Track the outcome of the bulk 5-minute candle snapshot that moonproto requests
         // automatically after subscribe_all_trades. Retained-history candle metrics such as
@@ -812,13 +850,67 @@ pub(super) fn run(
                 break;
             }
         }
-        // Hedge mode arrives directly in the Engine API response event.
-        let hedge_mode = events.iter().find_map(|ev| match ev {
-            Event::Account(AccountEvent::HedgeModeUpdated { hedge_mode, .. }) => Some(*hedge_mode),
-            _ => None,
-        });
+        // Account-plane answers, both of which arrive directly in an Engine API response event.
+        // ONE pass over the batch: `events` is the whole domain drain (ticks, book, orders) on a
+        // thread that runs per core, and these two answers are rare enough that a second traversal
+        // would cost far more than it carries.
+        //
+        // API-key expiration publishes successful answers only. A failed check is logged and
+        // otherwise ignored, so one dropped request does not erase the last known day count and
+        // cannot be mistaken for "this key has no expiration".
+        let mut hedge_mode = None;
+        let mut api_expiry = None;
+        for ev in &events {
+            match ev {
+                Event::Account(AccountEvent::HedgeModeUpdated { hedge_mode: on, .. }) => {
+                    // FIRST match in the batch, as the `find_map` this replaced took — the single
+                    // pass is an efficiency change, not a behaviour one.
+                    hedge_mode = hedge_mode.or(Some(*on));
+                }
+                Event::Account(AccountEvent::ApiExpirationUpdated { expiration, .. }) => {
+                    let expiry = convert::api_key_expiry_from_proto(*expiration, SystemTime::now());
+                    // Logged because nothing else observes this path: the value changes about once
+                    // a day, so a silent success is indistinguishable from a request that never
+                    // left. Rare enough (once per connect, then six-hourly) to cost nothing. The
+                    // RAW count is included beside the accepted one, so a core-side placeholder the
+                    // sanity range drops (`-1000` from a connected core, seen live) stays visible
+                    // instead of vanishing into "unknown".
+                    log::info!(
+                        "core {} api key: known={} days_left={:?} reported={:?}",
+                        crate::feed::core_label(server.id),
+                        expiry.known,
+                        expiry.days_left,
+                        expiration.reported_days_left()
+                    );
+                    api_expiry = Some(expiry);
+                }
+                Event::Account(AccountEvent::ApiExpirationUpdateFailed { error, .. }) => {
+                    // Retry sooner than the full interval: a core that was merely busy should not
+                    // wait six hours for its first day count.
+                    account_reconciliation.retry_api_expiry(Instant::now());
+                    if api_expiry_failed_before {
+                        log::debug!(
+                            "core {} api expiration check failed again: {error}",
+                            crate::feed::core_label(server.id)
+                        );
+                    } else {
+                        api_expiry_failed_before = true;
+                        log::warn!(
+                            "core {} api expiration check failed: {error}",
+                            crate::feed::core_label(server.id)
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
         if let Some(on) = hedge_mode {
             if tx.send(FeedMsg::HedgeMode(on)).is_err() {
+                break;
+            }
+        }
+        if let Some(expiry) = api_expiry {
+            if tx.send(FeedMsg::ApiExpiry(expiry)).is_err() {
                 break;
             }
         }
@@ -1330,19 +1422,21 @@ pub(super) fn run(
         } else {
             None
         };
-        let account_wait = account_reconciliation.next_wait(Instant::now());
-        let wake_wait = match (order_wait, account_wait) {
-            (Some(order), Some(account)) => Some(order.min(account)),
-            (Some(wait), None) | (None, Some(wait)) => Some(wait),
-            (None, None) => None,
-        };
-        let wake_result = match wake_wait {
-            Some(timeout) => wake_rx.recv_timeout(timeout).map_err(|err| match err {
-                std::sync::mpsc::RecvTimeoutError::Timeout => None,
-                std::sync::mpsc::RecvTimeoutError::Disconnected => Some(()),
-            }),
-            None => wake_rx.recv().map_err(|_| Some(())),
-        };
+        let wait_now = Instant::now();
+        let account_wait = account_reconciliation.next_wait(wait_now);
+        // The API-key poll is the one deadline that is ALWAYS pending, so the wait now always has a
+        // ceiling — which is what makes the poll fire on a core whose event stream went quiet. The
+        // loop therefore no longer blocks indefinitely, and the former unbounded `recv()` arm is
+        // gone with it.
+        let poll_wait = account_reconciliation.api_expiry_wait(wait_now);
+        let wake_wait = [order_wait, account_wait]
+            .into_iter()
+            .flatten()
+            .fold(poll_wait, Duration::min);
+        let wake_result = wake_rx.recv_timeout(wake_wait).map_err(|err| match err {
+            std::sync::mpsc::RecvTimeoutError::Timeout => None,
+            std::sync::mpsc::RecvTimeoutError::Disconnected => Some(()),
+        });
         match wake_result {
             Ok(()) => while wake_rx.try_recv().is_ok() {},
             Err(None) => {}

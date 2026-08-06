@@ -172,6 +172,11 @@ core_status.col.updated:
   ru: "Обновлено"
   en: "Updated"
   es: "Actualizado"
+# Exchange API-key lifetime column (flat table).
+core_status.col.api_key:
+  ru: "АПИ"
+  en: "API"
+  es: "API"
 
 # --- By IP column header (the fixed caption row above the server tree) ---
 # CPU column: percentage plus the machine's logical-core count in parentheses.
@@ -189,6 +194,11 @@ core_status.hdr.ip:
   ru: "IP"
   en: "IP"
   es: "IP"
+# API-key column: days left before the exchange key expires. Also the axis label in the alert list.
+core_status.hdr.api_key:
+  ru: "АПИ"
+  en: "API"
+  es: "API"
 
 # --- Detached-window chart legend ---
 core_status.chart_cpu:
@@ -263,6 +273,10 @@ core_status.warn_cfg.exch:
   ru: "Скачок пинга биржи"
   en: "Exchange ping spike"
   es: "Pico de ping de bolsa"
+core_status.warn_cfg.api:
+  ru: "Истекает ключ API"
+  en: "API key expiring"
+  es: "Clave API por vencer"
 # Column captions on a warning row (above the controls).
 core_status.warn_cfg.col.on:
   ru: "Вкл"
@@ -301,6 +315,11 @@ core_status.warn_cfg.p.red:
   ru: "Красн"
   en: "Red"
   es: "Rojo"
+# How many days before expiration the API-key warning starts.
+core_status.warn_cfg.p.days:
+  ru: "За"
+  en: "Within"
+  es: "En"
 # "no sound" option and the seconds unit in the alert popup.
 core_status.warn_cfg.sound_none:
   ru: "Нет"
@@ -310,6 +329,10 @@ core_status.warn_cfg.u.sec:
   ru: "сек"
   en: "s"
   es: "s"
+core_status.warn_cfg.u.day:
+  ru: "дней"
+  en: "days"
+  es: "días"
 
 # --- Units and relative time ---
 core_status.mb:
@@ -332,3 +355,16 @@ core_status.ago_h:
   ru: "%{n}ч"
   en: "%{n}h"
   es: "%{n}h"
+core_status.ago_d:
+  ru: "%{n}д"
+  en: "%{n}d"
+  es: "%{n}d"
+# Days left on an API key, and the state once it has run out.
+core_status.api_days:
+  ru: "%{n} дн"
+  en: "%{n} d"
+  es: "%{n} d"
+core_status.api_expired:
+  ru: "истёк"
+  en: "expired"
+  es: "vencida"

@@ -25,6 +25,7 @@ fn sample(id: CoreId, ip: [u8; 4], cpu: Option<u8>, used: Option<u16>) -> CoreSa
             updated_ms: 1,
             ..CoreSysStatus::default()
         },
+        api_days: None,
     }
 }
 
@@ -39,6 +40,7 @@ fn sample_rtt(id: CoreId, ip: [u8; 4], rtt: Option<u32>) -> CoreSample {
             updated_ms: 1,
             ..CoreSysStatus::default()
         },
+        api_days: None,
     }
 }
 
@@ -53,6 +55,7 @@ fn sample_exch(id: CoreId, ip: [u8; 4], exch: Option<u16>) -> CoreSample {
             updated_ms: 1,
             ..CoreSysStatus::default()
         },
+        api_days: None,
     }
 }
 
@@ -77,6 +80,7 @@ fn sample_conn(id: CoreId, ip: [u8; 4], status: ConnStatus) -> CoreSample {
             updated_ms: 1,
             ..CoreSysStatus::default()
         },
+        api_days: None,
     }
 }
 
@@ -261,6 +265,7 @@ fn tick_emits_server_and_core_ring_samples() {
             updated_ms: updated,
             ..CoreSysStatus::default()
         },
+        api_days: None,
     };
     // Two cores, 500 MB each → used_sum 1000, free 500, total 1500.
     let result = engine.tick(&[mk(1, 30, 500, 10), mk(2, 20, 500, 20)], 1_000);
@@ -539,6 +544,7 @@ fn disabled_axis_records_no_episode() {
         conn: true,
         ping: true,
         exch: true,
+        api: true,
     });
     let ip = IpAddr::V4(Ipv4Addr::from(IP));
     for sec in 1..=(CPU_SUSTAIN_SECS as i64 + 4) {
@@ -560,4 +566,91 @@ fn absent_core_is_evicted() {
     // Next second the core is gone from the sample set.
     engine.tick(&[], 2000);
     assert_eq!(engine.avg_cpu(9), (None, None));
+}
+
+/// Build one Ready sample carrying a specific API-key day count (`None` = no key answer to judge).
+fn sample_api(id: CoreId, ip: [u8; 4], api_days: Option<i32>) -> CoreSample {
+    CoreSample {
+        api_days,
+        ..sample(id, ip, None, None)
+    }
+}
+
+/// The API-key axis is a THRESHOLD, not a sustained measurement: it must fire on the very first
+/// sample inside the horizon. Requiring a hold window here — the shape every other axis has — would
+/// delay a warning whose input only moves once a day.
+#[test]
+fn an_expiring_key_warns_on_the_first_sample() {
+    let mut engine = CoreWarnEngine::default();
+
+    engine.tick(&[sample_api(1, IP, Some(3))], 1_000);
+
+    assert!(
+        engine.core_api_warn(1),
+        "3 days is inside the 7-day default"
+    );
+    assert_eq!(engine.open_episodes().len(), 1);
+}
+
+/// A key with plenty of time left, and a key with NO expiration at all, must both stay silent. The
+/// second is the dangerous one: moonproto reports it as zero days beside `is_known() == false`, so
+/// a caller that reads the number alone would warn on every perpetual key forever.
+#[test]
+fn a_distant_or_perpetual_key_never_warns() {
+    let mut engine = CoreWarnEngine::default();
+
+    engine.tick(
+        &[sample_api(1, IP, Some(60)), sample_api(2, IP, None)],
+        1_000,
+    );
+
+    assert!(!engine.core_api_warn(1), "60 days is outside the horizon");
+    assert!(!engine.core_api_warn(2), "no expiry is not an expiry today");
+    assert!(engine.open_episodes().is_empty());
+}
+
+/// The worst moment of an expiring-key episode is its FEWEST days, so `peak` must fall, not climb.
+/// Reusing the `max` rule every other axis has would record the day count the episode STARTED at
+/// and permanently understate how close the key got.
+#[test]
+fn the_key_episode_records_its_lowest_day_count() {
+    let mut engine = CoreWarnEngine::default();
+
+    engine.tick(&[sample_api(1, IP, Some(5))], 1_000);
+    engine.tick(&[sample_api(1, IP, Some(2))], 2_000);
+    engine.tick(&[sample_api(1, IP, Some(4))], 3_000);
+
+    let open = engine.open_episodes();
+    assert_eq!(open.len(), 1, "one episode spanning all three ticks");
+    assert_eq!(open[0].peak, 2, "the closest the key came to expiring");
+    assert_eq!(open[0].axis, WarnAxis::ApiExpiry);
+    assert_eq!(open[0].core_id, Some(1), "the key belongs to the core");
+}
+
+/// An expired key reports a NEGATIVE day count; `peak` is unsigned, so it has to clamp rather than
+/// wrap — a wrapped value would read as 65 000 days left on the row that matters most.
+#[test]
+fn an_expired_key_clamps_its_day_count() {
+    let mut engine = CoreWarnEngine::default();
+
+    engine.tick(&[sample_api(1, IP, Some(-12))], 1_000);
+
+    let open = engine.open_episodes();
+    assert!(engine.core_api_warn(1), "an expired key is still a warning");
+    assert_eq!(open[0].peak, 0, "clamped, not wrapped");
+}
+
+/// Replacing the key clears the warning and closes the episode — the "stays on until replaced"
+/// contract, seen from its end.
+#[test]
+fn replacing_the_key_closes_the_episode() {
+    let mut engine = CoreWarnEngine::default();
+    engine.tick(&[sample_api(1, IP, Some(2))], 1_000);
+    assert!(engine.core_api_warn(1));
+
+    let result = engine.tick(&[sample_api(1, IP, Some(365))], 2_000);
+
+    assert!(!engine.core_api_warn(1));
+    assert_eq!(result.closed.len(), 1, "the episode closed");
+    assert_eq!(result.closed[0].axis, WarnAxis::ApiExpiry);
 }

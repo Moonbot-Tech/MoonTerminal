@@ -374,6 +374,7 @@ fn axis_str(axis: WarnAxis) -> &'static str {
         WarnAxis::Unreachable => "connectivity",
         WarnAxis::Ping => "ping",
         WarnAxis::ExchPing => "exch_ping",
+        WarnAxis::ApiExpiry => "api_expiry",
     }
 }
 
@@ -384,6 +385,7 @@ fn axis_from(name: &str) -> WarnAxis {
         "connectivity" => WarnAxis::Unreachable,
         "ping" => WarnAxis::Ping,
         "exch_ping" => WarnAxis::ExchPing,
+        "api_expiry" => WarnAxis::ApiExpiry,
         _ => WarnAxis::SysCpu,
     }
 }

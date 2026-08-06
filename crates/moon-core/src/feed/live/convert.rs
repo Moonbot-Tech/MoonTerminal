@@ -9,9 +9,9 @@ use moonproto::{Event, MoonClient, OrderWorkerStatus};
 use crate::config::TakeProfitMode;
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
-    ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind, EngineActionResult,
-    LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow, OrderTrace,
-    OrderTracePoint, RuntimeState, WalletKind,
+    ApiKeyExpiry, ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind,
+    EngineActionResult, LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow,
+    OrderTrace, OrderTracePoint, RuntimeState, WalletKind,
 };
 
 /// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat
@@ -183,6 +183,76 @@ pub(super) fn sys_status_from_proto(
         updated_ms,
     }
 }
+
+/// Convert one successful `CheckAPIExpirationTime` answer into terminal state.
+///
+/// The day count is the core's own (`reported_days_left`), because the terminal's clock plays no
+/// part in it. A legacy core that predates that field falls back to `days_until`, which compares
+/// moonproto's UNNORMALIZED server-local timestamp against the local clock and can therefore be a
+/// day out; that answer also carries no absolute date, so its reader ages the count instead.
+///
+/// `is_known() == false` is a successful check on a key the exchange reports no expiration for. The
+/// day count then stays `None` even though the wire carries `Some(0)`, so no caller can mistake a
+/// perpetual key for one expiring today.
+///
+/// A day count outside [`SANE_DAYS`] is dropped rather than displayed — see that constant for why
+/// the negative side is the narrow one.
+///
+/// Args:
+///     expiration: The parsed expiration from `AccountEvent::ApiExpirationUpdated`.
+///     now: Terminal clock used for the legacy fallback and the receipt stamp.
+///
+/// Returns:
+///     Terminal-side expiration state for the store.
+pub(super) fn api_key_expiry_from_proto(
+    expiration: moonproto::ApiExpirationTime,
+    now: std::time::SystemTime,
+) -> ApiKeyExpiry {
+    let known = expiration.is_known();
+    // A CURRENT answer is the one that carries `reported_days_left`; only for those is the absolute
+    // date normalized to this terminal's clock. A legacy answer's date is the core's own local
+    // timestamp, which nothing corrects, so it is deliberately NOT kept: taking it would make the
+    // un-normalized value the preferred source and put a core in another time zone a day out.
+    let current = expiration.reported_days_left().is_some();
+    let days_left = known
+        .then(|| {
+            expiration
+                .reported_days_left()
+                .map(i64::from)
+                .or_else(|| expiration.days_until(now))
+        })
+        .flatten()
+        .filter(|days| SANE_DAYS.contains(days))
+        .map(|days| days as i32);
+    let checked_ms = crate::util::unix_ms_i64_of(now);
+    // The date is the third wire field and the day count is the second, so a core could answer with
+    // one sane and the other not. Keep the date only while BOTH agree on being plausible — the
+    // reader prefers the date, and an unchecked one would slip past the guard above.
+    let at_unix = (known && current)
+        .then(|| expiration.unix_seconds())
+        .flatten()
+        .filter(|_| days_left.is_some())
+        .filter(|at_unix| {
+            let days = (at_unix - crate::util::unix_ms_i64_of(now).div_euclid(1_000)) / 86_400;
+            SANE_DAYS.contains(&days)
+        });
+    ApiKeyExpiry {
+        known,
+        days_left,
+        at_unix,
+        checked_ms,
+    }
+}
+
+/// Plausible remaining lifetime of an exchange API key, in days.
+///
+/// Asymmetric on purpose. Forward, a century covers any real key. Backward, only a quarter: a core
+/// that is CONNECTED AND TRADING cannot be running on a key that expired years ago, so a large
+/// negative count is not a fact about the key. Observed live: two connected cores answer `-1000`
+/// while every other core on the same terminal reports "no expiry" — a core-side placeholder whose
+/// meaning is not documented in the protocol. Rendering it as "expired" would put a red warning on
+/// two healthy cores, which is worse than admitting the answer is unusable.
+const SANE_DAYS: std::ops::RangeInclusive<i64> = -90..=36_500;
 
 /// Applies a targeted toolbar edit to the retained settings snapshot THROUGH command helpers.
 /// Raw fields `s_price`/`sb_num` are `pub(crate)` in production; `price_drop_level` is public.

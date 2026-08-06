@@ -15,6 +15,18 @@ use moonproto::{Event, ExchangeCode, ExchangeKind, OrderWorkerStatus};
 pub(super) const BALANCE_REPAIR_INTERVAL: Duration = Duration::from_secs(3);
 /// Minimum interval between explicit Spot-wallet repair requests.
 pub(super) const SPOT_WALLET_REPAIR_INTERVAL: Duration = Duration::from_secs(10);
+/// Interval between API-key expiration polls.
+///
+/// Unlike the two repair deadlines above, this one is not event-driven: the core pushes nothing
+/// when a key ages, so the terminal has to ask. Six hours is far below the one-day granularity the
+/// answer carries, while the request itself reaches the exchange and must stay rare.
+pub(super) const API_EXPIRY_POLL_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Retry delay after an API-key check that did not answer.
+///
+/// Short enough that a core which was merely busy is re-asked within the session, long enough that
+/// a core which cannot answer the method at all (an older MoonBot) is not re-asked every minute.
+pub(super) const API_EXPIRY_RETRY_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 /// Account-relevant fields from one retained order.
 ///
@@ -122,20 +134,90 @@ impl RepairDeadline {
     }
 }
 
-/// Tracks order-account stamps and independent balance and Spot-wallet repair deadlines.
+/// A plain recurring deadline: unlike [`RepairDeadline`] it needs no trigger, because nothing in
+/// the event stream announces that a value went stale.
+#[derive(Clone, Copy, Debug)]
+struct PollDeadline {
+    interval: Duration,
+    due_at: Instant,
+    last_attempt: Option<Instant>,
+}
+
+impl PollDeadline {
+    /// Creates a poll that is due immediately, so the first value arrives as soon as the core can
+    /// answer rather than one interval later.
+    fn new(interval: Duration, now: Instant) -> Self {
+        Self {
+            interval,
+            due_at: now,
+            last_attempt: None,
+        }
+    }
+
+    /// Brings the poll due at once, unless one ran within `min_gap`.
+    ///
+    /// For an event that means "this value may have changed" — a core reaching Ready. The gap is
+    /// what keeps a flapping core from asking on every reconnect.
+    fn poll_now_unless_recent(&mut self, now: Instant, min_gap: Duration) {
+        let recent = self
+            .last_attempt
+            .is_some_and(|last| now.saturating_duration_since(last) < min_gap);
+        if !recent {
+            self.due_at = now;
+        }
+    }
+
+    /// Brings the next poll forward to `delay` from now, for a retry after an unanswered check.
+    /// Never pushes it further out than it already is.
+    fn retry_in(&mut self, now: Instant, delay: Duration) {
+        let retry_at = now + delay;
+        if retry_at < self.due_at {
+            self.due_at = retry_at;
+        }
+    }
+
+    /// Pushes a due poll out by `delay`, for a caller that cannot act on it yet.
+    ///
+    /// Unconditional, unlike [`Self::retry_in`]: a deadline that stays due while its caller keeps
+    /// declining it leaves the loop with a zero-length wait, and the thread spins.
+    fn defer(&mut self, now: Instant, delay: Duration) {
+        self.due_at = now + delay;
+    }
+
+    /// Returns whether the next poll may run at `now`.
+    fn is_due(&self, now: Instant) -> bool {
+        now >= self.due_at
+    }
+
+    /// Records a poll and schedules the next one a full interval out.
+    fn mark_attempt(&mut self, now: Instant) {
+        self.due_at = now + self.interval;
+        self.last_attempt = Some(now);
+    }
+
+    /// Returns the remaining wait before the next poll.
+    fn wait(&self, now: Instant) -> Duration {
+        self.due_at.saturating_duration_since(now)
+    }
+}
+
+/// Tracks order-account stamps, the balance and Spot-wallet repair deadlines, and the recurring
+/// API-key expiration poll.
 pub(super) struct AccountReconciliation {
     orders: HashMap<u64, OrderAccountStamp>,
     balance: RepairDeadline,
     spot_wallet: RepairDeadline,
+    api_expiry: PollDeadline,
 }
 
 impl AccountReconciliation {
     /// Creates idle reconciliation state.
-    pub(super) fn new() -> Self {
+    pub(super) fn new(now: Instant) -> Self {
         Self {
             orders: HashMap::new(),
             balance: RepairDeadline::new(BALANCE_REPAIR_INTERVAL),
             spot_wallet: RepairDeadline::new(SPOT_WALLET_REPAIR_INTERVAL),
+            api_expiry: PollDeadline::new(API_EXPIRY_POLL_INTERVAL, now),
         }
     }
 
@@ -223,7 +305,48 @@ impl AccountReconciliation {
         self.spot_wallet.mark_attempt(now);
     }
 
-    /// Returns the earliest pending account-repair deadline.
+    /// Returns whether the recurring API-key expiration poll is due.
+    pub(super) fn api_expiry_due(&self, now: Instant) -> bool {
+        self.api_expiry.is_due(now)
+    }
+
+    /// Records an API-key expiration poll and schedules the next one.
+    pub(super) fn mark_api_expiry_attempt(&mut self, now: Instant) {
+        self.api_expiry.mark_attempt(now);
+    }
+
+    /// Brings the next API-key poll forward after a check that did not answer.
+    pub(super) fn retry_api_expiry(&mut self, now: Instant) {
+        self.api_expiry.retry_in(now, API_EXPIRY_RETRY_INTERVAL);
+    }
+
+    /// Pushes the API-key poll out when it comes due on a core that cannot be asked yet.
+    ///
+    /// A FULL interval, not the retry delay: nothing is learned by waking a down core's thread to
+    /// ask again, because the Ready transition arrives as a lifecycle event that wakes the loop and
+    /// calls [`Self::poll_api_expiry_on_ready`] itself.
+    pub(super) fn defer_api_expiry(&mut self, now: Instant) {
+        self.api_expiry.defer(now, API_EXPIRY_POLL_INTERVAL);
+    }
+
+    /// Brings the API-key poll due when a core reaches Ready, unless one was just attempted.
+    ///
+    /// The gap is what keeps a flapping core from issuing an exchange-bound check per reconnect,
+    /// while a core that has just come up for the first time is asked immediately.
+    pub(super) fn poll_api_expiry_on_ready(&mut self, now: Instant) {
+        self.api_expiry
+            .poll_now_unless_recent(now, API_EXPIRY_RETRY_INTERVAL);
+    }
+
+    /// Returns the wait until the next API-key poll.
+    ///
+    /// Separate from [`Self::next_wait`] on purpose: that one answers "is repair pending?", and a
+    /// recurring poll is always pending, which would erase the distinction.
+    pub(super) fn api_expiry_wait(&self, now: Instant) -> Duration {
+        self.api_expiry.wait(now)
+    }
+
+    /// Returns the earliest PENDING repair deadline, or `None` when no repair is queued.
     pub(super) fn next_wait(&self, now: Instant) -> Option<Duration> {
         match (self.balance.wait(now), self.spot_wallet.wait(now)) {
             (Some(balance), Some(wallet)) => Some(balance.min(wallet)),

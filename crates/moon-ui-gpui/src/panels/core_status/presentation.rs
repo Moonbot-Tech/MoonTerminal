@@ -4,6 +4,7 @@ use moon_core::feed::ConnStatus;
 use moon_ui::MoonPalette;
 use rust_i18n::t;
 
+use super::model::ApiKeyState;
 use crate::backend::core_warn::LatencySeverity;
 
 /// Visual metadata shared by Flat and By IP connection rows.
@@ -90,6 +91,49 @@ pub(super) fn ping_plain(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+/// Format one core's API-key state for its column.
+///
+/// The two "no number" states must stay apart: collapsing them would leave the operator unable to
+/// tell "we could not check" from "this key never expires". The infinity glyph lives here, not in
+/// the dictionaries, because `locales/README.md` keeps glyphs out of translated values.
+///
+/// Args:
+///     state: The key's state as classified for this frame.
+///
+/// Returns:
+///     Column text for the key's remaining lifetime.
+pub(super) fn api_expiry_text(state: ApiKeyState) -> String {
+    match state {
+        ApiKeyState::Unknown => "-".to_string(),
+        ApiKeyState::Perpetual => "\u{221e}".to_string(),
+        ApiKeyState::Days(days) if days < 0 => t!("core_status.api_expired").to_string(),
+        ApiKeyState::Days(days) => t!("core_status.api_days", n = days).to_string(),
+    }
+}
+
+/// Colour for an API-key cell.
+///
+/// The WARNING decision is the engine's — it owns the user's day threshold — so this reads that
+/// decision instead of re-deriving one from its own day literals. A second set of steps here would
+/// let the number stay grey under a lit warning triangle the moment the threshold is not the
+/// default, the exact disagreement `lat_level` exists to prevent for the ping axes.
+///
+/// Args:
+///     state: The key's state as classified for this frame.
+///     warn: Whether the engine currently warns about this key.
+///
+/// Returns:
+///     Red once the key is past its date, yellow while the engine warns, else no colour.
+pub(super) fn api_expiry_level(state: ApiKeyState, warn: bool) -> LoadLevel {
+    if state.is_expired() {
+        LoadLevel::Critical
+    } else if warn {
+        LoadLevel::Warning
+    } else {
+        LoadLevel::Normal
+    }
 }
 
 /// Map the engine's latency severity (already computed against the core's baseline and the axis
@@ -221,3 +265,6 @@ pub(super) fn level_color(level: LoadLevel, palette: MoonPalette) -> u32 {
         LoadLevel::Critical => palette.red,
     }
 }
+
+#[cfg(test)]
+mod tests;

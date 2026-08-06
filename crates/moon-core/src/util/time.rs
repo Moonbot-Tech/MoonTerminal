@@ -27,6 +27,14 @@ pub fn now_unix_ms_i64() -> i64 {
         .unwrap_or(0)
 }
 
+/// Whole Unix milliseconds (`i64`) of an arbitrary `SystemTime`, for stamping a value whose clock
+/// reading the caller already holds. Returns `0` for a time before the epoch, like its siblings.
+pub fn unix_ms_i64_of(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
 /// Convert days since the Unix epoch to `(year, month, day)` in the proleptic Gregorian calendar.
 ///
 /// This is the crate's single copy of Howard Hinnant's civil-from-days algorithm.

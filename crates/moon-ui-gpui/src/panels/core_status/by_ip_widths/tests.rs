@@ -96,6 +96,7 @@ fn a_narrow_row_shrinks_every_column_by_the_same_factor() {
         (narrow.cpu, base.cpu),
         (narrow.mem, base.mem),
         (narrow.ping, base.ping),
+        (narrow.api, base.api),
         (narrow.cores, base.cores),
         (narrow.icon, base.icon),
         (narrow.indent, base.indent),

@@ -937,6 +937,10 @@ pub enum FeedMsg {
     RuntimeState(RuntimeState),
     /// Core account hedge mode for dual-side positions, sent on `HedgeModeUpdated`.
     HedgeMode(bool),
+    /// Exchange API-key expiration for this core, sent on a successful
+    /// `ApiExpirationUpdated`. A failed check publishes nothing, so the store keeps the last
+    /// known answer instead of falling back to "unknown" on one dropped request.
+    ApiExpiry(ApiKeyExpiry),
     /// Batch of Engine-action results such as leverage, hedge, cancel-all, or transfer accumulated
     /// during one event-drain tick. The UI displays them as toasts in the active window.
     EngineActions(Vec<EngineActionResult>),
@@ -951,6 +955,80 @@ pub enum FeedMsg {
     /// `feed::news` and the projection in `feed::live::convert`. The store gates the News panel with
     /// `news_rev` only when the reduced snapshot changes.
     News(super::news::NewsSnapshot),
+}
+
+/// Exchange API-key expiration reported by one core.
+///
+/// A CURRENT core sends a timezone-safe remaining duration, which MoonProto turns into an absolute
+/// date against the CLIENT's clock — so the core's own time zone cannot shift it. A LEGACY core
+/// (the 8-byte payload) sends only a server-local timestamp, which nothing normalizes; that answer
+/// carries no [`Self::at_unix`] and its day count can be off by the terminal↔core zone difference.
+///
+/// `known == false` means the check SUCCEEDED and the exchange reports no expiration for this key.
+/// That is not "zero days left": conflating the two would light a warning on every perpetual key.
+/// A failed or never-answered check is the absence of this value altogether (`None` in the store).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApiKeyExpiry {
+    /// Whether the response carried a real expiration at all.
+    pub known: bool,
+    /// Whole days left AT THE MOMENT OF THE CHECK, as counted by the core. `None` while `known` is
+    /// false. Read it through [`Self::days_left_at`], which ages it — this raw field goes stale
+    /// between polls and while the core is down.
+    pub days_left: Option<i32>,
+    /// Absolute expiration as whole Unix seconds, on the terminal's clock. `None` for a legacy
+    /// answer that carries no normalized duration, and while `known` is false.
+    pub at_unix: Option<i64>,
+    /// Unix ms the terminal received this answer, so a stored day count can be aged.
+    pub checked_ms: i64,
+}
+
+impl ApiKeyExpiry {
+    /// Days left as of `now_ms`, negative once the key has expired.
+    ///
+    /// A stored answer must never be read as-is: it is a snapshot, and the terminal keeps showing
+    /// it while a core is down — for weeks, if the core stays down. Aged here so a key that runs
+    /// out during an outage still crosses the warning threshold instead of standing frozen at the
+    /// count it had when the core was last reachable.
+    ///
+    /// The absolute date is preferred because it does not accumulate error; the legacy path ages
+    /// the core's own count by whole elapsed days instead.
+    ///
+    /// Args:
+    ///     now_ms: Current Unix milliseconds.
+    ///
+    /// Returns:
+    ///     Whole days remaining, or `None` for a key with no expiration or no usable count.
+    pub fn days_left_at(&self, now_ms: i64) -> Option<i32> {
+        if !self.known {
+            return None;
+        }
+        if let Some(at_unix) = self.at_unix {
+            let seconds_left = at_unix.saturating_sub(now_ms.div_euclid(1_000));
+            // Floor division, so a key with 23 hours left reads 0 days and only a key already past
+            // its date goes negative.
+            return Some(clamp_to_i32(seconds_left.div_euclid(86_400)));
+        }
+        let days = self.days_left?;
+        let aged = now_ms.saturating_sub(self.checked_ms).max(0) / 86_400_000;
+        Some(days.saturating_sub(clamp_to_i32(aged)))
+    }
+
+    /// Whether two answers say the same thing.
+    ///
+    /// The absolute date is compared at DAY granularity on purpose: MoonProto rebuilds it as
+    /// `client_now + remaining`, so an unchanged key answers with a date a few seconds apart every
+    /// poll, and an exact comparison would report a change every six hours.
+    pub fn answer_eq(&self, other: &Self) -> bool {
+        self.known == other.known
+            && self.days_left == other.days_left
+            && self.at_unix.map(|at| at.div_euclid(86_400))
+                == other.at_unix.map(|at| at.div_euclid(86_400))
+    }
+}
+
+/// Saturate an `i64` day count into `i32`, so a nonsense date cannot wrap into a plausible one.
+fn clamp_to_i32(days: i64) -> i32 {
+    days.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 /// Network endpoint of one MoonBot core, decoded from its exported key by the live feed.
@@ -1010,3 +1088,6 @@ impl CoreSysStatus {
             && self.order_api_latency_ms == other.order_api_latency_ms
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -123,6 +123,10 @@ pub struct CoreData {
     pub runtime_state: Option<RuntimeState>,
     /// Account hedge mode for dual-side positions, or `None` until the core responds.
     pub hedge_mode: Option<bool>,
+    /// Exchange API-key expiration, or `None` while the terminal has no answer: never asked, the
+    /// core is down, or the check failed. `None` is "unknown" — distinct from a successful answer
+    /// whose [`crate::feed::ApiKeyExpiry::known`] is false, which means the key has no expiry.
+    pub api_expiry: Option<crate::feed::ApiKeyExpiry>,
     /// Unshown Engine action results for toasts. The active window's shell drains them through
     /// [`CoreData::take_engine_actions`].
     engine_actions: VecDeque<EngineActionResult>,
@@ -174,6 +178,9 @@ pub struct CoreData {
     pub lev_manage_rev: u64,
     pub runtime_state_rev: u64,
     pub hedge_mode_rev: u64,
+    /// Advances only when the API-key ANSWER changes — not when the same answer is re-received on
+    /// the six-hourly poll, and not on the receipt stamp alone.
+    pub api_expiry_rev: u64,
     pub log_rev: u64,
     pub chart_alerts_rev: u64,
     /// Advances when typed `KernelHealth` metric values or the decoded endpoint change, gating
@@ -201,6 +208,7 @@ impl CoreData {
             lev_manage: None,
             runtime_state: None,
             hedge_mode: None,
+            api_expiry: None,
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
             log: VecDeque::new(),
@@ -224,6 +232,7 @@ impl CoreData {
             lev_manage_rev: 0,
             runtime_state_rev: 0,
             hedge_mode_rev: 0,
+            api_expiry_rev: 0,
             log_rev: 0,
             chart_alerts_rev: 0,
             sys_rev: 0,
@@ -264,6 +273,12 @@ impl CoreData {
         self.sys = crate::feed::CoreSysStatus::default();
         if inputs_changed {
             self.sys_rev = self.sys_rev.wrapping_add(1);
+        }
+        // The API key belongs to the MoonBot behind the endpoint, and a replacement feed may point
+        // at a different one. Keeping the previous host's day count would warn — or stay silent —
+        // about a key this core no longer uses.
+        if self.api_expiry.take().is_some() {
+            self.api_expiry_rev = self.api_expiry_rev.wrapping_add(1);
         }
     }
 
@@ -395,6 +410,17 @@ impl CoreData {
                 if self.hedge_mode != Some(on) {
                     self.hedge_mode = Some(on);
                     self.hedge_mode_rev = self.hedge_mode_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::ApiExpiry(expiry) => {
+                // Compare the ANSWER, not the receipt stamp: an unchanged key answered again six
+                // hours later is not a change.
+                let changed = self
+                    .api_expiry
+                    .is_none_or(|current| !current.answer_eq(&expiry));
+                self.api_expiry = Some(expiry);
+                if changed {
+                    self.api_expiry_rev = self.api_expiry_rev.wrapping_add(1);
                 }
             }
             FeedMsg::EngineActions(results) => {

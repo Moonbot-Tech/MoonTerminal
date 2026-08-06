@@ -20,6 +20,8 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         exch_warn: false,
         ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
+        api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
+        api_warn: false,
     }
 }
 

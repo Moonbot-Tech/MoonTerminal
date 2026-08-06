@@ -116,6 +116,15 @@ pub(super) fn server_header(
                     p,
                     weak_view,
                 ))
+                .child(metric_sort_header(
+                    t!("core_status.hdr.api_key").to_string(),
+                    GroupSortField::ApiKey,
+                    w.api,
+                    w.icon,
+                    sort,
+                    p,
+                    weak_view,
+                ))
                 .child(col_sort_header(
                     t!("core_status.cores").to_string(),
                     GroupSortField::Cores,

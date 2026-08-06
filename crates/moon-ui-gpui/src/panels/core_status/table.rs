@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use super::model::ServerKey;
-use super::presentation::{connection_presentation, memory_u16, percent, ping};
+use super::presentation::{api_expiry_text, connection_presentation, memory_u16, percent, ping};
 use super::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
@@ -46,6 +46,10 @@ fn columns() -> Vec<MoonDataTableColumn> {
             96.0,
         ),
         numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0),
+        // Sortable like the metrics, but LEFT-aligned: its cell holds words ("∞", "истёк") as often
+        // as a number, and those read wrong flush-right.
+        MoonDataTableColumn::new("api_key", t!("core_status.col.api_key").to_string(), 96.0)
+            .sortable(true),
     ]
 }
 
@@ -119,6 +123,7 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(ping(sys.round_trip_ms)),
         MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
         MoonDataCell::text(count(sys.logical_cpu_count)),
+        MoonDataCell::text(api_expiry_text(r.api_key)),
     ])
 }
 

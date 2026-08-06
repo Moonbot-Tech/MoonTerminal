@@ -44,6 +44,11 @@ const MAX_PARAMS: usize = 4;
 const WARN_CFG_W: f32 =
     NAME_W + ON_W + CHART_W + MAX_PARAMS as f32 * PARAM_W + SOUND_W + 7.0 * COL_GAP + 16.0;
 
+/// One row's "show on chart" state and its writer, or `None` for an axis that cannot be drawn on a
+/// chart at all — which leaves that column EMPTY rather than showing a checkbox whose state would
+/// mean nothing.
+type ChartToggle = Option<(bool, fn(&mut WarnParams, bool))>;
+
 /// Unit a threshold value is shown in.
 #[derive(Clone, Copy)]
 enum Unit {
@@ -55,6 +60,8 @@ enum Unit {
     Mult,
     /// Seconds.
     Sec,
+    /// Days.
+    Day,
 }
 
 /// One threshold control on a warning row: its caption, current value, bounds, and how to read/write
@@ -109,7 +116,7 @@ impl CoreStatusView {
             })
             .trigger(gear);
         // Built ONLY while open. `MoonPopover` takes its content eagerly, so a shut popover would
-        // otherwise rebuild five warning rows — their steppers, sound dropdowns and locale lookups —
+        // otherwise rebuild six warning rows — their steppers, sound dropdowns and locale lookups —
         // on every render of a panel that repaints on the ping cadence, and throw the tree away.
         if self.warn_cfg_open {
             popover = popover.content(self.warn_cfg_content(cx));
@@ -162,8 +169,7 @@ impl CoreStatusView {
                 true,
                 axes.cpu,
                 |a, on| a.cpu = on,
-                params.cpu.chart,
-                |p, on| p.cpu.chart = on,
+                Some((params.cpu.chart, |p, on| p.cpu.chart = on)),
                 params.cpu.sound.clone(),
                 |p, s| p.cpu.sound = s,
                 vec![
@@ -194,8 +200,7 @@ impl CoreStatusView {
                 false,
                 axes.mem,
                 |a, on| a.mem = on,
-                params.mem.chart,
-                |p, on| p.mem.chart = on,
+                Some((params.mem.chart, |p, on| p.mem.chart = on)),
                 params.mem.sound.clone(),
                 |p, s| p.mem.sound = s,
                 vec![
@@ -227,8 +232,7 @@ impl CoreStatusView {
                 false,
                 axes.conn,
                 |a, on| a.conn = on,
-                params.conn.chart,
-                |p, on| p.conn.chart = on,
+                Some((params.conn.chart, |p, on| p.conn.chart = on)),
                 params.conn.sound.clone(),
                 |p, s| p.conn.sound = s,
                 vec![],
@@ -240,8 +244,7 @@ impl CoreStatusView {
                 false,
                 axes.ping,
                 |a, on| a.ping = on,
-                params.ping.chart,
-                |p, on| p.ping.chart = on,
+                Some((params.ping.chart, |p, on| p.ping.chart = on)),
                 params.ping.sound.clone(),
                 |p, s| p.ping.sound = s,
                 lat_params(
@@ -262,8 +265,7 @@ impl CoreStatusView {
                 false,
                 axes.exch,
                 |a, on| a.exch = on,
-                params.exch.chart,
-                |p, on| p.exch.chart = on,
+                Some((params.exch.chart, |p, on| p.exch.chart = on)),
                 params.exch.sound.clone(),
                 |p, s| p.exch.sound = s,
                 lat_params(
@@ -276,6 +278,27 @@ impl CoreStatusView {
                     |p| u16::from(p.exch.hold),
                     |p, v| p.exch.hold = v as u8,
                 ),
+                cx,
+            ))
+            .child(self.warn_row(
+                "api",
+                t!("core_status.warn_cfg.api").to_string(),
+                false,
+                axes.api,
+                |a, on| a.api = on,
+                // No chart column: this axis has no per-second history to draw.
+                None,
+                params.api.sound.clone(),
+                |p, s| p.api.sound = s,
+                vec![Param {
+                    cap: t!("core_status.warn_cfg.p.days").into(),
+                    get: |p| p.api.days,
+                    set: |p, v| p.api.days = v,
+                    min: 0,
+                    max: moon_core::config::layout::API_WARN_MAX_DAYS,
+                    step: 1,
+                    unit: Unit::Day,
+                }],
                 cx,
             ))
             .into_any_element()
@@ -292,8 +315,7 @@ impl CoreStatusView {
         first: bool,
         enabled: bool,
         set_enabled: fn(&mut WarnAxesCfg, bool),
-        chart: bool,
-        set_chart: fn(&mut WarnParams, bool),
+        chart: ChartToggle,
         sound: Option<String>,
         set_sound: fn(&mut WarnParams, Option<String>),
         params: Vec<Param>,
@@ -333,17 +355,26 @@ impl CoreStatusView {
                 t!("core_status.warn_cfg.col.on").to_string(),
                 cx,
             ))
-            .child(self.cell(
-                CHART_W,
-                chart_checkbox(
-                    format!("cs-warn-{id}-chart"),
-                    chart,
-                    &self.backend,
-                    set_chart,
+            .child(
+                self.cell(
+                    CHART_W,
+                    // The checkbox itself, NOT wrapped in a container: the cell already centres its
+                    // control, and an extra flex box here would re-lay out the five rows that had this
+                    // column before the option existed.
+                    match chart {
+                        Some((on, set_chart)) => chart_checkbox(
+                            format!("cs-warn-{id}-chart"),
+                            on,
+                            &self.backend,
+                            set_chart,
+                        )
+                        .into_any_element(),
+                        None => div().into_any_element(),
+                    },
+                    t!("core_status.warn_cfg.col.chart").to_string(),
+                    cx,
                 ),
-                t!("core_status.warn_cfg.col.chart").to_string(),
-                cx,
-            ))
+            )
             .children(params.into_iter().enumerate().map(|(i, param)| {
                 let caption = caption_for(&param.cap, param.unit);
                 self.cell(
@@ -610,16 +641,17 @@ fn fmt_value(v: u16, unit: Unit) -> String {
         Unit::Pct => format!("{v}%"),
         Unit::PctRel => format!("+{v}%"),
         Unit::Mult => format!("×{v}"),
-        // Seconds move to the caption ("Окно (сек)"), so the value is just the number.
-        Unit::Sec => v.to_string(),
+        // Seconds and days move to the caption ("Окно (сек)"), so the value is just the number.
+        Unit::Sec | Unit::Day => v.to_string(),
     }
 }
 
-/// A threshold caption, with the unit appended in parentheses for a seconds value ("Окно (сек)") so
-/// the stepper value stays a bare number.
+/// A threshold caption, with the unit appended in parentheses for a seconds or days value
+/// ("Окно (сек)") so the stepper value stays a bare number.
 fn caption_for(cap: &str, unit: Unit) -> String {
     match unit {
         Unit::Sec => format!("{cap} ({})", t!("core_status.warn_cfg.u.sec")),
+        Unit::Day => format!("{cap} ({})", t!("core_status.warn_cfg.u.day")),
         _ => cap.to_string(),
     }
 }

@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use gpui::Context;
 
 use crate::Backend;
+use crate::backend::core_warn::axis_has_series;
 use crate::chartdx::ChartDataHandle;
 use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::config::{
@@ -1209,6 +1210,13 @@ impl Backend {
                         ip: core.endpoint.map(|endpoint| endpoint.address),
                         status: core.status.clone(),
                         sys: core.sys,
+                        // Aged to NOW, exactly as the panel classifies it: judging the raw stored
+                        // count here would let a key expire unnoticed on a core that went down, and
+                        // would disagree with the number the operator is reading. An unanswered
+                        // check and a key with no expiry both arrive as `None` and stay silent.
+                        api_days: core
+                            .api_expiry
+                            .and_then(|expiry| expiry.days_left_at(now_ms)),
                     })
                 })
                 .collect()
@@ -1280,6 +1288,16 @@ impl Backend {
                 }
                 None => continue,
             };
+            // Graph slices exist to fill a chart badge's hover card. An axis with no per-second
+            // series would write one blob per core for a card that can never have content, so it
+            // keeps the episode row and skips the slices.
+            //
+            // Structural, NOT `warn_chart`: that folds in the user's "show on chart" checkbox, and
+            // gating PERSISTENCE on a display toggle would silently stop recording slices for CPU
+            // the moment someone unticks it — and leave those episodes graph-less forever after.
+            if !axis_has_series(episode.axis) {
+                continue;
+            }
             // The roster to record per-core slices for: every core on the server, or the episode's
             // own core when it has no known endpoint.
             let ip = episode.server_ip;
@@ -1461,6 +1479,7 @@ impl Backend {
             conn: axes.conn,
             ping: axes.ping,
             exch: axes.exch,
+            api: axes.api,
         }
     }
 
@@ -1487,6 +1506,10 @@ impl Backend {
             exch_red_num: exch_red,
             exch_window: i64::from(p.exch.window),
             exch_hold: u32::from(p.exch.hold).max(1),
+            // A `days` of 0 is meaningful here (warn only on the key's last day), so it is NOT
+            // floored like the sustain counters above. The ceiling is the popup's own range: a
+            // hand-edited `layout.toml` asking for 60 000 days would warn on every dated key.
+            api_days: i32::from(p.api.days.min(moon_core::config::layout::API_WARN_MAX_DAYS)),
         }
     }
 
@@ -1500,6 +1523,7 @@ impl Backend {
             WarnAxis::Unreachable => &p.conn.sound,
             WarnAxis::Ping => &p.ping.sound,
             WarnAxis::ExchPing => &p.exch.sound,
+            WarnAxis::ApiExpiry => &p.api.sound,
         };
         sound.clone().filter(|s| !s.trim().is_empty())
     }
@@ -1514,6 +1538,9 @@ impl Backend {
             WarnAxis::Unreachable => p.conn.chart,
             WarnAxis::Ping => p.ping.chart,
             WarnAxis::ExchPing => p.exch.chart,
+            // Never on a chart: an expiring key has no per-second history, so its badge would open
+            // a card with an empty graph. It lives in Core Status and the Warnings list only.
+            WarnAxis::ApiExpiry => false,
         }
     }
 
@@ -1566,7 +1593,7 @@ impl Backend {
         out
     }
 
-    /// The most recent warning episodes across all servers, newest first, for the Warnings list.
+    /// Warning episodes for the Warnings list: the ones still open first, then newest.
     ///
     /// Merges still-open episodes (not yet persisted) with the persisted log, so an in-progress
     /// warning appears at the top.
@@ -1575,7 +1602,7 @@ impl Backend {
     ///     limit: Maximum rows to return.
     ///
     /// Returns:
-    ///     Episodes ordered newest first, capped to `limit`.
+    ///     Still-open episodes first, then closed ones newest first, capped to `limit`.
     pub(crate) fn warn_episodes_recent(
         &self,
         limit: usize,
@@ -1589,7 +1616,15 @@ impl Backend {
         // A disabled axis is also dropped from the Warnings list, matching the charts.
         let enabled = self.warn_enabled();
         all.retain(|episode| enabled.allows(episode.axis));
-        all.sort_by(|a, b| b.start_ms.cmp(&a.start_ms));
+        // Still-open episodes lead, then newest first. Without the pin, a warning that has been
+        // ongoing for weeks — an expiring API key is exactly that — has the OLDEST start time and is
+        // the first row the limit drops, hiding the one warning that is still true.
+        all.sort_by(|a, b| {
+            b.end_ms
+                .is_none()
+                .cmp(&a.end_ms.is_none())
+                .then(b.start_ms.cmp(&a.start_ms))
+        });
         all.truncate(limit);
         all
     }

@@ -27,6 +27,8 @@ pub(super) struct ByIpWidths {
     pub(super) mem: f32,
     /// Both latency columns (client↔core and core→exchange) use this width.
     pub(super) ping: f32,
+    /// API-key lifetime cell; wider than a latency because it also holds a word.
+    pub(super) api: f32,
     /// Ready/total core-count cell.
     pub(super) cores: f32,
     /// Warning-icon lead inside a metric cell; a header reserves the same lead.
@@ -62,12 +64,12 @@ pub(super) const TREE_SCROLLBAR_W: f32 = 16.0;
 /// same unit — so the two stay aligned at every font setting instead of at exactly one of them.
 pub(super) const ROW_INSET_REMS: f32 = 0.75;
 
-/// Number of `ROW_GAP_W` gaps in one row: the outer chevron↔body gap plus the eight between the
-/// body's nine children (name · ip · spacer · cpu · mem · ping · exch · cores · dot).
-const ROW_GAPS: f32 = 9.0;
+/// Number of `ROW_GAP_W` gaps in one row: the outer chevron↔body gap plus the nine between the
+/// body's ten children (name · ip · spacer · cpu · mem · ping · exch · key · cores · dot).
+const ROW_GAPS: f32 = 10.0;
 
-/// Number of `CELL_GAP_W` gaps: one inside each of the four metric cells.
-const CELL_GAPS: f32 = 4.0;
+/// Number of `CELL_GAP_W` gaps: one inside each of the five metric cells.
+const CELL_GAPS: f32 = 5.0;
 
 /// Floor for the shrink factor. Below roughly half the columns stop carrying their values (the
 /// numbers are already truncated), so the row clips the remainder rather than shrinking into
@@ -82,6 +84,7 @@ impl ByIpWidths {
         cpu: 100.0,
         mem: 116.0,
         ping: 64.0,
+        api: 72.0,
         cores: 40.0,
         icon: 12.0,
         indent: 16.0,
@@ -92,8 +95,15 @@ impl ByIpWidths {
     /// The indent is deliberately absent: it sits INSIDE the name column, so it costs no extra row
     /// width.
     fn columns_w(self) -> f32 {
-        // Four metric cells (cpu, mem, ping, exch), each preceded by its icon lead.
-        self.name + self.ip + self.cpu + self.mem + self.ping * 2.0 + self.cores + self.icon * 4.0
+        // Five metric cells (cpu, mem, ping, exch, key), each preceded by its icon lead.
+        self.name
+            + self.ip
+            + self.cpu
+            + self.mem
+            + self.ping * 2.0
+            + self.api
+            + self.cores
+            + self.icon * 5.0
     }
 
     /// Everything a row spends besides its columns, at the current `rem` size.
@@ -144,6 +154,7 @@ impl ByIpWidths {
             cpu: self.cpu * k,
             mem: self.mem * k,
             ping: self.ping * k,
+            api: self.api * k,
             cores: self.cores * k,
             icon: self.icon * k,
             indent: self.indent * k,

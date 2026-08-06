@@ -460,6 +460,10 @@ fn merge_axis(cluster: &mut WarnCluster, episode: &WarnEpisode) {
             )
         }
         WarnAxis::Unreachable => cluster.conn = true,
+        // Never reaches here: `warn_chart` reports false for this axis, so the chart read path
+        // filters it out before clustering. An expiring key is a standing state with no per-second
+        // history, so it has nothing to draw on a time axis.
+        WarnAxis::ApiExpiry => {}
     }
     if let Some(core) = episode.core_id {
         if !cluster.cores.contains(&core) {
@@ -779,19 +783,10 @@ fn ms_reading(label: String, ms: u16, p: MoonPalette, cx: &App) -> AnyElement {
     reading(label, format!("{} {}", ms, t!("core_status.ms")), p, cx)
 }
 
-/// Human duration of a cluster: `Nс` / `Nм`, or "идёт" while still open.
+/// Human duration of a cluster, through the shared episode formatter so a card and the Core Status
+/// list never describe the same episode differently.
 fn duration_text(cluster: &WarnCluster) -> String {
-    match cluster.end_ms {
-        None => t!("core_status.warn_ongoing").to_string(),
-        Some(end) => {
-            let secs = ((end - cluster.start_ms).max(0)) / 1000;
-            if secs < 60 {
-                t!("core_status.ago_s", n = secs).to_string()
-            } else {
-                t!("core_status.ago_m", n = secs / 60).to_string()
-            }
-        }
-    }
+    crate::panels::common::warn_duration_text(cluster.start_ms, cluster.end_ms)
 }
 
 /// A core's configured display name, if it is still in the config.

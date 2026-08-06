@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use moon_core::feed::{ConnStatus, CoreEndpoint};
-use moon_core::session::{CoreId, CoreSysStatus};
+use moon_core::session::{ApiKeyExpiry, CoreId, CoreSysStatus};
 
 /// Cached display data for one core before server aggregation.
 #[derive(Clone)]
@@ -33,6 +33,65 @@ pub(super) struct CoreStatusRow {
     pub(super) ping_sev: crate::backend::core_warn::LatencySeverity,
     /// This core's current core→exchange-ping colour severity.
     pub(super) exch_sev: crate::backend::core_warn::LatencySeverity,
+    /// This core's exchange API key, already classified against the current clock.
+    pub(super) api_key: ApiKeyState,
+    /// Whether this core's key is inside the configured warning horizon, decided by the engine so
+    /// the cell mark and the episode agree.
+    pub(super) api_warn: bool,
+}
+
+/// What is known about one core's exchange API key, as of a given moment.
+///
+/// A single classification instead of an `Option<ApiKeyExpiry>` read differently at each call site:
+/// the two "no number" cases mean opposite things (nothing was learned vs the key never expires),
+/// and every consumer that told them apart on its own would be one edit away from conflating them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ApiKeyState {
+    /// No answer: never asked, the core is down, or the check failed.
+    Unknown,
+    /// Checked, and the exchange reports no expiration for this key.
+    Perpetual,
+    /// Whole days remaining: zero means less than a day, negative means already expired. One
+    /// variant rather than a separate `Expired`, so "how long ago" survives — two keys dead by a
+    /// day and by a year must not compare equal in the column that ranks urgency.
+    Days(i32),
+}
+
+impl ApiKeyState {
+    /// Classify one core's stored answer against the current clock.
+    ///
+    /// Args:
+    ///     expiry: The retained answer, or `None` when the terminal has none.
+    ///     now_ms: Current Unix milliseconds.
+    ///
+    /// Returns:
+    ///     The state to display, sort and colour by.
+    pub(super) fn of(expiry: Option<ApiKeyExpiry>, now_ms: i64) -> Self {
+        let Some(expiry) = expiry else {
+            return Self::Unknown;
+        };
+        if !expiry.known {
+            return Self::Perpetual;
+        }
+        // A `None` here reported an expiration whose date is unusable — a legacy answer out of
+        // range. Nothing honest to show, and nothing to warn on.
+        expiry
+            .days_left_at(now_ms)
+            .map_or(Self::Unknown, Self::Days)
+    }
+
+    /// Days remaining when there is a number, for sorting and for picking the most urgent key.
+    pub(super) fn days(self) -> Option<i32> {
+        match self {
+            Self::Days(days) => Some(days),
+            Self::Unknown | Self::Perpetual => None,
+        }
+    }
+
+    /// Whether the key is already past its date.
+    pub(super) fn is_expired(self) -> bool {
+        self.days().is_some_and(|days| days < 0)
+    }
 }
 
 /// Stable grouping identity for a known host or one isolated unknown core.
@@ -104,6 +163,12 @@ pub(super) struct ServerStatusGroup {
     pub(super) ping_warn: bool,
     /// Exch-ping warning: any core on this server has a sustained above-baseline core→exchange ping.
     pub(super) exch_warn: bool,
+    /// API-key warning: any core on this server has a key inside the warning horizon. The key
+    /// belongs to the core, so the server row only carries the attention state, like ping.
+    pub(super) api_warn: bool,
+    /// The most urgent key among this server's cores — the one the server row shows and sorts by.
+    /// `Unknown` when no core has answered, `Perpetual` only when every answer says so.
+    pub(super) api_key: ApiKeyState,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
     /// Cores ordered attention-first, retaining canonical input order within each partition.
@@ -120,6 +185,20 @@ pub(super) struct ServerStatusGroup {
     pub(super) free_physical_memory_mb: Option<u16>,
     /// Freshest available logical-CPU count.
     pub(super) logical_cpu_count: Option<u8>,
+}
+
+impl ServerStatusGroup {
+    /// Whether any axis is currently warning on this server — the attention pin and the tab badge.
+    ///
+    /// One place, so a new axis cannot light the badge but miss the sort, or the reverse.
+    pub(super) fn has_warn(&self) -> bool {
+        self.cpu_warn
+            || self.mem_warn
+            || self.conn_warn
+            || self.ping_warn
+            || self.exch_warn
+            || self.api_warn
+    }
 }
 
 /// Group canonically ordered core rows into attention-first address-only server snapshots.
@@ -149,6 +228,8 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 conn_warn: false,
                 ping_warn: false,
                 exch_warn: false,
+                api_warn: false,
+                api_key: ApiKeyState::Unknown,
                 address: match key {
                     ServerKey::Address(address) => Some(address),
                     ServerKey::Unknown(_) => None,
@@ -210,6 +291,11 @@ fn finish_group(group: &mut ServerStatusGroup) {
     group.logical_cpu_count =
         freshest_metric(&group.cores, |sys| sys.logical_cpu_count).map(|(_, value)| value);
 
+    // Both halves of the API-key aggregate derive from the rows this group already holds, so they
+    // are decided together — the displayed key and the flag beside it cannot drift apart.
+    group.api_key = soonest_key(&group.cores);
+    group.api_warn = group.cores.iter().any(|core| core.api_warn);
+
     let mut has_process_memory = false;
     let mut process_memory_mb = 0u64;
     for value in group.cores.iter().filter_map(|row| row.sys.used_memory_mb) {
@@ -217,6 +303,31 @@ fn finish_group(group: &mut ServerStatusGroup) {
         process_memory_mb += u64::from(value);
     }
     group.process_memory_mb = has_process_memory.then_some(process_memory_mb);
+}
+
+/// The key a server row stands for: the one expiring soonest among its cores.
+///
+/// A dated key always outranks a perpetual one, and `Perpetual` is reported only when EVERY answer
+/// says so — otherwise one core's "never expires" would speak for siblings that were never checked.
+///
+/// Args:
+///     cores: The server's core rows, each already classified.
+///
+/// Returns:
+///     The state to show on the server row, and to sort the server list by.
+fn soonest_key(cores: &[CoreStatusRow]) -> ApiKeyState {
+    // Rank, then take the minimum: a dated key always outranks a perpetual one, and `Unknown`
+    // outranks `Perpetual` so one core's "never expires" cannot speak for a sibling nobody checked.
+    let rank = |state: ApiKeyState| match state {
+        ApiKeyState::Days(days) => (0, days),
+        ApiKeyState::Unknown => (1, 0),
+        ApiKeyState::Perpetual => (2, 0),
+    };
+    cores
+        .iter()
+        .map(|core| core.api_key)
+        .min_by_key(|state| rank(*state))
+        .unwrap_or(ApiKeyState::Unknown)
 }
 
 /// Select the newest available value for one machine-wide metric.

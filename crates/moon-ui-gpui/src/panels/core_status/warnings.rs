@@ -1,8 +1,8 @@
-//! Warnings-mode table: recorded warning episodes from the database, newest first.
+//! Warnings-mode table: recorded warning episodes, the ones still open first.
 //!
-//! A read-only log — one row per episode (CPU / memory / ping / connectivity), with the server and core
-//! resolved to their display names (never the raw IP). Ordering comes from the query (newest first),
-//! so the columns are not sortable.
+//! A read-only log — one row per episode (CPU / memory / ping / connectivity / API key), with the
+//! server and core resolved to their display names (never the raw IP). Still-open episodes lead,
+//! then newest first; the columns are not sortable.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -14,7 +14,7 @@ use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 use super::*;
 use crate::backend::core_warn::{WarnAxis, WarnEpisode};
 
-/// The fixed set of Warnings columns (no sorting: the query already orders newest first).
+/// The fixed set of Warnings columns (no sorting: the backend already orders the rows).
 fn columns() -> Vec<MoonDataTableColumn> {
     vec![
         MoonDataTableColumn::new("time", t!("core_status.col.time").to_string(), 150.0),
@@ -30,7 +30,7 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///
 /// Args:
 ///     id: Stable table element identity.
-///     episodes: Episodes newest first.
+///     episodes: Episodes in display order (open first, then newest).
 ///     server_names: Server display name per endpoint IP.
 ///     core_names: Core display name per core id.
 ///     state: Persisted table interaction state.
@@ -82,7 +82,10 @@ fn warn_row(
         .unwrap_or_else(|| "—".to_string());
     MoonDataRow::new([
         MoonDataCell::text(moon_core::db::fmt_unix(episode.start_ms / 1000)),
-        MoonDataCell::text(duration(episode)),
+        MoonDataCell::text(crate::panels::common::warn_duration_text(
+            episode.start_ms,
+            episode.end_ms,
+        )),
         MoonDataCell::text(server),
         MoonDataCell::text(core),
         MoonDataCell::text(axis_label(episode.axis)),
@@ -90,7 +93,7 @@ fn warn_row(
     ])
 }
 
-/// Localized axis label (CPU / RAM / ping / exch ping / Link).
+/// Localized axis label (CPU / RAM / ping / exch ping / Link / key).
 fn axis_label(axis: WarnAxis) -> String {
     match axis {
         WarnAxis::SysCpu => t!("core_status.chart_cpu"),
@@ -98,31 +101,24 @@ fn axis_label(axis: WarnAxis) -> String {
         WarnAxis::Ping => t!("core_status.chart_ping"),
         WarnAxis::ExchPing => t!("core_status.chart_exch"),
         WarnAxis::Unreachable => t!("core_status.warn_conn"),
+        WarnAxis::ApiExpiry => t!("core_status.hdr.api_key"),
     }
     .to_string()
 }
 
 /// Peak reading with its axis unit; connectivity has none.
+///
+/// For the API-key axis the "peak" is the FEWEST days seen — the worst moment of an episode runs
+/// downward there, not upward.
 fn peak(episode: &WarnEpisode) -> String {
     match episode.axis {
         WarnAxis::SysCpu => format!("{}%", episode.peak),
         WarnAxis::MemGrowth => format!("{} {}", episode.peak, t!("core_status.mb")),
         WarnAxis::Ping | WarnAxis::ExchPing => format!("{} {}", episode.peak, t!("core_status.ms")),
+        // Always a day count, never the "expired" word: `peak` is unsigned and clamps a negative
+        // count to zero, so a key on its LAST DAY and one already dead are indistinguishable here.
+        // Printing "expired" for both would label a still-valid key dead.
+        WarnAxis::ApiExpiry => t!("core_status.api_days", n = episode.peak).to_string(),
         WarnAxis::Unreachable => "—".to_string(),
-    }
-}
-
-/// Human duration, or "ongoing" while the episode has not closed.
-fn duration(episode: &WarnEpisode) -> String {
-    match episode.end_ms {
-        None => t!("core_status.warn_ongoing").to_string(),
-        Some(end) => {
-            let secs = ((end - episode.start_ms).max(0)) / 1000;
-            if secs < 60 {
-                t!("core_status.ago_s", n = secs).to_string()
-            } else {
-                t!("core_status.ago_m", n = secs / 60).to_string()
-            }
-        }
     }
 }

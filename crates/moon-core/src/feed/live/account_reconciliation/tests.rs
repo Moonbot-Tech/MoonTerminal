@@ -14,7 +14,7 @@ fn spot_stamp(
 #[test]
 fn presentation_only_order_events_do_not_queue_account_repairs() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     let events = [
         Event::Order(OrderEvent::Snapshot),
         Event::Order(OrderEvent::TracePoint { uid: 7 }),
@@ -31,7 +31,7 @@ fn presentation_only_order_events_do_not_queue_account_repairs() {
 #[test]
 fn unchanged_order_stamp_does_not_requeue_repairs() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     let stamp = spot_stamp(OrderWorkerStatus::BuySet, 0.0, 0.0);
     reconciliation.observe_order(OrderChange::Created, 7, stamp, start);
     reconciliation.mark_balance_attempt(start);
@@ -47,7 +47,7 @@ fn unchanged_order_stamp_does_not_requeue_repairs() {
 #[test]
 fn repeated_account_changes_preserve_the_original_deadline() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     reconciliation.mark_balance_attempt(start);
     reconciliation.mark_spot_wallet_attempt(start);
     reconciliation.observe_order(
@@ -77,7 +77,7 @@ fn repeated_account_changes_preserve_the_original_deadline() {
 #[test]
 fn pushed_full_balance_satisfies_pending_repair_only() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     reconciliation.observe_order(
         OrderChange::Created,
         7,
@@ -101,7 +101,7 @@ fn pushed_full_balance_satisfies_pending_repair_only() {
 fn first_change_after_idle_queues_balance_and_spot_repairs_immediately() {
     let start = Instant::now();
     let idle_change = start + Duration::from_secs(30);
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
 
     reconciliation.observe_order(
         OrderChange::Created,
@@ -120,7 +120,7 @@ fn first_change_after_idle_queues_balance_and_spot_repairs_immediately() {
 #[test]
 fn requests_inside_the_cooldown_are_coalesced_to_its_end() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     reconciliation.mark_balance_attempt(start);
     reconciliation.mark_spot_wallet_attempt(start);
 
@@ -146,7 +146,7 @@ fn requests_inside_the_cooldown_are_coalesced_to_its_end() {
 #[test]
 fn incremental_balance_does_not_cancel_full_repair() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     reconciliation.mark_balance_attempt(start);
     reconciliation.observe_order(
         OrderChange::Created,
@@ -173,7 +173,7 @@ fn incremental_balance_does_not_cancel_full_repair() {
 #[test]
 fn only_a_successful_spot_wallet_update_cancels_spot_repair() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     reconciliation.observe_order(
         OrderChange::Created,
         7,
@@ -217,7 +217,7 @@ fn only_a_successful_spot_wallet_update_cancels_spot_repair() {
 #[test]
 fn futures_order_changes_do_not_queue_spot_wallet_repairs() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
 
     reconciliation.observe_order(
         OrderChange::Created,
@@ -235,7 +235,7 @@ fn futures_order_changes_do_not_queue_spot_wallet_repairs() {
 #[test]
 fn terminal_cleanup_removal_does_not_requeue_satisfied_repairs() {
     let start = Instant::now();
-    let mut reconciliation = AccountReconciliation::new();
+    let mut reconciliation = AccountReconciliation::new(start);
     reconciliation.observe_order(
         OrderChange::Created,
         7,
@@ -265,4 +265,68 @@ fn terminal_cleanup_removal_does_not_requeue_satisfied_repairs() {
         reconciliation.next_wait(start + Duration::from_secs(30)),
         None
     );
+}
+
+/// A due poll that its caller declines — the feed loop's Ready gate — must still MOVE. The loop
+/// derives its wait from this deadline, so a deadline that stays due computes a zero-length wait
+/// every pass and spins the core's thread on `recv_timeout(0)` for as long as the core is down.
+#[test]
+fn a_declined_poll_stops_being_due() {
+    let start = Instant::now();
+    let mut reconciliation = AccountReconciliation::new(start);
+    assert!(
+        reconciliation.api_expiry_due(start),
+        "the first poll is due at once, so a connected core answers immediately"
+    );
+
+    reconciliation.defer_api_expiry(start);
+
+    assert!(!reconciliation.api_expiry_due(start));
+    assert!(
+        reconciliation.api_expiry_wait(start) > Duration::from_secs(0),
+        "the loop now has a real wait to sleep on"
+    );
+    assert!(
+        reconciliation.api_expiry_due(start + API_EXPIRY_POLL_INTERVAL),
+        "and it comes back on its own"
+    );
+    assert!(
+        !reconciliation.api_expiry_due(start + API_EXPIRY_RETRY_INTERVAL),
+        "a FULL interval, not the retry delay: waking a down core's thread every 15 minutes to          decline again is the spin this test exists to prevent, one step removed"
+    );
+}
+
+/// Reaching Ready is the moment a core can finally answer, so the poll becomes due at once — but a
+/// core that flaps must not issue an exchange-bound check on every reconnect.
+#[test]
+fn reaching_ready_asks_at_once_but_not_on_every_flap() {
+    let start = Instant::now();
+    let mut reconciliation = AccountReconciliation::new(start);
+    reconciliation.defer_api_expiry(start);
+
+    reconciliation.poll_api_expiry_on_ready(start);
+    assert!(reconciliation.api_expiry_due(start), "first Ready asks now");
+
+    reconciliation.mark_api_expiry_attempt(start);
+    let flap = start + Duration::from_secs(60);
+    reconciliation.poll_api_expiry_on_ready(flap);
+    assert!(
+        !reconciliation.api_expiry_due(flap),
+        "a reconnect a minute later rides the cooldown instead of asking again"
+    );
+}
+
+/// A check that answered with an error is retried sooner than the full interval — a core that was
+/// merely busy must not wait six hours for its first day count.
+#[test]
+fn a_failed_check_is_retried_before_the_full_interval() {
+    let start = Instant::now();
+    let mut reconciliation = AccountReconciliation::new(start);
+    reconciliation.mark_api_expiry_attempt(start);
+    assert!(!reconciliation.api_expiry_due(start + API_EXPIRY_RETRY_INTERVAL));
+
+    reconciliation.retry_api_expiry(start);
+
+    assert!(reconciliation.api_expiry_due(start + API_EXPIRY_RETRY_INTERVAL));
+    assert!(!reconciliation.api_expiry_due(start));
 }

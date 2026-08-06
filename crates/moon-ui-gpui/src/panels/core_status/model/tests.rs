@@ -28,6 +28,8 @@ fn row(
         exch_warn: false,
         ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
+        api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
+        api_warn: false,
     }
 }
 
@@ -256,4 +258,61 @@ fn partial_readiness_is_degraded() {
     assert_eq!(server.ready_count, 1);
     assert_eq!(server.connectivity, ServerConnectivity::Degraded);
     // The connectivity WARNING (conn_warn) now comes from the backend engine, tested beside it.
+}
+
+/// One core row carrying only an API-key state.
+fn key_row(id: u64, address: [u8; 4], key: super::ApiKeyState) -> CoreStatusRow {
+    CoreStatusRow {
+        api_key: key,
+        ..row(
+            id,
+            Some(address),
+            7000,
+            ConnStatus::Ready,
+            CoreSysStatus::default(),
+        )
+    }
+}
+
+/// A server stands for the key expiring SOONEST among its cores, so the row an operator scans
+/// reports the one that actually needs attention rather than whichever core sorted first.
+#[test]
+fn a_server_reports_its_soonest_key() {
+    let groups = aggregate_servers(&[
+        key_row(1, [10, 0, 0, 1], super::ApiKeyState::Days(40)),
+        key_row(2, [10, 0, 0, 1], super::ApiKeyState::Days(3)),
+        key_row(3, [10, 0, 0, 1], super::ApiKeyState::Perpetual),
+    ]);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].api_key, super::ApiKeyState::Days(3));
+}
+
+/// "This key never expires" may speak for a server only when EVERY core on it says so. One
+/// perpetual key beside an unchecked sibling would otherwise report the whole machine as safe.
+#[test]
+fn one_perpetual_key_does_not_speak_for_unchecked_siblings() {
+    let mixed = aggregate_servers(&[
+        key_row(1, [10, 0, 0, 2], super::ApiKeyState::Perpetual),
+        key_row(2, [10, 0, 0, 2], super::ApiKeyState::Unknown),
+    ]);
+    assert_eq!(mixed[0].api_key, super::ApiKeyState::Unknown);
+
+    let all_perpetual = aggregate_servers(&[
+        key_row(1, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
+        key_row(2, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
+    ]);
+    assert_eq!(all_perpetual[0].api_key, super::ApiKeyState::Perpetual);
+}
+
+/// An expired key outranks every live one when a server picks what to show — it is the most urgent
+/// state the column has, and `days()` places it below zero for exactly that reason.
+#[test]
+fn an_expired_key_wins_the_server_row() {
+    let groups = aggregate_servers(&[
+        key_row(1, [10, 0, 0, 4], super::ApiKeyState::Days(0)),
+        key_row(2, [10, 0, 0, 4], super::ApiKeyState::Days(-3)),
+    ]);
+
+    assert_eq!(groups[0].api_key, super::ApiKeyState::Days(-3));
 }

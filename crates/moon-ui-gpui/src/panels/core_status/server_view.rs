@@ -23,8 +23,8 @@ use super::by_ip_widths::{ByIpWidths, CELL_GAP_W, CHEVRON_W, ROW_GAP_W, TREE_SCR
 use super::model::{CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup};
 use super::ordering::GroupSortField;
 use super::presentation::{
-    LoadLevel, cpu_level, cpu_load, free_mem_level, lat_level, level_color, memory_free,
-    memory_u16, percent, ping_plain,
+    LoadLevel, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level, lat_level,
+    level_color, memory_free, memory_u16, percent, ping_plain,
 };
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
@@ -374,6 +374,16 @@ fn server_row(
                         p,
                     )
                 })
+                // The API key belongs to the core, so the server row shows its MOST URGENT one —
+                // the same key the warning is about, picked once during aggregation.
+                .child(metric_cell(
+                    api_expiry_text(group.api_key),
+                    w.api,
+                    w.icon,
+                    level_color(api_expiry_level(group.api_key, group.api_warn), p),
+                    group.api_warn,
+                    p,
+                ))
                 .child(
                     div()
                         .w(px(w.cores))
@@ -513,8 +523,17 @@ fn core_row(
                     core.exch_warn,
                     p,
                 ))
+                // This core's own API key: the value is per core, and so is the warning triangle.
+                .child(metric_cell(
+                    api_expiry_text(core.api_key),
+                    w.api,
+                    w.icon,
+                    level_color(api_expiry_level(core.api_key, core.api_warn), p),
+                    core.api_warn,
+                    p,
+                ))
                 // Empty ratio, warning, dot and scrollbar slots, matching the server row's trailing
-                // width so `exch` aligns.
+                // width so `key` aligns.
                 .child(div().w(px(w.cores)).flex_none())
                 .child(div().w(px(w.icon)).flex_none())
                 .child(div().w(px(crate::design::status_dot_w(app))).flex_none())

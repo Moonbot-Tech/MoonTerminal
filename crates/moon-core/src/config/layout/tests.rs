@@ -559,3 +559,44 @@ fn a_mistyped_clock_zone_cannot_discard_the_saved_layout() {
         );
     }
 }
+
+/// A `layout.toml` written before the API-key axis existed must still load, keep every axis the
+/// user had tuned, and default the new one to ON with its 7-day horizon.
+///
+/// The literal is copied verbatim from a real pre-change config, not from a freshly serialized
+/// one — a round trip through today's writer would contain the new keys and prove nothing.
+#[test]
+fn a_config_without_the_api_key_axis_still_loads() {
+    let old = "\
+[warn_axes]
+cpu = true
+mem = true
+conn = true
+ping = true
+exch = true
+
+[warn_params.cpu]
+chart = true
+sound = \"ringout\"
+pct = 70
+hold = 5
+
+[warn_params.exch]
+chart = true
+sound = \"ringout\"
+yellow = 2
+red = 30
+window = 15
+hold = 3
+";
+
+    let decoded: WindowLayout = toml::from_str(old).expect("an old config must still parse");
+
+    assert!(decoded.warn_axes.api, "a new axis defaults to on");
+    assert_eq!(decoded.warn_params.api.days, 7);
+    assert_eq!(decoded.warn_params.api.sound, None);
+    // The axes the user had already tuned survive untouched.
+    assert_eq!(decoded.warn_params.cpu.pct, 70);
+    assert_eq!(decoded.warn_params.exch.red, 30);
+    assert_eq!(decoded.warn_params.exch.sound.as_deref(), Some("ringout"));
+}

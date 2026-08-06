@@ -28,6 +28,8 @@ pub(super) enum GroupSortField {
     Exch,
     /// Ready core count.
     Cores,
+    /// Fewest days left on any of the server's API keys.
+    ApiKey,
 }
 
 /// Worst (highest) latency among a group's READY cores for one accessor, matching the value the
@@ -86,6 +88,9 @@ pub(super) fn compare_groups(
             .ready_count
             .cmp(&b.ready_count)
             .then_with(|| a.cores.len().cmp(&b.cores.len())),
+        // The very key the server row displays, so the column cannot sort by one number and show
+        // another. Not Ready-gated, unlike the latencies: a key keeps ageing while its core is down.
+        GroupSortField::ApiKey => a.api_key.days().cmp(&b.api_key.days()),
     }
     .then_with(|| natural_cmp(&a.display_name, &b.display_name))
 }
@@ -230,6 +235,11 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
         "ping" => a.sys.round_trip_ms.cmp(&b.sys.round_trip_ms),
         "ping_exch" => a.sys.order_api_latency_ms.cmp(&b.sys.order_api_latency_ms),
         "cpus" => a.sys.logical_cpu_count.cmp(&b.sys.logical_cpu_count),
+        // Days left, NOT the cell text: "9 дн" must not sort above "45 дн", and an expired key
+        // (negative days) is the most urgent of all. A key with no expiry and a key with no answer
+        // carry no number, so `Option::cmp` groups them ahead of every count, exactly as it does
+        // for the unreported metrics above.
+        "api_key" => a.api_key.days().cmp(&b.api_key.days()),
         // "core" and any unknown key sort by name.
         _ => a.name.cmp(&b.name),
     }

@@ -429,6 +429,9 @@ pub struct WarnAxesCfg {
     /// Sustained above-baseline core→exchange order-API latency warning (per core).
     #[serde(default = "def_true")]
     pub exch: bool,
+    /// Expiring exchange API-key warning (per core).
+    #[serde(default = "def_true")]
+    pub api: bool,
 }
 
 impl Default for WarnAxesCfg {
@@ -440,6 +443,7 @@ impl Default for WarnAxesCfg {
             conn: true,
             ping: true,
             exch: true,
+            api: true,
         }
     }
 }
@@ -461,6 +465,8 @@ pub struct WarnParams {
     pub ping: LatWarn,
     /// Core→exchange ping axis.
     pub exch: LatWarn,
+    /// Expiring exchange API-key axis.
+    pub api: ApiWarn,
 }
 
 /// CPU-warning parameters: drawn-on-chart, sound, sustained-CPU percent, and the sustain seconds.
@@ -554,6 +560,33 @@ impl Default for LatWarn {
             red: 10,
             window: 15,
             hold: 3,
+        }
+    }
+}
+
+/// Largest API-key warning horizon offered and honoured: the alert popup's stepper range, and the
+/// ceiling the engine clamps a hand-edited `layout.toml` to. One constant so the two cannot drift.
+pub const API_WARN_MAX_DAYS: u16 = 90;
+
+/// Expiring-API-key parameters: the alert sound and how many days ahead the warning starts.
+///
+/// No `chart` field, unlike every other axis: this one has no per-second history, so a chart badge
+/// would open a card with nothing to draw in it. The warning is a Core Status state, not a moment
+/// in time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApiWarn {
+    pub sound: Option<String>,
+    /// The warning is on from this many days before expiration and stays on until the key is
+    /// replaced. `0` warns on the key's LAST DAY and after — not only once it has expired, because
+    /// the count is in whole days and reaches zero while up to a day of life remains.
+    pub days: u16,
+}
+impl Default for ApiWarn {
+    fn default() -> Self {
+        Self {
+            sound: None,
+            days: 7,
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use super::{BalanceState, ConnStatus, CoreData};
-use crate::feed::{CoreEndpoint, CoreSysStatus, FeedMsg};
+use crate::feed::{ApiKeyExpiry, CoreEndpoint, CoreSysStatus, FeedMsg};
 
 /// A core with the given freshness inputs; everything else stays at its default.
 fn core(assets_rev: u64, rate_known: bool, stale: bool, status: ConnStatus) -> CoreData {
@@ -133,4 +133,54 @@ fn a_replacement_feed_clears_endpoint_scoped_health() {
     assert_eq!(core.endpoint, None);
     assert_eq!(core.sys, CoreSysStatus::default());
     assert_eq!(core.sys_rev, previous_rev + 1);
+}
+
+/// The API-key poll re-reports the same answer every few hours, and MoonProto rebuilds the absolute
+/// date from the CURRENT clock each time, so a byte-equal answer never arrives. The revision must
+/// track what the answer SAYS — anything watching it would otherwise see a change every six hours
+/// on a key that did not move.
+#[test]
+fn an_unchanged_key_answer_does_not_bump_the_revision() {
+    let mut core = CoreData::new();
+    let first = ApiKeyExpiry {
+        known: true,
+        days_left: Some(30),
+        at_unix: Some(1_800_000_000),
+        checked_ms: 1_000,
+    };
+    core.apply(FeedMsg::ApiExpiry(first));
+    let after_first = core.api_expiry_rev;
+
+    core.apply(FeedMsg::ApiExpiry(ApiKeyExpiry {
+        checked_ms: 1_000 + 6 * 60 * 60 * 1_000,
+        ..first
+    }));
+
+    assert_eq!(core.api_expiry_rev, after_first, "same answer, later check");
+    assert_eq!(
+        core.api_expiry.map(|e| e.checked_ms),
+        Some(1_000 + 6 * 60 * 60 * 1_000),
+        "the newer receipt time is still retained"
+    );
+}
+
+/// A key that lost a day is a real change and must reach the panel.
+#[test]
+fn a_changed_day_count_bumps_the_revision() {
+    let mut core = CoreData::new();
+    let first = ApiKeyExpiry {
+        known: true,
+        days_left: Some(8),
+        at_unix: Some(1_800_000_000),
+        checked_ms: 1_000,
+    };
+    core.apply(FeedMsg::ApiExpiry(first));
+    let after_first = core.api_expiry_rev;
+
+    core.apply(FeedMsg::ApiExpiry(ApiKeyExpiry {
+        days_left: Some(7),
+        ..first
+    }));
+
+    assert_eq!(core.api_expiry_rev, after_first + 1);
 }
