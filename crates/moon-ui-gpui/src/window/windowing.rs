@@ -5,6 +5,8 @@
 //! icons embedded in the executable by `build.rs` through `embed_group_icons`.
 
 use std::sync::Arc;
+#[cfg(target_os = "windows")]
+use std::time::Duration;
 
 use gpui::*;
 
@@ -170,8 +172,9 @@ pub(crate) fn tool_window_options(
 
 /// Build options for the independent desktop Profit Monitor.
 ///
-/// Unlike owned tool windows, the monitor remains independently minimizable and restorable after
-/// every Main window is minimized. Its explicit taskbar entry is the user's route back to it.
+/// The normal independent relationship keeps the monitor usable while every Main window is
+/// minimized and preserves its Alt+Tab entry. The caller completes the terminal's single-icon
+/// taskbar policy with [`hide_window_from_taskbar_soon`].
 ///
 /// Args:
 ///     title: Native window title.
@@ -180,7 +183,7 @@ pub(crate) fn tool_window_options(
 ///     min_size: Smallest responsive monitor size.
 ///
 /// Returns:
-///     Independent normal-window options with a visible taskbar entry.
+///     Independent normal-window options prepared for shared taskbar suppression.
 pub(crate) fn profit_monitor_window_options(
     title: impl Into<SharedString>,
     window_bounds: WindowBounds,
@@ -197,7 +200,7 @@ pub(crate) fn profit_monitor_window_options(
         true,
     );
     options.relationship = WindowRelationship::default();
-    options.taskbar_visibility = WindowTaskbarVisibility::Visible;
+    options.taskbar_visibility = WindowTaskbarVisibility::Hidden;
     options
 }
 
@@ -513,11 +516,10 @@ pub(crate) fn set_group_window_icon(window: &Window, icon_id: u32) {
 /// * `_` - Embedded icon ID accepted for API parity.
 pub(crate) fn set_group_window_icon(_: &Window, _: u32) {}
 
-/// Remove a Windows taskbar item without changing the window's native style.
+/// Attempt to remove a Windows taskbar item without changing the window's native style.
 ///
-/// Detached charts stay independent windows so PowerToys FancyZones can discover them; this
-/// calls `ITaskbarList::DeleteTab` only after the native window has been shown and its taskbar item
-/// can exist. Handle lookup, COM creation, initialization, and deletion are all best effort.
+/// This is one best-effort `ITaskbarList::DeleteTab` attempt. Scheduling and the rationale for
+/// repeated attempts belong to [`hide_window_from_taskbar_soon`].
 ///
 /// # Arguments
 ///
@@ -555,6 +557,69 @@ pub(crate) fn hide_window_from_taskbar(window: &Window) {
 ///
 /// * `_` - Window accepted for API parity with the Windows implementation.
 pub(crate) fn hide_window_from_taskbar(_: &Window) {}
+
+/// Maximum deletion attempts in one bounded taskbar-suppression burst.
+#[cfg(target_os = "windows")]
+const TASKBAR_HIDE_ATTEMPTS: u32 = 20;
+
+/// Delay between deletion attempts inside one taskbar-suppression burst.
+#[cfg(target_os = "windows")]
+const TASKBAR_HIDE_RETRY: Duration = Duration::from_millis(150);
+
+/// Consecutive unreachable-window probes accepted before a burst gives up.
+///
+/// `AnyWindowHandle::update` also fails while the window is busy inside another update, so a single
+/// failure is not proof that the window closed.
+#[cfg(target_os = "windows")]
+const TASKBAR_HIDE_MAX_FAILURES: u32 = 3;
+
+/// Delete a window's taskbar item over the next few seconds.
+///
+/// Detached charts and the Profit Monitor remain independent so a minimized Main window does not
+/// minimize them and PowerToys FancyZones can snap them, while the terminal still presents one
+/// taskbar icon. `ITaskbarList::DeleteTab` removes an item that already exists; it is not durable
+/// window state, and `WindowTaskbarVisibility::Hidden` only omits `WS_EX_APPWINDOW`, which an
+/// unowned top-level window never needed to earn a taskbar button.
+///
+/// The shell publishes the item shortly after the native window is shown and republishes it when
+/// an iconic window is restored. Callers therefore arm this burst at construction and after every
+/// activation. The burst is bounded, so overlapping arms cannot accumulate into standing work,
+/// and it stops early once the window is gone.
+///
+/// # Arguments
+///
+/// * `handle` - Window whose taskbar item should be deleted.
+/// * `cx` - Application context owning the deletion task.
+#[cfg(target_os = "windows")]
+pub(crate) fn hide_window_from_taskbar_soon(handle: AnyWindowHandle, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        let mut failures: u32 = 0;
+        for attempt in 0..TASKBAR_HIDE_ATTEMPTS {
+            if attempt > 0 {
+                cx.background_executor().timer(TASKBAR_HIDE_RETRY).await;
+            }
+            let alive = cx.update(|cx| {
+                handle
+                    .update(cx, |_, window, _| hide_window_from_taskbar(window))
+                    .is_ok()
+            });
+            failures = if alive { 0 } else { failures + 1 };
+            if failures >= TASKBAR_HIDE_MAX_FAILURES {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
+/// Leave taskbar state unchanged outside Windows.
+///
+/// # Arguments
+///
+/// * `_` - Window handle accepted for API parity with the Windows implementation.
+/// * `_` - Application context accepted for API parity.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn hide_window_from_taskbar_soon(_: AnyWindowHandle, _: &mut App) {}
 
 /// Restore a Windows window and move it into an on-screen cascade near the primary origin.
 ///

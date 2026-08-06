@@ -649,7 +649,7 @@ pub(crate) struct ProfitMonitorView {
 }
 
 impl ProfitMonitorView {
-    /// Construct the monitor, subscribe to report and identity changes, and start its first read.
+    /// Construct the monitor, arm taskbar suppression, and start its subscriptions and first read.
     ///
     /// Args:
     ///     backend: Shared terminal state.
@@ -659,6 +659,14 @@ impl ProfitMonitorView {
     /// Returns:
     ///     Fully initialized monitor state.
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Apply the shared independent-window taskbar policy now and after every activation;
+        // `hide_window_from_taskbar_soon` owns the delayed retry rationale.
+        crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
+        cx.observe_window_activation(window, |_this, window, cx| {
+            crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
+        })
+        .detach();
+
         cx.observe_window_bounds(window, |this, window, cx| {
             let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
                 return;
@@ -1893,6 +1901,10 @@ fn format_amount(value: f64, unit: Option<ProfitUnit>) -> String {
 }
 
 /// Open or focus the independent singleton Profit Monitor window.
+///
+/// This toolbar action is one route back to the taskbar-hidden monitor; Alt+Tab is the other.
+/// `activate_window` restores an iconic window before foregrounding it, so it reopens a monitor
+/// that the user minimized.
 ///
 /// Args:
 ///     backend: Shared terminal state retaining the singleton handle.

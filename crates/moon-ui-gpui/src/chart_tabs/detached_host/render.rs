@@ -28,12 +28,6 @@ impl Render for DetachedChartHost {
         if let Some(sz) = self.restore_size.take() {
             window.resize(sz);
         }
-        // Remove the taskbar button with `DeleteTab` while leaving the window independent so
-        // FancyZones can see it. Retry for the first few renders in case the button appears late.
-        if self.taskbar_hide_ticks > 0 {
-            crate::window::windowing::hide_window_from_taskbar(window);
-            self.taskbar_hide_ticks -= 1;
-        }
         // Shift+middle-click on THIS window's chart applies X scale to its panel and persists the spec.
         {
             let (rev, req) = {
