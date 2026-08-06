@@ -11,7 +11,7 @@ use moon_core::util::fmt::DeltaSign;
 
 use super::rows::{GroupMode, LiveContext, RowLabels, grouped_rows};
 use super::{
-    ContextChange, MonitorPeriod, MonitorSort, MonitorSortColumn, VisibleColumns,
+    ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
     duration_until_period_refresh, format_profit, monitor_zone, next_sort,
     retain_last_known_exchange_names, sort_rows, zoned_day_start,
 };
@@ -200,32 +200,112 @@ fn retired_bot_preference_falls_back_to_core() {
     assert_eq!(GroupMode::default(), GroupMode::Core);
 }
 
-/// `profit_monitor/mod.rs:VisibleColumns::for_width` must drop Average order before Win rate while
-/// preserving both exact boundaries; swapping the thresholds makes this boundary-pair assertion
-/// red and clips essential Profit/Trades columns in a narrow desktop widget.
+/// `profit_monitor/mod.rs:MIN_WINDOW_WIDTH` must remain the independently derived Name-plus-Profit
+/// budget, and `MonitorLayout::for_width` must preserve every exact degradation boundary. Restoring
+/// the old 390px minimum, keeping Trades always visible, removing a scale multiplier, or shifting a
+/// threshold makes the budget or one adjacent pair red and blocks or clips the narrow window.
 #[test]
-fn responsive_columns_degrade_in_the_documented_order() {
+fn responsive_layout_degrades_at_the_documented_boundaries() {
     assert_eq!(
-        VisibleColumns::for_width(619.0),
-        VisibleColumns {
+        super::MIN_WINDOW_WIDTH,
+        super::MIN_NAME_COLUMN_WIDTH
+            + super::PROFIT_COLUMN_WIDTH
+            + 2.0 * super::TABLE_HORIZONTAL_PADDING
+            + super::TABLE_COLUMN_GAP,
+        "the OS minimum must fit Name, Profit, their gap, and both side paddings"
+    );
+    assert_eq!(
+        MonitorLayout::for_width(super::MIN_WINDOW_WIDTH, 1.0),
+        MonitorLayout {
+            inline_controls: false,
+            clock_seconds: false,
+            status_label: false,
+            trades: false,
+            win_rate: false,
+            average_order: false,
+        },
+        "the minimum window width must exercise the tier below Trades instead of restoring 390px"
+    );
+    assert!(!MonitorLayout::for_width(389.0, 1.0).trades);
+    assert!(MonitorLayout::for_width(390.0, 1.0).trades);
+    assert_eq!(
+        MonitorLayout::for_width(459.0, 1.0),
+        MonitorLayout {
+            inline_controls: false,
+            clock_seconds: false,
+            status_label: false,
+            trades: true,
             win_rate: false,
             average_order: false,
         }
     );
     assert_eq!(
-        VisibleColumns::for_width(620.0),
-        VisibleColumns {
+        MonitorLayout::for_width(460.0, 1.0),
+        MonitorLayout {
+            inline_controls: true,
+            clock_seconds: true,
+            status_label: false,
+            trades: true,
+            win_rate: false,
+            average_order: false,
+        }
+    );
+    assert!(!MonitorLayout::for_width(619.0, 1.0).win_rate);
+    assert!(MonitorLayout::for_width(620.0, 1.0).win_rate);
+    assert!(!MonitorLayout::for_width(699.0, 1.0).status_label);
+    assert!(MonitorLayout::for_width(700.0, 1.0).status_label);
+    assert_eq!(
+        MonitorLayout::for_width(759.0, 1.0),
+        MonitorLayout {
+            inline_controls: true,
+            clock_seconds: true,
+            status_label: true,
+            trades: true,
             win_rate: true,
             average_order: false,
         }
     );
     assert_eq!(
-        VisibleColumns::for_width(760.0),
-        VisibleColumns {
+        MonitorLayout::for_width(760.0, 1.0),
+        MonitorLayout {
+            inline_controls: true,
+            clock_seconds: true,
+            status_label: true,
+            trades: true,
             win_rate: true,
             average_order: true,
         }
     );
+    assert_eq!(
+        MonitorLayout::for_width(574.9, 1.25),
+        MonitorLayout {
+            inline_controls: false,
+            clock_seconds: false,
+            status_label: false,
+            trades: true,
+            win_rate: false,
+            average_order: false,
+        }
+    );
+    assert_eq!(
+        MonitorLayout::for_width(575.0, 1.25),
+        MonitorLayout {
+            inline_controls: true,
+            clock_seconds: true,
+            status_label: false,
+            trades: true,
+            win_rate: false,
+            average_order: false,
+        }
+    );
+    assert!(!MonitorLayout::for_width(487.4, 1.25).trades);
+    assert!(MonitorLayout::for_width(487.5, 1.25).trades);
+    assert!(!MonitorLayout::for_width(774.9, 1.25).win_rate);
+    assert!(MonitorLayout::for_width(775.0, 1.25).win_rate);
+    assert!(!MonitorLayout::for_width(874.9, 1.25).status_label);
+    assert!(MonitorLayout::for_width(875.0, 1.25).status_label);
+    assert!(!MonitorLayout::for_width(949.9, 1.25).average_order);
+    assert!(MonitorLayout::for_width(950.0, 1.25).average_order);
 }
 
 /// `profit_monitor/mod.rs:{next_sort,sort_rows}` must map every visible heading to its own metric,

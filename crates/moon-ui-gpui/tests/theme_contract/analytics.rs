@@ -8,7 +8,9 @@ use super::support::*;
 ///
 /// Breakage: replacing `MoonVirtualList` with eager children or dropping its retained handle makes
 /// a 52-core window impossible to traverse reliably; moving header/footer into the list scrolls
-/// context away; removing the numeric-cell nowrap lets a large profit split across two rows.
+/// context away; removing the numeric-cell nowrap lets a large profit split across two rows;
+/// leaving any Trades output unconditional or routing it from `layout.win_rate` clips or hides the
+/// count at the wrong boundary instead of preserving the 310px Name-plus-Profit tier.
 #[test]
 fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
     let source = read_src("analytics/profit_monitor/mod.rs");
@@ -18,7 +20,10 @@ fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
         "fn new(backend: Entity<Backend>, window:",
     ));
     let table = code_only(braced_body(&source, "fn table("));
+    let monitor_body = code_only(braced_body(&source, "fn body("));
     let header = code_only(braced_body(&source, "fn table_header("));
+    let row = code_only(braced_body(&source, "fn table_row("));
+    let split = code_only(braced_body(&source, "fn split_body("));
     let numeric = code_only(braced_body(&source, "fn numeric_cell("));
 
     assert!(
@@ -63,6 +68,17 @@ fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
             && numeric.contains(".text_ellipsis()"),
         "fixed numeric cells must never wrap and alter the virtual row height"
     );
+    assert!(
+        header.contains(".when(layout.trades")
+            && row.contains(".when(show_trades")
+            && table.contains("let show_trades = layout.trades;")
+            && table.matches("show_trades,").count() == 2
+            && split.contains(".when(show_trades")
+            && monitor_body.contains("ProfitLoadState::Split(totals) => split_body(")
+            && monitor_body
+                .contains("MonitorLayout::for_width(width, design::ui_value(cx, 1.0)).trades",),
+        "the Trades heading, body rows, total footer, and split-currency count must share one responsive decision"
+    );
 }
 
 /// The Profit Monitor clock must share the terminal's selected city without making the entire
@@ -70,12 +86,16 @@ fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
 ///
 /// Breakage: moving `SECOND_MS` into `ProfitMonitorView` looks simpler but rebuilds, regroups, and
 /// sorts every visible row once per second. Constructing another clock inside `controls` leaks
-/// timers across rerenders instead of retaining one child entity. Removing `size_full()` from the
-/// inner `v_flex` in `ProfitMonitorBodyView::render` sizes its root to the header and footer, so the
-/// virtual viewport collapses and hides every grouped row while the nonzero total remains visible.
+/// timers across rerenders instead of retaining one child entity. Making `MonitorClockView::render`
+/// always call `header_clock` keeps seconds at narrow widths and clips the control row. Forking the
+/// compact clock's picker lets its city diverge from the full header. Removing `size_full()` from
+/// the inner `v_flex` in `ProfitMonitorBodyView::render` sizes its root to the header and footer, so
+/// the virtual viewport collapses and hides every grouped row while the nonzero total remains
+/// visible.
 #[test]
 fn profit_monitor_clock_ticks_in_one_retained_child_view() {
     let source = read_src("analytics/profit_monitor/mod.rs");
+    let shared_clock = read_src("chrome/clock.rs");
     let state = code_only(braced_body(&source, "pub(crate) struct ProfitMonitorView"));
     let construction = code_only(braced_body(
         &source,
@@ -84,6 +104,12 @@ fn profit_monitor_clock_ticks_in_one_retained_child_view() {
     let clock_construction =
         code_only(braced_body(&source, "fn new(backend: Entity<Backend>, cx:"));
     let clock_render = code_only(braced_body(&source, "impl Render for MonitorClockView"));
+    let full_clock = code_only(braced_body(&shared_clock, "pub(crate) fn header_clock("));
+    let compact_clock = code_only(braced_body(
+        &shared_clock,
+        "pub(crate) fn compact_header_clock(",
+    ));
+    let shared_clock_render = code_only(braced_body(&shared_clock, "fn render_header_clock("));
     let controls = code_only(braced_body(&source, "fn controls("));
     let body_render = code_only(braced_body(
         &source,
@@ -109,8 +135,22 @@ fn profit_monitor_clock_ticks_in_one_retained_child_view() {
         "only MonitorClockView may own the wall-clock-aligned second repaint"
     );
     assert!(
-        clock_render.contains("crate::chrome::clock::header_clock(&self.backend, palette, cx)"),
-        "the monitor clock must use the terminal's selected-city renderer and picker"
+        clock_render
+            .contains("MonitorLayout::for_width(window_width(window), design::ui_value(cx, 1.0))",)
+            && clock_render.contains(".clock_seconds")
+            && clock_render
+                .contains("crate::chrome::clock::header_clock(&self.backend, palette, cx)")
+            && clock_render
+                .contains("crate::chrome::clock::compact_header_clock(&self.backend, palette, cx)"),
+        "the retained monitor clock must select full or compact shared presentation from width"
+    );
+    assert!(
+        full_clock.contains("render_header_clock(backend, p, ClockPrecision::Seconds, cx)")
+            && compact_clock
+                .contains("render_header_clock(backend, p, ClockPrecision::Minutes, cx)")
+            && shared_clock_render.contains("let selected = selected_city(backend, cx);")
+            && shared_clock_render.contains("MoonPopover::new(\"header-clock-popover\")"),
+        "both clock precisions must share one selected-city renderer and picker"
     );
     assert!(
         state.contains("content: Entity<ProfitMonitorBodyView>")
@@ -200,8 +240,11 @@ fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
 /// writer paths instead of becoming session-only view state.
 ///
 /// Breakage: replacing the period dropdown with another segmented strip recreates the crowded
-/// header; deleting any layout assignment or constructor restore silently resets that choice after
-/// restart even though the layout serializer's isolated round-trip remains green.
+/// header; forcing the `layout.inline_controls` branch keeps every control on one clipped row below
+/// 460px; restoring `open` to a literal unscaled 460px minimum blocks the supported narrow window,
+/// while unscaled 390px clips it above 100% UI scale; deleting any layout assignment or constructor
+/// restore silently resets that choice after restart even though the layout serializer's isolated
+/// round-trip remains green.
 #[test]
 fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
     let source = read_src("analytics/profit_monitor/mod.rs");
@@ -211,6 +254,7 @@ fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
     ));
     let controls = code_only(braced_body(&source, "fn controls("));
     let period_dropdown = code_only(braced_body(&source, "fn period_dropdown("));
+    let open = code_only(braced_body(&source, "pub(crate) fn open("));
     let set_period = code_only(braced_body(&source, "fn set_period("));
     let set_group = code_only(braced_body(&source, "fn set_group("));
     let toggle_sort = code_only(braced_body(&source, "fn toggle_sort("));
@@ -227,6 +271,18 @@ fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
                 .count()
                 == 1,
         "period must use one dropdown while Core/Exchange remain exactly two segmented buttons"
+    );
+    assert!(
+        controls
+            .contains("let layout = MonitorLayout::for_width(width, design::ui_value(cx, 1.0));",)
+            && controls.contains("if layout.inline_controls")
+            && controls.contains("v_flex()")
+            && controls.contains(".child(h_flex().w_full().justify_center().child(group_control))"),
+        "narrow controls must move complete period/clock and grouping units onto two rows"
+    );
+    assert!(
+        open.contains("Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0)))"),
+        "the OS window minimum must scale the responsive-width constant with its rendered geometry"
     );
     for key in [
         "profit_monitor_period",

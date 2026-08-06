@@ -36,10 +36,19 @@ const HEADER_HEIGHT: f32 = 32.0;
 const CONTEXT_REFRESH_MS: u128 = 5_000;
 const SECOND_MS: u128 = 1_000;
 const MINUTE_MS: u128 = 60_000;
+const MIN_NAME_COLUMN_WIDTH: f32 = 128.0;
 const PROFIT_COLUMN_WIDTH: f32 = 154.0;
 const TRADES_COLUMN_WIDTH: f32 = 72.0;
 const WIN_RATE_COLUMN_WIDTH: f32 = 76.0;
 const AVERAGE_ORDER_COLUMN_WIDTH: f32 = 116.0;
+const TABLE_HORIZONTAL_PADDING: f32 = 10.0;
+const TABLE_COLUMN_GAP: f32 = 8.0;
+const TRADES_WIDTH: f32 = 390.0;
+const STACKED_CONTROLS_WIDTH: f32 = 460.0;
+const WIN_RATE_WIDTH: f32 = 620.0;
+const STATUS_LABEL_WIDTH: f32 = 700.0;
+const AVERAGE_ORDER_WIDTH: f32 = 760.0;
+const MIN_WINDOW_WIDTH: f32 = 310.0;
 
 /// Compact monitor-specific period choices.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -241,28 +250,42 @@ enum ContextChange {
     },
 }
 
-/// Columns retained at one monitor width.
+/// Complete responsive presentation selected from one monitor width.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VisibleColumns {
+struct MonitorLayout {
+    /// Whether controls remain on one horizontal line.
+    inline_controls: bool,
+    /// Whether the clock includes seconds.
+    clock_seconds: bool,
+    /// Whether automatic-refresh status includes its text label.
+    status_label: bool,
+    /// Whether trade counts remain visible.
+    trades: bool,
     /// Whether win rate remains visible.
     win_rate: bool,
     /// Whether average order remains visible.
     average_order: bool,
 }
 
-impl VisibleColumns {
-    /// Select columns in deterministic least-important-first degradation order.
+impl MonitorLayout {
+    /// Select every responsive decision in deterministic priority order.
     ///
     /// Args:
     ///     width: Current logical window width.
+    ///     ui_scale: Active MoonUI geometry scale applied to rendered controls and table cells.
     ///
     /// Returns:
-    ///     Name, Profit, and Trades are always present; Win rate appears at 620 and Average order
-    ///     at 760 logical pixels.
-    fn for_width(width: f32) -> Self {
+    ///     Name and Profit are always present; Trades appears at the scaled 390-design-pixel
+    ///     boundary. Controls stack and the clock drops seconds below scaled 460. Win rate appears
+    ///     at scaled 620, the status label at scaled 700, and Average order at scaled 760.
+    fn for_width(width: f32, ui_scale: f32) -> Self {
         Self {
-            win_rate: width >= 620.0,
-            average_order: width >= 760.0,
+            inline_controls: width >= STACKED_CONTROLS_WIDTH * ui_scale,
+            clock_seconds: width >= STACKED_CONTROLS_WIDTH * ui_scale,
+            status_label: width >= STATUS_LABEL_WIDTH * ui_scale,
+            trades: width >= TRADES_WIDTH * ui_scale,
+            win_rate: width >= WIN_RATE_WIDTH * ui_scale,
+            average_order: width >= AVERAGE_ORDER_WIDTH * ui_scale,
         }
     }
 }
@@ -577,14 +600,18 @@ impl Render for MonitorClockView {
     /// Render the same selected-city clock and picker used by the terminal header.
     ///
     /// Args:
-    ///     _window: Owning Profit Monitor window.
+    ///     window: Owning Profit Monitor window whose width selects clock precision.
     ///     cx: Clock render context used to read the active palette and backend state.
     ///
     /// Returns:
     ///     Shared terminal clock element.
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = MoonPalette::active(cx);
-        crate::chrome::clock::header_clock(&self.backend, palette, cx)
+        if MonitorLayout::for_width(window_width(window), design::ui_value(cx, 1.0)).clock_seconds {
+            crate::chrome::clock::header_clock(&self.backend, palette, cx)
+        } else {
+            crate::chrome::clock::compact_header_clock(&self.backend, palette, cx)
+        }
     }
 }
 
@@ -1066,13 +1093,14 @@ impl ProfitMonitorView {
     /// Render the period and grouping selectors.
     ///
     /// Args:
-    ///     width: Current window width used to compact the status.
+    ///     width: Current window width used to select the complete responsive presentation.
     ///     palette: Active MoonUI palette.
     ///     cx: Monitor render context.
     ///
     /// Returns:
-    ///     One compact selector row with period, grouping, and refresh status.
+    ///     One inline selector row or a narrow two-row control surface.
     fn controls(&self, width: f32, palette: MoonPalette, cx: &Context<Self>) -> AnyElement {
+        let layout = MonitorLayout::for_width(width, design::ui_value(cx, 1.0));
         let selected_group = self.group;
         let view = cx.entity();
         let groups = [GroupMode::Core, GroupMode::Exchange];
@@ -1091,36 +1119,51 @@ impl ProfitMonitorView {
                 view.update(app, |this, cx| this.set_group(group, cx));
             })
             .render();
-
-        h_flex()
-            .w_full()
-            .justify_between()
+        let period = period_dropdown(self.period, cx.entity());
+        let status_clock = h_flex()
+            .flex_none()
             .gap(design::ui_px(cx, 10.0))
+            .child(auto_status(
+                self.db_active,
+                self.refresh_error.is_some(),
+                layout.status_label,
+                palette,
+                cx,
+            ))
+            .child(self.clock.clone());
+        let content = if layout.inline_controls {
+            h_flex()
+                .justify_between()
+                .gap(design::ui_px(cx, 10.0))
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .gap(design::ui_px(cx, 8.0))
+                        .child(period)
+                        .child(group_control),
+                )
+                .child(status_clock)
+        } else {
+            v_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .gap(design::ui_px(cx, 10.0))
+                        .child(period)
+                        .child(status_clock),
+                )
+                .child(h_flex().w_full().justify_center().child(group_control))
+        };
+
+        content
+            .w_full()
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 8.0))
             .bg(moon(palette.shell_high))
             .border_b(px(1.0))
             .border_color(moon(palette.border))
-            .child(
-                h_flex()
-                    .min_w_0()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(period_dropdown(self.period, cx.entity()))
-                    .child(group_control),
-            )
-            .child(
-                h_flex()
-                    .flex_none()
-                    .gap(design::ui_px(cx, 10.0))
-                    .child(auto_status(
-                        self.db_active,
-                        self.refresh_error.is_some(),
-                        width < 700.0,
-                        palette,
-                        cx,
-                    ))
-                    .child(self.clock.clone()),
-            )
             .into_any_element()
     }
 
@@ -1147,7 +1190,12 @@ impl ProfitMonitorView {
                 error.to_string(),
                 cx,
             ),
-            ProfitLoadState::Split(totals) => split_body(totals, palette, cx),
+            ProfitLoadState::Split(totals) => split_body(
+                totals,
+                MonitorLayout::for_width(width, design::ui_value(cx, 1.0)).trades,
+                palette,
+                cx,
+            ),
             ProfitLoadState::Ready { unit, data } => {
                 let core_label = t!("profit_monitor.core_fallback").to_string();
                 let unknown_exchange = t!("profit_monitor.unknown_exchange").to_string();
@@ -1389,7 +1437,7 @@ fn window_header(palette: MoonPalette, cx: &App) -> impl IntoElement {
 /// Args:
 ///     active: Whether a database replacement is in flight.
 ///     failed: Whether the latest automatic replacement failed while old rows remain visible.
-///     compact: Whether only the colored dot fits beside the grouping control.
+///     show_label: Whether the colored dot has room for its text label.
 ///     palette: Active MoonUI palette.
 ///     cx: Render context.
 ///
@@ -1398,7 +1446,7 @@ fn window_header(palette: MoonPalette, cx: &App) -> impl IntoElement {
 fn auto_status(
     active: bool,
     failed: bool,
-    compact: bool,
+    show_label: bool,
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -1429,7 +1477,7 @@ fn auto_status(
                     palette.green
                 })),
         )
-        .when(!compact, |status| status.child(label))
+        .when(show_label, |status| status.child(label))
         .into_any_element()
 }
 
@@ -1480,13 +1528,15 @@ fn centered_alert(title: String, detail: String, cx: &App) -> AnyElement {
 ///
 /// Args:
 ///     totals: Per-quote safe totals.
+///     show_trades: Whether the current width retains the aggregate trade count.
 ///     palette: Active MoonUI palette.
 ///     cx: Render context.
 ///
 /// Returns:
-///     Explanation, quote chips, and complete trade count.
+///     Explanation and quote chips, with the aggregate trade count when space permits.
 fn split_body(
     totals: &moon_core::db::QuoteBreakdown,
+    show_trades: bool,
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -1530,11 +1580,13 @@ fn split_body(
                 .child(t!("profit_monitor.split_detail").to_string()),
         )
         .child(chips)
-        .child(
-            div()
-                .text_color(moon(palette.text_soft))
-                .child(t!("profit_monitor.trades_total", n = totals.orders).to_string()),
-        )
+        .when(show_trades, |body| {
+            body.child(
+                div()
+                    .text_color(moon(palette.text_soft))
+                    .child(t!("profit_monitor.trades_total", n = totals.orders).to_string()),
+            )
+        })
         .into_any_element()
 }
 
@@ -1562,9 +1614,10 @@ fn table(
     view: Entity<ProfitMonitorView>,
     cx: &App,
 ) -> AnyElement {
-    let columns = VisibleColumns::for_width(width);
-    let show_win = columns.win_rate;
-    let show_average = columns.average_order;
+    let layout = MonitorLayout::for_width(width, design::ui_value(cx, 1.0));
+    let show_trades = layout.trades;
+    let show_win = layout.win_rate;
+    let show_average = layout.average_order;
     let total = rows.iter().fold(MonitorRow::default(), |mut total, row| {
         total.profit += row.profit;
         total.trades += row.trades;
@@ -1573,7 +1626,7 @@ fn table(
         total.positive_orders += row.positive_orders;
         total
     });
-    let header = table_header(columns, sort, view, palette, cx);
+    let header = table_header(layout, sort, view, palette, cx);
     let rows = Arc::new(rows);
     let row_count = rows.len();
     let list_rows = rows.clone();
@@ -1594,6 +1647,7 @@ fn table(
                 format_trade_count(row.trades),
                 Some(format_win_rate(row.win_rate())),
                 Some(format_amount(row.average_order(), unit)),
+                show_trades,
                 show_win,
                 show_average,
                 palette,
@@ -1618,6 +1672,7 @@ fn table(
         format_trade_count(total.trades),
         Some(format_win_rate(total.win_rate())),
         Some(format_amount(total.average_order(), unit)),
+        show_trades,
         show_win,
         show_average,
         palette,
@@ -1643,7 +1698,7 @@ fn table(
 /// Render the fixed clickable header whose geometry mirrors the data rows.
 ///
 /// Args:
-///     columns: Responsive visible-column selection.
+///     layout: Responsive presentation including visible-column selection.
 ///     sort: Current explicit ordering.
 ///     view: Monitor entity receiving heading clicks.
 ///     palette: Active MoonUI palette.
@@ -1652,7 +1707,7 @@ fn table(
 /// Returns:
 ///     Fixed-height sortable table header.
 fn table_header(
-    columns: VisibleColumns,
+    layout: MonitorLayout,
     sort: Option<MonitorSort>,
     view: Entity<ProfitMonitorView>,
     palette: MoonPalette,
@@ -1689,15 +1744,17 @@ fn table_header(
         }
         match width {
             Some(width) => cell.w(design::ui_px(cx, width)).flex_none(),
-            None => cell.flex_1(),
+            None => cell
+                .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
+                .flex_1(),
         }
     };
 
     h_flex()
         .w_full()
         .h(design::fit_h_px(cx, 34.0, 13.0, 8.0))
-        .px(design::ui_px(cx, 10.0))
-        .gap(design::ui_px(cx, 8.0))
+        .px(design::ui_px(cx, TABLE_HORIZONTAL_PADDING))
+        .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
         .bg(moon(palette.table_head))
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 0.7))
@@ -1715,14 +1772,16 @@ fn table_header(
             Some(PROFIT_COLUMN_WIDTH),
             true,
         ))
-        .child(sortable(
-            "profit-monitor-heading-trades",
-            t!("profit_monitor.column.trades").to_string(),
-            MonitorSortColumn::Trades,
-            Some(TRADES_COLUMN_WIDTH),
-            true,
-        ))
-        .when(columns.win_rate, |header| {
+        .when(layout.trades, |header| {
+            header.child(sortable(
+                "profit-monitor-heading-trades",
+                t!("profit_monitor.column.trades").to_string(),
+                MonitorSortColumn::Trades,
+                Some(TRADES_COLUMN_WIDTH),
+                true,
+            ))
+        })
+        .when(layout.win_rate, |header| {
             header.child(sortable(
                 "profit-monitor-heading-win-rate",
                 t!("profit_monitor.column.win_rate").to_string(),
@@ -1731,7 +1790,7 @@ fn table_header(
                 true,
             ))
         })
-        .when(columns.average_order, |header| {
+        .when(layout.average_order, |header| {
             header.child(sortable(
                 "profit-monitor-heading-average-order",
                 t!("profit_monitor.column.average_order").to_string(),
@@ -1751,6 +1810,7 @@ fn table_header(
 ///     trades: Trade-count text.
 ///     win_rate: Optional win-rate text.
 ///     average_order: Optional average-order text.
+///     show_trades: Whether the current width retains trade count.
 ///     show_win: Whether the current width retains win rate.
 ///     show_average: Whether the current width retains average order.
 ///     palette: Active MoonUI palette.
@@ -1766,6 +1826,7 @@ fn table_row(
     trades: String,
     win_rate: Option<String>,
     average_order: Option<String>,
+    show_trades: bool,
     show_win: bool,
     show_average: bool,
     palette: MoonPalette,
@@ -1780,8 +1841,8 @@ fn table_row(
     h_flex()
         .w_full()
         .h(design::fit_h_px(cx, 34.0, 13.0, 8.0))
-        .px(design::ui_px(cx, 10.0))
-        .gap(design::ui_px(cx, 8.0))
+        .px(design::ui_px(cx, TABLE_HORIZONTAL_PADDING))
+        .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 0.7))
         .child(
@@ -1790,7 +1851,7 @@ fn table_row(
                     "profit-monitor-name:{name_tooltip}"
                 )))
                 .flex_1()
-                .min_w_0()
+                .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap()
@@ -1798,7 +1859,9 @@ fn table_row(
                 .child(name),
         )
         .child(numeric_cell(profit, PROFIT_COLUMN_WIDTH, cx).text_color(moon(profit_color)))
-        .child(numeric_cell(trades, TRADES_COLUMN_WIDTH, cx))
+        .when(show_trades, |element| {
+            element.child(numeric_cell(trades, TRADES_COLUMN_WIDTH, cx))
+        })
         .when(show_win, |element| {
             element.child(numeric_cell(
                 win_rate.unwrap_or_default(),
@@ -1911,6 +1974,9 @@ fn format_amount(value: f64, unit: Option<ProfitUnit>) -> String {
 ///     owner: Launching Main window, used only to choose the initial display.
 ///     owner_display: Display captured by the toolbar click.
 ///     cx: Application context used to create or activate the window.
+///
+/// Returns:
+///     Nothing; the singleton window is focused or created as a side effect.
 pub(crate) fn open(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,
@@ -1946,7 +2012,7 @@ pub(crate) fn open(
         t!("profit_monitor.window_title").to_string(),
         WindowBounds::Windowed(bounds),
         display_id,
-        Some(size(px(460.0), px(320.0))),
+        Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0))),
     );
     let view_backend = backend.clone();
     if let Ok(handle) = cx.open_window(options, move |window, cx| {
