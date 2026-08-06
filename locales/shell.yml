@@ -768,9 +768,8 @@ alerts.fig.fib_retracement:
   ru: "Коррекция Фибоначчи"
   en: "Fibonacci retracement"
   es: "Retroceso de Fibonacci"
-# Moonbot's own Fibonacci object: never drawn here, only received from a core, so its name appears
-# in the alerts list but never in the tool picker. Kept short — the list's figure column is a fixed
-# width and the name shares it with the price.
+# Moonbot's own Fibonacci object, drawn here on Moonbot's terms and also received from a core.
+# Kept short — the alerts list's figure column is a fixed width and shares it with the price.
 alerts.fig.mb_fib:
   ru: "Фибо Moonbot"
   en: "Moonbot Fib"

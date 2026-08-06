@@ -170,3 +170,40 @@ fn every_figure_settings_frame_swallows_the_charts_input() {
         "a figure-settings frame is built outside `shell`"
     );
 }
+
+/// All three backends draw the same five line styles.
+///
+/// A pattern lives in a shader, so a style added on one platform and forgotten on another is
+/// invisible until someone runs that platform — and the DX11 build is the only one anyone here runs
+/// daily. The five branches are `TPenStyle`: solid, dash, dot, dash-dot, dash-dot-dot.
+///
+/// The regression this exists for actually shipped: the shaders had three patterns for five kinds,
+/// so a figure drawn in Moonbot as a dash came back dash-dot-dot.
+#[test]
+fn every_backend_draws_all_five_line_styles() {
+    const BACKENDS: &[&str] = &[
+        "chartdx/shaders/order_lines.hlsl",
+        "chartdx/shaders/chart_native.metal",
+        "chartdx/shaders/native_hline.wgsl",
+        "chartdx/shaders/native_seg.wgsl",
+    ];
+    for rel in BACKENDS {
+        let src = code_only(&read_src(rel));
+        assert!(
+            src.contains("pattern_on"),
+            "{rel} does not go through the shared pattern function"
+        );
+        // One branch per style: four thresholds plus the fall-through.
+        for cut in ["0.5", "1.5", "2.5", "3.5"] {
+            assert!(
+                src.contains(&format!("style < {cut}")),
+                "{rel} is missing the style < {cut} branch — a line kind draws as another"
+            );
+        }
+        // And the caller passes distance along the line, not a boolean test of its own.
+        assert!(
+            !src.contains("style >= 0.5"),
+            "{rel} still tests the style inline instead of asking `pattern_on`"
+        );
+    }
+}

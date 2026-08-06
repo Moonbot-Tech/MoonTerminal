@@ -94,10 +94,7 @@ impl ChartTabs {
         for group in [true, false] {
             let mut group_items = moon_core::figures::tools::REGISTRY
                 .iter()
-                // A tool that only ever ARRIVES from the core has no gesture that would create one
-                // here, so it is not offered — it still has a registry row for its geometry, its
-                // hit test and its name in the alerts list.
-                .filter(|d| d.drawable && d.alertable == group)
+                .filter(|d| d.alertable == group)
                 .map(|d| tool_item(d, current, self.backend.clone()))
                 .peekable();
             if group_items.peek().is_some() {

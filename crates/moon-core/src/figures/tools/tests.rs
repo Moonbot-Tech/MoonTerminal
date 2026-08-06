@@ -39,6 +39,9 @@ impl Proj for TestProj {
 #[derive(Default)]
 pub(super) struct RecSink {
     pub(super) hlines: Vec<f64>,
+    /// Thickness of each full-width line, in the same order: a tool may weight one to show it can
+    /// be grabbed, and geometry alone cannot see that.
+    pub(super) hline_widths: Vec<f32>,
     pub(super) segs: Vec<(FigNode, FigNode)>,
     /// Colour of each segment, in the same order: a coloured ratio scale is wrong if the hues are
     /// wrong, and geometry alone cannot see that.
@@ -54,8 +57,9 @@ pub(super) struct RecSink {
 }
 
 impl GeomSink for RecSink {
-    fn hline(&mut self, price: f64, _stroke: &Stroke) {
+    fn hline(&mut self, price: f64, stroke: &Stroke) {
         self.hlines.push(price);
+        self.hline_widths.push(stroke.thickness);
     }
 
     fn seg(&mut self, a: FigNode, b: FigNode, stroke: &Stroke) {
@@ -108,14 +112,7 @@ fn nodes(n: usize) -> Vec<FigNode> {
 }
 
 fn figure(kind: FigureKind) -> Figure {
-    Figure::new(kind, crate::figures::DrawStyle::default(), 0)
-}
-
-/// The tools a gesture can create. Everything about placing nodes — the click count, `make`,
-/// `preview` — is a contract of THESE; a tool that only ever arrives from the core has no gesture
-/// and would fail every one of them for the right reason.
-fn drawable() -> impl Iterator<Item = &'static ToolDef> {
-    REGISTRY.iter().filter(|d| d.drawable)
+    Figure::new(kind, crate::figures::DrawStyle::default(), 0.0)
 }
 
 #[test]
@@ -123,12 +120,7 @@ fn registry_rows_match_their_tool_and_are_uniquely_keyed() {
     let mut keys = Vec::new();
     for def in REGISTRY {
         assert_eq!(def.tool.def().key, def.key, "def() must find its own row");
-        // Only a tool a gesture creates needs clicks; one that only ever arrives has none.
-        assert!(
-            def.clicks >= 1 || !def.drawable,
-            "{} places no node",
-            def.key
-        );
+        assert!(def.clicks >= 1, "{} places no node", def.key);
         assert!(!def.locale_key.is_empty(), "{} has no name key", def.key);
         // A typed scale colours what it FILLS. Claiming a palette without filling anything would
         // strip the settings panel's fill swatches for a tool that has no fill to colour — a control
@@ -148,7 +140,7 @@ fn registry_rows_match_their_tool_and_are_uniquely_keyed() {
 
 #[test]
 fn make_refuses_a_half_placed_figure() {
-    for def in drawable() {
+    for def in REGISTRY {
         let short = nodes(def.clicks as usize - 1);
         assert!(
             (def.make)(&short).is_none(),
@@ -171,7 +163,7 @@ fn make_refuses_a_half_placed_figure() {
 #[test]
 fn every_tool_previews_before_its_last_click() {
     let cursor = FigNode::new(TestProj::T0_MS + 5_000.0, 110.0);
-    for def in drawable() {
+    for def in REGISTRY {
         let placed = nodes(def.clicks as usize - 1);
         assert!(
             (def.preview)(&placed, cursor).is_some(),
@@ -181,29 +173,17 @@ fn every_tool_previews_before_its_last_click() {
     }
 }
 
-/// The hotkey cycle reaches every DRAWABLE tool once and nothing else.
-///
-/// The exclusion is the point, not a detail: a tool that only ever arrives from a core places no
-/// nodes, so arming one through the cycle would start a draft that can never finish and would show
-/// a name the picker's own list does not offer.
 #[test]
-fn tool_cycle_visits_every_drawable_tool_once_and_no_other() {
-    let drawable: Vec<_> = drawable().map(|d| d.tool).collect();
-    assert!(
-        drawable.len() < REGISTRY.len(),
-        "this test is vacuous unless some tool is not drawable"
-    );
-    let first = drawable[0];
+fn tool_cycle_visits_every_tool_once() {
+    let first = REGISTRY[0].tool;
     let mut seen = vec![first];
     let mut t = first;
-    for _ in 1..drawable.len() {
+    for _ in 1..REGISTRY.len() {
         t = t.next();
         assert!(!seen.contains(&t), "cycle repeats {t:?} before wrapping");
-        assert!(t.def().drawable, "cycle armed {t:?}, which draws nothing");
         seen.push(t);
     }
-    assert_eq!(t.next(), first, "cycle must wrap to the first drawable tool");
-    assert_eq!(seen.len(), drawable.len(), "cycle misses a drawable tool");
+    assert_eq!(t.next(), first, "cycle must wrap to the first tool");
 }
 
 #[test]
@@ -313,10 +293,10 @@ fn only_a_selected_knot_tool_emits_handles() {
 fn only_a_ratio_scale_labels_an_idle_chart() {
     // A readout that appears on hover costs nothing at rest; a Fibonacci scale is the exception,
     // because a level whose price shows only under the cursor cannot be read at a glance.
-    for def in drawable() {
+    for def in REGISTRY {
         let kind = (def.make)(&nodes(def.clicks as usize)).expect("full node set must build");
         let idle = build(&kind, ctx(false, false)).labels.len();
-        if def.tool == FigureTool::FibRetracement {
+        if matches!(def.tool, FigureTool::FibRetracement | FigureTool::MbFib) {
             assert!(idle > 0, "a scale must name its levels at rest");
         } else {
             assert_eq!(idle, 0, "{} labels an idle chart", def.key);
@@ -383,7 +363,7 @@ fn an_unknown_stored_switch_is_ignored() {
 /// would silently offer no switches in the toolbar while offering them on a real figure.
 #[test]
 fn every_tool_answers_the_toolbar_the_same_as_a_drawn_figure() {
-    for def in drawable() {
+    for def in REGISTRY {
         let drawn = (def.make)(&nodes(def.clicks as usize)).expect("full node set must build");
         assert_eq!(
             settings_of(def.tool, &ToolSettings::new()),

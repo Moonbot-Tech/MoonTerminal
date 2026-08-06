@@ -29,7 +29,6 @@ pub(super) const DEF: ToolDef = ToolDef {
     level_palette: false,
     fills: true,
     alertable: true,
-    drawable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::Channel(Channel {
             price1: a.price,

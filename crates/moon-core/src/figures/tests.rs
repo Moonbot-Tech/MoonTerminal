@@ -5,7 +5,7 @@ fn fig() -> Figure {
     Figure::new(
         FigureKind::HLine(HLine { price: 100.0 }),
         DrawStyle::default(),
-        0,
+        0.0,
     )
 }
 

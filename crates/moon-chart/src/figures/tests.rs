@@ -26,7 +26,7 @@ fn hline_fig(id: u64) -> Figure {
             kind: LineKind::Dash,
             fill: [10, 20, 30, 64],
         },
-        0,
+        0.0,
     );
     f.id = id;
     f
@@ -39,7 +39,7 @@ fn segment_fig(id: u64) -> Figure {
             b: FigNode::new(EPOCH + 60_000.0, 110.0),
         }),
         DrawStyle::default(),
-        0,
+        0.0,
     );
     f.id = id;
     f
@@ -216,22 +216,29 @@ fn the_builder_appends_and_never_clears() {
     assert_eq!(hlines[0].price, 1.0);
 }
 
+/// Each of the five line kinds reaches the shader as its own pattern, and as the pen index the
+/// blob carries.
+///
+/// It used to be three looks for five kinds — Dash and DashDot were folded into DashDotDot — so a
+/// figure drawn in Moonbot as a dash came back dash-dot-dot. The oracle is `to_pen`, the number the
+/// core's own format uses, not a table repeated here.
 #[test]
-fn seg_patterns_collapse_the_three_dashed_kinds() {
-    // The shader has one dashed pattern for Moonbot's three, and solid and dotted stay apart.
-    let dashed: Vec<f32> = [LineKind::Dash, LineKind::DashDot, LineKind::DashDotDot]
-        .into_iter()
-        .map(seg_pattern)
-        .collect();
-    assert!(
-        dashed.windows(2).all(|w| w[0] == w[1]),
-        "the dashed kinds no longer share one pattern: {dashed:?}"
-    );
-    let solid = seg_pattern(LineKind::Solid);
-    let dot = seg_pattern(LineKind::Dot);
-    assert_ne!(solid, dot);
-    assert_ne!(solid, dashed[0]);
-    assert_ne!(dot, dashed[0]);
+fn every_line_kind_reaches_the_shader_as_its_own_pen_index() {
+    let mut seen = Vec::new();
+    for kind in LineKind::ALL {
+        let pattern = seg_pattern(kind);
+        assert_eq!(
+            pattern,
+            kind.to_pen() as f32,
+            "{kind:?} is drawn as a style the blob does not name"
+        );
+        assert!(
+            !seen.contains(&pattern),
+            "{kind:?} shares a pattern with another kind: {seen:?}"
+        );
+        seen.push(pattern);
+    }
+    assert_eq!(seen.len(), 5, "all five kinds are distinct");
 }
 
 #[test]
@@ -245,7 +252,7 @@ fn a_fill_reaches_the_zone_layer_bounded_in_time() {
             hidden_levels: 0,
         }),
         DrawStyle::default(),
-        0,
+        0.0,
     );
     let (zones, ..) = build_one(&f, None, None);
     assert!(!zones.is_empty(), "the scale drew no fill");
@@ -291,7 +298,7 @@ fn a_fill_never_reacts_to_hover_or_selection() {
             hidden_levels: 0,
         }),
         DrawStyle::default(),
-        7,
+        7.0,
     );
     let (idle, ..) = build_one(&f, None, None);
     let (hovered, ..) = build_one(&f, Some(7), None);
@@ -311,7 +318,7 @@ fn a_level_readout_is_rendered_to_text_once_not_every_frame() {
             hidden_levels: 0,
         }),
         DrawStyle::default(),
-        0,
+        0.0,
     );
     let (_, _, _, _, labels) = build_one(&f, None, None);
     assert!(!labels.is_empty());
@@ -359,7 +366,7 @@ fn the_figure_being_dragged_paints_no_fill() {
             hidden_levels: 0,
         }),
         DrawStyle::default(),
-        0,
+        0.0,
     );
     f.id = 5;
     let (still, ..) = build_one(&f, None, None);
@@ -400,7 +407,7 @@ fn an_invisible_or_degenerate_fill_never_reaches_the_gpu() {
             b: FigNode::new(EPOCH + 60_000.0, 80.0),
         }),
         DrawStyle::default(),
-        0,
+        0.0,
     );
     off.fill = [10, 20, 30, 0];
     let (zones, _, segs, ..) = build_one(&off, None, None);

@@ -224,22 +224,16 @@ fn roundtrip_values() {
 #[test]
 fn alertable_tools_are_registered_in_the_cores_type_order() {
     use crate::figures::FigNode;
-    let node = FigNode::new(1.0, 2.0);
+    // DISTINCT nodes: a tool may refuse a degenerate figure, and a ratio scale with no height is
+    // one — every level would collapse onto a single price.
+    let nodes = |n: usize| -> Vec<FigNode> {
+        (0..n).map(|i| FigNode::new(1.0, 2.0 + i as f64)).collect()
+    };
     let types: Vec<u8> = crate::figures::tools::REGISTRY
         .iter()
         .filter(|d| d.alertable)
         .map(|d| {
-            // A tool that only ever arrives has no `make`; it is built directly so the check keeps
-            // covering the very type — the fibo — whose slot this order exists to fix.
-            let kind = match (d.make)(&vec![node; d.clicks as usize]) {
-                Some(kind) => kind,
-                None => FigureKind::MbFib(crate::figures::tools::MbFib {
-                    a: 1.0,
-                    b: 2.0,
-                    time_ms: 0.0,
-                    levels: [1.0; crate::figures::tools::MB_FIB_LEVELS],
-                }),
-            };
+            let kind = (d.make)(&nodes(d.clicks as usize)).expect("full node set builds");
             let blob = encode(&kind, [1, 2, 3, 4], 1.0, LineKind::Dash, 0.0, 0, 1)
                 .expect("an alertable tool encodes");
             blob[0]
@@ -259,9 +253,13 @@ fn alertable_tools_are_registered_in_the_cores_type_order() {
 #[test]
 fn every_alertable_tool_encodes_and_no_other_one_does() {
     use crate::figures::FigNode;
-    let node = FigNode::new(1_700_000_000_000.0, 100.0);
-    for def in crate::figures::tools::REGISTRY.iter().filter(|d| d.drawable) {
-        let nodes = vec![node; def.clicks as usize];
+    for def in crate::figures::tools::REGISTRY {
+        // Distinct nodes, for the same reason as above.
+        // Prices differ, times do not: a sub-millisecond time cannot survive the TDateTime hop
+        // exactly, and this test is about the KIND surviving, not about the clock.
+        let nodes: Vec<FigNode> = (0..def.clicks)
+            .map(|i| FigNode::new(1_700_000_000_000.0, 100.0 + i as f64))
+            .collect();
         let kind = (def.make)(&nodes).expect("full node set must build");
         let blob = encode(&kind, [1, 2, 3, 4], 1.0, LineKind::Dash, 0.0, 0, 1);
         assert_eq!(

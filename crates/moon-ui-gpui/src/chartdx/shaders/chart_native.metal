@@ -510,6 +510,18 @@ vertex ZOut zone_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
 
 fragment float4 zone_fragment(ZOut in [[stage_in]]) { return in.color; }
 
+// ── Line patterns (TPenStyle order: 0 solid · 1 dash · 2 dot · 3 dash-dot · 4 dash-dot-dot) ──
+// `d` is distance along the line in physical pixels: X for a full-width line, arc length for a
+// segment. Kept identical to the DX11 and wgsl copies — three backends draw the same five styles.
+static inline bool pattern_on(float style, float d) {
+    if (style < 0.5) return true;
+    if (style < 1.5) return fract(d / 16.0) < 9.0 / 16.0;
+    if (style < 2.5) return fract(d / 6.0) < 2.0 / 6.0;
+    float x = fract(d / 20.0) * 20.0;
+    if (style < 3.5) return x < 9.0 || (x >= 13.0 && x < 15.0);
+    return x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0);
+}
+
 struct HOut { float4 position [[position]]; float4 color; float style [[flat]]; float xpx; };
 
 vertex HOut hline_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
@@ -524,7 +536,7 @@ vertex HOut hline_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
 }
 
 fragment float4 hline_fragment(HOut in [[stage_in]]) {
-    if (in.style >= 0.5 && fract(in.xpx / 16.0) > 9.0 / 16.0) discard_fragment();
+    if (!pattern_on(in.style, in.xpx)) discard_fragment();
     return in.color;
 }
 
@@ -552,12 +564,7 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
 }
 
 fragment float4 seg_fragment(SOut in [[stage_in]]) {
-    if (in.pattern >= 1.5) {
-        if (fract(in.dist / 6.0) > 2.0 / 6.0) discard_fragment();
-    } else if (in.pattern >= 0.5) {
-        float x = fract(in.dist / 20.0) * 20.0;
-        if (!(x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0))) discard_fragment();
-    }
+    if (!pattern_on(in.pattern, in.dist)) discard_fragment();
     return in.color;
 }
 
