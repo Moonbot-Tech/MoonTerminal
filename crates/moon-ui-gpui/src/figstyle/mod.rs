@@ -25,17 +25,17 @@
 
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonTooltipView,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonTooltipView, h_flex, v_flex,
 };
 
 use moon_core::figures::{
-    DrawStyle, Figure, FigureTool, LineKind, ToolSetting, DEFAULT_FILL_ALPHA,
+    DEFAULT_FILL_ALPHA, DrawStyle, Figure, FigureTool, LineKind, ToolSetting,
 };
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
-use crate::design;
 use crate::Backend;
+use crate::design;
 
 /// Which figure the panel edits, and where it was opened.
 #[derive(Clone, PartialEq)]

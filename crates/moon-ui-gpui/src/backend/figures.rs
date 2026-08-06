@@ -52,7 +52,8 @@ impl Backend {
     /// The raw stored overrides for `tool`, for snapshotting into a draft. Empty when the tool has
     /// never been touched, which is also what "everything at its own default" means.
     pub(crate) fn tool_switches(&self, tool: FigureTool) -> &ToolSettings {
-        static NONE: std::sync::LazyLock<ToolSettings> = std::sync::LazyLock::new(ToolSettings::new);
+        static NONE: std::sync::LazyLock<ToolSettings> =
+            std::sync::LazyLock::new(ToolSettings::new);
         match self.fig_tool_settings.get(tool.def().key) {
             Some(map) => map,
             // Only the miss pays for the shared empty map; a hit never touches the lock.

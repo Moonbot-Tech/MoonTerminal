@@ -14,7 +14,7 @@
 
 use gpui::*;
 use moon_ui::{
-    h_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, h_flex,
 };
 
 use moon_core::figures::{FigureTool, ToolDef};
@@ -78,17 +78,19 @@ impl ChartTabs {
         // Cursor first, then the two groups split on `alertable`. Both groups are built from the
         // registry in its own order, so this function names no tool.
         let backend_off = self.backend.clone();
-        let mut items = vec![MoonMenuItem::with_key(
-            SharedString::new_static("cursor"),
-            SharedString::from(format!("↖  {}", t!("chart.fig.cursor"))),
-        )
-        .checked(current.is_none())
-        .on_click(move |_, _, app| {
-            backend_off.update(app, |b, bcx| {
-                b.fig_draw_mode = false;
-                bcx.notify();
-            });
-        })];
+        let mut items = vec![
+            MoonMenuItem::with_key(
+                SharedString::new_static("cursor"),
+                SharedString::from(format!("↖  {}", t!("chart.fig.cursor"))),
+            )
+            .checked(current.is_none())
+            .on_click(move |_, _, app| {
+                backend_off.update(app, |b, bcx| {
+                    b.fig_draw_mode = false;
+                    bcx.notify();
+                });
+            }),
+        ];
         for group in [true, false] {
             let mut group_items = moon_core::figures::tools::REGISTRY
                 .iter()
@@ -165,16 +167,15 @@ impl ChartTabs {
                     .render(),
             )
             .children(
-                open
-                    .then(|| {
-                        crate::figstyle::render_tool_defaults(
-                            &self.backend,
-                            tool,
-                            Some(self.custom_color_cell()),
-                            cx,
-                        )
-                    })
-                    .flatten(),
+                open.then(|| {
+                    crate::figstyle::render_tool_defaults(
+                        &self.backend,
+                        tool,
+                        Some(self.custom_color_cell()),
+                        cx,
+                    )
+                })
+                .flatten(),
             );
 
         h_flex()
