@@ -35,6 +35,7 @@ use moon_ui::{
 };
 
 use moon_core::session::CoreId;
+use rust_i18n::t;
 
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design::moon;
@@ -134,7 +135,11 @@ impl AlertsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let coin_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC, ETH"));
+        // The Report's own placeholder, not a second wording for the same field: the two coin
+        // filters sit one panel apart and are read as one control.
+        let coin_input = cx.new(|cx| {
+            MoonInputState::new(window, cx).placeholder(t!("report.filter.coin_ph").to_string())
+        });
         cx.subscribe(
             &coin_input,
             |this: &mut Self, input, ev: &MoonInputEvent, cx| {
@@ -775,7 +780,7 @@ impl Render for AlertsPanel {
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .track_focus(&self.focus)
-            .child(self.toolbar(p, cx))
+            .child(self.toolbar(cx))
             // The hairline Orders and Report draw between their filters and their table.
             .child(div().w_full().h(px(1.0)).flex_none().bg(moon(p.border)))
             .child(body)

@@ -20,24 +20,24 @@ impl AlertsPanel {
     /// Laid out like the Report toolbar, in the order those panels read left to right — who
     /// (cores), what (scope), which instrument (coin) — so the two panels are not two different
     /// habits.
-    pub(super) fn toolbar(&self, p: MoonPalette, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Spelled exactly as the Report toolbar is, down to the tailwind steps and the coin
+        // field's raw 90: `design::ui_px` grows with the font slider and `px_2`/`gap_2` do not, so
+        // writing this row "properly" made it drift wider than the panel beside it at any scale
+        // above one. Two toolbars the user reads side by side have to be one habit, not two.
         h_flex()
             .flex_none()
             .w_full()
             .flex_wrap()
-            .gap(design::ui_px(cx, 6.0))
+            .gap_2()
             .items_center()
-            .px(design::ui_px(cx, 8.0))
-            .py(design::ui_px(cx, 4.0))
+            .px_2()
+            .py_1()
             .child(self.core_combo(cx))
             .child(self.scope_combo(cx))
+            // No caption beside the field; the placeholder carries the word. See the Report's row.
             .child(
-                div()
-                    .text_color(moon(p.text_soft))
-                    .child(t!("alerts.col.coin").to_string()),
-            )
-            .child(
-                div().w(design::font_w_px(cx, 110.0)).child(
+                div().w(px(90.0)).child(
                     MoonInput::new("alerts-coin")
                         .state(&self.coin_input)
                         .small()
