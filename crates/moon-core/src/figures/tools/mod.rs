@@ -16,6 +16,8 @@ mod channel;
 mod fib_retracement;
 mod hline;
 mod mb_fib;
+mod position;
+mod ray;
 mod rect;
 mod segment;
 mod triangle;
@@ -24,6 +26,8 @@ pub use channel::Channel;
 pub use fib_retracement::FibRetracement;
 pub use hline::HLine;
 pub use mb_fib::{MbFib, MB_FIB_LEVELS, MB_FIB_RATIOS};
+pub use position::Position;
+pub use ray::Ray;
 pub use rect::Rect;
 pub use segment::Segment;
 pub use triangle::Triangle;
@@ -184,11 +188,14 @@ pub struct ToolDef {
     /// Not the same as "encloses an area": a triangle does, but the fill primitive paints an
     /// axis-aligned band and a triangle needs a polygon, so it joins them when that lands.
     pub fills: bool,
-    /// Whether the tool colours itself from a TYPED SCALE rather than from the style — a Fibonacci
-    /// level is recognised by its hue, the same one every charting package uses, so the scale owns
-    /// the colours and the style contributes only the opacity. The settings panel drops its fill
-    /// swatches for such a tool instead of offering a colour that would change nothing.
-    pub level_palette: bool,
+    /// The tool's own fill colour, when it has one, as a hue that stands for it.
+    ///
+    /// `Some` means the tool colours its own fills and the style contributes only the opacity — a
+    /// Fibonacci level is recognised by its hue, and a position's two zones ARE profit and loss.
+    /// The settings panel then offers this swatch instead of its palette, because a colour it let
+    /// the user pick would change nothing. Returned by a function rather than stored flat so the
+    /// swatch cannot drift from the colours the tool actually draws.
+    pub scale_swatch: Option<fn() -> [u8; 3]>,
     /// Builds the finished figure from exactly `clicks` placed nodes. Returns `None` when given
     /// fewer, so a caller cannot construct a half-placed figure.
     pub make: fn(&[FigNode]) -> Option<FigureKind>,
@@ -210,6 +217,10 @@ pub enum FigureTool {
     Channel,
     FibRetracement,
     Rect,
+    /// Planned trade: entry, target, stop and the two zones between them; see [`Position`].
+    Position,
+    /// Half-infinite line: an origin and a direction; see [`Ray`].
+    Ray,
 }
 
 /// Every tool, in menu order. The toolbar, the hotkey CYCLE, the alerts list and the tests all
@@ -234,6 +245,8 @@ pub const REGISTRY: &[ToolDef] = &[
     triangle::DEF,
     channel::DEF,
     rect::DEF,
+    ray::DEF,
+    position::DEF,
 ];
 
 /// `def()` and `next()` index the registry; an empty one would panic in the frame loop.

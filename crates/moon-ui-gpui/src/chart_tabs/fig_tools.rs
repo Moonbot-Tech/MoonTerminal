@@ -23,6 +23,10 @@ use rust_i18n::t;
 use super::ChartTabs;
 use crate::design;
 
+/// Width of the tool field, in font-scaled units. A fifth narrower than it first shipped: the
+/// longest name it has to hold is two short words, and the field sat half empty.
+const PICKER_W: f32 = 134.0;
+
 /// One tool's entry in the picker: its glyph and its name, checked when it is the current one.
 fn tool_item(
     def: &'static ToolDef,
@@ -110,6 +114,14 @@ impl ChartTabs {
             Some(_) => format!("{}  {}", def.glyph, t!(def.locale_key)),
             None => format!("↖  {}", t!("chart.fig.cursor")),
         };
+        // `MoonDropdown` and not a pill in a popover: a popover always draws its own border and
+        // padding AROUND its content, so a menu inside one reads as two frames, the outer one
+        // larger than the inner. The dropdown is one frame and the product's own menu chrome.
+        //
+        // Its label is centred, which is not what this field wants, and that cannot be fixed from
+        // here: the dropdown bakes its caret into the label string and the button centres the
+        // whole result. Logged in `docs-internal/FORK_BUGS.md`; a `trigger_align` on MoonUI's side
+        // is the fix.
         let picker = MoonDropdown::new("fig-tool")
             .label(trigger)
             .trigger_caret(true)
@@ -119,7 +131,7 @@ impl ChartTabs {
                 MoonButtonVariant::Soft
             })
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width_scaled(168.0)
+            .trigger_width_scaled(PICKER_W)
             .menu_width_scaled(180.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items);

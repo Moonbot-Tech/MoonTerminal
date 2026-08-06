@@ -65,10 +65,21 @@ pub struct SegInstance {
     pub thickness: f32,
     /// 0 = solid, 1 = DashDotDot, 2 = Dot (Moonbot trace parity).
     pub pattern: f32,
-    /// 1 = the shader takes t1 from the userdata uniform edge (`cv_pad`).
+    /// How the far end is found: [`SEG_EXTEND_NONE`], [`SEG_EXTEND_EDGE`] or [`SEG_EXTEND_RAY`].
     pub extend: f32,
     pub color: [f32; 4],
 }
+
+/// The segment ends where the tool put it.
+pub const SEG_EXTEND_NONE: f32 = 0.0;
+/// The shader takes `t1` from the userdata uniform edge (`cv_pad`) and KEEPS `p1`: a constant-price
+/// line running to the right edge, which is what an order line is.
+pub const SEG_EXTEND_EDGE: f32 = 1.0;
+/// The shader extrapolates THROUGH `(t1, p1)` to the plot edge the direction points at — a ray.
+///
+/// Distinct from [`SEG_EXTEND_EDGE`] because that one flattens the line: it moves the far end in
+/// time while leaving its price, which turns any sloped segment horizontal.
+pub const SEG_EXTEND_RAY: f32 = 2.0;
 
 /// Marker anchored to a PRICE: the shader maps `price` through the chart's Y transform, so the
 /// marker rides the data as the view pans and zooms.

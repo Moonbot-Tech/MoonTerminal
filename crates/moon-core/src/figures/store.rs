@@ -148,6 +148,59 @@ impl FigureStore {
     /// The figure as seen from this chart: its own set first, then a figure another core shares
     /// onto the same market. Spelled out rather than `visible(..).find(..)` because that iterator
     /// ties the market string's lifetime to the store's.
+    /// Grace given to an upsert before the core's silence is taken as an answer, in milliseconds.
+    ///
+    /// Between our upsert and the core's echo the core legitimately does not hold the figure yet,
+    /// and a reconcile triggered by ANY core in that window would read that absence as "Moonbot
+    /// dropped it". Measured round trip on a live core is ~1.3 s; this is roughly four times it.
+    const ALERT_ECHO_GRACE_MS: f64 = 5_000.0;
+
+    /// Brings LOCAL figures' `alert` flags back in line with what the cores actually hold.
+    ///
+    /// Moonbot removes an object when its alert fires — measured, see
+    /// `docs-internal/BUG_MOONBOT_ALERT_FIRES_ON_EXTERNAL_MOVE.md` — and nothing else ever told the
+    /// terminal. A figure DRAWN in Moonbot disappears with it, because the server set is rebuilt
+    /// from scratch on every reconcile; a figure drawn HERE kept a ticked box over an alert that no
+    /// longer existed anywhere. That box is what the panel and the chart badge read, so it was a
+    /// lie with nothing to notice it by.
+    ///
+    /// `held` is every `(core, obj_uid)` the cores currently hold. `authoritative` names the cores
+    /// whose answer may be trusted: connected, and having reported their chart-alert set at least
+    /// once this session — the core is asked for a full snapshot on connect, so anything absent
+    /// after that is genuinely absent. A core that has said nothing yet cannot disarm anything.
+    ///
+    /// Returns whether any flag changed.
+    pub fn reconcile_local_alerts(
+        &mut self,
+        held: &std::collections::HashSet<(CoreId, u64)>,
+        authoritative: &std::collections::HashSet<CoreId>,
+        now_ms: f64,
+    ) -> bool {
+        let mut changed = false;
+        for ((core, _), figs) in self.by_key.iter_mut() {
+            if !authoritative.contains(core) {
+                continue;
+            }
+            for f in figs.iter_mut().filter(|f| f.alert && !f.from_server) {
+                if held.contains(&(*core, f.id)) {
+                    // Seen on the core: the round trip is over, and a later absence will be real.
+                    f.alert_sent_ms = 0.0;
+                    continue;
+                }
+                if f.alert_sent_ms > 0.0 && now_ms - f.alert_sent_ms < Self::ALERT_ECHO_GRACE_MS {
+                    continue;
+                }
+                f.alert = false;
+                f.alert_sent_ms = 0.0;
+                changed = true;
+            }
+        }
+        if changed {
+            self.bump();
+        }
+        changed
+    }
+
     pub fn get(&self, core: CoreId, market: &str, id: u64) -> Option<&Figure> {
         self.figures(core, market)
             .iter()

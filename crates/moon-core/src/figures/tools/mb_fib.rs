@@ -84,7 +84,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     // blob carries one line colour and no fill at all — every sampled length is accounted for by
     // the header and the geometry — so the bands Moonbot draws are its own level palette, and ours
     // are the same palette read by the ratio each level recovers to.
-    level_palette: true,
+    scale_swatch: Some(super::super::levels::scale_swatch),
     fills: true,
     alertable: true,
     // A move with no height is not a scale: every level would collapse onto one price, and the

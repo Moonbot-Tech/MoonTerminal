@@ -325,3 +325,120 @@ fn a_store_change_bumps_the_revision_that_gates_redraws() {
     assert!(!store.edit(1, "BTCUSDT", id, |_| false));
     assert_eq!(store.rev(), rev1, "a no-op edit must not force a rebuild");
 }
+
+/// Builds the two sets `reconcile_local_alerts` is judged against.
+fn sets(
+    held: &[(CoreId, u64)],
+    authoritative: &[CoreId],
+) -> (
+    std::collections::HashSet<(CoreId, u64)>,
+    std::collections::HashSet<CoreId>,
+) {
+    (
+        held.iter().copied().collect(),
+        authoritative.iter().copied().collect(),
+    )
+}
+
+/// A local figure must not keep claiming an alert the core no longer holds.
+///
+/// Moonbot removes an object when its alert fires, and it tells nobody: the terminal only sees the
+/// object stop being in the core's set. Before this, the box stayed ticked over an alert that
+/// existed nowhere — and that box is what both the panel and the chart badge read.
+#[test]
+fn a_local_alert_the_core_no_longer_holds_is_disarmed() {
+    let mut store = FigureStore::default();
+    let id = store.add(1, "BTCUSDT", hline(100.0));
+    store.edit(1, "BTCUSDT", id, |f| {
+        f.alert = true;
+        true
+    });
+    let rev = store.rev();
+
+    let (held, authoritative) = sets(&[], &[1]);
+    assert!(store.reconcile_local_alerts(&held, &authoritative, 60_000.0));
+    assert!(
+        !store.figures(1, "BTCUSDT")[0].alert,
+        "the core does not hold it and has said so; the flag must go"
+    );
+    assert_ne!(store.rev(), rev, "a disarm must invalidate the drawn set");
+}
+
+/// The core's silence during a round trip is not an answer.
+///
+/// A reconcile can be triggered by ANY core between our upsert and this core's echo — measured at
+/// ~1.3 s on a live core — and reading that gap as "Moonbot dropped it" would untick the box the
+/// user just ticked.
+#[test]
+fn an_upsert_still_in_flight_keeps_its_flag() {
+    let mut store = FigureStore::default();
+    let id = store.add(1, "BTCUSDT", hline(100.0));
+    store.edit(1, "BTCUSDT", id, |f| {
+        f.alert = true;
+        f.alert_sent_ms = 10_000.0;
+        true
+    });
+
+    let (held, authoritative) = sets(&[], &[1]);
+    assert!(!store.reconcile_local_alerts(&held, &authoritative, 11_000.0));
+    assert!(store.figures(1, "BTCUSDT")[0].alert);
+
+    // Once the grace has passed, the same silence IS the answer.
+    assert!(store.reconcile_local_alerts(&held, &authoritative, 30_000.0));
+    assert!(!store.figures(1, "BTCUSDT")[0].alert);
+}
+
+/// Seeing the figure on the core ends the round trip: a LATER absence is then real at once, with
+/// no second grace period to wait out.
+#[test]
+fn being_seen_on_the_core_closes_the_round_trip() {
+    let mut store = FigureStore::default();
+    let id = store.add(1, "BTCUSDT", hline(100.0));
+    store.edit(1, "BTCUSDT", id, |f| {
+        f.alert = true;
+        f.alert_sent_ms = 10_000.0;
+        true
+    });
+
+    let (held, authoritative) = sets(&[(1, id)], &[1]);
+    assert!(!store.reconcile_local_alerts(&held, &authoritative, 10_100.0));
+    assert!(store.figures(1, "BTCUSDT")[0].alert);
+
+    let (gone, authoritative) = sets(&[], &[1]);
+    assert!(store.reconcile_local_alerts(&gone, &authoritative, 10_200.0));
+    assert!(!store.figures(1, "BTCUSDT")[0].alert);
+}
+
+/// A core that has not reported its set — offline, or connected but silent so far — cannot disarm
+/// anything. Its empty set means "has not said", and taking it for "holds nothing" would wipe every
+/// alert of every core that happened to be reconnecting.
+#[test]
+fn a_core_that_has_not_reported_disarms_nothing() {
+    let mut store = FigureStore::default();
+    let id = store.add(1, "BTCUSDT", hline(100.0));
+    store.edit(1, "BTCUSDT", id, |f| {
+        f.alert = true;
+        true
+    });
+
+    let (held, none) = sets(&[], &[]);
+    assert!(!store.reconcile_local_alerts(&held, &none, 60_000.0));
+    assert!(store.figures(1, "BTCUSDT")[0].alert);
+}
+
+/// Server-owned figures are NOT this function's business. They are rebuilt wholesale by
+/// `set_server_figures`, so one Moonbot dropped is already gone by the time this runs; touching
+/// their flag here would fight that.
+#[test]
+fn a_server_figure_is_left_alone() {
+    let mut store = FigureStore::default();
+    let mut fig = hline(100.0);
+    fig.id = 42;
+    fig.alert = true;
+    fig.from_server = true;
+    store.set_server_figures(HashMap::from([((1, "BTCUSDT".to_string()), vec![fig])]));
+
+    let (held, authoritative) = sets(&[], &[1]);
+    assert!(!store.reconcile_local_alerts(&held, &authoritative, 60_000.0));
+    assert!(store.figures(1, "BTCUSDT")[0].alert);
+}

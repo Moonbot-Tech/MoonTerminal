@@ -287,12 +287,8 @@ impl Render for ReportPanel {
             .py_1()
             .child(self.core_combo(cx))
             .child(self.strategy_combo(cx))
-            .child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("report.filter.coin").to_string()),
-            )
+            // No caption beside the field: the placeholder says "coin" from inside it, which costs
+            // no row width and disappears the moment something is typed.
             .child(coin_field)
             .child(self.scope_combo(cx))
             .child(self.period_combo(cx))

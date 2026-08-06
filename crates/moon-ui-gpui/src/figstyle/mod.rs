@@ -64,7 +64,8 @@ pub(crate) enum Target {
 struct Snapshot {
     style: DrawStyle,
     fills: bool,
-    level_palette: bool,
+    /// The tool's own fill hue, when its fills are not the style's to pick.
+    scale_swatch: Option<[u8; 3]>,
     switches: Vec<ToolSetting>,
 }
 
@@ -80,7 +81,7 @@ fn snapshot(backend: &Backend, target: &Target) -> Option<Snapshot> {
                 // so one set here would be reverted by the next reconcile — a control that changes
                 // nothing.
                 fills: def.fills && !fig.from_server,
-                level_palette: def.level_palette,
+                scale_swatch: def.scale_swatch.map(|f| f()),
                 switches: fig.kind.shape().settings(),
             })
         }
@@ -89,7 +90,7 @@ fn snapshot(backend: &Backend, target: &Target) -> Option<Snapshot> {
             Some(Snapshot {
                 style: backend.fig_style(*tool),
                 fills: def.fills,
-                level_palette: def.level_palette,
+                scale_swatch: def.scale_swatch.map(|f| f()),
                 switches: backend.tool_settings(*tool),
             })
         }
@@ -468,8 +469,7 @@ fn fill_row<V: 'static>(
                 });
             }),
     );
-    if snap.level_palette {
-        let [r, g, b] = moon_core::figures::levels::scale_swatch();
+    if let Some([r, g, b]) = snap.scale_swatch {
         let backend_on = backend.clone();
         let target_on = target.clone();
         row = row.child(

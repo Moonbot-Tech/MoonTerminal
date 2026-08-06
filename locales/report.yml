@@ -35,10 +35,6 @@ report.filter.core:
   ru: "Ядро:"
   en: "Core:"
   es: "Núcleo:"
-report.filter.coin:
-  ru: "Монета:"
-  en: "Coin:"
-  es: "Moneda:"
 report.filter.side:
   ru: "Сторона:"
   en: "Side:"
@@ -51,10 +47,11 @@ report.filter.to:
   ru: "По:"
   en: "To:"
   es: "Hasta:"
+# Doubles as the field's caption: there is no label beside it, so the placeholder names it.
 report.filter.coin_ph:
-  ru: "все"
-  en: "all"
-  es: "todas"
+  ru: "монета"
+  en: "coin"
+  es: "moneda"
 report.filter.date_ph:
   ru: "дата и время"
   en: "date and time"
