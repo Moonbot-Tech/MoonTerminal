@@ -1,5 +1,9 @@
 //! Horizontal channel: a price corridor of two horizontal lines (Moonbot's chart-object type 5,
 //! which stores two prices and no time).
+//!
+//! Shown to the user as **Zone**, which is what Moonbot calls it. The Rust type keeps the name
+//! `Channel` on purpose: it is the tag `figures.json` is written with, so renaming it would stop
+//! every saved corridor from loading.
 
 use serde::{Deserialize, Serialize};
 
