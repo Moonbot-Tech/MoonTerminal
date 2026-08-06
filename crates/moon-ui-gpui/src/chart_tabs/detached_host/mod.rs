@@ -54,11 +54,6 @@ pub(super) struct DetachedChartHost {
     /// moving to a display with another DPI even though position is already correct. Force the saved
     /// logical size once. Newly detached windows use `None`.
     restore_size: Option<Size<Pixels>>,
-    /// Remaining first renders that should call `ITaskbarList::DeleteTab` after the window is shown.
-    ///
-    /// The window remains normally independent so FancyZones can see it. Several attempts cover the
-    /// race where the taskbar button has not appeared yet.
-    taskbar_hide_ticks: u8,
     /// Anchored layout settings popup for this tab, opened by ⚙.
     ///
     /// It is not a separate OS window because chart text now lies below the normal GPUI scene.
@@ -88,6 +83,25 @@ pub(super) struct DetachedChartHost {
 }
 
 impl DetachedChartHost {
+    /// Construct a detached chart host and attach its window and persistence observers.
+    ///
+    /// Taskbar suppression is armed at construction and after every activation while the host
+    /// remains an independent window; [`crate::window::windowing::hide_window_from_taskbar_soon`]
+    /// owns the platform timing rationale.
+    ///
+    /// Args:
+    ///     panel: Chart-stack panel rendered by this host.
+    ///     backend: Shared terminal state used for persistence and window registration.
+    ///     group: Persisted chart group name.
+    ///     num: Persisted tab number within the group.
+    ///     bucket: Core bucket represented by the detached tab.
+    ///     restored: Whether this window is being restored from persisted state.
+    ///     restore_size: Saved logical size to enforce on the first render, when needed.
+    ///     window: Newly opened independent window.
+    ///     cx: Host context used for subscriptions and background work.
+    ///
+    /// Returns:
+    ///     Fully initialized detached chart host.
     pub(super) fn new(
         panel: Entity<AddChartStack>,
         backend: Entity<Backend>,
@@ -149,6 +163,13 @@ impl DetachedChartHost {
                 b.chart_repin_request.push((g.clone(), n, c.clone()));
                 cx.notify();
             });
+        })
+        .detach();
+        // Apply the shared independent-window taskbar policy now and after every activation;
+        // `hide_window_from_taskbar_soon` owns the delayed retry rationale.
+        crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
+        cx.observe_window_activation(window, |_this, window, cx| {
+            crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
         })
         .detach();
         let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
@@ -320,7 +341,6 @@ impl DetachedChartHost {
             window_id,
             persist_armed: !restored,
             restore_size,
-            taskbar_hide_ticks: 8,
             layout_popup_open: false,
             candle_popup_open: false,
             last_x_sync_rev: initial_x_sync_rev,

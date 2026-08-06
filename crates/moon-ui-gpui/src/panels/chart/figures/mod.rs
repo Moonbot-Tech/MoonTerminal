@@ -604,9 +604,9 @@ impl ChartPanel {
         let b = self.backend.read(cx);
         let alive = b
             .figures
-                .borrow()
-                .get(target.core, &target.market, target.id)
-                .is_some()
+            .borrow()
+            .get(target.core, &target.market, target.id)
+            .is_some()
             && self.chart.with_container(|c| {
                 c.panes()
                     .iter()

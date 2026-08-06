@@ -342,14 +342,22 @@ fn a_switch_stored_for_a_tool_reaches_the_next_figure() {
     let mut stored = ToolSettings::new();
     stored.insert(key.clone(), false);
     assert!(
-        settings_of(tool, &stored).iter().any(|s| s.key == key && !s.on),
+        settings_of(tool, &stored)
+            .iter()
+            .any(|s| s.key == key && !s.on),
         "the toolbar must show the switch as off"
     );
 
     let mut kind = (tool.def().make)(&nodes(tool.def().clicks as usize)).expect("builds");
-    assert!(apply_settings(&mut kind, &stored), "the figure must take it");
     assert!(
-        kind.shape().settings().iter().any(|s| s.key == key && !s.on),
+        apply_settings(&mut kind, &stored),
+        "the figure must take it"
+    );
+    assert!(
+        kind.shape()
+            .settings()
+            .iter()
+            .any(|s| s.key == key && !s.on),
         "the drawn figure must have the switch off"
     );
 }

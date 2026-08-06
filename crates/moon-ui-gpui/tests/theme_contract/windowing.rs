@@ -14,7 +14,7 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     let chart_detached_host = fs::read_to_string(
         root.join("chart_tabs")
             .join("detached_host")
-            .join("render.rs"),
+            .join("mod.rs"),
     )
     .unwrap();
 
@@ -29,8 +29,14 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
             .contains("owned_window_options(title, window_bounds, display_id, None, owner, true)"),
         "detached panel windows must keep owner-aware owned-window semantics"
     );
+    // Scoped to the chart factory's own body: the independent Profit Monitor factory now sets the
+    // same `Hidden` literal for the same reason, so a file-level `contains` no longer distinguishes
+    // the two and would stay green even if only the chart factory regressed to `Visible`.
+    let detached_chart_factory =
+        code_only(braced_body(&windowing, "fn detached_chart_window_options("));
     assert!(
-        windowing.contains("options.taskbar_visibility = WindowTaskbarVisibility::Hidden"),
+        detached_chart_factory
+            .contains("options.taskbar_visibility = WindowTaskbarVisibility::Hidden"),
         "detached chart windows must explicitly hide taskbar entries while staying independent"
     );
     assert!(
@@ -38,11 +44,14 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
         "generic detached panels must use the owner-aware panel factory"
     );
     // The chart-window lifecycle spans two files: `windows.rs` picks the options factory,
-    // `detached_host/render.rs` hides the taskbar entry once the window exists. The negatives
-    // stay scoped to `windows.rs` — that is where an owner-carrying panel factory could appear.
+    // `detached_host/mod.rs` arms the shared taskbar-hide burst once the window exists. The
+    // negatives stay scoped to `windows.rs` — that is where an owner-carrying panel factory could
+    // appear. Comments are stripped from the host body: its own doc comment names the helper by
+    // prose, which must not satisfy a check about actually calling it.
     assert!(
         chart_tabs_windows.contains("detached_chart_window_options(")
-            && chart_detached_host.contains("hide_window_from_taskbar(window)")
+            && code_only(&chart_detached_host)
+                .contains("hide_window_from_taskbar_soon(window.window_handle(), cx)")
             && !chart_tabs_windows.contains("owner: Option<AnyWindowHandle>")
             && !chart_tabs_windows.contains("detached_panel_window_options("),
         "detached chart windows must use the independent chart factory and must not carry owner in the chart lifecycle"
@@ -75,23 +84,75 @@ fn terminal_secondary_tool_windows_use_tool_window_options() {
     );
 }
 
-/// `windowing.rs:profit_monitor_window_options` must remain independent and taskbar-visible;
-/// changing either assignment makes this assertion red and causes the desktop monitor to minimize
-/// with a Main window or disappear without a restore route.
+/// `windowing.rs:profit_monitor_window_options` must remain independent but carry no taskbar
+/// button of its own — the terminal shows exactly one taskbar icon. Flipping `taskbar_visibility`
+/// back to `Visible` reopens the second taskbar icon this factory exists to suppress; dropping the
+/// independent relationship instead makes the desktop monitor minimize with a Main window or
+/// disappear without a restore route.
 #[test]
-fn profit_monitor_is_an_independent_taskbar_window() {
+fn profit_monitor_is_independent_but_carries_no_taskbar_button() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let windowing = fs::read_to_string(root.join("window").join("windowing.rs")).unwrap();
     let monitor =
         fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
     let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
-    let factory = braced_body(&windowing, "fn profit_monitor_window_options(");
+    let factory = code_only(braced_body(&windowing, "fn profit_monitor_window_options("));
 
     assert!(factory.contains("options.relationship = WindowRelationship::default()"));
-    assert!(factory.contains("WindowTaskbarVisibility::Visible"));
+    assert!(factory.contains("WindowTaskbarVisibility::Hidden"));
+    assert!(!factory.contains("WindowTaskbarVisibility::Visible"));
     assert!(monitor.contains("profit_monitor_window_options("));
     assert!(monitor.contains("MoonWindowFrame::tool("));
     assert!(!startup.contains("group_windows.insert(\"profit_monitor\""));
+}
+
+/// Both independent-window classes — the Profit Monitor and detached charts — arm the taskbar-hide
+/// burst at open AND re-arm it from `cx.observe_window_activation`. `DeleteTab` is not durable
+/// window state, and the shell republishes the taskbar item whenever an iconic window is restored
+/// (`windowing.rs::hide_window_from_taskbar_soon`'s own doc explains why). A future author who
+/// deletes either re-arm, assuming the open-time burst alone is enough, brings the second
+/// MoonTerminal taskbar icon back permanently the first time the user minimizes and restores that
+/// window.
+#[test]
+fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let monitor =
+        fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
+    let chart_detached_host = fs::read_to_string(
+        root.join("chart_tabs")
+            .join("detached_host")
+            .join("mod.rs"),
+    )
+    .unwrap();
+
+    // Comments stripped: both constructors document the re-arm by naming the exact helper and
+    // `observe_window_activation`, which must not itself satisfy a check about calling them. The
+    // burst must be armed once directly AND again from inside the activation observer — a bare
+    // `contains` cannot tell "armed twice" from "armed once and merely mentioned twice in prose",
+    // so this counts real call sites.
+    let monitor_ctor = code_only(braced_body(
+        &monitor,
+        "fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {",
+    ));
+    let monitor_rearms = monitor_ctor
+        .matches("hide_window_from_taskbar_soon(window.window_handle(), cx)")
+        .count();
+    assert!(
+        monitor_rearms >= 2 && monitor_ctor.contains("cx.observe_window_activation(window,"),
+        "ProfitMonitorView::new must arm the taskbar-hide burst at open AND re-arm it from \
+         cx.observe_window_activation — the open-time burst alone cannot survive the shell \
+         republishing the taskbar item when the window is restored from minimized"
+    );
+
+    let host_ctor = code_only(braced_body(&chart_detached_host, "pub(super) fn new("));
+    let host_rearms = host_ctor
+        .matches("hide_window_from_taskbar_soon(window.window_handle(), cx)")
+        .count();
+    assert!(
+        host_rearms >= 2 && host_ctor.contains("cx.observe_window_activation(window,"),
+        "DetachedChartHost::new must arm the taskbar-hide burst at open AND re-arm it from \
+         cx.observe_window_activation for the same reason as the Profit Monitor"
+    );
 }
 
 /// Decorative animation goes through `crate::pulse`, never `with_animation`.

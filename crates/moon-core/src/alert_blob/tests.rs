@@ -247,7 +247,10 @@ fn alertable_tools_are_registered_in_the_cores_type_order() {
         .collect();
     let mut sorted = types.clone();
     sorted.sort_unstable();
-    assert_eq!(types, sorted, "registry order no longer follows the blob types");
+    assert_eq!(
+        types, sorted,
+        "registry order no longer follows the blob types"
+    );
 }
 
 /// The registry's `alertable` flag and this codec must agree: a tool marked alertable that the

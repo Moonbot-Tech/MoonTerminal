@@ -23,8 +23,8 @@ decorations, owner, taskbar policy или min size, и снова получит
 - `detached_chart_window_options` - открепленные chart windows; намеренно
   independent от main/group окна.
 - `debug_window_options` - debug/perf/chart diagnostic windows.
-- `profit_monitor_window_options` - independent desktop Profit Monitor with an explicit taskbar
-  entry; minimizing a Main/group window never minimizes it.
+- `profit_monitor_window_options` - independent desktop Profit Monitor without its own taskbar
+  button; minimizing a Main/group window never minimizes it.
 
 ## MoonUI native contract
 
@@ -166,8 +166,7 @@ runtime detach, потому что owned/transient связь ОС подним
 при клике по графику. На мультимониторе это выглядит как прыжок основного окна
 на другом экране. Поэтому chart windows открываются только через
 `detached_chart_window_options(...)`: owner в их API отсутствует, окно
-independent, а отдельная taskbar-кнопка подавляется через
-`WindowTaskbarVisibility::Hidden` и Windows fallback `hide_window_from_taskbar`.
+independent, а отдельная taskbar-кнопка подавляется общим механизмом (см. ниже).
 
 Итоговая taskbar policy:
 
@@ -175,7 +174,8 @@ independent, а отдельная taskbar-кнопка подавляется �
 - `tool_window_options`, `debug_window_options`,
   `detached_panel_window_options` - hidden из taskbar, когда есть owner; при
   restore без owner становятся independent и могут получить taskbar entry;
-- `detached_chart_window_options` - always independent, но hidden из taskbar.
+- `detached_chart_window_options` - always independent, но hidden из taskbar;
+- `profit_monitor_window_options` - та же комбинация: always independent, но hidden из taskbar.
 
 Текущие окна `Настройки`, `Стратегии` и `Активы` считаются
 `Tool/secondary`, поэтому открываются через `tool_window_options(...)`. Если
@@ -185,8 +185,24 @@ independent, а отдельная taskbar-кнопка подавляется �
 
 Profit Monitor is the deliberate exception to the usual visual-tool ownership rule. It keeps
 `MoonWindowFrame::tool(...)` chrome because it is visually part of MoonTerminal, but its product
-role is a separately placeable desktop widget. Its centralized factory therefore carries no owner
-and forces a visible taskbar entry. Do not copy that OS policy to ordinary tool windows.
+role is a separately placeable desktop widget, so its centralized factory carries no owner: a
+minimized Main window leaves the monitor on screen and FancyZones can snap it. The terminal still
+presents ONE taskbar icon, so the monitor's own button is suppressed exactly as a chart window's
+is. Routes back to a minimized monitor: the terminal toolbar button (its `activate_window` restores
+an iconic window) and Alt+Tab, which the window keeps because hidden taskbar visibility only drops
+`WS_EX_APPWINDOW` and never applies the tool-window style. Do not copy that OS policy to ordinary
+tool windows.
+
+Обе independent-ветки - detached charts и Profit Monitor - подавляют taskbar-кнопку ОДНИМ
+механизмом: `WindowTaskbarVisibility::Hidden` плюс `hide_window_from_taskbar_soon`.
+`WindowTaskbarVisibility::Hidden` сам по себе гарантии не даёт: он лишь снимает `WS_EX_APPWINDOW`,
+который unowned top-level окну и не нужен, чтобы получить кнопку. `ITaskbarList::DeleteTab` удаляет
+уже существующий элемент и НЕ является постоянным состоянием окна: оболочка публикует элемент чуть
+позже показа окна и заново - при разворачивании свёрнутого окна. Поэтому burst удалений
+взводится при открытии окна и повторно на каждой активации (`observe_window_activation`); burst
+ограничен по числу попыток, так что перекрывающиеся взводы не превращаются в постоянную работу.
+Настоящее место для этой логики - Windows-бэкенд форка MoonUI (там доступны wndproc и broadcast
+`TaskbarCreated`); пока `Hidden` там ничего не гарантирует, компенсация живёт здесь.
 
 ## Chart windows и UnderScene
 
