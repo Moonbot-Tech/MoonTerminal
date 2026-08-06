@@ -157,7 +157,7 @@ impl ChartPanel {
         let finished = draft.place(node);
         if let Some(kind) = finished {
             self.fig_draft = None;
-            let fig = Figure::new(kind, style, moon_core::util::now_unix_ms_i64());
+            let fig = Figure::new(kind, style, moon_core::util::now_unix_ms_i64() as f64);
             let id = self
                 .backend
                 .read(cx)

@@ -39,6 +39,9 @@ impl Proj for TestProj {
 #[derive(Default)]
 pub(super) struct RecSink {
     pub(super) hlines: Vec<f64>,
+    /// Thickness of each full-width line, in the same order: a tool may weight one to show it can
+    /// be grabbed, and geometry alone cannot see that.
+    pub(super) hline_widths: Vec<f32>,
     pub(super) segs: Vec<(FigNode, FigNode)>,
     /// Colour of each segment, in the same order: a coloured ratio scale is wrong if the hues are
     /// wrong, and geometry alone cannot see that.
@@ -54,8 +57,9 @@ pub(super) struct RecSink {
 }
 
 impl GeomSink for RecSink {
-    fn hline(&mut self, price: f64, _stroke: &Stroke) {
+    fn hline(&mut self, price: f64, stroke: &Stroke) {
         self.hlines.push(price);
+        self.hline_widths.push(stroke.thickness);
     }
 
     fn seg(&mut self, a: FigNode, b: FigNode, stroke: &Stroke) {
@@ -108,7 +112,7 @@ fn nodes(n: usize) -> Vec<FigNode> {
 }
 
 fn figure(kind: FigureKind) -> Figure {
-    Figure::new(kind, crate::figures::DrawStyle::default(), 0)
+    Figure::new(kind, crate::figures::DrawStyle::default(), 0.0)
 }
 
 #[test]

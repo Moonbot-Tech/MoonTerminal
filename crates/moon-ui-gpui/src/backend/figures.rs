@@ -23,7 +23,7 @@ fn figure_blob(fig: &Figure) -> Option<Vec<u8>> {
         fig.color,
         fig.thickness,
         fig.line_kind,
-        fig.created_ms as f64,
+        fig.created_ms,
         fig.strategy_id,
         fig.id,
     )
@@ -248,12 +248,10 @@ impl Backend {
                         color: d.color,
                         thickness: d.thickness,
                         line_kind: d.line_kind,
-                        // ROUNDED, not truncated. The store keeps whole milliseconds while a
-                        // TDateTime carries a fraction of one, and `as i64` truncates toward zero:
-                        // an object Moonbot stamped on an exact millisecond came back a whole
-                        // millisecond early roughly a third of the time, so every later edit
-                        // re-upserted a blob whose @22 differed from the one it arrived as.
-                        created_ms: d.created_ms.round() as i64,
+                        // Kept as it arrived, to the last bit: this is what a re-upsert writes
+                        // back into Moonbot's own object, and rounding it away made Moonbot delete
+                        // the object on the first drag.
+                        created_ms: d.created_ms,
                         alert: true,
                         strategy_id: d.strategy_id,
                         shared: false,

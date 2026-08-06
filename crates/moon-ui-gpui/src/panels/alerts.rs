@@ -182,7 +182,7 @@ impl AlertsPanel {
                 coin,
                 figure: figure_label(&f.kind),
                 price: f.kind.anchor_price(),
-                time_ms: f.created_ms,
+                time_ms: f.created_ms as i64,
                 from_server: f.from_server,
                 fig_id: f.id,
                 strategy_id: f.strategy_id,

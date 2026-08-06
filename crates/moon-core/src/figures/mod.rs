@@ -68,7 +68,13 @@ pub struct Figure {
     #[serde(default)]
     pub line_kind: LineKind,
     /// Creation time in Unix milliseconds, shown in the alert list's Time column.
-    pub created_ms: i64,
+    ///
+    /// Fractional on purpose. The wire carries a Delphi `TDateTime`, whose resolution is finer than
+    /// a millisecond, and this field is what a re-upsert writes back into it. Rounding it to whole
+    /// milliseconds rewrote the creation instant of an object drawn in Moonbot on every drag —
+    /// measured, byte for byte at `@22` — and Moonbot then DELETED the object about 200 ms later.
+    /// A figure drawn here has no fraction to lose, so nothing is paid for keeping it.
+    pub created_ms: f64,
     /// Whether the "Alert" checkbox is enabled and the figure is sent to the core as a chart alert.
     pub alert: bool,
     /// Associated strategy ID of the "Alerts" type; 0 means no strategy. Stored at blob offset 32.
@@ -93,7 +99,7 @@ pub struct Figure {
 
 impl Figure {
     /// Builds a local figure of `kind` in the current drawing style.
-    pub fn new(kind: FigureKind, style: DrawStyle, created_ms: i64) -> Self {
+    pub fn new(kind: FigureKind, style: DrawStyle, created_ms: f64) -> Self {
         Self {
             id: 0,
             kind,

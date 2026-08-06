@@ -379,3 +379,41 @@ fn the_scale_is_filled_between_its_levels_in_their_own_hues() {
         }
     }
 }
+
+/// The three lines a drag can take hold of are drawn heavier once the figure is hovered or
+/// selected, and identical to the rest when it is not.
+///
+/// A full-width line has no X for a knot to sit at, so weight is the only cue there is — and
+/// Moonbot marks the same three the same way. The oracle is which lines a `move_handle` accepts,
+/// not a list written down here.
+#[test]
+fn the_grabbable_lines_are_marked_while_the_figure_is_live() {
+    use crate::figures::tools::tests::{build, ctx};
+    let f = sample();
+    let grabbable: Vec<f64> = (0..f.handle_count())
+        .filter_map(|i| f.handle(i).map(|n| n.price))
+        .collect();
+    assert_eq!(grabbable.len(), 3, "two ends and the free level");
+
+    let idle = build(&FigureKind::MbFib(f), ctx(false, false));
+    let live = build(&FigureKind::MbFib(f), ctx(true, false));
+    assert_eq!(idle.hlines, live.hlines, "the same lines either way");
+
+    // At rest every line weighs the same; live, exactly the grabbable ones weigh more.
+    let width = |rec: &crate::figures::tools::tests::RecSink, price: f64| {
+        rec.hlines
+            .iter()
+            .position(|p| *p == price)
+            .map(|i| rec.hline_widths[i])
+            .expect("the line is drawn")
+    };
+    for price in &idle.hlines {
+        let heavier = width(&live, *price) > width(&idle, *price);
+        assert_eq!(
+            heavier,
+            grabbable.contains(price),
+            "line at {price}: marked={heavier}, grabbable={}",
+            grabbable.contains(price)
+        );
+    }
+}

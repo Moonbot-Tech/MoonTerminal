@@ -46,6 +46,11 @@ pub const MB_FIB_RATIOS: [f64; MB_FIB_LEVELS] = [0.0, 0.236, 0.382, 0.5, 0.618, 
 /// 0.618. Every other slot keeps its ratio when the scale is stretched.
 const MB_FIB_FREE_LEVEL: usize = 4;
 
+/// How much heavier a line is drawn while it can be grabbed.
+///
+/// Enough to read at a glance on a one-pixel line, short of looking like a different kind of line.
+const HANDLE_LINE_WEIGHT: f32 = 2.0;
+
 /// The largest ratio worth naming. Well past 4.236, the furthest extension any charting package
 /// offers, and far short of what a degenerate span produces.
 const MAX_NAMED_RATIO: f64 = 100.0;
@@ -327,12 +332,13 @@ impl ToolShape for MbFib {
             }
         }
 
+        let free = self.free_level();
         for (price, ratio) in &lines {
             // Each line in its LEVEL's hue, like our own scale: the reader recognises 0.618 by its
             // teal without reading the number. The ends and any ratio our palette has no entry for
             // fall back to the figure's own colour.
             let hue = ratio.and_then(super::super::levels::color_of_ratio);
-            let stroke = match hue {
+            let mut stroke = match hue {
                 Some([r, g, b]) => Stroke {
                     color: [
                         r as f32 / 255.0,
@@ -344,6 +350,15 @@ impl ToolShape for MbFib {
                 },
                 None => ctx.stroke,
             };
+            // The three lines a drag can take hold of — both ends and the free level — draw HEAVIER
+            // once the figure is under the cursor or selected. They are otherwise identical to the
+            // four that cannot be grabbed, and Moonbot marks them the same way: there is nothing
+            // else on a full-width line to show a handle with, since a knot would have no X to sit
+            // at. Weight rather than colour, so a level keeps the hue it is recognised by.
+            let grabbable = *price == lo || *price == hi || free == Some(*price);
+            if grabbable && (ctx.hot || ctx.handles) {
+                stroke.thickness *= HANDLE_LINE_WEIGHT;
+            }
             sink.hline(*price, &stroke);
             // The readout, read as a column at the left edge where Moonbot puts it. An END carries
             // the move itself as a percentage — up from the bottom, down from the top — which is

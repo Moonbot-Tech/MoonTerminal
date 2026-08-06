@@ -32,7 +32,7 @@ const UNKNOWN_FILE: &str = r#"[{"core":1,"market":"BTCUSDT","figures":[
 ]}]"#;
 
 fn fig(kind: FigureKind) -> Figure {
-    Figure::new(kind, DrawStyle::default(), 0)
+    Figure::new(kind, DrawStyle::default(), 0.0)
 }
 
 fn hline(price: f64) -> Figure {

@@ -81,6 +81,6 @@ impl FigDraft {
     pub(super) fn preview(&self) -> Option<Figure> {
         let mut kind = (self.tool.def().preview)(&self.nodes, self.cursor)?;
         moon_core::figures::apply_settings(&mut kind, &self.switches);
-        Some(Figure::new(kind, self.style, 0))
+        Some(Figure::new(kind, self.style, 0.0))
     }
 }
