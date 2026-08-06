@@ -24,6 +24,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     level_palette: false,
     fills: false,
     alertable: true,
+    drawable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::Segment(Segment { a: *a, b: *b })),
         _ => None,

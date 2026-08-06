@@ -7,7 +7,8 @@
 //! There is no per-tool branch outside a tool's own module, and [`super::FigureKind`]'s dispatch
 //! `match` is the only place that lists them all.
 //!
-//! Adding a tool: a module here, a `FigureKind` arm, a `REGISTRY` row, and its locale keys. Two
+//! Adding a tool: a module here, a `FigureKind` arm, a `REGISTRY` row — with [`ToolDef::drawable`]
+//! saying whether a gesture creates it or it only ever arrives — and its locale keys. Two
 //! places outside this crate still name tools one by one and are meant to: `hotkeys.rs`, because
 //! each per-tool binding is a separate user-editable field in `hotkeys.toml`, and `alert_blob.rs`,
 //! because the core's chart-object types are its format, not ours.
@@ -15,6 +16,7 @@
 mod channel;
 mod fib_retracement;
 mod hline;
+mod mb_fib;
 mod rect;
 mod segment;
 mod triangle;
@@ -22,6 +24,7 @@ mod triangle;
 pub use channel::Channel;
 pub use fib_retracement::FibRetracement;
 pub use hline::HLine;
+pub use mb_fib::{MbFib, MB_FIB_LEVELS};
 pub use rect::Rect;
 pub use segment::Segment;
 pub use triangle::Triangle;
@@ -176,6 +179,10 @@ pub struct ToolDef {
     /// Whether the core's `TChartObject` blob can carry this figure, i.e. whether it can be armed
     /// as an alert. A tool the core does not know is drawn locally only.
     pub alertable: bool,
+    /// Whether the toolbar offers it. False for a figure that only ever ARRIVES — Moonbot's own
+    /// Fibonacci — which still needs a registry row for its geometry, its hit test and its name,
+    /// but has no gesture that would create one here.
+    pub drawable: bool,
     /// Whether the tool READS the style's fill. The settings panel hides the fill controls while a
     /// tool that does not is selected, rather than offering a setting that changes nothing.
     ///
@@ -202,6 +209,8 @@ pub struct ToolDef {
 pub enum FigureTool {
     HLine,
     Segment,
+    /// Moonbot's own Fibonacci object. Never drawn here; see [`MbFib`].
+    MbFib,
     Triangle,
     Channel,
     FibRetracement,
@@ -218,14 +227,14 @@ pub enum FigureTool {
 /// The toolbar splits its two groups on [`ToolDef::alertable`] and not on a position here, so a
 /// tool changes group by becoming sendable rather than by being moved.
 ///
-/// Fibonacci therefore sits at its TYPE position while still appearing in the second group: the
-/// core has a type 3 for it, but its payload is not encoded yet, so it is not sendable today. The
-/// slot is where it belongs the day it is. Note that this order is also the `switch_figure` hotkey
-/// CYCLE order, which is the one thing the placement changes today.
+/// OUR Fibonacci sits at type 3's position but stays in the second group, because it is not the
+/// same object as the core's type 3 — see [`MbFib`], which is. Note that this order is also the
+/// `switch_figure` hotkey CYCLE order, which is the one thing the placement changes today.
 pub const REGISTRY: &[ToolDef] = &[
     hline::DEF,
     segment::DEF,
     fib_retracement::DEF,
+    mb_fib::DEF,
     triangle::DEF,
     channel::DEF,
     rect::DEF,
@@ -246,10 +255,21 @@ impl FigureTool {
             .unwrap_or(&REGISTRY[0])
     }
 
-    /// Next tool in the cycle; the `switch_figure` hotkey advances through the registry and wraps.
+    /// Next DRAWABLE tool in the cycle; the `switch_figure` hotkey advances and wraps.
+    ///
+    /// Skips a tool that only ever arrives from a core: arming one would put the toolbar in a state
+    /// its own list cannot show and start a draft that can never finish, since such a tool places
+    /// no nodes. `drawable` is the registry's filter for every surface that PICKS a tool, not the
+    /// toolbar's private opinion.
     pub fn next(self) -> FigureTool {
         let i = REGISTRY.iter().position(|d| d.tool == self).unwrap_or(0);
-        REGISTRY[(i + 1) % REGISTRY.len()].tool
+        REGISTRY
+            .iter()
+            .cycle()
+            .skip(i + 1)
+            .take(REGISTRY.len())
+            .find(|d| d.drawable)
+            .map_or(self, |d| d.tool)
     }
 }
 

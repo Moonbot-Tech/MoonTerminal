@@ -151,3 +151,47 @@ fn a_ratio_reads_as_a_trader_names_it() {
     assert_eq!(super::fmt_ratio(4.236), "4.236");
     assert_eq!(super::fmt_ratio(-0.0), "0", "-0 must not print as a level");
 }
+
+/// A ratio recovered by division is named by the level it cannot be told apart from — and only
+/// then.
+///
+/// Every case here is a measurement, not a preference. The first is Moonbot's own single-precision
+/// error on a wide move; the second is the same error on a narrow one, where it is visible in the
+/// third decimal; the third and fourth are levels a user deliberately placed, which must keep their
+/// own value however close a canonical name sits.
+#[test]
+fn a_recovered_ratio_is_named_only_inside_its_own_error() {
+    // Wide move: the error is invisible and the level is already its own name.
+    assert_eq!(snap_ratio(0.2360000014, 1853.0, 112.0), 0.236);
+    // Narrow move on a big price: 0.236 comes back as 0.234375 and must still read as 0.236.
+    assert_eq!(snap_ratio(0.234375, 60000.0, 1.0), 0.236);
+    // A quarter retracement is not a mis-measured 0.236, however wide the bar would like to be.
+    assert_eq!(snap_ratio(0.25, 60000.0, 1.0), 0.25);
+    // The nearest name wins, not the first in the table: 1.272 sits next to 1.236.
+    assert_eq!(snap_ratio(1.272, 60000.0, 0.5), 1.272);
+}
+
+/// Degenerate inputs leave the ratio exactly as measured rather than snapping it to anything.
+#[test]
+fn snapping_refuses_a_span_it_cannot_reason_about() {
+    for (ratio, price, span) in [
+        (0.2341, 60000.0, 0.0),
+        (0.2341, 60000.0, f64::NAN),
+        (0.2341, f64::INFINITY, 1.0),
+        (f64::NAN, 60000.0, 1.0),
+    ] {
+        let got = snap_ratio(ratio, price, span);
+        assert!(got == ratio || (got.is_nan() && ratio.is_nan()), "{ratio} {price} {span}");
+    }
+}
+
+/// A ratio the third decimal cannot see prints as zero, sign included.
+///
+/// Reachable only since a ratio can be RECOVERED by division: a fixed scale never produces
+/// -0.0000022, and "-0" on a chart reads as a defect.
+#[test]
+fn a_ratio_below_the_printed_precision_loses_its_sign() {
+    assert_eq!(fmt_ratio(-0.0000022), "0");
+    assert_eq!(fmt_ratio(0.0000022), "0");
+    assert_eq!(fmt_ratio(-0.0006), "-0.001");
+}

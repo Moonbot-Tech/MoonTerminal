@@ -35,9 +35,11 @@ pub(super) const DEF: ToolDef = ToolDef {
     clicks: 2,
     level_palette: true,
     fills: true,
-    // The core's chart-object blob has a Fibo type (3), but its payload is not decoded yet, so
-    // this tool stays local until it is; sending a blob we cannot read back would be a guess.
+    // The core HAS a Fibo type and we now read and write it — as `MbFib`, which is a different
+    // object: seven stored prices across the whole chart against this tool's eleven ratios between
+    // two points. Sending one as the other would make the core draw something nobody drew.
     alertable: false,
+    drawable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::FibRetracement(FibRetracement {
             a: *a,

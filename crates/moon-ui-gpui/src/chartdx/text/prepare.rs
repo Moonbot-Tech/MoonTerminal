@@ -418,6 +418,22 @@ impl RenderState {
                 // Cloned out: a level's text is an `Arc<str>`, so this is a refcount bump, and
                 // holding a borrow of the pane would block measuring through `&mut self` below.
                 let label = self.panes[idx].figure_labels[li].clone();
+                // The per-tab "line labels" switch hides the readouts a figure draws AT REST,
+                // whichever placement they use: a ratio scale's, whether it spans a box like ours
+                // or the whole chart like Moonbot's. It used to be applied inside the `LineSpan`
+                // arm alone, which let a scale placing its readouts at the right edge draw straight
+                // past a switch the user had turned off.
+                //
+                // A readout that appears only under the POINTER is not one of those and stays.
+                // `permanent` cannot tell them apart — it means "not the draft" — so the VALUE does:
+                // a hover readout is a typed number the tool leaves to this layer to format, a
+                // `Price` or a `PctDelta`, while a scale's level arrives already formatted as
+                // `Ready`. Naming the hover kinds one by one was tried and was wrong the moment a
+                // second one existed; this asks the positive question instead.
+                if label.permanent && !self.line_labels && matches!(label.text, FigLabelValue::Ready(_))
+                {
+                    continue;
+                }
                 let y = line_y(label.price);
                 if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                     continue;
@@ -437,15 +453,11 @@ impl RenderState {
                     // The label rides the line's LEFT end, clipped INTO the plot: a scale must
                     // stay readable while any part of its lines is on screen. A scale's levels are
                     // the one readout that stays after the pointer leaves, so the per-tab "line
-                    // labels" switch hides them as it hides the order column — except on the
-                    // figure being DRAWN, whose numbers must stay on screen while it is aimed.
-                    // They sit at the box's anchor rather than under the pointer: with the left
-                    // end as the anchor, a box drawn rightward keeps its column still while the
-                    // prices in it change.
+                    // A ratio scale's column of levels, placed at the box's anchor rather than
+                    // under the pointer: with the left end as the anchor, a box drawn rightward
+                    // keeps its column still while the prices in it change. The "line labels"
+                    // switch is applied above, for every placement rather than only for this one.
                     FigLabelPlace::LineSpan { t0_ms, t1_ms } => {
-                        if label.permanent && !self.line_labels {
-                            continue;
-                        }
                         let (x0, x1) = (
                             x_of((t0_ms - epoch_ms) as f32),
                             x_of((t1_ms - epoch_ms) as f32),
