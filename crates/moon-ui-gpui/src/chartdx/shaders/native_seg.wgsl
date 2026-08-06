@@ -69,17 +69,22 @@ fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32
     return out;
 }
 
+// ── Line patterns (TPenStyle order: 0 solid · 1 dash · 2 dot · 3 dash-dot · 4 dash-dot-dot) ──
+// `d` is distance along the line in physical pixels: X for a full-width line, arc length for a
+// segment. Kept identical to the DX11 and Metal copies — three backends draw the same five styles.
+fn pattern_on(style: f32, d: f32) -> bool {
+    if style < 0.5 { return true; }
+    if style < 1.5 { return fract(d / 16.0) < 9.0 / 16.0; }
+    if style < 2.5 { return fract(d / 6.0) < 2.0 / 6.0; }
+    let x = fract(d / 20.0) * 20.0;
+    if style < 3.5 { return x < 9.0 || (x >= 13.0 && x < 15.0); }
+    return x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0);
+}
+
 @fragment
 fn seg_fragment(in: SOut) -> @location(0) vec4<f32> {
-    if in.pattern >= 1.5 {
-        if fract(in.dist / 6.0) > 2.0 / 6.0 {
-            discard;
-        }
-    } else if in.pattern >= 0.5 {
-        let x = fract(in.dist / 20.0) * 20.0;
-        if !(x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0)) {
-            discard;
-        }
+    if !pattern_on(in.pattern, in.dist) {
+        discard;
     }
     return in.color;
 }

@@ -59,6 +59,22 @@ float4 zone_fragment(ZOut i) : SV_Target {
     return float4(i.color.rgb, i.color.a);
 }
 
+// ── Line patterns (TPenStyle order: 0 solid · 1 dash · 2 dot · 3 dash-dot · 4 dash-dot-dot) ──
+// `d` is distance along the line in physical pixels: X for a full-width line, arc length for a
+// segment, so one function serves both and the two cannot drift apart.
+//
+// The dash and the dot keep the exact runs the two hard-coded patterns had before there were five,
+// so nothing already on screen changed when the missing three were added; those three are built
+// from the same pieces at the same period.
+bool pattern_on(float style, float d) {
+    if (style < 0.5) return true;
+    if (style < 1.5) return frac(d / 16.0) < (9.0 / 16.0);
+    if (style < 2.5) return frac(d / 6.0) < (2.0 / 6.0);
+    float x = frac(d / 20.0) * 20.0;
+    if (style < 3.5) return x < 9.0 || (x >= 13.0 && x < 15.0);
+    return x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0);
+}
+
 // ── Horizontal line (LineInstance: color, m=(price,style,thickness,_)) ───────
 struct HLine { float4 color; float4 m; };
 StructuredBuffer<HLine> hlines : register(t1);
@@ -76,7 +92,7 @@ HOut hline_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     HOut o; o.pos = float4(to_clip(px), 0, 1); o.color = h.color; o.style = style; o.xpx = px.x; return o;
 }
 float4 hline_fragment(HOut i) : SV_Target {
-    if (i.style >= 0.5 && frac(i.xpx / 16.0) > (9.0 / 16.0)) discard;
+    if (!pattern_on(i.style, i.xpx)) discard;
     return float4(i.color.rgb, i.color.a);
 }
 
@@ -106,12 +122,7 @@ SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     SOut o; o.pos = float4(to_clip(px), 0, 1); o.color = s.color; o.pattern = s.m.y; o.dist = len * along[vid]; return o;
 }
 float4 seg_fragment(SOut i) : SV_Target {
-    if (i.pattern >= 1.5) {
-        if (frac(i.dist / 6.0) > (2.0 / 6.0)) discard;
-    } else if (i.pattern >= 0.5) {
-        float x = frac(i.dist / 20.0) * 20.0;
-        if (!(x < 8.0 || (x >= 11.0 && x < 13.0) || (x >= 16.0 && x < 18.0))) discard;
-    }
+    if (!pattern_on(i.pattern, i.dist)) discard;
     return float4(i.color.rgb, i.color.a);
 }
 

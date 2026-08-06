@@ -216,22 +216,29 @@ fn the_builder_appends_and_never_clears() {
     assert_eq!(hlines[0].price, 1.0);
 }
 
+/// Each of the five line kinds reaches the shader as its own pattern, and as the pen index the
+/// blob carries.
+///
+/// It used to be three looks for five kinds — Dash and DashDot were folded into DashDotDot — so a
+/// figure drawn in Moonbot as a dash came back dash-dot-dot. The oracle is `to_pen`, the number the
+/// core's own format uses, not a table repeated here.
 #[test]
-fn seg_patterns_collapse_the_three_dashed_kinds() {
-    // The shader has one dashed pattern for Moonbot's three, and solid and dotted stay apart.
-    let dashed: Vec<f32> = [LineKind::Dash, LineKind::DashDot, LineKind::DashDotDot]
-        .into_iter()
-        .map(seg_pattern)
-        .collect();
-    assert!(
-        dashed.windows(2).all(|w| w[0] == w[1]),
-        "the dashed kinds no longer share one pattern: {dashed:?}"
-    );
-    let solid = seg_pattern(LineKind::Solid);
-    let dot = seg_pattern(LineKind::Dot);
-    assert_ne!(solid, dot);
-    assert_ne!(solid, dashed[0]);
-    assert_ne!(dot, dashed[0]);
+fn every_line_kind_reaches_the_shader_as_its_own_pen_index() {
+    let mut seen = Vec::new();
+    for kind in LineKind::ALL {
+        let pattern = seg_pattern(kind);
+        assert_eq!(
+            pattern,
+            kind.to_pen() as f32,
+            "{kind:?} is drawn as a style the blob does not name"
+        );
+        assert!(
+            !seen.contains(&pattern),
+            "{kind:?} shares a pattern with another kind: {seen:?}"
+        );
+        seen.push(pattern);
+    }
+    assert_eq!(seen.len(), 5, "all five kinds are distinct");
 }
 
 #[test]

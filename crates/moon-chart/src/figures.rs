@@ -27,7 +27,7 @@ use moon_core::figures::{
 
 use crate::layers::{
     LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT,
-    SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT, SEG_PATTERN_SOLID, TIME_UNBOUNDED,
+    TIME_UNBOUNDED,
 };
 
 /// Opacity of an idle (inactive) figure.
@@ -107,14 +107,14 @@ pub struct FigureView {
     pub dragging: Option<u64>,
 }
 
-/// Segment pattern (shader: 0 solid / 1 dashdotdot / 2 dot) based on the Moonbot line kind.
-/// The shader has fewer than five dashed variants → Dash/DashDot/DashDotDot share one pattern.
+/// The shader's pattern code for a line kind: its `TPenStyle` index, unchanged.
+///
+/// There is no table here on purpose. The blob carries the pen index at `@13`, the shaders switch
+/// on the same number, and a figure drawn in Moonbot is therefore drawn in the style Moonbot named.
+/// Until all five patterns existed in the shaders, Dash and DashDot were folded into DashDotDot —
+/// three kinds, one look.
 fn seg_pattern(kind: LineKind) -> f32 {
-    match kind {
-        LineKind::Solid => SEG_PATTERN_SOLID,
-        LineKind::Dot => SEG_PATTERN_DOT,
-        _ => SEG_PATTERN_DASH_DOT_DOT,
-    }
+    kind.to_pen() as f32
 }
 
 fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
@@ -192,7 +192,8 @@ impl GeomSink for Sink<'_, '_> {
         self.out.hlines.push(LineInstance {
             price: price as f32,
             color: stroke.color,
-            style: if stroke.kind.is_solid() { 0.0 } else { 1.0 },
+            // The pen index, like the segment's: a full-width line has all five styles too.
+            style: seg_pattern(stroke.kind),
             thickness: stroke.thickness,
         });
     }
