@@ -660,6 +660,10 @@ analytics.period.any_date:
   ru: "дата и время"
   en: "date and time"
   es: "fecha y hora"
+analytics.core_selection.clear:
+  ru: "Сбросить выбор ядер"
+  en: "Clear core selection"
+  es: "Borrar selección de núcleos"
 analytics.trades_count:
   ru: "%{n} закрытых сделок"
   en: "%{n} closed trades"

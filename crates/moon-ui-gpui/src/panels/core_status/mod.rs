@@ -543,6 +543,7 @@ impl CoreStatusView {
             cores,
             &exchange_names,
             &self.sel_cores,
+            crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("core_status.all_cores").to_string(),
             |n| t!("core_status.cores_n", n = n).to_string(),
             170.0,

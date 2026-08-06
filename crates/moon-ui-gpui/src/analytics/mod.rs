@@ -269,7 +269,7 @@ impl<T> ProfitLoadState<T> {
 pub(crate) struct AnalyticsSessionState {
     /// Last top-level page selected by the user.
     tab: Tab,
-    /// Explicit core filter, preserving the selector's empty/full/stale set semantics.
+    /// Explicit core filter, preserving empty, complete, and stale selections.
     sel_cores: HashSet<u64>,
     /// Last Strategies axis selected while this process is running.
     strat_mode: tuner::StratMode,
@@ -1021,15 +1021,12 @@ impl AnalyticsView {
         }
     }
 
-    /// Return selected cores for a query, using an empty vector only for implicit or complete All.
+    /// Return selected cores for a query, using an empty vector only for the exclusive All state.
     ///
     /// Returns:
-    ///     Explicit selected ids for a partial or stale selection, or empty for no core filter.
+    ///     Every explicit selected id, including complete or stale selections, or empty for All.
     fn cores_selected(&self) -> Vec<u64> {
-        crate::controls::normalized_core_filter_ids(
-            self.cores.iter().map(|(core, _)| *core),
-            &self.sel_cores,
-        )
+        toolbar::analytics_core_filter_ids(&self.sel_cores)
     }
 
     /// Start accounting for a blocking background operation.
@@ -1487,8 +1484,8 @@ impl AnalyticsView {
 
     /// Toggle one core or the All row in the multi-selection.
     ///
-    /// The All row clears a selection containing every current core, or replaces any partial or
-    /// stale selection with the current full set. Both empty and full representations query all.
+    /// The All row clears every explicit selection so only its own checkmark remains. A specific
+    /// core toggles independently and therefore removes the All checkmark from the empty state.
     ///
     /// Args:
     ///     core: Core to toggle, or `None` for the All row.
@@ -1497,18 +1494,9 @@ impl AnalyticsView {
     /// Returns:
     ///     Nothing; the in-memory filter and loaded analytics are updated in place.
     fn toggle_core(&mut self, core: Option<u64>, cx: &mut Context<Self>) {
-        match core {
-            None => {
-                let all = self.cores.iter().map(|(core, _)| *core).collect();
-                crate::controls::toggle_all_core_selection(&mut self.sel_cores, all);
-            }
-            Some(c) => {
-                if !self.sel_cores.remove(&c) {
-                    self.sel_cores.insert(c);
-                }
-            }
+        if toolbar::toggle_analytics_core_selection(&mut self.sel_cores, core) {
+            self.core_selection_changed(cx);
         }
-        self.core_selection_changed(cx);
     }
 
     /// Toggle every still-available core from one clicked exchange section.

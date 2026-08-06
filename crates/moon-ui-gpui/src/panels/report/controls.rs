@@ -43,6 +43,7 @@ impl ReportPanel {
             &cores,
             &exchange_names,
             &self.sel_cores,
+            crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),
             180.0,

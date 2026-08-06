@@ -6,8 +6,9 @@ use std::collections::HashSet;
 
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDateTimePicker, MoonDropdown,
-    MoonMenuSize, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex,
+    MoonAlert, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant,
+    MoonDateTimePicker, MoonDropdown, MoonMenuSize, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, h_flex,
 };
 use rust_i18n::t;
 
@@ -59,11 +60,10 @@ pub(super) enum UndatedBanner {
 
 /// The single selected core's display name, or `None` when the tab bar must not name one.
 ///
-/// Answers with a name in exactly the case the core trigger shows the count `1` — i.e. exactly
-/// when the name is otherwise unreachable without opening the dropdown. Everything the trigger
-/// calls "all cores" answers `None`, including a lone available core (whether ticked or left on
-/// the implicit All): naming a core beside a trigger reading "All cores" would assert a filter the
-/// query does not apply, and would keep naming it once a second core connects.
+/// Answers with a name exactly when the Analytics trigger shows the count `1`, including an
+/// explicitly selected core in a single-core installation. The exclusive All state is empty and
+/// answers `None`; naming a core beside a trigger reading "All cores" would assert a filter the
+/// user did not select.
 ///
 /// "Exactly one" is counted over the cores that still EXIST, not over the raw selection, because
 /// that is what the trigger counts: a selection deliberately keeps the id of a deleted core so it
@@ -83,12 +83,50 @@ pub(super) fn sole_core_name<'a>(
     cores: &'a [(u64, String)],
     selected: &HashSet<u64>,
 ) -> Option<&'a str> {
-    if crate::controls::core_selection_is_all(cores.iter().map(|(id, _)| *id), selected) {
+    if selected.is_empty() {
         return None;
     }
     let mut live = cores.iter().filter(|(id, _)| selected.contains(id));
     let (_, name) = live.next()?;
     live.next().is_none().then_some(name.as_str())
+}
+
+/// Apply one Analytics core-menu click with an exclusive implicit All state.
+///
+/// Args:
+///     selected: Mutable explicit core selection; empty represents the All row.
+///     core: Clicked core id, or `None` for the All row and clear button.
+///
+/// Returns:
+///     Whether the explicit selection changed.
+pub(super) fn toggle_analytics_core_selection(
+    selected: &mut HashSet<u64>,
+    core: Option<u64>,
+) -> bool {
+    match core {
+        None if selected.is_empty() => false,
+        None => {
+            selected.clear();
+            true
+        }
+        Some(core) if !selected.remove(&core) => {
+            selected.insert(core);
+            true
+        }
+        Some(_) => true,
+    }
+}
+
+/// Convert the exclusive Analytics selection into database filter ids.
+///
+/// Args:
+///     selected: Explicit core ids; only an empty set represents the All row.
+///
+/// Returns:
+///     Every explicit id, including complete and stale selections, or an empty unfiltered list for
+///     the exclusive All state.
+pub(super) fn analytics_core_filter_ids(selected: &HashSet<u64>) -> Vec<u64> {
+    selected.iter().copied().collect()
 }
 
 /// Decide what the strip shows, given only the read outcome and whether the user opened it.
@@ -258,19 +296,36 @@ impl AnalyticsView {
                     .render(),
             );
         }
-        // Keep the selector widths and their three internal gaps together. The fourth gap belongs
-        // to the caption, so the whole semantic group moves to the next line before any selector
-        // is clipped. MoonUI scales Action dropdown widths from their 10.5px reference font.
+        // Keep the selector widths and their internal gaps together. One additional gap belongs to
+        // the caption, so the whole semantic group moves to the next line before any control is
+        // clipped. MoonUI scales Action dropdown widths from their 10.5px reference font.
         let action_trigger_scale = design::font_value(cx, 10.5) / 10.5;
-        let filters_min_w = (crate::controls::CORE_COMBO_TRIGGER_W
-            + SIDE_TRIGGER_W
-            + KIND_TRIGGER_W
-            + METRIC_TRIGGER_W)
-            * action_trigger_scale
+        let clear_core_filter_w = if self.sel_cores.is_empty() {
+            0.0
+        } else {
+            design::glyph_btn_w(cx) + design::ui_value(cx, TOOLBAR_GAP)
+        };
+        let filters_min_w = clear_core_filter_w
+            + (crate::controls::CORE_COMBO_TRIGGER_W
+                + SIDE_TRIGGER_W
+                + KIND_TRIGGER_W
+                + METRIC_TRIGGER_W)
+                * action_trigger_scale
             + design::ui_value(cx, TOOLBAR_GAP * 4.0);
+        let clear_core_filter = (!self.sel_cores.is_empty()).then(|| {
+            MoonButton::new("an-core-clear")
+                .width(design::glyph_btn_w(cx))
+                .variant(MoonButtonVariant::Ghost)
+                .size(MoonButtonSize::Action)
+                .leading_icon(MoonButtonIconSlot::new("icons/close.svg"))
+                .tooltip(t!("analytics.core_selection.clear").to_string())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_core(None, cx)))
+                .render()
+        });
         let selectors = h_flex()
             .flex_none()
             .gap(design::ui_px(cx, TOOLBAR_GAP))
+            .children(clear_core_filter)
             .child(self.core_combo(cx))
             .child(self.side_combo(cx))
             .child(self.kind_combo(cx))
@@ -378,6 +433,7 @@ impl AnalyticsView {
             &cores,
             &exchange_names,
             &self.sel_cores,
+            crate::controls::CoreAllRowMode::ImplicitOnly,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),
             180.0,

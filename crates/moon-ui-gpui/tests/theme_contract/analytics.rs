@@ -698,10 +698,9 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
 
 /// Analytics tabs size from their title while the complete core/filter group wraps together.
 ///
-/// This binary crate exposes no importable GPUI view. The source contract pins two plausible
-/// visual regressions: restoring the old fixed 112px button makes a long translation touch its
-/// blue background, while removing the atomic filter group clips a selector at narrow widths or
-/// strands the selected core name on the tabs' line.
+/// This binary crate exposes no importable GPUI view. The source contract pins the content-sized
+/// tabs, the atomic wrapping filter group, and the conditional pre-dropdown clear button whose
+/// width must participate in that group's responsive floor.
 #[test]
 fn analytics_tabs_and_core_caption_follow_their_content() {
     let toolbar = read_src("analytics/toolbar.rs");
@@ -748,6 +747,22 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
             && body.contains("* action_trigger_scale"),
         "the responsive floor and shared core dropdown must use the same width and Action scaling"
     );
+    assert!(
+        toolbar.contains("crate::controls::CoreAllRowMode::ImplicitOnly")
+            && body.contains("let clear_core_filter = (!self.sel_cores.is_empty()).then(||")
+            && body.contains(".on_click(cx.listener(|this, _, _, cx| this.toggle_core(None, cx)))"),
+        "Analytics must keep All exclusive and route its conditional clear button through the core filter"
+    );
+    for needle in [
+        "let clear_core_filter_w = if self.sel_cores.is_empty()",
+        "design::glyph_btn_w(cx) + design::ui_value(cx, TOOLBAR_GAP)",
+        "let filters_min_w = clear_core_filter_w",
+    ] {
+        assert!(
+            body.contains(needle),
+            "the conditional core-clear button must participate in the responsive floor via {needle:?}"
+        );
+    }
 
     let selectors_start = body
         .find("let selectors = h_flex()")
@@ -775,6 +790,16 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
             "the atomic selector row must contain {needle:?}"
         );
     }
+    let clear_filter = selectors
+        .find(".children(clear_core_filter)")
+        .expect("the selector row must contain the conditional clear button");
+    let core_filter = selectors
+        .find(".child(self.core_combo(cx))")
+        .expect("the selector row must contain the core dropdown");
+    assert!(
+        clear_filter < core_filter,
+        "the conditional clear button must render immediately before the core dropdown"
+    );
     let filters = &body[filters_start..row_child];
     for needle in [
         ".flex_1()",
@@ -850,6 +875,10 @@ fn analytics_reopen_state_is_process_lifetime_only() {
             && toolbar.contains("b.ui_session.analytics.tab = t;")
             && tuner.contains("backend.ui_session.analytics.strat_mode = mode;"),
         "Analytics construction and all reopen choices must share the Backend UI-session snapshot"
+    );
+    assert!(
+        analytics.contains("toolbar::analytics_core_filter_ids(&self.sel_cores)"),
+        "Analytics queries must preserve every nonempty exclusive core selection"
     );
     let tab_init = analytics
         .find("tab: if probe {")
