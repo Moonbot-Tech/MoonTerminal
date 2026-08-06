@@ -333,6 +333,34 @@ fn shared_core_selectors_batch_exchange_changes_once() {
     }
 }
 
+/// The Assets Wallets-section header caret must stay a passive `MoonDisclosure::glyph`.
+///
+/// Plausible edit: swap `MoonDisclosure::glyph(!collapsed)` for `MoonDisclosure::button(id, ..)`
+/// so the caret "looks" clickable on its own. In this fork `should_insert_hitbox` inserts a
+/// hitbox for a cursor, a hover style OR a listener — `button` installs all three — so the caret
+/// would then own a hitbox that swallows the click meant for the enclosing `assets-wallets-toggle`
+/// row, which is what actually flips `wallets_collapsed`. Clicking the label beside the caret
+/// still works, so this is invisible without clicking the caret itself.
+#[test]
+fn the_assets_wallets_header_caret_stays_passive() {
+    let table = read_src("panels/assets/table.rs");
+    let body = code_only(braced_body(&table, "pub(super) fn bottom("));
+    let chain = chain_between(
+        &body,
+        "\"assets-wallets-toggle\"",
+        "\"assets.wallets_hint\"",
+        "the Assets wallets header toggle row",
+    );
+    assert!(
+        chain.contains("MoonDisclosure::glyph(!collapsed)"),
+        "the wallets header caret must stay a passive MoonDisclosure::glyph, not ::button"
+    );
+    assert!(
+        !chain.contains("MoonDisclosure::button("),
+        "an interactive MoonDisclosure::button here would take a hitbox and swallow the row's click"
+    );
+}
+
 #[test]
 fn status_bar_connection_and_license_are_localized() {
     // Neither caption is on the deliberately-untranslated list in locales/README.md, so an English

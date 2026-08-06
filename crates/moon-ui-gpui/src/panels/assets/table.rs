@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
-use moon_ui::{MoonButtonVariant, MoonNotification, MoonText, MoonWindowExt as _};
+use moon_ui::{MoonButtonVariant, MoonDisclosure, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
 
 /// Open the shared coin context menu from an Assets row's ticker right-click.
@@ -266,6 +266,14 @@ impl AssetsView {
 
     /// Collapsible Wallets section: a selectable balance-aware core list plus the Spot,
     /// Futures, and Quarterly transfer containers. Expanded content shares the available height.
+    ///
+    /// Args:
+    ///     aggs: Balance aggregates for the cores currently in scope.
+    ///     wallets: Transfer-container snapshots for those cores.
+    ///     cx: Assets view context.
+    ///
+    /// Returns:
+    ///     The Wallets header and its expanded content, when open.
     pub(super) fn bottom(
         &self,
         aggs: &[CoreAgg],
@@ -281,7 +289,6 @@ impl AssetsView {
 
         // Section header, styled like the Positions and Cores headers.
         let collapsed = self.wallets_collapsed;
-        let arrow = if collapsed { "▸" } else { "▾" };
         let mut header = h_flex()
             .id("assets-wallets-bar")
             .w_full()
@@ -303,11 +310,13 @@ impl AssetsView {
                         this.wallets_collapsed = !this.wallets_collapsed;
                         cx.notify();
                     }))
+                    // Passive: the enclosing toggle row owns the click, so the caret must not
+                    // take a hitbox of its own and swallow it. Unlike the label beside it this
+                    // caret rides the UI slider, not the Font slider — it is chrome.
                     .child(
-                        div()
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text_muted))
-                            .child(arrow),
+                        MoonDisclosure::glyph(!collapsed)
+                            .size(design::DISCLOSURE_GLYPH_MARKER)
+                            .box_size(design::DISCLOSURE_BOX),
                     )
                     .child(
                         div()

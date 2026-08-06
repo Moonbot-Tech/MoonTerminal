@@ -3,6 +3,40 @@
 
 use super::support::*;
 
+/// `analytics/tuner/shared.rs::collapse_caret` must pass the `DownUp` pose explicitly, ON the
+/// `MoonDisclosure` chain it builds.
+///
+/// `MoonDisclosure`'s own default is `RightDown` (collapsed points right, expanded points down —
+/// the strategy tree's own convention). The plausible edit is deleting `.direction(..)` as
+/// "redundant" now that a pose is set elsewhere; that silently switches both the KPI matrix's and
+/// the Distribution card's collapse carets from the up/down convention (▼ collapsed, ▲ expanded)
+/// to right/down (▶ collapsed, ▼ expanded), disagreeing with the tree next to them. Nothing else
+/// reddens — it compiles, lays out identically and still toggles the card.
+///
+/// A bare identifier search over the whole function body is under-anchored: it stays green if
+/// `.direction(MoonDisclosureDirection::DownUp)` is deleted from the chain while the identifier
+/// survives anywhere else in the function (an unrelated `let` binding, a dead-code leftover from
+/// a rebase), because it only requires the TEXT `MoonDisclosureDirection::DownUp` to appear
+/// somewhere, not that the chain actually calls `.direction(..)` with it. Slicing to the
+/// `MoonDisclosure::button(..)..into_any_element()` chain and requiring the CALL, not just the
+/// identifier, closes that gap.
+#[test]
+fn the_tuner_collapse_caret_uses_the_down_up_pose() {
+    let shared = read_src("analytics/tuner/shared.rs");
+    let body = code_only(braced_body(&shared, "pub(super) fn collapse_caret("));
+    let chain = chain_between(
+        &body,
+        "MoonDisclosure::button(",
+        ".into_any_element()",
+        "the tuner collapse caret's MoonDisclosure chain",
+    );
+    assert!(
+        chain.contains(".direction(MoonDisclosureDirection::DownUp)"),
+        "collapse_caret must call .direction(MoonDisclosureDirection::DownUp) on its \
+         MoonDisclosure chain, not merely reference the identifier elsewhere in the function"
+    );
+}
+
 /// The Tuning card header: mode-button order and a title that shares the buttons' box.
 ///
 /// The plausible edits are alphabetizing the three labels, or dropping the explicit height

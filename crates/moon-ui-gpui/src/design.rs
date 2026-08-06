@@ -25,6 +25,27 @@ pub const HEADER_PAD_X: f32 = 12.0;
 /// positions.
 pub const CHROME_GAP: f32 = 8.0;
 
+/// Base (unscaled) glyph edge for an interactive disclosure caret built with
+/// `MoonDisclosure::button`.
+///
+/// Pass this value directly to `MoonDisclosure`: its `caret_box` applies `tokens.ui(...)`, so
+/// passing [`ui_px`] would apply the UI scale twice. The caret therefore follows the UI slider,
+/// while raw text sized through [`t_body`] follows the Font slider. This matches chrome such as
+/// [`vline`].
+pub const DISCLOSURE_GLYPH: f32 = 11.0;
+
+/// Base (unscaled) glyph edge for a passive disclosure caret whose enclosing row owns the click.
+///
+/// Pass this value directly to `MoonDisclosure`; its `caret_box` applies the UI scale. This keeps
+/// the marker on the UI slider rather than the Font slider used by [`t_body`].
+pub const DISCLOSURE_GLYPH_MARKER: f32 = 9.0;
+
+/// Base (unscaled) square box around either disclosure caret.
+///
+/// Pass this value directly to `MoonDisclosure`; its `caret_box` applies the UI scale. Sharing the
+/// value keeps a caret aligned with a neighbouring `glyph_btn` cell in the same toolbar row.
+pub const DISCLOSURE_BOX: f32 = 12.0;
+
 /// Height of the toolbar strip.
 ///
 /// The one home of its fit triple, matching [`header_height`] and the
