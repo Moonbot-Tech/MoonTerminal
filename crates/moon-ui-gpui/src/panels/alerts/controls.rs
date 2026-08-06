@@ -153,7 +153,9 @@ impl AlertsPanel {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(150.0)
+            // Report's rule for the same kind of field: 102 is the floor, and it grows only for a
+            // label that would otherwise be ellipsised.
+            .fit_trigger_width(102.0, 170.0)
             .menu_width_scaled(200.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)

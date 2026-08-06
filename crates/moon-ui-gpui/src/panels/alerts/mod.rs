@@ -768,12 +768,16 @@ impl Render for AlertsPanel {
         v_flex()
             .id("alerts-panel")
             .size_full()
-            .bg(moon(p.shell))
+            // The same surface every other table panel sits on. It used to be `shell`, which is
+            // half a tone off and reads as a different panel next to Orders or Report.
+            .bg(moon(p.table_body))
             .text_color(moon(p.text))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .track_focus(&self.focus)
             .child(self.toolbar(p, cx))
+            // The hairline Orders and Report draw between their filters and their table.
+            .child(div().w_full().h(px(1.0)).flex_none().bg(moon(p.border)))
             .child(body)
             .child(self.bottom_bar(p, cx))
     }

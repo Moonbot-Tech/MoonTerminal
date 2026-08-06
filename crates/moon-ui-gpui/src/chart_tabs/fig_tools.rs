@@ -14,9 +14,7 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
-    MoonSelectorSegment, h_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize, h_flex,
 };
 
 use moon_core::figures::{FigureTool, ToolDef};
@@ -25,11 +23,9 @@ use rust_i18n::t;
 use super::ChartTabs;
 use crate::design;
 
-/// Width of the tool field, in font-scaled units. A fifth narrower than the row of six buttons it
-/// replaced: the longest name it has to hold is a two-word one, and the field sat half empty.
+/// Width of the tool field, in font-scaled units. A fifth narrower than it first shipped: the
+/// longest name it has to hold is two short words, and the field sat half empty.
 const PICKER_W: f32 = 134.0;
-/// Its height, matching the Micro buttons beside it.
-const PICKER_H: f32 = 18.0;
 
 /// One tool's entry in the picker: its glyph and its name, checked when it is the current one.
 fn tool_item(
@@ -114,70 +110,40 @@ impl ChartTabs {
         }
 
         let def = tool.def();
-        let label = match current {
+        let trigger = match current {
             Some(_) => format!("{}  {}", def.glyph, t!(def.locale_key)),
             None => format!("↖  {}", t!("chart.fig.cursor")),
         };
-        // A pill and a popover rather than `MoonDropdown`: the dropdown bakes its caret into the
-        // label string and centres the result, so a tool's name sits in the middle of the field
-        // with air on both sides. `MoonSelectorPill` is the product's own field-with-a-value — it
-        // lays its segments out from the LEFT and draws the caret at the right edge — and it takes
-        // the same `MoonMenuItem` list through `MoonPopupMenu`, so the menu itself is unchanged.
-        let p = MoonPalette::active(cx);
-        let picker_open = self.fig_tool_popup_open;
-        let trigger_w = f32::from(design::font_w_px(cx, PICKER_W));
-        let trigger_h = f32::from(design::ui_px(cx, PICKER_H));
-        let picker_view = cx.entity();
-        let picker = MoonPopover::new("fig-tool-popover")
-            .placement(MoonPopoverPlacement::BottomStart)
-            // No `content_width`: the content is a MENU, and a menu measures its own rows. That
-            // constant is for panels, whose content box a popover has to be told the size of.
-            .open(picker_open)
-            .on_open_change(move |open, _window, app| {
-                picker_view.update(app, |this, cx| {
-                    this.fig_tool_popup_open = open;
-                    cx.notify();
-                });
+        // `MoonDropdown` and not a pill in a popover: a popover always draws its own border and
+        // padding AROUND its content, so a menu inside one reads as two frames, the outer one
+        // larger than the inner. The dropdown is one frame and the product's own menu chrome.
+        //
+        // Its label is centred, which is not what this field wants, and that cannot be fixed from
+        // here: the dropdown bakes its caret into the label string and the button centres the
+        // whole result. Logged in `docs-internal/FORK_BUGS.md`; a `trigger_align` on MoonUI's side
+        // is the fix.
+        let picker = MoonDropdown::new("fig-tool")
+            .label(trigger)
+            .trigger_caret(true)
+            .trigger_variant(if draw_mode {
+                MoonButtonVariant::Blue
+            } else {
+                MoonButtonVariant::Soft
             })
-            .trigger(
-                // `MoonSelectorPill::bounds` is absolute, so an explicit in-flow box owns the
-                // geometry the popover measures and anchors to — the same shape the header's core
-                // selector uses.
-                div()
-                    .id("fig-tool-tip")
-                    .relative()
-                    .flex_none()
-                    .w(px(trigger_w))
-                    .h(px(trigger_h))
-                    .tooltip(|_window, cx| {
-                        cx.new(|_| {
-                            moon_ui::MoonTooltipView::new(t!("chart.fig.draw_tip").to_string())
-                        })
-                        .into()
-                    })
-                    .child(
-                        MoonSelectorPill::new("fig-tool")
-                            .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
-                            .height(trigger_h)
-                            .radius(f32::from(design::r_button(cx)))
-                            .caret(true)
-                            .segment(
-                                MoonSelectorSegment::new(label)
-                                    // Blue while a tool is armed, so the strip says at a glance
-                                    // that the next click on the chart draws.
-                                    .color(if draw_mode { p.accent } else { p.text })
-                                    .font_size(f32::from(design::t_caption(cx))),
-                            )
-                            .render(),
-                    ),
-            )
-            .content(
-                MoonPopupMenu::new("fig-tool-menu")
-                    .fit_width(160.0, 320.0)
-                    .size(MoonMenuSize::Compact)
-                    .items(items)
-                    .render(),
-            );
+            .trigger_size(MoonButtonSize::Micro)
+            .trigger_width_scaled(PICKER_W)
+            .menu_width_scaled(180.0)
+            .menu_size(MoonMenuSize::Compact)
+            .items(items);
+        // `MoonDropdown` carries no tooltip of its own, so the hint hangs on a wrapper. It is the
+        // only place the Ctrl gesture is written down now that the pencil's tooltip is gone.
+        let picker = div()
+            .id("fig-tool-tip")
+            .tooltip(|_window, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(t!("chart.fig.draw_tip").to_string()))
+                    .into()
+            })
+            .child(picker);
 
         // The settings button and, hanging under it, the shared panel for this tool's defaults.
         // Disarming the tool closes it rather than leaving it parked over the chart.
