@@ -484,16 +484,9 @@ impl Render for ChartPanel {
         // Per-figure settings panel, opened from a right-click on a figure. Rendered here beside
         // the other overlays rather than as a context menu: it holds swatches and switches, which
         // a menu of text items cannot draw.
-        let fig_settings = self.fig_settings.clone().and_then(|target| {
-            let (slot_w, slot_h) = self.chart.slot_dev_size();
+        let fig_settings = self.fig_settings.clone().and_then(|(target, at)| {
             let backend = self.backend.clone();
-            crate::figstyle::render(
-                &backend,
-                &target,
-                (slot_w as f32 / ppp, slot_h as f32 / ppp),
-                ppp,
-                cx,
-            )
+            crate::figstyle::render(&backend, &target, at, cx)
         });
 
         let show_empty_logo = axis_panes.is_empty();

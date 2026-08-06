@@ -76,7 +76,7 @@ fn coin_surfaces_resolve_through_the_market_source() {
         "chartdx/data_state/market.rs",
         "chart_tabs/custom.rs",
         "chrome/terminal_chrome.rs",
-        "panels/alerts.rs",
+        "panels/alerts/mod.rs",
         "panels/detects/mod.rs",
         "panels/report/render.rs",
         "panels/report/columns.rs",

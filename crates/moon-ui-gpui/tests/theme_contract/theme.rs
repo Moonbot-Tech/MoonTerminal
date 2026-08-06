@@ -193,6 +193,15 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "chart_tabs/candle_popup.rs",
             r#".id(SharedString::from(format!("{id}-popup")))"#,
         ),
+        // The Alerts row gear. Its content is `figstyle::rows` BARE — the same rows the chart's
+        // own settings panel wraps in `figstyle::shell`, which is what paints a surface there and
+        // must not be handed to a popover that already paints one. The anchor is the content
+        // root's own binding: these rows carry no `.id(..)`, having no state to retain.
+        (
+            "panels/alerts/table.rs",
+            "figstyle/mod.rs",
+            "let mut rows = v_flex()",
+        ),
     ];
     // Every one of these is chrome `MoonPopover` already paints around the content. The `_`-suffixed
     // entries are the tailwind-style shorthands, which re-add the same padding by another spelling.
