@@ -156,6 +156,7 @@ impl AssetsView {
             cores,
             &exchange_names,
             &self.sel_cores,
+            crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("assets.all_cores").to_string(),
             |n| t!("assets.cores_n", n = n).to_string(),
             170.0,

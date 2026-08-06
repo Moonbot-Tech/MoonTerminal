@@ -35,6 +35,7 @@ impl OrdersPanel {
             cores,
             &exchange_names,
             &self.sel_cores,
+            crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("orders.all_cores").to_string(),
             |n| t!("orders.cores_n", n = n).to_string(),
             170.0,

@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    core_menu_sections, core_selection_is_all, normalized_core_filter_ids, section_core_ids,
-    selection_summary, toggle_all_core_selection, toggle_exchange_cores,
+    CoreAllRowMode, core_menu_sections, core_selection_is_all, section_core_ids, selection_summary,
+    toggle_all_core_selection, toggle_exchange_cores,
 };
 
 /// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections,
@@ -69,8 +69,13 @@ fn one_selected_core_uses_the_compact_count_summary() {
     ];
     let selected = HashSet::from([1]);
 
-    let (summary, all_on) =
-        selection_summary(&cores, &selected, "All cores", &|n| format!("Cores: {n}"));
+    let (summary, all_on) = selection_summary(
+        &cores,
+        &selected,
+        CoreAllRowMode::ImplicitOrComplete,
+        "All cores",
+        &|n| format!("Cores: {n}"),
+    );
 
     assert_eq!(summary, "Cores: 1");
     assert!(!all_on);
@@ -83,25 +88,46 @@ fn one_selected_core_uses_the_compact_count_summary() {
 fn all_summary_requires_every_available_core() {
     let cores = vec![(1, "First".to_string()), (2, "Second".to_string())];
 
-    let empty = selection_summary(&cores, &HashSet::new(), "All cores", &|n| {
-        format!("Cores: {n}")
-    });
-    let full = selection_summary(&cores, &HashSet::from([1, 2]), "All cores", &|n| {
-        format!("Cores: {n}")
-    });
-    let full_with_stale =
-        selection_summary(&cores, &HashSet::from([1, 2, 99]), "All cores", &|n| {
-            format!("Cores: {n}")
-        });
-    let stale_equal_cardinality =
-        selection_summary(&cores, &HashSet::from([98, 99]), "All cores", &|n| {
-            format!("Cores: {n}")
-        });
+    let summary = |selected: HashSet<u64>| {
+        selection_summary(
+            &cores,
+            &selected,
+            CoreAllRowMode::ImplicitOrComplete,
+            "All cores",
+            &|n| format!("Cores: {n}"),
+        )
+    };
+    let empty = summary(HashSet::new());
+    let full = summary(HashSet::from([1, 2]));
+    let full_with_stale = summary(HashSet::from([1, 2, 99]));
+    let stale_equal_cardinality = summary(HashSet::from([98, 99]));
 
     assert_eq!(empty, ("All cores".to_string(), true));
     assert_eq!(full, ("All cores".to_string(), true));
     assert_eq!(stale_equal_cardinality, ("Cores: 0".to_string(), false));
     assert_eq!(full_with_stale, ("All cores".to_string(), true));
+}
+
+/// `CoreAllRowMode::ImplicitOnly` must not check All for a complete explicit selection.
+///
+/// Plausible edit this catches: routing `ImplicitOnly` through `core_selection_is_all` in
+/// `core_combo.rs:selection_summary`. On a one-core Analytics installation, clicking that core
+/// would leave both its row and All checked.
+#[test]
+fn implicit_only_mode_keeps_a_complete_explicit_selection_out_of_all() {
+    let cores = vec![(1, "Only core".to_string())];
+    let selected = HashSet::from([1]);
+
+    assert_eq!(
+        selection_summary(
+            &cores,
+            &selected,
+            CoreAllRowMode::ImplicitOnly,
+            "All cores",
+            &|n| format!("Cores: {n}"),
+        ),
+        ("Cores: 1".to_string(), false)
+    );
 }
 
 /// `core_combo.rs:toggle_all_core_selection` must compare available ids, not set cardinality.
@@ -152,24 +178,10 @@ fn exchange_toggle_adds_or_removes_only_available_members() {
     assert_eq!(selected, HashSet::from([1, 2, 4]));
 }
 
-/// `core_combo.rs:normalized_core_filter_ids` must compare available membership before returning
-/// the empty no-filter form. Replacing it with a cardinality check makes a stale equal-sized
-/// Analytics selection query every core while the trigger reports a partial selection.
-#[test]
-fn query_filter_keeps_stale_equal_cardinality_selection_explicit() {
-    let stale = HashSet::from([98, 99]);
-    let explicit = normalized_core_filter_ids([1, 2], &stale);
-    assert_eq!(explicit.into_iter().collect::<HashSet<_>>(), stale);
-
-    let full_with_stale = HashSet::from([1, 2, 99]);
-    assert!(normalized_core_filter_ids([1, 2], &full_with_stale).is_empty());
-}
-
 /// `core_combo.rs:core_selection_is_all` must weigh EVERY available core, first one included.
 ///
-/// It is the one definition behind the query filter, the dropdown trigger and the Analytics
-/// tab-bar caption, so an off-by-one here does not just mislabel a control — it silently widens
-/// a real report query to every core.
+/// It drives every `ImplicitOrComplete` dropdown summary, so an off-by-one would mark All while
+/// leaving one available core's own checkbox unchecked.
 ///
 /// Breakage this pins: consuming the availability iterator to test emptiness and then scanning
 /// only what is left (the shape a `next()`-then-`all()` pair produces, where `Peekable` is what

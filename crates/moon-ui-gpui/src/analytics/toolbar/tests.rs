@@ -1,4 +1,4 @@
-//! Decision table for the "closed trades the core never dated" notice.
+//! Regression coverage for Analytics toolbar notices and core-selection controls.
 //!
 //! The notice is the only thing that says money is missing from every figure on the window,
 //! so the two ways it can go wrong — starting open, or being collapsible when the read
@@ -10,7 +10,10 @@ use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
 use super::super::AnalyticsSessionState;
-use super::{UndatedBanner, sole_core_name, undated_banner_state};
+use super::{
+    UndatedBanner, analytics_core_filter_ids, sole_core_name, toggle_analytics_core_selection,
+    undated_banner_state,
+};
 
 /// Some undated trades, with money attached.
 ///
@@ -96,17 +99,16 @@ fn a_read_failure_is_never_collapsed() {
     }
 }
 
-/// The tab bar names a core in exactly one case: a genuine one-of-many selection.
+/// The tab bar names exactly one explicitly selected live core.
 ///
-/// The rule is "name it exactly when the core trigger shows the count 1", i.e. exactly when the
-/// name is otherwise unreachable without opening the dropdown.
+/// The rule is "name it exactly when the Analytics core trigger shows the count 1", i.e. exactly
+/// when the name is otherwise unreachable without opening the dropdown.
 ///
-/// Breakage this pins: testing only `selected.len() == 1` and dropping the all-cores guard. A
-/// single-core install would then paint that core's name beside a trigger reading "All cores",
-/// asserting a filter the query does not apply — and it would keep asserting it until a second
-/// core connected.
+/// Breakage this pins: treating a complete explicit selection as All in this Analytics-only path.
+/// A single-core install would then hide the clicked core's name even though the exclusive menu
+/// shows that core checked and All unchecked.
 #[test]
-fn the_sole_core_name_shows_only_for_a_genuine_one_of_many_selection() {
+fn the_sole_core_name_shows_for_one_explicit_live_selection() {
     let two = vec![(1u64, "alpha".to_string()), (2u64, "beta".to_string())];
     let one = vec![(1u64, "alpha".to_string())];
 
@@ -118,13 +120,13 @@ fn the_sole_core_name_shows_only_for_a_genuine_one_of_many_selection() {
             "one of two is a real filter",
         ),
         (&two, vec![], None, "the implicit All names nothing"),
-        (&two, vec![1, 2], None, "an explicit All names nothing"),
         (
-            &one,
-            vec![1],
+            &two,
+            vec![1, 2],
             None,
-            "the only core ticked still reads as All",
+            "two explicit cores do not have one name",
         ),
+        (&one, vec![1], Some("alpha"), "one explicit core is not All"),
         (&one, vec![], None, "one core, implicit All"),
         // A deleted core keeps its id in the selection so the query cannot silently broaden. The
         // trigger counts only the ids that still resolve, so this reads as "1" there and must
@@ -157,5 +159,41 @@ fn a_stale_selected_id_names_no_core() {
         sole_core_name(&cores, &set),
         None,
         "an id no core answers to must not borrow another core's name"
+    );
+}
+
+/// The All row and clear button discard explicit checks before the next core click.
+///
+/// Plausible selection edit this catches: changing the `None => selected.clear()` arm in
+/// `toolbar.rs:toggle_analytics_core_selection` to `None => {}` while treating All as a visual-only
+/// row. The prior core checks would survive, and the next click would remove one instead of
+/// selecting it alone.
+///
+/// Plausible query edit this catches: changing
+/// `toolbar.rs:analytics_core_filter_ids` to return `Vec::new()` for a complete explicit set. A
+/// newly reported core would then enter Analytics results despite never being checked.
+#[test]
+fn all_is_exclusive_and_the_next_core_starts_a_fresh_selection() {
+    let mut selected = HashSet::from([1, 2]);
+    assert_eq!(
+        analytics_core_filter_ids(&selected)
+            .into_iter()
+            .collect::<HashSet<_>>(),
+        selected,
+        "a complete explicit selection must remain a bounded query filter"
+    );
+
+    assert!(toggle_analytics_core_selection(&mut selected, None));
+    assert!(selected.is_empty(), "All must discard every explicit check");
+    assert!(
+        analytics_core_filter_ids(&selected).is_empty(),
+        "only the exclusive All state may produce an unfiltered query"
+    );
+
+    assert!(toggle_analytics_core_selection(&mut selected, Some(2)));
+    assert_eq!(
+        selected,
+        HashSet::from([2]),
+        "the first core after All must be the only explicit check"
     );
 }
