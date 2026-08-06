@@ -125,13 +125,24 @@ impl FigureStore {
         self.rev = self.rev.wrapping_add(1);
     }
 
-    /// All alert figures for the Alerts window as `(core, market, &Figure)` tuples.
-    pub fn all_alerts(&self) -> impl Iterator<Item = (CoreId, &str, &Figure)> + '_ {
-        self.by_key.iter().flat_map(|((c, m), v)| {
-            v.iter()
-                .filter(|f| f.alert)
-                .map(move |f| (*c, m.as_str(), f))
-        })
+    /// Every READABLE figure in the store, as `(core, market, &Figure)` tuples.
+    ///
+    /// Readable excludes the [`Self::unknown`] set — figures written by a newer build that this one
+    /// cannot parse. They are kept and written back verbatim, but there is no `Figure` to yield and
+    /// nothing a list could usefully do with one.
+    ///
+    /// The Alerts panel lists the whole drawing layer — local figures and the core's own alerts
+    /// side by side — and decides for itself which of them to show. It is deliberately not an
+    /// "alerts only" iterator: a figure's `alert` flag is one of the columns the panel offers to
+    /// filter and sort by, and the flag is what its checkbox WRITES, so a figure has to be listed
+    /// before it can be armed.
+    ///
+    /// Each figure is yielded once, under the core that OWNS it — a figure shared onto other cores'
+    /// charts is not repeated per viewer.
+    pub fn all(&self) -> impl Iterator<Item = (CoreId, &str, &Figure)> + '_ {
+        self.by_key
+            .iter()
+            .flat_map(|((c, m), v)| v.iter().map(move |f| (*c, m.as_str(), f)))
     }
 
     /// The figure as seen from this chart: its own set first, then a figure another core shares

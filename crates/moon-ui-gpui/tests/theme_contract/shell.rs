@@ -1008,3 +1008,51 @@ fn core_settings_writes_all_go_through_the_seeded_target_guard() {
          not a bare b.active_trade_core(&self.group)"
     );
 }
+
+/// A table host must sit in a container that actually gives it HEIGHT.
+///
+/// This shipped broken twice in one sitting, both times invisible to every other gate: the build,
+/// the unit tests, clippy and FireTest all pass while the panel draws a row counter and no table at
+/// all — not even a header — because `MoonDataTable` is a virtual list with no content height of
+/// its own. Two ways to lose it, and this panel found both:
+///
+/// - a bare `div()` is `Display::Block` (gpui `Style::default`), where the host's `flex_1` is inert;
+/// - `h_flex()` is `flex_row().items_center()`, and a centred child is laid out at its content
+///   height, which for that list is zero.
+///
+/// In a COLUMN, `flex_1` is the height — so the rule is that the table's container is a `v_flex`
+/// carrying `flex_1`, and that the render lays nothing out with `h_flex`. Reverting either half
+/// must fail here rather than in a screenshot.
+#[test]
+fn the_alerts_table_sits_in_a_container_that_gives_it_height() {
+    let src = read_src("panels/alerts/mod.rs");
+    let render = code_only(braced_body(
+        &src,
+        "fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement",
+    ));
+    assert!(
+        render.contains("self.table(p, cx)"),
+        "the Alerts render no longer builds its table here; move this contract with it"
+    );
+    let container = render
+        .split_once("self.table(p, cx)")
+        .expect("checked above")
+        .0;
+    let container = container
+        .rsplit_once("let body = ")
+        .unwrap_or_else(|| panic!("the Alerts table must be built into a `body` container"))
+        .1;
+    assert!(
+        container.starts_with("v_flex()"),
+        "the Alerts table's container must be a `v_flex`, where `flex_1` is the HEIGHT; it is: {}",
+        container.lines().next().unwrap_or_default()
+    );
+    assert!(
+        container.contains(".flex_1()"),
+        "the Alerts table's container must claim the remaining height with `flex_1()`"
+    );
+    assert!(
+        !render.contains("h_flex()"),
+        "the Alerts render must not lay its body out with `h_flex()`: it centres its children, and          a centred virtual list is drawn at zero height"
+    );
+}

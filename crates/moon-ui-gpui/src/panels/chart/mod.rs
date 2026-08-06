@@ -207,7 +207,11 @@ pub struct ChartPanel {
     /// Per-figure settings panel: the figure it edits and the point it was opened at, or `None`
     /// when it is closed. One at a time on purpose — it is opened from a right-click on a figure,
     /// and a second panel would edit a figure the first one is already showing.
-    fig_settings: Option<crate::figstyle::FigStyleTarget>,
+    ///
+    /// The point is the chart's, not the panel's: it is where THIS host puts the frame, in WINDOW
+    /// coordinates — the same point the figure's context menu was opened at — and it is passed to
+    /// the renderer rather than carried inside the target.
+    fig_settings: Option<(crate::figstyle::FigStyleTarget, Point<Pixels>)>,
     /// Figure-store revision this panel last rebuilt geometry for. An edit bumps the store but no
     /// order does, and the userdata rebuild is gated on the order signature — this is what makes a
     /// restyled figure repaint at once instead of on the next order tick.

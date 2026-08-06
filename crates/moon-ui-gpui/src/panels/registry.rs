@@ -58,9 +58,10 @@ pub(crate) struct DockPanelKind {
     /// counting declares it HERE rather than in a second list beside this one. A panel whose
     /// counter is not colour-split will need its own shape here; today none is.
     pub(crate) tab_colour_counters: bool,
-    /// Build the panel for a dock. `info` = `Some` on registry restore lets Orders reapply its saved
-    /// sort/kind/filter/columns; `info` = `None` (repin or default layout) starts it fresh, because
-    /// its view state was not persisted in the dock JSON while it lived detached.
+    /// Build the panel for a dock. `info` = `Some` on registry restore lets a panel that persists
+    /// view state — Orders and Alerts — reapply its saved sort, filters and columns; `info` =
+    /// `None` (repin or default layout) starts it fresh, because that state was not persisted in
+    /// the dock JSON while the panel lived detached.
     mk_docked: MkDocked,
     /// Build the panel for its own detached OS window. Some panels use a distinct constructor here
     /// (Assets and CoreStatus use `detached_group`, not `restored_group`) and mark their tables as
@@ -157,14 +158,24 @@ pub(crate) const DOCK_PANELS: &[DockPanelKind] = &[
         name: "Alerts",
         home_order: Some(3),
         tab_colour_counters: false,
-        mk_docked: |b, g, _info, w, cx| {
-            Rc::new(cx.new(|cx| AlertsPanel::new(b.clone(), g.to_string(), w, cx)))
+        mk_docked: |b, g, info, w, cx| {
+            let panel = cx.new(|cx| match info {
+                // Restore replays the saved filters, sort and columns; a repin or a fresh layout
+                // starts from defaults.
+                Some(info) => AlertsPanel::restored(b.clone(), g.to_string(), info, w, cx),
+                None => AlertsPanel::new(b.clone(), g.to_string(), w, cx),
+            });
+            Rc::new(panel)
         },
-        mk_detached: |b, g, w, cx| DetachedContent {
-            view: cx
-                .new(|cx| AlertsPanel::new(b.clone(), g.to_string(), w, cx))
-                .into(),
-            widths_reset: None,
+        mk_detached: |b, g, w, cx| {
+            let p = cx.new(|cx| AlertsPanel::new(b.clone(), g.to_string(), w, cx));
+            // Detached tables share the `:win` width context across windows.
+            p.update(cx, |this, cx| this.mark_table_detached(cx));
+            let state = p.read(cx).table_state();
+            DetachedContent {
+                view: p.into(),
+                widths_reset: Some(("alerts-reset-widths-win", state)),
+            }
         },
     },
     DockPanelKind {

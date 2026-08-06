@@ -480,6 +480,10 @@ impl ChartPanel {
                 .map(|f| (f.alert, f.shared, f.can_alert(), f.can_share()))
                 .map(|s| (s, store.owns(core, &market, id)))
         };
+        // Whether the core can be commanded at all. A chart alert is attempted once and never
+        // retried, so `Backend::set_figure_alert` refuses while the core is not `Ready` — and this
+        // menu must not offer a click that would then do nothing.
+        let core_ready = self.backend.read(cx).core_can_command(core);
         let Some(((armed, shared, can_alert, can_share), owned)) = state else {
             return false;
         };
@@ -493,12 +497,18 @@ impl ChartPanel {
         // First item: this is what a right-click on a figure is FOR most of the time. Arming,
         // sharing and deleting are one-shot actions; the look is what gets fiddled with.
         let view = cx.entity();
-        let settings_target = crate::figstyle::FigStyleTarget {
-            core,
-            market: market.clone(),
-            id,
-            at: local_pos,
-        };
+        // The point the panel is anchored at travels beside the target, not inside it: it is where
+        // THIS host puts the frame, and the other hosts of the same panel have no click to speak of.
+        // The MENU's point, in window coordinates — the settings frame is snapped to the window the
+        // way the menu itself is, so it needs the same coordinate space and not the slot's.
+        let settings_target = (
+            crate::figstyle::FigStyleTarget {
+                core,
+                market: market.clone(),
+                id,
+            },
+            menu_pos,
+        );
         items.push(
             MoonMenuItem::with_key("fig-settings", t!("chart.fig_menu.settings").to_string())
                 .on_click(move |_, window, app| {
@@ -509,9 +519,10 @@ impl ChartPanel {
                     });
                 }),
         );
-        // A tool the core has no chart-object type for cannot be armed at all: offer the item only
-        // where it would work, instead of failing after the click.
-        if armed || can_alert {
+        // A tool the core has no chart-object type for cannot be armed at all, and neither arming
+        // nor disarming reaches a core that is not connected: offer the item only where it would
+        // work, instead of failing after the click.
+        if (armed || can_alert) && core_ready {
             let label = if armed {
                 t!("chart.fig_menu.alert_off")
             } else {
@@ -592,7 +603,7 @@ impl ChartPanel {
     /// another window closes it here too. Disarming the tool does NOT close it: the figure it
     /// edits is still on the chart, still selected and still editable.
     pub(super) fn drop_stale_fig_settings(&mut self, cx: &mut Context<Self>) {
-        let Some(target) = self.fig_settings.clone() else {
+        let Some((target, _)) = self.fig_settings.clone() else {
             return;
         };
         let b = self.backend.read(cx);

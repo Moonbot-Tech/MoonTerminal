@@ -704,10 +704,6 @@ chart.fig_menu.delete_shared:
   es: "Eliminar en todos los núcleos"
 
 # --- Alerts window ---
-alerts.window_title:
-  ru: "Алерты"
-  en: "Alerts"
-  es: "Alertas"
 alerts.col.core:
   ru: "Ядро"
   en: "Core"
@@ -732,10 +728,122 @@ alerts.col.strategy:
   ru: "Стратегия"
   en: "Strategy"
   es: "Estrategia"
-alerts.clear:
-  ru: "Убрать"
-  en: "Clear"
-  es: "Quitar"
+# Header of the checkbox column that ARMS a figure as a core alert.
+alerts.col.alert:
+  ru: "Алерт"
+  en: "Alert"
+  es: "Alerta"
+# The figure's TYPE, not where it was drawn: whether Moonbot has a chart-object type for this tool,
+# and therefore whether an alert can be put on it at all.
+alerts.col.kind:
+  ru: "Тип"
+  en: "Type"
+  es: "Tipo"
+alerts.kind.moonbot:
+  ru: "МБ"
+  en: "Moonbot"
+  es: "Moonbot"
+alerts.kind.terminal:
+  ru: "Терминал"
+  en: "Terminal"
+  es: "Terminal"
+alerts.all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+alerts.cores_n:
+  ru: "Ядер: %{n}"
+  en: "Cores: %{n}"
+  es: "Núcleos: %{n}"
+alerts.filter.kind.all:
+  ru: "Любой тип"
+  en: "Any type"
+  es: "Cualquier tipo"
+alerts.filter.kind.moonbot:
+  ru: "Только тип МБ"
+  en: "Moonbot types only"
+  es: "Solo tipos de Moonbot"
+alerts.filter.kind.terminal:
+  ru: "Только тип Терминал"
+  en: "Terminal types only"
+  es: "Solo tipos del terminal"
+alerts.filter.arm.all:
+  ru: "С алертом и без"
+  en: "Armed and not"
+  es: "Con alerta y sin"
+alerts.filter.arm.on:
+  ru: "Только с алертом"
+  en: "Armed only"
+  es: "Solo con alerta"
+alerts.filter.arm.off:
+  ru: "Только без алерта"
+  en: "Unarmed only"
+  es: "Solo sin alerta"
+# Short words for the scope field's trigger, which shows both filters side by side.
+alerts.short.moonbot:
+  ru: "МБ"
+  en: "MB"
+  es: "MB"
+alerts.short.terminal:
+  ru: "терм."
+  en: "terminal"
+  es: "terminal"
+alerts.short.armed:
+  ru: "алерты"
+  en: "armed"
+  es: "con alerta"
+alerts.short.unarmed:
+  ru: "без алерта"
+  en: "unarmed"
+  es: "sin alerta"
+alerts.columns:
+  ru: "Колонки"
+  en: "Columns"
+  es: "Columnas"
+alerts.empty:
+  ru: "Ни одной фигуры"
+  en: "No figures"
+  es: "Sin figuras"
+alerts.count:
+  ru: "Фигур: %{n}"
+  en: "Figures: %{n}"
+  es: "Figuras: %{n}"
+alerts.settings:
+  ru: "Настройки фигуры"
+  en: "Figure settings"
+  es: "Ajustes de la figura"
+alerts.delete:
+  ru: "Удалить фигуру"
+  en: "Delete the figure"
+  es: "Eliminar la figura"
+alerts.delete_armed:
+  ru: "Удалить фигуру и снять её алерт с ядра"
+  en: "Delete the figure and take its alert off the core"
+  es: "Eliminar la figura y quitar su alerta del núcleo"
+alerts.delete_core:
+  ru: "Удалить фигуру — и в Moonbot тоже"
+  en: "Delete the figure, in Moonbot too"
+  es: "Eliminar la figura, también en Moonbot"
+alerts.arm.hint:
+  ru: "Отправить фигуру в ядро как алерт"
+  en: "Send the figure to the core as an alert"
+  es: "Enviar la figura al núcleo como alerta"
+alerts.arm.from_core:
+  ru: "Алерт нарисован в Moonbot. Снять его можно только удалением"
+  en: "Drawn in Moonbot. Deleting it is the only way to take it off"
+  es: "Dibujada en Moonbot. Solo se quita eliminándola"
+alerts.arm.disarm_hint:
+  ru: "Снять алерт в ядре"
+  en: "Take the alert off the core"
+  es: "Quitar la alerta del núcleo"
+alerts.arm.shared:
+  ru: "Фигура общая для всех ядер — алерт ставится на одно"
+  en: "Shared with every core — an alert belongs to one"
+  es: "Compartida con todos los núcleos — la alerta es de uno"
+alerts.arm.offline:
+  ru: "Ядро не на связи — команда не дойдёт"
+  en: "The core is offline — the command would not arrive"
+  es: "El núcleo está desconectado — el comando no llegaría"
 alerts.duration:
   ru: "Длительность, сек"
   en: "Duration, sec"

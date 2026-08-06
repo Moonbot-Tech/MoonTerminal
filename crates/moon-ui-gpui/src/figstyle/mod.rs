@@ -20,8 +20,10 @@
 //! fill, because the alert blob has no field for one and the next reconcile would revert it.
 //!
 //! The CONTAINER is the host's, not this module's: over a chart the panel is placed at the clicked
-//! point and kept inside the slot that clips it, while in the tab strip it hangs under its button.
-//! [`rows`] is the shared content; the two `render*` functions are the two frames around it.
+//! point and kept inside the slot that clips it, in the tab strip it hangs under its button, and in
+//! the Alerts table it is a `MoonPopover` anchored to the row's gear — that host takes [`rows`]
+//! alone, because a popover paints its own surface. [`shell`] is the one frame this module owns,
+//! carrying the surface and the input guards for the two hosts that float over a chart.
 
 use gpui::*;
 use moon_ui::{
@@ -37,16 +39,14 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::design;
 
-/// Which figure the panel edits, and where it was opened.
+/// WHICH figure the panel edits. Identity only — where the panel is put is the frame's business,
+/// and each frame takes it as an argument, so a host that pins the panel to its own corner has no
+/// coordinate to invent.
 #[derive(Clone, PartialEq)]
 pub(crate) struct FigStyleTarget {
     pub core: CoreId,
     pub market: String,
     pub id: u64,
-    /// Where to put the panel: the clicked point in the chart slot's DEVICE pixels, which is what
-    /// every chart hit test speaks. The renderer divides by pixels-per-point, because layout is in
-    /// logical ones — get that wrong and the panel opens a scale factor away from the click.
-    pub at: (f32, f32),
 }
 
 /// What the panel is aimed at.
@@ -298,46 +298,45 @@ fn shell<V: 'static>(id: &'static str, cx: &mut Context<V>) -> Stateful<Div> {
 }
 
 /// Renders the panel over a chart, anchored at the point it was opened from.
+///
+/// `at` is that point in WINDOW coordinates — the same point the figure's context menu is opened
+/// with — and the frame is deferred and snapped to the window, exactly as a menu is. That is what
+/// replaced a hand-written clamp against the chart slot: the clamp had to know the slot's size, its
+/// scale factor and a guess at how much of the panel must stay visible, and it still left the panel
+/// running under the dock below, where the slot clipped it instead of scrolling it. The window is
+/// the only box that can answer "does this fit", so it is asked.
 pub(crate) fn render<V: 'static>(
     backend: &Entity<Backend>,
     target: &FigStyleTarget,
-    slot: (f32, f32),
-    ppp: f32,
+    at: Point<Pixels>,
     cx: &mut Context<V>,
 ) -> Option<AnyElement> {
     let content = rows(backend, &Target::Figure(target.clone()), None, cx)?;
-
-    // Device pixels — what the click was measured in — into the logical ones layout uses.
-    let at = (target.at.0 / ppp.max(0.1), target.at.1 / ppp.max(0.1));
-    // Kept inside the chart slot, which clips its children: a panel opened near an edge would
-    // otherwise be cut in half. The width scales with the font like the toolbar popup's, and the
-    // height is not guessed — the panel is capped at the room below it and scrolls inside that,
-    // so a Fibonacci's eleven switches stay reachable in a short pane.
-    let w = f32::from(design::font_w_px(cx, 232.0));
-    // Enough of the panel has to be ON screen to use: opened near the bottom it moves UP rather
-    // than hanging into a slot that clips its children, and only then is capped to what is left.
-    const MIN_H: f32 = 180.0;
-    let left = at.0.min((slot.0 - w).max(0.0)).max(0.0);
-    let top = at.1.min((slot.1 - MIN_H).max(0.0)).max(0.0);
-    let max_h = (slot.1 - top - 8.0).max(MIN_H.min(slot.1));
-
     Some(
-        shell("figstyle-panel", cx)
-            .left(px(left))
-            .top(px(top))
-            .w(px(w))
-            .max_h(px(max_h))
-            .overflow_y_scroll()
-            .child(content)
-            .into_any_element(),
+        deferred(
+            anchored()
+                .position(at)
+                .snap_to_window_with_margin(design::ui_px(cx, 8.0))
+                .child(
+                    shell("figstyle-panel", cx)
+                        // Grows with the font, like the toolbar's copy of this panel.
+                        .w(design::font_w_px(cx, 232.0))
+                        // A ceiling, not a fit: a Fibonacci's eleven switches scroll inside it
+                        // rather than making a panel taller than the window it must stay inside.
+                        .max_h(design::ui_px(cx, 420.0))
+                        .overflow_y_scroll()
+                        .child(content),
+                ),
+        )
+        .into_any_element(),
     )
 }
 
 /// Renders the panel under the toolbar button that opened it, for the tool's own defaults.
 ///
-/// The strip cannot measure the window, so the height cap is a fixed one rather than the chart
-/// frame's "what is left below the click"; the content scrolls inside it either way, which is what
-/// keeps a ratio scale's eleven switches reachable in a short window.
+/// Positioned by its trigger rather than by the window: it hangs from a button in the tab strip,
+/// which never moves out from under it. The height is a fixed cap and the content scrolls inside
+/// it, which is what keeps a ratio scale's eleven switches reachable in a short window.
 pub(crate) fn render_tool_defaults<V: 'static>(
     backend: &Entity<Backend>,
     tool: FigureTool,

@@ -5,7 +5,8 @@
 //! - [`detects`] shows the detachable group detection ribbon;
 //! - [`orders`] shows the group's open-order table, filters, sorting, and chart navigation;
 //! - [`assets`] shows balances and positions and supports wallet transfers;
-//! - [`alerts`] lists the group's local and core-managed chart alerts;
+//! - [`alerts`] lists every chart figure of the group's cores, local and core-drawn, and is where a
+//!   figure is armed as an alert;
 //! - [`log`] provides virtualized live and file-backed log browsing;
 //! - [`news`] shows the group's news feed, merged and deduplicated across cores by `meta.id`;
 //! - [`report`] queries and filters closed trades from SQLite;

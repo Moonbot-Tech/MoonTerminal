@@ -114,53 +114,104 @@ impl Backend {
         }
     }
 
-    /// Toggles the selected figure's Alert flag, upserting the chart alert when enabling it and
-    /// deleting the core alert when disabling it. A newly armed figure with no strategy inherits
-    /// the core's nonzero default strategy. Returns `false` if no selected figure exists in the
-    /// store; command-send errors do not roll back the local edit.
+    /// Toggles the selected figure's Alert flag. See [`Self::set_figure_alert`] for what arming and
+    /// disarming actually do; this is the hotkey's entry point and only resolves WHICH figure.
+    /// Returns `false` when nothing is selected.
     pub(crate) fn toggle_selected_figure_alert(&mut self) -> bool {
         let Some((core, market, id)) = self.fig_selected.clone() else {
             return false;
         };
+        let Some(armed) = self.figures.borrow().get(core, &market, id).map(|f| f.alert) else {
+            return false;
+        };
+        self.set_figure_alert(core, &market, id, !armed)
+    }
+
+    /// Sets a figure's Alert flag: upserting the chart alert when arming it and deleting the core
+    /// alert when disarming it. A newly armed figure with no strategy inherits the core's nonzero
+    /// default strategy.
+    ///
+    /// The single place the flag is written AND the rule it must obey — so the hotkey over a chart
+    /// and the Alerts panel's checkbox cannot arm a figure two different ways, and a surface that
+    /// greys its control is only DRAWING a refusal this function makes. Returns whether anything
+    /// changed; a missing figure, an unchanged flag and every refusal return `false`.
+    pub(crate) fn set_figure_alert(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        id: u64,
+        on: bool,
+    ) -> bool {
         // Arming is refused for a figure the core cannot represent — a tool it has no type for, or
-        // a figure shared across cores, which has no single core to arm it on. Disarming always
-        // runs: it only deletes whatever alert is out there.
-        let Some((armed, can_alert)) = self
+        // a figure shared across cores, which has no single core to arm it on.
+        let Some((armed, strategy_before, can_alert)) = self
             .figures
             .borrow()
-            .get(core, &market, id)
-            .map(|f| (f.alert, f.can_alert()))
+            .get(core, market, id)
+            .map(|f| (f.alert, f.strategy_id, f.can_alert()))
         else {
             return false;
         };
-        if !armed && !can_alert {
+        if armed == on || (on && !can_alert) {
             return false;
         }
+        // BOTH directions are refused while the core cannot be commanded. A chart-alert command is
+        // attempted once by the core's worker and never retried, so a flag flipped now would simply
+        // disagree with Moonbot: an arm nobody received, or a disarm that leaves the core firing an
+        // alert this side believes is gone.
+        if !self.core_can_command(core) {
+            return false;
+        }
+        let market = market.to_string();
         let def_strategy = self.alert_def_strategy(core);
         let mut upsert_blob = None;
-        let mut disarm = false;
         let changed = self.figures.borrow_mut().edit(core, &market, id, |fig| {
-            fig.alert = !fig.alert;
-            if fig.alert {
+            fig.alert = on;
+            if on {
                 // Apply the core's default strategy when arming a figure that has none.
                 if fig.strategy_id == 0 && def_strategy != 0 {
                     fig.strategy_id = def_strategy;
                 }
                 upsert_blob = figure_blob(fig);
-            } else {
-                disarm = true;
             }
             true
         });
         if !changed {
             return false;
         }
-        if let Some(blob) = upsert_blob {
-            let _ = self.session.chart_alert_upsert(core, market, id, blob);
-        } else if disarm {
-            let _ = self.session.chart_alert_delete(core, market, id);
+        let sent = match (on, upsert_blob) {
+            (true, Some(blob)) => self.session.chart_alert_upsert(core, market.clone(), id, blob),
+            (false, _) => self.session.chart_alert_delete(core, market.clone(), id),
+            // Arming produced no blob: a tool the encoder has no chart-object type for. Nothing was
+            // sent and nothing can be, so the flag it just set is a lie and rolls back below.
+            (true, None) => Err(anyhow::anyhow!("figure {id} has no chart-object encoding")),
+        };
+        // A command that never left the terminal must not leave the figure claiming otherwise. The
+        // flag is what the Alerts panel's checkbox and the chart's badge both read, and nothing else
+        // ever reconciles a LOCAL figure's flag against the core — an unsent arm would sit there
+        // ticked, and an unsent disarm would hide an alert the core is still firing.
+        if let Err(err) = sent {
+            log::warn!("chart alert not sent for figure {id} on {market}: {err}");
+            self.figures.borrow_mut().edit(core, &market, id, |fig| {
+                fig.alert = armed;
+                fig.strategy_id = strategy_before;
+                true
+            });
+            return false;
         }
         true
+    }
+
+    /// Whether a core is in a state that can carry a command it will not be asked twice for.
+    ///
+    /// `Ready` is the same test the Analytics purge and the tuner's core menu apply before offering
+    /// an action; chart alerts need it because the worker attempts the call once, logs a failure and
+    /// moves on.
+    pub(crate) fn core_can_command(&self, core: CoreId) -> bool {
+        self.session
+            .store()
+            .core(core)
+            .is_some_and(|c| c.status == moon_core::feed::ConnStatus::Ready)
     }
 
     /// Removes a figure and deletes its core alert if it was armed. The matching global selection

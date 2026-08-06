@@ -31,10 +31,12 @@ dock.tab.detects:
   ru: "Детекты"
   en: "Detects"
   es: "Detecciones"
+# The tab lists every chart FIGURE, armed or not — arming one is what it is for, but the list is
+# the drawing layer. `panel_name` stays "Alerts": it is the persistence key in `docks.json`.
 dock.tab.alerts:
-  ru: "Алерты"
-  en: "Alerts"
-  es: "Alertas"
+  ru: "Фигуры"
+  en: "Figures"
+  es: "Figuras"
 dock.tab.core_status:
   ru: "Статус ядер"
   en: "Core status"
