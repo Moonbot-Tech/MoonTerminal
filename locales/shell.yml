@@ -873,16 +873,26 @@ alerts.fig.channel:
   en: "Zone"
   es: "Zona"
 alerts.fig.fib_retracement:
-  ru: "Коррекция Фибоначчи"
-  en: "Fibonacci retracement"
-  es: "Retroceso de Fibonacci"
+  ru: "Фибоначчи"
+  en: "Fibonacci"
+  es: "Fibonacci"
 # Moonbot's own Fibonacci object, drawn here on Moonbot's terms and also received from a core.
 # Kept short — the alerts list's figure column is a fixed width and shares it with the price.
 alerts.fig.mb_fib:
-  ru: "Фибо Moonbot"
-  en: "Moonbot Fib"
-  es: "Fibo Moonbot"
+  ru: "Фибоначчи MB"
+  en: "Fibonacci MB"
+  es: "Fibonacci MB"
 alerts.fig.rect:
   ru: "Прямоугольник"
   en: "Rectangle"
   es: "Rectángulo"
+# Entry, target and stop with the two zones between them: a planned trade, long or short.
+alerts.fig.position:
+  ru: "Позиция"
+  en: "Position"
+  es: "Posición"
+# A line with ONE end: it starts where it was placed and runs off the chart through the second point.
+alerts.fig.ray:
+  ru: "Луч"
+  en: "Ray"
+  es: "Rayo"

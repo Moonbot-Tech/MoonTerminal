@@ -207,3 +207,36 @@ fn every_backend_draws_all_five_line_styles() {
         );
     }
 }
+
+/// All three backends must extend a RAY along its own direction.
+///
+/// The instance carries three extend modes, and two of them look alike from Rust: `1` moves the far
+/// end in TIME while keeping its price — which is right for an order line and turns any sloped
+/// figure horizontal — and `2` extrapolates through the second point. A backend that never learned
+/// the second one draws a ray as a flat line to the right edge, at the origin's price. Nothing else
+/// catches that: the geometry is built, uploaded and drawn, every test passes, and only the pixels
+/// on that one platform are wrong — and DX11 is the only backend anyone here runs daily.
+#[test]
+fn every_backend_extends_a_ray_along_its_direction() {
+    const BACKENDS: &[&str] = &[
+        "chartdx/shaders/order_lines.hlsl",
+        "chartdx/shaders/chart_native.metal",
+        "chartdx/shaders/native_seg.wgsl",
+    ];
+    for path in BACKENDS {
+        let src = read_src(path);
+        assert!(
+            src.contains("1.5"),
+            "{path}: no ray branch — the extend mode is not distinguished from the order line's"
+        );
+        assert!(
+            src.contains("normalize(d"),
+            "{path}: a ray's far end must be pushed along the a->b direction"
+        );
+        assert!(
+            src.contains("b_raw - a_raw"),
+            "{path}: the direction must come from the UNSNAPPED points; a one-pixel round over the \
+             ray's reach visibly tilts the line"
+        );
+    }
+}

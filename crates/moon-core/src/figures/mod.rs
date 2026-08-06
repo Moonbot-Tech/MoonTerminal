@@ -88,6 +88,15 @@ pub struct Figure {
     /// specific core, and there is no core to upsert to when the figure belongs to all of them.
     #[serde(default)]
     pub shared: bool,
+    /// When this session last sent an upsert for this figure, in Unix milliseconds; zero when it
+    /// sent none.
+    ///
+    /// Not persisted, and not a fact about the figure — a fact about a round trip in flight. The
+    /// reconcile below clears an `alert` the core turns out not to hold, and between our upsert and
+    /// the core's echo the core legitimately does not hold it yet. Measured on a live core, that
+    /// window is ~1.3 s.
+    #[serde(default, skip)]
+    pub alert_sent_ms: f64,
     /// Whether the figure CAME FROM THE CORE (an alert drawn in Moonbot) and was decoded from
     /// a server blob rather than drawn locally. Such figures are NOT persisted because the
     /// server owns them, and they disappear when the server removes them. They can still be
@@ -111,6 +120,7 @@ impl Figure {
             alert: false,
             strategy_id: 0,
             shared: false,
+            alert_sent_ms: 0.0,
             from_server: false,
         }
     }

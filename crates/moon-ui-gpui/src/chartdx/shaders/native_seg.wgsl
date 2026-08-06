@@ -46,14 +46,24 @@ struct SOut {
 
 @vertex
 fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> SOut {
+    // extend: 0 = as given, 1 = to the right edge at the SAME price (an order line), 2 = ray.
+    // A ray keeps its DIRECTION, so its far end is pushed along a->b past the plot and left to the
+    // clip — solving against an edge would divide by a direction component that is zero for a
+    // vertical ray. Two details matter: the direction is taken from the UNSNAPPED points, because a
+    // one-pixel round over a long reach visibly tilts the line, and the far end is not snapped at
+    // all for the same reason. Only the start keeps the snap that stops a thin line from flickering.
     let s = segs[iid];
+    let ray = s.m.z >= 1.5;
     let a_raw = data_to_px(cv, s.pts.x, s.pts.y);
-    let t1 = select(s.pts.z, cv.pad, s.m.z >= 0.5);
+    let t1 = select(s.pts.z, cv.pad, s.m.z >= 0.5 && !ray);
     let b_raw = data_to_px(cv, t1, s.pts.w);
     // Snap endpoint Y coordinates to whole pixels; otherwise a horizontal order line flickers
     // in thickness/brightness as view_price0 drifts by subpixels (matching hline's round()).
     let a = vec2<f32>(a_raw.x, round(a_raw.y));
-    let b = vec2<f32>(b_raw.x, round(b_raw.y));
+    let b_snapped = vec2<f32>(b_raw.x, round(b_raw.y));
+    let d = b_raw - a_raw;
+    let reach = length(cv.bounds.zw) + length(d) + 1.0;
+    let b = select(b_snapped, a + normalize(d + vec2<f32>(1e-6, 0.0)) * reach, ray);
     var dir = b - a;
     let len = max(length(dir), 1e-4);
     dir = dir / len;

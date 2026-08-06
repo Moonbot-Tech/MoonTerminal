@@ -46,6 +46,10 @@ pub(super) struct RecSink {
     /// Colour of each segment, in the same order: a coloured ratio scale is wrong if the hues are
     /// wrong, and geometry alone cannot see that.
     pub(super) seg_colors: Vec<[f32; 4]>,
+    /// Each ray, as `(origin, aimed-through)`. Kept apart from `segs` on purpose: a tool that
+    /// emitted a segment where a ray was meant would draw a line that simply stops, and a recorder
+    /// that folded the two together could not tell that from correct.
+    pub(super) rays: Vec<(FigNode, FigNode)>,
     /// `(t0_ms, t1_ms, p0, p1)` of each filled band.
     pub(super) bands: Vec<(f64, f64, f64, f64)>,
     /// Colour each band was filled with, in the same order.
@@ -65,6 +69,10 @@ impl GeomSink for RecSink {
     fn seg(&mut self, a: FigNode, b: FigNode, stroke: &Stroke) {
         self.segs.push((a, b));
         self.seg_colors.push(stroke.color);
+    }
+
+    fn ray(&mut self, a: FigNode, b: FigNode, _stroke: &Stroke) {
+        self.rays.push((a, b));
     }
 
     fn band(&mut self, t0_ms: f64, t1_ms: f64, p0: f64, p1: f64, color: [f32; 4]) {
@@ -126,7 +134,7 @@ fn registry_rows_match_their_tool_and_are_uniquely_keyed() {
         // strip the settings panel's fill swatches for a tool that has no fill to colour — a control
         // removed for a tool that never had it.
         assert!(
-            !def.level_palette || def.fills,
+            def.scale_swatch.is_none() || def.fills,
             "{} claims a level palette but fills nothing",
             def.key
         );

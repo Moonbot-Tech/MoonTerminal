@@ -127,6 +127,8 @@ pub struct ChartTabs {
     focus: FocusHandle,
     /// Whether the selected tool's settings panel is open under its toolbar button.
     fig_style_popup_open: bool,
+    /// Whether the drawing-tool list is open.
+    fig_tool_popup_open: bool,
     /// Anchored layout-settings popup for the active tab.
     /// Chart text renders below the regular GPUI scene, so this popup needs no separate OS window.
     layout_popup_open: bool,
@@ -484,6 +486,7 @@ impl ChartTabs {
             window_handle: window.window_handle(),
             focus: cx.focus_handle(),
             fig_style_popup_open: false,
+            fig_tool_popup_open: false,
             layout_popup_open: false,
             candle_popup_open: false,
             layout_fit_input,

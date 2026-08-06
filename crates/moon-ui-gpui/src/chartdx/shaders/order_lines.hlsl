@@ -102,16 +102,28 @@ StructuredBuffer<Seg> segs : register(t1);
 struct SOut { float4 pos : SV_Position; float4 color : COLOR0; nointerpolation float pattern : TEXCOORD0; float dist : TEXCOORD1; };
 
 SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+    // extend: 0 = as given, 1 = to the right edge at the SAME price (an order line), 2 = ray.
+    // A ray keeps its DIRECTION, so its far end is pushed along a->b past the plot and left to the
+    // clip — solving against an edge would divide by a direction component that is zero for a
+    // vertical ray. Two details matter: the direction is taken from the UNSNAPPED points, because a
+    // one-pixel round over a long reach visibly tilts the line, and the far end is not snapped at
+    // all for the same reason. Only the start keeps the snap that stops a thin line from flickering.
     Seg s = segs[iid];
-    float2 a = data_to_px(s.pts.x, s.pts.y);
-    float t1 = s.m.z >= 0.5 ? cv_pad : s.pts.z;
-    float2 b = data_to_px(t1, s.pts.w);
+    bool ray = s.m.z >= 1.5;
+    float2 a_raw = data_to_px(s.pts.x, s.pts.y);
+    float t1 = (s.m.z >= 0.5 && !ray) ? cv_pad : s.pts.z;
+    float2 b_raw = data_to_px(t1, s.pts.w);
     // Snap endpoint Y coordinates to whole pixels. An order line (entry/stop/trailing) is a
     // constant-price segment; at fractional Y, a thin line flickers in thickness/brightness as
     // view_price0 drifts by subpixels between base rebakes and lands on a different row than
     // rounded crosses/hlines. Preserve X so the horizontal extent remains smooth.
-    a.y = round(a.y);
-    b.y = round(b.y);
+    float2 a = float2(a_raw.x, round(a_raw.y));
+    float2 b = float2(b_raw.x, round(b_raw.y));
+    if (ray) {
+        float2 d = b_raw - a_raw;
+        float reach = length(cv_bounds.zw) + length(d) + 1.0;
+        b = a + normalize(d + float2(1e-6, 0.0)) * reach;
+    }
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;

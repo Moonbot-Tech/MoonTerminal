@@ -165,8 +165,12 @@ impl Backend {
         let market = market.to_string();
         let def_strategy = self.alert_def_strategy(core);
         let mut upsert_blob = None;
+        let now_ms = moon_chart::paint::now_unix_ms();
         let changed = self.figures.borrow_mut().edit(core, &market, id, |fig| {
             fig.alert = on;
+            // Stamped on the way OUT, cleared on the way back: `reconcile_local_alerts` reads it to
+            // tell an upsert still in flight from an object the core does not have.
+            fig.alert_sent_ms = if on { now_ms } else { 0.0 };
             if on {
                 // Apply the core's default strategy when arming a figure that has none.
                 if fig.strategy_id == 0 && def_strategy != 0 {
@@ -195,6 +199,7 @@ impl Backend {
             self.figures.borrow_mut().edit(core, &market, id, |fig| {
                 fig.alert = armed;
                 fig.strategy_id = strategy_before;
+                fig.alert_sent_ms = 0.0;
                 true
             });
             return false;
@@ -272,8 +277,19 @@ impl Backend {
     /// only after `chart_alerts_activity` changes.
     pub(crate) fn sync_remote_alerts(&mut self) {
         let mut server: HashMap<FigureKey, Vec<Figure>> = HashMap::new();
+        // What the cores actually hold, and which of them may be believed about it — see
+        // `FigureStore::reconcile_local_alerts`. A core is believed once it is connected AND has
+        // reported its chart-alert set at least once (`chart_alerts_rev`), because it is asked for
+        // a full snapshot on connect; before that, an empty set means "has not said" rather than
+        // "holds nothing".
+        let mut held: std::collections::HashSet<(CoreId, u64)> = std::collections::HashSet::new();
+        let mut authoritative: std::collections::HashSet<CoreId> = std::collections::HashSet::new();
         for (core, data) in self.session.store().cores() {
+            if data.chart_alerts_rev > 0 && data.status == moon_core::feed::ConnStatus::Ready {
+                authoritative.insert(core);
+            }
             for ((market, obj_uid), blob) in &data.chart_alerts {
+                held.insert((core, *obj_uid));
                 let Some(d) = alert_blob::decode(blob) else {
                     // The raw bytes of every incoming object are already logged as hex by the feed
                     // (`feed::live`, for exactly this reverse engineering), so an undecodable one
@@ -306,11 +322,20 @@ impl Backend {
                         alert: true,
                         strategy_id: d.strategy_id,
                         shared: false,
+                        // Nothing is in flight for a figure the core just handed us.
+                        alert_sent_ms: 0.0,
                         from_server: true,
                     });
             }
         }
         self.figures.borrow_mut().set_server_figures(server);
+        // AFTER the server set is in place: a figure Moonbot dropped is already gone from it, and
+        // this is what stops a LOCAL figure from claiming an alert the core no longer has.
+        self.figures.borrow_mut().reconcile_local_alerts(
+            &held,
+            &authoritative,
+            moon_chart::paint::now_unix_ms(),
+        );
     }
 
     /// Sets a figure's Alerts-strategy ID, where zero means no strategy. A changed value marks the

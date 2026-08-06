@@ -26,8 +26,8 @@ use moon_core::figures::{
 };
 
 use crate::layers::{
-    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT,
-    TIME_UNBOUNDED,
+    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT, SEG_EXTEND_NONE,
+    SEG_EXTEND_RAY, TIME_UNBOUNDED,
 };
 
 /// Opacity of an idle (inactive) figure.
@@ -206,7 +206,22 @@ impl GeomSink for Sink<'_, '_> {
             p1: b.price as f32,
             thickness: stroke.thickness,
             pattern: seg_pattern(stroke.kind),
-            extend: 0.0,
+            extend: SEG_EXTEND_NONE,
+            color: stroke.color,
+        });
+    }
+
+    fn ray(&mut self, a: FigNode, b: FigNode, stroke: &Stroke) {
+        self.out.segs.push(SegInstance {
+            t0_rel: self.to_rel(a.time_ms),
+            p0: a.price as f32,
+            t1_rel: self.to_rel(b.time_ms),
+            p1: b.price as f32,
+            thickness: stroke.thickness,
+            pattern: seg_pattern(stroke.kind),
+            // The second point stays exactly where the tool put it: it is the DIRECTION, and the
+            // shader extrapolates through it to whichever plot edge the ray points at.
+            extend: SEG_EXTEND_RAY,
             color: stroke.color,
         });
     }
@@ -271,6 +286,9 @@ impl GeomSink for Sink<'_, '_> {
             LabelText::Price(p) => LabelValue::Price(p),
             LabelText::PctDelta { from, to } => LabelValue::PctDelta { from, to },
             LabelText::Level { ratio, price } => LabelValue::Ready(fmt_level(ratio, price).into()),
+            // Two decimals: the number is compared against a habit ("at least two to one"), not
+            // measured, and a third digit only makes it harder to read at a glance.
+            LabelText::RiskReward(rr) => LabelValue::Ready(format!("R:R {rr:.2}").into()),
         };
         self.out.labels.push(FigureLabel {
             t_rel: self.to_rel(at.time_ms),

@@ -54,6 +54,8 @@ pub enum LabelText {
     PctDelta { from: f64, to: f64 },
     /// A level of a ratio scale and the price it sits at, e.g. `0.618 (6109.48)`.
     Level { ratio: f64, price: f64 },
+    /// Reward over risk, e.g. `R:R 2.00` — what a planned position pays for what it stakes.
+    RiskReward(f64),
 }
 
 /// Receiver for the primitives a figure is made of.
@@ -66,6 +68,14 @@ pub trait GeomSink {
 
     /// Line segment between two nodes.
     fn seg(&mut self, a: FigNode, b: FigNode, stroke: &Stroke);
+
+    /// Half-infinite line: starts at `a`, passes through `b`, and runs to the edge of the plot.
+    ///
+    /// Separate from [`Self::seg`] because the far end is not a POINT a tool could compute. It
+    /// depends on the visible window, which moves with every pan and zoom, and a tool that knew the
+    /// window would have to be rebuilt on each of them. The implementor owns the view, so it does
+    /// the extrapolation — per frame, on the GPU, for free.
+    fn ray(&mut self, a: FigNode, b: FigNode, stroke: &Stroke);
 
     /// Filled band between two prices, bounded in time by two nodes' times.
     ///

@@ -149,7 +149,12 @@ pub fn encode(
         // OUR Fibonacci is a different object from Moonbot's: eleven ratios between two points
         // against seven stored prices across the whole chart. Sending one as the other would have
         // the core draw something the user did not draw, so it stays local. See `MbFib`.
-        FigureKind::FibRetracement(_) | FigureKind::Rect(_) => return None,
+        // Local-only kinds. A ray has no core type at all: the format's five are hline, segment,
+        // fibo, triangle and zone, and none of them is half-infinite.
+        FigureKind::FibRetracement(_)
+        | FigureKind::Rect(_)
+        | FigureKind::Ray(_)
+        | FigureKind::Position(_) => return None,
     };
     let mut out = Vec::with_capacity(96);
     out.push(ty);
@@ -202,7 +207,10 @@ pub fn encode(
             }
         }
         // Unreachable: the type byte above already refused these kinds.
-        FigureKind::FibRetracement(_) | FigureKind::Rect(_) => return None,
+        FigureKind::FibRetracement(_)
+        | FigureKind::Rect(_)
+        | FigureKind::Ray(_)
+        | FigureKind::Position(_) => return None,
     }
     Some(out)
 }

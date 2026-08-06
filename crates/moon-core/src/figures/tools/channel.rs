@@ -26,7 +26,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.channel",
     glyph: "☰",
     clicks: 2,
-    level_palette: false,
+    scale_swatch: None,
     fills: true,
     alertable: true,
     make: |nodes| match nodes {
