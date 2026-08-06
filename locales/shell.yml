@@ -749,21 +749,21 @@ alerts.sound:
   en: "Sound"
   es: "Sonido"
 alerts.fig.hline:
-  ru: "Горизонталь"
-  en: "Price Line"
-  es: "Línea de precio"
-alerts.fig.line:
   ru: "Линия"
   en: "Line"
   es: "Línea"
+alerts.fig.line:
+  ru: "Отрезок"
+  en: "Segment"
+  es: "Segmento"
 alerts.fig.triangle:
   ru: "Треугольник"
   en: "Triangle"
   es: "Triángulo"
 alerts.fig.channel:
-  ru: "Канал"
-  en: "Channel"
-  es: "Canal"
+  ru: "Зона"
+  en: "Zone"
+  es: "Zona"
 alerts.fig.fib_retracement:
   ru: "Коррекция Фибоначчи"
   en: "Fibonacci retracement"

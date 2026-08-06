@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use moon_core::alert_blob;
-use moon_core::figures::{DrawStyle, Figure, FigureKey, FigureTool, ToolSetting, ToolSettings};
+use moon_core::figures::{
+    DrawStyle, Figure, FigureKey, FigureTool, ToolSetting, ToolSettings, DEFAULT_FILL_ALPHA,
+};
 use moon_core::session::CoreId;
 
 use crate::Backend;
@@ -232,10 +234,18 @@ impl Backend {
                     .or_default()
                     .push(Figure {
                         id: *obj_uid,
+                        // The blob carries no fill — every sampled length is accounted for by the
+                        // header and the geometry — so a tool that FILLS gets one derived from its
+                        // line colour, which is what Moonbot itself draws. Deterministic on purpose:
+                        // the next reconcile rebuilds this figure from the same bytes and must
+                        // arrive at the same fill, which is also why the settings panel offers no
+                        // fill row for a server figure.
+                        fill: match d.kind.tool().def().fills {
+                            true => [d.color[0], d.color[1], d.color[2], DEFAULT_FILL_ALPHA],
+                            false => [0; 4],
+                        },
                         kind: d.kind,
                         color: d.color,
-                        // The core's chart objects carry no fill; the blob has no field for one.
-                        fill: [0; 4],
                         thickness: d.thickness,
                         line_kind: d.line_kind,
                         // ROUNDED, not truncated. The store keeps whole milliseconds while a

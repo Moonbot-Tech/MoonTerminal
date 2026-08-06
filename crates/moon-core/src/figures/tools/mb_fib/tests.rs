@@ -111,7 +111,11 @@ fn the_nearest_level_is_what_is_grabbed() {
 fn the_levels_are_named_on_an_idle_chart() {
     use crate::figures::tools::tests::{build, ctx};
     let rec = build(&FigureKind::MbFib(sample()), ctx(false, false));
-    assert_eq!(rec.labels.len(), 7, "every level names itself at rest");
+    assert_eq!(
+        rec.labels.len(),
+        6,
+        "every level but the one on the anchor names itself at rest"
+    );
     assert_eq!(rec.hlines.len(), 7, "and draws across the whole chart");
     assert!(rec.handles.is_empty(), "and offers no drag knot");
 }
@@ -129,4 +133,68 @@ fn an_unusable_level_is_absent_from_both_the_picture_and_the_hit_test() {
         f.hit(far, &proj) > 100.0,
         "a level that is not drawn must not be grabbable"
     );
+}
+
+/// The level that sits ON an anchor draws its line and carries no name.
+///
+/// Which anchor it is flips with the direction the fib was drawn — measured on live samples, an
+/// upward one puts it on `a` and a downward one on `b` — so the same slot would be named 0 in one
+/// and 1 in the other. Moonbot leaves it bare as well.
+#[test]
+fn the_level_on_the_anchor_is_drawn_but_not_named() {
+    use crate::figures::tools::tests::{build, ctx};
+    // The downward sample: `a` is the higher price and the first level lands on `b`.
+    let down = MbFib {
+        a: 2026.76,
+        b: 1997.2145,
+        time_ms: 1_754_400_000_000.0,
+        levels: [
+            1997.2145, 2019.7873, 2015.4736, 2011.9872, 2008.5009, 2003.5372, 1990.2417,
+        ],
+    };
+    assert_eq!(down.ratio_of(down.levels[0]), Some(1.0), "it is the anchor");
+    for f in [sample(), down] {
+        let rec = build(&FigureKind::MbFib(f), ctx(false, false));
+        assert_eq!(rec.hlines.len(), 7, "every level draws its line");
+        assert_eq!(rec.labels.len(), 6, "the anchor level carries no name");
+    }
+}
+
+/// The scale is filled between its levels, in the levels' own hues.
+///
+/// Moonbot draws those bands and sends no fill — every byte of the 145 is accounted for — so they
+/// come from the same palette our own Fibonacci uses, read by the ratio each level recovers to.
+/// Ordered by PRICE and not by slot: a fib drawn downward writes its anchor level first, so banding
+/// the array as stored would join levels that are not neighbours on the chart.
+#[test]
+fn the_scale_is_filled_between_its_levels_in_their_own_hues() {
+    use crate::figures::tools::tests::{build, ctx};
+    let down = MbFib {
+        a: 2026.76,
+        b: 1997.2145,
+        time_ms: 1_754_400_000_000.0,
+        levels: [
+            1997.2145, 2019.7873, 2015.4736, 2011.9872, 2008.5009, 2003.5372, 1990.2417,
+        ],
+    };
+    for f in [sample(), down] {
+        let rec = build(&FigureKind::MbFib(f), ctx(false, false));
+        assert!(!rec.bands.is_empty(), "a scale without bands is not filled");
+        for (_, _, p0, p1) in &rec.bands {
+            let (lo, hi) = (p0.min(*p1), p0.max(*p1));
+            // Every band joins two ADJACENT drawn levels: nothing else may lie between them.
+            let between = f
+                .drawn()
+                .filter(|p| *p > lo + 1e-9 && *p < hi - 1e-9)
+                .count();
+            assert_eq!(between, 0, "band {lo}..{hi} skips a level");
+        }
+        // And no band is painted in the figure's own colour: the hues belong to the scale.
+        for c in &rec.band_colors {
+            assert!(
+                c[..3] != [1.0, 1.0, 1.0],
+                "a band took the stroke colour instead of its level's hue"
+            );
+        }
+    }
 }

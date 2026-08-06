@@ -55,8 +55,12 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.mb_fib",
     glyph: "▤",
     clicks: 0,
-    level_palette: false,
-    fills: false,
+    // Coloured by the scale, and filled between its levels, exactly as our own Fibonacci is: the
+    // blob carries one line colour and no fill at all — every sampled length is accounted for by
+    // the header and the geometry — so the bands Moonbot draws are its own level palette, and ours
+    // are the same palette read by the ratio each level recovers to.
+    level_palette: true,
+    fills: true,
     alertable: true,
     // Arrives from the core; the toolbar offers our own Fibonacci instead.
     drawable: false,
@@ -150,6 +154,35 @@ impl ToolShape for MbFib {
     }
 
     fn build(&self, ctx: &BuildCtx, sink: &mut dyn GeomSink) {
+        // The bands first, under the lines that bound them. Moonbot's levels are NOT stored in
+        // ratio order — a fib drawn downward writes its anchor level first — so they are ordered by
+        // price here, and each band takes the hue of the level with the smaller ratio, which is the
+        // rule our own scale follows. A gap with no hue on either side is left unfilled rather than
+        // guessed at: Moonbot's ratio set is a setting on that side and need not match ours.
+        let mut ordered: Vec<(f64, Option<f64>)> =
+            self.drawn().map(|p| (p, self.ratio_of(p))).collect();
+        ordered.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for pair in ordered.windows(2) {
+            let [(p0, r0), (p1, r1)] = [pair[0], pair[1]];
+            let hue = match (r0, r1) {
+                (Some(a), Some(b)) => super::super::levels::color_of_ratio(a.min(b)),
+                _ => None,
+            };
+            if let Some([r, g, b]) = hue {
+                sink.band(
+                    f64::NEG_INFINITY,
+                    f64::INFINITY,
+                    p0,
+                    p1,
+                    [
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                        ctx.fill[3],
+                    ],
+                );
+            }
+        }
         for price in self.drawn() {
             sink.hline(price, &ctx.stroke);
             // The readout is the point of a ratio scale, so it is drawn at rest rather than on
@@ -157,10 +190,25 @@ impl ToolShape for MbFib {
             // A level whose ratio cannot be named draws its line and stays silent. A bare price in
             // a column of ratios reads as something else entirely, and it would also slip past the
             // per-tab switch that hides the rest of the column.
-            if let Some(ratio) = self.ratio_of(price) {
+            //
+            // The level sitting ON an anchor is silent for a different reason: it is the move's own
+            // end rather than a retracement of it, and which end that is cannot be read from the
+            // bytes. Measured across live samples: a fib drawn UP puts that level on `a`, one drawn
+            // DOWN puts it on `b`, so the same slot is ratio 0 in one and ratio 1 in the other and
+            // we would name one of them wrong. Moonbot leaves it unlabelled too — its own chart
+            // names six levels and draws the seventh bare. A line with no name is never wrong; a
+            // line with the wrong number is.
+            if let Some(ratio) = self.ratio_of(price).filter(|r| *r != 0.0 && *r != 1.0) {
                 sink.label(
                     FigNode::new(0.0, price),
-                    LabelPlace::RightEdge,
+                    // Read as a COLUMN at the left edge, where Moonbot puts its own and where the
+                    // eye starts a row. The span is the whole chart because the figure is: the
+                    // renderer clips the anchor into the plot, so an unbounded left end lands on
+                    // the plot's left edge.
+                    LabelPlace::LineSpan {
+                        t0_ms: f64::NEG_INFINITY,
+                        t1_ms: f64::INFINITY,
+                    },
                     LabelText::Level { ratio, price },
                     ctx.stroke.color,
                 );

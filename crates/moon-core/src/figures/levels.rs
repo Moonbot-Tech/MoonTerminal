@@ -166,6 +166,18 @@ const NAMED_RATIOS: &[f64] = &[
     0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.236, 1.272, 1.414, 1.618, 2.0, 2.618, 3.618, 4.236,
 ];
 
+/// The hue a ratio is drawn in, for a scale whose levels were RECOVERED rather than chosen.
+///
+/// Looks the ratio up in [`FIB_LEVELS`], so a level named 0.618 is the same teal whether our own
+/// tool placed it or Moonbot's object arrived carrying its price. `None` for a ratio our scale has
+/// no entry for — Moonbot's set is a user setting on that side and need not match ours.
+pub fn color_of_ratio(ratio: f64) -> Option<[u8; 3]> {
+    FIB_LEVELS
+        .iter()
+        .find(|l| (l.ratio - ratio).abs() < 1e-6)
+        .map(|l| l.color)
+}
+
 /// Names a recovered ratio, snapping it to a canonical one when the measurement cannot tell them
 /// apart.
 ///
