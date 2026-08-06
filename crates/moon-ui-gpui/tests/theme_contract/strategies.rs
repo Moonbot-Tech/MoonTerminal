@@ -346,3 +346,25 @@ fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
         "every listed core must emit its own row, pruned or not"
     );
 }
+
+/// `core_folder_row`'s expand/collapse marker must stay a passive `MoonDisclosure::glyph`.
+///
+/// Plausible edit: swap `MoonDisclosure::glyph(expanded)` for `MoonDisclosure::button(id, ..)` so
+/// the marker "looks" clickable on its own. In this fork `should_insert_hitbox` inserts a hitbox
+/// for a cursor, a hover style OR a listener — `button` installs all three — so the marker would
+/// then take a hitbox of its own and swallow the click meant for the whole `strat-tree-cf-*` row,
+/// which is what actually expands/selects on click. Clicking anywhere else on the row still works,
+/// so this is invisible without clicking the marker itself.
+#[test]
+fn a_core_folder_row_marker_stays_passive() {
+    let src = read_src("strategies/tree/moon.rs");
+    let body = code_only(braced_body(&src, "fn core_folder_row("));
+    assert!(
+        body.contains("MoonDisclosure::glyph(expanded)"),
+        "the core/folder row marker must stay a passive MoonDisclosure::glyph, not ::button"
+    );
+    assert!(
+        !body.contains("MoonDisclosure::button("),
+        "an interactive MoonDisclosure::button here would take a hitbox and swallow the row's click"
+    );
+}

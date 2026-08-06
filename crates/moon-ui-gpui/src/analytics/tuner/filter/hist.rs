@@ -37,7 +37,14 @@ impl AnalyticsView {
         )
     }
 
-    /// Histogram of the selected field: wins up, losses down, the count and the edges.
+    /// Render the selected field's histogram with wins above and losses below the axis.
+    ///
+    /// Args:
+    ///     p: Active MoonUI palette.
+    ///     cx: Analytics view context.
+    ///
+    /// Returns:
+    ///     A histogram card with its count, bin edges, and collapse control.
     pub(in crate::analytics::tuner) fn hist_card(
         &self,
         p: MoonPalette,
@@ -59,10 +66,8 @@ impl AnalyticsView {
             t!("analytics.tuner.hist_collapse").to_string(),
             t!("analytics.tuner.hist_expand").to_string(),
             p,
-            cx,
-        )
-        .on_click(cx.listener(|this, _, _, cx| this.toggle_hist_collapsed(cx)))
-        .into_any_element();
+            cx.listener(|this, _, _, cx| this.toggle_hist_collapsed(cx)),
+        );
         // Collapsed skips the bar geometry entirely, but NOT the read behind it: the histogram
         // keeps loading, so expanding shows the chart rather than a spinner.
         let body = if self.hist_collapsed {

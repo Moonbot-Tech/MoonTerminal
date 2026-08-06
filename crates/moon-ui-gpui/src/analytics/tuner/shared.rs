@@ -5,7 +5,9 @@
 //! between them, and a helper that drifts in here stops being reviewable as shared.
 
 use gpui::*;
-use moon_ui::{MoonPalette, MoonTooltipView, h_flex, v_flex};
+use moon_ui::{
+    MoonDisclosure, MoonDisclosureDirection, MoonPalette, MoonTooltipView, h_flex, v_flex,
+};
 
 use super::super::AnalyticsView;
 use crate::design;
@@ -156,36 +158,41 @@ pub(super) fn glyph_btn(
         .child(glyph)
 }
 
-/// A card's collapse caret, for the title-bar `accessory` slot; the caller adds its own
-/// `.on_click`.
+/// A card's collapse caret, for the title-bar `accessory` slot.
 ///
-/// ▲ (expanded) folds the card away, ▼ (collapsed) unfolds it — the up/down convention of the
-/// strategy tree. Glyph and tooltip are chosen together here so they cannot drift apart, and
-/// callers build it BEFORE their data match so it does not blink out while the card is loading
-/// or after a read failure.
+/// Draws MoonUI's shared [`MoonDisclosure`] in the explicit `DownUp` pose: down while collapsed and
+/// up while expanded. The helper selects the pose and tooltip together, and callers build it before
+/// matching their data state so the caret remains visible during loading and read failures.
+///
+/// `MoonDisclosure` implements `RenderOnce`, so the click handler is supplied before rendering.
+/// Pass `cx.listener(..)`; its output type matches `on_toggle` and keeps this helper independent of
+/// a concrete view type.
 ///
 /// Args:
 ///     id: Stable element id of this card's caret.
 ///     collapsed: Whether the card is folded right now.
 ///     collapse_tip: Tooltip shown while expanded (what the click will do).
 ///     expand_tip: Tooltip shown while collapsed.
-///     p: Active palette.
-///     cx: Analytics context.
+///     p: Active palette used for the hover color.
+///     on_toggle: Receives the next expanded state on click; build it with `cx.listener(..)`.
 ///
 /// Returns:
-///     The caret as a stateful div, awaiting its click handler.
+///     An interactive caret ready for the accessory slot.
 pub(super) fn collapse_caret(
     id: impl Into<ElementId>,
     collapsed: bool,
     collapse_tip: String,
     expand_tip: String,
     p: MoonPalette,
-    cx: &Context<AnalyticsView>,
-) -> Stateful<Div> {
-    let (glyph, tip) = if collapsed {
-        ("▼", expand_tip)
-    } else {
-        ("▲", collapse_tip)
-    };
-    glyph_btn(id, glyph, tip, p.text, p, cx)
+    on_toggle: impl Fn(&bool, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let tip = if collapsed { expand_tip } else { collapse_tip };
+    MoonDisclosure::button(id, !collapsed)
+        .direction(MoonDisclosureDirection::DownUp)
+        .size(design::DISCLOSURE_GLYPH)
+        .box_size(design::DISCLOSURE_BOX)
+        .hover_color(p.text)
+        .tooltip(tip)
+        .on_toggle(on_toggle)
+        .into_any_element()
 }

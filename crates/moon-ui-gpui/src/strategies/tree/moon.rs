@@ -11,8 +11,9 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
-    MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta, h_flex,
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
+    MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta,
+    h_flex,
 };
 
 use super::super::filter::PreparedFilter;
@@ -687,6 +688,24 @@ enum ToggleTarget {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Render a clickable core, folder, or Deleted heading in the strategy tree.
+///
+/// Actual folders also receive the context menu assembled inside this function. The disclosure
+/// glyph remains passive because the enclosing row handles interaction.
+///
+/// Args:
+///     view: Strategies view updated by row interactions.
+///     expanded: Whether the heading's children are visible.
+///     selected: Whether to draw the selected-folder highlight.
+///     indent: Leading indentation for the tree depth.
+///     text: Heading label and count summary.
+///     color: Heading text color.
+///     weight: Heading font weight.
+///     target: Core, folder, or Deleted collection toggled by the row.
+///     app: Application context used for palette and sizing tokens.
+///
+/// Returns:
+///     The complete interactive tree row.
 fn core_folder_row(
     view: &Entity<StrategiesView>,
     expanded: bool,
@@ -699,7 +718,6 @@ fn core_folder_row(
     app: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(app);
-    let marker = if expanded { "▼" } else { "▶" };
     // In this core/folder row type, only actual folders receive the egui-style context menu for
     // rename, copy, paste, create, and delete; core and Deleted headings do not.
     let menu = match &target {
@@ -720,12 +738,13 @@ fn core_folder_row(
         .rounded(design::ui_px(app, 3.0))
         .when(selected, |s| s.bg(moon_alpha(p.amber, 0.14)))
         .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
+        // Passive: the whole row carries the click that expands or collapses this node, so the
+        // marker stays hitbox-free and cannot swallow it.
+        // Chrome, so it tracks the UI slider rather than the row's own text scale.
         .child(
-            MoonText::new(marker)
-                .mono(true)
-                .uppercase(false)
-                .color(p.text_muted)
-                .render(),
+            MoonDisclosure::glyph(expanded)
+                .size(design::DISCLOSURE_GLYPH_MARKER)
+                .box_size(design::DISCLOSURE_BOX),
         )
         .child(
             MoonText::new(text)

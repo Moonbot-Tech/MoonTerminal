@@ -77,10 +77,8 @@ pub(super) fn kpi_matrix_card(
         t!("analytics.tuner.kpi_collapse").to_string(),
         t!("analytics.tuner.kpi_expand").to_string(),
         p,
-        cx,
-    )
-    .on_click(cx.listener(|this, _, _, cx| this.toggle_kpi_collapsed(cx)))
-    .into_any_element();
+        cx.listener(|this, _, _, cx| this.toggle_kpi_collapsed(cx)),
+    );
     // No empty state by design: `stats.len() == variants.len()` always, so
     // the only non-data cases are loading / not-ready / read failure.
     let stats = match stats.view(|_| false) {
