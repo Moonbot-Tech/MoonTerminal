@@ -111,7 +111,11 @@ fn the_nearest_level_is_what_is_grabbed() {
 fn the_levels_are_named_on_an_idle_chart() {
     use crate::figures::tools::tests::{build, ctx};
     let rec = build(&FigureKind::MbFib(sample()), ctx(false, false));
-    assert_eq!(rec.labels.len(), 7, "every level names itself at rest");
+    assert_eq!(
+        rec.labels.len(),
+        6,
+        "every level but the one on the anchor names itself at rest"
+    );
     assert_eq!(rec.hlines.len(), 7, "and draws across the whole chart");
     assert!(rec.handles.is_empty(), "and offers no drag knot");
 }
@@ -129,4 +133,29 @@ fn an_unusable_level_is_absent_from_both_the_picture_and_the_hit_test() {
         f.hit(far, &proj) > 100.0,
         "a level that is not drawn must not be grabbable"
     );
+}
+
+/// The level that sits ON an anchor draws its line and carries no name.
+///
+/// Which anchor it is flips with the direction the fib was drawn — measured on live samples, an
+/// upward one puts it on `a` and a downward one on `b` — so the same slot would be named 0 in one
+/// and 1 in the other. Moonbot leaves it bare as well.
+#[test]
+fn the_level_on_the_anchor_is_drawn_but_not_named() {
+    use crate::figures::tools::tests::{build, ctx};
+    // The downward sample: `a` is the higher price and the first level lands on `b`.
+    let down = MbFib {
+        a: 2026.76,
+        b: 1997.2145,
+        time_ms: 1_754_400_000_000.0,
+        levels: [
+            1997.2145, 2019.7873, 2015.4736, 2011.9872, 2008.5009, 2003.5372, 1990.2417,
+        ],
+    };
+    assert_eq!(down.ratio_of(down.levels[0]), Some(1.0), "it is the anchor");
+    for f in [sample(), down] {
+        let rec = build(&FigureKind::MbFib(f), ctx(false, false));
+        assert_eq!(rec.hlines.len(), 7, "every level draws its line");
+        assert_eq!(rec.labels.len(), 6, "the anchor level carries no name");
+    }
 }

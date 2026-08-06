@@ -157,7 +157,15 @@ impl ToolShape for MbFib {
             // A level whose ratio cannot be named draws its line and stays silent. A bare price in
             // a column of ratios reads as something else entirely, and it would also slip past the
             // per-tab switch that hides the rest of the column.
-            if let Some(ratio) = self.ratio_of(price) {
+            //
+            // The level sitting ON an anchor is silent for a different reason: it is the move's own
+            // end rather than a retracement of it, and which end that is cannot be read from the
+            // bytes. Measured across live samples: a fib drawn UP puts that level on `a`, one drawn
+            // DOWN puts it on `b`, so the same slot is ratio 0 in one and ratio 1 in the other and
+            // we would name one of them wrong. Moonbot leaves it unlabelled too — its own chart
+            // names six levels and draws the seventh bare. A line with no name is never wrong; a
+            // line with the wrong number is.
+            if let Some(ratio) = self.ratio_of(price).filter(|r| *r != 0.0 && *r != 1.0) {
                 sink.label(
                     FigNode::new(0.0, price),
                     LabelPlace::RightEdge,
