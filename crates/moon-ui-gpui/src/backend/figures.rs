@@ -237,7 +237,12 @@ impl Backend {
                         fill: [0; 4],
                         thickness: d.thickness,
                         line_kind: d.line_kind,
-                        created_ms: d.created_ms as i64,
+                        // ROUNDED, not truncated. The store keeps whole milliseconds while a
+                        // TDateTime carries a fraction of one, and `as i64` truncates toward zero:
+                        // an object Moonbot stamped on an exact millisecond came back a whole
+                        // millisecond early roughly a third of the time, so every later edit
+                        // re-upserted a blob whose @22 differed from the one it arrived as.
+                        created_ms: d.created_ms.round() as i64,
                         alert: true,
                         strategy_id: d.strategy_id,
                         shared: false,

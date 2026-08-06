@@ -27,6 +27,13 @@ const HLINE_SOLID: &str = "010d000000fff8f0ffb563c53f00000000010000000063a69ffbf
 const HLINE_DOT: &str = "010d000000fff8f0ffb563c53f020000000100000000e86971fcf38fe6400000d443f363658c9f665be3d2c76ed3acae0d1afa27b858b13f0000";
 const HLINE_DDD: &str = "010d000000fff8f0ffb563c53f04000000010000000074e0eafdf38fe6400000d443f363658c9f6626640e165467db1274efe192e34eb13f0000";
 
+// Moonbot's own Fibonacci (type 3, 145 bytes), captured live from core 17 «QQ» on ETHUSD_PERP,
+// 2026-08-05. Three different geometries, one of them the same object upserted twice with a
+// strategy attached — which is how @32 was identified.
+const MB_FIB_A: &str = "030d000000fff8f0ff0000803f010000000100000000f746d566f893e640000000000000000000007b68ac514b9ed3b12219274dfce79b40c76e73c9358a9c404e754131f593e64000000000000000000000000000000000002219274dfce79b407af99042450e9c40c8539890f4259c40f4434d0b19399c406217b1853d4c9c40aecd417a7e679c4006408abe7eb09c40";
+const MB_FIB_B: &str = "030d000000fff8f0ff0000803f010000000100000000cc0915cef893e64000000000000000000000bee001c0d1f10397cb7e1eb26cac9c406362215c2d099f40e0b24482f593e6400000000000000000000000000000000000cb7e1eb26cac9c40ac25c16d253b9d40269d4ea970939d4097f01f07cdda9d40b3e3c26329229e40957c8898c2879e4023678e16e6979f40";
+const MB_FIB_STRAT: &str = "030d000000fff8f0ff0000803f010000000100000000cee06542fa93e640000063e465ae763c0c688789efaa4ccfadcdfe7ddda452f59c40e3795d9872b69e40f498bcb7f693e6400000000000000000000000000000000000fe7ddda452f59c40d229f9f7505f9d4006a60f75e3a09d40f07b9d9ee2d59d40e1c14ac7e10a9e408ec73fbe55569e40083293ea70209f40";
+
 fn bytes(hx: &str) -> Vec<u8> {
     (0..hx.len())
         .step_by(2)
@@ -222,7 +229,17 @@ fn alertable_tools_are_registered_in_the_cores_type_order() {
         .iter()
         .filter(|d| d.alertable)
         .map(|d| {
-            let kind = (d.make)(&vec![node; d.clicks as usize]).expect("full node set must build");
+            // A tool that only ever arrives has no `make`; it is built directly so the check keeps
+            // covering the very type — the fibo — whose slot this order exists to fix.
+            let kind = match (d.make)(&vec![node; d.clicks as usize]) {
+                Some(kind) => kind,
+                None => FigureKind::MbFib(crate::figures::tools::MbFib {
+                    a: 1.0,
+                    b: 2.0,
+                    time_ms: 0.0,
+                    levels: [1.0; crate::figures::tools::MB_FIB_LEVELS],
+                }),
+            };
             let blob = encode(&kind, [1, 2, 3, 4], 1.0, LineKind::Dash, 0.0, 0, 1)
                 .expect("an alertable tool encodes");
             blob[0]
@@ -240,7 +257,7 @@ fn alertable_tools_are_registered_in_the_cores_type_order() {
 fn every_alertable_tool_encodes_and_no_other_one_does() {
     use crate::figures::FigNode;
     let node = FigNode::new(1_700_000_000_000.0, 100.0);
-    for def in crate::figures::tools::REGISTRY {
+    for def in crate::figures::tools::REGISTRY.iter().filter(|d| d.drawable) {
         let nodes = vec![node; def.clicks as usize];
         let kind = (def.make)(&nodes).expect("full node set must build");
         let blob = encode(&kind, [1, 2, 3, 4], 1.0, LineKind::Dash, 0.0, 0, 1);
@@ -254,5 +271,108 @@ fn every_alertable_tool_encodes_and_no_other_one_does() {
             let back = decode(&blob).expect("what we encode we must decode");
             assert_eq!(back.kind, kind, "{} does not survive the wire", def.key);
         }
+    }
+}
+
+/// A Moonbot Fibonacci survives decode-then-encode BYTE FOR BYTE.
+///
+/// The strongest check this codec can have, and the only one that proves the layout rather than
+/// asserting it: the bytes are Moonbot's, all 145 of them, including the three constant fields at
+/// @72/@80/@88 that nothing here interprets. A misread offset, a dropped tail or a rewritten
+/// constant all show up as a differing byte.
+///
+/// It covers the CODEC, not the whole terminal round trip: the production path stores the creation
+/// instant as whole milliseconds on the way through, which this test does not model. That hop has
+/// its own test below.
+#[test]
+fn a_moonbot_fibonacci_round_trips_byte_for_byte() {
+    for hx in [MB_FIB_A, MB_FIB_B, MB_FIB_STRAT] {
+        let orig = bytes(hx);
+        let d = decode(&orig).expect("a fibo decodes");
+        assert!(matches!(d.kind, FigureKind::MbFib(_)), "type 3 is a fibo");
+        let enc = encode(
+            &d.kind,
+            d.color,
+            d.thickness,
+            d.line_kind,
+            d.created_ms,
+            d.strategy_id,
+            d.uid,
+        )
+        .expect("a fibo encodes");
+        assert_eq!(enc, orig, "fibo blob changed on the round trip: {hx}");
+    }
+}
+
+/// The seven level prices are read in Moonbot's own order and none is invented.
+///
+/// The oracle is the ratio set visible on the Moonbot chart that produced the sample; a shifted
+/// offset would still decode seven finite prices, so length alone proves nothing.
+#[test]
+fn a_fibonacci_carries_seven_levels_at_moonbots_ratios() {
+    let FigureKind::MbFib(f) = decode(&bytes(MB_FIB_A)).unwrap().kind else {
+        panic!("type 3 is a fibo");
+    };
+    assert_eq!(f.levels.len(), 7);
+    let want = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.236];
+    for (price, want) in f.levels.iter().zip(want) {
+        let got = f.ratio_of(*price).expect("the move has height");
+        assert!((got - want).abs() < 1e-6, "level {price} reads as {got}");
+    }
+    // The anchors are the move itself, not two more levels.
+    assert_eq!(f.a, f.levels[0], "ratio 0 sits on the move's start");
+    assert!(f.b > f.levels[5] && f.b < f.levels[6], "ratio 1 is between .786 and 1.236");
+}
+
+/// A truncated fibo is refused rather than read past its end.
+///
+/// A fibo is refused unless it is EXACTLY the one shape sampled from Moonbot — reading part of an
+/// unknown one and writing 145 bytes back would delete the rest from Moonbot's copy. The checked
+/// accessors behind the guard are exercised too, by a blob of the right length full of nothing.
+#[test]
+fn a_truncated_fibonacci_is_refused() {
+    let full = bytes(MB_FIB_A);
+    for cut in [56, 89, 100, 144] {
+        assert!(
+            decode(&full[..cut]).is_none(),
+            "a fibo cut to {cut} bytes decoded anyway"
+        );
+    }
+    assert!(decode(&full).is_some(), "the whole blob still decodes");
+    // Right length, wrong everything: refused for its TYPE, without reading past its end.
+    assert!(decode(&vec![0u8; full.len()]).is_none(), "type 0 is not a figure");
+}
+
+/// What the terminal actually sends back after an edit, creation instant included.
+///
+/// The codec speaks `f64` while the figure store keeps whole milliseconds, so a re-upsert cannot be
+/// byte-identical at @22 in general — this pins how far off it is allowed to be, and that NOTHING
+/// ELSE moves. Rounding rather than truncating is what keeps the error centred: truncation walked
+/// an object Moonbot stamped on an exact millisecond a whole millisecond backwards.
+#[test]
+fn the_terminals_own_round_trip_moves_only_the_creation_instant_and_only_by_rounding() {
+    for hx in [MB_FIB_A, MB_FIB_B, MB_FIB_STRAT] {
+        let orig = bytes(hx);
+        let d = decode(&orig).expect("a fibo decodes");
+        // Exactly what `sync_remote_alerts` stores and `figure_blob` sends back.
+        let stored_ms = d.created_ms.round() as i64;
+        let enc = encode(
+            &d.kind,
+            d.color,
+            d.thickness,
+            d.line_kind,
+            stored_ms as f64,
+            d.strategy_id,
+            d.uid,
+        )
+        .expect("a fibo encodes");
+        assert_eq!(enc.len(), orig.len());
+        assert_eq!(&enc[..22], &orig[..22], "header before @22 moved: {hx}");
+        assert_eq!(&enc[30..], &orig[30..], "everything after @22 moved: {hx}");
+        let back = decode(&enc).expect("what we send we can read");
+        assert!(
+            (back.created_ms - d.created_ms).abs() <= 0.5,
+            "creation instant moved by more than a rounded millisecond: {hx}"
+        );
     }
 }

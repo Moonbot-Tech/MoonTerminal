@@ -21,18 +21,18 @@
 //!        triangle(4) = 3×(t,price)  — three vertices
 //!        channel(5)  = 2×price f64 + u16 0  — two horizontal prices (without time)
 //! ```
-//! Node = `(TDateTime f64, price f64)`. Fibo (type 3) is not decoded yet; four live samples
-//! (145 bytes each, ETHUSD_PERP, 2026-08-05) read as:
+//! Node = `(TDateTime f64, price f64)`. Fibo (type 3), 145 bytes, reads as:
 //! ```text
-//! @48  f64   price A
-//! @56  f64   price B
+//! @48  f64   price A — the level the scale calls zero
+//! @56  f64   price B — the level it calls one
 //! @64  f64   TDateTime — the ONLY time in the object
 //! @72  f64   0          (unchanged across samples of different geometry)
 //! @80  f64   0          (likewise)
 //! @88  u8    0          (likewise)
 //! @89  7×f64 the drawn LEVEL PRICES, ratios exactly 0, .236, .382, .5, .618, .786, 1.236
 //! ```
-//! The arithmetic closes exactly: 48 + 5×8 + 1 + 7×8 = 145. Confirmed by those samples:
+//! The arithmetic closes exactly: 48 + 5×8 + 1 + 7×8 = 145. Confirmed by four live samples
+//! (ETHUSD_PERP, 2026-08-05):
 //! - the level COUNT is fixed at seven, but the ratios are NOT fixed: the samples sit at
 //!   0/.236/.382/.5/.618/.786/**1.236** while a Moonbot chart drawn later showed the seventh at
 //!   **1.618**. That is why the object stores prices and not ratios — the set is a user setting,
@@ -44,10 +44,10 @@
 //! - `@32` is the strategy id for this type as well — the same object upserted twice differs in
 //!   those eight bytes and nowhere else once a strategy is attached.
 //!
-//! `decode` still skips the type rather than guessing at it, because a guess written back would
-//! rewrite an object drawn in Moonbot.
+//! Both directions are implemented for it, into [`crate::figures::tools::MbFib`] — a tool of its
+//! own rather than a reading of ours, for the reasons in that module.
 
-use crate::figures::tools::{Channel, HLine, Segment, Triangle};
+use crate::figures::tools::{Channel, HLine, MbFib, Segment, Triangle, MB_FIB_LEVELS};
 use crate::figures::{DrawStyle, FigNode, FigureKind, LineKind};
 
 /// Figure type in the blob.
@@ -62,6 +62,13 @@ const KIND_ALERT: u32 = 13;
 
 /// Start of the payload (after the 40-byte header + 8-byte uid).
 const PAYLOAD_OFF: usize = 48;
+
+/// Start of a fibo's level prices: the payload's two anchors, its one time, two zero `f64`s and a
+/// zero byte. `48 + 5×8 + 1 = 89`, and `89 + 7×8 = 145` closes the sampled length exactly.
+const MB_FIB_LEVELS_OFF: usize = PAYLOAD_OFF + 5 * 8 + 1;
+
+/// The whole of a fibo object. A blob of any other length is a shape this codec has not seen.
+const MB_FIB_LEN: usize = MB_FIB_LEVELS_OFF + MB_FIB_LEVELS * 8;
 
 /// Widths a line can be drawn at. Hairlines and skyscrapers both come off the wire from another
 /// process; neither is a width, and the vertex builder has no opinion about either.
@@ -138,8 +145,10 @@ pub fn encode(
         FigureKind::Segment(_) => T_SEGMENT,
         FigureKind::Triangle(_) => T_TRIANGLE,
         FigureKind::Channel(_) => T_CHANNEL,
-        // The blob HAS a Fibo type (3), but its payload is not decoded yet — see the module doc.
-        // Until it is, a Fibonacci figure is local and its registry row says so.
+        FigureKind::MbFib(_) => T_FIBO,
+        // OUR Fibonacci is a different object from Moonbot's: eleven ratios between two points
+        // against seven stored prices across the whole chart. Sending one as the other would have
+        // the core draw something the user did not draw, so it stays local. See `MbFib`.
         FigureKind::FibRetracement(_) | FigureKind::Rect(_) => return None,
     };
     let mut out = Vec::with_capacity(96);
@@ -178,14 +187,28 @@ pub fn encode(
             out.extend_from_slice(&price2.to_le_bytes());
             out.extend_from_slice(&0u16.to_le_bytes());
         }
+        FigureKind::MbFib(f) => {
+            out.extend_from_slice(&f.a.to_le_bytes()); // @48
+            out.extend_from_slice(&f.b.to_le_bytes()); // @56
+            out.extend_from_slice(&unix_ms_to_tdatetime(f.time_ms).to_le_bytes()); // @64
+            // @72, @80 and @88 are zero in every sample, including across samples whose geometry
+            // differs, so they are written back as the constants they were read as rather than
+            // guessed at.
+            out.extend_from_slice(&0f64.to_le_bytes());
+            out.extend_from_slice(&0f64.to_le_bytes());
+            out.push(0u8);
+            for price in f.levels {
+                out.extend_from_slice(&price.to_le_bytes());
+            }
+        }
         // Unreachable: the type byte above already refused these kinds.
         FigureKind::FibRetracement(_) | FigureKind::Rect(_) => return None,
     }
     Some(out)
 }
 
-/// Decodes a chart-object blob. Returns `None` if it is too short or has a type absent from
-/// our figure model (fibo).
+/// Decodes a chart-object blob. Returns `None` if it is too short, if a fibo is not exactly the
+/// length this codec knows, or if the type is one our figure model has no tool for.
 pub fn decode(blob: &[u8]) -> Option<DecodedAlert> {
     if blob.len() < PAYLOAD_OFF + 8 {
         return None;
@@ -237,7 +260,26 @@ pub fn decode(blob: &[u8]) -> Option<DecodedAlert> {
             price1: rd_f64(PAYLOAD_OFF)?,
             price2: rd_f64(PAYLOAD_OFF + 8)?,
         }),
-        T_FIBO => return None,
+        T_FIBO => {
+            // Refused unless it is EXACTLY the shape sampled from Moonbot. The ratio set behind the
+            // levels is a user setting on that side, so a build that offers a different count would
+            // send a longer or shorter object; reading the first seven of a longer one and encoding
+            // 145 bytes back would delete the rest from Moonbot's own copy on the first edit here.
+            // A figure that fails to appear is a bug to notice; a silently truncated one is not.
+            if blob.len() != MB_FIB_LEN {
+                return None;
+            }
+            let mut levels = [0f64; MB_FIB_LEVELS];
+            for (i, level) in levels.iter_mut().enumerate() {
+                *level = rd_f64(MB_FIB_LEVELS_OFF + i * 8)?;
+            }
+            FigureKind::MbFib(MbFib {
+                a: rd_f64(PAYLOAD_OFF)?,
+                b: rd_f64(PAYLOAD_OFF + 8)?,
+                time_ms: tdatetime_to_unix_ms(rd_f64(PAYLOAD_OFF + 16)?),
+                levels,
+            })
+        }
         _ => return None,
     };
     Some(DecodedAlert {

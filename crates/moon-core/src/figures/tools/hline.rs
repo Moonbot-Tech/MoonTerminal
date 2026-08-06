@@ -23,6 +23,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     level_palette: false,
     fills: false,
     alertable: true,
+    drawable: true,
     make: |nodes| {
         nodes
             .first()

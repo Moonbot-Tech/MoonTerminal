@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::tools::{
-    Channel, FibRetracement, FigureTool, HLine, Rect, Segment, ToolShape, Triangle,
+    Channel, FibRetracement, FigureTool, HLine, MbFib, Rect, Segment, ToolShape, Triangle,
 };
 
 /// Figure type. The JSON representation matches Moonbot's `TChartObject` names that were used
@@ -22,6 +22,8 @@ pub enum FigureKind {
     Channel(Channel),
     FibRetracement(FibRetracement),
     Rect(Rect),
+    /// Moonbot's own Fibonacci object, decoded from the core rather than drawn here.
+    MbFib(MbFib),
 }
 
 impl FigureKind {
@@ -39,6 +41,7 @@ impl FigureKind {
             FigureKind::Channel(t) => t,
             FigureKind::FibRetracement(t) => t,
             FigureKind::Rect(t) => t,
+            FigureKind::MbFib(t) => t,
         }
     }
 
@@ -51,6 +54,7 @@ impl FigureKind {
             FigureKind::Channel(t) => t,
             FigureKind::FibRetracement(t) => t,
             FigureKind::Rect(t) => t,
+            FigureKind::MbFib(t) => t,
         }
     }
 

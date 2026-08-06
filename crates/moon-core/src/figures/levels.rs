@@ -144,9 +144,64 @@ pub fn scale_swatch() -> [u8; 3] {
 /// A level's ratio as it is READ: `0.618`, `1`, `4.236` — three decimals with the trailing zeros
 /// dropped, which is how every charting package writes them and how a trader names them out loud.
 pub fn fmt_ratio(ratio: f64) -> String {
-    // `+ 0.0` folds -0.0, which would otherwise print as "-0".
-    let s = format!("{:.3}", ratio + 0.0);
+    // Anything the third decimal cannot see is zero, sign included. `+ 0.0` alone folds only a
+    // literal -0.0, and a ratio DERIVED from prices — Moonbot's fibo recovers its ratios by
+    // division — lands on values like -2.2e-6, which would print as "-0".
+    let ratio = if ratio.abs() < 5e-4 { 0.0 } else { ratio };
+    let s = format!("{:.3}", ratio);
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// The ratios a Fibonacci level is NAMED by, across the sets charting packages offer.
+///
+/// Used only to name a ratio that was RECOVERED by division — see [`snap_ratio`]. Our own scale
+/// does not consult it: there the ratio is the input, not a measurement.
+/// The widest gap that still counts as "the same level, measured imprecisely".
+///
+/// Bounds [`snap_ratio`]'s error bar. Chosen against the values a user can deliberately place: a
+/// quarter retracement sits 0.014 from 0.236, so anything at or above that would rename it.
+const MAX_SNAP: f64 = 0.01;
+
+const NAMED_RATIOS: &[f64] = &[
+    0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.236, 1.272, 1.414, 1.618, 2.0, 2.618, 3.618, 4.236,
+];
+
+/// Names a recovered ratio, snapping it to a canonical one when the measurement cannot tell them
+/// apart.
+///
+/// Moonbot stores a level as a PRICE computed in single precision, so recovering its ratio divides
+/// away an `f32` rounding error whose size is `ulp(price) / |span|`. On a wide move that is
+/// invisible; on a narrow one it is not — a level Moonbot calls 0.236 recovers as 0.234375 when the
+/// span is a dollar on a $60 000 price, and a label reading "0.234" names a level that does not
+/// exist. Snapping inside the error bar reports the value the format cannot distinguish from;
+/// outside it, the measurement stands and is shown as measured.
+pub fn snap_ratio(ratio: f64, price: f64, span: f64) -> f64 {
+    let span = span.abs();
+    if !ratio.is_finite() || !price.is_finite() || span == 0.0 || !span.is_finite() {
+        return ratio;
+    }
+    // The error the recovery itself can carry: four `f32` ulps of the price, spread over the span.
+    // Floored so a wide move, where it underflows to nothing, still absorbs plain f64 noise; and
+    // CAPPED, because past a point the bar grows wide enough to swallow a level the user really did
+    // place. The cap is the largest error worth calling "the format cannot tell these apart", not
+    // the largest that keeps two names apart — half the table's smallest gap (0.018) would still
+    // rename a deliberate 0.25 to 0.236.
+    let bar = (4.0 * f32::EPSILON as f64 * price.abs() / span)
+        .max(1e-9)
+        .min(MAX_SNAP);
+    // NEAREST, not the first inside the bar: the table is ordered by value, and 1.236 precedes
+    // 1.272, so "first" renamed an exactly drawn 1.272 to its neighbour.
+    NAMED_RATIOS
+        .iter()
+        .copied()
+        .filter(|named| (ratio - named).abs() <= bar)
+        .min_by(|a, b| {
+            (ratio - a)
+                .abs()
+                .partial_cmp(&(ratio - b).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(ratio)
 }
 
 /// Price of `ratio` on the scale spanned by a move from `start` to `end`.

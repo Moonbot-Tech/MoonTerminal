@@ -29,6 +29,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     fills: true,
     // The core's chart-object blob has no rectangle type.
     alertable: false,
+    drawable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::Rect(Rect { a: *a, b: *b })),
         _ => None,

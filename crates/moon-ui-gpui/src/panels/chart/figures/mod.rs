@@ -43,6 +43,13 @@ pub(super) struct FigDrag {
     /// target: the figure then follows the cursor without jumping to it, and a price-only tool
     /// drops the time component by itself instead of needing a per-tool anchor table here.
     pub last: FigNode,
+    /// Whether any step actually moved the figure.
+    ///
+    /// A tool may refuse every step — Moonbot's own Fibonacci does, having no editable geometry —
+    /// and an armed figure that did not move must not be re-upserted: that would write 145 bytes
+    /// into another program's object to say nothing, and hand it back the values this side repaired
+    /// on decode.
+    pub moved: bool,
 }
 
 impl ChartPanel {
@@ -90,10 +97,19 @@ impl ChartPanel {
         // Grabbing works with no tool armed — that is what the Cursor entry leaves behind — but
         // PLACING a node needs one. Without this the click would fall through to trading, which is
         // exactly right: with no tool selected a modifier-click that hits nothing is not a draw.
-        if !self.backend.read(cx).fig_draw_mode {
+        let tool = {
+            let b = self.backend.read(cx);
+            if !b.fig_draw_mode {
+                return false;
+            }
+            b.fig_tool
+        };
+        // A tool that only ever ARRIVES places no nodes: `clicks` is zero, so a draft started for it
+        // could never complete and would swallow every later click while growing. The cycle cannot
+        // reach one, and this is the second lock on the same door.
+        if !tool.def().drawable {
             return false;
         }
-        let tool = self.backend.read(cx).fig_tool;
         let node = map.node_at(pos);
         self.fig_draw_click(pane, tool, node, cx);
         // Retain the placed-node position for the drag-release gesture in `try_fig_release`.
@@ -228,6 +244,7 @@ impl ChartPanel {
                     pane,
                     grab: Grab::Handle(i),
                     last: map.node_at(pos),
+                    moved: false,
                 });
                 // Publish the drag, as the body branch below does: the renderer suppresses a
                 // dragged figure's fill, and an unpublished drag would keep re-baking the base
@@ -262,6 +279,7 @@ impl ChartPanel {
             pane,
             grab: Grab::Body,
             last: map.node_at(pos),
+            moved: false,
         });
         self.sync_fig_visual(cx);
         true
@@ -326,6 +344,9 @@ impl ChartPanel {
                         .figures
                         .borrow_mut()
                         .edit(core, &market, id, |fig| drag_figure(fig, grab, dt_ms, dp));
+                if let Some(d) = self.fig_drag.as_mut() {
+                    d.moved |= edited;
+                }
                 if edited {
                     self.fig_resync(cx);
                     cx.notify();
@@ -562,9 +583,11 @@ impl ChartPanel {
         let Some(drag) = self.fig_drag.take() else {
             return false;
         };
-        self.backend.update(cx, |b, _| {
-            b.reupsert_figure_alert(drag.core, &drag.market, drag.id);
-        });
+        if drag.moved {
+            self.backend.update(cx, |b, _| {
+                b.reupsert_figure_alert(drag.core, &drag.market, drag.id);
+            });
+        }
         self.sync_fig_visual(cx);
         true
     }
