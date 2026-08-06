@@ -10,8 +10,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonButtonVariant,
-    MoonPalette, h_flex, rgba_from, v_flex,
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonButtonSize,
+    MoonButtonVariant, MoonDisclosureDirection, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 use std::time::Instant;
@@ -167,7 +167,10 @@ pub(super) fn news_card(
     }
     let id = item.id.clone();
     let chevron = MoonButton::new(SharedString::from(format!("news-exp-{}", item.id)))
-        .label(if expanded { "⌃" } else { "⌄" })
+        .leading_icon(MoonButtonIconSlot::caret(
+            MoonDisclosureDirection::DownUp,
+            expanded,
+        ))
         .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(cx.listener(move |this: &mut NewsView, _, _w, cx| this.toggle_expand(&id, cx)))
@@ -177,9 +180,8 @@ pub(super) fn news_card(
     // allocations that nobody reads until the button is pressed. Only the id is captured, and the
     // item is looked up in the panel's own list — the same route the chevron takes.
     //
-    // MoonUI's copy icon rather than a glyph, at the chevron's size and ghost weight, deliberately
-    // a different mark from the header's detach button so a card control does not read as a window
-    // control.
+    // Keep both card actions in Micro/Ghost button chrome, but use the copy mark rather than the
+    // header's detach mark so this card action does not read as a window control.
     let copy_id = item.id.clone();
     let copy = MoonButton::new(SharedString::from(format!("news-copy-{}", item.id)))
         .icon("icons/copy.svg")

@@ -28,6 +28,13 @@ pub const CHROME_GAP: f32 = 8.0;
 /// Base (unscaled) glyph edge for an interactive disclosure caret built with
 /// `MoonDisclosure::button`.
 ///
+/// Choose among the three shared caret idioms by who owns the click: an enclosing element that owns
+/// it hosts a passive `MoonDisclosure::glyph` sized by [`DISCLOSURE_GLYPH_MARKER`]; a caret that IS
+/// the control is `MoonDisclosure::button` at this size; and a control that must keep button chrome
+/// puts `MoonButtonIconSlot::caret` in the button's leading icon slot. `MoonButton` overrides that
+/// slot's default size from its own text metrics, so none of these disclosure-size constants
+/// controls it. Do not replace these shared carets with unicode glyphs.
+///
 /// Pass this value directly to `MoonDisclosure`: its `caret_box` applies `tokens.ui(...)`, so
 /// passing [`ui_px`] would apply the UI scale twice. The caret therefore follows the UI slider,
 /// while raw text sized through [`t_body`] follows the Font slider. This matches chrome such as
