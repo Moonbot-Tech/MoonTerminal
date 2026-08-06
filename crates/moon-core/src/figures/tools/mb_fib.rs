@@ -140,21 +140,14 @@ impl MbFib {
         Some(super::super::levels::snap_ratio(r, price, span))
     }
 
-    /// The drawn level at one end of the scale, as `(index, price)`.
+    /// The scale's two ends — ratio 0 and ratio 1 — ordered low to high.
     ///
-    /// The FREE level is never an end, even when it has been dragged past one: the two ends and the
-    /// free level are three separate handles, and a level that became an end would answer for two
-    /// of them — the tie resolves to the end, and that level could never be slid alone again.
-    fn extreme(&self, highest: bool) -> Option<(usize, f64)> {
-        self.levels
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(i, p)| *i != MB_FIB_FREE_LEVEL && Self::is_price(*p))
-            .reduce(|acc, cur| match (highest, cur.1 > acc.1) {
-                (true, true) | (false, false) => cur,
-                _ => acc,
-            })
+    /// These are the anchors, not the outermost LEVELS: Moonbot draws a line at each anchor whether
+    /// or not the level set contains one, and an extension above 1 is a projection rather than an
+    /// edge. Both must be prices for the pair to mean anything.
+    fn bounds(&self) -> Option<(f64, f64)> {
+        (Self::is_price(self.a) && Self::is_price(self.b))
+            .then(|| (self.a.min(self.b), self.a.max(self.b)))
     }
 
     /// The price of the level Moonbot lets the user drag, when it is one.
@@ -197,22 +190,22 @@ impl ToolShape for MbFib {
         &DEF
     }
 
-    /// Three, as in Moonbot: the outermost level at each end, which stretch the scale, and the one
-    /// level that moves on its own.
+    /// Three, as in Moonbot: the line at each end of the scale, which stretch it, and the one level
+    /// that slides on its own.
     fn handle_count(&self) -> usize {
         3
     }
 
-    /// Handle 0 is the lowest drawn level, 1 the highest, 2 the free one.
+    /// Handle 0 is the scale's bottom line, 1 its top, 2 the free level.
     ///
-    /// The ENDS are levels rather than the stored anchors, because that is what there is to grab: a
-    /// scale whose set has no level at ratio 1 draws no line at `b`, and a handle on an invisible
-    /// line is a handle nobody can find. Index 0 doubles as the figure's anchor price for the alerts
-    /// list, which asks for it directly.
+    /// The ends are the ANCHORS — ratio 0 and ratio 1 — which Moonbot draws whether or not the level
+    /// set contains them, and which are what bounds the scale: the extension above 1 is a
+    /// projection, not an edge. Index 0 doubles as the figure's anchor price for the alerts list.
     fn handle(&self, i: usize) -> Option<FigNode> {
+        let (lo, hi) = self.bounds()?;
         let price = match i {
-            0 => self.extreme(false)?.1,
-            1 => self.extreme(true)?.1,
+            0 => lo,
+            1 => hi,
             2 => self.free_level()?,
             _ => return None,
         };
@@ -221,16 +214,12 @@ impl ToolShape for MbFib {
 
     /// Stretches the scale from one end, or slides the free level alone.
     ///
-    /// Dragging an END keeps the other end where it is and re-solves the two anchors so the dragged
-    /// level lands under the cursor; every level is then recomputed from the ratio it ALREADY had,
-    /// which is what keeps a level the user had dragged where they put it. Dragging the free level
-    /// moves that price and nothing else — its ratio is then whatever it now measures, exactly as
-    /// Moonbot's own does.
+    /// Dragging an END moves that anchor and leaves the other where it is; every level is then
+    /// recomputed from the ratio it ALREADY had, which is what keeps a level the user had dragged
+    /// where they put it. Dragging the free level moves that price and nothing else — its ratio is
+    /// then whatever it now measures, exactly as Moonbot's own does.
     fn move_handle(&mut self, i: usize, to: FigNode) -> bool {
-        if !Self::is_price(to.price) {
-            return false;
-        }
-        if i > 2 {
+        if !Self::is_price(to.price) || i > 2 {
             return false;
         }
         if i == 2 {
@@ -243,32 +232,23 @@ impl ToolShape for MbFib {
             *slot = to.price;
             return true;
         }
-        let (Some((i_move, moving)), Some((i_fix, anchored))) =
-            (self.extreme(i == 1), self.extreme(i != 1))
-        else {
-            return false;
-        };
-        if moving == to.price {
-            return false;
-        }
-        // The ratios as they stand, including any the user has already dragged. RAW, not the named
-        // ones `ratio_of` returns: a name is snapped to the nearest canonical value, and solving
-        // with it would land the dragged end beside the cursor by exactly the error the snap hides.
         let Some(ratios) = self.ratios() else {
             return false;
         };
-        let denom = ratios[i_move] - ratios[i_fix];
-        if denom == 0.0 || !denom.is_finite() {
+        // Which stored anchor is the end being dragged: `a` and `b` are the first and second click,
+        // in either order, while the handles are the bottom and the top.
+        let moving_is_a = (self.a < self.b) == (i == 0);
+        let end = match moving_is_a {
+            true => &mut self.a,
+            false => &mut self.b,
+        };
+        if *end == to.price {
             return false;
         }
-        let span = (to.price - anchored) / denom;
-        if !span.is_finite() || span == 0.0 {
-            return false;
-        }
-        self.a = anchored - ratios[i_fix] * span;
-        self.b = self.a + span;
+        *end = to.price;
+        let (a, span) = (self.a, self.b - self.a);
         for (level, ratio) in self.levels.iter_mut().zip(ratios) {
-            *level = self.a + ratio * span;
+            *level = a + ratio * span;
         }
         true
     }
@@ -304,20 +284,33 @@ impl ToolShape for MbFib {
     }
 
     fn build(&self, ctx: &BuildCtx, sink: &mut dyn GeomSink) {
-        // The bands first, under the lines that bound them. Moonbot's levels are NOT stored in
-        // ratio order — a fib drawn downward writes its anchor level first — so they are ordered by
-        // price here, and each band takes the hue of the level with the smaller ratio, which is the
-        // rule our own scale follows. A gap with no hue on either side is left unfilled rather than
-        // guessed at: Moonbot's ratio set is a setting on that side and need not match ours.
-        let mut ordered: Vec<(f64, Option<f64>)> =
-            self.drawn().map(|p| (p, self.ratio_of(p))).collect();
-        ordered.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        for pair in ordered.windows(2) {
-            let [(p0, r0), (p1, r1)] = [pair[0], pair[1]];
-            let hue = match (r0, r1) {
-                (Some(a), Some(b)) => super::super::levels::color_of_ratio(a.min(b)),
-                _ => None,
-            };
+        // What Moonbot draws, in Moonbot's order: a line at each END of the scale carrying the
+        // percentage between them instead of a name, the levels between carrying their ratios, and
+        // an extension above 1 as a bare line. The fill stops at the ends — a projection past the
+        // move is not part of the move, and filling it was the one thing our picture had that
+        // Moonbot's did not.
+        let Some((lo, hi)) = self.bounds() else {
+            return;
+        };
+        // Every line, ordered by price and deduplicated: a level sitting exactly on an anchor is
+        // one line, not two, and it is the ANCHOR — that is why it reads as a percentage.
+        let mut lines: Vec<(f64, Option<f64>)> = self
+            .drawn()
+            .filter(|p| *p != lo && *p != hi)
+            .map(|p| (p, self.ratio_of(p)))
+            .chain([(lo, None), (hi, None)])
+            .collect();
+        lines.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        // The bands, under the lines that bound them, and only INSIDE the move.
+        for pair in lines.windows(2) {
+            let [(p0, r0), (p1, _)] = [pair[0], pair[1]];
+            if p0 < lo || p1 > hi {
+                continue;
+            }
+            // The band takes the hue of the level below it; against the bottom anchor there is no
+            // ratio to look up, so the scale's own zero names it.
+            let hue = super::super::levels::color_of_ratio(r0.unwrap_or(0.0));
             if let Some([r, g, b]) = hue {
                 sink.band(
                     f64::NEG_INFINITY,
@@ -333,13 +326,12 @@ impl ToolShape for MbFib {
                 );
             }
         }
-        for price in self.drawn() {
+
+        for (price, ratio) in &lines {
             // Each line in its LEVEL's hue, like our own scale: the reader recognises 0.618 by its
-            // teal without reading the number. The figure's own colour is the fallback for a ratio
-            // our palette has no entry for — Moonbot's set is a setting on that side.
-            let hue = self
-                .ratio_of(price)
-                .and_then(super::super::levels::color_of_ratio);
+            // teal without reading the number. The ends and any ratio our palette has no entry for
+            // fall back to the figure's own colour.
+            let hue = ratio.and_then(super::super::levels::color_of_ratio);
             let stroke = match hue {
                 Some([r, g, b]) => Stroke {
                     color: [
@@ -352,35 +344,30 @@ impl ToolShape for MbFib {
                 },
                 None => ctx.stroke,
             };
-            sink.hline(price, &stroke);
-            // The readout is the point of a ratio scale, so it is drawn at rest rather than on
-            // hover — the same rule our own Fibonacci follows.
-            // A level whose ratio cannot be named draws its line and stays silent. A bare price in
-            // a column of ratios reads as something else entirely, and it would also slip past the
-            // per-tab switch that hides the rest of the column.
-            //
-            // The level sitting ON an anchor is silent for a different reason: it is the move's own
-            // end rather than a retracement of it, and which end that is cannot be read from the
-            // bytes. Measured across live samples: a fib drawn UP puts that level on `a`, one drawn
-            // DOWN puts it on `b`, so the same slot is ratio 0 in one and ratio 1 in the other and
-            // we would name one of them wrong. Moonbot leaves it unlabelled too — its own chart
-            // names six levels and draws the seventh bare. A line with no name is never wrong; a
-            // line with the wrong number is.
-            if let Some(ratio) = self.ratio_of(price).filter(|r| *r != 0.0 && *r != 1.0) {
-                sink.label(
-                    FigNode::new(0.0, price),
-                    // Read as a COLUMN at the left edge, where Moonbot puts its own and where the
-                    // eye starts a row. The span is the whole chart because the figure is: the
-                    // renderer clips the anchor into the plot, so an unbounded left end lands on
-                    // the plot's left edge.
-                    LabelPlace::LineSpan {
-                        t0_ms: f64::NEG_INFINITY,
-                        t1_ms: f64::INFINITY,
-                    },
-                    LabelText::Level { ratio, price },
-                    ctx.stroke.color,
-                );
-            }
+            sink.hline(*price, &stroke);
+            // The readout, read as a column at the left edge where Moonbot puts it. An END carries
+            // the move itself as a percentage — up from the bottom, down from the top — which is
+            // what Moonbot shows there instead of "0" and "1".
+            let text = match ratio {
+                Some(ratio) => LabelText::Level {
+                    ratio: *ratio,
+                    price: *price,
+                },
+                None if *price == hi => LabelText::PctDelta { from: lo, to: hi },
+                None if *price == lo => LabelText::PctDelta { from: hi, to: lo },
+                // A level whose ratio cannot be measured draws its line and stays silent: a bare
+                // price in a column of ratios reads as something else entirely.
+                None => continue,
+            };
+            sink.label(
+                FigNode::new(0.0, *price),
+                LabelPlace::LineSpan {
+                    t0_ms: f64::NEG_INFINITY,
+                    t1_ms: f64::INFINITY,
+                },
+                text,
+                stroke.color,
+            );
         }
     }
 

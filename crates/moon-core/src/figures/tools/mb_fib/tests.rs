@@ -1,6 +1,18 @@
 use super::*;
 use crate::figures::tools::tests::TestProj;
 
+/// The downward live sample: `a` is the higher price, so its first slot lands on `b`.
+fn down_sample() -> MbFib {
+    MbFib {
+        a: 2026.76,
+        b: 1997.2145,
+        time_ms: 1_754_400_000_000.0,
+        levels: [
+            1997.2145, 2019.7873, 2015.4736, 2011.9872, 2008.5009, 2003.5372, 1990.2417,
+        ],
+    }
+}
+
 /// The sample decoded from the live blob (core 17 «QQ», ETHUSD_PERP, 2026-08-05 19:41:39 UTC).
 fn sample() -> MbFib {
     MbFib {
@@ -197,17 +209,18 @@ fn the_tool_offers_no_level_switches() {
 /// The alert list's Price column asks handle 0, which is the scale's bottom line.
 ///
 /// Not `a`: which anchor is lower depends on the direction the fib was drawn, and a column of
-/// prices that flipped ends with the gesture would be unreadable.
+/// The alert list's Price column asks handle 0, which is the scale's bottom END.
+///
+/// Not `a`, and not the lowest LINE: which anchor is lower depends on the direction the fib was
+/// drawn, and an extension can hang below the move without being its bottom.
 #[test]
 fn the_anchor_price_is_the_bottom_of_the_scale() {
-    let up = MbFib::spanning(FigNode::new(0.0, 100.0), FigNode::new(1.0, 200.0));
-    let down = MbFib::spanning(FigNode::new(0.0, 200.0), FigNode::new(1.0, 100.0));
-    for f in [up, down] {
-        let anchor = FigureKind::MbFib(f).anchor_price();
-        let lowest = f
-            .drawn()
-            .fold(f64::INFINITY, f64::min);
-        assert_eq!(anchor, lowest, "the Price column shows the bottom line");
+    for f in [
+        MbFib::spanning(FigNode::new(0.0, 100.0), FigNode::new(1.0, 200.0)),
+        MbFib::spanning(FigNode::new(0.0, 200.0), FigNode::new(1.0, 100.0)),
+        down_sample(),
+    ] {
+        assert_eq!(FigureKind::MbFib(f).anchor_price(), f.a.min(f.b));
     }
 }
 
@@ -258,20 +271,43 @@ fn the_nearest_level_is_what_is_grabbed() {
 ///
 /// The registry-wide version of this contract only covers tools a gesture can draw, so the one tool
 /// that arrives instead asserts it here. A level whose price shows only under the pointer cannot be
-/// read at a glance, which is the whole purpose of the object.
+/// Moonbot's own picture, at rest: a line at each END of the scale carrying the move as a
+/// percentage, the levels between carrying their ratios, the extension above 1 as a line, and the
+/// fill stopping at the ends.
+///
+/// The counts are derived from the model rather than written down: whatever the level set is, the
+/// lines are its measurable levels plus the two anchors, and the bands are the gaps inside the move.
 #[test]
-fn the_levels_are_named_on_an_idle_chart() {
+fn the_picture_matches_moonbots() {
     use crate::figures::tools::tests::{build, ctx};
-    let rec = build(&FigureKind::MbFib(sample()), ctx(false, false));
-    assert_eq!(
-        rec.labels.len(),
-        6,
-        "every level but the one on the anchor names itself at rest"
-    );
-    assert_eq!(rec.hlines.len(), 7, "and draws across the whole chart");
-    // No knots: the ends are grabbed by their lines, as they are in Moonbot, and a knot on a
-    // full-width line has no X to sit at.
-    assert!(rec.handles.is_empty(), "and offers no drag knot");
+    for f in [sample(), down_sample()] {
+        let (lo, hi) = (f.a.min(f.b), f.a.max(f.b));
+        let inner: Vec<f64> = f.drawn().filter(|p| *p != lo && *p != hi).collect();
+        let rec = build(&FigureKind::MbFib(f), ctx(false, false));
+
+        assert_eq!(
+            rec.hlines.len(),
+            inner.len() + 2,
+            "every level plus the two ends"
+        );
+        assert!(rec.hlines.contains(&lo) && rec.hlines.contains(&hi), "the ends are drawn");
+        // Every readout is present: a ratio for each level, a percentage for each end.
+        assert_eq!(rec.labels.len(), inner.len() + 2, "nothing is left unnamed");
+
+        // The fill stops at the ends: nothing is painted outside the move.
+        assert!(!rec.bands.is_empty(), "a scale without bands is not filled");
+        for (_, _, p0, p1) in &rec.bands {
+            let (band_lo, band_hi) = (p0.min(*p1), p0.max(*p1));
+            assert!(
+                band_lo >= lo - 1e-9 && band_hi <= hi + 1e-9,
+                "band {band_lo}..{band_hi} spills past the move {lo}..{hi}"
+            );
+        }
+        // And an extension outside the move still draws its line.
+        for level in f.drawn().filter(|p| *p > hi || *p < lo) {
+            assert!(rec.hlines.contains(&level), "the extension keeps its line");
+        }
+    }
 }
 
 /// A level Moonbot could not have drawn is dropped from the picture AND from the hit test, so the
@@ -293,24 +329,23 @@ fn an_unusable_level_is_absent_from_both_the_picture_and_the_hit_test() {
 ///
 /// Which anchor it is flips with the direction the fib was drawn — measured on live samples, an
 /// upward one puts it on `a` and a downward one on `b` — so the same slot would be named 0 in one
-/// and 1 in the other. Moonbot leaves it bare as well.
+/// A level sitting exactly ON an anchor is one line, not two, and it reads as the anchor.
+///
+/// Which anchor that is flips with the direction the fib was drawn — an upward one puts it on `a`,
+/// a downward one on `b` — so naming it by its ratio would print 0 for one and 1 for the other.
+/// Moonbot prints neither: it shows the move as a percentage there.
 #[test]
-fn the_level_on_the_anchor_is_drawn_but_not_named() {
+fn a_level_on_an_anchor_becomes_the_anchor_line() {
     use crate::figures::tools::tests::{build, ctx};
-    // The downward sample: `a` is the higher price and the first level lands on `b`.
-    let down = MbFib {
-        a: 2026.76,
-        b: 1997.2145,
-        time_ms: 1_754_400_000_000.0,
-        levels: [
-            1997.2145, 2019.7873, 2015.4736, 2011.9872, 2008.5009, 2003.5372, 1990.2417,
-        ],
-    };
-    assert_eq!(down.ratio_of(down.levels[0]), Some(1.0), "it is the anchor");
-    for f in [sample(), down] {
+    for f in [sample(), down_sample()] {
+        let (lo, hi) = (f.a.min(f.b), f.a.max(f.b));
         let rec = build(&FigureKind::MbFib(f), ctx(false, false));
-        assert_eq!(rec.hlines.len(), 7, "every level draws its line");
-        assert_eq!(rec.labels.len(), 6, "the anchor level carries no name");
+        assert_eq!(
+            rec.hlines.iter().filter(|p| **p == lo).count(),
+            1,
+            "the level on the anchor is not drawn twice"
+        );
+        assert_eq!(rec.hlines.iter().filter(|p| **p == hi).count(), 1);
     }
 }
 
@@ -323,15 +358,7 @@ fn the_level_on_the_anchor_is_drawn_but_not_named() {
 #[test]
 fn the_scale_is_filled_between_its_levels_in_their_own_hues() {
     use crate::figures::tools::tests::{build, ctx};
-    let down = MbFib {
-        a: 2026.76,
-        b: 1997.2145,
-        time_ms: 1_754_400_000_000.0,
-        levels: [
-            1997.2145, 2019.7873, 2015.4736, 2011.9872, 2008.5009, 2003.5372, 1990.2417,
-        ],
-    };
-    for f in [sample(), down] {
+    for f in [sample(), down_sample()] {
         let rec = build(&FigureKind::MbFib(f), ctx(false, false));
         assert!(!rec.bands.is_empty(), "a scale without bands is not filled");
         for (_, _, p0, p1) in &rec.bands {
