@@ -6,6 +6,7 @@ const DAY_MS: i64 = 86_400_000;
 /// An answer with an absolute date `days` from `checked_ms`.
 fn dated(days: i64, checked_ms: i64) -> ApiKeyExpiry {
     ApiKeyExpiry {
+        unlimited: false,
         known: true,
         days_left: Some(days as i32),
         at_unix: Some((checked_ms + days * DAY_MS) / 1_000),
@@ -16,6 +17,7 @@ fn dated(days: i64, checked_ms: i64) -> ApiKeyExpiry {
 /// A legacy answer: a day count with no absolute date behind it.
 fn legacy(days: i32, checked_ms: i64) -> ApiKeyExpiry {
     ApiKeyExpiry {
+        unlimited: false,
         known: true,
         days_left: Some(days),
         at_unix: None,
@@ -83,14 +85,23 @@ fn the_last_day_is_not_yet_expired() {
 /// puts a zero beside that answer, and letting it through would warn on every perpetual key.
 #[test]
 fn a_perpetual_key_never_ages_into_a_warning() {
+    // What the converter builds for an unlimited key: the flag, and NO count — the zero the wire
+    // carries beside it is deliberately not retained, so nothing downstream can age it into
+    // "expired" and warn on a key that has nothing to expire.
     let perpetual = ApiKeyExpiry {
+        unlimited: true,
         known: false,
         days_left: None,
         at_unix: None,
         checked_ms: 0,
     };
 
-    assert_eq!(perpetual.days_left_at(9_999 * DAY_MS), None);
+    assert_eq!(perpetual.days_left_at(0), None, "not zero days left");
+    assert_eq!(
+        perpetual.days_left_at(9_999 * DAY_MS),
+        None,
+        "and it never ages"
+    );
 }
 
 /// MoonProto rebuilds the absolute date as `client_now + remaining`, so an unchanged key answers

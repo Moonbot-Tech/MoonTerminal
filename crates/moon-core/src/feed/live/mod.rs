@@ -872,9 +872,9 @@ pub(super) fn run(
                     // Logged because nothing else observes this path: the value changes about once
                     // a day, so a silent success is indistinguishable from a request that never
                     // left. Rare enough (once per connect, then six-hourly) to cost nothing. The
-                    // RAW count is included beside the accepted one, so a core-side placeholder the
-                    // sanity range drops (`-1000` from a connected core, seen live) stays visible
-                    // instead of vanishing into "unknown".
+                    // RAW count is logged beside the accepted one so core-side oddities stay
+                    // visible instead of vanishing into the display: a legacy answer's `-1000`,
+                    // which the sanity range drops, and the round `+1000` current cores send.
                     log::info!(
                         "core {} api key: known={} days_left={:?} reported={:?}",
                         crate::feed::core_label(server.id),

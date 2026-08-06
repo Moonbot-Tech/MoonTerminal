@@ -101,7 +101,9 @@ fn axis_label(axis: WarnAxis) -> String {
         WarnAxis::Ping => t!("core_status.chart_ping"),
         WarnAxis::ExchPing => t!("core_status.chart_exch"),
         WarnAxis::Unreachable => t!("core_status.warn_conn"),
-        WarnAxis::ApiExpiry => t!("core_status.hdr.api_key"),
+        // The axis NAME, not the column heading: this list names a kind, and the heading carries a
+        // unit ("АПИ (дн)") that would read as nonsense in a "Type" cell.
+        WarnAxis::ApiExpiry => t!("core_status.axis_api"),
     }
     .to_string()
 }
@@ -115,9 +117,11 @@ fn peak(episode: &WarnEpisode) -> String {
         WarnAxis::SysCpu => format!("{}%", episode.peak),
         WarnAxis::MemGrowth => format!("{} {}", episode.peak, t!("core_status.mb")),
         WarnAxis::Ping | WarnAxis::ExchPing => format!("{} {}", episode.peak, t!("core_status.ms")),
-        // Always a day count, never the "expired" word: `peak` is unsigned and clamps a negative
-        // count to zero, so a key on its LAST DAY and one already dead are indistinguishable here.
-        // Printing "expired" for both would label a still-valid key dead.
+        // A day count WITH its unit, unlike the panel's API column, which moved the unit into its
+        // heading — this column is shared by axes measured in %, MB and ms, so each cell has to
+        // carry its own. Never the "expired" word: `peak` is unsigned and clamps a negative count to
+        // zero, so a key on its LAST DAY and one already dead are indistinguishable here, and
+        // printing "expired" for both would label a still-valid key dead.
         WarnAxis::ApiExpiry => t!("core_status.api_days", n = episode.peak).to_string(),
         WarnAxis::Unreachable => "—".to_string(),
     }

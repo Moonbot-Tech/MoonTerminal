@@ -46,10 +46,10 @@ fn columns() -> Vec<MoonDataTableColumn> {
             96.0,
         ),
         numeric("cpus", t!("core_status.col.cpus").to_string(), 80.0),
-        // Sortable like the metrics, but LEFT-aligned: its cell holds words ("∞", "истёк") as often
-        // as a number, and those read wrong flush-right.
-        MoonDataTableColumn::new("api_key", t!("core_status.col.api_key").to_string(), 96.0)
-            .sortable(true),
+        // Right-aligned like every other metric: the cells are now bare day counts, and a column of
+        // numbers has to align on the digit. The three word forms ("-", "∞", "истёк") are short
+        // enough to sit right without reading oddly.
+        numeric("api_key", t!("core_status.col.api_key").to_string(), 96.0),
     ]
 }
 

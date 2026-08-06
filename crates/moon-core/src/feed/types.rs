@@ -964,16 +964,30 @@ pub enum FeedMsg {
 /// (the 8-byte payload) sends only a server-local timestamp, which nothing normalizes; that answer
 /// carries no [`Self::at_unix`] and its day count can be off by the terminal↔core zone difference.
 ///
-/// `known == false` means the check SUCCEEDED and the exchange reports no expiration for this key.
-/// That is not "zero days left": conflating the two would light a warning on every perpetual key.
-/// A failed or never-answered check is the absence of this value altogether (`None` in the store).
+/// Only a SUCCESSFUL check produces this value. A core that cannot check an exchange at all answers
+/// `success = false` (observed live on Bitget/Gate/OKX), which becomes a failure event and never
+/// reaches this type — that is the protocol's own line between "unlimited" and "could not check",
+/// and no consumer should try to redraw it from the fields below.
+///
+/// Note what a failure does NOT do: it does not erase what came before. The store keeps the last
+/// successful answer, so a core whose checks start failing keeps showing its previous state until
+/// the connection is replaced ([`crate::session::CoreData`] clears it on a new connection attempt).
+/// A core that has never answered has no value at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApiKeyExpiry {
-    /// Whether the response carried a real expiration at all.
+    /// The core answered that this key has NO expiration — an unlimited key.
+    ///
+    /// Derived at the wire boundary rather than inferred later: an empty date field alone does not
+    /// mean unlimited, because the same answer can still carry a real day count (the parser fills
+    /// the date with zero whenever the core's timestamp is unusable, yet returns the count beside
+    /// it). Only an empty date AND no positive count is an unlimited key.
+    pub unlimited: bool,
+    /// Whether the response carried a usable expiration DATE.
     pub known: bool,
-    /// Whole days left AT THE MOMENT OF THE CHECK, as counted by the core. `None` while `known` is
-    /// false. Read it through [`Self::days_left_at`], which ages it — this raw field goes stale
-    /// between polls and while the core is down.
+    /// Whole days left AT THE MOMENT OF THE CHECK, as counted by the core. Present whenever the
+    /// answer carried a usable count — with or without a date beside it — and `None` for an
+    /// unlimited key or an unusable answer. Read it through [`Self::days_left_at`], which ages it:
+    /// this raw field goes stale between polls and while the core is down.
     pub days_left: Option<i32>,
     /// Absolute expiration as whole Unix seconds, on the terminal's clock. `None` for a legacy
     /// answer that carries no normalized duration, and while `known` is false.
@@ -999,9 +1013,9 @@ impl ApiKeyExpiry {
     /// Returns:
     ///     Whole days remaining, or `None` for a key with no expiration or no usable count.
     pub fn days_left_at(&self, now_ms: i64) -> Option<i32> {
-        if !self.known {
-            return None;
-        }
+        // No guard on `known`: an answer can carry a count with no usable date, and dropping it
+        // here would hide a real countdown. The zero that means "no expiry" never reaches this
+        // field — the converter records that as [`Self::unlimited`] instead.
         if let Some(at_unix) = self.at_unix {
             let seconds_left = at_unix.saturating_sub(now_ms.div_euclid(1_000));
             // Floor division, so a key with 23 hours left reads 0 days and only a key already past
@@ -1019,7 +1033,8 @@ impl ApiKeyExpiry {
     /// `client_now + remaining`, so an unchanged key answers with a date a few seconds apart every
     /// poll, and an exact comparison would report a change every six hours.
     pub fn answer_eq(&self, other: &Self) -> bool {
-        self.known == other.known
+        self.unlimited == other.unlimited
+            && self.known == other.known
             && self.days_left == other.days_left
             && self.at_unix.map(|at| at.div_euclid(86_400))
                 == other.at_unix.map(|at| at.div_euclid(86_400))

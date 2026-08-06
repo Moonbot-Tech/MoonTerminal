@@ -14,8 +14,8 @@ use crate::panels::core_status::model::{
     ApiKeyState, CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup,
 };
 
-/// Build one core row carrying only an API-key answer: `Some(days)` is a dated key, `None` is a
-/// key with no expiration (which is also how an unanswered check arrives).
+/// Build one core row carrying only an API-key state: `Some(days)` is a dated key, `None` is a core
+/// nothing is known about (no answer, or an answer with no usable date).
 fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
     CoreStatusRow {
         id,
@@ -27,7 +27,7 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         exch_warn: false,
         ping_sev: LatencySeverity::Normal,
         exch_sev: LatencySeverity::Normal,
-        api_key: days.map_or(ApiKeyState::Perpetual, ApiKeyState::Days),
+        api_key: days.map_or(ApiKeyState::Unknown, ApiKeyState::Days),
         api_warn: false,
     }
 }
@@ -159,10 +159,10 @@ fn name_is_natural_and_the_tiebreak() {
     );
 }
 
-/// The key column shows text ("9 дн", "∞", "истёк"), but it must sort by the NUMBER behind it.
-/// Sorting the rendered string would put 9 days after 45 and bury the key that expires first.
+/// The key column shows text ("9", "∞", "истёк"), but it must sort by the URGENCY behind it.
+/// Sorting the rendered string would put 9 after 45 and bury the key that expires first.
 #[test]
-fn the_key_column_sorts_by_days_not_by_its_text() {
+fn the_key_column_sorts_by_urgency_not_by_its_text() {
     let soon = row_with_key(1, Some(9));
     let later = row_with_key(2, Some(45));
 
@@ -173,18 +173,27 @@ fn the_key_column_sorts_by_days_not_by_its_text() {
     );
 }
 
-/// A key with no expiration and a key with no answer carry no number, so they land at the SAME end
-/// of the ascending order as every other unreported metric in this table — which is the FRONT, as
-/// `None` sorts first. Spelled out because the wording is easy to flip while the assertion stands.
+/// This column is scanned for the key that dies soonest, so the states with NO number trail the
+/// counts instead of heading them — the opposite of what a plain `Option` sort would do. And the
+/// two of them are not interchangeable: a dash may still hide a dying key, an infinity cannot.
 #[test]
-fn keys_without_a_day_count_sort_as_unreported_metrics_do() {
-    let dated = row_with_key(1, Some(1));
-    let perpetual = row_with_key(2, None);
+fn the_states_without_a_number_trail_the_counts() {
+    let dated = row_with_key(1, Some(300));
+    let unknown = row_with_key(2, None);
+    let unlimited = CoreStatusRow {
+        api_key: ApiKeyState::Perpetual,
+        ..row_with_key(3, None)
+    };
 
     assert_eq!(
-        compare_flat_rows(&perpetual, &dated, "api_key"),
+        compare_flat_rows(&dated, &unknown, "api_key"),
         Ordering::Less,
-        "no number sorts before any number, as `None` does everywhere here"
+        "a real count outranks 'nothing known', however distant the date"
+    );
+    assert_eq!(
+        compare_flat_rows(&unknown, &unlimited, "api_key"),
+        Ordering::Less,
+        "'nothing known' outranks 'cannot expire' — it may still hide a problem"
     );
 }
 

@@ -95,9 +95,9 @@ pub(super) fn ping_plain(value: Option<u32>) -> String {
 
 /// Format one core's API-key state for its column.
 ///
-/// The two "no number" states must stay apart: collapsing them would leave the operator unable to
-/// tell "we could not check" from "this key never expires". The infinity glyph lives here, not in
-/// the dictionaries, because `locales/README.md` keeps glyphs out of translated values.
+/// A bare number: the unit lives in the column heading, so a column of counts reads as a column
+/// instead of repeating "дн" on every row. The infinity glyph lives here, not in the dictionaries,
+/// because `locales/README.md` keeps glyphs out of translated values.
 ///
 /// Args:
 ///     state: The key's state as classified for this frame.
@@ -109,7 +109,7 @@ pub(super) fn api_expiry_text(state: ApiKeyState) -> String {
         ApiKeyState::Unknown => "-".to_string(),
         ApiKeyState::Perpetual => "\u{221e}".to_string(),
         ApiKeyState::Days(days) if days < 0 => t!("core_status.api_expired").to_string(),
-        ApiKeyState::Days(days) => t!("core_status.api_days", n = days).to_string(),
+        ApiKeyState::Days(days) => days.to_string(),
     }
 }
 

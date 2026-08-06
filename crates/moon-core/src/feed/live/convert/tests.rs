@@ -133,3 +133,68 @@ fn an_implausible_negative_count_is_not_taken_as_expired() {
     let expired = api_key_expiry_from_proto(placeholder, recent);
     assert_eq!(expired.days_left, Some(-10));
 }
+
+/// The parser zeroes the expiration DATE whenever the core's timestamp is unusable, but still
+/// returns the day count that came beside it. Gating the count on the date would turn "no date,
+/// but 42 days left" into an unlimited key — an infinity glyph over a key with six weeks to live.
+#[test]
+fn a_count_survives_an_unusable_date() {
+    let (days, unlimited) = api_days_and_unlimited(false, Some(42), None);
+
+    assert!(!unlimited, "42 days is not an unlimited key");
+    assert_eq!(days, Some(42));
+}
+
+/// The same answer with a ZERO count is the unlimited key: no date, nothing counting down. The
+/// wire always puts that zero there, so reading it as a countdown would warn on every such key.
+#[test]
+fn no_date_and_no_count_is_an_unlimited_key() {
+    let (days, unlimited) = api_days_and_unlimited(false, Some(0), None);
+
+    assert!(unlimited);
+    assert_eq!(days, None, "the zero is not a countdown");
+
+    // A legacy answer carries no count field at all; an empty date still means unlimited.
+    let (days, unlimited) = api_days_and_unlimited(false, None, None);
+    assert!(unlimited);
+    assert_eq!(days, None);
+}
+
+/// A dated answer is never unlimited, and a zero count on it is a real "less than a day left".
+#[test]
+fn a_dated_answer_keeps_its_count_including_zero() {
+    let (days, unlimited) = api_days_and_unlimited(true, Some(0), None);
+    assert!(!unlimited, "the date exists, so the key expires");
+    assert_eq!(days, Some(0), "zero days left, not 'no expiry'");
+
+    // No count field: the date-derived fallback supplies it.
+    let (days, unlimited) = api_days_and_unlimited(true, None, Some(10));
+    assert!(!unlimited);
+    assert_eq!(days, Some(10));
+}
+
+/// Implausible counts are dropped on both paths, and dropping the count of an answer that HAS a
+/// date must not turn it into an unlimited key — it is simply unusable.
+#[test]
+fn an_implausible_count_never_becomes_unlimited() {
+    let (days, unlimited) = api_days_and_unlimited(true, Some(-1000), None);
+    assert_eq!(days, None);
+    assert!(
+        !unlimited,
+        "a dated answer stays dated even when its count is junk"
+    );
+}
+
+/// A count the plausibility range REJECTS still proves the core was talking about a lifetime, so
+/// the answer must not fall through to "unlimited". Deciding that flag after the filter would put
+/// an infinity glyph on a key whose only number we just threw away.
+#[test]
+fn a_rejected_count_does_not_become_unlimited() {
+    let (days, unlimited) = api_days_and_unlimited(false, Some(-1000), None);
+
+    assert_eq!(days, None, "the junk count is not shown");
+    assert!(
+        !unlimited,
+        "and it is not evidence of an unlimited key either"
+    );
+}

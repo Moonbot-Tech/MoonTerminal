@@ -27,7 +27,9 @@ pub(super) struct ByIpWidths {
     pub(super) mem: f32,
     /// Both latency columns (client↔core and core→exchange) use this width.
     pub(super) ping: f32,
-    /// API-key lifetime cell; wider than a latency because it also holds a word.
+    /// API-key lifetime cell. Wider than a latency because it holds a word ("истёк") as often as a
+    /// number, and its heading is longer than the others ("АПИ (дн)"). Like every column here it
+    /// still shrinks by the shared factor, so on a very narrow dock the caption clips like the rest.
     pub(super) api: f32,
     /// Ready/total core-count cell.
     pub(super) cores: f32,
@@ -84,7 +86,7 @@ impl ByIpWidths {
         cpu: 100.0,
         mem: 116.0,
         ping: 64.0,
-        api: 72.0,
+        api: 84.0,
         cores: 40.0,
         icon: 12.0,
         indent: 16.0,

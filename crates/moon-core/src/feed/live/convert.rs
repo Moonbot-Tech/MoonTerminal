@@ -191,9 +191,10 @@ pub(super) fn sys_status_from_proto(
 /// moonproto's UNNORMALIZED server-local timestamp against the local clock and can therefore be a
 /// day out; that answer also carries no absolute date, so its reader ages the count instead.
 ///
-/// `is_known() == false` is a successful check on a key the exchange reports no expiration for. The
-/// day count then stays `None` even though the wire carries `Some(0)`, so no caller can mistake a
-/// perpetual key for one expiring today.
+/// An empty date field alone does NOT mean "no expiration": the parser zeroes the date whenever the
+/// core's timestamp is unusable, and still returns the count beside it. Only an empty date with no
+/// counting-down number is an unlimited key, and that is recorded as its own flag rather than
+/// re-derived downstream — see [`api_days_and_unlimited`].
 ///
 /// A day count outside [`SANE_DAYS`] is dropped rather than displayed — see that constant for why
 /// the negative side is the narrow one.
@@ -209,21 +210,14 @@ pub(super) fn api_key_expiry_from_proto(
     now: std::time::SystemTime,
 ) -> ApiKeyExpiry {
     let known = expiration.is_known();
+    let reported = expiration.reported_days_left();
     // A CURRENT answer is the one that carries `reported_days_left`; only for those is the absolute
     // date normalized to this terminal's clock. A legacy answer's date is the core's own local
     // timestamp, which nothing corrects, so it is deliberately NOT kept: taking it would make the
     // un-normalized value the preferred source and put a core in another time zone a day out.
-    let current = expiration.reported_days_left().is_some();
-    let days_left = known
-        .then(|| {
-            expiration
-                .reported_days_left()
-                .map(i64::from)
-                .or_else(|| expiration.days_until(now))
-        })
-        .flatten()
-        .filter(|days| SANE_DAYS.contains(days))
-        .map(|days| days as i32);
+    let current = reported.is_some();
+    let dated_days = known.then(|| expiration.days_until(now)).flatten();
+    let (days_left, unlimited) = api_days_and_unlimited(known, reported, dated_days);
     let checked_ms = crate::util::unix_ms_i64_of(now);
     // The date is the third wire field and the day count is the second, so a core could answer with
     // one sane and the other not. Keep the date only while BOTH agree on being plausible — the
@@ -237,11 +231,48 @@ pub(super) fn api_key_expiry_from_proto(
             SANE_DAYS.contains(&days)
         });
     ApiKeyExpiry {
+        unlimited,
         known,
         days_left,
         at_unix,
         checked_ms,
     }
+}
+
+/// Decide the day count and the unlimited flag from the three facts one answer carries.
+///
+/// Split out as a pure function because the shape that matters most cannot be built through
+/// moonproto's public API: an answer with NO usable date but a real count. The parser produces it
+/// (it zeroes the date whenever the core's timestamp is unusable, yet still returns the count
+/// beside it), and gating the count on the date would render such a key as unlimited.
+///
+/// Unlimited is the absence of BOTH: no usable date and no count to run down. A zero count with no
+/// date is exactly how the wire spells "this key does not expire", so it is not kept as a number.
+///
+/// Args:
+///     known: Whether the answer carries a usable expiration date.
+///     reported: The core's own day count, when the answer carries that field.
+///     dated_days: Days derived from the date, for a legacy answer with no count field.
+///
+/// Returns:
+///     The day count to retain, and whether the key has no expiration at all.
+fn api_days_and_unlimited(
+    known: bool,
+    reported: Option<i32>,
+    dated_days: Option<i64>,
+) -> (Option<i32>, bool) {
+    // Decided BEFORE the plausibility filter: a core that sent a count said something about this
+    // key's lifetime, even if the number is unusable. Deciding after would turn a rejected count
+    // into "no expiry" — an infinity glyph built out of a value we threw away.
+    let unlimited = !known && reported.is_none_or(|days| days == 0);
+    let days_left = reported
+        .map(i64::from)
+        .or(dated_days)
+        .filter(|days| SANE_DAYS.contains(days))
+        // A zero on an answer with no date is "no expiry", not "expires today".
+        .filter(|days| *days != 0 || known)
+        .map(|days| days as i32);
+    (days_left, unlimited)
 }
 
 /// Plausible remaining lifetime of an exchange API key, in days.

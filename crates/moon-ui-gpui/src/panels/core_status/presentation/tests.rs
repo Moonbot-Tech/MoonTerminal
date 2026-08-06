@@ -6,16 +6,36 @@
 use super::{LoadLevel, api_expiry_level, api_expiry_text};
 use crate::panels::core_status::model::ApiKeyState;
 
-/// "We could not check" and "this key never expires" are different facts, and the column is the
-/// only place an operator can tell them apart. Rendering both as one marker would make a broken
-/// check look like a healthy perpetual key.
+/// The cell carries a BARE number — the unit lives in the column heading. A per-row "дн" would
+/// repeat itself down the whole column and push the heading's meaning into the data.
 #[test]
-fn no_answer_and_no_expiry_read_differently() {
-    let unchecked = api_expiry_text(ApiKeyState::Unknown);
-    let perpetual = api_expiry_text(ApiKeyState::Perpetual);
+fn a_day_count_renders_without_its_unit() {
+    assert_eq!(api_expiry_text(ApiKeyState::Days(45)), "45");
+    assert_eq!(api_expiry_text(ApiKeyState::Days(0)), "0", "its last day");
+}
 
-    assert_eq!(unchecked, "-", "no answer yet");
-    assert_eq!(perpetual, "\u{221e}", "checked: this key has no expiry");
+/// A key past its date reads as a WORD, not as a negative number: "-3" under a heading that says
+/// days would look like a count, and this is the one arm an operator must not have to decode.
+#[test]
+fn an_expired_key_reads_as_a_word() {
+    let text = api_expiry_text(ApiKeyState::Days(-3));
+    assert!(
+        text.parse::<i32>().is_err(),
+        "a count would be read as days remaining, got {text:?}"
+    );
+    assert!(!text.is_empty(), "and it has to say something");
+    // Distinct from every other arm, so "expired" cannot be mistaken for "nothing known".
+    for other in [ApiKeyState::Unknown, ApiKeyState::Perpetual] {
+        assert_ne!(text, api_expiry_text(other));
+    }
+}
+
+/// "Nothing is known" and "effectively unlimited" are different facts and must not share a marker:
+/// a failed check that rendered as ∞ would look like a healthy key nobody has to think about.
+#[test]
+fn unknown_and_unlimited_read_differently() {
+    assert_eq!(api_expiry_text(ApiKeyState::Unknown), "-");
+    assert_eq!(api_expiry_text(ApiKeyState::Perpetual), "\u{221e}");
 }
 
 /// The colour follows the ENGINE's warning decision, which carries the user's day threshold. A
@@ -45,10 +65,10 @@ fn an_expired_key_is_red_regardless() {
     );
 }
 
-/// A key with no expiration, and one never checked, must never colour: the engine cannot warn about
-/// either, so the row has nothing to report.
+/// An unlimited key, and one nothing is known about, must never colour: the engine cannot warn
+/// about either, so the row has nothing to report.
 #[test]
-fn a_perpetual_or_unchecked_key_is_never_coloured() {
+fn an_unlimited_or_unknown_key_is_never_coloured() {
     assert_eq!(
         api_expiry_level(ApiKeyState::Perpetual, false),
         LoadLevel::Normal

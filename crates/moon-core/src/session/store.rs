@@ -123,9 +123,9 @@ pub struct CoreData {
     pub runtime_state: Option<RuntimeState>,
     /// Account hedge mode for dual-side positions, or `None` until the core responds.
     pub hedge_mode: Option<bool>,
-    /// Exchange API-key expiration, or `None` while the terminal has no answer: never asked, the
-    /// core is down, or the check failed. `None` is "unknown" — distinct from a successful answer
-    /// whose [`crate::feed::ApiKeyExpiry::known`] is false, which means the key has no expiry.
+    /// Exchange API-key expiration, or `None` while this core has never answered. A LATER failure
+    /// does not clear it: the last successful answer is retained until the connection is replaced,
+    /// so a core whose checks start failing keeps showing what it last reported.
     pub api_expiry: Option<crate::feed::ApiKeyExpiry>,
     /// Unshown Engine action results for toasts. The active window's shell drains them through
     /// [`CoreData::take_engine_actions`].

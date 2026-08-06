@@ -172,11 +172,12 @@ core_status.col.updated:
   ru: "Обновлено"
   en: "Updated"
   es: "Actualizado"
-# Exchange API-key lifetime column (flat table).
+# Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
+# bare number.
 core_status.col.api_key:
-  ru: "АПИ"
-  en: "API"
-  es: "API"
+  ru: "АПИ (дн)"
+  en: "API (d)"
+  es: "API (d)"
 
 # --- By IP column header (the fixed caption row above the server tree) ---
 # CPU column: percentage plus the machine's logical-core count in parentheses.
@@ -194,8 +195,13 @@ core_status.hdr.ip:
   ru: "IP"
   en: "IP"
   es: "IP"
-# API-key column: days left before the exchange key expires. Also the axis label in the alert list.
+# API-key column heading in the By-IP tree; carries the unit its cells omit.
 core_status.hdr.api_key:
+  ru: "АПИ (дн)"
+  en: "API (d)"
+  es: "API (d)"
+# The same axis named as a KIND in the Warnings episode list, where no unit belongs.
+core_status.axis_api:
   ru: "АПИ"
   en: "API"
   es: "API"
@@ -359,7 +365,8 @@ core_status.ago_d:
   ru: "%{n}д"
   en: "%{n}d"
   es: "%{n}d"
-# Days left on an API key, and the state once it has run out.
+# Day count WITH its unit — used by the Warnings list's mixed-unit "Peak" column only; the API
+# column itself prints a bare number under a heading that carries the unit.
 core_status.api_days:
   ru: "%{n} дн"
   en: "%{n} d"

@@ -43,13 +43,16 @@ pub(super) struct CoreStatusRow {
 /// What is known about one core's exchange API key, as of a given moment.
 ///
 /// A single classification instead of an `Option<ApiKeyExpiry>` read differently at each call site:
-/// the two "no number" cases mean opposite things (nothing was learned vs the key never expires),
-/// and every consumer that told them apart on its own would be one edit away from conflating them.
+/// the two states without a number mean opposite things (the check produced nothing vs the key has
+/// nothing to expire), and every consumer that told them apart on its own — the text, the colour,
+/// the sort, the server-row aggregate — would be one edit away from conflating them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ApiKeyState {
-    /// No answer: never asked, the core is down, or the check failed.
+    /// The check produced nothing to show: never asked, the core is down, the check failed, or the
+    /// answer carried a date this terminal could not use.
     Unknown,
-    /// Checked, and the exchange reports no expiration for this key.
+    /// No expiration at all, or a lifetime long enough to read as none — see
+    /// [`API_PERPETUAL_DAYS`].
     Perpetual,
     /// Whole days remaining: zero means less than a day, negative means already expired. One
     /// variant rather than a separate `Expired`, so "how long ago" survives — two keys dead by a
@@ -57,11 +60,28 @@ pub(super) enum ApiKeyState {
     Days(i32),
 }
 
+/// A remaining lifetime of at least this many days reads as unlimited rather than as a number.
+///
+/// Two reasons. A count beyond a year is not information an operator acts on — the column exists
+/// to catch a key about to die. And a round `1000` is what two Bybit cores answer here (observed
+/// live, with `known == true`): too round to be a real date, most likely a core-side stand-in, and
+/// rendering it as "1000" would present that constant as a measurement.
+const API_PERPETUAL_DAYS: i32 = 365;
+
 impl ApiKeyState {
     /// Classify one core's stored answer against the current clock.
     ///
+    /// An answer the core marked as having no expiration is `Perpetual` — the key is unlimited.
+    /// That fact is decided at the wire boundary ([`ApiKeyExpiry::unlimited`]), not inferred here
+    /// from a missing date: the same answer can carry a real day count with no date beside it.
+    ///
+    /// A core that cannot check its exchange answers `success = false`, which never becomes an
+    /// `ApiKeyExpiry` at all — so it reaches this function as `None` while it has never answered,
+    /// and as its LAST successful answer once it has (the store keeps that until the connection is
+    /// replaced).
+    ///
     /// Args:
-    ///     expiry: The retained answer, or `None` when the terminal has none.
+    ///     expiry: The retained answer, or `None` when this core has never answered.
     ///     now_ms: Current Unix milliseconds.
     ///
     /// Returns:
@@ -70,21 +90,37 @@ impl ApiKeyState {
         let Some(expiry) = expiry else {
             return Self::Unknown;
         };
-        if !expiry.known {
+        if expiry.unlimited {
             return Self::Perpetual;
         }
-        // A `None` here reported an expiration whose date is unusable — a legacy answer out of
-        // range. Nothing honest to show, and nothing to warn on.
-        expiry
-            .days_left_at(now_ms)
-            .map_or(Self::Unknown, Self::Days)
+        match expiry.days_left_at(now_ms) {
+            Some(days) if days >= API_PERPETUAL_DAYS => Self::Perpetual,
+            Some(days) => Self::Days(days),
+            // Dated, but the date is unusable — a legacy answer outside the plausible range. Nothing
+            // honest to show and nothing to warn on.
+            None => Self::Unknown,
+        }
     }
 
-    /// Days remaining when there is a number, for sorting and for picking the most urgent key.
+    /// Days remaining when there is a number.
     pub(super) fn days(self) -> Option<i32> {
         match self {
             Self::Days(days) => Some(days),
             Self::Unknown | Self::Perpetual => None,
+        }
+    }
+
+    /// Sort key ordering states by URGENCY, most urgent first.
+    ///
+    /// A dated key leads, soonest (and expired, being negative) first; then the keys nothing is
+    /// known about, which may still hide a problem; then the effectively-unlimited ones, which
+    /// cannot. Sorting on [`Self::days`] instead would put every dash AND every infinity ahead of
+    /// the counts — `None` sorts first — which is the opposite of what the column is scanned for.
+    pub(super) fn urgency(self) -> (u8, i32) {
+        match self {
+            Self::Days(days) => (0, days),
+            Self::Unknown => (1, 0),
+            Self::Perpetual => (2, 0),
         }
     }
 
@@ -167,7 +203,8 @@ pub(super) struct ServerStatusGroup {
     /// belongs to the core, so the server row only carries the attention state, like ping.
     pub(super) api_warn: bool,
     /// The most urgent key among this server's cores — the one the server row shows and sorts by.
-    /// `Unknown` when no core has answered, `Perpetual` only when every answer says so.
+    /// A real day count wins whenever any core has one; `Unknown` when none does and at least one
+    /// core is unaccounted for; `Perpetual` only when every core is unlimited.
     pub(super) api_key: ApiKeyState,
     /// Shared endpoint address, or `None` for an isolated unknown endpoint.
     pub(super) address: Option<IpAddr>,
@@ -305,10 +342,10 @@ fn finish_group(group: &mut ServerStatusGroup) {
     group.process_memory_mb = has_process_memory.then_some(process_memory_mb);
 }
 
-/// The key a server row stands for: the one expiring soonest among its cores.
+/// The key a server row stands for: the most urgent among its cores, by [`ApiKeyState::urgency`].
 ///
-/// A dated key always outranks a perpetual one, and `Perpetual` is reported only when EVERY answer
-/// says so — otherwise one core's "never expires" would speak for siblings that were never checked.
+/// A dated key outranks everything, and `Perpetual` surfaces only when EVERY core says so —
+/// otherwise one core's unlimited key would speak for a sibling nobody could check.
 ///
 /// Args:
 ///     cores: The server's core rows, each already classified.
@@ -316,17 +353,13 @@ fn finish_group(group: &mut ServerStatusGroup) {
 /// Returns:
 ///     The state to show on the server row, and to sort the server list by.
 fn soonest_key(cores: &[CoreStatusRow]) -> ApiKeyState {
-    // Rank, then take the minimum: a dated key always outranks a perpetual one, and `Unknown`
-    // outranks `Perpetual` so one core's "never expires" cannot speak for a sibling nobody checked.
-    let rank = |state: ApiKeyState| match state {
-        ApiKeyState::Days(days) => (0, days),
-        ApiKeyState::Unknown => (1, 0),
-        ApiKeyState::Perpetual => (2, 0),
-    };
+    // The most urgent state on the server, by the same ordering the column sorts on — so the row
+    // shows what the sort would rank it by, and one core's "unlimited" cannot speak for a sibling
+    // nobody could check.
     cores
         .iter()
         .map(|core| core.api_key)
-        .min_by_key(|state| rank(*state))
+        .min_by_key(|state| state.urgency())
         .unwrap_or(ApiKeyState::Unknown)
 }
 

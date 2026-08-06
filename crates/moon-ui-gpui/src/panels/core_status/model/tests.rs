@@ -288,21 +288,21 @@ fn a_server_reports_its_soonest_key() {
     assert_eq!(groups[0].api_key, super::ApiKeyState::Days(3));
 }
 
-/// "This key never expires" may speak for a server only when EVERY core on it says so. One
-/// perpetual key beside an unchecked sibling would otherwise report the whole machine as safe.
+/// "Effectively unlimited" may speak for a server only when EVERY core on it says so. One unlimited
+/// key beside a sibling nobody could check would otherwise report the whole machine as safe.
 #[test]
-fn one_perpetual_key_does_not_speak_for_unchecked_siblings() {
+fn one_unlimited_key_does_not_speak_for_unchecked_siblings() {
     let mixed = aggregate_servers(&[
         key_row(1, [10, 0, 0, 2], super::ApiKeyState::Perpetual),
         key_row(2, [10, 0, 0, 2], super::ApiKeyState::Unknown),
     ]);
     assert_eq!(mixed[0].api_key, super::ApiKeyState::Unknown);
 
-    let all_perpetual = aggregate_servers(&[
+    let all_unlimited = aggregate_servers(&[
         key_row(1, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
         key_row(2, [10, 0, 0, 3], super::ApiKeyState::Perpetual),
     ]);
-    assert_eq!(all_perpetual[0].api_key, super::ApiKeyState::Perpetual);
+    assert_eq!(all_unlimited[0].api_key, super::ApiKeyState::Perpetual);
 }
 
 /// An expired key outranks every live one when a server picks what to show — it is the most urgent
@@ -315,4 +315,102 @@ fn an_expired_key_wins_the_server_row() {
     ]);
 
     assert_eq!(groups[0].api_key, super::ApiKeyState::Days(-3));
+}
+
+/// A SUCCESSFUL check that carries no expiration date means the core looked and the key is
+/// unlimited — the answer most of a Binance fleet gives. Reading it as "nothing known" instead
+/// paints a dash over every healthy unlimited key, which is precisely the regression this pins:
+/// the protocol separates "unlimited" from "could not check" by the response's success flag, and a
+/// failed check never becomes an `ApiKeyExpiry` at all — it arrives here as `None`.
+///
+/// The fixture is what the converter builds for that answer: `unlimited`, with no date and no
+/// count — the zero the wire carries beside it is deliberately not kept as a number.
+#[test]
+fn a_successful_answer_without_a_date_is_unlimited_and_no_answer_is_unknown() {
+    let no_expiry = moon_core::session::ApiKeyExpiry {
+        unlimited: true,
+        known: false,
+        days_left: None,
+        at_unix: None,
+        checked_ms: 0,
+    };
+
+    assert_eq!(
+        super::ApiKeyState::of(Some(no_expiry), 0),
+        super::ApiKeyState::Perpetual,
+        "the core checked and found no expiry — that is an unlimited key, not an unknown one"
+    );
+    assert_eq!(
+        super::ApiKeyState::of(None, 0),
+        super::ApiKeyState::Unknown,
+        "a failed or absent check is the only thing that reads as unknown"
+    );
+}
+
+/// The two thresholds of this feature live in different crates, and only their ORDER keeps the
+/// panel honest: the warning horizon must stay below the point where a count turns into ∞, or the
+/// engine would light a triangle on a cell that says "cannot expire". Nothing else asserts it.
+#[test]
+fn the_warning_horizon_stays_below_the_unlimited_cut() {
+    assert!(
+        i32::from(moon_core::config::layout::API_WARN_MAX_DAYS) < super::API_PERPETUAL_DAYS,
+        "a horizon reaching into the unlimited range would warn on an infinity cell"
+    );
+}
+
+/// A lifetime of a year or more is not a number an operator acts on, and a round 1000 is what two
+/// Bybit cores answer live — too round to be a real date. Both read as unlimited, while anything
+/// inside a year keeps its exact day count.
+#[test]
+fn a_year_or_more_reads_as_unlimited() {
+    let dated = |days: i64| {
+        Some(moon_core::session::ApiKeyExpiry {
+            unlimited: false,
+            known: true,
+            days_left: Some(days as i32),
+            at_unix: Some(days * 86_400),
+            checked_ms: 0,
+        })
+    };
+
+    assert_eq!(
+        super::ApiKeyState::of(dated(1000), 0),
+        super::ApiKeyState::Perpetual,
+        "the round 1000 two Bybit cores answer live"
+    );
+    assert_eq!(
+        super::ApiKeyState::of(dated(365), 0),
+        super::ApiKeyState::Perpetual,
+        "exactly a year is already unlimited"
+    );
+    assert_eq!(
+        super::ApiKeyState::of(dated(364), 0),
+        super::ApiKeyState::Days(364),
+        "one day inside the year keeps its count"
+    );
+}
+
+/// An answer with a real day count but NO usable date must reach the column as that count. The
+/// parser produces this shape (it zeroes the date whenever the core's timestamp is unusable while
+/// still returning the count), and both wrong readings of it are silent: as "unlimited" it hides a
+/// dying key behind an infinity, as "unknown" it hides the same key behind a dash.
+#[test]
+fn a_count_without_a_date_reaches_the_column() {
+    let dateless = moon_core::session::ApiKeyExpiry {
+        unlimited: false,
+        known: false,
+        days_left: Some(42),
+        at_unix: None,
+        checked_ms: 0,
+    };
+
+    assert_eq!(
+        super::ApiKeyState::of(Some(dateless), 0),
+        super::ApiKeyState::Days(42)
+    );
+    // And it ages from the receipt stamp like any other count.
+    assert_eq!(
+        super::ApiKeyState::of(Some(dateless), 40 * 86_400_000),
+        super::ApiKeyState::Days(2)
+    );
 }

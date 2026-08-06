@@ -143,6 +143,7 @@ fn a_replacement_feed_clears_endpoint_scoped_health() {
 fn an_unchanged_key_answer_does_not_bump_the_revision() {
     let mut core = CoreData::new();
     let first = ApiKeyExpiry {
+        unlimited: false,
         known: true,
         days_left: Some(30),
         at_unix: Some(1_800_000_000),
@@ -169,6 +170,7 @@ fn an_unchanged_key_answer_does_not_bump_the_revision() {
 fn a_changed_day_count_bumps_the_revision() {
     let mut core = CoreData::new();
     let first = ApiKeyExpiry {
+        unlimited: false,
         known: true,
         days_left: Some(8),
         at_unix: Some(1_800_000_000),
