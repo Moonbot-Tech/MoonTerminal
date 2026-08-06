@@ -39,7 +39,6 @@ pub(super) const DEF: ToolDef = ToolDef {
     // object: seven stored prices across the whole chart against this tool's eleven ratios between
     // two points. Sending one as the other would make the core draw something nobody drew.
     alertable: false,
-    drawable: true,
     make: |nodes| match nodes {
         [a, b, ..] => Some(FigureKind::FibRetracement(FibRetracement {
             a: *a,

@@ -13,19 +13,38 @@
 //! Converting one into our eleven-ratio tool would therefore draw something the user never drew.
 //! This tool draws what Moonbot drew.
 //!
-//! Not drawable here ([`ToolDef::drawable`] is false): it exists to show — and to round-trip — an
-//! object that arrives from the core. Ours is the tool the toolbar offers.
+//! Both tools are offered. This one draws what Moonbot draws — Moonbot's own set of ratios, no
+//! switches to turn a level off, one level draggable on its own as Moonbot allows, sent to the core
+//! as a type-3 object. [`super::FibRetracement`] is the one that is ours to change: as many levels
+//! as we like, each switchable, and local.
 
 use serde::{Deserialize, Serialize};
 
+use super::super::kind::FigureKind;
 use super::super::node::FigNode;
 use super::super::proj::{hline_dist, Proj, PxPoint};
-use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText};
+use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
 use super::{FigureTool, GrabMode, ToolDef, ToolShape};
 
 /// Levels a Moonbot Fibonacci object carries. Fixed by the format: every sampled blob is 145 bytes,
 /// which is exactly this many `f64` prices after the header and the anchors.
 pub const MB_FIB_LEVELS: usize = 7;
+
+/// The ratios a fib drawn HERE places its levels at.
+///
+/// Measured off the wire, not chosen: every fib captured from Moonbot divides to exactly these.
+/// The seventh is a setting on that side — a chart drawn later showed 1.618 where these show
+/// 1.236 — so this is Moonbot's default rather than a law. It costs nothing when it differs: the
+/// object stores PRICES, so a level placed here keeps its price whatever Moonbot's own set is, and
+/// Moonbot labels it with its own names.
+pub const MB_FIB_RATIOS: [f64; MB_FIB_LEVELS] = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.236];
+
+/// The slot Moonbot lets the user drag on its own, initially the 0.618.
+///
+/// This is why the object stores prices rather than a ratio set: that one level is free, so its
+/// ratio is whatever the user dragged it to — a live sample reads 0.604 where the scale started at
+/// 0.618. Every other slot keeps its ratio when the scale is stretched.
+const MB_FIB_FREE_LEVEL: usize = 4;
 
 /// The largest ratio worth naming. Well past 4.236, the furthest extension any charting package
 /// offers, and far short of what a degenerate span produces.
@@ -42,8 +61,9 @@ pub struct MbFib {
     /// The price the scale calls ONE. Neither anchor is necessarily one of [`Self::levels`]: the
     /// sampled sets contain a level at ratio 0 but none at ratio 1.
     pub b: f64,
-    /// When it was drawn. Kept because the blob carries it and a re-upsert must give it back
-    /// unchanged; it is NOT an edge, and nothing here draws with it.
+    /// When it was drawn. Kept because the blob carries it and nothing here has cause to change it
+    /// — dragging the figure moves prices, not this — so a re-upsert gives it back as it arrived.
+    /// It is NOT an edge: the levels run the whole width of the chart.
     pub time_ms: f64,
     /// The drawn level prices, in the order Moonbot wrote them.
     pub levels: [f64; MB_FIB_LEVELS],
@@ -54,7 +74,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     key: "mb-fib",
     locale_key: "alerts.fig.mb_fib",
     glyph: "▤",
-    clicks: 0,
+    clicks: 2,
     // Coloured by the scale, and filled between its levels, exactly as our own Fibonacci is: the
     // blob carries one line colour and no fill at all — every sampled length is accounted for by
     // the header and the geometry — so the bands Moonbot draws are its own level palette, and ours
@@ -62,13 +82,44 @@ pub(super) const DEF: ToolDef = ToolDef {
     level_palette: true,
     fills: true,
     alertable: true,
-    // Arrives from the core; the toolbar offers our own Fibonacci instead.
-    drawable: false,
-    make: |_| None,
-    preview: |_, _| None,
+    // A move with no height is not a scale: every level would collapse onto one price, and the
+    // object would be encodable and invisible at once.
+    make: |nodes| match nodes {
+        [a, b, ..] if a.price != b.price => Some(FigureKind::MbFib(MbFib::spanning(*a, *b))),
+        _ => None,
+    },
+    preview: |placed, cursor| {
+        placed
+            .first()
+            .filter(|a| a.price != cursor.price)
+            .map(|a| FigureKind::MbFib(MbFib::spanning(*a, cursor)))
+    },
 };
 
 impl MbFib {
+    /// Builds the object a move from `a` to `b` produces, with Moonbot's own ratios.
+    ///
+    /// The level PRICES are computed once, here, and are what the figure carries from then on —
+    /// exactly as an object drawn in Moonbot does. Nothing recomputes them later, so a set that
+    /// differs on Moonbot's side changes nothing about a figure already placed.
+    pub fn spanning(a: FigNode, b: FigNode) -> Self {
+        let span = b.price - a.price;
+        let mut levels = MB_FIB_RATIOS.map(|r| a.price + r * span);
+        // Slot 0 holds the LOWER anchor, whichever way the move was drawn. Measured, and it is the
+        // one rule both live samples obey: an upward fib's first slot equals `a` and a downward
+        // one's equals `b`, which is ratio 0 in one and ratio 1 in the other. Placing it by ratio
+        // alone would put a line where Moonbot has none on every fib drawn downward.
+        levels[0] = a.price.min(b.price);
+        Self {
+            a: a.price,
+            b: b.price,
+            // Where it was drawn from, which is the one time the object carries. Not an edge: the
+            // levels run the whole width of the chart.
+            time_ms: a.time_ms,
+            levels,
+        }
+    }
+
     /// Where `price` sits on the move, as the ratio Moonbot would label it.
     ///
     /// Derived for the LABEL only — the price is what is drawn. `None` when the move has no height,
@@ -87,6 +138,40 @@ impl MbFib {
             return None;
         }
         Some(super::super::levels::snap_ratio(r, price, span))
+    }
+
+    /// The drawn level at one end of the scale, as `(index, price)`.
+    ///
+    /// The FREE level is never an end, even when it has been dragged past one: the two ends and the
+    /// free level are three separate handles, and a level that became an end would answer for two
+    /// of them — the tie resolves to the end, and that level could never be slid alone again.
+    fn extreme(&self, highest: bool) -> Option<(usize, f64)> {
+        self.levels
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(i, p)| *i != MB_FIB_FREE_LEVEL && Self::is_price(*p))
+            .reduce(|acc, cur| match (highest, cur.1 > acc.1) {
+                (true, true) | (false, false) => cur,
+                _ => acc,
+            })
+    }
+
+    /// The price of the level Moonbot lets the user drag, when it is one.
+    fn free_level(&self) -> Option<f64> {
+        self.levels
+            .get(MB_FIB_FREE_LEVEL)
+            .copied()
+            .filter(|p| Self::is_price(*p))
+    }
+
+    /// Every level's ratio as it stands now, or `None` when the move has no height to measure by.
+    fn ratios(&self) -> Option<[f64; MB_FIB_LEVELS]> {
+        let span = self.b - self.a;
+        if span == 0.0 || !span.is_finite() {
+            return None;
+        }
+        Some(self.levels.map(|p| (p - self.a) / span))
     }
 
     /// The levels worth drawing: finite and above zero.
@@ -112,37 +197,102 @@ impl ToolShape for MbFib {
         &DEF
     }
 
-    /// No DRAGGABLE handles: the object belongs to Moonbot, and there is no gesture here that could
-    /// edit it without inventing which of the seven prices a drag was supposed to move.
+    /// Three, as in Moonbot: the outermost level at each end, which stretch the scale, and the one
+    /// level that moves on its own.
     fn handle_count(&self) -> usize {
-        0
+        3
     }
 
-    /// The move's start, which is the figure's anchor price for the alert list.
+    /// Handle 0 is the lowest drawn level, 1 the highest, 2 the free one.
     ///
-    /// Answered even though `handle_count` is zero: the two questions differ. Nothing iterates past
-    /// the count — `pick_handle` and the knot pass both stop at it — while `FigureKind::anchor_price`
-    /// asks index 0 directly, and a figure with no answer would sort and display as price zero.
+    /// The ENDS are levels rather than the stored anchors, because that is what there is to grab: a
+    /// scale whose set has no level at ratio 1 draws no line at `b`, and a handle on an invisible
+    /// line is a handle nobody can find. Index 0 doubles as the figure's anchor price for the alerts
+    /// list, which asks for it directly.
     fn handle(&self, i: usize) -> Option<FigNode> {
-        if i != 0 {
-            return None;
-        }
-        // The move's start when it is a price at all; otherwise the first level that is one. The
-        // anchor is what the alerts list prints in its Price column, and `a` comes off the wire
-        // unchecked — a NaN or a negative would be printed there verbatim, and a zero would render
-        // as an empty cell indistinguishable from "no price".
-        let price = Self::is_price(self.a)
-            .then_some(self.a)
-            .or_else(|| self.drawn().next())?;
+        let price = match i {
+            0 => self.extreme(false)?.1,
+            1 => self.extreme(true)?.1,
+            2 => self.free_level()?,
+            _ => return None,
+        };
         Some(FigNode::new(self.time_ms, price))
     }
 
-    fn move_handle(&mut self, _i: usize, _to: FigNode) -> bool {
-        false
+    /// Stretches the scale from one end, or slides the free level alone.
+    ///
+    /// Dragging an END keeps the other end where it is and re-solves the two anchors so the dragged
+    /// level lands under the cursor; every level is then recomputed from the ratio it ALREADY had,
+    /// which is what keeps a level the user had dragged where they put it. Dragging the free level
+    /// moves that price and nothing else — its ratio is then whatever it now measures, exactly as
+    /// Moonbot's own does.
+    fn move_handle(&mut self, i: usize, to: FigNode) -> bool {
+        if !Self::is_price(to.price) {
+            return false;
+        }
+        if i > 2 {
+            return false;
+        }
+        if i == 2 {
+            let Some(slot) = self.levels.get_mut(MB_FIB_FREE_LEVEL) else {
+                return false;
+            };
+            if *slot == to.price {
+                return false;
+            }
+            *slot = to.price;
+            return true;
+        }
+        let (Some((i_move, moving)), Some((i_fix, anchored))) =
+            (self.extreme(i == 1), self.extreme(i != 1))
+        else {
+            return false;
+        };
+        if moving == to.price {
+            return false;
+        }
+        // The ratios as they stand, including any the user has already dragged. RAW, not the named
+        // ones `ratio_of` returns: a name is snapped to the nearest canonical value, and solving
+        // with it would land the dragged end beside the cursor by exactly the error the snap hides.
+        let Some(ratios) = self.ratios() else {
+            return false;
+        };
+        let denom = ratios[i_move] - ratios[i_fix];
+        if denom == 0.0 || !denom.is_finite() {
+            return false;
+        }
+        let span = (to.price - anchored) / denom;
+        if !span.is_finite() || span == 0.0 {
+            return false;
+        }
+        self.a = anchored - ratios[i_fix] * span;
+        self.b = self.a + span;
+        for (level, ratio) in self.levels.iter_mut().zip(ratios) {
+            *level = self.a + ratio * span;
+        }
+        true
     }
 
-    fn translate(&mut self, _dt_ms: f64, _dp: f64) -> bool {
-        false
+    /// Moved as a whole, by PRICE, with every stored level carried along.
+    ///
+    /// Shifting the prices rather than recomputing them from a ratio set is what makes this safe
+    /// for an object drawn in MOONBOT, whose set may not be ours: the levels keep whatever spacing
+    /// they arrived with.
+    ///
+    /// Time is untouched, and a purely horizontal drag is not a move. The figure spans the whole
+    /// chart, so sideways travel changes nothing you can see — while `@64` is the instant the
+    /// object was DRAWN, and rewriting that in another program's object on every drag would be a
+    /// change nobody asked for that the core would keep.
+    fn translate(&mut self, _dt_ms: f64, dp: f64) -> bool {
+        if dp == 0.0 {
+            return false;
+        }
+        self.a += dp;
+        self.b += dp;
+        for level in &mut self.levels {
+            *level += dp;
+        }
+        true
     }
 
     /// Distance to the nearest drawn level, measured vertically: every level spans the full width,
@@ -184,7 +334,25 @@ impl ToolShape for MbFib {
             }
         }
         for price in self.drawn() {
-            sink.hline(price, &ctx.stroke);
+            // Each line in its LEVEL's hue, like our own scale: the reader recognises 0.618 by its
+            // teal without reading the number. The figure's own colour is the fallback for a ratio
+            // our palette has no entry for — Moonbot's set is a setting on that side.
+            let hue = self
+                .ratio_of(price)
+                .and_then(super::super::levels::color_of_ratio);
+            let stroke = match hue {
+                Some([r, g, b]) => Stroke {
+                    color: [
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                        ctx.stroke.color[3],
+                    ],
+                    ..ctx.stroke
+                },
+                None => ctx.stroke,
+            };
+            sink.hline(price, &stroke);
             // The readout is the point of a ratio scale, so it is drawn at rest rather than on
             // hover — the same rule our own Fibonacci follows.
             // A level whose ratio cannot be named draws its line and stays silent. A bare price in

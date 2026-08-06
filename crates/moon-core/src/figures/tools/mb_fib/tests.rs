@@ -1,5 +1,4 @@
 use super::*;
-use crate::figures::kind::FigureKind;
 use crate::figures::tools::tests::TestProj;
 
 /// The sample decoded from the live blob (core 17 «QQ», ETHUSD_PERP, 2026-08-05 19:41:39 UTC).
@@ -72,22 +71,175 @@ fn unusable_levels_are_not_drawn() {
     assert!(drawn.iter().all(|p| p.is_finite() && *p > 0.0));
 }
 
-/// The object is never editable by a drag, whichever handle a caller asks for.
+/// Stretching from one end keeps the other end still and every level's own ratio.
+///
+/// The ratios are what a stretch must preserve, prices are what it recomputes — including a level
+/// the user had already dragged away from its starting ratio, which must not snap back.
 #[test]
-fn moonbots_object_takes_no_edit() {
+fn stretching_one_end_holds_the_other_and_keeps_every_ratio() {
     let mut f = sample();
-    let before = f;
-    assert_eq!(f.handle_count(), 0);
-    assert!(!f.move_handle(0, FigNode::new(1.0, 2.0)));
-    assert!(!f.translate(1000.0, 5.0));
-    assert_eq!(f, before);
+    // Drag the free level first, so the stretch has a custom ratio to preserve.
+    let moved_to = f.levels[4] + 1.0;
+    assert!(f.move_handle(2, FigNode::new(0.0, moved_to)));
+    let custom = f.ratio_of(moved_to).expect("still measurable");
+    assert!(custom != 0.618, "the free level left its starting ratio");
+
+    let before_ratios: Vec<_> = f.levels.iter().map(|p| f.ratio_of(*p)).collect();
+    let low = f.handle(0).expect("a low end").price;
+    let high = f.handle(1).expect("a high end").price;
+    assert!(high > low);
+
+    // Pull the high end up; the low end must not move.
+    assert!(f.move_handle(1, FigNode::new(0.0, high + 20.0)));
+    assert_eq!(f.handle(0).expect("still there").price, low, "the far end held");
+    assert!(
+        (f.handle(1).expect("still there").price - (high + 20.0)).abs() < 1e-9,
+        "the dragged end landed under the cursor"
+    );
+    for (p, was) in f.levels.iter().zip(&before_ratios) {
+        let now = f.ratio_of(*p);
+        match (now, was) {
+            (Some(a), Some(b)) => assert!((a - b).abs() < 1e-9, "ratio moved: {a} vs {b}"),
+            _ => panic!("a level stopped being measurable"),
+        }
+    }
 }
 
-/// The alert list's Price column asks index 0 directly, past the zero handle count.
+/// The free level moves alone, and only its own ratio changes.
 #[test]
-fn the_anchor_price_is_still_answered() {
-    let f = sample();
-    assert_eq!(FigureKind::MbFib(f).anchor_price(), f.a);
+fn the_free_level_moves_by_itself() {
+    let mut f = sample();
+    let before = f;
+    let to = f.levels[4] + 2.0;
+    assert!(f.move_handle(2, FigNode::new(0.0, to)));
+    assert_eq!(f.a, before.a, "the anchors are untouched");
+    assert_eq!(f.b, before.b);
+    for (i, (now, was)) in f.levels.iter().zip(before.levels).enumerate() {
+        if i == 4 {
+            assert_eq!(*now, to);
+        } else {
+            assert_eq!(*now, was, "level {i} moved with it");
+        }
+    }
+    assert!(!f.move_handle(2, FigNode::new(0.0, to)), "no move is no change");
+}
+
+/// The whole figure still travels on a body drag, carrying every stored price.
+#[test]
+fn the_figure_also_moves_whole() {
+    let mut f = sample();
+    let before = f;
+    assert_eq!(f.handle_count(), 3, "two ends and the free level");
+    assert!(f.translate(1000.0, 5.0), "the body drag moves it");
+    assert_eq!(f.a, before.a + 5.0);
+    assert_eq!(f.b, before.b + 5.0);
+    // The instant it was DRAWN, untouched: the figure spans the whole chart, so sideways travel
+    // changes nothing visible, and rewriting @64 in another program's object is not a drag's job.
+    assert_eq!(f.time_ms, before.time_ms);
+    for (after, was) in f.levels.iter().zip(before.levels) {
+        assert_eq!(*after, was + 5.0, "every level travels with the figure");
+    }
+    // The scale is unchanged by the move: the same prices sit at the same ratios.
+    for (price, was) in f.levels.iter().zip(before.levels) {
+        assert_eq!(f.ratio_of(*price), before.ratio_of(was));
+    }
+    assert!(!f.translate(0.0, 0.0), "a zero step is not a move");
+    assert!(
+        !f.translate(5_000.0, 0.0),
+        "a purely sideways drag changes nothing and must not re-upsert"
+    );
+}
+
+/// A fib drawn HERE places its levels at Moonbot's own ratios.
+///
+/// The set is measured off the wire rather than chosen, and the object stores the resulting PRICES
+/// — so a Moonbot whose seventh ratio differs still shows these levels where they were placed, with
+/// its own names.
+#[test]
+fn a_fib_drawn_here_uses_moonbots_ratios() {
+    let f = MbFib::spanning(FigNode::new(1_000.0, 100.0), FigNode::new(9_000.0, 200.0));
+    assert_eq!(f.a, 100.0);
+    assert_eq!(f.b, 200.0);
+    assert_eq!(f.time_ms, 1_000.0, "the time it was drawn from, not an edge");
+    for (level, ratio) in f.levels.iter().zip(MB_FIB_RATIOS) {
+        assert_eq!(*level, 100.0 + ratio * 100.0);
+        assert_eq!(f.ratio_of(*level), Some(ratio));
+    }
+}
+
+/// Slot 0 holds the LOWER anchor whichever way the move was drawn.
+///
+/// The oracle is the pair of live samples: an upward fib's first slot equals `a` and a downward
+/// one's equals `b`. Placing it by ratio alone would put a line where Moonbot has none on every fib
+/// drawn downward, and leave none where Moonbot has one.
+#[test]
+fn a_fib_drawn_downward_puts_its_first_slot_on_the_lower_anchor() {
+    let up = MbFib::spanning(FigNode::new(0.0, 100.0), FigNode::new(1.0, 200.0));
+    let down = MbFib::spanning(FigNode::new(0.0, 200.0), FigNode::new(1.0, 100.0));
+    assert_eq!(up.levels[0], 100.0, "the lower price");
+    assert_eq!(down.levels[0], 100.0, "the lower price again");
+    assert_eq!(up.ratio_of(up.levels[0]), Some(0.0));
+    assert_eq!(down.ratio_of(down.levels[0]), Some(1.0));
+    // And the other six sit at the same ratios in both, which is what the samples show.
+    for f in [up, down] {
+        for (level, ratio) in f.levels.iter().zip(MB_FIB_RATIOS).skip(1) {
+            assert_eq!(f.ratio_of(*level), Some(ratio));
+        }
+    }
+}
+
+/// The tool offers no switches: its levels are Moonbot's, and there is nothing here to turn off.
+#[test]
+fn the_tool_offers_no_level_switches() {
+    assert!(sample().settings().is_empty());
+}
+
+/// The alert list's Price column asks handle 0, which is the scale's bottom line.
+///
+/// Not `a`: which anchor is lower depends on the direction the fib was drawn, and a column of
+/// prices that flipped ends with the gesture would be unreadable.
+#[test]
+fn the_anchor_price_is_the_bottom_of_the_scale() {
+    let up = MbFib::spanning(FigNode::new(0.0, 100.0), FigNode::new(1.0, 200.0));
+    let down = MbFib::spanning(FigNode::new(0.0, 200.0), FigNode::new(1.0, 100.0));
+    for f in [up, down] {
+        let anchor = FigureKind::MbFib(f).anchor_price();
+        let lowest = f
+            .drawn()
+            .fold(f64::INFINITY, f64::min);
+        assert_eq!(anchor, lowest, "the Price column shows the bottom line");
+    }
+}
+
+/// The free level stays grabbable after being dragged past an end.
+///
+/// Otherwise it would answer for two handles at once, the tie would resolve to the end, and the one
+/// level Moonbot lets a user slide could never be slid again.
+#[test]
+fn the_free_level_stays_its_own_handle_beyond_the_ends() {
+    let mut f = sample();
+    let above = f.levels[6] + 50.0;
+    assert!(f.move_handle(2, FigNode::new(0.0, above)));
+    assert_eq!(f.handle(2).expect("still a handle").price, above);
+    assert_ne!(
+        f.handle(1).expect("an end").price,
+        above,
+        "the end handle must not become the free level"
+    );
+    // And it can be slid back.
+    assert!(f.move_handle(2, FigNode::new(0.0, above - 10.0)));
+}
+
+/// A handle index this tool does not have changes nothing.
+#[test]
+fn an_unknown_handle_is_refused() {
+    let mut f = sample();
+    let before = f;
+    for i in [3, 9, usize::MAX] {
+        assert!(f.handle(i).is_none());
+        assert!(!f.move_handle(i, FigNode::new(0.0, 1.0)));
+    }
+    assert_eq!(f, before);
 }
 
 /// The hit test measures the nearest LEVEL, vertically, because every level spans the full width.
@@ -117,6 +269,8 @@ fn the_levels_are_named_on_an_idle_chart() {
         "every level but the one on the anchor names itself at rest"
     );
     assert_eq!(rec.hlines.len(), 7, "and draws across the whole chart");
+    // No knots: the ends are grabbed by their lines, as they are in Moonbot, and a knot on a
+    // full-width line has no X to sit at.
     assert!(rec.handles.is_empty(), "and offers no drag knot");
 }
 

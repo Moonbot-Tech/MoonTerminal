@@ -45,10 +45,10 @@ pub(super) struct FigDrag {
     pub last: FigNode,
     /// Whether any step actually moved the figure.
     ///
-    /// A tool may refuse every step — Moonbot's own Fibonacci does, having no editable geometry —
-    /// and an armed figure that did not move must not be re-upserted: that would write 145 bytes
-    /// into another program's object to say nothing, and hand it back the values this side repaired
-    /// on decode.
+    /// A tool may refuse a step — Moonbot's own Fibonacci refuses a purely sideways drag, since its
+    /// levels run the whole chart and nothing it draws would move — and an armed figure that did not
+    /// move must not be re-upserted: that would write a blob into another program's object to say
+    /// nothing, and hand it back the values this side repaired on decode.
     pub moved: bool,
 }
 
@@ -104,12 +104,6 @@ impl ChartPanel {
             }
             b.fig_tool
         };
-        // A tool that only ever ARRIVES places no nodes: `clicks` is zero, so a draft started for it
-        // could never complete and would swallow every later click while growing. The cycle cannot
-        // reach one, and this is the second lock on the same door.
-        if !tool.def().drawable {
-            return false;
-        }
         let node = map.node_at(pos);
         self.fig_draw_click(pane, tool, node, cx);
         // Retain the placed-node position for the drag-release gesture in `try_fig_release`.

@@ -22,7 +22,7 @@ pub enum FigureKind {
     Channel(Channel),
     FibRetracement(FibRetracement),
     Rect(Rect),
-    /// Moonbot's own Fibonacci object, decoded from the core rather than drawn here.
+    /// Moonbot's own Fibonacci object: drawn here on Moonbot's terms, and decoded from the core.
     MbFib(MbFib),
 }
 

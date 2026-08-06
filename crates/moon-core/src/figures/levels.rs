@@ -198,9 +198,7 @@ pub fn snap_ratio(ratio: f64, price: f64, span: f64) -> f64 {
     // place. The cap is the largest error worth calling "the format cannot tell these apart", not
     // the largest that keeps two names apart — half the table's smallest gap (0.018) would still
     // rename a deliberate 0.25 to 0.236.
-    let bar = (4.0 * f32::EPSILON as f64 * price.abs() / span)
-        .max(1e-9)
-        .min(MAX_SNAP);
+    let bar = (4.0 * f32::EPSILON as f64 * price.abs() / span).clamp(1e-9, MAX_SNAP);
     // NEAREST, not the first inside the bar: the table is ordered by value, and 1.236 precedes
     // 1.272, so "first" renamed an exactly drawn 1.272 to its neighbour.
     NAMED_RATIOS
