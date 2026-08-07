@@ -8,6 +8,7 @@
 //! calculation in [`dirty`].
 
 mod account_reconciliation;
+mod archive_probe;
 mod client_settings;
 mod commands;
 mod convert;
@@ -728,6 +729,13 @@ pub(super) fn run(
                         summary.retained.mini_candles,
                         summary.retained.last_prices,
                         summary.retained.liquidations,
+                    );
+                    // `Ready` is an apply barrier, so this is the first moment the merged rings can
+                    // be measured. Off unless MOON_ARCHIVE_PROBE is set.
+                    archive_probe::probe(
+                        &client,
+                        &ticket.market,
+                        crate::feed::core_label(server.id),
                     );
                 }
                 Event::MarketHistory(moonproto::state::MarketHistoryEvent::Failed {
