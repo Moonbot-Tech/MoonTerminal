@@ -250,8 +250,19 @@ impl ArchiveGate {
 
     /// Forget everything about one provider.
     pub(super) fn forget_provider(&self, provider: CoreId) {
-        let mut state = self.state.lock().expect("archive gate poisoned");
-        state.markets.remove(&provider);
+        let dropped = {
+            let mut state = self.state.lock().expect("archive gate poisoned");
+            state.markets.remove(&provider).map_or(0, |m| m.len())
+        };
+        if dropped > 0 {
+            // A respawn hands over a whole new client slot whose epoch restarts, so this is the
+            // path that lets an already-answered market ask again. Silent, it is indistinguishable
+            // from a reconnect bumping the epoch — which is a different mechanism with a different
+            // failure mode.
+            market_diag(format!(
+                "chart archive forgot provider={provider}: {dropped} market(s)"
+            ));
+        }
     }
 
     /// Keep only the providers still in use.
