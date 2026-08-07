@@ -100,19 +100,51 @@ struct GateState {
     last_send: Option<Instant>,
 }
 
+/// Why this market was or was not asked, so a diagnostic can name the reason instead of leaving
+/// "nothing happened" indistinguishable from "deliberately skipped".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    /// No state for this market under this client — never asked.
+    SendFirst,
+    /// State exists but belongs to a superseded client.
+    SendNewClient,
+    /// A refusal whose retry window has elapsed.
+    SendRetryRefusal,
+    /// Already accepted by this client; MoonProto owns it.
+    SkipAccepted,
+    /// Refused recently; still inside the retry window.
+    SkipRefusalWindow,
+    /// Refused too many times for this client.
+    SkipRefusalCap,
+}
+
+impl Decision {
+    fn sends(self) -> bool {
+        matches!(
+            self,
+            Self::SendFirst | Self::SendNewClient | Self::SendRetryRefusal
+        )
+    }
+}
+
 /// Whether this market may be asked again, given what is already known about it.
 ///
 /// `None`, or state belonging to a superseded client, always may: a new client means empty
 /// retained rings.
-fn may_send(state: Option<&ArchiveRequest>, epoch: u64, now: Instant) -> bool {
-    let Some(state) = state.filter(|state| state.epoch == epoch) else {
-        return true;
+fn decide(state: Option<&ArchiveRequest>, epoch: u64, now: Instant) -> Decision {
+    let Some(state) = state else {
+        return Decision::SendFirst;
     };
+    if state.epoch != epoch {
+        return Decision::SendNewClient;
+    }
     match state.outcome {
-        Outcome::Accepted => false,
-        Outcome::Refused { count, at } => {
-            count < ARCHIVE_MAX_REFUSALS && now.duration_since(at) >= ARCHIVE_SEND_RETRY
+        Outcome::Accepted => Decision::SkipAccepted,
+        Outcome::Refused { count, .. } if count >= ARCHIVE_MAX_REFUSALS => Decision::SkipRefusalCap,
+        Outcome::Refused { at, .. } if now.duration_since(at) < ARCHIVE_SEND_RETRY => {
+            Decision::SkipRefusalWindow
         }
+        Outcome::Refused { .. } => Decision::SendRetryRefusal,
     }
 }
 
@@ -136,22 +168,48 @@ impl ArchiveGate {
         // unasked. What closes that window is the spacing stamp taken here: a second caller for the
         // same market is turned away by it for [`ARCHIVE_SEND_SPACING`], while the send in between
         // is a synchronous local post that returns in microseconds.
-        {
+        let decision = {
             let mut state = self.state.lock().expect("archive gate poisoned");
             let previous = state
                 .markets
                 .get(&provider)
                 .and_then(|markets| markets.get(market));
-            if !may_send(previous, epoch, now) {
-                return;
-            }
+            let decision = decide(previous, epoch, now);
+            let claimed = decision.sends() && spacing_allows(state.last_send, now);
             // Spacing is checked LAST, and its timestamp is written only for a send that actually
             // goes out: bumping it on a rejected attempt would push the next allowed send further
             // away on every frame and nothing would ever be sent.
-            if !spacing_allows(state.last_send, now) {
-                return;
+            if claimed {
+                state.last_send = Some(now);
             }
-            state.last_send = Some(now);
+            (decision, claimed)
+        };
+        let (decision, claimed) = decision;
+        if !claimed {
+            // Throttled, and the reason is named: a repeat of an already-accepted market and a
+            // market held back by spacing look identical from the outside, and telling them apart
+            // is the whole point of this line.
+            if super::market_diag_enabled()
+                && super::market_diag_due(
+                    format!("archive-skip:{provider}:{market}"),
+                    Duration::from_secs(5),
+                )
+            {
+                market_diag(format!(
+                    "chart archive skipped {market} provider={provider} epoch={epoch}: {}",
+                    if decision.sends() {
+                        "spacing"
+                    } else {
+                        match decision {
+                            Decision::SkipAccepted => "already accepted by this client",
+                            Decision::SkipRefusalWindow => "refusal retry window",
+                            Decision::SkipRefusalCap => "refusal cap",
+                            _ => "unreachable",
+                        }
+                    }
+                ));
+            }
+            return;
         }
 
         let result = client.history().request_chart(market);
@@ -179,25 +237,14 @@ impl ArchiveGate {
         };
         match result {
             Ok(ticket) => market_diag(format!(
-                "chart archive requested {market} provider={provider} epoch={epoch} ticket={}",
+                "chart archive requested {market} provider={provider} epoch={epoch} \
+                 why={decision:?} ticket={}",
                 ticket.id()
             )),
             Err(e) => market_diag(format!(
                 "chart archive request refused {market} provider={provider} \
                  ({refusals}/{ARCHIVE_MAX_REFUSALS}): {e}"
             )),
-        }
-    }
-
-    /// Forget one market's claim, so a later chart re-requests it.
-    ///
-    /// Called where the terminal invalidates a market wholesale. MoonProto can drop that market's
-    /// retained store on the same events, taking the merged archive with it; without this the claim
-    /// would keep saying "already asked" over rings that no longer hold the answer.
-    pub(super) fn forget_market(&self, provider: CoreId, market: &str) {
-        let mut state = self.state.lock().expect("archive gate poisoned");
-        if let Some(markets) = state.markets.get_mut(&provider) {
-            markets.remove(market);
         }
     }
 

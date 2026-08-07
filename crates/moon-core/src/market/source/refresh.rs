@@ -240,10 +240,13 @@ impl MarketDataSource {
     fn invalidate_market(&self, provider: CoreId, market: &str) -> SharedMarketStore {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.cursors.remove(&(provider, market.to_string()));
-        // Drop the archive claim too. `MarketDirtyFlags::ALL` below deliberately excludes the
-        // archive bit, so nothing else here would, and a market that comes back would keep saying
-        // "already asked" over rings that no longer hold the merged history.
-        inner.archive.forget_market(provider, market);
+        // The archive claim deliberately SURVIVES this. Invalidating a market here resets the
+        // terminal's own view and cursors; it does not touch MoonProto's retained rings, which keep
+        // the merged archive as long as the market is in the catalog. Forgetting the claim here also
+        // raced the chart: `set_open` calls `reset_market` when a market becomes wanted, which lands
+        // just AFTER the pane's first history read has already asked, and the erased claim made the
+        // next pass ask a second time. The claim belongs to the client, so only a new client
+        // (`set_client`) or a departed provider clears it.
         bump_market_revisions(
             &mut inner.market_revisions,
             provider,
@@ -264,6 +267,9 @@ impl MarketDataSource {
 
     pub fn drop_market(&self, provider: CoreId, market: &str) {
         let store = self.invalidate_market(provider, market);
+        // Symmetric with `reset_market`: this was the only market-lifecycle path that invalidated
+        // silently, which made it the hardest one to rule out when reading a log.
+        market_diag(format!("drop_market provider={provider} market={market}"));
         store
             .write()
             .expect("market store poisoned")
