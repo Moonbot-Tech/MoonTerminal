@@ -157,9 +157,10 @@ impl FigureStore {
 
     /// Brings LOCAL figures' `alert` flags back in line with what the cores actually hold.
     ///
-    /// Moonbot removes an object when its alert fires — measured, see
-    /// `docs-internal/BUG_MOONBOT_ALERT_FIRES_ON_EXTERNAL_MOVE.md` — and nothing else ever told the
-    /// terminal. A figure DRAWN in Moonbot disappears with it, because the server set is rebuilt
+    /// Moonbot removes an object when its alert fires — measured on a live core against
+    /// `chart alert` log events, including the case where the terminal merely DRAGS the figure and
+    /// the core answers by dropping it — and nothing else ever told the terminal. A figure DRAWN in
+    /// Moonbot disappears with it, because the server set is rebuilt
     /// from scratch on every reconcile; a figure drawn HERE kept a ticked box over an alert that no
     /// longer existed anywhere. That box is what the panel and the chart badge read, so it was a
     /// lie with nothing to notice it by.
