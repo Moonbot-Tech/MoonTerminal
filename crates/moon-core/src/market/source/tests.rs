@@ -24,6 +24,12 @@ fn cadence_slot_waits_until_phase_then_advances_by_period() {
     assert_eq!(cadence_slot(300, 100, 200), Some(1));
 }
 
+/// The four per-market counters, so an assertion reads as one line and a fifth counter later
+/// changes one place instead of every assertion.
+fn counters(revs: MarketRevisions) -> (u64, u64, u64, u64) {
+    (revs.history, revs.book, revs.meta, revs.archive)
+}
+
 #[test]
 fn market_dirty_flags_bump_only_their_slice_revisions() {
     let source = MarketDataSource::new(MarketStore::shared(0.0));
@@ -32,17 +38,14 @@ fn market_dirty_flags_bump_only_their_slice_revisions() {
     source.set_provider_map(&providers);
 
     let initial = source.market_revisions(7, "BTCUSDT").unwrap();
-    assert_eq!((initial.history, initial.book, initial.meta), (0, 0, 0));
+    assert_eq!(counters(initial), (0, 0, 0, 0));
 
     source.mark_dirty(
         42,
         &[MarketDirty::new("BTCUSDT", MarketDirtyFlags::ORDERBOOK)],
     );
     let after_book = source.market_revisions(7, "BTCUSDT").unwrap();
-    assert_eq!(
-        (after_book.history, after_book.book, after_book.meta),
-        (0, 1, 0)
-    );
+    assert_eq!(counters(after_book), (0, 1, 0, 0));
 
     source.mark_dirty(
         42,
@@ -52,12 +55,25 @@ fn market_dirty_flags_bump_only_their_slice_revisions() {
         )],
     );
     let after_history_meta = source.market_revisions(7, "BTCUSDT").unwrap();
-    assert_eq!(
-        (
-            after_history_meta.history,
-            after_history_meta.book,
-            after_history_meta.meta
-        ),
-        (1, 1, 1)
+    // The archive counter must stay at zero here: live history arriving at the edge is what cursors
+    // are for. If it moved with HISTORY, every chart would force a full reset on every trade batch.
+    assert_eq!(counters(after_history_meta), (1, 1, 1, 0));
+
+    source.mark_dirty(
+        42,
+        &[MarketDirty::new(
+            "BTCUSDT",
+            MarketDirtyFlags::HISTORY | MarketDirtyFlags::HISTORY_ARCHIVE,
+        )],
     );
+    let after_archive = source.market_revisions(7, "BTCUSDT").unwrap();
+    assert_eq!(counters(after_archive), (2, 1, 1, 1));
+}
+
+/// The periodic force-sample passes `ALL`, so an archive bit hiding in it would order a full
+/// chart reset on every wanted-market change with no archive behind it.
+#[test]
+fn all_dirty_flags_exclude_the_chart_archive() {
+    assert!(!MarketDirtyFlags::ALL.contains(MarketDirtyFlags::HISTORY_ARCHIVE));
+    assert!(MarketDirtyFlags::ALL.contains(MarketDirtyFlags::HISTORY));
 }

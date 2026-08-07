@@ -276,6 +276,12 @@ struct PaneRender {
     source_history_sig: u64,
     /// Last provider generation seen by this pane. Changed generation means source replacement.
     source_generation: u64,
+    /// Last chart-archive revision seen by this pane.
+    ///
+    /// A change means the core's archive was merged into the retained rings, prepending rows OLDER
+    /// than this pane's cursors. Those rows are unreachable by an incremental drain, so the pane
+    /// answers with a full history reset rather than the usual wake.
+    source_archive: u64,
     cross_upload: Vec<ChartCross>,
     /// LIQUIDATION trade-cross upload buffer using `side=2` in the same combo ring.
     liq_upload: Vec<ChartCross>,
@@ -429,6 +435,7 @@ impl PaneRender {
             history_buffers: ChartHistoryBuffers::default(),
             source_history_sig: u64::MAX,
             source_generation: u64::MAX,
+            source_archive: u64::MAX,
             cross_upload: Vec::new(),
             liq_upload: Vec::new(),
             last_line_upload: Vec::new(),

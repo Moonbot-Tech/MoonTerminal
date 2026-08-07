@@ -210,6 +210,11 @@ impl ChartDataState {
             }
             let source_generation = source_revs.map(|revs| revs.generation).unwrap_or(0);
             let source_generation_changed = source_generation != pr.source_generation;
+            // The core's chart archive was merged, prepending history OLDER than every cursor this
+            // pane holds. A wake is not enough: an incremental drain starts at the cursor and can
+            // never reach behind it, so this forces a full window re-read exactly once per archive.
+            let source_archive = source_revs.map(|revs| revs.archive).unwrap_or(0);
+            let source_archive_changed = source_archive != pr.source_archive;
             let mut history_source_sig = 0xcbf29ce4_84222325u64;
             if let Some(revs) = source_revs {
                 history_source_sig = mix_sig(history_source_sig, revs.provider);
@@ -244,6 +249,7 @@ impl ChartDataState {
             }
             let force_history_reset = device_lost
                 || source_generation_changed
+                || source_archive_changed
                 || liq_toggle_changed
                 || candle_cfg_changed
                 || zone_bucket_changed
@@ -353,6 +359,13 @@ impl ChartDataState {
             if read_history {
                 pr.source_history_sig = history_source_sig;
                 pr.source_generation = source_generation;
+                // Only once the read actually HAPPENED. `market_revisions` answers from the
+                // provider map alone, while the read bails when the client, snapshot or readers
+                // are momentarily absent — committing there would consume the one-shot archive
+                // revision without ever reading the rows it announced, and nothing re-raises it.
+                if history.is_some() {
+                    pr.source_archive = source_archive;
+                }
             }
             let capacity_changed = history.as_ref().is_some_and(|h| {
                 (h.combo_capacity > 0 && h.combo_capacity != pr.combo_cross_capacity)

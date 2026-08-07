@@ -59,21 +59,47 @@ pub(crate) fn assets_view_active() -> bool {
     unix_ms_now() - ASSETS_VIEW_RENDER_MS.load(std::sync::atomic::Ordering::Relaxed) < 3_000
 }
 
+/// The client slot's contents: the live client and how many have been installed here.
+#[derive(Default)]
+struct MoonClientSlot {
+    client: Option<Arc<MoonClient>>,
+    /// Counts INSTALLS into this slot, so a replaced client is distinguishable from the same one.
+    ///
+    /// Every reconnect builds a fresh `MoonClient` in `live::run` and drops it into this slot, and
+    /// a fresh client means fresh retained history: empty rings, no subscriptions yet. Nothing else
+    /// in the terminal reports that — `MarketDataSource`'s provider generation is bumped only when
+    /// a core is added or removed, not when its connection drops and comes back. A consumer that
+    /// cached anything derived from the client's retained state compares this number to know it
+    /// must start over.
+    epoch: u64,
+}
+
 #[derive(Clone, Default)]
 pub struct SharedMoonClient {
-    inner: Arc<RwLock<Option<Arc<MoonClient>>>>,
+    inner: Arc<RwLock<MoonClientSlot>>,
 }
 
 impl SharedMoonClient {
     pub(crate) fn set(&self, client: Option<Arc<MoonClient>>) {
-        *self.inner.write().expect("moon client slot poisoned") = client;
+        let mut slot = self.inner.write().expect("moon client slot poisoned");
+        if client.is_some() {
+            slot.epoch = slot.epoch.wrapping_add(1);
+        }
+        slot.client = client;
     }
 
     pub fn get(&self) -> Option<Arc<MoonClient>> {
-        self.inner
-            .read()
-            .expect("moon client slot poisoned")
-            .clone()
+        self.get_with_epoch().map(|(client, _)| client)
+    }
+
+    /// The live client together with the epoch it was installed under.
+    ///
+    /// Read as a pair under ONE guard on purpose: taken separately, a reconnect landing between
+    /// the two reads would pair a fresh client with a stale epoch, and whatever the caller keyed
+    /// on that epoch would never be redone for the client that actually needs it.
+    pub fn get_with_epoch(&self) -> Option<(Arc<MoonClient>, u64)> {
+        let slot = self.inner.read().expect("moon client slot poisoned");
+        slot.client.clone().map(|client| (client, slot.epoch))
     }
 }
 

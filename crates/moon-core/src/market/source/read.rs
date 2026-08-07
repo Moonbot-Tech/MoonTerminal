@@ -100,6 +100,7 @@ impl MarketDataSource {
             history: counters.history,
             book: counters.book,
             meta: counters.meta,
+            archive: counters.archive,
         })
     }
 
@@ -615,15 +616,23 @@ impl MarketDataSource {
         out: &mut ChartHistoryBuffers,
     ) -> Option<ChartHistoryRead> {
         out.clear();
-        let (provider, client) = {
+        // The client's epoch is read HERE, under the guard that already resolves the client, and
+        // carried down to the archive request: taking it again there would mean a second source
+        // lock, a second client lookup and a third lock inside the slot, on the frame path.
+        let (provider, client, client_epoch, archive) = {
             let inner = self.inner.read().expect("market source poisoned");
             let provider = inner.core_provider.get(&core).copied()?;
-            let client = inner.clients.get(&provider)?.get()?;
-            (provider, client)
+            let (client, epoch) = inner.clients.get(&provider)?.get_with_epoch()?;
+            (provider, client, epoch, inner.archive.clone())
         };
         let snapshot = client.snapshot_versioned()?;
         let revision = client.snapshot_revision().unwrap_or(0);
         let readers = snapshot.market_history_readers(market)?;
+        // This chart is open, so the core's accumulated archive for it is worth having. Asked for
+        // AFTER the readers resolve, because the request is only legal for a market in the retained
+        // trades scope — MoonProto re-checks that against its own fresh snapshot, so a refusal here
+        // is still possible and is handled inside. One send per installed client; see `archive.rs`.
+        archive.request(provider, market, &client, client_epoch);
         let from_time = moon_time_from_rel_ms(epoch_ms, from_rel_ms);
         let to_time = moon_time_from_rel_ms(epoch_ms, to_rel_ms.max(from_rel_ms + 1.0));
         // Read trade crosses and scans only from the last-K-candles display zone. INFINITY hides
