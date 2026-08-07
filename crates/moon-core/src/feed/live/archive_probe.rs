@@ -11,8 +11,19 @@
 //!    of error that survives review because both readings produce plausible numbers.
 //!
 //! The first run answered reach and, in doing so, ruled out the obvious way to answer units: the
-//! two sections do not overlap at all. The core sends mini candles for the period BEFORE its
-//! detailed trades and they meet end to end, so there is no shared window to sum over.
+//! two rings do not overlap, so there is no shared window to sum over. Mini candles cover the
+//! period before the detailed trades and meet them within seconds.
+//!
+//! That seam is NOT evidence of an archive-only prefix, and reading it that way was a mistake worth
+//! recording. MoonProto keeps the mini ring flush against the trade ring for the whole session:
+//! `MarketHistoryStore` buffers rows evicted from the trade ring and `compact_evicted_futures`
+//! folds them into mini candles as they age out. The seam is therefore maintained continuously,
+//! not delivered once.
+//!
+//! For the same reason the observed step is not the core "choosing" one. `MINI_CANDLE_SPLIT_MS` is
+//! a fixed 5 seconds: a candle closes on the first trade more than 5 s after its anchor. A step
+//! measured at 128 s means the market was quiet, not that the rows were coarsened — so the spacing
+//! describes trade sparsity, and no statistic over it describes a grid.
 //!
 //! So units are settled by size-per-trade instead, which both sections carry independently. A mini
 //! candle knows how many trades it covers (`cnt`) and the price range it covered them at, and the
