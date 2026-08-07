@@ -60,6 +60,63 @@ fn reach_of(times: &[i64]) -> Option<Reach> {
     })
 }
 
+/// Where the retained 5-minute rows sit relative to the wall-clock 5-minute grid.
+///
+/// MoonProto stamps a sealed row at the moment it seals, not at a period boundary
+/// (`history_store/derived.rs`), so nothing in the protocol guarantees these land on the grid. But
+/// the ring is filled mostly by the core's snapshot, and whether THAT is grid-aligned decides
+/// whether a chart can place these rows by subtracting a fixed period or has to treat their
+/// position as approximate. The core is Delphi and unavailable to read, so the phase is measured:
+/// a distribution clustered near 0 means a grid, a spread means a drifting anchor.
+fn probe_candle_5m_phase(
+    readers: &moonproto::state::MarketHistoryReaders,
+    market: &str,
+    core_label: &impl std::fmt::Display,
+) {
+    const PERIOD_MS: i64 = 300_000;
+    let Some(reader) = readers.candles_5m.as_ref() else {
+        return;
+    };
+    let mut rows = Vec::new();
+    reader.copy_last(reader.capacity(), &mut rows);
+    if rows.len() < 2 {
+        return;
+    }
+    let mut on_grid = 0usize;
+    let mut phase_sum = 0i64;
+    let mut phase_min = i64::MAX;
+    let mut phase_max = i64::MIN;
+    let mut gaps_exactly_a_period = 0usize;
+    let mut previous: Option<i64> = None;
+    for row in &rows {
+        let at = row.time().unix_millis();
+        let phase = at.rem_euclid(PERIOD_MS);
+        if phase == 0 {
+            on_grid += 1;
+        }
+        phase_sum += phase;
+        phase_min = phase_min.min(phase);
+        phase_max = phase_max.max(phase);
+        if let Some(prev) = previous {
+            if at - prev == PERIOD_MS {
+                gaps_exactly_a_period += 1;
+            }
+        }
+        previous = Some(at);
+    }
+    log::info!(
+        "core {core_label} 5m phase {market}: {} rows, {} exactly on the 5m grid, \
+         phase min {} ms / mean {} ms / max {} ms, {} of {} gaps exactly one period",
+        rows.len(),
+        on_grid,
+        phase_min,
+        phase_sum / rows.len() as i64,
+        phase_max,
+        gaps_exactly_a_period,
+        rows.len() - 1,
+    );
+}
+
 /// Measure the merged archive for `market` and log one line.
 ///
 /// `core_label` is taken as `Display` rather than a string so it keeps the lazy resolution
@@ -74,6 +131,7 @@ pub(super) fn probe(client: &MoonClient, market: &str, core_label: impl std::fmt
     let Some(readers) = snapshot.market_history_readers(market) else {
         return;
     };
+    probe_candle_5m_phase(&readers, market, &core_label);
 
     let mut trades = Vec::new();
     if let Some(reader) = readers.futures_trades.or(readers.spot_trades) {
