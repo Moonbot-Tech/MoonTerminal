@@ -372,6 +372,11 @@ struct PaneRender {
     scan_cam_px: i64,
     cached_tick_price: Option<(f32, f32)>,
     cached_last_price: Option<f32>,
+    /// Whether this pane has ever had price data of its OWN in the window — trades, candles or an
+    /// order line — as opposed to the last price and the order-book band, which are only kept on
+    /// screen. Decides whether the price fit may fall back to those references; see `fit_band`.
+    /// Monotone until the pane's market changes.
+    saw_window_data: bool,
     /// Last live-order range for auto-Y. Full session sync updates it; market-only frame sync reads
     /// this cache without touching CoreStore from `frame()`.
     cached_order_price: Option<(f32, f32)>,
@@ -471,6 +476,7 @@ impl PaneRender {
             scan_cam_px: i64::MIN,
             cached_tick_price: None,
             cached_last_price: None,
+            saw_window_data: false,
             cached_order_price: None,
             active: false,
             orderbook_enabled: true,

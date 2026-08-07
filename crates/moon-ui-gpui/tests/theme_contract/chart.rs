@@ -240,3 +240,45 @@ fn every_backend_extends_a_ray_along_its_direction() {
         );
     }
 }
+
+/// Prepare must hand the price auto-fit the two bands SEPARATELY, through `fit_band`.
+///
+/// This is the one link in the chain no unit test can reach: `moon-ui-gpui` is a binary crate, so
+/// the rule itself lives in `moon-chart` where it can be tested and only its CALL is here. The rule
+/// exists because the two spans mean different things — trades and order lines are inside the
+/// window, the last price and the order-book band merely have to stay on screen — and unioning them
+/// before the fit destroys the distinction. A view panned off the data then sizes itself to a
+/// reference that is not on screen: measured, a settled 2.4% window snapped to 1.2% against the book
+/// band, and to 0.06% against the bare last price, in a single frame. Restoring the union compiles,
+/// passes every unit test, and shows up only as the price scale jumping when the chart crosses the
+/// live edge.
+#[test]
+fn the_price_fit_is_told_what_the_window_holds_and_what_only_has_to_be_visible() {
+    let src = code_only(&read_src("chartdx/data_state/market.rs"));
+    // Argument ORDER is pinned, not just the call: the two spans have the same type, and swapping
+    // them type-checks while inverting the rule.
+    assert!(
+        src.contains("fit_band(window_data, reference, use_reference)"),
+        "prepare no longer asks `fit_band` what the price fit should cover, in that order"
+    );
+    assert!(
+        src.contains("let window_data =") && src.contains("let reference ="),
+        "the reference band must be built apart from the window's own data"
+    );
+    // And the fallback test is TWO things joined by OR: following the live edge, or never having had
+    // window data. `&&` would strip the reference from every live pane; testing the view's current
+    // scale instead of the data would switch the fallback off one frame after the first fit and
+    // latch a data-less pane onto that first hairline band.
+    assert!(
+        src.contains("pane.view.follow || !pr.saw_window_data"),
+        "a pane that has never had window data is not allowed to fall back to the reference band"
+    );
+    // The other link no unit test can reach: the ceiling on a future pan depends on the plot width
+    // and the X scale, and both change without any pan (a resize, a Shift+MMB scale sync). Prepare
+    // is the only place that sees all three, so it has to re-apply it or the live edge ends up off
+    // the left of the plot with nothing on screen to navigate back by.
+    assert!(
+        src.contains("clamp_future_anchor("),
+        "prepare no longer re-applies the future-pan ceiling"
+    );
+}
