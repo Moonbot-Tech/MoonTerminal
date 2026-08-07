@@ -1,3 +1,4 @@
+mod archive;
 #[cfg(test)]
 mod label_tests;
 mod read;
@@ -79,6 +80,9 @@ fn bump_market_revisions(
     if flags.contains(MarketDirtyFlags::MARKET_META) {
         entry.meta = entry.meta.wrapping_add(1);
     }
+    if flags.contains(MarketDirtyFlags::HISTORY_ARCHIVE) {
+        entry.archive = entry.archive.wrapping_add(1);
+    }
 }
 
 fn mix_pair(a: u64, b: u64) -> u64 {
@@ -98,6 +102,7 @@ struct MarketRevisionCounters {
     history: u64,
     book: u64,
     meta: u64,
+    archive: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,6 +112,11 @@ pub struct MarketRevisions {
     pub history: u64,
     pub book: u64,
     pub meta: u64,
+    /// Bumps once per merged core chart archive for this market.
+    ///
+    /// A consumer that keeps a cursor must FULLY re-read its window when this changes: the
+    /// archive prepends rows older than the cursor, which no incremental drain can reach.
+    pub archive: u64,
 }
 
 impl MarketRevisions {
@@ -116,7 +126,8 @@ impl MarketRevisions {
         sig = mix_pair(sig, self.generation);
         sig = mix_pair(sig, self.history);
         sig = mix_pair(sig, self.book);
-        mix_pair(sig, self.meta)
+        sig = mix_pair(sig, self.meta);
+        mix_pair(sig, self.archive)
     }
 }
 
@@ -394,6 +405,11 @@ struct MarketDataSourceInner {
     /// Each `(provider, market, kind_min)` records one deliberate core timeframe-slot change when
     /// opening a coarse timeframe with an empty cache.
     native_backfill_done: Mutex<HashSet<(CoreId, String, u32)>>,
+    /// Who has already been asked for a core chart archive; see [`archive`].
+    ///
+    /// Shared behind an `Arc` so the chart read can take its handle in the same guard that
+    /// resolves the client and then talk to MoonProto with the source lock released.
+    archive: Arc<archive::ArchiveGate>,
 }
 
 /// How one market is named to the user.

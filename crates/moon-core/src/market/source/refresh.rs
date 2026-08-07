@@ -34,6 +34,7 @@ impl MarketDataSource {
                 kline_cache: None,
                 provider_exchange: HashMap::new(),
                 native_backfill_done: std::sync::Mutex::new(HashSet::new()),
+                archive: Default::default(),
             })),
         }
     }
@@ -186,6 +187,11 @@ impl MarketDataSource {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.clients.insert(core, client);
         inner.cursors.retain(|(provider, _), _| *provider != core);
+        // A respawn hands over a whole new client SLOT, whose epoch starts from zero again — so the
+        // archive state left by the old slot would collide with the new slot's first epoch and read
+        // as "already asked" for a client that has never been asked. Epochs only order installs
+        // WITHIN one slot; replacing the slot has to drop them.
+        inner.archive.forget_provider(core);
         bump_generation(&mut inner.provider_generations, core);
     }
 
@@ -201,6 +207,7 @@ impl MarketDataSource {
         inner.market_revisions.remove(&core);
         inner.provider_orderbook_kind.remove(&core);
         inner.core_provider.remove(&core);
+        inner.archive.forget_provider(core);
         bump_generation(&mut inner.provider_generations, core);
     }
 
@@ -218,6 +225,7 @@ impl MarketDataSource {
         inner
             .provider_orderbook_kind
             .retain(|provider, _| active_providers.contains(provider));
+        inner.archive.retain_providers(&active_providers);
     }
 
     pub fn set_orderbook_kind(&self, core: CoreId, kind: OrderBookKind) {
@@ -232,6 +240,10 @@ impl MarketDataSource {
     fn invalidate_market(&self, provider: CoreId, market: &str) -> SharedMarketStore {
         let mut inner = self.inner.write().expect("market source poisoned");
         inner.cursors.remove(&(provider, market.to_string()));
+        // Drop the archive claim too. `MarketDirtyFlags::ALL` below deliberately excludes the
+        // archive bit, so nothing else here would, and a market that comes back would keep saying
+        // "already asked" over rings that no longer hold the merged history.
+        inner.archive.forget_market(provider, market);
         bump_market_revisions(
             &mut inner.market_revisions,
             provider,
@@ -265,6 +277,7 @@ impl MarketDataSource {
             bump_generation(&mut inner.provider_generations, provider);
             inner.provider_orderbook_kind.remove(&provider);
             inner.market_revisions.remove(&provider);
+            inner.archive.forget_provider(provider);
             inner.store.clone()
         };
         store
@@ -281,6 +294,7 @@ impl MarketDataSource {
             inner.market_revisions.clear();
             inner.provider_generations.clear();
             inner.provider_orderbook_kind.clear();
+            inner.archive.clear();
             inner.store.clone()
         };
         store.write().expect("market store poisoned").clear();

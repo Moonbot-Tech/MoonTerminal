@@ -96,11 +96,10 @@ impl ChartDataState {
         sig = mix_sig(sig, core);
         sig = mix_sig(sig, str_sig(&market));
         if let Some(revs) = source.market_revisions(core, &market) {
-            sig = mix_sig(sig, revs.provider);
-            sig = mix_sig(sig, revs.generation);
-            sig = mix_sig(sig, revs.history);
-            sig = mix_sig(sig, revs.book);
-            sig = mix_sig(sig, revs.meta);
+            // Every revision this market has, including the chart archive. The inner gate in
+            // `market.rs` deliberately mixes a SUBSET by hand; this one wants the lot, so it asks
+            // for the lot rather than re-listing the fields and drifting from them.
+            sig = mix_sig(sig, revs.combined_signature());
         }
         sig
     }

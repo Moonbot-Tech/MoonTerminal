@@ -839,6 +839,19 @@ impl MarketDirtyFlags {
     pub const HISTORY: Self = Self(1 << 0);
     pub const ORDERBOOK: Self = Self(1 << 1);
     pub const MARKET_META: Self = Self(1 << 2);
+    /// The core's chart archive was merged into this market's retained rings, PREPENDING rows
+    /// older than everything the chart has read so far.
+    ///
+    /// Distinct from [`Self::HISTORY`] because the two demand different work. `HISTORY` says
+    /// "new rows at the live edge", which a chart drains through its cursor; this one says
+    /// "rows appeared BEHIND the cursor", which no cursor drain can ever reach. Only a full
+    /// history reset picks them up, so it drives its own revision counter.
+    pub const HISTORY_ARCHIVE: Self = Self(1 << 3);
+    /// Every domain that a periodic sample may re-read.
+    ///
+    /// Deliberately WITHOUT [`Self::HISTORY_ARCHIVE`]: `ALL` is also the force-sample flag set
+    /// whenever the wanted-market set changes, and folding the archive bit in would order a
+    /// full chart reset on every chart open, with no archive behind it.
     pub const ALL: Self = Self(Self::HISTORY.0 | Self::ORDERBOOK.0 | Self::MARKET_META.0);
 
     pub fn contains(self, other: Self) -> bool {

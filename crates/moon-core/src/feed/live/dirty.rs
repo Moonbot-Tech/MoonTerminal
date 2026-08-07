@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use moonproto::state::{CoinCardCandlesEvent, MarketsEvent, OrderBookEvent, TradesEvent};
+use moonproto::state::{
+    CoinCardCandlesEvent, MarketHistoryEvent, MarketsEvent, OrderBookEvent, TradesEvent,
+};
 use moonproto::Event;
 
 use crate::feed::{MarketDirty, MarketDirtyFlags};
@@ -57,6 +59,17 @@ pub(super) fn market_dirty_from_events(
             }
             Event::Markets(MarketsEvent::PricesUpdated { .. }) => {
                 push_wanted_dirty(&mut dirty, wanted, MarketDirtyFlags::HISTORY);
+            }
+            // The core's chart archive was merged into this market's retained rings. `Ready` is an
+            // apply barrier in MoonProto, so the older rows are already readable here. They sit
+            // BEHIND every chart cursor, hence the archive flag on top of the history wake: only a
+            // full reset re-reads the window and picks them up.
+            Event::MarketHistory(MarketHistoryEvent::Ready { ticket, .. }) => {
+                push_dirty(
+                    &mut dirty,
+                    ticket.market.clone(),
+                    MarketDirtyFlags::HISTORY | MarketDirtyFlags::HISTORY_ARCHIVE,
+                );
             }
             // Deep CoinCard history arrived (authoritative OHLC for chart candles), so wake this
             // market's chart to rebuild the series.
