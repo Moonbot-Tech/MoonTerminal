@@ -17,6 +17,7 @@ pub mod config;
 pub mod data;
 pub mod db;
 pub mod detect_diag;
+pub mod order_diag;
 pub mod feed;
 pub mod figures;
 pub mod market;

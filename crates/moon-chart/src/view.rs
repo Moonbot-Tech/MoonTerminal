@@ -1,11 +1,68 @@
 //! Chart view state — a port of the Moonbot/WebGame interactions:
 //!   X (time): wheel zoom around the cursor, LMB/Shift-wheel pan. Live/latest is
 //!             determined spatially: when the right edge is within 5% of the window
-//!             from now, it re-anchors to now. Panning also starts a 3-second manual
-//!             hold, while the toolbar's manual mode remains persistent.
+//!             from now, it re-anchors to now. Panning into HISTORY starts a 3-second
+//!             manual hold, while the toolbar's manual mode remains persistent.
+//!             Panning the other way walks past the live edge into empty future chart,
+//!             as far as putting `now` on the left edge of the plot — a place to draw a
+//!             plan, so while the view is AHEAD there is no hold timer at all. Panning
+//!             back onto the data restores the ordinary 3-second hold. The live edge is
+//!             never allowed off screen: `clamp_future_anchor` owns that ceiling.
 //!   Y (price): auto/fixed-percent scaling and manual Y-pan/RMB-zoom are independent
 //!              of X-follow, so browsing history horizontally does not freeze the
-//!              price scale.
+//!              price scale. What the auto-fit is given to cover is decided OUTSIDE this
+//!              type, by `fit_band` — the view fits what it is handed and does not know
+//!              where the window is pointing.
+
+/// What the price auto-fit should cover, from what the window actually CONTAINS and what merely has
+/// to stay on screen.
+///
+/// The two are different things and the fit cannot tell them apart once they are unioned. Trades,
+/// candles and order lines are IN the window; the last price and the order-book band are folded in
+/// so that a market which has not traded yet still has something to show. Off the live edge — parked
+/// in empty future, or in a gap of history — the window contains none of the first kind, and the
+/// second kind is not on screen either: fitting to it snapped a settled 2.4% window to 1.2% against
+/// the book band, and to 0.06% against the bare last price, in a single frame, because the manual-X
+/// branch of [`ChartView::update_y`] applies its result with neither lerp nor hysteresis.
+///
+/// So the rule is: with data in the window, fit everything; with none of it, fall back to the
+/// references only when the view has no scale worth keeping, and otherwise nothing at all — `None`
+/// tells the view to hold the scale the user is reading rather than invent one.
+///
+/// `use_reference` is that "no scale worth keeping" test, and it is two things, not one: a view that
+/// FOLLOWS the live edge is about the live price by definition, and a pane that has never had window
+/// data at all has nothing to hold — a chart opened while the toolbar's Live is off, or a market
+/// with an order book and no trades, would otherwise sit forever on the constructor's zero centre.
+/// The second half must be a fact about the DATA and not about the view's current scale: the first
+/// fit gives the view a scale, so testing the scale would switch the fallback off after one frame
+/// and latch the pane onto whatever that first frame produced.
+///
+/// One honest limit: `window_data` is what the CALLER believes is in the window, and prepare scans
+/// ticks over the window plus a 20% prefetch margin. Parked at the very ceiling, the newest trades
+/// just left of the plot therefore still count — the scale stays anchored to the recent price band
+/// instead of freezing completely, which is the harmless direction to be wrong in.
+///
+/// This lives here, beside the fit it feeds, so it can be tested: its caller is in a binary crate.
+///
+/// Args:
+///     window_data: Price span of what is actually drawn inside the window, if anything.
+///     reference: Price span that must remain visible regardless (last price, order-book band).
+///     use_reference: Whether the reference may stand in for missing window data.
+///
+/// Returns:
+///     The span to fit, or `None` to leave the price scale untouched.
+pub fn fit_band(
+    window_data: Option<(f32, f32)>,
+    reference: Option<(f32, f32)>,
+    use_reference: bool,
+) -> Option<(f32, f32)> {
+    match (window_data, reference, use_reference) {
+        (Some((dlo, dhi)), Some((rlo, rhi)), _) => Some((dlo.min(rlo), dhi.max(rhi))),
+        (Some(data), None, _) => Some(data),
+        (None, reference, true) => reference,
+        (None, _, false) => None,
+    }
+}
 
 /// Rectangle in pixels (top-left origin).
 #[derive(Clone, Copy)]
@@ -126,6 +183,15 @@ pub struct ChartView {
     /// Keep manual X mode after a pan until this time (unix ms); once it expires,
     /// `tick_auto_live` automatically returns to live. 0 means no pending return (or already live).
     manual_until: f64,
+    /// Whether following was turned off EXPLICITLY — [`Self::set_manual_persistent`], which is what
+    /// the toolbar's Live button reaches — so that no later pan may schedule a return that was not
+    /// asked for.
+    ///
+    /// A separate flag rather than `manual_until == 0`, which a pan ahead of the live edge produces
+    /// too. Those two states are identical to the timer and mean opposite things to the user, and
+    /// reading the timer for both made one excursion into the future switch a pane's three-second
+    /// return off for the rest of its life.
+    manual_persistent: bool,
 }
 
 impl ChartView {
@@ -161,6 +227,7 @@ impl ChartView {
             phase_default_px_per_ms: 0.0,
             last_update_ms: 0.0,
             manual_until: 0.0,
+            manual_persistent: false,
         }
     }
 
@@ -278,6 +345,57 @@ impl ChartView {
         self.follow
     }
 
+    /// Latest time the right anchor may hold, which is how far ahead of the live edge the user may
+    /// pan in order to draw on empty chart.
+    ///
+    /// The limit is not a new number: it is the point at which `now` reaches the LEFT edge of the
+    /// plot. [`Self::visible_x`] places the left edge at `right + window*margin - window`, so
+    /// anchoring at `now + window*(1-margin)` puts the live edge exactly at x=0 and every visible
+    /// pixel in the future. Panning further would take the price off screen entirely with nothing
+    /// left to navigate by.
+    ///
+    /// The window comes from [`Self::visible_x`] itself, so the invariant is exact rather than
+    /// nearly, and is capped at [`MAX_WINDOW_MS`]: the ppm guard below it is only a division floor,
+    /// and [`Self::set_px_per_ms_sync`] accepts any scale down to that floor, so a scale synced from
+    /// a much narrower pane would otherwise put the ceiling decades ahead.
+    fn max_right_time_ms(&self, now_ms: f64, area_w: f32) -> f64 {
+        let window_ms = self.visible_x(area_w).1.min(MAX_WINDOW_MS) as f64;
+        now_ms + window_ms * (1.0 - self.right_margin_frac as f64)
+    }
+
+    /// Re-applies the future ceiling to the current scale and plot width, returning whether the
+    /// anchor moved. The single owner of that invariant: every other site delegates here.
+    ///
+    /// The ceiling relates three things that move independently — the anchor, the zoom and the
+    /// width — so enforcing it only where the user pans leaves the other two able to break it.
+    /// Measured: a pane parked at the ceiling and then narrowed from 1000 to 500 px put the live
+    /// edge 450 px LEFT of the plot, and a Shift+MMB scale sync put it 13 500 px off, each leaving a
+    /// wholly empty chart with no data to navigate back by. Prepare calls this every frame, so the
+    /// invariant survives whichever of the three moved.
+    pub fn clamp_future_anchor(&mut self, now_ms: f64, area_w: f32) -> bool {
+        // The ceiling is never earlier than `now`, so anything at or behind the live edge is already
+        // inside it — the common manual case (browsing history) leaves without dividing anything.
+        //
+        // A pane with no width to speak of is left ALONE rather than clamped to `now`: its window is
+        // zero, so the ceiling would be `now` and the clamp would silently delete a pan the user
+        // made at full size. That is not hypothetical — prepare passes `chart_w = 1.0` in
+        // order-book-only mode, and a pane mid-layout can be narrower still.
+        if self.follow || self.right_time_ms <= now_ms || area_w < 1.0 {
+            return false;
+        }
+        let ceiling = self.max_right_time_ms(now_ms, area_w);
+        if self.right_time_ms <= ceiling {
+            return false;
+        }
+        self.right_time_ms = ceiling;
+        true
+    }
+
+    /// Whether the right anchor sits ahead of the live edge — the view is showing future.
+    fn is_ahead_of_now(&self, now_ms: f64) -> bool {
+        self.right_time_ms > now_ms
+    }
+
     /// Anchors the right edge to `edge_ms` while live, quantized to whole-pixel time steps.
     pub fn follow_edge(&mut self, edge_ms: f64, now_ms: f64) {
         if self.is_live(now_ms) {
@@ -301,12 +419,14 @@ impl ChartView {
         self.follow = true;
         self.right_time_ms = now_ms;
         self.manual_until = 0.0;
+        self.manual_persistent = false;
     }
 
     /// Explicitly and persistently disables live from the toolbar, with no automatic return.
     pub fn set_manual_persistent(&mut self) {
         self.follow = false;
         self.manual_until = 0.0;
+        self.manual_persistent = true;
     }
 
     /// Returns to live when the manual hold after a pan expires (Item 9). Driven by a timer
@@ -342,7 +462,10 @@ impl ChartView {
         }
         let tolerance_ms =
             (area_w.max(1.0) * LIVE_REJOIN_FRAC) as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
-        if now_ms - self.right_time_ms <= tolerance_ms {
+        // ABSOLUTE distance, because the anchor can now sit on either side of `now`. A signed
+        // comparison reads every future anchor as "near", so releasing a drag one whole window into
+        // the future would snap the view back to live and delete the empty chart just drawn on.
+        if (now_ms - self.right_time_ms).abs() <= tolerance_ms {
             self.resume_live(now_ms);
             true
         } else {
@@ -453,15 +576,26 @@ impl ChartView {
     // X drag detaches the view from live immediately; re-anchoring is checked separately on mouse-up.
 
     /// Pans X by dx pixels (LMB drag/Shift-wheel).
+    ///
+    /// Panning LEFT walks into the future, up to [`Self::max_right_time_ms`], so a plan can be
+    /// drawn on empty chart ahead of the live edge.
     pub fn pan_x_px(&mut self, dx: f32, now_ms: f64, area_w: f32) {
         let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
-        self.right_time_ms = (self.right_time_ms - dt_ms).min(now_ms);
+        self.right_time_ms -= dt_ms;
         self.follow = false;
-        // Item 9: panning does not disable live permanently. Start a manual hold window,
-        // after which `tick_auto_live` re-anchors to now. Every pan frame advances the deadline,
-        // so the return occurs about 3 s AFTER release.
-        self.manual_until = now_ms + MANUAL_HOLD_MS;
-        let _ = area_w;
+        self.clamp_future_anchor(now_ms, area_w);
+        if self.is_ahead_of_now(now_ms) || self.manual_persistent {
+            // Ahead of the live edge there is nothing to follow, and an automatic return would
+            // erase the future the user just panned into. The condition is the CURRENT position and
+            // not a memory of having been there: panning back onto the data restores the ordinary
+            // three-second return, so a stray forward nudge cannot silently switch it off for good.
+            self.manual_until = 0.0;
+        } else {
+            // Item 9: panning does not disable live permanently. Start a manual hold window,
+            // after which `tick_auto_live` re-anchors to now. Every pan frame advances the deadline,
+            // so the return occurs about 3 s AFTER release.
+            self.manual_until = now_ms + MANUAL_HOLD_MS;
+        }
     }
 
     /// Pans Y by dy pixels (LMB drag).
@@ -485,6 +619,7 @@ impl ChartView {
     ///     Nothing; the X scale and anchor are updated in place.
     pub fn zoom_x_at(&mut self, factor: f32, area_w: f32, cursor_x: f32, now_ms: f64) {
         let was_follow = self.follow;
+        let right_before = self.right_time_ms;
         let old_px = self.px_per_ms.max(MIN_PX_PER_MS);
         let cursor_x = cursor_x.clamp(0.0, area_w.max(1.0));
         let (old_left, _) = self.visible_x(area_w);
@@ -507,9 +642,17 @@ impl ChartView {
         }
         let new_window = area_w / self.px_per_ms.max(MIN_PX_PER_MS);
         let left = cursor_time - self.epoch_ms - cursor_x as f64 / self.px_per_ms as f64;
+        // Zoom's OWN rule: it must not SCROLL the chart. Anywhere left of the right margin the cursor
+        // holds its time while the window grows around it, which walks the anchor forward — measured,
+        // one 0.5x notch with the cursor at the left edge landed 0.42 windows into the future, and
+        // repeating it crossed the live edge with nothing to pull it back. So a zoom may KEEP a view
+        // already parked ahead, and may never push one further ahead than it already was.
         self.right_time_ms =
             (self.epoch_ms + left + new_window as f64 * (1.0 - self.right_margin_frac as f64))
-                .min(now_ms);
+                .min(right_before.max(now_ms));
+        // And the general rule on top: the ceiling shrinks with the window, so zooming IN can leave
+        // an anchor that was legal at the old scale above it.
+        self.clamp_future_anchor(now_ms, area_w);
         self.snap_to_live_if_near(now_ms, area_w);
     }
 
@@ -548,15 +691,19 @@ impl ChartView {
             1000.0 / 60.0
         };
         self.last_update_ms = now_ms;
-        let frame_ref = 1000.0 / 60.0;
-        let auto_lerp = (1.0 - (1.0 - AUTO_LERP as f64).powf(dt_ms / frame_ref)) as f32;
-        let tick_lerp = (1.0 - (1.0 - TICK_LERP as f64).powf(dt_ms / frame_ref)) as f32;
         if !self.manual_price {
+            let frame_ref = 1000.0 / 60.0;
+            let auto_lerp = (1.0 - (1.0 - AUTO_LERP as f64).powf(dt_ms / frame_ref)) as f32;
+            let tick_lerp = (1.0 - (1.0 - TICK_LERP as f64).powf(dt_ms / frame_ref)) as f32;
             let visible_mid = visible.map(|(lo, hi)| (lo + hi) * 0.5);
+            // No fallback to the last price while X is manual. `None` here means the window holds
+            // nothing to fit ([`fit_band`] decides that), and the last price is then by definition
+            // not in the window: centring on it would drag the Y view after a price the user cannot
+            // see. Live is the opposite case — there the last price is what the window is about.
             let target_center = if live {
                 last_price.or(visible_mid)
             } else {
-                visible_mid.or(last_price)
+                visible_mid
             };
             let target_range = match (self.auto_price, visible, target_center) {
                 (true, Some((lo, hi)), Some(c)) if live => {
@@ -571,7 +718,11 @@ impl ChartView {
                 (true, Some((lo, hi)), Some(c)) => {
                     Some((hi - lo).abs().max(c.abs() * 0.0005 + Self::min_range(c)) * 1.20)
                 }
-                (true, None, Some(c)) => Some((c.abs() * 0.001).max(Self::min_range(c))),
+                // Nothing to fit. Only a LIVE chart takes the seed range: it is a chart that has not
+                // received data yet, and a thousandth of the price is a starting window. Off the live
+                // edge the same seed is a collapse — the branch below assigns it with neither lerp
+                // nor hysteresis — so the scale the user is reading is kept instead.
+                (true, None, Some(c)) if live => Some((c.abs() * 0.001).max(Self::min_range(c))),
                 // Fixed percent: sized off the SAME reference `set_scale_percent` and the badge
                 // use, or the click's range would be overwritten on the very next frame by a
                 // differently-based one.

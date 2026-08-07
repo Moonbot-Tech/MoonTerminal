@@ -154,6 +154,14 @@ impl ChartDataState {
             };
             pane.view
                 .ensure_default_window(chart_area.w, self.present_rate_hz, self.default_x_ppm);
+            // Prepare is the only place that knows the anchor, the scale AND the width at once, so
+            // the future ceiling is re-applied here rather than in each mutator that can break it.
+            // Not while the pane shows only its order book: `chart_w` is floored at 1 px there, and
+            // a ceiling computed from a one-pixel window would drag a view parked six hours ahead
+            // down to six seconds ahead and lose the drawing position on a mode toggle.
+            if !pr.orderbook_only {
+                pane.view.clamp_future_anchor(now, chart_area.w);
+            }
             pane.view.follow_edge(now, now);
             let (view_time0, window_ms) = pane.view.visible_x(chart_area.w);
             let cam_px = ((pane.view.right_time_ms - pane.view.epoch_ms)
@@ -518,6 +526,9 @@ impl ChartDataState {
                     pr.resident_left_rel = f32::NAN;
                     pr.cached_tick_price = None;
                     pr.cached_last_price = None;
+                    // A different market is a different price entirely: the new one has had no data
+                    // in this pane yet and must fit its reference until it does.
+                    pr.saw_window_data = false;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
@@ -557,13 +568,21 @@ impl ChartDataState {
             // Use trades, or otherwise the order-book midpoint, as the cursor label's percentage
             // reference. Without this fallback, HIP markets with a book but no trades lost the label.
             pr.cached_last_price = last_price;
-            let visible_price = union_range(
-                union_range(
-                    union_range(tick_price, pr.cached_order_price),
-                    last_price.map(|p| (p, p)),
-                ),
-                book_focus,
-            );
+            // Split by MEANING, not by convenience: ticks and order lines are drawn inside the
+            // window, while the last price and the book band only have to stay on screen. Unioning
+            // the two left the fit unable to tell "no data here" from "data here", which is what
+            // made a view panned off the data rescale to a reference that is not in it.
+            let window_data = union_range(tick_price, pr.cached_order_price);
+            let reference = union_range(last_price.map(|p| (p, p)), book_focus);
+            // A pane that has NEVER had data of its own has no scale to keep, so it goes on fitting
+            // the reference until something real arrives — otherwise a chart opened while the
+            // toolbar's Live is already off, or a market with a book and no trades, would sit on the
+            // constructor's zero centre forever. MONOTONE on purpose: the test cannot be "does the
+            // view know a price", because the very first fit gives it one and would switch the
+            // fallback off after a single frame, latching the pane onto that first hairline band.
+            pr.saw_window_data |= window_data.is_some();
+            let use_reference = pane.view.follow || !pr.saw_window_data;
+            let visible_price = moon_chart::view::fit_band(window_data, reference, use_reference);
             pane.view.update_y(now, plot_h, visible_price, last_price);
             // Show the current Y-scale badge beside the corner label always in Auto mode. For manual
             // drag, right-button zoom, or comparison lock, show it when the whole percentage differs
