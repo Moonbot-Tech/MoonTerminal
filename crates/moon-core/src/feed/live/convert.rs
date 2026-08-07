@@ -848,6 +848,77 @@ fn exchange_of(snap: &moonproto::MoonStateSnapshot) -> crate::symbol::Exchange {
 ///
 /// Event rows preserve terminal states that may disappear from the retained
 /// snapshot before the application processes the event queue.
+/// Reports one order batch to the `MOON_ORDER_DIAG` channel, and only when it changed.
+///
+/// Answers the question static reading cannot: an order the core says it published either reaches
+/// `snapshot().orders()` or it does not, and the moonproto client drops exactly one class silently —
+/// one whose MARKET it has not seen yet stays parked with no log line. So this prints both sides:
+/// which followed markets the catalog holds, and which orders on them actually arrived. A followed
+/// market present with zero orders on it is the parked case; orders present here while the panels
+/// show none puts the loss in our own UI.
+///
+/// Gated by a per-core signature so an idle terminal writes nothing at the table's 4 Hz.
+fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &[OrderRow]) {
+    if !crate::order_diag::enabled() {
+        return;
+    }
+    let core = crate::feed::core_label(server_id).to_string();
+    let markets: Vec<String> = snap
+        .markets()
+        .iter()
+        .map(|h| h.name().to_string())
+        .filter(|n| crate::order_diag::follows(&core, n))
+        .collect();
+    if markets.is_empty() && !crate::order_diag::follows(&core, "") {
+        return;
+    }
+    let matched: Vec<&OrderRow> = rows
+        .iter()
+        .filter(|r| crate::order_diag::follows(&core, &r.market))
+        .collect();
+    let mut sig = std::collections::hash_map::DefaultHasher::new();
+    {
+        use std::hash::Hash;
+        rows.len().hash(&mut sig);
+        markets.hash(&mut sig);
+        for r in &matched {
+            (r.uid, &r.status, r.pending, r.pending_cond.map(f64::to_bits)).hash(&mut sig);
+        }
+    }
+    let sig = {
+        use std::hash::Hasher;
+        sig.finish()
+    };
+    static LAST: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u64, u64>>> =
+        std::sync::OnceLock::new();
+    let mut last = LAST.get_or_init(Default::default).lock().unwrap();
+    if last.insert(server_id, sig) == Some(sig) {
+        return;
+    }
+    drop(last);
+    crate::order_diag::line(&format!(
+        "core {} orders={} followed_markets={:?} matched_orders={}",
+        crate::feed::core_label(server_id),
+        rows.len(),
+        markets,
+        matched.len()
+    ));
+    for r in matched {
+        crate::order_diag::line(&format!(
+            "core {} uid={} market={} status={} pending={} cond={:?} buy={} filled={} short={}",
+            crate::feed::core_label(server_id),
+            r.uid,
+            r.market,
+            r.status,
+            r.pending,
+            r.pending_cond,
+            r.buy_price,
+            r.filled,
+            r.is_short
+        ));
+    }
+}
+
 pub(super) fn build_order_rows(
     server_id: u64,
     snap: &moonproto::MoonStateSnapshot,
@@ -878,6 +949,7 @@ pub(super) fn build_order_rows(
         }
     }
 
+    diag_order_batch(server_id, snap, &order_rows);
     order_rows
 }
 
