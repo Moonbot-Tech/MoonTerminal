@@ -379,7 +379,8 @@ pub(super) fn sort_rows(rows: &mut [FigRow], col: AlCol, ascending: bool) {
             AlCol::Actions => std::cmp::Ordering::Equal,
         };
         let ord = if ascending { ord } else { ord.reverse() };
-        ord.then_with(|| a.core.cmp(&b.core)).then_with(|| a.id.cmp(&b.id))
+        ord.then_with(|| a.core.cmp(&b.core))
+            .then_with(|| a.id.cmp(&b.id))
     });
 }
 

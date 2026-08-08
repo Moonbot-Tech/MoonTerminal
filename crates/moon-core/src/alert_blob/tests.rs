@@ -226,9 +226,8 @@ fn alertable_tools_are_registered_in_the_cores_type_order() {
     use crate::figures::FigNode;
     // DISTINCT nodes: a tool may refuse a degenerate figure, and a ratio scale with no height is
     // one — every level would collapse onto a single price.
-    let nodes = |n: usize| -> Vec<FigNode> {
-        (0..n).map(|i| FigNode::new(1.0, 2.0 + i as f64)).collect()
-    };
+    let nodes =
+        |n: usize| -> Vec<FigNode> { (0..n).map(|i| FigNode::new(1.0, 2.0 + i as f64)).collect() };
     let types: Vec<u8> = crate::figures::tools::REGISTRY
         .iter()
         .filter(|d| d.alertable)
@@ -322,7 +321,10 @@ fn a_fibonacci_carries_seven_levels_at_moonbots_ratios() {
     }
     // The anchors are the move itself, not two more levels.
     assert_eq!(f.a, f.levels[0], "ratio 0 sits on the move's start");
-    assert!(f.b > f.levels[5] && f.b < f.levels[6], "ratio 1 is between .786 and 1.236");
+    assert!(
+        f.b > f.levels[5] && f.b < f.levels[6],
+        "ratio 1 is between .786 and 1.236"
+    );
 }
 
 /// A truncated fibo is refused rather than read past its end.
@@ -341,7 +343,10 @@ fn a_truncated_fibonacci_is_refused() {
     }
     assert!(decode(&full).is_some(), "the whole blob still decodes");
     // Right length, wrong everything: refused for its TYPE, without reading past its end.
-    assert!(decode(&vec![0u8; full.len()]).is_none(), "type 0 is not a figure");
+    assert!(
+        decode(&vec![0u8; full.len()]).is_none(),
+        "type 0 is not a figure"
+    );
 }
 
 /// What the terminal actually sends back after an edit, creation instant included.

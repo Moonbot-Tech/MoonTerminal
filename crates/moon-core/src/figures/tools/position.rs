@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::kind::FigureKind;
 use super::super::node::FigNode;
-use super::super::proj::{Proj, PxPoint, seg_dist};
+use super::super::proj::{seg_dist, Proj, PxPoint};
 use super::super::sink::{BuildCtx, GeomSink, LabelPlace, LabelText};
 use super::{FigureTool, ToolDef, ToolShape};
 
@@ -173,8 +173,20 @@ impl ToolShape for Position {
                 alpha,
             ]
         };
-        sink.band(self.t0_ms, self.t1_ms, self.entry, self.target, zone(PROFIT_RGB));
-        sink.band(self.t0_ms, self.t1_ms, self.entry, self.stop, zone(RISK_RGB));
+        sink.band(
+            self.t0_ms,
+            self.t1_ms,
+            self.entry,
+            self.target,
+            zone(PROFIT_RGB),
+        );
+        sink.band(
+            self.t0_ms,
+            self.t1_ms,
+            self.entry,
+            self.stop,
+            zone(RISK_RGB),
+        );
         for price in [self.entry, self.target, self.stop] {
             sink.seg(
                 FigNode::new(self.t0_ms, price),

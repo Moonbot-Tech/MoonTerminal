@@ -176,8 +176,10 @@ impl AlertsPanel {
         })
         .detach();
         let widths_id = crate::persistence::table_persist::ctx_id(TABLE_ID, false);
-        let saved_widths =
-            floored_widths(crate::persistence::table_persist::saved(backend.read(cx), &widths_id));
+        let saved_widths = floored_widths(crate::persistence::table_persist::saved(
+            backend.read(cx),
+            &widths_id,
+        ));
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.column_widths = saved_widths;
@@ -242,7 +244,12 @@ impl AlertsPanel {
     fn data_sig(&self, b: &Backend) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         b.figures.borrow().rev().hash(&mut h);
-        for s in b.session.sessions().iter().filter(|s| s.group == self.group) {
+        for s in b
+            .session
+            .sessions()
+            .iter()
+            .filter(|s| s.group == self.group)
+        {
             s.id.hash(&mut h);
             s.name.hash(&mut h);
             if let Some(core) = b.session.store().core(s.id) {
@@ -311,8 +318,7 @@ impl AlertsPanel {
             .borrow()
             .all()
             .filter(|(core, _, f)| {
-                names.contains_key(core)
-                    && view.scope_accepts(f.tool().def().alertable, f.alert)
+                names.contains_key(core) && view.scope_accepts(f.tool().def().alertable, f.alert)
             })
             .map(|(core, market, f)| (core, market.to_string(), f.clone()))
             .collect();
@@ -331,10 +337,8 @@ impl AlertsPanel {
             by_core.entry(*core).or_default().push(ix);
         }
         for (core, positions) in by_core {
-            let mut distinct: Vec<&str> = positions
-                .iter()
-                .map(|ix| figures[*ix].1.as_str())
-                .collect();
+            let mut distinct: Vec<&str> =
+                positions.iter().map(|ix| figures[*ix].1.as_str()).collect();
             distinct.sort_unstable();
             distinct.dedup();
             let coins: HashMap<&str, String> = distinct

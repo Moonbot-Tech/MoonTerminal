@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::kind::FigureKind;
-use crate::figures::tools::tests::{TestProj, build, ctx};
+use crate::figures::tools::tests::{build, ctx, TestProj};
 
 /// A ray pointing up and to the right: origin at `T0`, aimed through a point 10 s later and 20
 /// higher. In test pixels that is `(0, 0)` aimed through `(10, -40)`.
@@ -24,7 +24,10 @@ fn both_nodes_are_handles_and_move_independently() {
     assert!(r.move_handle(1, aim));
     assert_eq!(r.b, aim);
     assert_eq!(r.a, ray().a, "moving the aim must not move the origin");
-    assert!(!r.move_handle(1, aim), "an unchanged drag reports no change");
+    assert!(
+        !r.move_handle(1, aim),
+        "an unchanged drag reports no change"
+    );
 }
 
 /// The whole VISIBLE line is grabbable, not just the stretch between the two nodes.

@@ -181,7 +181,10 @@ fn snapping_refuses_a_span_it_cannot_reason_about() {
         (f64::NAN, 60000.0, 1.0),
     ] {
         let got = snap_ratio(ratio, price, span);
-        assert!(got == ratio || (got.is_nan() && ratio.is_nan()), "{ratio} {price} {span}");
+        assert!(
+            got == ratio || (got.is_nan() && ratio.is_nan()),
+            "{ratio} {price} {span}"
+        );
     }
 }
 

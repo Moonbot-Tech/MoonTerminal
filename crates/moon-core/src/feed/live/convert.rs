@@ -882,7 +882,13 @@ fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &
         rows.len().hash(&mut sig);
         markets.hash(&mut sig);
         for r in &matched {
-            (r.uid, &r.status, r.pending, r.pending_cond.map(f64::to_bits)).hash(&mut sig);
+            (
+                r.uid,
+                &r.status,
+                r.pending,
+                r.pending_cond.map(f64::to_bits),
+            )
+                .hash(&mut sig);
         }
     }
     let sig = {

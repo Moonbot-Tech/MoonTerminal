@@ -55,7 +55,10 @@ impl AlertsPanel {
         let exchange_view = view.clone();
         let (cores, exchange_names) = {
             let b = self.backend.read(cx);
-            (self.group_cores(b), b.session.market_source().core_exchange_names())
+            (
+                self.group_cores(b),
+                b.session.market_source().core_exchange_names(),
+            )
         };
         crate::controls::core_combo(
             "alerts-cores",
@@ -70,7 +73,9 @@ impl AlertsPanel {
                 view.update(app, |this, cx| this.toggle_core(id, cx));
             },
             move |exchange_cores, app| {
-                exchange_view.update(app, |this, cx| this.toggle_exchange_cores(exchange_cores, cx));
+                exchange_view.update(app, |this, cx| {
+                    this.toggle_exchange_cores(exchange_cores, cx)
+                });
             },
         )
     }

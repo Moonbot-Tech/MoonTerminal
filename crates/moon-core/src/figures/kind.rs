@@ -8,7 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::tools::{
-    Channel, FibRetracement, FigureTool, HLine, MbFib, Position, Ray, Rect, Segment, ToolShape, Triangle,
+    Channel, FibRetracement, FigureTool, HLine, MbFib, Position, Ray, Rect, Segment, ToolShape,
+    Triangle,
 };
 
 /// Figure type. The JSON representation matches Moonbot's `TChartObject` names that were used
