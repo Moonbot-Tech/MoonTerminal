@@ -39,6 +39,19 @@ pub(super) fn resolve_paste_target(
         .unwrap_or_else(|| (first_core.unwrap_or(0), String::new()))
 }
 
+/// Return whether a UI-created folder should remain locally owned after a strategy snapshot.
+///
+/// Args:
+///     path: Canonical UI-folder path retained by [`StrategiesView`].
+///     rows: Current live strategies for the same core, or `None` while that core is absent.
+///
+/// Returns:
+///     `false` once a live row represents the folder or any of its descendants.
+fn keep_ui_folder(path: &str, rows: Option<&[StrategyRow]>) -> bool {
+    let prefix = ops::split_path(path);
+    rows.is_none_or(|rows| prefix.is_empty() || !ops::has_row_under(rows, &prefix))
+}
+
 /// Active mutually exclusive operation modal rendered over the window.
 #[derive(Clone)]
 pub(crate) enum TreeOp {
@@ -219,6 +232,23 @@ impl StrategiesView {
             .filter(|(c, _)| *c == core)
             .map(|(_, p)| ops::split_path(p))
             .collect()
+    }
+
+    /// Drop UI-only ownership once live core data represents a folder through a strategy row.
+    ///
+    /// Empty folders exist only in this view until first use. Retaining their local marker after
+    /// a strategy arrives would make the folder reappear as a ghost if another surface later
+    /// deletes that strategy and asks the core to remove the now-empty folder.
+    ///
+    /// Args:
+    ///     store: Current per-core live strategy snapshots.
+    pub(in crate::strategies) fn reconcile_ui_folders(&mut self, store: &CoreStore) {
+        self.ui_folders.retain(|(core, path)| {
+            keep_ui_folder(
+                path,
+                store.core(*core).map(|data| data.strategies.as_slice()),
+            )
+        });
     }
 
     // ── Keyboard: Ctrl+C, Ctrl+V, and Delete ──────────────────────────────────

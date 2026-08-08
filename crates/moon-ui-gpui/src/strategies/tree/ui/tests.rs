@@ -1,11 +1,28 @@
-//! Paste/Create target precedence.
+//! Paste/Create target precedence plus UI-only folder occupancy and observer wiring.
 
+use moon_core::feed::StrategyRow;
 use moon_core::session::CoreId;
 
-use super::resolve_paste_target;
+use super::{keep_ui_folder, resolve_paste_target};
 
 /// The source file, read at COMPILE time so the guard below cannot drift from it.
 const SRC: &str = include_str!("../ui.rs");
+/// The observer must retire UI-only folders when the live strategy snapshot changes.
+const STATE_SRC: &str = include_str!("../../state.rs");
+
+/// Build the only strategy fields the folder-occupancy decision reads.
+fn strategy(id: u64, folder_path: &str) -> StrategyRow {
+    StrategyRow {
+        id,
+        name: format!("strategy-{id}"),
+        kind: "Demo".to_string(),
+        kind_ordinal: 1,
+        folder_path: folder_path.to_string(),
+        checked: false,
+        is_short: false,
+        fields: Vec::new(),
+    }
+}
 
 /// Build a selected folder or strategy location for precedence tests.
 fn at(core: CoreId, path: &str) -> Option<(CoreId, String)> {
@@ -77,5 +94,34 @@ fn a_root_folder_selection_is_not_mistaken_for_nothing() {
         resolve_paste_target(at(9, ""), at(3, "old"), Some(1)),
         (9, String::new()),
         "an empty path on core 9 means that core's root, not 'no selection'"
+    );
+}
+
+/// `strategies/tree/ui.rs:keep_ui_folder`: replacing subtree occupancy with direct equality would
+/// preserve a parent marker and reveal a ghost folder after the child strategy is later deleted.
+#[test]
+fn a_live_strategy_occupies_its_folder_and_every_ui_only_ancestor() {
+    let rows = vec![strategy(1, "desk/live")];
+
+    assert!(!keep_ui_folder("desk", Some(&rows)));
+    assert!(!keep_ui_folder("desk/live", Some(&rows)));
+    assert!(keep_ui_folder("desk/archive", Some(&rows)));
+    assert!(keep_ui_folder("des", Some(&rows)));
+    assert!(keep_ui_folder("desk", Some(&[])));
+    assert!(keep_ui_folder("desk", None));
+}
+
+/// `strategies/state.rs:StrategiesView::observe_state`: removing the reconciliation call would
+/// leave occupied markers cached and expose a ghost folder after an Analytics purge.
+#[test]
+fn strategy_snapshot_changes_reconcile_ui_only_folders() {
+    let state_code: String = STATE_SRC
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        state_code.contains("this.reconcile_ui_folders(b.session.store());"),
+        "the live snapshot observer must retire newly occupied UI-only folders"
     );
 }

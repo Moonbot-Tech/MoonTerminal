@@ -1303,9 +1303,9 @@ analytics.coins.save_moved:
   en: "The lists moved while the write was being prepared — nothing was sent. Try again."
   es: "Las listas cambiaron mientras se preparaba la escritura — no se envió nada."
 
-# Right-click on a strategy row: hide its trades from the report, disable it, then delete it.
-# The three steps are confirmed one by one against the core, so the wording says "step", never
-# "done" — the terminal only ever learns that the core committed each one.
+# Right-click on a strategy row: hide its trades, disable it, delete it, then request folder removal
+# if it became empty. Core-confirmable actions are awaited in order; the feed thread skips the
+# folder request if the complete strategy placements changed after the UI's fresh snapshot.
 analytics.purge.menu:
   ru: "Удалить стратегию и её сделки из отчёта"
   en: "Delete the strategy and its trades from the report"
@@ -1340,17 +1340,17 @@ analytics.purge.counts:
   en: "Trades to hide: %{total} (in the selected period: %{period})"
   es: "Operaciones a ocultar: %{total} (en el periodo seleccionado: %{period})"
 analytics.purge.no_rows:
-  ru: "Сделок к удалению нет — будет удалена только сама стратегия."
-  en: "No trades to delete — only the strategy itself will be removed."
-  es: "No hay operaciones que eliminar — solo se eliminará la estrategia."
+  ru: "Сделок к удалению нет — будет удалена сама стратегия; если её папка опустеет, терминал запросит удаление папки."
+  en: "No trades to delete — the strategy will be removed; if its folder becomes empty, the terminal will request folder removal."
+  es: "No hay operaciones que eliminar: se eliminará la estrategia; si su carpeta queda vacía, el terminal solicitará eliminarla."
 analytics.purge.legacy_note:
   ru: "Ещё %{n} строк из старой таблицы отчёта удалить нельзя — они останутся."
   en: "Another %{n} rows from the old report table cannot be deleted and will remain."
   es: "Otras %{n} filas de la tabla antigua del informe no se pueden eliminar y permanecerán."
 analytics.purge.steps:
-  ru: "По шагам: скрыть сделки в отчёте, выключить стратегию, удалить её. Каждый шаг ждёт подтверждения от ядра."
-  en: "Step by step: hide the trades, disable the strategy, delete it. Each step waits for the core to confirm."
-  es: "Paso a paso: ocultar las operaciones, desactivar la estrategia y eliminarla. Cada paso espera la confirmación del núcleo."
+  ru: "По шагам: скрыть сделки в отчёте, выключить стратегию, удалить её, затем запросить удаление папки, если она опустела. Подтверждаемые ядром действия выполняются последовательно."
+  en: "Step by step: hide the trades, disable the strategy, delete it, then request removal of its folder if empty. Core-confirmable actions run in sequence."
+  es: "Paso a paso: ocultar las operaciones, desactivar la estrategia, eliminarla y después solicitar que se elimine su carpeta si queda vacía. Las acciones confirmables por el núcleo se ejecutan en orden."
 analytics.purge.ok:
   ru: "Удалить"
   en: "Delete"
@@ -1373,13 +1373,17 @@ analytics.purge.step_delete:
   en: "Deleting the strategy"
   es: "Eliminando la estrategia"
 analytics.purge.done:
-  ru: "Готово: стратегия удалена, её сделки скрыты в отчёте"
-  en: "Done: the strategy is deleted and its trades are hidden in the report"
-  es: "Listo: la estrategia fue eliminada y sus operaciones están ocultas en el informe"
+  ru: "Готово: стратегия удалена, её сделки скрыты в отчёте; если папка опустела, её удаление также поставлено в очередь"
+  en: "Done: the strategy is deleted and its trades are hidden; if its folder became empty, it was also queued for removal"
+  es: "Listo: la estrategia fue eliminada y sus operaciones están ocultas; si su carpeta quedó vacía, su eliminación también se puso en cola"
 analytics.purge.send_failed:
   ru: "Шаг не отправлен: %{step}. Предыдущие шаги остались в силе."
   en: "Step not sent: %{step}. The earlier steps stand."
   es: "Paso no enviado: %{step}. Los pasos anteriores siguen en pie."
+analytics.purge.folder_send_failed:
+  ru: "Стратегия удалена, но запрос на удаление опустевшей папки не отправлен."
+  en: "The strategy was deleted, but the empty-folder removal request was not queued."
+  es: "La estrategia fue eliminada, pero no se pudo enviar la solicitud para eliminar la carpeta vacía."
 analytics.purge.timeout:
   ru: "Ядро не подтвердило шаг: %{step}. Предыдущие шаги остались в силе."
   en: "The core did not confirm this step: %{step}. The earlier steps stand."

@@ -18,8 +18,8 @@ mod market_role;
 mod tests;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::mpsc::{sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use moonproto::state::{AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent};
@@ -69,7 +69,7 @@ fn apply_strategy_delivery_ack(
 
 use account_reconciliation::AccountReconciliation;
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
-use commands::{drain_commands, CommandDrain, LocalStratEdits};
+use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
     runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
@@ -330,6 +330,9 @@ pub(super) fn run(
         Vec<(String, moonproto::FieldValue)>,
     > = std::collections::HashMap::new();
     let mut local_strat_edits = LocalStratEdits::new();
+    // Shadow full-list syncs already accepted by MoonProto's asynchronous runtime queue. Its
+    // public snapshot can lag these commands, so conditional destructive actions check both.
+    let mut strategy_placements = StrategyPlacementGuard::new();
     let mut strat_db_initial = true;
     // Monotonic per-core detect number used as the ingestion cursor for the UI detect feed.
     let mut detect_seq: u64 = 0;
@@ -363,6 +366,7 @@ pub(super) fn run(
             &mut force_market_sample,
             &mut orders_mutated,
             &mut local_strat_edits,
+            &mut strategy_placements,
             client_settings_sequence,
         );
         if command_drain == CommandDrain::Disconnected {

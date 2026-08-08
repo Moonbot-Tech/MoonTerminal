@@ -1,6 +1,8 @@
-//! Placement of newly created strategies inside the core's list.
+//! Placement of newly created strategies plus snapshot guards for destructive strategy commands.
 
-use super::{anchor_on_core, plan_insert_positions};
+use super::{
+    StrategyPlacementGuard, anchor_on_core, plan_insert_positions, strategy_placements_unchanged,
+};
 
 /// An anchor is honoured only on the core it names.
 ///
@@ -82,4 +84,141 @@ fn the_create_handler_places_rather_than_appends() {
         !arm.contains("full.push("),
         "a created strategy must be placed with `full.insert`, never appended"
     );
+}
+
+/// `feed/live/commands.rs:strategy_placements_unchanged`: comparing vectors without sorting would
+/// reject a harmless snapshot reorder and leave the user's empty folder behind.
+#[test]
+fn conditional_folder_delete_ignores_snapshot_order() {
+    let expected = vec![(1, "alpha".to_string()), (2, "beta".to_string())];
+    let reordered = vec![(2, "beta".to_string()), (1, "alpha".to_string())];
+
+    assert!(strategy_placements_unchanged(reordered, expected));
+}
+
+/// `feed/live/commands.rs:strategy_placements_unchanged`: ignoring ids, paths, or length would let
+/// a queued create, delete, or move pass and could delete a strategy the user did not purge.
+#[test]
+fn conditional_folder_delete_detects_every_placement_change() {
+    let expected = vec![(1, "alpha".to_string()), (2, "beta".to_string())];
+
+    assert!(!strategy_placements_unchanged(
+        vec![(1, "alpha".to_string())],
+        expected.clone()
+    ));
+    assert!(!strategy_placements_unchanged(
+        vec![(1, "alpha".to_string()), (2, "beta/child".to_string())],
+        expected.clone()
+    ));
+    assert!(!strategy_placements_unchanged(
+        vec![
+            (1, "alpha".to_string()),
+            (2, "beta".to_string()),
+            (3, "alpha".to_string())
+        ],
+        expected
+    ));
+}
+
+/// `feed/live/commands.rs:StrategyPlacementGuard::allows_snapshot`: ignoring the queued full-list
+/// shadow would let a stale live snapshot authorize deletion after a same-terminal move/create.
+#[test]
+fn conditional_deletes_require_live_and_queued_placements_to_agree() {
+    let original = vec![(1, "alpha".to_string())];
+    let moved = vec![(1, "beta".to_string())];
+    let mut guard = StrategyPlacementGuard::new();
+    guard.note_queued_sync(moved.clone());
+
+    assert!(!guard.allows_snapshot(Some(original.clone()), original));
+    assert!(guard.allows_snapshot(Some(moved.clone()), moved.clone()));
+    assert!(!guard.allows_snapshot(
+        Some(vec![(1, "beta".to_string()), (2, "beta".to_string())]),
+        moved
+    ));
+    assert!(!guard.allows_snapshot(None, Vec::new()));
+}
+
+/// Extract one command arm from comment-free source so guard assertions cannot match a neighboring
+/// handler or a disabled line.
+fn command_arm<'a>(code: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
+    let start = code.find(start_marker).expect("the guarded arm must exist");
+    let end = code[start..]
+        .find(end_marker)
+        .map(|offset| start + offset)
+        .expect("the following command arm must exist");
+    &code[start..end]
+}
+
+/// Assert that one arm checks the combined live/queued shadow before its sole delete call.
+fn assert_shadow_guarded_delete(arm: &str, delete_call: &str) {
+    let guard = arm
+        .find("if strategy_placements.allows(client, expected_placements)")
+        .expect("the arm must use the live-plus-queued placement guard");
+    let delete = arm
+        .find(delete_call)
+        .expect("the guarded branch must issue its destructive command");
+
+    assert!(
+        guard < delete,
+        "the live-plus-queued placement guard must precede deletion"
+    );
+    assert_eq!(
+        arm.matches(delete_call).count(),
+        1,
+        "the arm must contain no second unconditional delete"
+    );
+}
+
+/// `feed/live/commands.rs:rebuild_sync`: omitting the centralized shadow update after queue
+/// acceptance would make a queued move/create invisible to both conditional handlers.
+#[test]
+fn every_full_list_sync_updates_the_placement_shadow() {
+    let body = command_arm(SRC, "fn rebuild_sync(", "pub(super) fn drain_commands(");
+    let queued = body
+        .find("client.strategies().sync_local_strategies(full)")
+        .expect("the rebuild path must queue its full list");
+    let shadow = body
+        .find("strategy_placements.note_queued_sync(placements)")
+        .expect("accepted full-list syncs must update the synchronous shadow");
+
+    assert!(
+        queued < shadow,
+        "queue acceptance must precede shadow adoption"
+    );
+}
+
+/// `feed/live/commands.rs:DeleteStrategyIfUnchanged`: bypassing its exact snapshot comparison would
+/// delete a moved target and make Analytics clean the folder captured before that move.
+#[test]
+fn conditional_strategy_handler_requires_an_unchanged_snapshot() {
+    let code: String = SRC
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let arm = command_arm(
+        &code,
+        "CoreCmd::DeleteStrategyIfUnchanged",
+        "CoreCmd::DeleteFolder",
+    );
+
+    assert_shadow_guarded_delete(arm, "client.strategies().delete(id, \"\")");
+}
+
+/// `feed/live/commands.rs:DeleteEmptyFolder`: bypassing its exact snapshot comparison would send an
+/// unconditional folder-wide delete after stale UI evidence and could remove a new strategy.
+#[test]
+fn conditional_folder_handler_requires_a_snapshot_and_unchanged_placements() {
+    let code: String = SRC
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let arm = command_arm(
+        &code,
+        "CoreCmd::DeleteEmptyFolder",
+        "CoreCmd::CreateStrategies",
+    );
+
+    assert_shadow_guarded_delete(arm, "client.strategies().delete(0, path.as_str())");
 }
