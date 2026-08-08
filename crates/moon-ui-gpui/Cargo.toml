@@ -25,6 +25,12 @@ moon-core = { path = "../moon-core" }
 # constants). chartdx renders the data via DX11 on Windows, Metal on macOS, and wgpu on Linux.
 moon-chart = { path = "../moon-chart" }
 image = "0.25"
+# Not used directly — pinned to hold back a transitive break. zune-core 0.5.2 makes
+# zune-jpeg 0.5.15 (pulled in by image and tiff) fail to compile with "macro expansion ends
+# with an incomplete expression". Cargo.lock is not committed here, so CI resolves the newer
+# one and every job dies; a direct `=` requirement is the only way to hold a transitive
+# version without a lock. Drop this once zune-jpeg 0.5.16 ships (only 0.5.16-rc1 exists).
+zune-core = "=0.5.1"
 bytemuck = { version = "1", features = ["derive"] }
 # Embedded coin icon set (assets/coins), so icons ship in the build without a
 # separate folder beside the executable; disk files take priority for adding icons without rebuilding.
