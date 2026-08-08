@@ -103,6 +103,89 @@ fn rebuild_prefers_server_before_first_full_trade_bucket() {
     assert_eq!(c[2].close, 2.5);
 }
 
+/// A thin market must not punch holes in a base that covers those buckets.
+///
+/// Trades are the better source for a bucket they actually cover, but only for that bucket. On a
+/// coin that trades a few times an hour the overlay used to start at the FIRST trade in the window
+/// and discard every base candle after it, so a full exchange history collapsed to the handful of
+/// buckets that happened to contain a trade — measured live on CETUSUSDC as 15 candles across a
+/// span holding 57, with 672 cached rows available and unused.
+#[test]
+fn rebuild_keeps_base_in_buckets_the_trades_do_not_cover() {
+    let base: Vec<ChartCandle> = (0..5)
+        .map(|i| {
+            let t = i as f64 * TF5 as f64;
+            candle(t, 10.0, 11.0, 9.0, 10.5, 1.0)
+        })
+        .collect();
+    // Two trades in a five-bucket base: the first bucket and the last, four apart.
+    let trades = [
+        tick(1.0 * M, 20.0, 1.0),
+        tick(4.0 * TF5 as f64 + M, 30.0, 1.0),
+    ];
+
+    let mut s = CandleSeries::default();
+    s.rebuild(TF5, &base, TF5, &trades);
+    let out = s.candles();
+
+    assert_eq!(
+        out.len(),
+        5,
+        "every base bucket must survive; trades only replace the ones they cover, got {:?}",
+        out.iter()
+            .map(|c| c.t_open_ms / TF5 as f64)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        out[1].close, 10.5,
+        "an untraded bucket keeps its base candle"
+    );
+    assert_eq!(out[2].close, 10.5);
+    assert_eq!(out[3].close, 10.5);
+    assert_eq!(
+        out[4].close, 30.0,
+        "a traded bucket is still won by the trade that covers it"
+    );
+}
+
+/// A live trade must take over a base bucket, not add itself on top of it.
+///
+/// The per-bucket merge lets the series END with a base candle — the base runs to now while a
+/// thin market's last trade is older. That bucket's volume is already complete from the source,
+/// so the live drain adding trade quantity to it would double count. Before the merge the series
+/// always ended in a trade-derived candle and this could not happen.
+#[test]
+fn push_trades_takes_over_a_base_bucket_instead_of_adding_to_it() {
+    let base: Vec<ChartCandle> = (0..6)
+        .map(|i| candle(i as f64 * TF5 as f64, 10.0, 11.0, 9.0, 10.5, 100.0))
+        .collect();
+    // One trade, early. Buckets 2..5 stay base, so the series ends on a base candle.
+    let trades = [tick(1.0 * TF5 as f64 + M, 20.0, 1.0)];
+    let mut s = CandleSeries::default();
+    s.rebuild(TF5, &base, TF5, &trades);
+    assert_eq!(s.candles().len(), 6);
+    assert_eq!(
+        s.candles()[5].volume,
+        100.0,
+        "the last bucket is still the base candle"
+    );
+
+    // A live trade lands in that last, base-derived bucket.
+    assert!(s.push_trades(&[tick(5.0 * TF5 as f64 + M, 42.0, 3.0)]));
+    let last = s.candles()[5];
+    assert_eq!(
+        last.volume, 3.0,
+        "the bucket is taken over by the trade, not added to the source's complete volume"
+    );
+    assert_eq!(last.close, 42.0);
+    assert_eq!(s.candles().len(), 6, "taking over must not add a bucket");
+
+    // A second live trade in the same bucket now accumulates normally.
+    assert!(s.push_trades(&[tick(5.0 * TF5 as f64 + 2.0 * M, 44.0, 2.0)]));
+    assert_eq!(s.candles()[5].volume, 5.0);
+    assert_eq!(s.candles()[5].close, 44.0);
+}
+
 #[test]
 fn rebuild_without_server_takes_partial_first() {
     let trades = [tick(7.0 * M, 5.0, 1.0), tick(12.0 * M, 6.0, 1.0)];

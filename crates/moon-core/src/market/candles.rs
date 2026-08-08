@@ -4,10 +4,14 @@
 //! Pure functions plus a revisioned series let the renderer re-upload the GPU buffer only
 //! when the revision changes.
 //!
-//! Seam rule: when the base covers the first local bucket's timestamp, that base candle
-//! is retained and the local overlay begins at the next bucket. Otherwise the overlay
-//! begins at the first local bucket. This rule tests timestamp coverage without inferring
-//! how much of the bucket interval the local trades represent.
+//! Overlay rule: the two sources are merged PER BUCKET. A trade-derived candle replaces the
+//! base candle in the bucket it covers; a bucket with no trades keeps its base candle. There
+//! is deliberately no seam — cutting the base off at the first traded bucket assumed trades
+//! cover every bucket after it, which holds on a liquid market and fails badly on a thin one,
+//! where it left the series with only the few buckets that happened to contain a trade.
+//!
+//! The first local bucket is the one exception: the read window starts mid-bucket, so its
+//! trades are partial, and where the base covers that bucket the base candle is preferred.
 
 use serde::{Deserialize, Serialize};
 
@@ -237,7 +241,6 @@ pub fn resample(rows: &[ChartCandle], tf_ms: i64, out: &mut Vec<ChartCandle>) {
 ///
 /// It lives in `ChartHistoryCursor`, rebuilds on a combo reset, and updates its live edge
 /// through `push_trades` from the same drain that feeds the crosses.
-#[derive(Default)]
 pub struct CandleSeries {
     tf_ms: i64,
     candles: Vec<ChartCandle>,
@@ -245,6 +248,29 @@ pub struct CandleSeries {
     valid: bool,
     /// Resampling scratch space whose allocation is reused between rebuilds.
     scratch: Vec<ChartCandle>,
+    /// Merge scratch space, reused for the same reason: a rebuild runs on the chart's prepare
+    /// path and happens on every frame of a pan.
+    merge_scratch: Vec<ChartCandle>,
+    /// Oldest bucket this series accumulates from trades itself.
+    ///
+    /// Buckets at or after it are trade-derived and may be added to; earlier ones still hold a
+    /// base candle whose volume is already complete. `INFINITY` while nothing is trade-derived.
+    live_from: f64,
+}
+
+impl Default for CandleSeries {
+    fn default() -> Self {
+        Self {
+            tf_ms: 0,
+            candles: Vec::new(),
+            revision: 0,
+            valid: false,
+            scratch: Vec::new(),
+            merge_scratch: Vec::new(),
+            // Nothing is trade-derived yet, so every bucket is "base" until a rebuild says so.
+            live_from: f64::INFINITY,
+        }
+    }
 }
 
 impl CandleSeries {
@@ -273,9 +299,15 @@ impl CandleSeries {
     ///
     /// `base` contains candles sorted at `base_tf_ms`; the production caller currently
     /// supplies a merged base already resampled to the target timeframe. `trades` contains
-    /// the visible window's trades. If the base covers the first local bucket's timestamp,
-    /// the local overlay begins at the next bucket; otherwise it begins at that first
-    /// local bucket.
+    /// the visible window's trades.
+    ///
+    /// The two are merged per bucket: a trade-derived candle wins the bucket it covers, and
+    /// every other base bucket survives. The first local bucket is dropped when the base
+    /// covers it, because the window clips it and the base candle is the complete one.
+    ///
+    /// `base` MUST be ascending by `t_open_ms` with one candle per bucket — the merge walks it
+    /// once and cannot repair either. The production caller satisfies this by building it from
+    /// a `BTreeMap`; an unsorted slice passes through unsorted and drops local candles.
     pub fn rebuild(&mut self, tf_ms: i64, base: &[ChartCandle], base_tf_ms: i64, trades: &[Tick]) {
         let tf_ms = tf_ms.max(1);
         self.tf_ms = tf_ms;
@@ -296,26 +328,47 @@ impl CandleSeries {
             }
         }
 
-        // Choose the seam by timestamp coverage. If the base contains the first local
-        // bucket, retain that base candle and begin the overlay at the next bucket.
-        // Without base coverage, retain the local series from its first bucket.
-        let overlay_from = match local.first() {
-            None => f64::INFINITY,
-            Some(first) if self.candles.is_empty() => first.t_open_ms,
-            Some(first) => {
-                // Base coverage keeps the first local timestamp on the base side of the
-                // seam; without coverage, include that local bucket to avoid a gap.
-                let covered = self.candles.iter().any(|c| c.t_open_ms == first.t_open_ms);
-                if covered {
-                    first.t_open_ms + tf_ms as f64
-                } else {
-                    first.t_open_ms
-                }
+        // Overlay the trade-derived candles PER BUCKET. Trades are the better source for a bucket
+        // they cover, but only for that one: a thin market trades a few times an hour, and cutting
+        // the base off at the first trade in the window discarded every later base candle, leaving
+        // the series with only the buckets that happened to contain a trade. Measured on a live
+        // thin market: 15 candles across a span holding 57, with a full cached history unused.
+        //
+        // The first local bucket is the exception. The window starts mid-bucket, so its trades are
+        // partial; where the base covers that bucket, the base candle is the complete one.
+        let skip_partial_first = local
+            .first()
+            .is_some_and(|first| self.candles.iter().any(|c| c.t_open_ms == first.t_open_ms));
+        let mut merged = std::mem::take(&mut self.merge_scratch);
+        merged.clear();
+        merged.reserve(self.candles.len() + local.len());
+        let mut base_at = 0usize;
+        for candle in local.iter().skip(usize::from(skip_partial_first)) {
+            while base_at < self.candles.len() && self.candles[base_at].t_open_ms < candle.t_open_ms
+            {
+                merged.push(self.candles[base_at]);
+                base_at += 1;
             }
-        };
-        self.candles.retain(|c| c.t_open_ms < overlay_from);
-        self.candles
-            .extend(local.iter().filter(|c| c.t_open_ms >= overlay_from));
+            // Same bucket: the trade-derived candle wins and the base one is dropped. A loop, not
+            // an `if`, so a base that repeats a bucket cannot leave its stale twin sitting after
+            // the winner and break the series' ascending order.
+            while base_at < self.candles.len()
+                && self.candles[base_at].t_open_ms == candle.t_open_ms
+            {
+                base_at += 1;
+            }
+            merged.push(*candle);
+        }
+        merged.extend_from_slice(&self.candles[base_at..]);
+        std::mem::swap(&mut self.candles, &mut merged);
+        self.merge_scratch = merged;
+        // Buckets from here on are ours to accumulate into; earlier ones keep a base candle whose
+        // volume is already complete. See `push_trades`.
+        self.live_from = local
+            .iter()
+            .skip(usize::from(skip_partial_first))
+            .next()
+            .map_or(f64::INFINITY, |c| c.t_open_ms);
 
         local.clear();
         self.scratch = local;
@@ -338,7 +391,18 @@ impl CandleSeries {
                 continue;
             }
             let open_ms = bucket_open_ms(t.time_ms, tf_ms);
+            // A bucket this series has not been accumulating itself still holds its BASE candle,
+            // whose volume already covers the whole period from the source. Adding trade quantity
+            // on top of it would double count, so the first live trade in such a bucket takes the
+            // bucket over instead of joining it. Before the per-bucket merge the series always
+            // ended in a trade-derived candle and this could not arise.
+            let live_here = open_ms >= self.live_from;
             match self.candles.last_mut() {
+                Some(last) if last.t_open_ms == open_ms && !live_here => {
+                    *last = candle_from_tick(open_ms, t);
+                    self.live_from = open_ms;
+                    changed = true;
+                }
                 Some(last) if last.t_open_ms == open_ms => {
                     last.high = last.high.max(t.price);
                     last.low = last.low.min(t.price);
@@ -348,10 +412,12 @@ impl CandleSeries {
                 }
                 Some(last) if open_ms > last.t_open_ms => {
                     self.candles.push(candle_from_tick(open_ms, t));
+                    self.live_from = self.live_from.min(open_ms);
                     changed = true;
                 }
                 None => {
                     self.candles.push(candle_from_tick(open_ms, t));
+                    self.live_from = self.live_from.min(open_ms);
                     changed = true;
                 }
                 _ => {
