@@ -286,9 +286,9 @@ impl ChartEngine {
     /// `accent` is the palette token; the flash never picks its own colour. The own-pass paces and
     /// expires the flash from the stamp, so this schedules no timer and requests no GPUI render.
     pub fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: u32) -> bool {
-        // `MoonPalette` stores colours as packed `0xRRGGBB`; the chart layers take sRGB channels.
-        let color = rgb4([(accent >> 16) as u8, (accent >> 8) as u8, accent as u8]);
-        self.state.borrow_mut().set_arrival_pulse(at, color)
+        self.state
+            .borrow_mut()
+            .set_arrival_pulse(at, types::accent_rgb4(accent))
     }
 
     /// Sets the comparison tab anchor's last price, used for the large delta beneath the corner

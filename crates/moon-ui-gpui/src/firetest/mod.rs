@@ -46,6 +46,7 @@ pub(crate) use probe::ChartProbe;
 use logging::{firetest_error, firetest_info};
 use plan::{DONE_STAGE_NAME, StageDef, StageStep, plan_for};
 use sample::Sample;
+use stages::arrival_flash::FlashRun;
 use stages::order_cancel::OrderCancelRun;
 use storm::MouseStorm;
 
@@ -70,6 +71,11 @@ pub(crate) struct Runtime {
     bench: Option<bench::BenchShape>,
     samples: Vec<Sample>,
     storm: Option<MouseStorm>,
+    /// The in-flight arrival-flash window, while that stage runs.
+    flash: Option<FlashRun>,
+    /// Charts seen flashing at once during that window — the divisor its samples are scored by,
+    /// because the bench shape was captured before it and charts arrive mid-run.
+    flash_charts: Option<usize>,
     opened_group: Option<String>,
     tool_window_ids: Option<(String, String, String)>,
     locale_switch: Option<(Language, Language)>,
@@ -86,12 +92,16 @@ impl Runtime {
         let now = Instant::now();
         let plan = plan_for(config.script);
         firetest_info(&format!(
-            "[firetest] script={:?} market={} storm_ms={} mouse_hz={:.0} text_labels={} order_cancel_lag={}",
+            "[firetest] script={:?} market={} storm_ms={} mouse_hz={:.0} text_labels={} flash_ms={} arrival_flash={} order_cancel_lag={}",
             config.script,
             config.market,
             config.storm.as_millis(),
             config.mouse_hz,
             config.text_labels,
+            config.flash.as_millis(),
+            // Recorded per run because it is the A/B variable: a log line that does not say which
+            // side of the comparison it is cannot be pooled with nine others.
+            crate::chartdx::arrival_flash_enabled(),
             config.order_cancel_lag
         ));
         firetest_info(&format!(
@@ -108,6 +118,8 @@ impl Runtime {
             bench: None,
             samples: Vec::new(),
             storm: None,
+            flash: None,
+            flash_charts: None,
             opened_group: None,
             tool_window_ids: None,
             locale_switch: None,
