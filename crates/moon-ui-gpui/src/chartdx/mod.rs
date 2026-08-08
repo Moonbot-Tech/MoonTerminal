@@ -307,6 +307,12 @@ struct PaneRender {
     pane_bounds: [f32; 4],
     book_style: BookStyle,
     resident_left_rel: f32,
+    /// Camera position, in pixels, at this pane's last history reset.
+    ///
+    /// A pan is covered by the prefetch the last read already fetched, so the next reset is owed
+    /// only once the camera has travelled further than that; see the use site. `i64::MIN` means
+    /// "never reset", which makes the distance overflow into a reset on the first pass.
+    pan_reset_cam_px: i64,
     /// Last observed combo device generation; device loss requires history reupload.
     last_device_gen: u64,
     /// Last order-book build: data revision plus visible price window.
@@ -452,6 +458,7 @@ impl PaneRender {
             pane_bounds: [0.0, 0.0, 1.0, 1.0],
             book_style: BookStyle::default(),
             resident_left_rel: f32::NAN,
+            pan_reset_cam_px: i64::MIN,
             last_device_gen: 0,
             last_book_rev: u64::MAX,
             last_book_lo: f32::NAN,

@@ -800,6 +800,7 @@ impl ChartEngine {
         for pr in &mut st.panes {
             pr.history_cursor.reset();
             pr.resident_left_rel = f32::NAN;
+            pr.pan_reset_cam_px = i64::MIN;
             pr.cached_tick_price = None;
             pr.scan_cam_px = i64::MIN;
             pr.gpu_prepare_dirty = true;

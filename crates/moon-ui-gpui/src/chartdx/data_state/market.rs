@@ -247,6 +247,35 @@ impl ChartDataState {
                 // A new device has an empty candle layer, invalidating the delivered revision.
                 pr.last_candle_rev = u64::MAX;
             }
+            // A pane panned off the live edge needs its coverage re-established, and only a reset
+            // does it. Three invariants ride on it, and none of them survives dropping it:
+            //   * the trade ring is left with a HOLE. A reset copies `[from, to]` and then parks
+            //     the cursor at `cursor_from_now()`, so rows between the window's right edge and
+            //     now reach neither path. While following the two coincide; a pane in the past
+            //     carries a hole exactly as wide as it scrolled, and panning back sweeps it.
+            //   * a candle-series rebuild re-clips the series to the then-current window, so its
+            //     left edge can move RIGHT of `resident_left_rel` between resets.
+            //   * a pane parked in the past keeps appending live trades into a fixed-capacity ring,
+            //     evicting the historical crosses it is displaying.
+            // What it does NOT need is a reset per camera pixel, which is what a drag used to cost:
+            // ~100 a second, each re-copying the window, rebuilding the series, re-draining both
+            // price lines and re-uploading the whole combo ring. Every read already fetches
+            // `history_prefetch` beyond both edges, so the pane stays covered until the camera has
+            // panned further than that slack — which is exactly the condition below, in the units
+            // the invariant is written in. `history_from` cannot express it: as an f32 offset from
+            // the process epoch its ULP reaches ~8 ms within a day, so a one-pixel pan need not
+            // change the value at all. `cam_px` is exact, and it also folds in zoom, which moves
+            // the camera without moving time.
+            // Spend the prefetch, but not the marker margin inside it: a cross whose glyph straddles
+            // the visible edge has to stay in the buffer, so the budget stops one margin short. A
+            // pane too narrow for any slack (an order-book-only pane floors `chart_w` at 1 px) gets
+            // a zero budget and the old per-pixel behaviour, which is the correct degradation.
+            let panned_off_edge = !pane.view.follow && scan_price;
+            let pan_budget_px = (history_prefetch - marker_margin).max(0.0) as f64
+                * pane.view.px_per_ms.max(1e-9) as f64;
+            let pan_reset_due = panned_off_edge
+                && (cam_px.saturating_sub(pr.pan_reset_cam_px).unsigned_abs() as f64)
+                    >= pan_budget_px;
             let force_history_reset = device_lost
                 || source_generation_changed
                 || source_archive_changed
@@ -254,8 +283,14 @@ impl ChartDataState {
                 || candle_cfg_changed
                 || zone_bucket_changed
                 || pr.resident_left_rel.is_nan()
-                || history_from < pr.resident_left_rel
-                || (!pane.view.follow && scan_price);
+                // Coverage runs out when the VISIBLE left edge leaves the fetched range, not when
+                // the requested one moves at all. `resident_left_rel` is stamped to `history_from`,
+                // which already carries a whole prefetch, so comparing `history_from` against it —
+                // as this did — fired on every single pixel of a pan into the past and left that
+                // drag direction paying the full per-pixel reset. The margin keeps the glyph
+                // overhang, exactly as in the pan budget above.
+                || view_time0 - marker_margin < pr.resident_left_rel
+                || pan_reset_due;
             // The lower displayed-trade boundary in relative milliseconds is the opening of bucket
             // N-K+1. K=0 yields infinity, suppressing all crosses and leaving only candles.
             let trades_zone_rel = if candle_cfg.trade_candles == 0 {
@@ -331,9 +366,14 @@ impl ChartDataState {
                 pixels_changed = true;
             }
             let candle_params_opt = (!candles_off).then_some(&candle_params);
-            let read_history = history_source_changed || force_history_reset;
+            // Automatic Y refits on every camera pixel, so a panning pane reads even when the pan
+            // budget has not run out: the price scan keeps its own windowed buffer and follows
+            // `scan_price` alone, independently of `force_reset`. Reading without resetting is what
+            // makes the budget affordable — those pixels still get a fitted Y and an incremental
+            // drain, they just do not re-upload the world.
+            let read_history = history_source_changed || force_history_reset || panned_off_edge;
             let mut history = if read_history {
-                let history_read_started = force_history_reset.then(std::time::Instant::now);
+                let read_timer = crate::diag::timer();
                 let history = source.read_chart_history_into(
                     pane.core,
                     &pane.market,
@@ -346,11 +386,14 @@ impl ChartDataState {
                     &mut pr.history_cursor,
                     &mut pr.history_buffers,
                 );
-                if let Some(started) = history_read_started {
-                    crate::diag::bump_by(
-                        &crate::diag::CHART_HISTORY_RESET_MS,
-                        started.elapsed().as_millis().max(1) as u64,
-                    );
+                crate::diag::record_us(&crate::diag::CHART_HISTORY_READ_US, read_timer);
+                if force_history_reset {
+                    if let Some(started) = read_timer {
+                        crate::diag::bump_by(
+                            &crate::diag::CHART_HISTORY_RESET_MS,
+                            started.elapsed().as_millis().max(1) as u64,
+                        );
+                    }
                 }
                 history
             } else {
@@ -373,7 +416,7 @@ impl ChartDataState {
                         && h.price_line_capacity != pr.combo_price_line_capacity)
             });
             if capacity_changed && history.as_ref().is_some_and(|h| !h.combo_reset) {
-                let history_read_started = std::time::Instant::now();
+                let read_timer = crate::diag::timer();
                 history = source.read_chart_history_into(
                     pane.core,
                     &pane.market,
@@ -386,10 +429,13 @@ impl ChartDataState {
                     &mut pr.history_cursor,
                     &mut pr.history_buffers,
                 );
-                crate::diag::bump_by(
-                    &crate::diag::CHART_HISTORY_RESET_MS,
-                    history_read_started.elapsed().as_millis().max(1) as u64,
-                );
+                crate::diag::record_us(&crate::diag::CHART_HISTORY_READ_US, read_timer);
+                if let Some(started) = read_timer {
+                    crate::diag::bump_by(
+                        &crate::diag::CHART_HISTORY_RESET_MS,
+                        started.elapsed().as_millis().max(1) as u64,
+                    );
+                }
             }
             let last_price = if let Some(history) = history {
                 if scan_price {
@@ -425,6 +471,11 @@ impl ChartDataState {
                     // left boundary makes a fresh live chart reset every frame while the
                     // 60s window extends into empty pre-connect history.
                     pr.resident_left_rel = history_from;
+                    // Restart the pan budget from the reset that ACTUALLY happened, whatever raised
+                    // it. Stamping back where the decision was made would also credit a frame whose
+                    // read returned nothing, and would miss the capacity-driven re-read that resets
+                    // without the pane having asked for it.
+                    pr.pan_reset_cam_px = cam_px;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 } else if !pr.history_buffers.ticks.is_empty() {
@@ -537,6 +588,7 @@ impl ChartDataState {
                     pr.last_candle_rev = u64::MAX;
                     pr.history_cursor.reset();
                     pr.resident_left_rel = f32::NAN;
+                    pr.pan_reset_cam_px = i64::MIN;
                     pr.cached_tick_price = None;
                     pr.cached_last_price = None;
                     // A different market is a different price entirely: the new one has had no data
@@ -611,7 +663,17 @@ impl ChartDataState {
                 w: chart_area.w,
                 h: chart_area.h,
             };
-            let next_view = view::view_gpu(&pane.view, area_win, res, self.last_ppp);
+            // `view_gpu` cannot fill `pad`: the live-edge extent spans the plot AND the order-book
+            // glass, which is layout it does not see. It has to be stamped HERE, before the
+            // comparison — it used to be written in a separate block further down, so the field
+            // ping-ponged between `view_gpu`'s 0.0 and this value on every single sync. That made
+            // `pr.view != next_view` permanently true, so every active pane set `pixels_changed`
+            // unconditionally and the base texture was rebuilt on every sync forever. Measured at
+            // idle on one chart: 25 full base rebuilds a second with nothing on screen moving.
+            let mut next_view = view::view_gpu(&pane.view, area_win, res, self.last_ppp);
+            next_view.pad = view_time0
+                + (chart_area.w + glass_w)
+                    / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             if pr.view != next_view {
                 pr.view = next_view;
                 pr.gpu_prepare_dirty = true;
@@ -806,13 +868,6 @@ impl ChartDataState {
             if pr.book_style != next_book_style {
                 pr.book_style = next_book_style;
                 pr.gpu_prepare_dirty = true;
-                pixels_changed = true;
-            }
-            let edge_rel = view_time0
-                + (chart_area.w + glass_w)
-                    / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
-            if pr.view.pad != edge_rel {
-                pr.view.pad = edge_rel;
                 pixels_changed = true;
             }
             pr.last_device_gen = device_gen;
