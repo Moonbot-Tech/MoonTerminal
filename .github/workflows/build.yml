@@ -6,6 +6,17 @@ name: build
 #   macOS probe  — diagnostic only (`continue-on-error`). Compiles the chartdx Metal
 #                  backend on a native runner, which Windows cannot do at all: no
 #                  macOS SDK and no Apple linker. Read its log; it never blocks.
+#
+# The Rust toolchain is PINNED, not `@stable`. This repo does not commit Cargo.lock and
+# its own deps are branch refs, so CI already resolves more freely than any developer's
+# machine; taking the compiler from the same moving target as well means a green PR can
+# turn red overnight with no change to it. That is not theoretical: rustc 1.97.1 fails to
+# compile zune-jpeg 0.5.15 (a transitive dep via image/tiff), which went unnoticed only
+# because Swatinem/rust-cache kept restoring a pre-built copy — every job broke the moment
+# that cache key missed.
+#
+# Keep this equal to what developers run locally (`rustc --version`), and raise it as a
+# deliberate commit that can be reverted on its own when a new compiler breaks a dep.
 on:
   push:
     branches: [main]
@@ -34,7 +45,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
@@ -59,7 +70,7 @@ jobs:
     # instead of running beside it.
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
@@ -79,7 +90,7 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2

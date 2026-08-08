@@ -7,6 +7,11 @@ name: release
 # Note it does NOT re-run those gates: publishing trusts whatever build.yml
 # reported on the commit being tagged.
 #
+# The Rust toolchain is PINNED here for the same reason as in build.yml, and the stakes
+# are higher: this workflow does not re-run the gates, so an unpinned compiler could
+# first appear in a run that ships a binary to users. Keep the version in step with
+# build.yml.
+#
 # Every job here caches restore-only (`save-if: false`). A run's ref is a tag, and a
 # tag-scoped cache is readable only from that same tag, which never builds twice — so
 # anything saved here is written once and read never, at ~0.9 GiB against a 10 GB repo
@@ -38,7 +43,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
@@ -62,7 +67,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
