@@ -86,6 +86,11 @@ diag_counters!(
     CHART_CANDLE_UPLOAD_LEN => "candle_upload_len",
     CHART_HISTORY_RESET_ROWS => "history_reset_rows",
     CHART_HISTORY_RESET_MS => "history_reset_ms",
+    // Microseconds per second inside `read_chart_history_into`, over EVERY call — the reset pair
+    // above covers only the resetting subset. A non-resetting read still copies the visible window
+    // into the automatic-Y price-scan buffer, so without this a change that removes resets reads
+    // as free while that copy goes on unmeasured.
+    CHART_HISTORY_READ_US => "history_read_us",
     CHART_COMBO_UPLOAD_LEN => "combo_upload_len",
     CHART_PRICE_LINE_UPLOAD_LEN => "price_line_upload_len",
     CHART_BOOK_DRAW   => "orderbook_draw",
@@ -100,6 +105,13 @@ diag_counters!(
     CHART_OPEN_NOTIFY => "chart_open_notify",
     CHART_TTL_NOTIFY  => "chart_ttl_notify",
     CHART_INPUT_NOTIFY => "chart_input_notify",
+    // Drag moves whose notify the pacer dropped. Without it, "the drag was cheap" and "there was no
+    // drag" print the same near-zero `chart_input_notify` and nothing tells them apart. The two are
+    // NOT a partition: the move that ends a gesture is counted here when it is dropped and again in
+    // `chart_input_notify` when the release settles it, so the sum runs one high per settled
+    // gesture. Read `chart_input_notify` against `shell_render` — one notify repaints the whole
+    // window, so those two moving in step is the cost this pacing exists to bound.
+    CHART_INPUT_NOTIFY_PACED => "chart_input_notify_paced",
     CHART_CANVAS_NOTIFY => "chart_canvas_notify",
     CHART_MOUSE_MOVE => "chart_mouse_move",
     CHART_MOUSE_MOVE_FAST => "chart_mouse_move_fast",

@@ -3,9 +3,22 @@
 //! These free functions use the `(this, event, window, cx)` signature expected by the named
 //! `cx.listener` registrations in `render.rs`.
 
+use std::time::{Duration, Instant};
+
 use gpui::*;
 
 use crate::chartdx::input;
+
+/// Smallest gap between two drag-driven `cx.notify()` calls.
+///
+/// 33 ms is the `chart_render_per_chart` ceiling of 30/s that `firetest/verdict.rs` already holds
+/// this panel to — a drag is simply the one gesture the storm phases never produce, so it was
+/// running at four times the project's own budget unnoticed.
+///
+/// Deliberately a constant and not the chart's own present interval, which would read better but
+/// could never bind: that pacer is fed from a refresh rate clamped to 30 Hz at the low end, so the
+/// two differ by at most a third of a millisecond.
+const DRAG_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
 use super::ChartPanel;
 use super::trade::TradeMouseButton;
@@ -183,6 +196,8 @@ pub(super) fn mouse_up_left(
     window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
+    // Before every early return below: the release ends the gesture whichever branch takes it.
+    settle_paced_drag(this, cx);
     // A draw-drag-release gesture (Command/Ctrl down, drag, release) completes a segment/channel
     // without a second click. A stationary click is not a drag gesture and waits for click two.
     if let Some((pos, _)) = this.chart_local(e.position) {
@@ -284,6 +299,9 @@ pub(super) fn mouse_up_right(
     window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
+    // A right-button drag zooms Y and is paced like any other, but `mouse_button(Right, false, ..)`
+    // always reports unchanged, so this release would otherwise never settle what the pacer owed.
+    settle_paced_drag(this, cx);
     // When right-button down opened a figure/order menu or handled a trading gesture, consume its
     // paired release instead of letting a parent exit the Main stack's fullscreen mode.
     if this.suppress_rmb_up {
@@ -374,6 +392,15 @@ pub(super) fn mouse_move(
             this.finish_fig_drag(cx);
         }
         crate::diag::bump(&crate::diag::CHART_MOUSE_MOVE_FAST);
+        // A move with no button held normally means the drag is over — including one whose release
+        // landed outside this slot and so reached no handler at all, both being hitbox-gated. Only
+        // from motion INSIDE the chart, for the same reason the figure-drag rescue just above is:
+        // the Windows fork reports non-client mouse moves with no pressed button DURING a live
+        // drag, and settling on those would reset the pacer on every one of them and restore the
+        // full event-rate notify this exists to stop.
+        if within {
+            settle_paced_drag(this, cx);
+        }
         let prev_cursor = this.input.cursor;
         let prev_hovered = this.input.hovered_pane;
         this.input.cursor = if within { Some(pos) } else { None };
@@ -465,7 +492,44 @@ pub(super) fn mouse_move(
     }
     // Dragging changes cameras/axes and GPUI-side controls. Cursor-only motion remains in retained
     // gpu_canvas, which presents the crosshair/readout without cx.notify().
+    //
+    // PACED, because one notify here is not one repaint of this panel: `mark_view_dirty` marks
+    // every ancestor and a re-rendered root bypasses each descendant's view cache, so it repaints
+    // the WHOLE window. Measured under a drag, `shell_render` tracked `chart_render` exactly, both
+    // at the mouse-event rate — around 110 a second. The chart's own pass cannot show more than
+    // `present_rate_hz` anyway, so anything above that is a window repaint nobody can see. The
+    // camera itself is NOT paced: the drag has already moved it above, and the own-pass presents it
+    // on its own tick without the GPUI tree.
     if dragging {
+        // The rate this yields is the event rate quantized DOWN to the grid, not exactly the
+        // grid — the stamp restarts at each notify rather than advancing by a whole interval. The
+        // undershoot is in the direction we want and it never bursts after a pause.
+        let interval = DRAG_NOTIFY_MIN_INTERVAL;
+        let now = Instant::now();
+        if this
+            .drag_notify_at
+            .is_none_or(|last| now.duration_since(last) >= interval)
+        {
+            this.drag_notify_at = Some(now);
+            this.drag_notify_pending = false;
+            crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);
+            cx.notify();
+        } else {
+            crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY_PACED);
+            this.drag_notify_pending = true;
+        }
+    }
+}
+
+/// Settle a drag move the pacer dropped, at the end of the gesture that owed it.
+///
+/// Called from EVERY release path, before their own early exits. The debt is not this panel's
+/// alone: compare-lock followers take their locked Y from an observer on this entity's notify
+/// (`chart_tabs/main_stack.rs`), with no render path that would catch up later, so a swallowed
+/// final move leaves sibling charts on a stale scale.
+fn settle_paced_drag(this: &mut ChartPanel, cx: &mut Context<ChartPanel>) {
+    this.drag_notify_at = None;
+    if std::mem::take(&mut this.drag_notify_pending) {
         crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);
         cx.notify();
     }
@@ -491,6 +555,10 @@ pub(super) fn hover(
         }
     });
     if !*hovered {
+        // The pointer leaving is the last event this panel is guaranteed while a gesture may still
+        // be owed a repaint: a release outside the slot reaches neither mouse-up nor mouse-move,
+        // both of which are hitbox-gated. Settling here costs nothing when nothing is owed.
+        settle_paced_drag(this, _cx);
         let had_order_drag = this.order_drag.take().is_some();
         let had_order_hover = this.order_hover.take().is_some();
         if had_order_drag || had_order_hover {

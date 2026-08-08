@@ -190,6 +190,13 @@ pub struct ChartPanel {
     /// Point of the most recent order-line hover hit-test. The Delphi-style movement threshold keeps
     /// subpixel raw mouse movement from scanning the lines again.
     order_hover_probe: Option<(f32, f32)>,
+    /// When the last drag-driven `cx.notify()` went out, for the pacing in `render_input`.
+    drag_notify_at: Option<Instant>,
+    /// Whether a drag move was paced away and still owes the GPUI tree a repaint.
+    ///
+    /// Without this the LAST move of a gesture could be the one the pacer dropped, leaving the
+    /// side controls a frame behind where the user let go.
+    drag_notify_pending: bool,
     /// Last position the FIGURE hover hit-test ran at; see `trade::hover_probe_due`.
     fig_hover_probe: Option<(f32, f32)>,
     /// Last position the draft preview followed the cursor to, under the same threshold.
@@ -401,6 +408,8 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             order_hover_probe: None,
+            drag_notify_at: None,
+            drag_notify_pending: false,
             fig_hover_probe: None,
             fig_draft_probe: None,
             news: news::NewsState::default(),
@@ -532,6 +541,8 @@ impl ChartPanel {
             pending_order_drag: None,
             order_hover: None,
             order_hover_probe: None,
+            drag_notify_at: None,
+            drag_notify_pending: false,
             fig_hover_probe: None,
             fig_draft_probe: None,
             news: news::NewsState::default(),
