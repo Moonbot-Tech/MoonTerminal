@@ -21,7 +21,6 @@ use gpui::*;
 use moon_ui::{MoonPalette, MoonSurface, MoonSurfaceVariant, h_flex, v_flex};
 use rust_i18n::t;
 
-use moon_chart::axes::fmt_clock_dated;
 use moon_chart::news_marks::{MarkHit, NewsMark};
 use moon_core::session::CoreId;
 use moon_core::util::now_unix_ms_i64;
@@ -487,12 +486,7 @@ fn cluster_card_body(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    let clock = fmt_clock_dated(
-        mark.time_ms as f64,
-        crate::chartdx::axes::local_offset_sec(),
-        true,
-        now_ms as f64,
-    );
+    let clock = crate::chartdx::axes::format_clock_dated(mark.time_ms as f64, true, now_ms as f64);
     let head = h_flex()
         .w_full()
         .items_center()

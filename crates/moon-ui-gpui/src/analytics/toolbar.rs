@@ -776,7 +776,7 @@ impl AnalyticsView {
             .items(Period::ALL.map(|per| {
                 // The tooltip carries the untruncated title, since `fit_width` elides the label
                 // and an elided preset is otherwise unreadable with no way to recover it.
-                let title = per.title();
+                let title = per.title(self.display_zone);
                 MoonSegmentItem::new("", title.clone())
                     .fit_width(cx, PRESET_CELL_MIN_W, PRESET_CELL_MAX_W)
                     .tooltip(title)

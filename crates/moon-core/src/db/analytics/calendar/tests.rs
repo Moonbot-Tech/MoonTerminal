@@ -87,6 +87,27 @@ fn buckets_by_utc_day_fills_gaps_and_counts_wins() {
     assert_eq!((days[2].trades, days[2].wins, days[2].profit), (1, 0, -3.0));
 }
 
+/// Replacing `mt_local_bucket` with integer UTC-day division would place this trade on March 28,
+/// although the selected Warsaw calendar already shows March 29.
+#[test]
+fn calendar_bucket_uses_the_selected_civil_day() {
+    let close = 1_774_740_600; // 2026-03-28 23:30 UTC = 2026-03-29 00:30 Warsaw.
+    let c = seed(&[(close, 1, 7.0)]);
+    let q = Query {
+        time_zone: chrono_tz::Europe::Warsaw,
+        from: 1_774_735_200,
+        to: 1_774_828_800,
+        ..Default::default()
+    };
+
+    let days = calendar_cells_from(&c, &q, ProjectionMode::Native).expect("calendar reads");
+
+    let populated: Vec<_> = days.iter().filter(|day| day.trades != 0).collect();
+    assert_eq!(populated.len(), 1);
+    assert_eq!(populated[0].start, 1_774_738_800); // Warsaw midnight, 23:00 UTC.
+    assert_eq!(populated[0].profit, 7.0);
+}
+
 /// `calendar/mod.rs:calendar_cells_from` must return `Ok(empty)` for an initialized source with no
 /// trades; treating it as a read failure leaves a new Calendar tab in a retry loop.
 #[test]

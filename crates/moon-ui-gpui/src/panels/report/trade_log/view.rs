@@ -25,6 +25,8 @@ const LIST_H: f32 = 460.0;
 /// every visible line on every frame — classifying costs a lowercase allocation and two dozen
 /// substring scans over the whole line. The Log panel precomputes the same way into `LineView`.
 pub(super) struct TradeLine {
+    /// Original UTC timestamp retained so an open dialog can reformat without rescanning files.
+    utc_ts: String,
     clock: String,
     msg: String,
     sev: Sev,
@@ -39,16 +41,23 @@ impl TradeLine {
     }
 }
 
-/// Turns scanned lines into render-ready ones, resolving severity once per line.
-pub(super) fn build_lines(lines: Vec<LogLine>) -> Vec<TradeLine> {
+/// Turns scanned lines into render-ready ones, resolving severity and civil clocks once per line.
+///
+/// Args:
+///     lines: Raw rows whose timestamps are stored as UTC text.
+///     zone: Selected application-wide display zone.
+///
+/// Returns:
+///     Render-ready rows whose visible and copied clocks use `zone`.
+pub(super) fn build_lines(lines: Vec<LogLine>, zone: chrono_tz::Tz) -> Vec<TradeLine> {
     lines
         .into_iter()
         .map(|line| {
             let sev = line_list::classify_lower(line.level, &line.msg.to_lowercase()).sev;
-            // `HH:MM:SS.mmm` of the stored timestamp, or the whole value when it has no time part.
-            let clock = line.ts.get(11..).unwrap_or(line.ts.as_str()).to_string();
+            let clock = moon_core::util::display_time::format_utc_millis_clock(&line.ts, zone);
             let width_chars = clock.chars().count() + 1 + line.msg.chars().count();
             TradeLine {
+                utc_ts: line.ts,
                 clock,
                 msg: line.msg,
                 sev,
@@ -56,6 +65,21 @@ pub(super) fn build_lines(lines: Vec<LogLine>) -> Vec<TradeLine> {
             }
         })
         .collect()
+}
+
+/// Reformat cached trade-log clocks after the selected display zone changes.
+///
+/// Args:
+///     lines: Render-ready rows retaining their original UTC timestamps.
+///     zone: Newly selected application-wide display zone.
+///
+/// Returns:
+///     Nothing; clocks and their width budgets are updated in place.
+pub(super) fn rezone_lines(lines: &mut [TradeLine], zone: chrono_tz::Tz) {
+    for line in lines {
+        line.clock = moon_core::util::display_time::format_utc_millis_clock(&line.utc_ts, zone);
+        line.width_chars = line.clock.chars().count() + 1 + line.msg.chars().count();
+    }
 }
 
 /// Widest row among render-ready lines, capped so one outlier cannot size the viewport.

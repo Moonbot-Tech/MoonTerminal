@@ -2,6 +2,32 @@
 
 use super::support::*;
 
+/// Removing startup reconciliation, the setter's dirty write, or the debounced layout flush would
+/// leave first-run and upgraded profiles on UTC after the next reboot even though detection worked.
+#[test]
+fn startup_detects_and_persists_an_untouched_profiles_system_zone() {
+    let startup = code_only(&read_src("startup.rs"));
+    let clock = code_only(&read_src("chrome/clock.rs"));
+    let backend = code_only(&read_src("backend/mod.rs"));
+    let reconcile = braced_body(
+        &clock,
+        "pub(crate) fn reconcile_clock_zone(backend: &Entity<Backend>, cx: &mut App)",
+    );
+    let setter = braced_body(&backend, "pub(crate) fn set_header_clock_zone(");
+
+    assert!(
+        startup.contains("crate::chrome::clock::reconcile_clock_zone(&backend, cx);")
+            && reconcile.contains("iana_time_zone::get_timezone().ok()")
+            && reconcile
+                .contains("b.set_header_clock_zone(&target.zone_id, target.offset_min, bcx)")
+            && setter.contains("self.layout.header_clock_zone = Some(zone.to_string())")
+            && setter.contains("self.layout_dirty = true")
+            && startup.contains("if b.layout_dirty {")
+            && startup.contains("b.layout.save();"),
+        "normal startup must detect, store, dirty, and flush the exact IANA zone for the next reboot"
+    );
+}
+
 /// Removing the `firetest_config.is_none()` guard would let a diagnostic FireTest run create and
 /// prune durable settings or strategy backups even though its other persistence paths are gated.
 #[test]

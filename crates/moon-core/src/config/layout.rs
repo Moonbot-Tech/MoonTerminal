@@ -322,19 +322,22 @@ pub struct WindowLayout {
     /// every window position along with it.
     #[serde(default, deserialize_with = "de_lenient")]
     pub recent_coins: Option<Vec<HeaderTicker>>,
-    /// Clock in the header's right corner: the IANA zone id of the selected city, such as
-    /// `Europe/Warsaw`. `None` = never chosen, which reads as UTC. Shared by all windows.
+    /// Application-wide display clock: an exact IANA zone id such as `Europe/Warsaw`.
+    /// `None` means an untouched profile; startup detects and persists the operating-system zone.
+    /// Existing values always win, including zones outside the clock picker's curated city list.
     ///
     /// The zone id rather than the city's three-letter code: it is canonical, unambiguous and
     /// meaningful to anyone editing this file by hand, while the code is presentation the terminal
-    /// derives from its own city table. `de_lenient` because this document is hand-editable and a
-    /// value of the wrong type must not take every window position down with it.
-    #[serde(default, deserialize_with = "de_lenient")]
+    /// derives from its own city table when possible. `de_clock_zone` preserves a present invalid
+    /// value as an invalid sentinel: the document remains loadable without mistaking corruption
+    /// for a first-run profile and overwriting it from the operating system.
+    #[serde(default, deserialize_with = "de_clock_zone")]
     pub header_clock_zone: Option<String>,
     /// Fixed UTC offset in minutes, retained as the migration seed when
     /// [`Self::header_clock_zone`] is absent and as a compatibility mirror when it is present.
-    /// Startup refreshes it from the chosen city's current offset so fixed-offset readers show the
-    /// same wall clock; zero is the neutral UTC default and does not seed a city selection.
+    /// Startup refreshes it from the chosen zone's current offset so fixed-offset readers show the
+    /// same wall clock. A nonzero value migrates an old profile without consulting the operating
+    /// system; zero plus an absent zone marks an untouched profile for system-zone detection.
     #[serde(default)]
     pub header_clock_offset_min: i32,
     /// Candle/trade display on charts (timeframe, mode, trade zone, outline, etc.) —
@@ -716,6 +719,37 @@ where
     Ok(match Option::<Or<T>>::deserialize(d)? {
         Some(Or::Val(v)) => Some(v),
         Some(Or::Other(_)) | None => None,
+    })
+}
+
+/// Read the optional clock zone without conflating a malformed present key with an absent one.
+///
+/// Args:
+///     d: Serde deserializer positioned at a present `header_clock_zone` value.
+///
+/// Returns:
+///     The saved string, or an empty invalid sentinel for any other shape. An absent key bypasses
+///     this function through `#[serde(default)]` and remains `None` for first-run detection.
+///
+/// Errors:
+///     Propagates deserializer errors for values that cannot be visited at all.
+fn de_clock_zone<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// A valid text zone or any malformed value that must remain distinguishable from absence.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ClockZone {
+        /// Persisted IANA identifier.
+        Text(String),
+        /// Wrong-typed value accepted only to salvage the surrounding layout document.
+        Invalid(serde::de::IgnoredAny),
+    }
+
+    Ok(match Option::<ClockZone>::deserialize(d)? {
+        Some(ClockZone::Text(value)) => Some(value),
+        Some(ClockZone::Invalid(_)) | None => Some(String::new()),
     })
 }
 

@@ -36,7 +36,7 @@ fn row(ts: &str, msg: String) -> LogLine {
 fn multiline_message_flattens_and_keeps_the_coin_range_valid() {
     let line = LogLine::core(0, "SPK order failed\r\n  at retry 2".to_string());
     let known = HashSet::from(["SPK".to_string()]);
-    let view = LineView::parse(&line, &known);
+    let view = LineView::parse(&line, &known, chrono_tz::UTC);
 
     assert!(
         !view.flat.contains('\n') && !view.flat.contains('\r'),

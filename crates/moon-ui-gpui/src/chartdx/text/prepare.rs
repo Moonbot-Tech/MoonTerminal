@@ -31,7 +31,6 @@ impl RenderState {
         let label_neutral = color(self.label_neutral);
         // The corner caption uses a dedicated chart-theme color without a backdrop.
         let caption_fg = color(self.caption_label);
-        let tz_offset_sec = local_offset_sec();
         let mut firetest_text_drawn = false;
         let mut readout_metrics_changed = false;
 
@@ -609,8 +608,7 @@ impl RenderState {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_or(0.0, |d| d.as_millis() as f64);
                     // For a day other than today, show "DD.MM HH:MM:SS" for large timeframes/windows.
-                    let label =
-                        moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
+                    let label = crate::chartdx::axes::format_clock_dated(unix, true, now_ms);
                     let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
                     let line_h = metrics.line_height.as_f32();
@@ -824,23 +822,22 @@ impl RenderState {
             // Place time labels at ROUND local-time boundaries (`nice_time_step`, from 1 s to 6 h
             // for roughly six labels). Fixed window fractions previously produced non-round times
             // with uneven steps, such as 19:46, 19:56, 20:05 (+10, then +9).
+            if !time_axis_visible {
+                continue;
+            }
             let step_ms =
                 (moon_chart::axes::nice_time_step(window_ms / 1000.0, 6.0) * 1000.0).max(1000.0);
             let with_sec = step_ms < 60_000.0;
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0.0, |d| d.as_millis() as f64);
-            let tz_ms = tz_offset_sec as f64 * 1000.0;
             let right_unix = left_unix + window_ms;
-            // Find the first round boundary in the window, aligned to LOCAL time.
-            let mut tick_unix = ((left_unix + tz_ms) / step_ms).ceil() * step_ms - tz_ms;
             // Thin labels horizontally in narrow windows: draw only when a label's left edge is
             // separated from the RIGHT edge of the previously drawn label; otherwise skip it.
             let min_h_gap = 6.0;
             let mut last_right = f32::NEG_INFINITY;
-            while time_axis_visible && tick_unix <= right_unix + 0.5 {
-                let unix = tick_unix;
-                tick_unix += step_ms;
+            for unix in crate::chartdx::axes::aligned_ticks_ms(left_unix, right_unix + 0.5, step_ms)
+            {
                 // The rightmost ~10% is future space beyond the live edge; do not label times that
                 // have not occurred, which would be confusing near the order-book boundary.
                 if now_ms > 0.0 && unix > now_ms {
@@ -849,8 +846,7 @@ impl RenderState {
                 let x = plot_left + ((unix - left_unix) / window_ms) as f32 * plot_w;
                 // Include a "DD.MM" date on axis labels outside the current day; without it,
                 // labels in wide windows with steps over one day appeared to run backward.
-                let label =
-                    moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, with_sec, now_ms);
+                let label = crate::chartdx::axes::format_clock_dated(unix, with_sec, now_ms);
                 let metrics = self.measure_text(ctx, &label);
                 let half_w = metrics.width.as_f32() * 0.5;
                 let left = x - half_w;

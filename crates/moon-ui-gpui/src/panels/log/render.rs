@@ -92,6 +92,8 @@ pub(super) struct LineView {
     /// sorted by, and cores whose clocks disagree hand over rows that belong before ones already
     /// buffered — across midnight, a bare clock would sort those backwards.
     pub(super) ts: String,
+    /// Clock formatted in the application-wide selected display zone.
+    time: String,
     pub(super) target: String,
     pub(super) sev: Sev,
     pub(super) cat: Cat,
@@ -120,7 +122,16 @@ impl LineView {
     /// Classification reads the flattened text rather than the raw message. The two differ only in
     /// line breaks, which no keyword spans, and using one string for classification, filtering and
     /// highlighting is what keeps this to a single lowercase allocation per line.
-    pub(super) fn parse(line: &LogLine, known: &HashSet<String>) -> Self {
+    ///
+    /// Args:
+    ///     line: Stored UTC log row.
+    ///     known: Coin bases learned from the current source.
+    ///     zone: Selected application-wide display zone.
+    ///
+    /// Returns:
+    ///     One render-ready row whose visible and copied clock uses `zone`.
+    pub(super) fn parse(line: &LogLine, known: &HashSet<String>, zone: chrono_tz::Tz) -> Self {
+        let time = moon_core::util::display_time::format_utc_millis_clock(&line.ts, zone);
         // Scan the flattened text because folding can change byte offsets.
         let flat = crate::display_text::flatten_lines(&line.msg);
         let lower = flat.to_lowercase();
@@ -128,6 +139,7 @@ impl LineView {
         let coin = find_coin(&flat, known);
         Self {
             ts: line.ts.clone(),
+            time,
             target: line.target.clone(),
             sev: cl.sev,
             cat: cl.cat,
@@ -137,12 +149,23 @@ impl LineView {
         }
     }
 
-    /// Clock the row displays: the `HH:MM:SS.mmm` tail of its stamp.
+    /// Reformat the cached clock after the application-wide display zone changes.
     ///
-    /// Borrowed from `ts` rather than stored separately — the row renderer asks for it on every
-    /// frame, and a slice costs nothing.
+    /// Args:
+    ///     zone: Newly selected application-wide display zone.
+    ///
+    /// Returns:
+    ///     Nothing; the visible and copied clock is updated in place.
+    pub(super) fn rezone(&mut self, zone: chrono_tz::Tz) {
+        self.time = moon_core::util::display_time::format_utc_millis_clock(&self.ts, zone);
+    }
+
+    /// Return the cached `HH:MM:SS.mmm` clock in the selected display zone.
+    ///
+    /// Returns:
+    ///     The clock used by rendering, width measurement, and clipboard text.
     pub(super) fn time(&self) -> &str {
-        self.ts.rsplit(' ').next().unwrap_or(self.ts.as_str())
+        &self.time
     }
 }
 

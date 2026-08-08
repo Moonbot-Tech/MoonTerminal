@@ -27,13 +27,13 @@ impl AnalyticsView {
         let mut agg: HashMap<(i32, u32), (f64, i64)> = HashMap::new();
         let mut min_year = i32::MAX;
         for d in days {
-            let dt = date_of(d.start);
+            let dt = date_of(d.start, self.display_zone);
             min_year = min_year.min(dt.year());
             let e = agg.entry((dt.year(), dt.month())).or_insert((0.0, 0));
             e.0 += d.profit;
             e.1 += d.trades;
         }
-        let (cy, cm) = now_ym();
+        let (cy, cm) = now_ym(self.display_zone);
         if min_year == i32::MAX {
             min_year = cy;
         }
@@ -62,8 +62,8 @@ impl AnalyticsView {
     ///
     /// Args:
     ///     y: Rendered year.
-    ///     cy: Current UTC year.
-    ///     cm: Current UTC month.
+    ///     cy: Current selected-zone year.
+    ///     cm: Current selected-zone month.
     ///     agg: Month aggregates keyed by year and month.
     ///     p: Active MoonUI palette.
     ///     cx: Analytics view context.

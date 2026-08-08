@@ -318,7 +318,6 @@ impl RenderState {
         let border = self.readout_border;
         let border_px = self.readout_border_px;
         let m = [border_px, 1.0, 1.0, 0.0];
-        let tz_offset_sec = crate::chartdx::axes::local_offset_sec();
         let cursor = self.cursor;
         let slot_origin = self.slot_origin;
         // Arrival flash phase, sampled once for every pane. Three flashes over `ARRIVAL_HIGHLIGHT`,
@@ -433,7 +432,7 @@ impl RenderState {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
                 // A date other than today uses day-month plus time for large time frames or windows.
-                let label = moon_chart::axes::fmt_clock_dated(unix, tz_offset_sec, true, now_ms);
+                let label = crate::chartdx::axes::format_clock_dated(unix, true, now_ms);
                 let text_w = readout_text_width(&label, pr.readout_time_width);
                 let line_h = pr.readout_time_line_h.max(1.0);
                 let half_w = text_w * 0.5;

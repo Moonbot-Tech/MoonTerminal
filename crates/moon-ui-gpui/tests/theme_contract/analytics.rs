@@ -3,6 +3,77 @@
 
 use super::support::*;
 
+/// Every retained view that caches civil-time presentation must observe the one shared display
+/// zone revision published by the header clock.
+///
+/// Breakage: removing the Report observer leaves its date fields in the old city after a header
+/// clock change; the same edit in Analytics, Charts, Strategies, News, Alerts, or Log leaves that
+/// surface stale until an unrelated data event happens.
+#[test]
+fn selected_display_zone_reaches_every_cached_time_surface() {
+    let backend = read_src("backend/mod.rs");
+    let setter = code_only(braced_body(
+        &backend,
+        "pub(crate) fn set_header_clock_zone(",
+    ));
+    assert!(
+        setter.contains("crate::chartdx::axes::set_display_zone(")
+            && setter.contains("self.display_time_revision.update(cx, |_, cx| cx.notify())"),
+        "the clock setter must update chart formatting and publish the shared zone revision"
+    );
+
+    for (path, label) in [
+        ("panels/report/state.rs", "Report"),
+        ("analytics/mod.rs", "Analytics"),
+        ("strategies/state.rs", "Strategies"),
+        ("panels/news/mod.rs", "News"),
+        ("panels/alerts/mod.rs", "Alerts"),
+        ("analytics/profit_monitor/mod.rs", "Profit Monitor"),
+        ("panels/core_status/mod.rs", "Core Status"),
+        ("panels/log/mod.rs", "Log"),
+    ] {
+        let source = code_only(&read_src(path));
+        assert!(
+            source.contains("cx.observe(&display_time_revision"),
+            "{label} must repaint or reload when the selected display zone changes"
+        );
+    }
+
+    let report = code_only(&read_src("panels/report/state.rs"));
+    let report_observer = braced_body(
+        &report,
+        "cx.observe(&display_time_revision, |this, _revision, cx|",
+    );
+    assert!(
+        report_observer.contains("this.data = LoadState::default()"),
+        "a zone change must discard preset rows selected under the old civil bounds"
+    );
+
+    let charts = code_only(&read_src("panels/chart/mod.rs"));
+    assert_eq!(
+        charts.matches("cx.observe(&display_time_revision").count(),
+        2,
+        "both chart constructors must invalidate cached time labels"
+    );
+
+    let trade_log = code_only(&read_src("panels/report/trade_log.rs"));
+    assert!(
+        trade_log.contains("cx.observe(")
+            && trade_log.contains("&display_time_revision")
+            && trade_log.contains("view::rezone_lines(lines, zone)"),
+        "an open Report trade-log dialog must rebuild its cached clocks after a zone change"
+    );
+
+    let profit_monitor = code_only(&read_src("analytics/profit_monitor/mod.rs"));
+    assert_eq!(
+        profit_monitor
+            .matches("cx.observe(&display_time_revision")
+            .count(),
+        2,
+        "the cached Profit Monitor clock and its body must both update immediately on a zone change"
+    );
+}
+
 /// The Profit Monitor must keep large core sets scrollable, fixed around one virtualized body,
 /// while every visible heading remains clickable and numeric values stay on one line.
 ///
@@ -148,9 +219,9 @@ fn profit_monitor_clock_ticks_in_one_retained_child_view() {
         full_clock.contains("render_header_clock(backend, p, ClockPrecision::Seconds, cx)")
             && compact_clock
                 .contains("render_header_clock(backend, p, ClockPrecision::Minutes, cx)")
-            && shared_clock_render.contains("let selected = selected_city(backend, cx);")
+            && shared_clock_render.contains("let selected = selected_zone(backend, cx);")
             && shared_clock_render.contains("MoonPopover::new(\"header-clock-popover\")"),
-        "both clock precisions must share one selected-city renderer and picker"
+        "both clock precisions must share one selected-zone renderer and picker"
     );
     assert!(
         state.contains("content: Entity<ProfitMonitorBodyView>")

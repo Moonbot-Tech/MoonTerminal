@@ -28,6 +28,8 @@ struct RowCtx {
     /// Gap between the two action glyphs, resolved through `design` once rather than per row: the
     /// row callback has no context to scale a raw pixel with.
     action_gap: Pixels,
+    /// User-selected zone for the creation-time column.
+    display_zone: chrono_tz::Tz,
     p: MoonPalette,
 }
 
@@ -63,6 +65,9 @@ impl AlertsPanel {
             cols: cols.clone(),
             open_settings: self.settings_for.clone(),
             action_gap: design::ui_px(cx, 2.0),
+            display_zone: crate::chrome::clock::resolved_header_clock_zone(
+                self.backend.read(cx).header_clock_zone(),
+            ),
             p,
         };
         let sort_view = cx.entity();
@@ -179,7 +184,9 @@ fn cell_for(col: AlCol, row: &FigRow, ctx: &RowCtx, app: &mut App) -> MoonDataCe
             }
         }
         AlCol::Price => MoonDataCell::text(fmt_price(row.price)),
-        AlCol::Time => MoonDataCell::text(fmt_time(row.time_ms)).tone(MoonTone::Muted),
+        AlCol::Time => {
+            MoonDataCell::text(fmt_time(row.time_ms, ctx.display_zone)).tone(MoonTone::Muted)
+        }
         // The strategy is what the CORE runs when the alert fires, so it belongs to an armed
         // figure and to no other. An unarmed row leaves the cell empty.
         AlCol::Strategy => match row.armed {
@@ -412,10 +419,19 @@ fn fmt_price(price: f64) -> String {
     }
 }
 
-/// Formats a creation instant as `MM-DD HH:MM`, which is as much as the column's width fits.
-fn fmt_time(ms: i64) -> String {
-    let (date, hms) = moon_core::applog::split_unix_ms(ms);
-    let md = date.get(5..).unwrap_or(&date);
-    let hm = hms.get(..5).unwrap_or(&hms);
-    format!("{md} {hm}")
+/// Format a creation instant as selected-zone `MM-DD HH:MM` for the narrow column.
+///
+/// Args:
+///     ms: Absolute UTC Unix timestamp in milliseconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Compact civil timestamp, or the shared formatter's fallback text.
+fn fmt_time(ms: i64, zone: chrono_tz::Tz) -> String {
+    let full = moon_core::util::display_time::format_minute(ms / 1000, zone);
+    if full.len() >= 16 {
+        format!("{} {}", &full[5..10], &full[11..16])
+    } else {
+        full
+    }
 }

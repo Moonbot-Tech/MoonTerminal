@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono_tz::Tz;
 use moon_ui::{MoonDataTable, MoonDataTableState};
 use rusqlite::types::Value;
 
@@ -283,6 +284,7 @@ pub(super) fn ordered_visible_indices(
 ///     cols: Runtime report schema.
 ///     indices: Visible column indices in visual order.
 ///     selection: Controlled selected row set.
+///     zone: User-selected display time zone.
 ///
 /// Returns:
 ///     Header plus selected rows. Tabs and hard line breaks inside cells are flattened.
@@ -291,6 +293,7 @@ pub(super) fn selected_tsv(
     cols: &[String],
     indices: &[usize],
     selection: &ReportSelection,
+    zone: Tz,
 ) -> String {
     let mut lines = Vec::with_capacity(selection.len() + 1);
     lines.push(
@@ -311,7 +314,7 @@ pub(super) fn selected_tsv(
                 .filter_map(|index| {
                     let column = cols.get(*index)?;
                     let value = row.get(*index).unwrap_or(&Value::Null);
-                    Some(tsv_cell(&export::field_text(column, value)))
+                    Some(tsv_cell(&export::field_text(column, value, zone)))
                 })
                 .collect::<Vec<_>>()
                 .join("\t"),

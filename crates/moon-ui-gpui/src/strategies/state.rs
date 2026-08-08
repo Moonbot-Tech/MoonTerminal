@@ -24,6 +24,8 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) -> Self {
         let panels = backend.read(cx).layout.strategies_panels;
+        let display_zone =
+            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
         let search = cx
             .new(|cx| MoonInputState::new(window, cx).placeholder(t!("strat.search").to_string()));
         // Update the filter and redraw from search input events; render must not poll the input as
@@ -68,6 +70,18 @@ impl StrategiesView {
         })
         .detach();
 
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            let zone = crate::chrome::clock::resolved_header_clock_zone(
+                this.backend.read(cx).header_clock_zone(),
+            );
+            if zone != this.display_zone {
+                this.display_zone = zone;
+                cx.notify();
+            }
+        })
+        .detach();
+
         // Persist Strategies-window geometry in layout. The debounced save loop drains
         // `layout_dirty`, matching group windows.
         cx.observe_window_bounds(window, |this, window, cx| {
@@ -107,6 +121,7 @@ impl StrategiesView {
 
         Self {
             backend,
+            display_zone,
             search,
             filter: StrategyFilter::default(),
             selected: None,

@@ -24,6 +24,7 @@
 mod scan;
 mod view;
 
+use crate::Backend;
 use crate::panels::line_list::RowSelection;
 use gpui::*;
 use moon_ui::MoonVirtualListScrollHandle;
@@ -60,6 +61,8 @@ enum TradeLogState {
 struct TradeLog {
     request: TradeLogRequest,
     state: TradeLogState,
+    /// Zone used to build every cached visible and copied clock.
+    display_zone: chrono_tz::Tz,
     selection: RowSelection,
     /// Character budget of the widest line, sizing the horizontal scroll area.
     widest_chars: usize,
@@ -84,22 +87,60 @@ const MAX_LINES: usize = 5000;
 ///
 /// Args:
 ///     request: Core, task, and days resolved from the report row.
+///     backend: Shared state containing the selected display zone and its revision.
 ///     window: Window hosting the dialog.
 ///     cx: Application context used to spawn the scan and open the dialog.
 ///
 /// Returns:
 ///     Nothing; the dialog updates itself when the scan lands.
-pub(super) fn open_trade_log(request: TradeLogRequest, window: &mut Window, cx: &mut App) {
-    let entity = cx.new(|cx| TradeLog {
-        request: request.clone(),
-        state: TradeLogState::Loading,
-        selection: RowSelection::default(),
-        widest_chars: 0,
-        scroll: MoonVirtualListScrollHandle::new(),
-        hscroll: ScrollHandle::new(),
-        focus: cx.focus_handle(),
-        focused_once: false,
-        _scan: None,
+pub(super) fn open_trade_log(
+    request: TradeLogRequest,
+    backend: Entity<Backend>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let display_time_revision = backend.read(cx).display_time_revision.clone();
+    let display_zone =
+        crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+    let zone_backend = backend.clone();
+    let dialog_request = request.clone();
+    let entity = cx.new(move |cx| {
+        cx.observe(
+            &display_time_revision,
+            move |this: &mut TradeLog, _revision, cx| {
+                let zone = crate::chrome::clock::resolved_header_clock_zone(
+                    zone_backend.read(cx).header_clock_zone(),
+                );
+                if zone == this.display_zone {
+                    return;
+                }
+                this.display_zone = zone;
+                let widest = match &mut this.state {
+                    TradeLogState::Ready { lines, .. } => {
+                        view::rezone_lines(lines, zone);
+                        Some(view::widest_chars(lines))
+                    }
+                    TradeLogState::Loading => None,
+                };
+                if let Some(widest) = widest {
+                    this.widest_chars = widest;
+                }
+                cx.notify();
+            },
+        )
+        .detach();
+        TradeLog {
+            request: dialog_request,
+            state: TradeLogState::Loading,
+            display_zone,
+            selection: RowSelection::default(),
+            widest_chars: 0,
+            scroll: MoonVirtualListScrollHandle::new(),
+            hscroll: ScrollHandle::new(),
+            focus: cx.focus_handle(),
+            focused_once: false,
+            _scan: None,
+        }
     });
     // Reading a day of a core's log is tens of megabytes off disk; it never runs on the frame
     // thread. The task is owned by the dialog state, so closing the dialog drops it — which is why
@@ -116,7 +157,7 @@ pub(super) fn open_trade_log(request: TradeLogRequest, window: &mut Window, cx: 
         };
         cx.update(|cx| {
             scan_entity.update(cx, |this, cx| {
-                let lines = view::build_lines(found.lines);
+                let lines = view::build_lines(found.lines, this.display_zone);
                 this.widest_chars = view::widest_chars(&lines);
                 this.state = TradeLogState::Ready {
                     lines,

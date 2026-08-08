@@ -30,7 +30,7 @@ mod tuner;
 
 // Pages reach these through the familiar `super::…`, unaware of the `period` module.
 pub(in crate::analytics) use period::{
-    Period, Tab, custom_bounds, day_of_secs, fmt_day, secs_of_day,
+    Period, Tab, custom_bounds, day_of_secs, exact_secs_of_day, fmt_day, secs_of_day,
 };
 
 use std::collections::HashSet;
@@ -50,7 +50,7 @@ use crate::controls::date_range::{self, Bound};
 use crate::design::{moon, moon_alpha};
 use crate::valuation_health;
 use crate::{Backend, design};
-use moon_core::db::analytics::{DayCell, Query, StrategyBase, Summary};
+use moon_core::db::analytics::{DayCell, PreviousPeriodBasis, Query, StrategyBase, Summary};
 use moon_core::db::valuation::{ValuationMode, ValuationStatus};
 use moon_core::db::{
     FailKind, ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, ReadFail, SideFilter,
@@ -300,6 +300,10 @@ impl Default for AnalyticsSessionState {
 /// State of the Analytics window.
 pub struct AnalyticsView {
     backend: Entity<Backend>,
+    /// User-selected zone applied to all civil Analytics periods and timestamps.
+    display_zone: chrono_tz::Tz,
+    /// Whether custom-period pickers need redisplay after a zone identity change.
+    display_zone_fields_dirty: bool,
     /// Report-writer generation observed only while this window exists.
     report_generation: Option<Arc<AtomicU64>>,
     /// Historical-cache and current-rate data generation observed beside report commits.
@@ -557,6 +561,25 @@ impl AnalyticsView {
             this.observe_report_generation(cx);
         })
         .detach();
+        let display_zone =
+            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            let zone = crate::chrome::clock::resolved_header_clock_zone(
+                this.backend.read(cx).header_clock_zone(),
+            );
+            if zone == this.display_zone {
+                return;
+            }
+            this.cal_day = calendar::rezone_day(this.cal_day, this.display_zone, zone);
+            this.display_zone = zone;
+            this.display_zone_fields_dirty = true;
+            this.coin_lists.invalidate_display_time();
+            this.cal_dirty = true;
+            this.reload(cx);
+            cx.notify();
+        })
+        .detach();
 
         // Period: the previous layout selection, defaulting to the current calendar month.
         let saved_period = backend
@@ -620,10 +643,13 @@ impl AnalyticsView {
         let cal_from = cx.new(|cx| date_range::bound_picker(Bound::From, window, cx));
         let cal_to = cx.new(|cx| date_range::bound_picker(Bound::To, window, cx));
         if let Some(Period::Custom(f, t)) = saved_period {
-            if let Some(d) = (f >= 0).then(|| date_range::dt_of_secs(f)).flatten() {
+            if let Some(d) = (f >= 0)
+                .then(|| date_range::dt_of_secs(f, display_zone))
+                .flatten()
+            {
                 cal_from.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
-            if let Some(d) = date_range::field_of_exclusive(t) {
+            if let Some(d) = date_range::field_of_exclusive(t, display_zone) {
                 cal_to.update(cx, |s, cx| s.set_value(Some(d), window, cx));
             }
         }
@@ -659,6 +685,8 @@ impl AnalyticsView {
         let saved_valuation_mode = backend.read(cx).valuation_mode();
         let mut this = Self {
             backend,
+            display_zone,
+            display_zone_fields_dirty: false,
             report_generation,
             valuation_generation,
             valuation_status,
@@ -717,10 +745,16 @@ impl AnalyticsView {
             cal_mode: saved_mode,
             cal_ym: {
                 use chrono::Datelike;
-                let d = day_of_secs(moon_core::util::now_unix_ms_i64() / 1000).unwrap_or_default();
+                let d = day_of_secs(moon_core::util::now_unix_ms_i64() / 1000, display_zone)
+                    .unwrap_or_default();
                 (d.year(), d.month())
             },
-            cal_day: (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400,
+            cal_day: moon_core::util::display_time::bucket_start(
+                moon_core::util::now_unix_ms_i64() / 1000,
+                86_400,
+                display_zone,
+            )
+            .unwrap_or(0),
             cal_prev: LoadState::default(),
             strat_mode: if probe {
                 tuner::StratMode::Coins
@@ -1008,8 +1042,15 @@ impl AnalyticsView {
     /// Current filters in the structure shared by Summary and Tuning, using the active tab's
     /// period (`active_period`).
     fn query(&self) -> Query {
-        let (from, to) = self.active_period().range();
+        let period = self.active_period();
+        let (from, to) = period.range(self.display_zone);
         Query {
+            time_zone: self.display_zone,
+            previous_period_basis: if matches!(period, Period::Custom(..)) {
+                PreviousPeriodBasis::Elapsed
+            } else {
+                PreviousPeriodBasis::Civil
+            },
             from,
             to,
             cores: self.cores_selected(),
@@ -1393,11 +1434,11 @@ impl AnalyticsView {
         let (from, to) = match self.active_period() {
             Period::Custom(f, t) => (
                 if f >= 0 {
-                    date_range::dt_of_secs(f)
+                    date_range::dt_of_secs(f, self.display_zone)
                 } else {
                     None
                 },
-                date_range::field_of_exclusive(t),
+                date_range::field_of_exclusive(t, self.display_zone),
             ),
             _ => (None, None),
         };
@@ -1468,10 +1509,9 @@ impl AnalyticsView {
         if f.is_none() && t.is_none() {
             return;
         }
-        let now = moon_core::util::now_unix_ms_i64() / 1000;
-        let tomorrow = now.div_euclid(86_400) * 86_400 + 86_400;
+        let tomorrow = Period::Today.range(self.display_zone).1;
         let next = {
-            let (from, to) = custom_bounds(f, t, tomorrow);
+            let (from, to) = custom_bounds(f, t, tomorrow, self.display_zone);
             Period::Custom(from, to)
         };
         // Programmatic writes (tab switch, preset reset, the swap above) emit `Change` too, so
@@ -1618,6 +1658,10 @@ impl Render for AnalyticsView {
     /// Returns:
     ///     Complete Analytics surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.display_zone_fields_dirty {
+            self.display_zone_fields_dirty = false;
+            self.sync_period_pickers(window, cx);
+        }
         let p = MoonPalette::active(cx);
         let (unit, split) = match self.tab {
             Tab::Summary => (self.data.unit(), self.data.split().cloned()),

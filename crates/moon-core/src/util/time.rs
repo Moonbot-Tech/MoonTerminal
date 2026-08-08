@@ -3,9 +3,9 @@
 //! `SystemTime::now() - UNIX_EPOCH` formula. Their common helpers were consolidated here: `f64`
 //! milliseconds for the chart tick timeline and `i64` milliseconds for logs and the database.
 //!
-//! This module also owns the crate's single Gregorian calendar implementation
-//! (`civil_from_days`), consumed by `db` for report timestamps, `strat_db` for compact version
-//! labels, and the config/strategy backup domains for every snapshot directory name.
+//! This module also owns the crate's UTC Gregorian calendar implementation (`civil_from_days`),
+//! consumed by `db` report timestamps and config/strategy backup snapshot directory names.
+//! User-selected civil display belongs to `display_time` instead.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,8 +38,8 @@ pub fn unix_ms_i64_of(time: SystemTime) -> i64 {
 /// Convert days since the Unix epoch to `(year, month, day)` in the proleptic Gregorian calendar.
 ///
 /// This is the crate's single copy of Howard Hinnant's civil-from-days algorithm.
-/// `db::fmt_unix*`, `strat_db::stats::short_date`, and `config::backup` all use it so report dates,
-/// strategy-version labels, and snapshot directory names cannot drift apart.
+/// `db::fmt_unix*` and `config::backup` use it so UTC report contracts and snapshot directory names
+/// cannot drift apart. User-facing strategy-version labels use `display_time` instead.
 pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

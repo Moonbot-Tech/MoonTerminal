@@ -392,7 +392,7 @@ fn legend_chip(label: String, color: Hsla, p: MoonPalette) -> impl IntoElement {
         .child(div().text_color(rgb(p.text_muted)).child(label))
 }
 
-/// X-axis time labels (HH:MM:SS, UTC) placed under the vertical grid divisions.
+/// X-axis time labels in the selected display zone, placed under the vertical grid divisions.
 fn x_axis_row(now_sec: i64, window: ChartWindow, p: MoonPalette, cx: &App) -> impl IntoElement {
     let span = window.secs() as i64;
     // Reserve the gutters so labels line up with the plot, then place them by fraction inside.
@@ -425,9 +425,15 @@ fn x_axis_row(now_sec: i64, window: ChartWindow, p: MoonPalette, cx: &App) -> im
     )
 }
 
-/// Format a Unix second as `HH:MM:SS` (UTC) by day-of arithmetic. Always UTC: this axis labels a
-/// core's own timeline, which no display timezone applies to.
+/// Format a Unix second as `HH:MM:SS` in the selected display zone.
+///
+/// Args:
+///     unix_sec: Absolute UTC Unix timestamp.
+///
+/// Returns:
+///     Selected-zone wall-clock time, or an empty string outside chrono's range.
 fn hms(unix_sec: i64) -> String {
-    let day = unix_sec.rem_euclid(86_400);
-    format!("{:02}:{:02}:{:02}", day / 3600, (day % 3600) / 60, day % 60)
+    moon_core::util::display_time::at(unix_sec, crate::chartdx::axes::display_zone())
+        .map(|value| value.format("%H:%M:%S").to_string())
+        .unwrap_or_default()
 }

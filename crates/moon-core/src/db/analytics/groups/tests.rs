@@ -15,6 +15,8 @@ use crate::db::{ProfitMetric, SideFilter};
 /// The report scope every case here uses: all cores, all history, no filters.
 fn q() -> Query {
     Query {
+        time_zone: chrono_tz::UTC,
+        previous_period_basis: Default::default(),
         from: 0,
         to: i64::MAX,
         cores: Vec::new(),

@@ -223,7 +223,7 @@ fn clipboard_tsv_uses_visual_column_and_row_order_without_embedded_delimiters() 
     state.column_order = order;
     let indices = ordered_visible_indices(&cols, &visible, &state);
 
-    let copied = selected_tsv(&data, &cols, &indices, &selection);
+    let copied = selected_tsv(&data, &cols, &indices, &selection, chrono_tz::UTC);
 
     assert_eq!(
         copied,

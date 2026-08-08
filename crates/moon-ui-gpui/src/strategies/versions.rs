@@ -513,7 +513,7 @@ impl StrategiesView {
                         self.versions
                             .list
                             .first()
-                            .map(|v| short_date(v.valid_from))
+                            .map(|v| short_date(v.valid_from, self.display_zone))
                             .unwrap_or_default(),
                     ),
                 )
@@ -557,7 +557,7 @@ impl StrategiesView {
                 .child(
                     div()
                         .text_color(moon(p.text))
-                        .child(short_date(v.valid_from)),
+                        .child(short_date(v.valid_from, self.display_zone)),
                 )
                 .child(
                     div()

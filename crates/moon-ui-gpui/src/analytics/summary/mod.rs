@@ -189,6 +189,7 @@ impl AnalyticsView {
                                 &core_colors,
                                 self.hover_cum_bucket,
                                 data.bucket_secs,
+                                self.display_zone,
                                 p,
                                 cx,
                             ),
@@ -234,6 +235,7 @@ impl AnalyticsView {
                                     &core_colors,
                                     self.hover_daily_bucket,
                                     data.bucket_secs,
+                                    self.display_zone,
                                     p,
                                     cx,
                                 ),
@@ -250,12 +252,14 @@ impl AnalyticsView {
                     .child(top_card(
                         t!("analytics.best_trades").to_string(),
                         &data.best,
+                        self.display_zone,
                         p,
                         cx,
                     ))
                     .child(top_card(
                         t!("analytics.worst_trades").to_string(),
                         &data.worst,
+                        self.display_zone,
                         p,
                         cx,
                     ))
@@ -577,9 +581,20 @@ fn chart_card_ex(
 }
 
 /// Render a card of ranked trades.
+///
+/// Args:
+///     title: Localized card heading.
+///     trades: Ranked trade rows.
+///     zone: Selected IANA display zone used by close timestamps.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Complete ranked-trades card.
 fn top_card(
     title: String,
     trades: &[TopTrade],
+    zone: chrono_tz::Tz,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> impl IntoElement {
@@ -629,7 +644,7 @@ fn top_card(
                     div()
                         .w(design::font_w_px(cx, 96.0))
                         .text_color(moon(p.text_soft))
-                        .child(fmt_dm_hm(tr.closedate)),
+                        .child(fmt_dm_hm(tr.closedate, zone)),
                 )
                 .child(
                     h_flex()
@@ -819,7 +834,7 @@ fn insight_rows(d: &Summary, p: MoonPalette) -> [InsightRow; 5] {
             InsightRow {
                 label: t!("analytics.ins.label.hour").to_string(),
                 main: t!(
-                    "analytics.ins.metric.hour_utc",
+                    "analytics.ins.metric.hour_clock",
                     hour = format!("{hour:02}:00")
                 )
                 .to_string(),
@@ -953,11 +968,17 @@ fn insights_card(d: &Summary, p: MoonPalette, cx: &Context<AnalyticsView>) -> im
         .child(list)
 }
 
-/// "dd.mm.yy hh:mm" UTC for the top tables — the full date: over monthly
-/// periods a bare time with no day says nothing.
-pub(super) fn fmt_dm_hm(secs: i64) -> String {
-    let s = moon_core::db::fmt_unix(secs);
-    // fmt_unix → "YYYY-MM-DD HH:MM"; we take "DD.MM.YY HH:MM".
+/// Format a top-table timestamp as selected-zone `DD.MM.YY HH:MM`.
+///
+/// Args:
+///     secs: Absolute UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil date-time label, or the shared formatter's fallback text.
+pub(super) fn fmt_dm_hm(secs: i64, zone: chrono_tz::Tz) -> String {
+    let s = moon_core::util::display_time::format_minute(secs, zone);
+    // The shared formatter returns "YYYY-MM-DD HH:MM"; take "DD.MM.YY HH:MM".
     if s.len() >= 16 {
         format!("{}.{}.{} {}", &s[8..10], &s[5..7], &s[2..4], &s[11..16])
     } else {

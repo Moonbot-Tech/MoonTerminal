@@ -321,3 +321,26 @@ fn evicting_hidden_rows_does_not_disturb_the_visible_list() {
     assert_eq!(moved, Disturbance::AppendedOnly);
     assert_eq!(shown(&buf), ["an error here"]);
 }
+
+/// `buffer.rs:RowBuffer::rezone` removing its row update would leave already-visible Log clocks
+/// in the previous zone until those rows were evicted and ingested again.
+#[test]
+fn changing_zone_reformats_rows_already_in_the_buffer() {
+    let mut buf = RowBuffer::new(chrono_tz::Europe::Warsaw);
+    buf.ingest(
+        batch(&[("2026-07-25 08:26:50.123", "selected-zone clock")]),
+        10,
+        ALL,
+    );
+    assert_eq!(
+        buf.at(0).expect("test row must be visible").time(),
+        "10:26:50.123"
+    );
+
+    buf.rezone(chrono_tz::America::New_York);
+
+    assert_eq!(
+        buf.at(0).expect("test row must remain visible").time(),
+        "04:26:50.123"
+    );
+}

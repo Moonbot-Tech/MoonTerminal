@@ -183,6 +183,13 @@ impl CoreStatusView {
         })
         .detach();
 
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            this.rebuild_cache(cx);
+            cx.notify();
+        })
+        .detach();
+
         let widths_id = crate::persistence::table_persist::ctx_id("core-status-table", detached);
         let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
@@ -408,6 +415,7 @@ impl Render for CoreStatusView {
                     Rc::new(server_names),
                     Rc::new(core_names),
                     &self.warn_table_state,
+                    crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
                     cx,
                 )
                 .into_any_element()

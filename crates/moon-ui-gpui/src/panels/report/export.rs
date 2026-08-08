@@ -6,12 +6,14 @@
 //! every matching row up to [`EXPORT_MAX_ROWS`]. Cell values retain their RAW database
 //! representation (`isshort` and `emulator` remain 0/1, and numbers receive no presentation
 //! formatting or localized value labels), making this a machine-readable extract rather than a
-//! snapshot of the table. Date columns are formatted as `YYYY-MM-DD HH:MM` UTC text, matching the
-//! table. In XLSX, large identifiers in `strategyid`, `exorderid`, `taskid`, and `newrecid` are also
+//! snapshot of the table. Date columns are formatted as `YYYY-MM-DD HH:MM` text in the selected
+//! display zone, matching the table. In XLSX, large identifiers in `strategyid`, `exorderid`,
+//! `taskid`, and `newrecid` are also
 //! written as text so Excel preserves every digit.
 
 use std::path::{Path, PathBuf};
 
+use chrono_tz::Tz;
 use rusqlite::types::Value;
 
 use super::columns;
@@ -41,9 +43,23 @@ impl Format {
 ///
 /// Exporting the full runtime report schema adds the `-All` suffix, for example
 /// `report_2026-07-13-All.csv`, distinguishing it from a visible-column export on disk.
-pub(super) fn suggested_name(filter: &ReportFilter, fmt: Format, all_cols: bool) -> String {
+///
+/// Args:
+///     filter: Report filter whose absolute bounds name the file.
+///     fmt: Selected export format.
+///     all_cols: Whether the complete runtime schema is exported.
+///     zone: Captured IANA display zone used by bound dates.
+///
+/// Returns:
+///     Filesystem-safe suggested filename.
+pub(super) fn suggested_name(
+    filter: &ReportFilter,
+    fmt: Format,
+    all_cols: bool,
+    zone: Tz,
+) -> String {
     let day = |secs: i64| {
-        let full = db::fmt_unix(secs);
+        let full = moon_core::util::display_time::format_minute(secs, zone);
         full.get(..10).unwrap_or(&full).to_string()
     };
     let range = match (filter.date_from, filter.date_to) {
@@ -70,6 +86,21 @@ pub(super) fn default_dir() -> PathBuf {
 /// `cols` preserves table order. The full query completes before a CSV/XLSX
 /// writer opens; both `NotReady` and `Failed` abort without writing export bytes
 /// because a partial file would look complete. Call from a background executor.
+///
+/// Args:
+///     path: Destination file path selected by the user.
+///     fmt: CSV or XLSX output format.
+///     cols: Runtime columns in export order.
+///     filter: Frozen report filter.
+///     sort_key: Runtime column used for row ordering.
+///     sort_desc: Whether rows are ordered descending.
+///     zone: Captured IANA display zone used by every timestamp.
+///
+/// Returns:
+///     Number of data rows written.
+///
+/// Errors:
+///     Returns an error for an unreadable report, empty column selection, or file writer failure.
 pub(super) fn run(
     path: &Path,
     fmt: Format,
@@ -77,6 +108,7 @@ pub(super) fn run(
     filter: &ReportFilter,
     sort_key: &str,
     sort_desc: bool,
+    zone: Tz,
 ) -> anyhow::Result<usize> {
     let conn = db::open_reader().map_err(|e| anyhow::anyhow!("БД отчётов недоступна: {e}"))?;
     let table = db::query_reports(&conn, filter, sort_key, sort_desc, EXPORT_MAX_ROWS)
@@ -99,8 +131,8 @@ pub(super) fn run(
         anyhow::bail!("нет колонок для экспорта");
     }
     match fmt {
-        Format::Csv => write_csv(path, &idx, &table.rows)?,
-        Format::Xlsx => write_xlsx(path, &idx, &table.rows)?,
+        Format::Csv => write_csv(path, &idx, &table.rows, zone)?,
+        Format::Xlsx => write_xlsx(path, &idx, &table.rows, zone)?,
     }
     Ok(table.rows.len())
 }
@@ -109,7 +141,24 @@ pub(super) fn run(
 ///
 /// A Russian-locale Excel installation accepts the delimiter without its import wizard, while the
 /// BOM preserves Cyrillic text. Fields containing semicolons, quotes, or line breaks are quoted.
-fn write_csv(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow::Result<()> {
+///
+/// Args:
+///     path: Destination CSV path.
+///     idx: Ordered source-column indices and names.
+///     rows: Raw SQLite report rows.
+///     zone: Captured IANA display zone used by timestamp fields.
+///
+/// Returns:
+///     Success after the complete file is written.
+///
+/// Errors:
+///     Returns the filesystem write failure.
+fn write_csv(
+    path: &Path,
+    idx: &[(usize, &str)],
+    rows: &[Vec<Value>],
+    zone: Tz,
+) -> anyhow::Result<()> {
     let mut out = String::with_capacity(64 * (rows.len() + 1));
     out.push('\u{FEFF}');
     let header: Vec<String> = idx
@@ -126,7 +175,7 @@ fn write_csv(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow:
             }
             first = false;
             let val = row.get(*i).unwrap_or(&Value::Null);
-            out.push_str(&csv_field(&field_text(name, val)));
+            out.push_str(&csv_field(&field_text(name, val, zone)));
         }
         out.push_str("\r\n");
     }
@@ -134,7 +183,7 @@ fn write_csv(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow:
     Ok(())
 }
 
-/// Returns whether a database column stores Unix seconds that export formats as UTC date text.
+/// Return whether a database column stores Unix seconds formatted in the selected display zone.
 fn date_col(col: &str) -> bool {
     matches!(
         col,
@@ -158,14 +207,15 @@ fn id_text_col(col: &str) -> bool {
 /// Args:
 ///     col: Runtime report column name.
 ///     v: SQLite value from that column.
+///     zone: User-selected display time zone.
 ///
 /// Returns:
 ///     Display-ready text shared by file export and clipboard TSV.
-pub(super) fn field_text(col: &str, v: &Value) -> String {
+pub(super) fn field_text(col: &str, v: &Value, zone: Tz) -> String {
     if date_col(col) {
         return match v {
-            Value::Integer(i) => db::fmt_unix(*i),
-            Value::Real(r) => db::fmt_unix(*r as i64),
+            Value::Integer(i) => moon_core::util::display_time::format_minute(*i, zone),
+            Value::Real(r) => moon_core::util::display_time::format_minute(*r as i64, zone),
             _ => String::new(),
         };
     }
@@ -190,7 +240,24 @@ fn csv_field(s: &str) -> String {
 ///
 /// Database Integer and Real values become numbers, Text remains text, and NULL leaves an empty
 /// cell. Dates become formatted strings, and large identifier columns remain text to preserve them.
-fn write_xlsx(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow::Result<()> {
+///
+/// Args:
+///     path: Destination XLSX path.
+///     idx: Ordered source-column indices and names.
+///     rows: Raw SQLite report rows.
+///     zone: Captured IANA display zone used by timestamp fields.
+///
+/// Returns:
+///     Success after the workbook is saved.
+///
+/// Errors:
+///     Returns worksheet or workbook writer failures.
+fn write_xlsx(
+    path: &Path,
+    idx: &[(usize, &str)],
+    rows: &[Vec<Value>],
+    zone: Tz,
+) -> anyhow::Result<()> {
     use rust_xlsxwriter::{Format as XFormat, Workbook};
 
     let mut wb = Workbook::new();
@@ -205,7 +272,7 @@ fn write_xlsx(path: &Path, idx: &[(usize, &str)], rows: &[Vec<Value>]) -> anyhow
             let c = c as u16;
             let val = row.get(*i).unwrap_or(&Value::Null);
             if date_col(name) {
-                let text = field_text(name, val);
+                let text = field_text(name, val, zone);
                 if !text.is_empty() {
                     ws.write_string(r, c, text)?;
                 }

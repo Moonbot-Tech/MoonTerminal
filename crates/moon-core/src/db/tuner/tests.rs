@@ -332,11 +332,7 @@ fn variant_week_span_predicate() {
         ..Default::default()
     };
     let w = v.where_sql();
-    // Use OPEN_TS (buydate with a closedate fallback), not closedate alone.
-    assert!(
-        w.contains("BETWEEN 0 AND 8639") && w.contains("buydate"),
-        "w={w}"
-    );
+    assert!(w.contains("o.__mt_week BETWEEN 0 AND 8639"), "w={w}");
     assert!(!v.is_empty(), "week_span-вариант не равен «Факту»");
 
     // Wrap Sun -> Mon (from > to): Sat 12:00 (8640-720=7920) -> Mon 12:00 (720).
@@ -364,10 +360,7 @@ fn variant_time_window_predicate() {
         ..Default::default()
     };
     let w = v.where_sql();
-    assert!(
-        w.contains("BETWEEN 540 AND 1260") && w.contains("buydate"),
-        "w={w}"
-    );
+    assert!(w.contains("o.__mt_day BETWEEN 540 AND 1260"), "w={w}");
     assert!(!v.is_empty());
 
     // `Day` wrapping past midnight (22:00-06:00) -> `<= 360 OR >= 1320`.
@@ -396,6 +389,50 @@ fn variant_time_window_predicate() {
     let w = v.where_sql();
     assert!(w.contains("BETWEEN 0 AND 8639"));
     assert!(w.contains("BETWEEN 1 AND 1430"));
+}
+
+/// Removing the query-zone UDF from `Variant::where_sql` would evaluate this 09:00 Warsaw
+/// schedule as 08:00 UTC and drop the trade the user sees inside the window.
+#[test]
+fn time_variant_uses_the_selected_zone_for_open_time() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE trades(closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL);
+         INSERT INTO trades VALUES (1767258000, 1767256200, 5.0, 10.0);",
+    )
+    .expect("seed trade");
+    let source = "(SELECT closedate, buydate, pnl, spentbtc FROM trades
+                   WHERE closedate >= ?1 AND closedate < ?2) o";
+    let query = Query {
+        time_zone: chrono_tz::Europe::Warsaw,
+        from: 1_767_200_000,
+        to: 1_767_300_000,
+        ..Default::default()
+    };
+    let variants = [
+        Variant::default(),
+        Variant {
+            tod: Some(TimeWindow::Day(9 * 60, 10 * 60)),
+            ..Default::default()
+        },
+    ];
+
+    let stats = variant_stats_from_source(&conn, &query, source, &variants)
+        .expect("selected-zone variant evaluates");
+
+    assert_eq!(stats[0].n, 1, "fact sees the seeded trade");
+    assert_eq!(stats[1].n, 1, "Warsaw 09:30 stays inside 09:00-10:00");
+
+    let mut civil_rows = Vec::new();
+    visit_time_rows(
+        &conn,
+        &query,
+        source,
+        "test: selected-zone time profile",
+        |weekday, minute, _profit| civil_rows.push((weekday, minute)),
+    )
+    .expect("selected-zone profile evaluates");
+    assert_eq!(civil_rows, vec![(3, 570)], "Thursday 09:30 in Warsaw");
 }
 
 #[test]

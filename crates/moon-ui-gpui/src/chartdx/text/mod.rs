@@ -29,10 +29,6 @@ fn color(hex: u32) -> Hsla {
     gpui::rgb(hex).into()
 }
 
-fn local_offset_sec() -> i64 {
-    crate::chartdx::axes::local_offset_sec()
-}
-
 fn readout_rect_dst(
     anchor_x: f32,
     anchor_y: f32,

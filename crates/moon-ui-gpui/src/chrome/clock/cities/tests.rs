@@ -5,7 +5,7 @@
 
 use super::{
     CITIES, by_zone_id, current_offset_min, local_hms, migrate_offset_min, reconcile_target,
-    utc_city,
+    zone_by_id,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::{OffsetComponents, Tz};
@@ -91,13 +91,11 @@ fn every_zone_is_unique_and_resolvable_by_its_id() {
     assert!(by_zone_id("Europe/Atlantis").is_none());
 }
 
-/// UTC stays the neutral first row: it is the fallback for an unknown saved zone and the default
-/// for a config that never opened the picker.
+/// Moving UTC away from the first picker row hides the neutral manual choice in a long city list.
 #[test]
-fn utc_is_the_first_row_and_the_fallback() {
-    assert_eq!(utc_city().code, "UTC");
-    assert_eq!(utc_city().zone, Tz::UTC);
+fn utc_is_the_first_row() {
     assert_eq!(CITIES[0].code, "UTC");
+    assert_eq!(CITIES[0].zone, Tz::UTC);
 }
 
 /// The menu reads west to east; a row inserted in the wrong place is invisible in review and
@@ -141,18 +139,17 @@ fn migrating_a_legacy_offset_keeps_the_clock_where_it_was() {
     }
 }
 
-/// A default or out-of-schema offset must not silently invent a selected city.
+/// A default or out-of-schema offset must not silently invent a legacy selected city.
 ///
-/// Zero is the untouched default of every config that never opened the picker — resolving it to a
-/// city would relabel all of them. A value outside the compatibility range is not a saved choice.
-/// Both leave the clock on UTC.
+/// Zero is the untouched default of every config that never opened the picker and belongs to the
+/// system detector. A value outside the compatibility range is not a saved legacy choice.
 #[test]
 fn a_legacy_offset_migrates_only_when_it_was_actually_chosen() {
     let now = at("2026-07-01T12:00:00Z");
 
     assert!(
         migrate_offset_min(0, now).is_none(),
-        "an untouched default must stay on UTC, not become a city"
+        "an untouched default must reach system detection, not legacy city migration"
     );
     for off in [999, -13 * 60, 15 * 60] {
         assert!(
@@ -165,32 +162,97 @@ fn a_legacy_offset_migrates_only_when_it_was_actually_chosen() {
 /// Reconciling an already-saved zone must still refresh its compatibility offset mirror across a
 /// summer-time transition.
 ///
-/// Regression target: `chrome::clock::reconcile_clock_zone` regaining an early return when a
-/// zone is already saved (`if b.layout.header_clock_zone.is_some() { return; }` at the top) —
-/// or, equivalently, `backend::set_header_clock_zone` dropping the
-/// `|| self.layout.header_clock_offset_min != offset_min` half of its guard. Either edit stops
-/// the mirror from tracking the chosen city's own transitions, leaving compatibility readers an
-/// hour stale. The oracle is `reconcile_target` computing a DIFFERENT offset for the same saved
-/// zone on either side of a known DST date (Warsaw's CEST/CET switch), a wall-clock fact
-/// independent of how the function is implemented.
+/// Regression target: replacing `reconcile_target`'s
+/// `offset_min: current_offset_min(zone, now_utc)` with the incoming `legacy_offset_min` pins the
+/// compatibility mirror to its previously saved value. The oracle compares the same saved Warsaw
+/// zone on either side of its known CEST/CET transition.
 #[test]
 fn reconciling_an_already_saved_zone_still_refreshes_its_legacy_offset() {
     let winter = at("2026-01-01T12:00:00Z");
     let summer = at("2026-07-01T12:00:00Z");
     let zone_id = Tz::Europe__Warsaw.name();
 
-    let (winter_city, winter_offset) =
-        reconcile_target(Some(zone_id), 60, winter).expect("an already-saved zone must resolve");
-    let (summer_city, summer_offset) =
-        reconcile_target(Some(zone_id), 60, summer).expect("an already-saved zone must resolve");
+    let winter_target = reconcile_target(Some(zone_id), 60, winter, || {
+        panic!("saved zone must not call the system detector")
+    })
+    .expect("an already-saved zone must resolve");
+    let summer_target = reconcile_target(Some(zone_id), 60, summer, || {
+        panic!("saved zone must not call the system detector")
+    })
+    .expect("an already-saved zone must resolve");
 
-    assert_eq!(winter_city.code, "WAW");
-    assert_eq!(summer_city.code, "WAW");
+    assert_eq!(zone_by_id(&winter_target.zone_id), Some(Tz::Europe__Warsaw));
+    assert_eq!(zone_by_id(&summer_target.zone_id), Some(Tz::Europe__Warsaw));
     assert_ne!(
-        winter_offset, summer_offset,
+        winter_target.offset_min, summer_target.offset_min,
         "the legacy offset mirror for an already-saved zone must track its own DST transitions, \
          not stay pinned to whatever it was when the zone was first chosen"
     );
+}
+
+/// Calling the detector before checking persisted fields would let an OS-zone change overwrite a
+/// manual city or migrated old offset on reboot; failing to call it for `None + 0` leaves every
+/// new and untouched old profile on UTC.
+#[test]
+fn system_zone_is_detected_only_for_an_untouched_profile() {
+    use std::cell::Cell;
+
+    let now = at("2026-07-01T12:00:00Z");
+    let calls = Cell::new(0);
+    let detected = reconcile_target(None, 0, now, || {
+        calls.set(calls.get() + 1);
+        Some("Europe/Prague".to_string())
+    })
+    .expect("untouched profile detects a zone");
+    assert_eq!(calls.get(), 1);
+    assert_eq!(detected.zone_id, "Europe/Prague");
+    assert_eq!(zone_by_id(&detected.zone_id), Some(Tz::Europe__Prague));
+
+    for saved in ["Europe/Warsaw", "Europe/Prague"] {
+        let target = reconcile_target(Some(saved), 0, now, || {
+            panic!("a saved curated or uncurated zone must win on reboot")
+        })
+        .expect("saved zone resolves");
+        assert_eq!(target.zone_id, saved);
+    }
+
+    let migrated = reconcile_target(None, 120, now, || {
+        panic!("a legacy manual offset must win over system detection")
+    })
+    .expect("legacy offset migrates");
+    assert_ne!(zone_by_id(&migrated.zone_id), Some(Tz::UTC));
+
+    let rebooted = reconcile_target(Some(&detected.zone_id), 120, now, || {
+        panic!("a detected-and-saved zone must not be detected again")
+    })
+    .expect("detected zone survives reboot");
+    assert_eq!(rebooted.zone_id, detected.zone_id);
+}
+
+/// Treating a malformed saved id as missing would invoke the OS detector and silently overwrite a
+/// hand-edited profile instead of preserving the existing fail-safe UTC behavior.
+#[test]
+fn invalid_saved_zone_does_not_trigger_first_run_detection() {
+    for invalid in ["Europe/Atlantis", ""] {
+        let target = reconcile_target(Some(invalid), 0, at("2026-07-01T12:00:00Z"), || {
+            panic!("a present invalid id is not an untouched profile")
+        });
+        assert!(target.is_none());
+    }
+    assert!(zone_by_id("Europe/Atlantis").is_none());
+}
+
+/// Persisting UTC after a transient detector failure would make that fallback permanent and stop
+/// every later reboot from retrying the real operating-system zone.
+#[test]
+fn a_failed_or_unknown_system_detection_remains_retryable() {
+    let now = at("2026-07-01T12:00:00Z");
+    assert!(reconcile_target(None, 0, now, || None).is_none());
+    assert!(reconcile_target(None, 0, now, || Some("Europe/Atlantis".to_string())).is_none());
+
+    let retried = reconcile_target(None, 0, now, || Some("Europe/Prague".to_string()))
+        .expect("a later successful detection must still be eligible");
+    assert_eq!(retried.zone_id, "Europe/Prague");
 }
 
 /// A valid compatibility offset that no curated city currently observes still lands nearby.

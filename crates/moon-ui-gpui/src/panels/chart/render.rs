@@ -8,8 +8,6 @@ use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonRe
 
 use moon_chart::paint::now_unix_ms;
 
-use crate::chartdx::axes;
-
 use super::render_input;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
 use crate::persistence::chart_persist::ChartBtnPos;
@@ -144,7 +142,7 @@ impl Render for ChartPanel {
         // Snapshot visible pane layout once and reuse its rectangles for pane-positioned GPUI
         // overlays. The single-pane action overlay uses GPUI layout, while FireTest uses its canvas
         // bounds. Input hit testing receives the engine's current pane rectangles separately.
-        let axis_panes = self.chart.axis_panes(axes::local_offset_sec());
+        let axis_panes = self.chart.axis_panes();
         self.input.pane_rects = self.chart.pane_rects();
         // Input hit testing needs the axis side to account for plot inset/width. Broom mode hides it.
         self.input.price_axis_pos = if self.orderbook_only {

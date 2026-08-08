@@ -40,6 +40,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::Datelike as _;
+use chrono_tz::Tz;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::MoonWindowExt as _;
@@ -67,16 +69,14 @@ use moon_core::db::{
 
 pub use window::open_scoped;
 
-/// Moonbot-style report period presets with UTC-day boundaries.
-///
-/// Database and table dates are also displayed in UTC, keeping filters aligned with visible values.
+/// Moonbot-style report period presets with selected-zone civil-day boundaries.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Period {
     All,
     Today,
     Yesterday,
     Week,
-    /// The calendar month from the 1st to today (UTC) — unlike `Month`, which counts 30
+    /// The calendar month from the 1st to today, unlike `Month`, which counts 30
     /// days back regardless of where the month boundary falls.
     CurMonth,
     Month,
@@ -107,34 +107,57 @@ impl Period {
         .to_string()
     }
 
-    /// Return inclusive `(from, to)` Unix-second bounds; `None` leaves that edge unbounded.
-    fn range(self) -> (Option<i64>, Option<i64>) {
+    /// Return inclusive `(from, to)` Unix-second bounds in one display time zone.
+    ///
+    /// Args:
+    ///     zone: User-selected display time zone.
+    ///
+    /// Returns:
+    ///     Inclusive absolute bounds; `None` leaves that edge unbounded.
+    fn range(self, zone: Tz) -> (Option<i64>, Option<i64>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let day = now - now.rem_euclid(86_400);
+        self.range_at(now, zone)
+    }
+
+    /// Return inclusive preset bounds at one pinned UTC instant.
+    ///
+    /// Args:
+    ///     now: Current UTC Unix timestamp in seconds.
+    ///     zone: User-selected display time zone.
+    ///
+    /// Returns:
+    ///     Inclusive absolute bounds; `None` leaves that edge unbounded.
+    fn range_at(self, now: i64, zone: Tz) -> (Option<i64>, Option<i64>) {
+        let Some(today) = moon_core::util::display_time::date(now, zone) else {
+            return (None, None);
+        };
+        let day_start = |date| moon_core::util::display_time::day_start(date, zone);
+        let day = day_start(today);
+        let shifted_start = |days| {
+            day.and_then(|start| moon_core::util::display_time::shift_day_start(start, days, zone))
+        };
         match self {
             Self::All => (None, None),
-            Self::Today => (Some(day), None),
-            Self::Yesterday => (Some(day - 86_400), Some(day - 1)),
-            Self::Week => (Some(day - 6 * 86_400), None),
+            Self::Today => (day, None),
+            Self::Yesterday => (shifted_start(-1), day.map(|value| value - 1)),
+            Self::Week => (shifted_start(-6), None),
             Self::CurMonth => {
-                // Midnight of the 1st of the current month, UTC — derived exactly as the
-                // Analytics period bar does it (`analytics::period`): "YYYY-MM" from the DB
-                // formatter + "-01", no calendar arithmetic of our own. Unparseable → today.
-                let ym = moon_core::db::fmt_unix(now);
-                let start = moon_core::db::parse_ymd(&format!("{}-01", &ym[..7.min(ym.len())]))
-                    .unwrap_or(day);
-                (Some(start), None)
+                let first = today.with_day(1).and_then(day_start).or(day);
+                (first, None)
             }
-            // 30 days back including today (like Week = 7, Year = 365) — a ROLLING window,
+            // 30 days back including today (like Week = 7, Year = 365) is a rolling window,
             // not the calendar month: that one is CurMonth.
-            Self::Month => (Some(day - 29 * 86_400), None),
-            Self::Year => (Some(day - 364 * 86_400), None),
+            Self::Month => (shifted_start(-29), None),
+            Self::Year => (shifted_start(-364), None),
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Report order-type filter: all, real, or emulator orders.
 ///
@@ -233,6 +256,10 @@ const DEFAULT_VISIBLE: &[&str] = &[
 /// Closed-trade report surface shared by docked, detached, and scoped standalone hosts.
 pub struct ReportPanel {
     pub(super) backend: Entity<Backend>,
+    /// User-selected zone applied to every visible date and civil period boundary.
+    pub(super) display_zone: Tz,
+    /// Whether picker civil values must be rewritten from their preserved absolute bounds.
+    display_zone_fields_dirty: bool,
     pub(super) group: String,
     generation: Option<Arc<AtomicU64>>,
     /// Historical-cache and current-rate data generation combined with report commits for refresh
@@ -300,6 +327,8 @@ pub struct ReportPanel {
     /// Every clock-drum step emits `Change`; the mirrors follow it immediately, but the read is
     /// issued once, when the popup closes.
     bounds_pending: bool,
+    /// Guards programmatic picker rewrites from being mistaken for user filter edits.
+    bound_write_in_progress: bool,
     pub(super) side: SideFilter,
     /// Period preset, defaulting to Today as in Moonbot.
     ///

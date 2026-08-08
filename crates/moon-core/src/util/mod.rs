@@ -1,5 +1,6 @@
 //! General utilities not tied to a specific module.
 
+pub mod display_time;
 pub mod fmt;
 pub mod hash;
 pub mod time;

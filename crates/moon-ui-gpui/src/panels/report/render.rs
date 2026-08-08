@@ -38,8 +38,9 @@ impl ReportPanel {
         let backend = self.backend.clone();
         let table_state = self.table_state.clone();
         let row_cols = self.cols.clone();
+        let display_zone = self.display_zone;
         self.natural_widths
-            .refresh(&self.cols, &data.rows, vis, p, cx);
+            .refresh(&self.cols, &data.rows, vis, p, self.display_zone, cx);
         let cols = columns::report_columns(&self.cols, vis, &self.natural_widths.widths);
         let selection = self.selection.clone();
         // Clip resized columns at the shared table host; an empty successful
@@ -60,6 +61,7 @@ impl ReportPanel {
                     &view_row,
                     selection.contains(data.row_keys.get(ri).copied().flatten()),
                     p,
+                    display_zone,
                 )
             })
             .state(&table_state)
@@ -179,6 +181,7 @@ impl Render for ReportPanel {
     /// Returns:
     ///     The complete Report surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_display_zone_fields(window, cx);
         // Automatic report work is allowed only in the focused OS window. The main Report tab may
         // remain the front dock tab behind a separate Analytics window; starting its five-second
         // query there would compete with Strategy Tuning while nobody can see the Report result.

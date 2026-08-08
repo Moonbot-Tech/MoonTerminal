@@ -30,14 +30,6 @@ impl City {
     }
 }
 
-/// Return plain UTC as the always-resolvable neutral fallback.
-///
-/// Returns the table's own first row rather than a second UTC value, so an identity check against
-/// a selected city stays meaningful.
-pub(crate) fn utc_city() -> &'static City {
-    &CITIES[0]
-}
-
 /// The selectable cities, ordered by standard UTC offset west to east, with plain UTC pinned first
 /// as the neutral default. Standard offset keeps the order stable across summer-time transitions;
 /// Dublin therefore belongs among the `+1` cities despite sharing London's wall clock year-round.
@@ -46,9 +38,7 @@ pub(crate) fn utc_city() -> &'static City {
 /// not a menu. One entry per zone the desk actually watches, which keeps the codes meaningful and
 /// the list scrollable.
 ///
-/// A `static`, not a `const`, and load-bearing: a const is inlined at each use, and the language
-/// does not promise one address for its value, so `chrome::clock` comparing a row against the
-/// selected city by pointer would be resting on an optimization rather than a guarantee.
+/// A `static` rather than a `const` keeps one shared table behind all picker and migration scans.
 #[rustfmt::skip]
 pub(crate) static CITIES: &[City] = &[
     City { code: "UTC", zone: Tz::UTC },
@@ -109,10 +99,27 @@ pub(crate) static CITIES: &[City] = &[
 
 /// Look a city up by the IANA zone id persisted in `layout.toml`.
 ///
-/// An id that names no curated city returns `None`; the caller falls back to [`utc_city`] rather
-/// than inventing a code for a zone the table cannot label.
+/// An id that names no curated city returns `None`; exact uncurated IANA zones are resolved by
+/// [`zone_by_id`] and shown as a dedicated system-zone row rather than assigned a false city code.
+///
+/// Args:
+///     id: IANA id to search in the curated picker table.
+///
+/// Returns:
+///     Matching curated city, or `None` for an uncurated or invalid id.
 pub(crate) fn by_zone_id(id: &str) -> Option<&'static City> {
     CITIES.iter().find(|c| c.zone.name() == id)
+}
+
+/// Parse any valid IANA id supported by the embedded chrono-tz database.
+///
+/// Args:
+///     id: Persisted or operating-system IANA zone id.
+///
+/// Returns:
+///     Exact zone, including valid zones outside the curated city picker.
+pub(crate) fn zone_by_id(id: &str) -> Option<Tz> {
+    id.parse().ok()
 }
 
 /// The city's wall clock at `now_utc`, as `HH:MM:SS`.
@@ -142,9 +149,8 @@ const LEGACY_OFFSETS: std::ops::RangeInclusive<i32> = (-12 * 60)..=(14 * 60);
 /// Map a fixed `header_clock_offset_min` compatibility seed onto a curated city.
 ///
 /// Zero returns `None` on purpose: it is the untouched default of every config that never opened
-/// the picker, so treating it as a choice would relabel every one of those headers. `None` leaves
-/// the clock on UTC. A value outside [`LEGACY_OFFSETS`] is not a valid saved choice and gets the
-/// same answer.
+/// the picker, so it belongs to first-run system-zone detection rather than legacy migration. A
+/// value outside [`LEGACY_OFFSETS`] is not a valid saved choice and gets the same answer.
 ///
 /// The match uses the CURRENT offset, not the standard one, because migration must preserve the
 /// wall clock at the migration instant. Matching standard offsets can map a saved `+2` to Athens
@@ -154,6 +160,13 @@ const LEGACY_OFFSETS: std::ops::RangeInclusive<i32> = (-12 * 60)..=(14 * 60);
 /// It stays lossy in one direction and cannot be otherwise: the saved integer never named a place,
 /// so a `+2` reads as any city currently at `+2`. Its clock is right; its name is a guess, and one
 /// click settles it.
+///
+/// Args:
+///     off_min: Legacy fixed offset in minutes east of UTC.
+///     now_utc: Migration instant used to compare each city's current offset.
+///
+/// Returns:
+///     Closest curated city for a valid nonzero legacy offset, otherwise `None`.
 pub(crate) fn migrate_offset_min(off_min: i32, now_utc: DateTime<Utc>) -> Option<&'static City> {
     if off_min == 0 || !LEGACY_OFFSETS.contains(&off_min) {
         return None;
@@ -163,25 +176,47 @@ pub(crate) fn migrate_offset_min(off_min: i32, now_utc: DateTime<Utc>) -> Option
         .min_by_key(|c| (current_offset_min(c.zone, now_utc) - off_min).abs())
 }
 
-/// The city and its current offset that `chrome::clock::reconcile_clock_zone` must persist this
-/// call, given the zone id already saved in the layout (if any) and the compatibility offset mirror.
+/// Zone fields that startup must persist through `Backend::set_header_clock_zone`.
+pub(crate) struct ReconciledZone {
+    /// Exact saved, migrated, or detected IANA id.
+    pub zone_id: String,
+    /// Current fixed-offset mirror for legacy readers.
+    pub offset_min: i32,
+}
+
+/// Resolve one startup clock selection without consulting the OS after a prior choice.
 ///
-/// Pure counterpart of `reconcile_clock_zone`, extracted here so it can be unit tested without a
-/// `Backend` — a GPUI entity too large to construct in a unit test. The caller must apply this
-/// on EVERY reconcile, never skipping it because a zone is already saved: the offset paired with
-/// an already-chosen city is a DERIVED value that goes stale at that city's next summer-time
-/// transition. Keeping it fresh preserves the clock for compatibility readers that consume only
-/// the offset field.
+/// Args:
+///     zone_id: Existing persisted IANA id, including an uncurated but valid system zone.
+///     legacy_offset_min: Old fixed-offset choice; nonzero values predate the IANA field.
+///     now_utc: Instant used to refresh the compatibility offset mirror.
+///     detect_system: Lazy detector called only when both persisted fields are untouched.
+///
+/// Returns:
+///     Exact zone fields to persist. `None` preserves an invalid saved id or leaves failed system
+///     detection unsaved so a later reboot can retry it.
 pub(crate) fn reconcile_target(
     zone_id: Option<&str>,
     legacy_offset_min: i32,
     now_utc: DateTime<Utc>,
-) -> Option<(&'static City, i32)> {
-    let city = match zone_id {
-        Some(id) => by_zone_id(id),
-        None => migrate_offset_min(legacy_offset_min, now_utc),
-    }?;
-    Some((city, current_offset_min(city.zone, now_utc)))
+    detect_system: impl FnOnce() -> Option<String>,
+) -> Option<ReconciledZone> {
+    let (zone_id, zone) = match zone_id {
+        Some(id) => (id.to_string(), zone_by_id(id)?),
+        None if legacy_offset_min != 0 => {
+            let city = migrate_offset_min(legacy_offset_min, now_utc)?;
+            (city.zone.name().to_string(), city.zone)
+        }
+        None => {
+            let id = detect_system()?;
+            let zone = zone_by_id(&id)?;
+            (id, zone)
+        }
+    };
+    Some(ReconciledZone {
+        zone_id,
+        offset_min: current_offset_min(zone, now_utc),
+    })
 }
 
 #[cfg(test)]

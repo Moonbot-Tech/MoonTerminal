@@ -48,6 +48,7 @@ pub(super) fn report_columns(
 ///     view: Owning Report panel entity.
 ///     selected: Whether the controlled selection contains this row.
 ///     p: Active Moon palette.
+///     zone: User-selected display time zone.
 ///
 /// Returns:
 ///     A MoonDataTable row whose highlight mirrors the controlled selection.
@@ -61,6 +62,7 @@ pub(super) fn report_data_row(
     view: &Entity<ReportPanel>,
     selected: bool,
     p: MoonPalette,
+    zone: Tz,
 ) -> MoonDataRow {
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = data.rows.get(ri) {
@@ -75,7 +77,7 @@ pub(super) fn report_data_row(
             } else if cname == "deleted" {
                 cells.push(deleted_cell(ri, val));
             } else {
-                cells.push(report_data_cell(cname, val, p));
+                cells.push(report_data_cell(cname, val, p, zone));
             }
         }
     }
@@ -332,8 +334,18 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
     )
 }
 
-fn report_data_cell(col: &str, val: &Value, p: MoonPalette) -> MoonDataCell {
-    let (text, color) = cell(col, val, p);
+/// Render one Report value with column-specific formatting and alignment.
+///
+/// Args:
+///     col: Runtime report column name.
+///     val: SQLite value from the row.
+///     p: Active MoonUI palette.
+///     zone: Selected IANA display zone for timestamp columns.
+///
+/// Returns:
+///     Clipped table cell ready for MoonDataTable.
+fn report_data_cell(col: &str, val: &Value, p: MoonPalette, zone: Tz) -> MoonDataCell {
+    let (text, color) = cell(col, val, p, zone);
     // Clip formatted content to the column's actual width. Alignment matches the column, while
     // MoonDataTable also protects cell boundaries at the container level. Font styling comes
     // from the cell style through MoonUI cascading.
@@ -381,14 +393,18 @@ fn is_numeric_report_column(col: &str) -> bool {
 ///     col: Runtime Report column key.
 ///     v: Database value to format.
 ///     p: Active palette used for signed coloring.
+///     zone: User-selected display time zone.
 ///
 /// Returns:
 ///     Display text and optional text color.
-pub(super) fn cell(col: &str, v: &Value, p: MoonPalette) -> (String, Option<u32>) {
+pub(super) fn cell(col: &str, v: &Value, p: MoonPalette, zone: Tz) -> (String, Option<u32>) {
     match col {
-        "buydate" | "closedate" | "sellsetdate" | "last_update_at" => {
-            (as_i64(v).map(db::fmt_unix).unwrap_or_default(), None)
-        }
+        "buydate" | "closedate" | "sellsetdate" | "last_update_at" => (
+            as_i64(v)
+                .map(|secs| moon_core::util::display_time::format_minute(secs, zone))
+                .unwrap_or_default(),
+            None,
+        ),
         "isshort" => match as_i64(v) {
             Some(1) => (t!("report.side.short").to_string(), Some(p.red)),
             Some(0) => (t!("report.side.long").to_string(), Some(p.green)),

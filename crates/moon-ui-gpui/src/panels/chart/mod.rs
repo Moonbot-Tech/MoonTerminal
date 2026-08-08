@@ -299,6 +299,13 @@ impl ChartPanel {
             let b = backend.read(cx);
             chart_settings_sig(&b)
         };
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            this.chart.invalidate_display_time();
+            this.view_dirty = true;
+            cx.notify();
+        })
+        .detach();
         // Notify for setting changes and infrequent axis text. Frequent market data bypasses GPUI
         // notification because `gpu_canvas.frame()` reads MarketDataSource directly. A local
         // one-shot timer handles time-based pane TTL independently of backend observations.
@@ -433,6 +440,13 @@ impl ChartPanel {
             let b = backend.read(cx);
             chart_settings_sig(&b)
         };
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            this.chart.invalidate_display_time();
+            this.view_dirty = true;
+            cx.notify();
+        })
+        .detach();
         cx.observe(&backend, |this, backend, cx| {
             let now = Instant::now();
             let (sig, settings_sig) = {

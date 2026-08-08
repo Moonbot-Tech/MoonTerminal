@@ -15,7 +15,7 @@ use crate::db::{ProfitScope, ProfitUnit};
 /// profile can never disagree about what counts as a winning trade.
 const CELL_AGG: &str = "COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)";
 
-/// A calendar heatmap cell containing the aggregate for one UTC day or hour.
+/// A calendar heatmap cell containing one selected-zone civil day or hour aggregate.
 #[derive(Clone, Debug, Default)]
 pub struct DayCell {
     /// Cell start in UTC Unix seconds.
@@ -157,9 +157,9 @@ fn comparison_projection(
 }
 
 /// Dense daily cells for calendar heatmaps (GitHub-style Year or the large Month view).
-/// One bucket is one UTC day; `GROUP BY closedate/86400` yields its PnL, trade count, and
-/// wins. The range is filled COMPLETELY with empty cells for days without trades so the
-/// calendar grid remains regular; unlike [`summary`], it NEVER widens buckets to a week.
+/// One bucket is one selected-zone civil day; the range is filled completely with empty cells for
+/// days without trades so the calendar grid remains regular. Unlike [`summary`], it never widens
+/// buckets to a week.
 /// An empty result means the period has no closed trades or the source schema has not arrived yet;
 /// database and query failures remain classified so UI callers can retry transient contention.
 ///
@@ -215,9 +215,10 @@ fn calendar_cells_from(
         // returns its default), not an error; otherwise the tab would remain on Loading.
         return Ok(Vec::new());
     };
+    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
     // Daily bucket: PnL, trade count, and wins for W/L and win rate.
     let sql = format!(
-        "SELECT (o.closedate / 86400) * 86400 AS d,
+        "SELECT mt_local_bucket(o.closedate, 86400) AS d,
                 {CELL_AGG}
          FROM {src} GROUP BY d ORDER BY d"
     );
@@ -255,13 +256,14 @@ fn calendar_cells_from(
     // cells since the epoch), or at the requested period's start otherwise. Because `to` is
     // exclusive, the last day is day(to - 1); do not extend into the future.
     let now = crate::util::now_unix_ms_i64() / 1000;
-    let today0 = now.div_euclid(86_400) * 86_400;
+    let today0 = crate::util::display_time::bucket_start(now, 86_400, q.time_zone).unwrap_or(now);
     let day0 = if all_history {
         first
     } else {
-        q.from.div_euclid(86_400) * 86_400
+        crate::util::display_time::bucket_start(q.from, 86_400, q.time_zone).unwrap_or(q.from)
     };
-    let last_grid = ((q.to - 1).div_euclid(86_400) * 86_400)
+    let last_grid = crate::util::display_time::bucket_start(q.to - 1, 86_400, q.time_zone)
+        .unwrap_or(q.to - 1)
         .min(today0)
         .max(last);
     let day0 = day0.min(last_grid);
@@ -272,14 +274,18 @@ fn calendar_cells_from(
             start: t,
             ..Default::default()
         }));
-        t += 86_400;
+        let Some(next) = crate::util::display_time::next_bucket(t, 86_400, q.time_zone) else {
+            break;
+        };
+        t = next;
     }
     Ok(out)
 }
 
-/// Hourly cells for the calendar's Day mode: `start` is the UTC hour start, with PnL,
-/// trades, and wins. The result is sparse (only hours with trades); the UI builds the 24xN
-/// grid. An empty result means no trades or source schema; failures remain classified.
+/// Hourly cells for Calendar Day mode: `start` is the absolute UTC instant of a selected-zone
+/// civil-hour bucket, with PnL, trades, and wins. The result is sparse; the UI supplies civil-hour
+/// labels and leaves skipped transition hours empty. An empty result means no trades or source
+/// schema; failures remain classified.
 ///
 /// Args:
 ///     q: Report scope and one-day time range to aggregate.
@@ -322,8 +328,9 @@ fn calendar_hours_from(
         Some(s) => s,
         None => return Ok(Vec::new()), // The schema has not arrived yet.
     };
+    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
     let sql = format!(
-        "SELECT (o.closedate / 3600) * 3600 AS h,
+        "SELECT mt_local_bucket(o.closedate, 3600) AS h,
                 {CELL_AGG}
          FROM {src} GROUP BY h ORDER BY h"
     );
@@ -345,8 +352,8 @@ fn calendar_hours_from(
     Ok(out)
 }
 
-/// Hour-of-day profile (0..23 UTC): PnL, trades, and wins aggregated across all days in
-/// the period. This supplies a cell in the Tuning by-time lower heatmap.
+/// Selected-zone hour-of-day profile (0..23): PnL, trades, and wins across the period.
+/// This supplies a cell in the Tuning by-time lower heatmap.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HourStat {
     pub profit: f64,
@@ -414,11 +421,12 @@ fn hour_profile_one(
     let Some(src) = unified_from_mode(conn, &q, projection)? else {
         return Ok(prof);
     };
+    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
     // Hour of day comes from the trade OPEN time (`buydate`), matching the schedule and tuner
     // sliders that gate ENTRY. Fall back to `closedate` when the open time is absent (0/NULL).
     // The period itself still uses `closedate`, which defines the analysis window.
     let sql = format!(
-        "SELECT ((COALESCE(NULLIF(o.buydate, 0), o.closedate) % 86400) / 3600) AS h,
+        "SELECT (mt_minute_of_day(COALESCE(NULLIF(o.buydate, 0), o.closedate)) / 60) AS h,
                 {CELL_AGG}
          FROM {src} GROUP BY h ORDER BY h"
     );

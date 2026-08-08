@@ -106,6 +106,8 @@ struct Backend {
     valuation: Option<moon_core::db::valuation::ValuationHandle>,
     /// Dedicated wake channel for report-derived consumers.
     report_revision: Entity<ReportRevision>,
+    /// Dedicated wake channel for surfaces whose civil-time meaning follows the header clock.
+    display_time_revision: Entity<DisplayTimeRevision>,
     metrics: Metrics,
     snap: MetricsSnapshot,
     /// Desired open markets as `(core, market)`, derived from `chart_market_refs`.
@@ -470,6 +472,9 @@ struct Backend {
 
 /// Notification-only entity for committed report revisions.
 struct ReportRevision;
+
+/// Notification-only entity for a changed application-wide display zone.
+struct DisplayTimeRevision;
 
 fn main() -> anyhow::Result<()> {
     startup::run()

@@ -339,9 +339,16 @@ pub fn head_row(core_uid: u64, strategy_id: i64) -> Option<HeadRow> {
     .flatten()
 }
 
-/// Formats Unix milliseconds in UTC as `dd.mm` for a compact version label in lists.
-pub fn short_date(ms: i64) -> String {
-    let days = (ms / 1000).div_euclid(86_400);
-    let (_, mo, d) = crate::util::time::civil_from_days(days);
-    format!("{d:02}.{mo:02}")
+/// Format Unix milliseconds as `DD.MM` in a selected display zone.
+///
+/// Args:
+///     ms: Instant to format as Unix milliseconds.
+///     zone: IANA display zone selected by the terminal clock.
+///
+/// Returns:
+///     Compact civil date, or an empty string for an invalid timestamp.
+pub fn short_date(ms: i64, zone: chrono_tz::Tz) -> String {
+    crate::util::display_time::at_millis(ms, zone)
+        .map(|dt| dt.format("%d.%m").to_string())
+        .unwrap_or_default()
 }

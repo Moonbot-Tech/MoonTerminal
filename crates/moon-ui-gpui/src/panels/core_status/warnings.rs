@@ -34,6 +34,7 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///     server_names: Server display name per endpoint IP.
 ///     core_names: Core display name per core id.
 ///     state: Persisted table interaction state.
+///     zone: User-selected display time zone.
 ///     cx: Panel context.
 ///
 /// Returns:
@@ -44,6 +45,7 @@ pub(super) fn warnings_table(
     server_names: Rc<HashMap<IpAddr, String>>,
     core_names: Rc<HashMap<CoreId, String>>,
     state: &Entity<MoonDataTableState>,
+    zone: chrono_tz::Tz,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
     let empty = episodes.is_empty();
@@ -57,7 +59,7 @@ pub(super) fn warnings_table(
         p,
         cx,
         MoonDataTable::new(id, row_count, move |ix, _window, _app| {
-            warn_row(&episodes[ix], &server_names, &core_names)
+            warn_row(&episodes[ix], &server_names, &core_names, zone)
         })
         .columns(columns())
         .state(state)
@@ -66,11 +68,21 @@ pub(super) fn warnings_table(
     )
 }
 
-/// Render one episode row in column order.
+/// Render one warning episode row in column order.
+///
+/// Args:
+///     episode: Warning episode to present.
+///     server_names: Display names keyed by server IP.
+///     core_names: Display names keyed by core id.
+///     zone: Selected IANA display zone used by the start timestamp.
+///
+/// Returns:
+///     Complete warning table row.
 fn warn_row(
     episode: &WarnEpisode,
     server_names: &HashMap<IpAddr, String>,
     core_names: &HashMap<CoreId, String>,
+    zone: chrono_tz::Tz,
 ) -> MoonDataRow {
     let server = episode
         .server_ip
@@ -81,7 +93,10 @@ fn warn_row(
         .and_then(|id| core_names.get(&id).cloned())
         .unwrap_or_else(|| "—".to_string());
     MoonDataRow::new([
-        MoonDataCell::text(moon_core::db::fmt_unix(episode.start_ms / 1000)),
+        MoonDataCell::text(moon_core::util::display_time::format_minute(
+            episode.start_ms / 1000,
+            zone,
+        )),
         MoonDataCell::text(crate::panels::common::warn_duration_text(
             episode.start_ms,
             episode.end_ms,
