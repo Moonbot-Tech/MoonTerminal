@@ -141,6 +141,8 @@ impl StrategiesView {
                     }
                     if this.deleted != map {
                         this.deleted = map;
+                        // The tree signature cannot see this map, so it reads this counter instead.
+                        this.deleted_rev = this.deleted_rev.wrapping_add(1);
                         cx.notify();
                     }
                 });

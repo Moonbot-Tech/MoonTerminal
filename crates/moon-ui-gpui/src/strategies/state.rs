@@ -47,8 +47,14 @@ impl StrategiesView {
         // MoonTree can mutate expansion from keyboard input, but `expanded_cores` and
         // `expanded_folders` remain authoritative. Invalidating the cached shape makes the next
         // frame restore that window-owned expansion without requiring unconditional tree pushes.
+        //
+        // The adapter cache goes with it. A keyboard expansion changes state inside MoonTree and
+        // NOTHING the tree signature hashes, so a surviving cache entry would send the next frame
+        // straight past the push that reasserts the window's own expansion — and the tree would
+        // stay wherever the keyboard left it.
         cx.subscribe(&tree_state, |this, _state, _ev: &MoonTreeEvent, cx| {
             this.last_tree_shape = None;
+            this.tree_cache = None;
             cx.notify();
         })
         .detach();
@@ -133,6 +139,7 @@ impl StrategiesView {
             panels,
             deleted: HashMap::new(),
             deleted_gen: u64::MAX,
+            deleted_rev: 0,
             deleted_inflight: false,
             expanded_deleted: HashSet::new(),
             anchor: None,
@@ -158,6 +165,7 @@ impl StrategiesView {
             pending_select: None,
             last_sig: initial_sig,
             last_tree_shape: None,
+            tree_cache: None,
             // Hide dependency-inactive parameters by default.
             only_active_params: true,
             pending_scroll: None,

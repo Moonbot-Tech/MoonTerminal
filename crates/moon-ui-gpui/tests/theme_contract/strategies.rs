@@ -293,6 +293,13 @@ fn tree_state_events_reassert_the_windows_own_expansion() {
             && body.contains("this.last_tree_shape = None;"),
         "a MoonTreeEvent subscription must drop the cached shape so the next frame re-pushes"
     );
+    // Dropping the shape alone is not enough since the adapter became cacheable: a keyboard
+    // expansion moves nothing `tree::cache::data_sig` hashes, so a surviving entry would let the
+    // next frame skip the push entirely and leave the tree where the keyboard put it.
+    assert!(
+        body.contains("this.tree_cache = None;"),
+        "the same event must drop the adapter cache, or the re-push it schedules never happens"
+    );
     // An undetached `Subscription` is dropped where it is built, tearing the subscription down at
     // construction — every grep above still matches while the mechanism is silently dead.
     // Bounded by the next statement in `new`, not by the first `;` — the closure body has its own.
@@ -347,14 +354,158 @@ fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
     );
 }
 
+/// Every window field the tree build reads is an input to the cache signature.
+///
+/// The adapter is now rebuilt only when `tree::cache::data_sig` moves, because a hover repaint was
+/// paying 1.0-1.3 ms to rebuild an identical tree ~85 times a second. That trade is only safe while
+/// the signature sees everything the build does: a field read by `build` and missed by the
+/// signature renders a tree frozen at whatever it looked like when the last hashed input changed —
+/// a checkbox that stays where the user left it after the core disagreed, a folder count stuck
+/// mid-session. Both look like data bugs, not like a cache.
+///
+/// So this walks the build's own source for `view.<field>` reads and requires each one to appear in
+/// the signature. The plausible edit it catches: adding a filter, an expansion set or a highlight
+/// to the tree and not to `data_sig` — which compiles, renders correctly on the frame it is
+/// introduced, and goes stale on the next hover.
+#[test]
+fn the_tree_cache_signature_covers_every_input_the_build_reads() {
+    let src = read_src("strategies/tree/moon.rs");
+    let cache = read_src("strategies/tree/cache.rs");
+
+    // Whitespace-stripped so a field reached across a line break (`view\n    .deleted`) is found
+    // the same way as one written inline — the formatter decides which of the two it is.
+    let scanned: String = [
+        "pub(crate) fn build(",
+        "fn build_core_subtree(",
+        "fn convert_node(",
+    ]
+    .iter()
+    .map(|f| braced_body(&src, f))
+    .collect::<Vec<_>>()
+    .join("\n");
+    let packed: String = scanned.chars().filter(|c| !c.is_whitespace()).collect();
+
+    // Accessors read state indirectly, so they stand in for the field behind them.
+    fn behind(field: &str) -> &str {
+        match field {
+            "drag_ids_for_core" => "sel",
+            "ui_folder_paths" => "ui_folders",
+            // Loaded in the background; the map itself is too big to hash, so an explicit counter
+            // represents it. `deleted_gen` deliberately does NOT: it moves when a load STARTS.
+            "deleted" => "deleted_rev",
+            other => other,
+        }
+    }
+
+    let mut missing = Vec::new();
+    let mut checked = 0;
+    for chunk in packed.split("view.").skip(1) {
+        let field: String = chunk
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if field.is_empty() {
+            continue;
+        }
+        checked += 1;
+        let expected = behind(&field);
+        if !cache.contains(&format!("view.{expected}")) {
+            missing.push(format!("{field} (expected view.{expected} in data_sig)"));
+        }
+    }
+    assert!(
+        checked >= 8,
+        "the scan found only {checked} field reads — the build was renamed or split and this test \
+         is now checking nothing"
+    );
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "these inputs are read by the tree build but absent from the cache signature, so the tree \
+         would render stale after they change:\n{}",
+        missing.join("\n")
+    );
+
+    // The store side has no `view.` form to scan for, and the captions carry both numbers. Matched
+    // as CODE, not as any occurrence: the prose here names the counters it rejects, so a substring
+    // search over the whole file would go green on a comment.
+    let sig_body = code_only(braced_body(&cache, "pub(crate) fn data_sig("));
+    for read in ["cd.strategies_rev", "open_orders_digest(cd)"] {
+        assert!(
+            sig_body.contains(read),
+            "the signature must read {read}, or the tree freezes while the core keeps talking"
+        );
+    }
+    // `orders_table_rev` advances for every order batch, including a price moving on an untouched
+    // order — keying on it made a busy account miss on roughly half its frames.
+    assert!(
+        !sig_body.contains("orders_table_rev"),
+        "the open-order digest, not the batch revision: the tree renders counts, not batches"
+    );
+    // The Deleted folder's caption comes from the dictionary and a language switch is only a
+    // repaint, which moves nothing else the signature reads.
+    assert!(
+        cache.contains("rust_i18n::locale()"),
+        "the active locale must be an input, or a language switch leaves the Deleted row translated"
+    );
+
+    // A counter nothing increments is worse than no counter: it reads as covered.
+    let versions = read_src("strategies/versions.rs");
+    let ensure = braced_body(&versions, "pub(super) fn ensure_deleted(");
+    assert!(
+        ensure.contains("deleted_rev = this.deleted_rev.wrapping_add(1)"),
+        "deleted_rev must advance where `deleted` is actually replaced"
+    );
+
+    // And the render path has to consult the cache at all.
+    let window = read_src("strategies/mod.rs");
+    let render = braced_body(&window, "fn render(&mut self, window: &mut Window");
+    assert!(
+        render.contains("tree::cache::data_sig(") && render.contains("TreeCache::store("),
+        "render must key the build on the signature and retain the result"
+    );
+}
+
+/// A core/folder row's `ElementId` is the node's own tree id, never its rendered caption.
+///
+/// GPUI keeps `pending_mouse_down` in element state addressed by `ElementId` (fork
+/// `elements/div.rs`), and a click is only delivered when press and release find the SAME state. A
+/// caption-derived id ("core  3/10  (2)") changes identity the moment a counter moves, so any
+/// repaint between press and release — which a trading core produces continuously — discards the
+/// click and the folder silently fails to expand.
+///
+/// The plausible edit this catches: rebuilding the id from the row text "so it reads nicely in the
+/// inspector", which compiles, looks correct, and only misbehaves on a live account.
+#[test]
+fn a_core_folder_rows_element_id_is_its_node_id() {
+    let src = read_src("strategies/tree/moon.rs");
+    let row = code_only(braced_body(&src, "fn core_folder_row("));
+    assert!(
+        row.contains(".id(row_id)"),
+        "the core/folder row must take its ElementId from the node id passed in"
+    );
+    assert!(
+        !row.contains("format!(\"strat-tree-cf-"),
+        "a caption-derived ElementId changes whenever a count moves and drops the click"
+    );
+    // The id has to be the node's, not another per-frame string: `render_row` reads it from the
+    // MoonTree entry, which is exactly the `c:`/`f:`/`d:` identity `build` assigned.
+    let render = code_only(braced_body(&src, "fn render_row("));
+    assert!(
+        render.contains("let node_id = entry.item().id().clone();"),
+        "render_row must source the row id from the tree entry's node id"
+    );
+}
+
 /// `core_folder_row`'s expand/collapse marker must stay a passive `MoonDisclosure::glyph`.
 ///
 /// Plausible edit: swap `MoonDisclosure::glyph(expanded)` for `MoonDisclosure::button(id, ..)` so
 /// the marker "looks" clickable on its own. In this fork `should_insert_hitbox` inserts a hitbox
 /// for a cursor, a hover style OR a listener — `button` installs all three — so the marker would
-/// then take a hitbox of its own and swallow the click meant for the whole `strat-tree-cf-*` row,
-/// which is what actually expands/selects on click. Clicking anywhere else on the row still works,
-/// so this is invisible without clicking the marker itself.
+/// then take a hitbox of its own and swallow the click meant for the whole core/folder row, which
+/// is what actually expands/selects on click. Clicking anywhere else on the row still works, so
+/// this is invisible without clicking the marker itself.
 #[test]
 fn a_core_folder_row_marker_stays_passive() {
     let src = read_src("strategies/tree/moon.rs");

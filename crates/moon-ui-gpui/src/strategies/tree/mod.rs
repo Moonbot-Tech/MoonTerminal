@@ -2,6 +2,7 @@
 //! filters, staged checkboxes, and start/stop (Apply) buttons. These methods extend
 //! `StrategiesView`; state and pure helpers live in [`super`] and [`super::logic`].
 
+pub(crate) mod cache;
 pub(crate) mod dialogs;
 pub(crate) mod dnd;
 pub(crate) mod menu;
