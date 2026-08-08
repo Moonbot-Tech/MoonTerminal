@@ -14,7 +14,7 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::super::summary::{fmt_signed_unit, sign_color};
-use super::{date_of, day_window, split_i18n};
+use super::{date_of, day_window, hour_start, next_day, previous_day, split_i18n};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::DayCell;
@@ -40,16 +40,18 @@ impl AnalyticsView {
         let map: HashMap<i64, &DayCell> = hours.iter().map(|c| (c.start, c)).collect();
         // Daily aggregate (over the window's hourly cells).
         let day_agg = |d0: i64| -> (f64, i64, i64) {
+            let end = next_day(d0, self.display_zone);
             hours
                 .iter()
-                .filter(|c| c.start >= d0 && c.start < d0 + 86_400)
+                .filter(|c| c.start >= d0 && c.start < end)
                 .fold((0.0f64, 0i64, 0i64), |a, c| {
                     (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
                 })
         };
         let sel = self.cal_day;
         let (profit, trades, wins) = day_agg(sel);
-        let (pp, pt, pw) = day_agg(sel - 86_400);
+        let previous = previous_day(sel, self.display_zone);
+        let (pp, pt, pw) = day_agg(previous);
         let has_prev = pt > 0 || pp != 0.0;
 
         v_flex()
@@ -178,7 +180,7 @@ impl AnalyticsView {
         let cell_gap = design::ui_px(cx, 4.0);
         let gutter_w = design::font_w_px(cx, 84.0);
         let wdays = split_i18n(t!("analytics.heat.weekdays").to_string());
-        let (top, bottom) = day_window(self.cal_day);
+        let (top, bottom) = day_window(self.cal_day, self.display_zone);
 
         // Largest hourly |PnL| (for the fill) + the average profit per hour
         // across the visible days (only days that traded in that hour) — shown
@@ -190,7 +192,9 @@ impl AnalyticsView {
             let mut d = top;
             while d <= bottom {
                 for h in 0..24usize {
-                    if let Some(c) = map.get(&(d + h as i64 * 3600)) {
+                    if let Some(c) =
+                        hour_start(d, h as u32, self.display_zone).and_then(|start| map.get(&start))
+                    {
                         if c.trades > 0 {
                             hour_max = hour_max.max(c.profit.abs());
                             hour_sum[h] += c.profit;
@@ -198,7 +202,11 @@ impl AnalyticsView {
                         }
                     }
                 }
-                d += 86_400;
+                let next = next_day(d, self.display_zone);
+                if next == d {
+                    break;
+                }
+                d = next;
             }
         }
 
@@ -234,7 +242,7 @@ impl AnalyticsView {
         let mut d = top;
         while d <= bottom {
             let sel = d == self.cal_day;
-            let dt = date_of(d);
+            let dt = date_of(d, self.display_zone);
             let wd = wdays
                 .get(dt.weekday().num_days_from_monday() as usize)
                 .cloned()
@@ -284,10 +292,11 @@ impl AnalyticsView {
                 .gap(cell_gap)
                 .child(gutter);
             for h in 0..24i64 {
-                let hsec = d + h * 3600;
+                let start = hour_start(d, h as u32, self.display_zone);
+                let hsec = start.unwrap_or_else(|| d.saturating_add(h * 3_600));
                 rowel = rowel.child(hour_cell(
                     hsec,
-                    map.get(&hsec).copied(),
+                    start.and_then(|value| map.get(&value).copied()),
                     hour_max,
                     sel,
                     p,
@@ -295,7 +304,11 @@ impl AnalyticsView {
                 ));
             }
             rows = rows.child(rowel);
-            d += 86_400;
+            let next = next_day(d, self.display_zone);
+            if next == d {
+                break;
+            }
+            d = next;
         }
 
         v_flex()

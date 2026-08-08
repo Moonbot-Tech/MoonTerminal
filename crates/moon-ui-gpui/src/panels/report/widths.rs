@@ -26,6 +26,7 @@ impl NaturalWidthsCache {
     ///     rows: Current formatted-data source.
     ///     visible: Columns currently rendered; newly shown columns are measured lazily.
     ///     p: Active palette used by cell formatting.
+    ///     zone: User-selected display time zone.
     ///     cx: Application context used for text measurement and scale.
     ///
     /// Returns:
@@ -36,6 +37,7 @@ impl NaturalWidthsCache {
         rows: &[Vec<Value>],
         visible: &[usize],
         p: MoonPalette,
+        zone: Tz,
         cx: &App,
     ) {
         let scale = design::font_scale(cx);
@@ -52,7 +54,7 @@ impl NaturalWidthsCache {
             })
             .collect();
         self.widths
-            .extend(natural_widths(cols, rows, &missing, p, cx));
+            .extend(natural_widths(cols, rows, &missing, p, zone, cx));
     }
 }
 
@@ -67,6 +69,7 @@ impl NaturalWidthsCache {
 ///     rows: Current query rows in schema order.
 ///     visible: Source-column indices requiring measurement.
 ///     p: Active palette used by cell formatting.
+///     zone: User-selected display time zone.
 ///     cx: Application context used for text measurement.
 ///
 /// Returns:
@@ -76,6 +79,7 @@ fn natural_widths(
     rows: &[Vec<Value>],
     visible: &[usize],
     p: MoonPalette,
+    zone: Tz,
     cx: &App,
 ) -> std::collections::HashMap<String, f32> {
     visible
@@ -86,7 +90,7 @@ fn natural_widths(
             let mut width = design::mono_body_text_width(cx, &header, FontWeight::SEMIBOLD.0);
             for row in rows.iter().take(query::MAX_REPORT_ROWS) {
                 let value = row.get(column_index).unwrap_or(&Value::Null);
-                let text = columns::cell(column, value, p).0;
+                let text = columns::cell(column, value, p, zone).0;
                 width = width.max(design::mono_body_text_width(
                     cx,
                     &text,

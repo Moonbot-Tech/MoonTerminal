@@ -1,10 +1,12 @@
 // `use super::*` is banned here: the parent chain re-exports `gpui::*`, whose own `test` attribute
 // shadows the built-in one and makes `#[test]` expand recursively.
 use crate::panels::news::clip::telegram_text;
+use chrono_tz::Tz;
 use moon_core::feed::NewsItem;
 
 /// 2026-07-25 08:26:50 UTC.
 const TIME_MS: i64 = 1_784_968_010_000;
+const ZONE: Tz = Tz::Europe__Warsaw;
 
 fn item() -> NewsItem {
     NewsItem {
@@ -25,20 +27,20 @@ fn item() -> NewsItem {
 /// body. Putting the hashtags back between the headline and the text is the regression here.
 #[test]
 fn tickers_head_the_post_and_topics_close_it() {
-    let text = telegram_text(&item(), true);
+    let text = telegram_text(&item(), true, ZONE);
     assert_eq!(
         text,
-        "TOA · 25.07.2026 08:26:50 UTC\n$VANRY $PORTAL\n\nРусский текст\n#listing"
+        "TOA · 25.07.2026 10:26:50 CEST\n$VANRY $PORTAL\n\nРусский текст\n#listing"
     );
 }
 
-/// Catches pasting the absolute stamp as the card's relative age: a forwarded message is read
-/// later, when "16 сек назад" means something else entirely.
+/// Hard-coding UTC in `clip.rs:stamp` makes this assertion red and makes copied News disagree with
+/// the selected-zone timestamp visible in the same card.
 #[test]
-fn the_stamp_is_absolute_utc() {
-    let text = telegram_text(&item(), true);
+fn the_absolute_stamp_follows_the_selected_zone() {
+    let text = telegram_text(&item(), true, ZONE);
     assert!(
-        text.starts_with("TOA · 25.07.2026 08:26:50 UTC\n"),
+        text.starts_with("TOA · 25.07.2026 10:26:50 CEST\n"),
         "{text}"
     );
 }
@@ -47,8 +49,8 @@ fn the_stamp_is_absolute_utc() {
 /// must pick the clipboard's body too.
 #[test]
 fn the_body_follows_the_cards_translate_toggle() {
-    assert!(telegram_text(&item(), true).contains("\nРусский текст\n"));
-    assert!(telegram_text(&item(), false).contains("\nEnglish body\n"));
+    assert!(telegram_text(&item(), true, ZONE).contains("\nРусский текст\n"));
+    assert!(telegram_text(&item(), false, ZONE).contains("\nEnglish body\n"));
 }
 
 /// Catches emitting stray separators for an item with no source, no stamp and no subjects — the
@@ -59,7 +61,7 @@ fn a_bare_item_yields_just_its_body() {
         en: "Body only".to_string(),
         ..NewsItem::default()
     };
-    assert_eq!(telegram_text(&bare, false), "Body only");
+    assert_eq!(telegram_text(&bare, false, ZONE), "Body only");
 }
 
 /// Catches adding the two service offsets together: both are measured from publication, so their
@@ -73,7 +75,7 @@ fn the_delay_is_the_latest_service_mark_not_the_sum() {
         en: "x".to_string(),
         ..NewsItem::default()
     };
-    let text = telegram_text(&timed, false);
+    let text = telegram_text(&timed, false, ZONE);
     assert!(text.contains("(+2349"), "{text}");
     assert!(!text.contains("2355"), "{text}");
 }
@@ -88,8 +90,8 @@ fn the_terminal_receipt_is_not_part_of_the_delay() {
         en: "x".to_string(),
         ..NewsItem::default()
     };
-    let text = telegram_text(&timed, false);
-    assert_eq!(text, "25.07.2026 08:26:50 UTC\n\nx");
+    let text = telegram_text(&timed, false, ZONE);
+    assert_eq!(text, "25.07.2026 10:26:50 CEST\n\nx");
 }
 
 /// Catches emitting a stray blank line or a trailing newline for an item whose body never arrived —
@@ -103,8 +105,8 @@ fn a_body_less_item_ends_after_its_topics() {
         ..NewsItem::default()
     };
     assert_eq!(
-        telegram_text(&headless_body, false),
-        "TOA · 25.07.2026 08:26:50 UTC\n\n#listing"
+        telegram_text(&headless_body, false, ZONE),
+        "TOA · 25.07.2026 10:26:50 CEST\n\n#listing"
     );
 }
 
@@ -112,5 +114,5 @@ fn a_body_less_item_ends_after_its_topics() {
 /// keys on this to leave whatever the user already had.
 #[test]
 fn an_empty_item_yields_nothing_at_all() {
-    assert_eq!(telegram_text(&NewsItem::default(), false), "");
+    assert_eq!(telegram_text(&NewsItem::default(), false, ZONE), "");
 }

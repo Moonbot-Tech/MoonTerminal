@@ -32,7 +32,6 @@ use gpui::*;
 use moon_ui::{MoonPalette, MoonSurface, MoonSurfaceVariant, h_flex, v_flex};
 use rust_i18n::t;
 
-use moon_chart::axes::fmt_clock_dated;
 use moon_chart::news_marks::{MarkHit, NewsMark};
 use moon_core::config::Language;
 use moon_core::feed::NewsItem;
@@ -378,12 +377,7 @@ fn delivery_lag_ms(item: &NewsItem, mark_time_ms: i64) -> Option<i64> {
 fn news_row(item: &NewsItem, mark: &NewsMark, now_ms: i64, p: MoonPalette, cx: &App) -> AnyElement {
     // The chart's own axis formatter, so the card and the axis under it cannot disagree about where
     // the gem sits — and it adds the date when the mark is not from today.
-    let clock = fmt_clock_dated(
-        mark.time_ms as f64,
-        crate::chartdx::axes::local_offset_sec(),
-        true,
-        now_ms as f64,
-    );
+    let clock = crate::chartdx::axes::format_clock_dated(mark.time_ms as f64, true, now_ms as f64);
     let mut head = h_flex()
         .w_full()
         .items_center()

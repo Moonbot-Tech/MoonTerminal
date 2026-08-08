@@ -1,6 +1,8 @@
 //! Period and tabs of the "Analytics" window: period presets (`Period`) with their ranges and
 //! persist keys, the list of tabs (`Tab`) and the date helpers shared by the pages.
 
+use chrono::Datelike as _;
+use chrono_tz::Tz;
 use rust_i18n::t;
 
 use crate::controls::date_range;
@@ -39,13 +41,13 @@ impl Tab {
     }
 }
 
-/// Period presets (UTC days, same as in the "Report" panel).
+/// Period presets resolved as civil dates in the selected header-clock zone.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Period {
     Today,
     Yesterday,
     Week,
-    /// The current calendar month (from the 1st, UTC).
+    /// The current selected-zone calendar month from its first civil day.
     CurMonth,
     /// A rolling 30 days.
     Month,
@@ -96,7 +98,14 @@ impl Period {
             p => p.id().to_string(),
         }
     }
-    pub(super) fn title(self) -> String {
+    /// Format the localized period label in the selected display zone.
+    ///
+    /// Args:
+    ///     zone: Selected IANA display zone used by custom bound labels.
+    ///
+    /// Returns:
+    ///     Localized preset name or formatted custom range.
+    pub(super) fn title(self, zone: Tz) -> String {
         match self {
             Period::Today => t!("analytics.period.today"),
             Period::Yesterday => t!("analytics.period.yesterday"),
@@ -109,63 +118,130 @@ impl Period {
                 let a = if f < 0 {
                     "—".to_string()
                 } else {
-                    fmt_minute(f)
+                    fmt_minute(f, zone)
                 };
                 // `t` is exclusive, so the label names the last minute INSIDE the range.
                 return format!(
                     "{a} – {}",
-                    fmt_minute((t - date_range::MINUTE).max(f.max(0)))
+                    fmt_minute((t - date_range::MINUTE).max(f.max(0)), zone)
                 );
             }
         }
         .to_string()
     }
-    /// The `[from, to)` bounds in UTC unix seconds; from = -1 → the whole history.
-    pub(super) fn range(self) -> (i64, i64) {
+    /// Resolve this period to absolute `[from, to)` bounds using civil calendar dates.
+    ///
+    /// Args:
+    ///     zone: Selected IANA display zone.
+    ///
+    /// Returns:
+    ///     UTC Unix-second bounds; `from = -1` means the whole history.
+    pub(super) fn range(self, zone: Tz) -> (i64, i64) {
         let now = moon_core::util::now_unix_ms_i64() / 1000;
-        let day0 = now.div_euclid(86_400) * 86_400;
-        let tomorrow = day0 + 86_400;
+        self.range_at(now, zone)
+    }
+
+    /// Resolve this period at a pinned instant for deterministic civil-boundary handling.
+    ///
+    /// Args:
+    ///     now: Current UTC Unix timestamp in seconds.
+    ///     zone: Selected IANA display zone.
+    ///
+    /// Returns:
+    ///     UTC Unix-second bounds; `from = -1` means the whole history.
+    fn range_at(self, now: i64, zone: Tz) -> (i64, i64) {
+        let today = moon_core::util::display_time::date(now, zone).unwrap_or_default();
+        let day0 = moon_core::util::display_time::day_start(today, zone).unwrap_or(now);
+        let tomorrow = moon_core::util::display_time::day_start(
+            moon_core::util::display_time::shift_date(today, 1),
+            zone,
+        )
+        .unwrap_or(now);
+        let shifted =
+            |days| moon_core::util::display_time::shift_day_start(day0, days, zone).unwrap_or(day0);
         match self {
             Period::Today => (day0, tomorrow),
-            Period::Yesterday => (day0 - 86_400, day0),
-            Period::Week => (tomorrow - 7 * 86_400, tomorrow),
+            Period::Yesterday => (shifted(-1), day0),
+            Period::Week => (shifted(-6), tomorrow),
             Period::CurMonth => {
-                // The 1st of the current month: "YYYY-MM" from the DB formatter + "-01".
-                let ym = moon_core::db::fmt_unix(now);
-                let start = moon_core::db::parse_ymd(&format!("{}-01", &ym[..7.min(ym.len())]))
+                // Resolve the current civil month's first date through the selected zone.
+                let start = today
+                    .with_day(1)
+                    .and_then(|day| moon_core::util::display_time::day_start(day, zone))
                     .unwrap_or(day0);
                 (start, tomorrow)
             }
-            Period::Month => (tomorrow - 30 * 86_400, tomorrow),
-            Period::Year => (tomorrow - 365 * 86_400, tomorrow),
+            Period::Month => (shifted(-29), tomorrow),
+            Period::Year => (shifted(-364), tomorrow),
             Period::All => (-1, tomorrow),
             Period::Custom(f, t) => (f, t),
         }
     }
 }
 
-/// unix seconds → UTC date (for the "from"/"to" calendars and the heatmap).
-pub(super) fn day_of_secs(secs: i64) -> Option<chrono::NaiveDate> {
-    chrono::DateTime::from_timestamp(secs, 0).map(|d| d.date_naive())
+/// Return the selected-zone civil date for an absolute instant.
+///
+/// Args:
+///     secs: UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil date, or `None` outside chrono's range.
+pub(super) fn day_of_secs(secs: i64, zone: Tz) -> Option<chrono::NaiveDate> {
+    moon_core::util::display_time::date(secs, zone)
 }
 
-/// UTC date → unix seconds of that day's midnight.
-pub(super) fn secs_of_day(d: chrono::NaiveDate) -> i64 {
-    d.and_hms_opt(0, 0, 0)
-        .map(|dt| dt.and_utc().timestamp())
-        .unwrap_or(0)
+/// Resolve the first real instant of one selected-zone civil date.
+///
+/// Args:
+///     d: Civil date.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     UTC Unix seconds, or zero when the date cannot be resolved.
+pub(super) fn secs_of_day(d: chrono::NaiveDate, zone: Tz) -> i64 {
+    moon_core::util::display_time::day_start(d, zone).unwrap_or(0)
 }
 
-/// "dd.mm.yy" for the range field labels and the heatmap info.
-pub(super) fn fmt_day(secs: i64) -> String {
-    day_of_secs(secs)
+/// Resolve a civil date only when that date actually exists in the selected zone.
+///
+/// The shared gap policy advances a fully skipped historical date to the next real instant. Month
+/// cells need to distinguish that case so the following day's aggregate is not displayed twice.
+///
+/// Args:
+///     d: Civil date represented by one calendar cell.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     First real instant of `d`, or `None` when the date is skipped or out of range.
+pub(super) fn exact_secs_of_day(d: chrono::NaiveDate, zone: Tz) -> Option<i64> {
+    moon_core::util::display_time::exact_day_start(d, zone)
+}
+
+/// Format an absolute instant as `DD.MM.YY` in the selected zone.
+///
+/// Args:
+///     secs: UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil date label, or an empty string outside chrono's range.
+pub(super) fn fmt_day(secs: i64, zone: Tz) -> String {
+    day_of_secs(secs, zone)
         .map(|d| d.format("%d.%m.%y").to_string())
         .unwrap_or_default()
 }
 
-/// "dd.mm.yy HH:MM" for the period label; the bounds carry a clock time, so the label shows it.
-pub(super) fn fmt_minute(secs: i64) -> String {
-    date_range::dt_of_secs(secs)
+/// Format an absolute instant as `DD.MM.YY HH:MM` in the selected zone.
+///
+/// Args:
+///     secs: UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil date-time label, or an empty string outside chrono's range.
+pub(super) fn fmt_minute(secs: i64, zone: Tz) -> String {
+    date_range::dt_of_secs(secs, zone)
         .map(|d| d.format("%d.%m.%y %H:%M").to_string())
         .unwrap_or_default()
 }
@@ -176,6 +252,7 @@ pub(super) fn fmt_minute(secs: i64) -> String {
 ///     from: Lower bound as picked, or `None` while the field is empty.
 ///     to: Upper bound as picked, or `None` while the field is empty.
 ///     tomorrow: Midnight after today, used when the upper field is empty.
+///     zone: Selected IANA display zone used to resolve both civil picker values.
 ///
 /// Returns:
 ///     `(from, to)` in UTC unix seconds, `from = -1` for unbounded history. The upper bound is
@@ -186,10 +263,14 @@ pub(super) fn custom_bounds(
     from: Option<chrono::NaiveDateTime>,
     to: Option<chrono::NaiveDateTime>,
     tomorrow: i64,
+    zone: Tz,
 ) -> (i64, i64) {
-    let lower = from.map(date_range::secs_of_dt).unwrap_or(-1);
+    let lower = from
+        .and_then(|dt| date_range::secs_of_dt(dt, zone, date_range::Bound::From))
+        .unwrap_or(-1);
     let upper = to
-        .map(|dt| date_range::exclusive_end(date_range::secs_of_dt(dt)))
+        .and_then(|dt| date_range::secs_of_dt(dt, zone, date_range::Bound::To))
+        .map(date_range::exclusive_end)
         .unwrap_or_else(|| tomorrow.max(lower + date_range::MINUTE));
     (lower, upper)
 }

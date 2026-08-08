@@ -58,7 +58,7 @@ impl AnalyticsView {
             .filter(|d| d.trades > 0)
             .map(|d| d.profit.abs())
             .fold(0.0f64, f64::max);
-        let today = today_start();
+        let today = today_start(self.display_zone);
 
         let map: HashMap<i64, &DayCell> = days.iter().map(|d| (d.start, d)).collect();
         v_flex()
@@ -172,7 +172,7 @@ impl AnalyticsView {
     /// Args:
     ///     map: Day-start timestamps mapped to their trade aggregates.
     ///     month_max: Largest daily `|PnL|` in the month, used to scale cell fills.
-    ///     today: Current UTC day start, used to classify future cells.
+    ///     today: Current selected-zone day start, used to classify future cells.
     ///     p: Active MoonUI palette.
     ///     cx: GPUI view context used for sizing and day-selection listeners.
     ///
@@ -200,9 +200,10 @@ impl AnalyticsView {
             );
         }
 
-        let first = month_start(y, m);
-        let lead = date_of(first).weekday().num_days_from_monday() as i64;
-        let anchor = first - lead * 86_400; // Monday of the week the 1st falls in
+        let first = month_start(y, m, self.display_zone);
+        let first_date = date_of(first, self.display_zone);
+        let lead = first_date.weekday().num_days_from_monday() as i64;
+        let anchor = moon_core::util::display_time::shift_date(first_date, -lead);
         let ndays = days_in_month(y, m) as usize;
         let n_rows = (lead as usize + ndays).div_ceil(7);
 
@@ -210,12 +211,16 @@ impl AnalyticsView {
         for row in 0..n_rows {
             let mut rowel = h_flex().flex_1().w_full().gap(cell_gap);
             for col in 0..7 {
-                let t = anchor + ((row * 7 + col) as i64) * 86_400;
-                let dt = date_of(t);
+                let dt = moon_core::util::display_time::shift_date(anchor, (row * 7 + col) as i64);
+                let t = super::super::exact_secs_of_day(dt, self.display_zone);
                 let dom = dt.day();
                 let in_month = dt.month() == m && dt.year() == y;
-                let is_future = t > today;
-                let day = if in_month { map.get(&t).copied() } else { None };
+                let is_future = t.is_some_and(|start| start > today);
+                let day = if in_month {
+                    t.and_then(|start| map.get(&start).copied())
+                } else {
+                    None
+                };
                 rowel = rowel.child(cal_cell(t, dom, day, in_month, is_future, month_max, p, cx));
             }
             weeks = weeks.child(rowel);
@@ -309,9 +314,9 @@ impl AnalyticsView {
 /// This is a free function because the card's rendering needs no view state.
 ///
 /// Args:
-///     dsec: Day start, in unix seconds.
+///     dsec: Exact day start, or `None` for a civil date skipped by the selected zone.
 ///     dom: Day of month, the number drawn in the corner.
-///     day: Aggregate for that day, or `None` outside the month or with no trades.
+///     day: Aggregate for that day, or `None` outside the month, without trades, or when skipped.
 ///     in_month: Whether the day belongs to the displayed month.
 ///     is_future: Whether the day is still ahead of today.
 ///     month_max: Largest daily `|PnL|` in the grid, the fill's scale.
@@ -322,7 +327,7 @@ impl AnalyticsView {
 ///     The complete day card.
 #[allow(clippy::too_many_arguments)]
 fn cal_cell(
-    dsec: i64,
+    dsec: Option<i64>,
     dom: u32,
     day: Option<&DayCell>,
     in_month: bool,
@@ -333,7 +338,7 @@ fn cal_cell(
 ) -> AnyElement {
     let pad = design::ui_px(cx, 8.0);
     let r = design::ui_px(cx, 8.0);
-    let date_only = !in_month || is_future;
+    let date_only = !in_month || is_future || dsec.is_none();
     let profit = day.map_or(0.0, |d| d.profit);
     let trades = day.map_or(0, |d| d.trades);
     let date_el = div()
@@ -402,19 +407,23 @@ fn cal_cell(
         moon_alpha(p.border, 0.3)
     };
     let cell = div()
-        .id(("mc", dsec as u64))
+        .id(("mc", dsec.unwrap_or(-i64::from(dom)) as u64))
         .relative()
         .flex_1()
         .h_full()
         .overflow_hidden()
-        .cursor_pointer()
         .rounded(r)
         .bg(bg)
         .border_1()
-        .border_color(border)
-        // Click a day → the "Day" breakdown.
-        .on_click(cx.listener(move |this, _, _, cx| this.cal_goto_day(dsec, cx)));
-    // Highlight only cards that show figures; date-only cards remain clickable navigation.
+        .border_color(border);
+    // A fully skipped civil date has no instant to open and remains a non-interactive label.
+    let cell = if let Some(dsec) = dsec {
+        cell.cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| this.cal_goto_day(dsec, cx)))
+    } else {
+        cell
+    };
+    // Highlight only cards that show figures; existing date-only cards remain clickable.
     let cell = if date_only {
         cell
     } else {

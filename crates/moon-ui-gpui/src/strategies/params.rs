@@ -197,7 +197,7 @@ impl StrategiesView {
         // The persisted-snapshot banner marks parameters as read-only. When there is no diff
         // (for example, a created/baseline snapshot), explain why all fields are displayed.
         if let Some(vf) = self.versions.sel {
-            let date = moon_core::strat_db::stats::short_date(vf);
+            let date = moon_core::strat_db::stats::short_date(vf, self.display_zone);
             let text = if self.version_changed_filter().is_some() {
                 t!("strat.version_view", date = date).to_string()
             } else {

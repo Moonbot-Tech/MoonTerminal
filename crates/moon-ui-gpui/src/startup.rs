@@ -382,6 +382,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
             );
         }
         let report_revision = cx.new(|_| crate::ReportRevision);
+        let display_time_revision = cx.new(|_| crate::DisplayTimeRevision);
+        crate::chartdx::axes::set_display_zone(
+            crate::chrome::clock::resolved_header_clock_zone(layout.header_clock_zone.as_deref()),
+        );
         // Check the complete replica once because individual reads only detect
         // damage on pages reached by their query.
         moon_core::db::integrity::spawn_check();
@@ -398,6 +402,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             reports,
             valuation,
             report_revision: report_revision.clone(),
+            display_time_revision: display_time_revision.clone(),
             metrics: Metrics::new(),
             snap: MetricsSnapshot::default(),
             // open = markets of OPEN chart panels, as in App::about_to_wait in egui.
@@ -525,8 +530,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
             quitting: false,
         });
         backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
-        // Settle the header clock fields ONCE before any window reads them: derive a missing city
-        // zone from the compatibility seed and refresh the chosen city's current offset mirror.
+        // Settle the header clock fields once before any window reads them: detect an untouched
+        // profile's OS zone, migrate an old nonzero offset, or refresh a saved zone's offset mirror.
         crate::chrome::clock::reconcile_clock_zone(&backend, cx);
 
         // Register panel factories used to restore dock layouts (PanelRegistry is global).

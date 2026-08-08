@@ -39,7 +39,6 @@ pub(super) enum Disturbance {
 }
 
 /// Parsed rows for one source and the filtered view over them.
-#[derive(Default)]
 pub(super) struct RowBuffer {
     /// Parsed rows, oldest first, always sorted by timestamp.
     rows: Vec<LineView>,
@@ -54,13 +53,67 @@ pub(super) struct RowBuffer {
     /// deliberate — a base learned now does not light up rows parsed before it (a whole-buffer
     /// rebuild used to do that by accident), and one learned from an evicted row keeps working.
     known: HashSet<String>,
+    /// Display zone used for clocks cached in every parsed row.
+    zone: chrono_tz::Tz,
     /// Character budget of the widest row that passed the filters, sizing the horizontal scroll
     /// area. Raised as rows arrive and recomputed only by [`RowBuffer::refilter`], so eviction can
     /// leave it generous — a scroll area slightly wider than its content, never narrower.
     widest_chars: usize,
 }
 
+impl Default for RowBuffer {
+    /// Build an empty UTC buffer for isolated tests and callers without an application preference.
+    ///
+    /// Returns:
+    ///     An empty row buffer whose incoming timestamps are displayed in UTC.
+    fn default() -> Self {
+        Self::new(chrono_tz::UTC)
+    }
+}
+
 impl RowBuffer {
+    /// Build an empty row buffer using the selected application-wide display zone.
+    ///
+    /// Args:
+    ///     zone: Zone used to format clocks on incoming rows.
+    ///
+    /// Returns:
+    ///     An empty buffer ready to ingest rows in `zone`.
+    pub(super) fn new(zone: chrono_tz::Tz) -> Self {
+        Self {
+            rows: Vec::new(),
+            view: Vec::new(),
+            known: HashSet::new(),
+            zone,
+            widest_chars: 0,
+        }
+    }
+
+    /// Reformat every cached row clock after the selected display zone changes.
+    ///
+    /// This deliberate whole-buffer pass runs only on a user zone change. Incoming revisions keep
+    /// the incremental arrival path and parse only fresh lines.
+    ///
+    /// Args:
+    ///     zone: Newly selected application-wide display zone.
+    ///
+    /// Returns:
+    ///     Nothing; cached clocks and visible-row width are updated in place.
+    pub(super) fn rezone(&mut self, zone: chrono_tz::Tz) {
+        self.zone = zone;
+        for row in &mut self.rows {
+            row.rezone(zone);
+        }
+        self.widest_chars = self
+            .view
+            .iter()
+            .filter_map(|&ix| self.rows.get(ix))
+            .map(row::row_width_chars)
+            .max()
+            .unwrap_or(0)
+            .min(line_list::WIDEST_CHARS_CAP);
+    }
+
     /// Drops everything, for a source the buffer cannot be carried across.
     pub(super) fn clear(&mut self) {
         self.rows.clear();
@@ -160,7 +213,7 @@ impl RowBuffer {
         crate::diag::bump_by(&crate::diag::LOG_LINES_PARSED, fresh.len() as u64);
         let mut parsed: Vec<LineView> = fresh
             .iter()
-            .map(|line| LineView::parse(line, &self.known))
+            .map(|line| LineView::parse(line, &self.known, self.zone))
             .collect();
         // The buffer's sortedness is this type's invariant, so it is established here rather than
         // trusted from the caller: a source whose lines are not perfectly ordered — two feed threads

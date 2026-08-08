@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Datelike, Days, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use chrono_tz::Tz;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_core::db::analytics::{ProfitMonitorSummary, Query};
+use moon_core::db::analytics::{PreviousPeriodBasis, ProfitMonitorSummary, Query};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
 use moon_core::util::fmt::DeltaSign;
@@ -55,14 +55,14 @@ const MIN_WINDOW_WIDTH: f32 = 310.0;
 enum MonitorPeriod {
     /// Rolling hour ending now.
     Hour,
-    /// Current calendar day in the header clock's selected city.
+    /// Current calendar day in the application-wide selected zone.
     #[default]
     Today,
-    /// Previous calendar day in the header clock's selected city.
+    /// Previous calendar day in the application-wide selected zone.
     Yesterday,
-    /// Rolling seven calendar days through tomorrow in the selected city.
+    /// Rolling seven calendar days through tomorrow in the selected zone.
     Week,
-    /// Current calendar month in the header clock's selected city.
+    /// Current calendar month in the application-wide selected zone.
     CurrentMonth,
     /// Rolling thirty days.
     Month,
@@ -145,75 +145,31 @@ impl MonitorPeriod {
             return (now.saturating_sub(3_600), now.saturating_add(1));
         }
         let today = now.with_timezone(&zone).date_naive();
-        let tomorrow_date = shift_date(today, 1);
-        let today_start = zoned_day_start(zone, today);
-        let tomorrow = zoned_day_start(zone, tomorrow_date);
+        let shift = |days| moon_core::util::display_time::shift_date(today, days);
+        let start = |date| {
+            moon_core::util::display_time::day_start(date, zone)
+                .expect("current display-zone date has a valid nearby instant")
+        };
+        let today_start = start(today);
+        let tomorrow = start(shift(1));
+        let shifted = |days| {
+            moon_core::util::display_time::shift_day_start(today_start, days, zone)
+                .unwrap_or(today_start)
+        };
         match self {
             Self::Today => (today_start, tomorrow),
-            Self::Yesterday => (zoned_day_start(zone, shift_date(today, -1)), today_start),
-            Self::Week => (zoned_day_start(zone, shift_date(today, -6)), tomorrow),
+            Self::Yesterday => (shifted(-1), today_start),
+            Self::Week => (shifted(-6), tomorrow),
             Self::CurrentMonth => {
-                let month_start =
-                    NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today);
-                (zoned_day_start(zone, month_start), tomorrow)
+                let month_start = today.with_day(1).unwrap_or(today);
+                (start(month_start), tomorrow)
             }
-            Self::Month => (zoned_day_start(zone, shift_date(today, -29)), tomorrow),
-            Self::Year => (zoned_day_start(zone, shift_date(today, -364)), tomorrow),
+            Self::Month => (shifted(-29), tomorrow),
+            Self::Year => (shifted(-364), tomorrow),
             Self::All => (-1, tomorrow),
             Self::Hour => unreachable!("rolling hour returned above"),
         }
     }
-}
-
-/// Shift one civil date without assuming that its UTC day is always 86,400 seconds.
-///
-/// Args:
-///     date: Local calendar date to move.
-///     days: Signed number of civil dates.
-///
-/// Returns:
-///     Shifted date, or the input at chrono's representable boundary.
-fn shift_date(date: NaiveDate, days: i64) -> NaiveDate {
-    if days >= 0 {
-        date.checked_add_days(Days::new(days as u64))
-            .unwrap_or(date)
-    } else {
-        date.checked_sub_days(Days::new(days.unsigned_abs()))
-            .unwrap_or(date)
-    }
-}
-
-/// Resolve the first valid local instant at or after one civil date in an IANA zone.
-///
-/// A few zones have historically advanced at midnight, making `00:00` nonexistent; walking to
-/// the first valid minute preserves the correct civil-day boundary, including a date skipped
-/// completely by a dateline change. An ambiguous midnight uses its earlier occurrence so no real
-/// instant at the start of the date is omitted.
-///
-/// Args:
-///     zone: IANA time zone defining the civil date.
-///     date: Local calendar date whose start is required.
-///
-/// Returns:
-///     UTC Unix seconds at the first valid local minute at or after `date`.
-///
-/// Panics:
-///     When the zone has no valid local instant within the following 48 hours.
-fn zoned_day_start(zone: Tz, date: NaiveDate) -> i64 {
-    let midnight = date
-        .and_hms_opt(0, 0, 0)
-        .expect("a valid date always has midnight");
-    for minute in 0..=48 * 60 {
-        let Some(candidate) = midnight.checked_add_signed(chrono::Duration::minutes(minute)) else {
-            break;
-        };
-        match zone.from_local_datetime(&candidate) {
-            LocalResult::Single(value) => return value.timestamp(),
-            LocalResult::Ambiguous(first, second) => return first.min(second).timestamp(),
-            LocalResult::None => {}
-        }
-    }
-    panic!("no valid local instant within 48 hours of {date} in {zone}")
 }
 
 /// Read the current UTC instant through the terminal's shared system-clock source.
@@ -225,13 +181,13 @@ fn now_utc() -> DateTime<Utc> {
         .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
-/// Resolve a saved header-clock zone through the same curated-city policy as the visible clock.
+/// Resolve a saved header-clock zone through the same exact-IANA policy as the visible clock.
 ///
 /// Args:
 ///     zone_id: Persisted IANA zone id from the shared header clock.
 ///
 /// Returns:
-///     Displayed city zone, or UTC when no valid curated selection exists.
+///     Display zone, or UTC when no valid saved selection exists.
 fn monitor_zone(zone_id: Option<&str>) -> Tz {
     crate::chrome::clock::resolved_header_clock_zone(zone_id)
 }
@@ -460,7 +416,7 @@ fn sort_arrow(sort: Option<MonitorSort>, column: MonitorSortColumn) -> &'static 
 ///     before: Context represented by the current table.
 ///     after: Newly sampled context.
 ///     valuation_changed: Whether the application-wide projection mode changed.
-///     zone_changed: Whether the header clock selected a different curated zone.
+///     zone_changed: Whether the header clock selected a different IANA zone.
 ///
 /// Returns:
 ///     Nothing, a cheap regroup, or a database reload plan with its timer effect.
@@ -570,12 +526,15 @@ impl MonitorClockView {
     /// Construct the shared terminal clock and align its repaint loop to wall-clock seconds.
     ///
     /// Args:
-    ///     backend: Shared terminal state containing the selected clock city.
+    ///     backend: Shared terminal state containing the selected display zone and its revision.
     ///     cx: Child view context that owns the recurring timer.
     ///
     /// Returns:
     ///     Clock state whose repaint cadence is isolated from the parent monitor.
     fn new(backend: Entity<Backend>, cx: &mut Context<Self>) -> Self {
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |_this, _revision, cx| cx.notify())
+            .detach();
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             loop {
@@ -758,6 +717,9 @@ impl ProfitMonitorView {
             this.observe_report_generation(cx);
         })
         .detach();
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _, cx| this.sync_context(cx))
+            .detach();
         let mut this = Self {
             backend,
             clock,
@@ -897,6 +859,8 @@ impl ProfitMonitorView {
     fn query(&self) -> Query {
         let (from, to) = self.period.range_at(now_utc(), self.zone);
         Query {
+            time_zone: self.zone,
+            previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,
             cores: Vec::new(),

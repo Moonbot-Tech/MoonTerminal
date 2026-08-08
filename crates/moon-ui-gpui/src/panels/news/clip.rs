@@ -5,23 +5,31 @@
 //! a hashtag and `$COIN` a cashtag — so the tickers and tags are written in those forms and stay
 //! clickable on the other side.
 //!
-//! Layout follows how a forwarded post is read: source · absolute UTC time with the service delay
-//! in brackets, then the tickers it concerns, then the body — and the topic hashtags last, under
-//! the text, where they file the item without standing between the headline and what it says.
+//! Layout follows how a forwarded post is read: source, absolute selected-zone time with the
+//! service delay in brackets, then the tickers it concerns, then the body, with topic hashtags
+//! last under the text where they do not interrupt the headline.
 
 use rust_i18n::t;
 
 use moon_core::feed::NewsItem;
 
-/// Build the clipboard text for `item`.
+/// Build the clipboard text for one news item in the application's display zone.
 ///
 /// `translate` picks the same body the card is showing, so what lands in the clipboard is what the
 /// user was reading — not a different language they never saw.
-pub(super) fn telegram_text(item: &NewsItem, translate: bool) -> String {
+///
+/// Args:
+///     item: News card being copied.
+///     translate: Whether to use the translated body shown by the card.
+///     zone: Selected application-wide IANA display zone.
+///
+/// Returns:
+///     Telegram-ready plain text, or an empty string when the item has no usable content.
+pub(super) fn telegram_text(item: &NewsItem, translate: bool, zone: chrono_tz::Tz) -> String {
     // Head block: what the item is, on consecutive lines. Body and topics follow after a blank
     // line. Assembled from the parts that exist, so an item missing any of them cannot leave a
     // stray separator or a trailing newline behind.
-    let head: Vec<String> = [header(item), tickers(item)]
+    let head: Vec<String> = [header(item, zone), tickers(item)]
         .into_iter()
         .filter(|s| !s.is_empty())
         .collect();
@@ -45,10 +53,17 @@ pub(super) fn telegram_text(item: &NewsItem, translate: bool) -> String {
     }
 }
 
-/// `SOURCE · DD.MM.YYYY HH:MM:SS UTC (+2349 мс)`, dropping any part the item lacks.
-fn header(item: &NewsItem) -> String {
+/// Build `SOURCE - DD.MM.YYYY HH:MM:SS ZONE (+delay)`, dropping absent parts.
+///
+/// Args:
+///     item: News item supplying the source, publication instant, and delay stamps.
+///     zone: Selected application-wide IANA display zone.
+///
+/// Returns:
+///     Compact header text, or an empty string when no header data exists.
+fn header(item: &NewsItem, zone: chrono_tz::Tz) -> String {
     let source = item.source.to_uppercase();
-    let time = match (stamp(item.time_ms), delay(item)) {
+    let time = match (stamp(item.time_ms, zone), delay(item)) {
         (s, _) if s.is_empty() => String::new(),
         (s, Some(d)) => format!("{s} ({d})"),
         (s, None) => s,
@@ -109,16 +124,23 @@ fn tags(item: &NewsItem) -> String {
         .join(" ")
 }
 
-/// Publication time as `DD.MM.YYYY HH:MM:SS UTC`, or empty when the item carries no usable stamp.
+/// Format publication time in the selected zone, or return empty for an unusable stamp.
 ///
 /// Absolute, not the card's "5 min ago": a pasted message outlives the moment it was copied, and a
 /// relative age would be read against the wrong clock on the other end.
-fn stamp(time_ms: i64) -> String {
+///
+/// Args:
+///     time_ms: UTC Unix publication timestamp in milliseconds.
+///     zone: Selected application-wide IANA display zone.
+///
+/// Returns:
+///     `DD.MM.YYYY HH:MM:SS ZONE`, or an empty string for an unknown/out-of-range value.
+fn stamp(time_ms: i64, zone: chrono_tz::Tz) -> String {
     if time_ms <= 0 {
         return String::new();
     }
-    chrono::DateTime::from_timestamp_millis(time_ms)
-        .map(|dt| dt.format("%d.%m.%Y %H:%M:%S UTC").to_string())
+    moon_core::util::display_time::at_millis(time_ms, zone)
+        .map(|dt| dt.format("%d.%m.%Y %H:%M:%S %Z").to_string())
         .unwrap_or_default()
 }
 

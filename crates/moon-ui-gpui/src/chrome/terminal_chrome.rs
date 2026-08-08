@@ -152,8 +152,8 @@ pub fn header(
                         ))
                         .child(design::chrome_divider(cx, p))
                 }))
-                // The selected city's clock with its three-letter code; clicking opens the city
-                // picker. Its MoonPopover is anchored to this trigger, so unlike the ticker it
+                // The selected zone's clock with a city code or system abbreviation; clicking opens
+                // the picker. Its MoonPopover is anchored to this trigger, so unlike the ticker it
                 // needs no offset arithmetic.
                 .child(crate::chrome::clock::header_clock(&backend, p, cx))
                 .when(design::show_custom_window_controls(), |this| {

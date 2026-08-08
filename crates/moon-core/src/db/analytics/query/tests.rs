@@ -216,6 +216,8 @@ fn attach_strategies(c: &Connection) {
 /// Build the baseline Analytics query used by liquidation-attribution tests.
 fn q() -> Query {
     Query {
+        time_zone: chrono_tz::UTC,
+        previous_period_basis: Default::default(),
         from: 0,
         to: i64::MAX,
         cores: Vec::new(),

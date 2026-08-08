@@ -879,10 +879,10 @@ analytics.ins.metric.hour:
   ru: "%{profit} | %{n} сделок"
   en: "%{profit} | %{n} trades"
   es: "%{profit} | %{n} operaciones"
-analytics.ins.metric.hour_utc:
-  ru: "%{hour} UTC"
-  en: "%{hour} UTC"
-  es: "%{hour} UTC"
+analytics.ins.metric.hour_clock:
+  ru: "%{hour}"
+  en: "%{hour}"
+  es: "%{hour}"
 analytics.ins.best_strategy:
   ru: "Лучшая стратегия — %{name}: %{profit} при winrate %{wr}%."
   en: "Best strategy — %{name}: %{profit} at %{wr}% winrate."
@@ -916,9 +916,9 @@ analytics.ins.pf_bad:
   en: "needs optimization"
   es: "requiere optimización"
 analytics.ins.best_hour:
-  ru: "Самый прибыльный час — %{hour} UTC (%{profit}, %{n} сделок)."
-  en: "Most profitable hour — %{hour} UTC (%{profit}, %{n} trades)."
-  es: "Hora más rentable — %{hour} UTC (%{profit}, %{n} operaciones)."
+  ru: "Самый прибыльный час — %{hour} (%{profit}, %{n} сделок)."
+  en: "Most profitable hour — %{hour} (%{profit}, %{n} trades)."
+  es: "Hora más rentable — %{hour} (%{profit}, %{n} operaciones)."
 
 analytics.strat.title:
   ru: "Тюнинг"

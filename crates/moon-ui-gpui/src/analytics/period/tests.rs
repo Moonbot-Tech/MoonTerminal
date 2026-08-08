@@ -1,8 +1,8 @@
 //! Regression coverage for the minute-precise bounds of a custom Analytics period.
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, TimeZone as _, Utc};
 
-use super::{Period, custom_bounds};
+use super::{Period, custom_bounds as zoned_custom_bounds, exact_secs_of_day};
 use crate::controls::date_range::{Bound, MINUTE, field_of_exclusive, secs_of_dt};
 
 /// Build a UTC timestamp out of a day and a clock time, the way the pickers hold their value.
@@ -15,7 +15,55 @@ fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveD
 
 /// Midnight of a day in UTC unix seconds.
 fn midnight(year: i32, month: u32, day: u32) -> i64 {
-    secs_of_dt(at(year, month, day, 0, 0))
+    secs_of_dt(at(year, month, day, 0, 0), chrono_tz::UTC, Bound::From)
+        .expect("UTC midnight resolves")
+}
+
+/// Apply the production custom-bound policy in UTC for legacy arithmetic assertions.
+///
+/// Args:
+///     from: Optional lower picker value.
+///     to: Optional upper picker value.
+///     tomorrow: UTC midnight after the test's current day.
+///
+/// Returns:
+///     Production `[from, to)` bounds resolved in UTC.
+fn custom_bounds(
+    from: Option<chrono::NaiveDateTime>,
+    to: Option<chrono::NaiveDateTime>,
+    tomorrow: i64,
+) -> (i64, i64) {
+    zoned_custom_bounds(from, to, tomorrow, chrono_tz::UTC)
+}
+
+/// Removing `exact_secs_of_day`'s civil-date identity check makes both cells resolve to December
+/// 31 and duplicates that day's profit in Calendar Month for the Apia dateline transition.
+#[test]
+fn a_fully_skipped_civil_date_has_no_month_cell_bucket() {
+    let skipped = NaiveDate::from_ymd_opt(2011, 12, 30).expect("valid date");
+    let following = NaiveDate::from_ymd_opt(2011, 12, 31).expect("valid date");
+
+    assert_eq!(exact_secs_of_day(skipped, chrono_tz::Pacific::Apia), None);
+    assert_eq!(
+        exact_secs_of_day(following, chrono_tz::Pacific::Apia),
+        Some(1_325_239_200)
+    );
+}
+
+/// Replacing `Period::range_at`'s existing-day step with `day_start(shift_date(...))` makes Apia
+/// Yesterday empty on December 31 because the skipped December 30 clamps forward onto today.
+#[test]
+fn yesterday_uses_the_previous_existing_civil_date() {
+    let now = Utc
+        .with_ymd_and_hms(2011, 12, 30, 12, 0, 0)
+        .single()
+        .expect("valid UTC instant")
+        .timestamp();
+
+    assert_eq!(
+        Period::Yesterday.range_at(now, chrono_tz::Pacific::Apia),
+        (1_325_152_800, 1_325_239_200)
+    );
 }
 
 /// The question this change had to answer: one day chosen on BOTH fields, with the two default
@@ -49,7 +97,10 @@ fn an_equal_from_and_to_still_covers_the_picked_minute() {
     let (lower, upper) = custom_bounds(Some(pick), Some(pick), midnight(2026, 8, 5));
 
     assert_eq!(upper - lower, MINUTE);
-    assert_eq!(lower, secs_of_dt(pick));
+    assert_eq!(
+        lower,
+        secs_of_dt(pick, chrono_tz::UTC, Bound::From).expect("UTC value resolves")
+    );
 }
 
 /// Catches dropping the clock time when composing the bounds — the whole point of the control.
@@ -100,14 +151,14 @@ fn the_to_field_shows_the_last_minute_inside_the_range() {
     let to = at(2026, 8, 4, 17, 45);
     let (_, upper) = custom_bounds(Some(from), Some(to), midnight(2026, 8, 5));
 
-    assert_eq!(field_of_exclusive(upper), Some(to));
+    assert_eq!(field_of_exclusive(upper, chrono_tz::UTC), Some(to));
 }
 
 /// Catches labelling the period with the exclusive edge, which would advertise a minute the range
 /// does not contain.
 #[test]
 fn the_period_label_names_the_last_minute_inside_the_range() {
-    let label = Period::Custom(midnight(2026, 8, 4), midnight(2026, 8, 5)).title();
+    let label = Period::Custom(midnight(2026, 8, 4), midnight(2026, 8, 5)).title(chrono_tz::UTC);
 
     assert_eq!(label, "04.08.26 00:00 – 04.08.26 23:59");
 }

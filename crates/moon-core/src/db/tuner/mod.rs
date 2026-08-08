@@ -106,9 +106,7 @@ impl Variant {
         if let Some((f, t)) = self.week_span {
             // Week minute from OPEN time = day*1440 + minute_of_day (0..10079,
             // day 0=Mon..6=Sun); a continuous span with `from > to` wrapping Sun -> Mon.
-            let wk = format!(
-                "((((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7) * 1440 + ({OPEN_TS} % 86400) / 60)"
-            );
+            let wk = "o.__mt_week";
             let (f, t) = (f.min(10079), t.min(10079));
             if f <= t {
                 w.push_str(&format!(" AND ({wk} BETWEEN {f} AND {t})"));
@@ -173,13 +171,8 @@ pub(super) fn sql_str_list(items: &[String]) -> String {
 fn time_window_where(tw: TimeWindow) -> String {
     // Calculate the minute from OPEN TIME because the schedule gates entry.
     let (expr, f, t, hi): (String, u16, u16, u16) = match tw {
-        TimeWindow::Day(f, t) => (format!("(({OPEN_TS} % 86400) / 60)"), f, t, 1439),
-        TimeWindow::Hour(f, t) => (
-            format!("((({OPEN_TS} % 86400) / 60) % 60)"),
-            f as u16,
-            t as u16,
-            59,
-        ),
+        TimeWindow::Day(f, t) => ("o.__mt_day".to_string(), f, t, 1439),
+        TimeWindow::Hour(f, t) => ("(o.__mt_day % 60)".to_string(), f as u16, t as u16, 59),
     };
     let (f, t) = (f.min(hi), t.min(hi));
     if f <= t {
@@ -483,9 +476,11 @@ fn visit_time_rows(
     ctx: &'static str,
     mut visit: impl FnMut(i64, i64, f64),
 ) -> ReadResult<()> {
+    super::analytics::time_zone::install(conn, q.time_zone)
+        .map_err(|e| read_fail_on(conn, ctx, e))?;
     let sql = format!(
-        "SELECT ((({OPEN_TS} / 86400) + 4) % 7 + 6) % 7 AS wd,
-                ({OPEN_TS} % 86400) / 60 AS mn,
+        "SELECT mt_minute_of_week({OPEN_TS}) / 1440 AS wd,
+                mt_minute_of_day({OPEN_TS}) AS mn,
                 COALESCE(o.pnl, 0)
          FROM {src}"
     );
@@ -554,6 +549,8 @@ fn variant_stats_from_source(
     if variants.is_empty() {
         return Ok(Vec::new());
     }
+    super::analytics::time_zone::install(conn, q.time_zone)
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
     let sql = variant_stats_sql(src, variants);
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
@@ -592,6 +589,26 @@ fn variant_stats_from_source(
 /// Returns:
 ///     SQL with one source scan and a Boolean match column per variant.
 fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
+    let needs_week = variants.iter().any(|variant| variant.week_span.is_some());
+    let needs_day = variants.iter().any(|variant| variant.tod.is_some());
+    let mut projections = Vec::new();
+    if needs_week {
+        projections.push(format!("mt_minute_of_week({OPEN_TS}) AS __mt_week"));
+    }
+    if needs_day {
+        projections.push(format!("mt_minute_of_day({OPEN_TS}) AS __mt_day"));
+    }
+    let (prefix, source) = if projections.is_empty() {
+        (String::new(), src.to_string())
+    } else {
+        (
+            format!(
+                "WITH projected AS MATERIALIZED (SELECT o.*, {} FROM {src}) ",
+                projections.join(", ")
+            ),
+            "projected o".to_string(),
+        )
+    };
     let matches = variants
         .iter()
         .enumerate()
@@ -604,8 +621,8 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0), {matches}
-         FROM {src}
+        "{prefix}SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0), {matches}
+         FROM {source}
          ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)"
     )
 }

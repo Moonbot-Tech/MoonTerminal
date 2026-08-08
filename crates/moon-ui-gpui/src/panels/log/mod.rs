@@ -176,6 +176,15 @@ impl LogPanel {
     ///
     /// Dock activity or the first detached-window render performs the initial load, so constructing
     /// a hidden default tab does not aggregate every core before the user opens it.
+    ///
+    /// Args:
+    ///     backend: Shared state containing log sources and the selected display zone.
+    ///     group: Optional core-group scope for this panel instance.
+    ///     window: Window used to construct the search input.
+    ///     cx: Panel context used to subscribe to data and display-zone revisions.
+    ///
+    /// Returns:
+    ///     A deferred Log panel ready for its first visible reload.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
@@ -203,6 +212,18 @@ impl LogPanel {
             }
         })
         .detach();
+        let display_zone =
+            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            let zone = crate::chrome::clock::resolved_header_clock_zone(
+                this.backend.read(cx).header_clock_zone(),
+            );
+            this.buf.rezone(zone);
+            this.after_view_change();
+            cx.notify();
+        })
+        .detach();
         Self {
             backend,
             group,
@@ -215,7 +236,7 @@ impl LogPanel {
             loaded_lines: Vec::new(),
             available_files_label: None,
             available_files: Vec::new(),
-            buf: buffer::RowBuffer::default(),
+            buf: buffer::RowBuffer::new(display_zone),
             cursors: feed::LiveCursors::default(),
             exchange_membership: None,
             sources_sig: 0,

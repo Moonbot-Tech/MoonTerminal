@@ -266,7 +266,7 @@ impl ReportPanel {
         // A preset overrides the manual date only on the edge it SETS itself. Every preset
         // but "All" sets the lower one; only "Yesterday" sets the upper one — for the rest
         // `to = None`, and then the upper edge comes from the "To:" field if it holds a date.
-        let (pfrom, pto) = self.period.range();
+        let (pfrom, pto) = self.period.range(self.display_zone);
         let date_from = pfrom.or(self.from_query);
         // The upper field names a whole minute and the SQL bound is inclusive, so it reaches that
         // minute's last second: "from 04.08 00:00 to 04.08 23:59" is the whole day, and an equal

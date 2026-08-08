@@ -145,6 +145,8 @@ impl ReportPanel {
             .map(|valuation| valuation.seed_status())
             .unwrap_or_default();
         let seeded_valuation_mode = backend.read(cx).valuation_mode();
+        let display_zone =
+            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
         // Keep this connection for panel metadata. Startup core/schema probes
         // are deliberately lossy because the fallible background batch below
         // owns user-visible read errors.
@@ -206,13 +208,11 @@ impl ReportPanel {
         let from_query = scope
             .as_ref()
             .and_then(|scope| scope.date_from)
-            .and_then(date_range::field_of_inclusive)
-            .map(date_range::secs_of_dt);
+            .map(|secs| secs.div_euclid(date_range::MINUTE) * date_range::MINUTE);
         let to_query = scope
             .as_ref()
             .and_then(|scope| scope.date_to)
-            .and_then(date_range::field_of_inclusive)
-            .map(date_range::secs_of_dt);
+            .map(|secs| secs.div_euclid(date_range::MINUTE) * date_range::MINUTE);
         let coin = cx.new(|cx| {
             MoonInputState::new(window, cx)
                 .default_value(coin_query.clone())
@@ -220,14 +220,18 @@ impl ReportPanel {
         });
         let from = cx.new(|cx| {
             let mut state = date_range::bound_picker(Bound::From, window, cx);
-            if let Some(value) = from_query.and_then(date_range::dt_of_secs) {
+            if let Some(value) =
+                from_query.and_then(|secs| date_range::dt_of_secs(secs, display_zone))
+            {
                 state.set_value(Some(value), window, cx);
             }
             state
         });
         let to = cx.new(|cx| {
             let mut state = date_range::bound_picker(Bound::To, window, cx);
-            if let Some(value) = to_query.and_then(date_range::dt_of_secs) {
+            if let Some(value) =
+                to_query.and_then(|secs| date_range::dt_of_secs(secs, display_zone))
+            {
                 state.set_value(Some(value), window, cx);
             }
             state
@@ -356,6 +360,31 @@ impl ReportPanel {
         })
         .detach();
 
+        // Zone identity changes are rare and have their own revision so report commits do not
+        // repaint every civil-time consumer. Manual bounds remain absolute instants; only their
+        // picker text is rewritten. Presets requery because their civil-day boundaries move.
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            let zone = crate::chrome::clock::resolved_header_clock_zone(
+                this.backend.read(cx).header_clock_zone(),
+            );
+            if zone == this.display_zone {
+                return;
+            }
+            this.display_zone = zone;
+            this.display_zone_fields_dirty = true;
+            this.natural_widths.clear();
+            if this.period == Period::All {
+                cx.notify();
+            } else {
+                // A preset's civil bounds changed. Do not render rows from the old zone under
+                // the new preset label while the replacement query is in flight.
+                this.data = LoadState::default();
+                this.request_requery(cx);
+            }
+        })
+        .detach();
+
         // Never touched by the user means on: the pane is what makes a long comment readable.
         // Seeded for the docked host; `mark_table_detached` re-reads the detached one.
         let show_comment = conn
@@ -364,6 +393,8 @@ impl ReportPanel {
             .unwrap_or(true);
         let mut this = Self {
             backend,
+            display_zone,
+            display_zone_fields_dirty: false,
             group,
             generation,
             valuation_generation,
@@ -394,6 +425,7 @@ impl ReportPanel {
             to,
             to_query,
             bounds_pending: false,
+            bound_write_in_progress: false,
             side: scope
                 .as_ref()
                 .map(|scope| scope.side)
@@ -463,10 +495,18 @@ impl ReportPanel {
         self.coin_popup_open = false;
         // The scope's bounds are exact seconds; the fields pick whole minutes, so the lower one is
         // floored and the upper one keeps the minute its inclusive bound ends in.
-        let from_value = scope.date_from.and_then(date_range::field_of_inclusive);
-        let to_value = scope.date_to.and_then(date_range::field_of_inclusive);
-        self.from_query = from_value.map(date_range::secs_of_dt);
-        self.to_query = to_value.map(date_range::secs_of_dt);
+        self.from_query = scope
+            .date_from
+            .map(|secs| secs.div_euclid(date_range::MINUTE) * date_range::MINUTE);
+        self.to_query = scope
+            .date_to
+            .map(|secs| secs.div_euclid(date_range::MINUTE) * date_range::MINUTE);
+        let from_value = self
+            .from_query
+            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
+        let to_value = self
+            .to_query
+            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
 
         self.coin.update(cx, |input, input_cx| {
             input.set_value(String::new(), window, input_cx)
@@ -498,12 +538,14 @@ impl ReportPanel {
             Bound::From => self.from.clone(),
             Bound::To => self.to.clone(),
         };
+        self.bound_write_in_progress = true;
         picker.update(cx, |state, state_cx| {
             state.set_value(value, window, state_cx);
             if value.is_none() {
                 state.set_time(bound.default_time(), state_cx);
             }
         });
+        self.bound_write_in_progress = false;
     }
 
     /// Mirror a bound field's new value into the filter and requery.
@@ -524,7 +566,10 @@ impl ReportPanel {
         picker: Entity<MoonDateTimePickerState>,
         cx: &mut Context<Self>,
     ) {
-        let secs = value.map(date_range::secs_of_dt);
+        if self.bound_write_in_progress {
+            return;
+        }
+        let secs = value.and_then(|dt| date_range::secs_of_dt(dt, self.display_zone, bound));
         let slot = match bound {
             Bound::From => &mut self.from_query,
             Bound::To => &mut self.to_query,
@@ -550,6 +595,29 @@ impl ReportPanel {
         if value.is_none() && picker.read(cx).time() != default {
             picker.update(cx, |state, state_cx| state.set_time(default, state_cx));
         }
+    }
+
+    /// Rewrite picker civil values after a selected-zone change without moving their instants.
+    ///
+    /// Args:
+    ///     window: Window required by the retained picker states.
+    ///     cx: Panel context used to update picker entities.
+    ///
+    /// Returns:
+    ///     Nothing; absolute query bounds remain unchanged.
+    pub(super) fn sync_display_zone_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.display_zone_fields_dirty {
+            return;
+        }
+        self.display_zone_fields_dirty = false;
+        let from = self
+            .from_query
+            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
+        let to = self
+            .to_query
+            .and_then(|secs| date_range::dt_of_secs(secs, self.display_zone));
+        self.write_bound(Bound::From, from, window, cx);
+        self.write_bound(Bound::To, to, window, cx);
     }
 
     /// Schedule synchronization of the retained strategy combobox on its next render.

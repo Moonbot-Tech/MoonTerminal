@@ -27,7 +27,7 @@ use super::{AnalyticsView, ProfitLoadState};
 use crate::design;
 use crate::design::moon;
 use crate::load_state::{LoadState, note_el};
-use moon_core::db::analytics::{CalendarPeriod, DayCell, Query};
+use moon_core::db::analytics::{CalendarPeriod, DayCell, PreviousPeriodBasis, Query};
 use moon_core::db::{ProfitScope, ProfitUnit, ReadResult};
 
 /// Store one consistent Calendar period result without collapsing classified read failures.
@@ -112,27 +112,92 @@ impl CalMode {
     }
 }
 
-// ── Calendar date helpers (UTC) ─────────────────────────────────────────────
+// ── Calendar date helpers ───────────────────────────────────────────────────
 
-/// unix seconds (UTC midnight) → date (thin wrapper over the window's helper).
-pub(super) fn date_of(secs: i64) -> NaiveDate {
-    super::day_of_secs(secs).unwrap_or_default()
+/// Return the selected-zone civil date at one UTC instant.
+///
+/// Args:
+///     secs: Absolute Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil date, or chrono's default date outside its representable range.
+pub(super) fn date_of(secs: i64, zone: chrono_tz::Tz) -> NaiveDate {
+    super::day_of_secs(secs, zone).unwrap_or_default()
 }
 
-/// Current (real) month — the boundary "Next" refuses to page past.
-pub(super) fn now_ym() -> (i32, u32) {
-    let d = date_of(moon_core::util::now_unix_ms_i64() / 1000);
+/// Preserve Calendar Day's selected civil date while changing its display zone.
+///
+/// Args:
+///     day: Selected day start resolved in `old_zone`.
+///     old_zone: Zone in which the user chose the civil date.
+///     new_zone: Replacement display zone.
+///
+/// Returns:
+///     The same civil date's first real instant in `new_zone`; when that zone skipped the complete
+///     date, the next existing date is selected. Returns `day` only at chrono limits.
+pub(super) fn rezone_day(day: i64, old_zone: chrono_tz::Tz, new_zone: chrono_tz::Tz) -> i64 {
+    moon_core::util::display_time::date(day, old_zone)
+        .and_then(|date| resolve_calendar_date(date, new_zone, 1))
+        .unwrap_or(day)
+}
+
+/// Resolve a Calendar date while stepping past a fully skipped historical date.
+///
+/// Args:
+///     date: First civil date to try.
+///     zone: Selected IANA display zone.
+///     direction: Negative to search earlier dates, non-negative to search later dates.
+///
+/// Returns:
+///     First existing civil-day start in the requested direction, or `None` at chrono limits.
+pub(super) fn resolve_calendar_date(
+    date: NaiveDate,
+    zone: chrono_tz::Tz,
+    direction: i64,
+) -> Option<i64> {
+    moon_core::util::display_time::resolve_day_start(date, zone, direction)
+}
+
+/// Return the current selected-zone year and month that Calendar cannot page beyond.
+///
+/// Args:
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Current civil `(year, month)`.
+pub(super) fn now_ym(zone: chrono_tz::Tz) -> (i32, u32) {
+    let d = date_of(moon_core::util::now_unix_ms_i64() / 1000, zone);
     (d.year(), d.month())
 }
 
-/// Midnight of the current day (UTC) — the grid's "future" day boundary.
-pub(super) fn today_start() -> i64 {
-    (moon_core::util::now_unix_ms_i64() / 1000).div_euclid(86_400) * 86_400
+/// Resolve the current selected-zone day's first instant for the future-grid boundary.
+///
+/// Args:
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     UTC Unix seconds, or zero outside chrono's range.
+pub(super) fn today_start(zone: chrono_tz::Tz) -> i64 {
+    moon_core::util::display_time::bucket_start(
+        moon_core::util::now_unix_ms_i64() / 1000,
+        86_400,
+        zone,
+    )
+    .unwrap_or(0)
 }
 
-/// Midnight of the 1st of the month (unix seconds, UTC).
-pub(super) fn month_start(y: i32, m: u32) -> i64 {
-    super::secs_of_day(NaiveDate::from_ymd_opt(y, m, 1).unwrap_or_default())
+/// Resolve the first instant of a selected-zone calendar month.
+///
+/// Args:
+///     y: Civil year.
+///     m: Civil month from 1 through 12.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     UTC Unix seconds, or zero for an invalid month or out-of-range instant.
+pub(super) fn month_start(y: i32, m: u32, zone: chrono_tz::Tz) -> i64 {
+    super::secs_of_day(NaiveDate::from_ymd_opt(y, m, 1).unwrap_or_default(), zone)
 }
 
 pub(super) fn next_month(y: i32, m: u32) -> (i32, u32) {
@@ -143,26 +208,48 @@ fn prev_month(y: i32, m: u32) -> (i32, u32) {
     if m == 1 { (y - 1, 12) } else { (y, m - 1) }
 }
 
-/// Days in a month (difference between the two 1st-of-month midnights).
+/// Return the number of civil dates in a month from adjacent `NaiveDate` values.
 fn days_in_month(y: i32, m: u32) -> u32 {
     let (ny, nm) = next_month(y, m);
-    ((month_start(ny, nm) - month_start(y, m)) / 86_400).max(28) as u32
+    let current = NaiveDate::from_ymd_opt(y, m, 1).unwrap_or_default();
+    let next = NaiveDate::from_ymd_opt(ny, nm, 1).unwrap_or(current);
+    (next - current).num_days().max(28) as u32
 }
 
-/// The month's `[from, to)` range — for `cal_query` (mod.rs).
-pub(super) fn month_range((y, m): (i32, u32)) -> (i64, i64) {
+/// Return one selected-zone month's absolute `[from, to)` range.
+///
+/// Args:
+///     `(y, m)`: Civil year and month.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     UTC Unix-second bounds at consecutive civil month starts.
+pub(super) fn month_range((y, m): (i32, u32), zone: chrono_tz::Tz) -> (i64, i64) {
     let (ny, nm) = next_month(y, m);
-    (month_start(y, m), month_start(ny, nm))
+    (month_start(y, m, zone), month_start(ny, nm, zone))
 }
 
-/// The PREVIOUS month's `[from, to)` range — for the KPI deltas (mod.rs).
-pub(super) fn prev_month_range((y, m): (i32, u32)) -> (i64, i64) {
-    month_range(prev_month(y, m))
+/// Return the previous selected-zone month's absolute `[from, to)` range.
+///
+/// Args:
+///     `(y, m)`: Current civil year and month.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     UTC Unix-second bounds for the preceding calendar month.
+pub(super) fn prev_month_range((y, m): (i32, u32), zone: chrono_tz::Tz) -> (i64, i64) {
+    month_range(prev_month(y, m), zone)
 }
 
-/// The whole history `[-1, tomorrow)` — "Year" mode shows every year at once.
-pub(super) fn all_history_range() -> (i64, i64) {
-    (-1, today_start() + 86_400)
+/// Return the whole-history `[-1, tomorrow)` range for Calendar Year mode.
+///
+/// Args:
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     All-history sentinel and the next selected-zone midnight.
+pub(super) fn all_history_range(zone: chrono_tz::Tz) -> (i64, i64) {
+    (-1, super::Period::Today.range(zone).1)
 }
 
 /// How many day rows "Day" mode shows.
@@ -171,11 +258,66 @@ pub(super) const DAY_ROWS: i64 = 30;
 /// Day window for "Day" mode: the selected day sits in the middle, but NEVER
 /// higher — if the rows below it would run into the future, the window is
 /// pinned so that its bottom is "today" (the selected day drops toward the
-/// bottom row). Returns `(top, bottom)` day-starts; exactly `DAY_ROWS` rows,
-/// `bottom = top + (DAY_ROWS - 1) days`.
-pub(super) fn day_window(sel: i64) -> (i64, i64) {
-    let bottom = (sel + (DAY_ROWS / 2) * 86_400).min(today_start());
-    (bottom - (DAY_ROWS - 1) * 86_400, bottom)
+/// bottom row). Returns `(top, bottom)` day-starts whose forward traversal contains exactly
+/// `DAY_ROWS` existing civil dates even when the zone skipped a complete calendar date.
+///
+/// Args:
+///     sel: Selected day's absolute start instant.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Inclusive top and bottom civil-day start instants.
+pub(super) fn day_window(sel: i64, zone: chrono_tz::Tz) -> (i64, i64) {
+    let candidate =
+        moon_core::util::display_time::shift_day_start(sel, DAY_ROWS / 2, zone).unwrap_or(sel);
+    let bottom = candidate.min(today_start(zone));
+    let top = moon_core::util::display_time::shift_day_start(bottom, -(DAY_ROWS - 1), zone)
+        .unwrap_or(bottom);
+    (top, bottom)
+}
+
+/// Return the previous existing civil-day start for Calendar comparisons.
+///
+/// Args:
+///     day: Current existing civil-day start.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Previous existing day, or `day` at chrono limits.
+pub(super) fn previous_day(day: i64, zone: chrono_tz::Tz) -> i64 {
+    moon_core::util::display_time::shift_day_start(day, -1, zone).unwrap_or(day)
+}
+
+/// Resolve one displayed civil hour inside a calendar day.
+///
+/// Args:
+///     day: UTC instant at the selected civil day's start.
+///     hour: Displayed wall-clock hour from 0 through 23.
+///     zone: IANA display zone selected by the header clock.
+///
+/// Returns:
+///     The hour's first UTC instant, or `None` when DST skips that civil hour.
+pub(super) fn hour_start(day: i64, hour: u32, zone: chrono_tz::Tz) -> Option<i64> {
+    use chrono::{LocalResult, TimeZone as _};
+
+    let local = date_of(day, zone).and_hms_opt(hour, 0, 0)?;
+    match zone.from_local_datetime(&local) {
+        LocalResult::Single(value) => Some(value.timestamp()),
+        LocalResult::Ambiguous(first, second) => Some(first.min(second).timestamp()),
+        LocalResult::None => None,
+    }
+}
+
+/// Step from one displayed calendar day to the next without assuming 24 elapsed hours.
+///
+/// Args:
+///     day: Current civil-day start as UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Next civil-day start, or the input when it cannot be resolved.
+pub(super) fn next_day(day: i64, zone: chrono_tz::Tz) -> i64 {
+    moon_core::util::display_time::next_bucket(day, 86_400, zone).unwrap_or(day)
 }
 
 /// Localized list parsed out of an "a,b,c" string.
@@ -215,7 +357,7 @@ impl AnalyticsView {
         match self.cal_mode {
             CalMode::Year => return,
             CalMode::Month => {
-                let (cy, cm) = now_ym();
+                let (cy, cm) = now_ym(self.display_zone);
                 let (y, m) = self.cal_ym;
                 if forward && (y, m) >= (cy, cm) {
                     return; // no paging into the future — no trades there
@@ -227,10 +369,15 @@ impl AnalyticsView {
                 };
             }
             CalMode::Day => {
-                if forward && self.cal_day >= today_start() {
+                if forward && self.cal_day >= today_start(self.display_zone) {
                     return;
                 }
-                self.cal_day += if forward { 86_400 } else { -86_400 };
+                let date = date_of(self.cal_day, self.display_zone);
+                let shifted =
+                    moon_core::util::display_time::shift_date(date, if forward { 1 } else { -1 });
+                self.cal_day =
+                    resolve_calendar_date(shifted, self.display_zone, if forward { 1 } else { -1 })
+                        .unwrap_or(self.cal_day);
             }
         }
         self.reload_calendar(cx);
@@ -340,14 +487,14 @@ impl AnalyticsView {
         let label = match self.cal_mode {
             CalMode::Month => format!("{} {}", month_name(m), y),
             CalMode::Year => t!("analytics.cal.all_years").to_string(),
-            CalMode::Day => super::fmt_day(self.cal_day),
+            CalMode::Day => super::fmt_day(self.cal_day, self.display_zone),
         };
         // "Next" greys out: both in "Year", on the current/future one otherwise.
-        let (cy, cm) = now_ym();
+        let (cy, cm) = now_ym(self.display_zone);
         let (prev_off, next_off) = match self.cal_mode {
             CalMode::Year => (true, true),
             CalMode::Month => (false, (y, m) >= (cy, cm)),
-            CalMode::Day => (false, self.cal_day >= today_start()),
+            CalMode::Day => (false, self.cal_day >= today_start(self.display_zone)),
         };
         let nav_btn = |id: &'static str, label: String, forward: bool, off: bool| {
             MoonButton::new(id)
@@ -458,15 +605,20 @@ impl AnalyticsView {
     /// valuation filters.
     fn cal_query(&self) -> Query {
         let (from, to) = match self.cal_mode {
-            CalMode::Month => month_range(self.cal_ym),
-            CalMode::Year => all_history_range(),
+            CalMode::Month => month_range(self.cal_ym, self.display_zone),
+            CalMode::Year => all_history_range(self.display_zone),
             // "Day" loads a 7-day window (selected day centered/at the bottom).
             CalMode::Day => {
-                let (top, bottom) = day_window(self.cal_day);
-                (top, bottom + 86_400)
+                let (top, bottom) = day_window(self.cal_day, self.display_zone);
+                let to =
+                    moon_core::util::display_time::next_bucket(bottom, 86_400, self.display_zone)
+                        .unwrap_or(bottom);
+                (top, to)
             }
         };
         Query {
+            time_zone: self.display_zone,
+            previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,
             cores: self.cores_selected(),
@@ -483,8 +635,10 @@ impl AnalyticsView {
         if self.cal_mode != CalMode::Month {
             return None;
         }
-        let (from, to) = prev_month_range(self.cal_ym);
+        let (from, to) = prev_month_range(self.cal_ym, self.display_zone);
         Some(Query {
+            time_zone: self.display_zone,
+            previous_period_basis: PreviousPeriodBasis::Civil,
             from,
             to,
             cores: self.cores_selected(),

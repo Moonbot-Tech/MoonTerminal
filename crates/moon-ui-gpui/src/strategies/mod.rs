@@ -57,6 +57,8 @@ type FieldEditKey = (CoreId, u64, String);
 /// State and renderer for the four-panel Strategies window.
 pub struct StrategiesView {
     backend: Entity<Backend>,
+    /// IANA zone selected by the shared header clock for user-facing version dates.
+    display_zone: chrono_tz::Tz,
     /// Search input whose value is synchronized into the filter.
     search: Entity<MoonInputState>,
     /// Tree filters for kind, direction, active state, and search text synchronized from the input.

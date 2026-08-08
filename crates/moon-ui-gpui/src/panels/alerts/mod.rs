@@ -175,6 +175,9 @@ impl AlertsPanel {
             }
         })
         .detach();
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |_this, _revision, cx| cx.notify())
+            .detach();
         let widths_id = crate::persistence::table_persist::ctx_id(TABLE_ID, false);
         let saved_widths = floored_widths(crate::persistence::table_persist::saved(
             backend.read(cx),

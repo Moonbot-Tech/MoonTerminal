@@ -21,6 +21,11 @@ toml = "0.8"
 anyhow = "1"
 log = "0.4"
 
+# Application-wide display-time conversion. Unix timestamps remain UTC at storage/protocol
+# boundaries; chrono-tz supplies historical IANA transitions for user-selected civil time.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
+
 # The TeeLogger wrapper (applog.rs) delegates to env_logger and is installed in main.
 env_logger = "0.11"
 
@@ -47,7 +52,7 @@ zeroize = "1"
 bytemuck = { version = "1", features = ["derive"] }
 
 # Local reports database (db/).
-rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "trace"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "trace", "functions"] }
 
 # Public historical spot candles used to value mixed report quote currencies in USDT. The
 # synchronous client lives on a dedicated worker thread, never on a UI or feed thread.

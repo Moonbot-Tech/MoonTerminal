@@ -16,6 +16,8 @@ use crate::db::{ProfitScope, SideFilter};
 ///     A quote-profit query over all cores and strategies.
 fn query(from: i64, to: i64) -> Query {
     Query {
+        time_zone: chrono_tz::UTC,
+        previous_period_basis: Default::default(),
         from,
         to,
         cores: Vec::new(),

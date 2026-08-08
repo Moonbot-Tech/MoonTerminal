@@ -23,6 +23,22 @@ use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 /// composition step, so this is what turns those signals into moving captions. Fast enough to
 /// read as live without repainting the whole Analytics window for every completed unit.
 const SUGGEST_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+/// Marker identifying the analyzer-owned suffix inside a strategy comment.
+const ANALYZER_MARK: &str = "(Save from analyzer)";
+
+/// Format the analyzer save stamp in the selected application-wide display zone.
+///
+/// Args:
+///     now: Current UTC Unix timestamp in seconds.
+///     zone: Selected application-wide IANA display zone.
+///
+/// Returns:
+///     A selected-zone analyzer stamp, or the marker alone outside chrono's range.
+fn analyzer_stamp(now: i64, zone: chrono_tz::Tz) -> String {
+    moon_core::util::display_time::at(now, zone)
+        .map(|value| format!("{} {ANALYZER_MARK}", value.format("%d.%m.%Y %H:%M:%S")))
+        .unwrap_or_else(|| ANALYZER_MARK.to_string())
+}
 
 impl AnalyticsView {
     /// Suggest v1 ranges with joint coordinate descent, optionally composing the field set first.
@@ -735,34 +751,26 @@ impl AnalyticsView {
         (changes, warns)
     }
 
-    /// The analyzer stamp for Comment: "dd.mm.yyyy hh:mm:ss (Save from
-    /// analyzer)" UTC. The user's own description is preserved — only the previous
-    /// stamp is replaced (segments are separated by "; ").
+    /// Build the analyzer Comment stamp in the selected display zone.
     ///
-    /// `tuner`-visible: the "By time" copy dialog (`time/save.rs`) stamps its copies
-    /// through the same helper.
+    /// The user's own description is preserved and only the previous analyzer stamp is replaced;
+    /// the "By time" copy dialog routes through this same helper.
+    ///
+    /// Returns:
+    ///     The Comment field name and its updated selected-zone value.
     pub(in crate::analytics::tuner) fn analyzer_comment(&self) -> (String, String) {
-        const MARK: &str = "(Save from analyzer)";
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let ts = moon_core::db::fmt_unix_secs(now); // YYYY-MM-DD HH:MM:SS
-        let (date, time) = ts.split_once(' ').unwrap_or((ts.as_str(), ""));
-        let mut dmy = date.splitn(3, '-');
-        let (y, m, d) = (
-            dmy.next().unwrap_or(""),
-            dmy.next().unwrap_or(""),
-            dmy.next().unwrap_or(""),
-        );
-        let stamp = format!("{d}.{m}.{y} {time} {MARK}");
+        let stamp = analyzer_stamp(now, self.display_zone);
         let base: Vec<&str> = self
             .tuner
             .strat
             .comment
             .split("; ")
             .map(str::trim)
-            .filter(|s| !s.is_empty() && !s.contains(MARK))
+            .filter(|s| !s.is_empty() && !s.contains(ANALYZER_MARK))
             .collect();
         let comment = if base.is_empty() {
             stamp
@@ -786,3 +794,6 @@ fn fmt_plain(v: f64) -> String {
     }
     s
 }
+
+#[cfg(test)]
+mod tests;

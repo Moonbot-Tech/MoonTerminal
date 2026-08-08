@@ -87,6 +87,8 @@ struct FieldCache {
     /// The working-list revision this was built for — the field follows the EDIT, so a tick
     /// must rebuild it even though the background read has not moved.
     rev: u64,
+    /// Display zone used to precompute the hover dates.
+    zone: chrono_tz::Tz,
     coins: Vec<PickCoin>,
     /// How many of them carry a date, counted here rather than in the probe: the probe runs
     /// on every frame it is armed for, and this does not change between rebuilds.
@@ -114,29 +116,50 @@ impl CoinListsState {
         self.rows = LoadState::default();
         self.field = None;
     }
+
+    /// Drop only the rendered field so dates rebuild after the display zone changes.
+    ///
+    /// Returns:
+    ///     Nothing; source rows and working edits remain intact.
+    pub(in crate::analytics) fn invalidate_display_time(&mut self) {
+        self.field = None;
+    }
 }
 
 /// Build the field unless the cache already holds it.
 ///
 /// Built once per read AND per edit, never per frame: GPUI repaints the whole view on any
 /// hover, and this walks and sorts every entry of the list.
+///
+/// Args:
+///     state: Coin-list state that owns the cache.
+///     data: Loaded saved lists.
+///     work: Current working blacklist tokens.
+///     saved: Persisted blacklist tokens used to mark pending entries.
+///     rev: Working-list revision.
+///     zone: Selected IANA display zone used by hover dates.
+///
+/// Returns:
+///     Cached or freshly built field entries borrowed from `state`.
 fn field_for<'a>(
     state: &'a mut CoinListsState,
     data: &Arc<CoinListRows>,
     work: &HashSet<String>,
     saved: &HashSet<String>,
     rev: u64,
+    zone: chrono_tz::Tz,
 ) -> &'a [PickCoin] {
     let stale = state
         .field
         .as_ref()
-        .is_none_or(|c| !Arc::ptr_eq(&c.src, data) || c.rev != rev);
+        .is_none_or(|c| !Arc::ptr_eq(&c.src, data) || c.rev != rev || c.zone != zone);
     if stale {
-        let coins = build(data, work, saved);
+        let coins = build(data, work, saved, zone);
         state.field = Some(FieldCache {
             dated: coins.iter().filter(|c| c.at.is_some()).count(),
             src: Arc::clone(data),
             rev,
+            zone,
             coins,
         });
     }
@@ -169,7 +192,21 @@ struct Saved<'a> {
 /// the value the picking produces, so it has to follow the tick boxes: a coin just ticked
 /// appears, one just unticked leaves. Rendering the saved value instead made the field sit
 /// still while the badge beside it counted the edits.
-fn build(data: &CoinListRows, work: &HashSet<String>, saved: &HashSet<String>) -> Vec<PickCoin> {
+///
+/// Args:
+///     data: Loaded saved lists and their historical dates.
+///     work: Current working blacklist tokens.
+///     saved: Persisted blacklist tokens used to mark pending entries.
+///     zone: Selected IANA display zone used by hover dates.
+///
+/// Returns:
+///     Newest-first field entries with precomputed text, tooltip, and brightness.
+fn build(
+    data: &CoinListRows,
+    work: &HashSet<String>,
+    saved: &HashSet<String>,
+    zone: chrono_tz::Tz,
+) -> Vec<PickCoin> {
     // What the SAVED lists hold, indexed by token, so a working coin can pick up its
     // entries, its cores and its date.
     let mut by_token: HashMap<&str, Saved> = HashMap::new();
@@ -216,7 +253,7 @@ fn build(data: &CoinListRows, work: &HashSet<String>, saved: &HashSet<String>) -
         for text in entries {
             let tip = match (
                 pending,
-                at.map(|ms| moon_core::db::fmt_unix_date(ms / 1000)),
+                at.map(|ms| moon_core::util::display_time::format_date(ms / 1000, zone)),
             ) {
                 // An unsaved tick has no date and no core: saying so is the point, since it
                 // is the one entry the strategy does not hold yet.
@@ -330,7 +367,12 @@ impl AnalyticsView {
             // The same fold the card draws. This VALUE is what "Make a copy" writes; Save
             // reads only the KEYS from here and sends the user's edit replayed onto each
             // strategy's own live list instead.
-            let coins = build(data, &self.coins.work.black, &self.coins.saved.black);
+            let coins = build(
+                data,
+                &self.coins.work.black,
+                &self.coins.saved.black,
+                self.display_zone,
+            );
             out.push((
                 super::save::FIELD.to_string(),
                 coins
@@ -377,6 +419,7 @@ impl AnalyticsView {
                 // every frame than the whole rest of this card — which is exactly what
                 // precomputing the chip strings was for. `coins` and `coin_lists` are
                 // separate fields, so the split borrow is sound.
+                let display_zone = self.display_zone;
                 let Self {
                     coins: edit,
                     coin_lists: state,
@@ -388,6 +431,7 @@ impl AnalyticsView {
                     &edit.work.black,
                     &edit.saved.black,
                     edit.lists_rev,
+                    display_zone,
                 );
                 if coins.is_empty() {
                     (

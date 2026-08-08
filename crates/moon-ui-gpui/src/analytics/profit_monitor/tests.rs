@@ -13,7 +13,7 @@ use super::rows::{GroupMode, LiveContext, RowLabels, grouped_rows};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
     duration_until_period_refresh, format_profit, monitor_zone, next_sort,
-    retain_last_known_exchange_names, sort_rows, zoned_day_start,
+    retain_last_known_exchange_names, sort_rows,
 };
 
 /// Return deterministic fallback labels for pure grouping tests.
@@ -391,7 +391,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
 }
 
 /// `profit_monitor/mod.rs:MonitorPeriod::range_at` must derive Today from the selected header-clock
-/// zone; replacing `zoned_day_start(zone, ...)` with UTC excludes a HyperLiquid close at 01:01
+/// zone; replacing `display_time::day_start` with UTC excludes a HyperLiquid close at 01:01
 /// Warsaw from the user's Today report.
 #[test]
 fn today_includes_the_early_warsaw_hour() {
@@ -408,23 +408,37 @@ fn today_includes_the_early_warsaw_hour() {
     );
 }
 
-/// `profit_monitor/mod.rs:monitor_zone` must share the header clock's curated-city fallback;
-/// parsing any valid IANA id directly makes this assertion red and lets the header show UTC while
-/// Profit Monitor silently queries Detroit calendar days.
+/// `profit_monitor/mod.rs:monitor_zone` must share the header clock's exact-IANA policy; restricting
+/// it to the curated city table makes this assertion red and sends a Detroit system profile back
+/// to UTC calendar bounds after restart.
 #[test]
-fn monitor_zone_matches_the_visible_header_fallback() {
+fn monitor_zone_matches_the_visible_header_exact_iana_policy() {
     assert_eq!(monitor_zone(Some("Europe/Warsaw")), Warsaw);
-    assert_eq!(monitor_zone(Some("America/Detroit")), Tz::UTC);
+    assert_eq!(monitor_zone(Some("America/Detroit")), Tz::America__Detroit);
     assert_eq!(monitor_zone(None), Tz::UTC);
 }
 
-/// `profit_monitor/mod.rs:zoned_day_start` must advance across a fully skipped civil date;
-/// restoring the three-hour search plus UTC reinterpretation makes this assertion red and invents
-/// a boundary fourteen hours after Apia's actual next local midnight.
+/// `display_time::day_start` must advance across a fully skipped civil date; restoring a short gap
+/// probe makes this assertion red and can drop a historical monitor day at a dateline jump.
 #[test]
 fn skipped_civil_date_advances_to_its_first_real_instant() {
     let skipped = NaiveDate::from_ymd_opt(2011, 12, 30).unwrap();
-    assert_eq!(zoned_day_start(Apia, skipped), 1_325_239_200);
+    assert_eq!(
+        moon_core::util::display_time::day_start(skipped, Apia),
+        Some(1_325_239_200)
+    );
+}
+
+/// Replacing `MonitorPeriod::range_at`'s existing-day step with forward-clamping `day_start`
+/// makes Apia Yesterday empty on December 31 instead of selecting December 29.
+#[test]
+fn yesterday_uses_the_previous_existing_day_across_a_dateline_skip() {
+    let now = Utc.with_ymd_and_hms(2011, 12, 30, 12, 0, 0).unwrap();
+
+    assert_eq!(
+        MonitorPeriod::Yesterday.range_at(now, Apia),
+        (1_325_152_800, 1_325_239_200)
+    );
 }
 
 /// `profit_monitor/mod.rs:MonitorPeriod::range_at` must resolve both local midnights through the

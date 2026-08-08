@@ -1,9 +1,9 @@
 //! Shared terminal clock, normally formatted as `HH:MM:SS CODE` and compacted to `HH:MM CODE` in
-//! narrow hosts. It shows the selected city's wall clock and advances whenever its host rerenders.
-//! Clicking it opens a
-//! `MoonPopover` listing the curated cities of [`cities`], each with its own current time. The
-//! selection persists in the layout as the city's IANA zone id through
-//! `Backend::set_header_clock_zone` and is shared by all windows.
+//! narrow hosts. It shows the selected zone's wall clock and advances whenever its host rerenders.
+//! Clicking it opens a `MoonPopover` listing the curated cities of [`cities`], each with its own
+//! current time. A first-run system zone outside that list remains an exact IANA selection and is
+//! shown in a checked system row until the user replaces it with a curated city. The selection
+//! persists through `Backend::set_header_clock_zone` and is shared by all windows.
 //!
 //! Summer time needs no handling here: the zone answers every conversion, so a city that has just
 //! moved its clocks reads correctly without an update or a restart.
@@ -49,40 +49,29 @@ fn now_utc() -> DateTime<Utc> {
         .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
-/// Resolve one persisted zone id through the curated header-clock city table.
-///
-/// Args:
-///     zone_id: Persisted IANA zone id, if the user selected one.
-///
-/// Returns:
-///     Matching curated city, or UTC for an absent, invalid, or unlisted id.
-fn city_for_zone_id(zone_id: Option<&str>) -> &'static City {
-    zone_id
-        .and_then(cities::by_zone_id)
-        .unwrap_or_else(cities::utc_city)
-}
-
 /// Resolve the exact IANA zone represented by the visible header clock.
 ///
 /// Args:
 ///     zone_id: Persisted IANA zone id, if the user selected one.
 ///
 /// Returns:
-///     Curated city zone, or UTC under the header's fallback policy.
+///     Saved curated or uncurated IANA zone, or UTC under the header's fallback policy.
 pub(crate) fn resolved_header_clock_zone(zone_id: Option<&str>) -> chrono_tz::Tz {
-    city_for_zone_id(zone_id).zone
+    zone_id
+        .and_then(cities::zone_by_id)
+        .unwrap_or(chrono_tz::Tz::UTC)
 }
 
-/// Resolve the saved zone to the city shown by the header clock.
+/// Resolve the saved zone shown by the header clock.
 ///
 /// Args:
 ///     backend: Shared state containing the persisted header-clock zone.
 ///     cx: Application context used to read the backend entity.
 ///
 /// Returns:
-///     Matching curated city, or UTC when the saved value cannot be displayed.
-fn selected_city(backend: &Entity<Backend>, cx: &App) -> &'static City {
-    city_for_zone_id(backend.read(cx).header_clock_zone())
+///     Matching curated or uncurated zone, or UTC when the saved value is invalid.
+fn selected_zone(backend: &Entity<Backend>, cx: &App) -> chrono_tz::Tz {
+    resolved_header_clock_zone(backend.read(cx).header_clock_zone())
 }
 
 /// Gap between the time and the city code.
@@ -106,27 +95,30 @@ enum ClockPrecision {
     Minutes,
 }
 
-/// The two strings one clock host shows: the city's time and its code.
+/// The two strings one clock host shows: the selected-zone time and its compact code.
 ///
 /// One source for the renderer and the width measurement, so they cannot drift apart.
 ///
 /// Args:
-///     city: Selected city whose IANA zone determines the wall clock.
+///     zone: Selected IANA zone that determines the wall clock.
 ///     now: UTC instant converted into the selected zone.
 ///     precision: Whether the host has room for seconds.
 ///
 /// Returns:
-///     Local time text and the stable city code.
+///     Local time text and curated city code, or the zone's current abbreviation when uncurated.
 fn clock_parts(
-    city: &City,
+    zone: chrono_tz::Tz,
     now: DateTime<Utc>,
     precision: ClockPrecision,
-) -> (String, &'static str) {
-    let mut time = cities::local_hms(city.zone, now);
+) -> (String, String) {
+    let mut time = cities::local_hms(zone, now);
     if precision == ClockPrecision::Minutes {
         time.truncate(5);
     }
-    (time, city.code)
+    let code = cities::by_zone_id(zone.name())
+        .map(|city| city.code.to_string())
+        .unwrap_or_else(|| now.with_timezone(&zone).format("%Z").to_string());
+    (time, code)
 }
 
 /// Rendered width of the header clock, in the units the header lays its children out with.
@@ -140,49 +132,70 @@ fn clock_parts(
 /// measurement.
 ///
 /// Args:
-///     backend: Shared state containing the selected clock city.
+///     backend: Shared state containing the selected display zone.
 ///     cx: Application context used to measure the active typography.
 ///
 /// Returns:
 ///     Full `HH:MM:SS CODE` trigger width used by the main-header ticker offset.
 pub(crate) fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
     let (time, code) = clock_parts(
-        selected_city(backend, cx),
+        selected_zone(backend, cx),
         now_utc(),
         ClockPrecision::Seconds,
     );
     design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT)
         + design::ui_value(cx, CLOCK_GAP)
-        + design::mono_body_text_width(cx, code, CLOCK_TZ_WEIGHT)
+        + design::mono_body_text_width(cx, &code, CLOCK_TZ_WEIGHT)
 }
 
-/// Write a city into the layout, deriving its compatibility offset mirror from the same instant.
+/// Write a picker city into the layout, deriving its compatibility offset from the same instant.
 ///
 /// The click path's writer; the startup path pairs the same two fields through
 /// [`cities::reconcile_target`]. `Backend` cannot derive an offset from a zone — the city table
 /// lives up here — so the pairing has to happen on this side, and both paths derive it the one
 /// way, through `cities::current_offset_min`. Any new writer goes through one of these two.
-fn commit_city(b: &mut Backend, city: &City, now: DateTime<Utc>) {
-    b.set_header_clock_zone(city.zone.name(), cities::current_offset_min(city.zone, now));
+///
+/// Args:
+///     b: Shared Backend whose layout stores the selection.
+///     city: Curated city selected by the user.
+///     now: UTC instant used to derive the compatibility offset mirror.
+///     cx: Backend context that publishes the display-time revision.
+///
+/// Returns:
+///     Nothing; layout state and observers are updated in place.
+fn commit_city(b: &mut Backend, city: &City, now: DateTime<Utc>, cx: &mut Context<Backend>) {
+    b.set_header_clock_zone(
+        city.zone.name(),
+        cities::current_offset_min(city.zone, now),
+        cx,
+    );
 }
 
 /// Settle both persisted clock fields once at startup, before any window draws.
 ///
-/// A layout with only the compatibility offset receives a city here rather than during rendering,
-/// because lazy resolution would let later city-table ordering decide a persisted selection. A
-/// layout that names a city also gets its offset mirror refreshed: the mirror is DERIVED and can
-/// become an hour stale at the city's next summer-time transition. Both cases are decided by
-/// [`cities::reconcile_target`], so this must run even when a zone is already saved.
+/// A profile with neither field configured calls the OS detector and persists its exact IANA id.
+/// Old nonzero offsets migrate without consulting the OS, while every already-saved valid IANA id
+/// wins and only refreshes its derived compatibility offset. A failed detection leaves the profile
+/// untouched, so this startup path can retry after the next reboot instead of persisting fallback
+/// UTC as a manual choice.
+///
+/// Args:
+///     backend: Shared state whose loaded layout is reconciled and marked for persistence.
+///     cx: Application context used to update Backend before window construction.
+///
+/// Returns:
+///     Nothing; a valid saved, migrated, or detected zone is applied through the shared setter.
 pub(crate) fn reconcile_clock_zone(backend: &Entity<Backend>, cx: &mut App) {
-    backend.update(cx, |b, _| {
+    backend.update(cx, |b, bcx| {
         let now = now_utc();
         let target = cities::reconcile_target(
             b.layout.header_clock_zone.as_deref(),
             b.layout.header_clock_offset_min,
             now,
+            || iana_time_zone::get_timezone().ok(),
         );
-        if let Some((city, offset_min)) = target {
-            b.set_header_clock_zone(city.zone.name(), offset_min);
+        if let Some(target) = target {
+            b.set_header_clock_zone(&target.zone_id, target.offset_min, bcx);
         }
     });
 }
@@ -192,7 +205,7 @@ pub(crate) fn reconcile_clock_zone(backend: &Entity<Backend>, cx: &mut App) {
 /// Both the drawn strings and [`header_clock_width`] are derived through [`clock_parts`].
 ///
 /// Args:
-///     backend: Shared state containing the selected clock city.
+///     backend: Shared state containing the selected display zone.
 ///     p: Active palette.
 ///     cx: Application context used to build the shared popover.
 ///
@@ -205,7 +218,7 @@ pub(crate) fn header_clock(backend: &Entity<Backend>, p: MoonPalette, cx: &App) 
 /// Render the minute-precision shared clock and its unchanged city-selection popover.
 ///
 /// Args:
-///     backend: Shared state containing the selected clock city.
+///     backend: Shared state containing the selected display zone.
 ///     p: Active palette.
 ///     cx: Application context used to build the shared popover.
 ///
@@ -219,10 +232,10 @@ pub(crate) fn compact_header_clock(
     render_header_clock(backend, p, ClockPrecision::Minutes, cx)
 }
 
-/// Render one clock precision through the single selected-city and popover implementation.
+/// Render one clock precision through the single selected-zone and popover implementation.
 ///
 /// Args:
-///     backend: Shared state containing the selected clock city.
+///     backend: Shared state containing the selected display zone.
 ///     p: Active palette.
 ///     precision: Time fields retained by the host.
 ///     cx: Application context used to build the shared popover.
@@ -235,7 +248,7 @@ fn render_header_clock(
     precision: ClockPrecision,
     cx: &App,
 ) -> AnyElement {
-    let selected = selected_city(backend, cx);
+    let selected = selected_zone(backend, cx);
     // One instant for the header and every menu row, so no row can straddle a second and disagree
     // with the clock above it. `MoonPopover` builds its content eagerly, so this loop runs whether
     // the popup is open or not — reading the system clock per row would be that cost per frame.
@@ -245,11 +258,23 @@ fn render_header_clock(
     // One shared handle for all 47 rows: cloning an `Entity` takes a read lock on the entity map,
     // so a clone per row is not the refcount bump it reads as.
     let backend = Rc::new(backend.clone());
-    let mut items = Vec::with_capacity(cities::CITIES.len());
+    let selected_curated = cities::by_zone_id(selected.name());
+    let mut items =
+        Vec::with_capacity(cities::CITIES.len() + usize::from(selected_curated.is_none()));
+    if selected_curated.is_none() {
+        items.push(
+            MoonMenuItem::with_key(
+                "tz-system",
+                t!("header.clock_system", zone = selected.name()).to_string(),
+            )
+            .right_label(cities::local_hms(selected, now))
+            .selected(true)
+            .checked(true)
+            .disabled(true),
+        );
+    }
     for city in cities::CITIES {
-        // Both rows and the header come from the same `CITIES` slice, so identity IS the selection
-        // test — no string comparison stands in for it.
-        let is_selected = std::ptr::eq(city, selected);
+        let is_selected = city.zone == selected;
         let backend = backend.clone();
         items.push(
             MoonMenuItem::with_key(
@@ -263,7 +288,7 @@ fn render_header_clock(
                 backend.update(cx, |b, bcx| {
                     // `now_utc()` again rather than the captured snapshot: a popup left open across
                     // a transition would otherwise mirror an offset that has since moved.
-                    commit_city(b, city, now_utc());
+                    commit_city(b, city, now_utc(), bcx);
                     bcx.notify();
                 });
             }),

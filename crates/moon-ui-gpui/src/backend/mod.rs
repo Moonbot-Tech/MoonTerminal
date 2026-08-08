@@ -1020,28 +1020,49 @@ impl Backend {
             .unwrap_or_default()
     }
 
-    /// The IANA zone id of the city the header clock shows, or `None` when none was ever picked.
+    /// The exact IANA zone id used application-wide, or `None` for an untouched profile.
     ///
-    /// Returns the raw id rather than a resolved city: the city table lives in the chrome layer,
-    /// which already depends on `Backend`, and returning its type from here would close that loop.
+    /// Returns the raw id rather than a parsed zone: resolution lives in the chrome layer, which
+    /// already depends on `Backend`, and returning its type from here would close that loop.
+    ///
+    /// Returns:
+    ///     Persisted IANA id, or `None` only for an untouched profile.
     pub(crate) fn header_clock_zone(&self) -> Option<&str> {
         self.layout.header_clock_zone.as_deref()
     }
 
-    /// Store the zone picked in the header clock's city popup and mark layout persistence dirty.
+    /// Store the application-wide display zone and publish a dedicated zone revision.
     ///
-    /// `offset_min` is that city's current offset, mirrored into the compatibility field so readers
+    /// `offset_min` is that zone's current offset, mirrored into the compatibility field so readers
     /// that understand only fixed offsets still show the right clock. Such a reader can rewrite the
     /// layout without the zone field, so a stale mirror would also lose the selection on its next
     /// save. A mirror-only change marks the layout dirty because summer time can move the offset
-    /// while the zone remains stable; `chrome::clock` derives both values from one city.
-    pub(crate) fn set_header_clock_zone(&mut self, zone: &str, offset_min: i32) {
-        if self.layout.header_clock_zone.as_deref() != Some(zone)
-            || self.layout.header_clock_offset_min != offset_min
-        {
+    /// while the zone remains stable; `chrome::clock` derives both values from one IANA zone.
+    ///
+    /// Args:
+    ///     zone: Valid IANA zone id used by every civil-time surface.
+    ///     offset_min: Current offset mirror retained for older layout readers.
+    ///     cx: Backend context used to notify civil-time consumers when the zone identity changes.
+    ///
+    /// Returns:
+    ///     Nothing; changed fields are marked dirty and zone observers are notified in place.
+    pub(crate) fn set_header_clock_zone(
+        &mut self,
+        zone: &str,
+        offset_min: i32,
+        cx: &mut Context<Self>,
+    ) {
+        crate::chartdx::axes::set_display_zone(crate::chrome::clock::resolved_header_clock_zone(
+            Some(zone),
+        ));
+        let zone_changed = self.layout.header_clock_zone.as_deref() != Some(zone);
+        if zone_changed || self.layout.header_clock_offset_min != offset_min {
             self.layout.header_clock_zone = Some(zone.to_string());
             self.layout.header_clock_offset_min = offset_min;
             self.layout_dirty = true;
+            if zone_changed {
+                self.display_time_revision.update(cx, |_, cx| cx.notify());
+            }
         }
     }
 

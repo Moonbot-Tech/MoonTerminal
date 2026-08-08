@@ -1,14 +1,29 @@
 //! Selection filters and the unified report source (`Query`, `unified_from`).
 
+use chrono_tz::Tz;
 use rusqlite::types::Value;
 use rusqlite::Connection;
 
 use super::super::valuation::ValuationMode;
 use super::super::{ProfitMetric, QuoteBreakdown, ReadResult, SideFilter};
 
+/// Basis used to place Summary's immediately preceding comparison window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PreviousPeriodBasis {
+    /// Shift by the selected zone's civil clock, preserving calendar-day comparisons across DST.
+    #[default]
+    Civil,
+    /// Shift by elapsed seconds, preserving custom range duration across ambiguous picker bounds.
+    Elapsed,
+}
+
 /// Selection filters shared by all Analytics tabs.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
+    /// User-selected time zone for civil periods, buckets, and schedule predicates.
+    pub time_zone: Tz,
+    /// How Summary places the previous comparison window.
+    pub previous_period_basis: PreviousPeriodBasis,
     /// UTC Unix seconds; `from < 0` means all history. `to` is exclusive.
     pub from: i64,
     pub to: i64,

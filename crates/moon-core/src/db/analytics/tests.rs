@@ -9,6 +9,8 @@ use super::*;
 /// Build the minimal real-trade query used by analytics regression tests.
 fn q(from: i64, to: i64) -> Query {
     Query {
+        time_zone: chrono_tz::UTC,
+        previous_period_basis: Default::default(),
         from,
         to,
         cores: Vec::new(),
@@ -89,6 +91,70 @@ fn single_day_uses_hourly_grid_and_kinds_reconcile() {
 
     drop(conn);
     remove_db(&path);
+}
+
+/// Replacing Summary's civil-span check with elapsed UTC seconds would classify Warsaw's
+/// 25-hour fall-back day as a multi-day period and remove its hourly and strategy-kind views.
+#[test]
+fn fall_back_civil_day_keeps_the_hourly_summary_grid() {
+    let path = temp_db("fall-back-day");
+    let zone = chrono_tz::Europe::Warsaw;
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 25).expect("valid date");
+    let from = crate::util::display_time::day_start(date, zone).expect("day starts");
+    let to =
+        crate::util::display_time::day_start(crate::util::display_time::shift_date(date, 1), zone)
+            .expect("next day starts");
+    assert_eq!(
+        to - from,
+        90_000,
+        "Warsaw fall-back day has 25 elapsed hours"
+    );
+    let conn = build_replica(&path, &[(from + 3_600, 5.0, "BTCUSDT")]);
+    let mut query = q(from, to);
+    query.time_zone = zone;
+
+    let scoped = summary_on(&conn, &query, false, false).expect("healthy DB reads");
+    let summary = scoped.data().expect("single-quote summary is comparable");
+
+    assert_eq!(summary.bucket_secs, 3_600);
+    assert!(
+        !summary.kinds.is_empty(),
+        "one civil day keeps the kind split"
+    );
+    drop(conn);
+    remove_db(&path);
+}
+
+/// Replacing `PreviousPeriodBasis::Elapsed` with the civil-span branch makes a custom Warsaw
+/// `02:30-02:30` fall-back selection compare 61 elapsed minutes against only one prior minute.
+#[test]
+fn ambiguous_custom_range_keeps_an_equal_elapsed_comparison_window() {
+    let query = Query {
+        time_zone: chrono_tz::Europe::Warsaw,
+        previous_period_basis: PreviousPeriodBasis::Elapsed,
+        from: 1_792_888_200, // 2026-10-25 02:30 CEST, the first occurrence.
+        to: 1_792_891_860,   // 2026-10-25 02:31 CET, after the selected later minute.
+        ..Default::default()
+    };
+
+    assert_eq!(query.to - query.from, 3_660);
+    assert_eq!(previous_period_start(&query, 3_660), 1_792_884_540);
+}
+
+/// Replacing the civil basis with elapsed subtraction moves the comparison of Warsaw's 25-hour
+/// fall-back day to 23:00 on the previous date instead of the previous civil midnight.
+#[test]
+fn fall_back_day_comparison_still_starts_at_the_previous_civil_midnight() {
+    let query = Query {
+        time_zone: chrono_tz::Europe::Warsaw,
+        previous_period_basis: PreviousPeriodBasis::Civil,
+        from: 1_792_879_200, // 2026-10-25 00:00 CEST.
+        to: 1_792_969_200,   // 2026-10-26 00:00 CET.
+        ..Default::default()
+    };
+
+    assert_eq!(query.to - query.from, 90_000);
+    assert_eq!(previous_period_start(&query, 90_000), 1_792_792_800);
 }
 
 /// A healthy replica retains exact summary metrics and empty-period semantics.
@@ -716,7 +782,7 @@ fn mixed_quote_summary_becomes_usdt_only_after_complete_coverage() {
         )
         .expect("count raw previous rows");
     assert_eq!(previous_rows, 1);
-    let direct_previous = scan_period(&conn, &source, day - 86_400, day, 3_600)
+    let direct_previous = scan_period(&conn, &source, day - 86_400, day, 3_600, chrono_tz::UTC)
         .expect("scan compatible previous period")
         .0;
     assert_eq!(
@@ -976,7 +1042,7 @@ fn corrupt_replica_surfaces_error_not_empty() {
         .expect("схема читается")
         .expect("источник есть");
     assert!(
-        scan_period(&conn, &src, wide.from, wide.to, 86_400).is_err(),
+        scan_period(&conn, &src, wide.from, wide.to, 86_400, chrono_tz::UTC).is_err(),
         "скан периода обязан вернуть ошибку, а не усечённую статистику"
     );
 

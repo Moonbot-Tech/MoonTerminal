@@ -119,12 +119,26 @@ fn swing_labels(pts: &[f32]) -> Vec<usize> {
 ///
 /// The cores share the total's Y scale, so the scale is taken over BOTH — a core that
 /// outruns the total would otherwise be painted outside the canvas.
+///
+/// Args:
+///     days: Ordered analytical buckets.
+///     cores: Per-core series aligned to `days`.
+///     colors: Resolved per-core theme colors.
+///     hover: Hovered bucket index, if any.
+///     bucket: Civil bucket width in seconds.
+///     zone: Selected IANA display zone.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Complete cumulative chart with selected-zone ticks and hover popup.
 pub(super) fn cumulative_area(
     days: &[DayPoint],
     cores: &[CoreSeries],
     colors: &[Hsla],
     hover: Option<usize>,
     bucket: i64,
+    zone: chrono_tz::Tz,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -363,6 +377,7 @@ pub(super) fn cumulative_area(
                 bi,
                 frac,
                 bucket,
+                zone,
                 PopupMode::Running,
                 p,
                 cx,
@@ -376,7 +391,7 @@ pub(super) fn cumulative_area(
                 .w_full()
                 .gap(px(4.0))
                 .child(stack)
-                .child(date_ticks(days, bucket, p)),
+                .child(date_ticks(days, bucket, zone, p)),
         )
         .children(popup)
         .into_any_element()
@@ -431,7 +446,16 @@ fn hover_row(
 /// rather than centred on the outermost points — the usual axis convention, and the only
 /// one that keeps them inside the card. Ticks in between are therefore approximate: they
 /// name evenly spaced dates, they are not plumb lines onto their points.
-fn date_ticks(days: &[DayPoint], bucket: i64, p: MoonPalette) -> AnyElement {
+///
+/// Args:
+///     days: Ordered analytical buckets.
+///     bucket: Civil bucket width in seconds.
+///     zone: Selected IANA display zone.
+///     p: Active MoonUI palette.
+///
+/// Returns:
+///     Complete row of evenly distributed time labels.
+fn date_ticks(days: &[DayPoint], bucket: i64, zone: chrono_tz::Tz, p: MoonPalette) -> AnyElement {
     let n = days.len();
     if n == 0 {
         // Callers return early on an empty period, but this runs in the render path and a
@@ -448,7 +472,7 @@ fn date_ticks(days: &[DayPoint], bucket: i64, p: MoonPalette) -> AnyElement {
         } else {
             (i * (n - 1) + (count - 1) / 2) / (count - 1)
         };
-        row = row.child(muted_caption(p, bucket_label(days[k].start, bucket)));
+        row = row.child(muted_caption(p, bucket_label(days[k].start, bucket, zone)));
     }
     row.into_any_element()
 }

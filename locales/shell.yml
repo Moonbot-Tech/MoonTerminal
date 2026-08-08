@@ -58,15 +58,19 @@ header.delta_24h:
   ru: "24ч"
   en: "24h"
   es: "24h"
-# Clock in the header's right corner.
+# Application-wide display zone in the header's right corner.
 header.clock_tip:
-  ru: "Часы выбранного города. Клик — сменить город; переход на летнее время автоматический"
-  en: "Clock of the selected city. Click to change it; summer time switches automatically"
-  es: "Reloj de la ciudad elegida. Clic para cambiarla; el horario de verano se ajusta solo"
+  ru: "Часы выбранного часового пояса. Клик — сменить пояс; переход на летнее время автоматический"
+  en: "Clock in the selected time zone. Click to change it; daylight-saving changes are automatic"
+  es: "Reloj de la zona horaria elegida. Clic para cambiarla; el horario de verano se ajusta solo"
 header.clock_pick:
-  ru: "Город часов"
-  en: "Clock city"
-  es: "Ciudad del reloj"
+  ru: "Часовой пояс"
+  en: "Time zone"
+  es: "Zona horaria"
+header.clock_system:
+  ru: "Системный · %{zone}"
+  en: "System · %{zone}"
+  es: "Sistema · %{zone}"
 
 # --- Toolbar ---
 # Tooltips for preset strips. The group label itself is a literal (Size/Sell), like the adjacent

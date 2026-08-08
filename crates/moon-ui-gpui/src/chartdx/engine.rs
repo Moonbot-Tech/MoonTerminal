@@ -809,13 +809,23 @@ impl ChartEngine {
         self.data.borrow_mut().mark_view_dirty();
     }
 
+    /// Invalidate retained axis and readout text after the selected display zone changes.
+    ///
+    /// Returns:
+    ///     Nothing; the next frame rebuilds display-time text from retained data.
+    pub fn invalidate_display_time(&mut self) {
+        self.data.borrow_mut().mark_view_dirty();
+    }
+
     pub fn pane_count(&self) -> usize {
         self.container.borrow().pane_count()
     }
 
-    /// Returns axis snapshots for visible panes as `(index, device-pixel rectangle, snapshot)`.
-    /// Call this after preparation.
-    pub fn axis_panes(&self, tz_offset_sec: i64) -> Vec<(usize, Rect, AxisSnapshot)> {
+    /// Return axis snapshots for visible panes after preparation.
+    ///
+    /// Returns:
+    ///     Visible panes as `(index, device-pixel rectangle, snapshot)` tuples.
+    pub fn axis_panes(&self) -> Vec<(usize, Rect, AxisSnapshot)> {
         let container = self.container.borrow();
         container
             .layout({
@@ -840,7 +850,6 @@ impl ChartEngine {
                         render_range: v.render_range,
                         epoch_ms: v.epoch_ms,
                         right_time_ms: v.right_time_ms,
-                        tz_offset_sec,
                     },
                 ))
             })

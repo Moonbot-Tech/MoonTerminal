@@ -101,10 +101,10 @@ impl TimeAxes {
 /// and one time window (`WorkingTime`). What to search is dictated by `axes` (the row
 /// checkboxes); with both `WorkingTime` formats checked the sweep tries each and keeps the
 /// better one, and a row that is unchecked but already holds a value pins the sweep inside
-/// it. The two fields are independent; each is `None` when the best candidate does not
-/// improve on the unrestricted sample. Using `OPEN_TS`, the UTC weekday is
-/// `(((OPEN_TS/86400)+4)%7+6)%7` (0=Mon..6=Sun), and the minute is
-/// `(OPEN_TS%86400)/60`.
+/// it. The two fields are independent; each is `None` when the best candidate does not improve on
+/// the unrestricted sample. Weekday and minute are projected from `OPEN_TS` through the query's
+/// selected IANA zone, so recommendations use the same civil schedule that saved KPI predicates
+/// evaluate.
 ///
 /// Args:
 ///     q: Report scope and profit metric.

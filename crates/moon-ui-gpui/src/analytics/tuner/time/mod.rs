@@ -339,7 +339,7 @@ const BAR_H: f32 = 108.0;
 /// Bar up = profit (green), down = loss (orange); length ∝ |PnL| / maximum.
 ///
 /// Args:
-///     h: UTC hour index.
+///     h: Selected-zone civil hour index.
 ///     stat: Hour aggregate in the active comparable unit.
 ///     max: Largest absolute profit across the rendered profile.
 ///     p: Active MoonUI palette.

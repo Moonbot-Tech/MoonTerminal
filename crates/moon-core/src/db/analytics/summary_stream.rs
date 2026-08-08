@@ -211,6 +211,7 @@ impl Accumulator {
     ///     row: Chronological report row shared by every projection.
     ///     bucket: Time-grid bucket width in seconds.
     ///     include_inline_raw: Whether this stream owns raw-money group aggregation.
+    ///     zone: Selected IANA zone used for civil buckets and hour profiles.
     ///
     /// Returns:
     ///     Success after every projection accepts the row.
@@ -222,6 +223,7 @@ impl Accumulator {
         row: TradeRow,
         bucket: i64,
         include_inline_raw: bool,
+        zone: chrono_tz::Tz,
     ) -> rusqlite::Result<()> {
         let profit = row.pnl.unwrap_or(0.0);
         self.stats.n += 1;
@@ -244,7 +246,8 @@ impl Accumulator {
         self.peak = self.peak.max(self.cumulative);
         self.stats.max_dd = self.stats.max_dd.max(self.peak - self.cumulative);
 
-        let bucket_start = row.closedate.div_euclid(bucket) * bucket;
+        let bucket_start = crate::util::display_time::bucket_start(row.closedate, bucket, zone)
+            .unwrap_or(row.closedate);
         match self.days.last_mut() {
             Some(day) if day.start == bucket_start => {
                 day.profit += profit;
@@ -256,7 +259,9 @@ impl Accumulator {
                 trades: 1,
             }),
         }
-        let hour = (row.closedate.rem_euclid(86_400) / 3_600) as usize;
+        let hour = crate::util::display_time::minute_of_day(row.closedate, zone)
+            .map(|minute| minute as usize / 60)
+            .unwrap_or(0);
         self.hours[hour].0 += profit;
         self.hours[hour].1 += 1;
 
@@ -302,7 +307,11 @@ impl Accumulator {
     ///
     /// Args:
     ///     bucket: Time-grid bucket width in seconds.
-    fn finish_period(&mut self, bucket: i64) {
+    ///     zone: Selected IANA zone used to step the civil bucket grid.
+    ///
+    /// Returns:
+    ///     Nothing; aggregate fields and dense buckets are finalized in place.
+    fn finish_period(&mut self, bucket: i64, zone: chrono_tz::Tz) {
         if self.stats.n > 0 {
             self.stats.avg = self.stats.profit / self.stats.n as f64;
             self.stats.avg_dur_min = self.duration_seconds as f64 / self.stats.n as f64 / 60.0;
@@ -324,7 +333,10 @@ impl Accumulator {
                     trades: 0,
                 });
             }
-            start += bucket;
+            let Some(next) = crate::util::display_time::next_bucket(start, bucket, zone) else {
+                break;
+            };
+            start = next;
         }
         self.days = filled;
     }
@@ -411,10 +423,10 @@ pub(super) fn read(
     for row in rows {
         let row = row.map_err(|error| read_fail_on(conn, CTX, error))?;
         accumulator
-            .push(row, bucket, raw_src.is_none())
+            .push(row, bucket, raw_src.is_none(), q.time_zone)
             .map_err(|error| read_fail_on(conn, CTX, error))?;
     }
-    accumulator.finish_period(bucket);
+    accumulator.finish_period(bucket, q.time_zone);
 
     let (raw_strategies, raw_coins) = match raw_src {
         Some(raw_src) => read_raw_groups(conn, raw_src, q)?,

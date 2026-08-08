@@ -526,11 +526,11 @@ fn a_pre_city_clock_choice_survives_as_the_migration_seed() {
     );
 }
 
-/// A hand-written clock zone of the wrong type must cost that one key, not the whole document.
+/// A hand-written clock zone of the wrong type must preserve the document without looking absent.
 ///
-/// Breakage this pins: dropping `deserialize_with = "de_lenient"` from
-/// `layout.rs:header_clock_zone`. `layout.toml` is hand-editable and holds every window's
-/// geometry, so a zone written as a bare number would take all of it down.
+/// Breakage this pins: replacing `de_clock_zone` with generic `de_lenient` turns malformed present
+/// values into `None`; startup then mistakes the profile for first run and overwrites it from the
+/// operating system. Removing lenient deserialization entirely would discard the whole layout.
 #[test]
 fn a_mistyped_clock_zone_cannot_discard_the_saved_layout() {
     for (written, expected) in [
@@ -538,9 +538,9 @@ fn a_mistyped_clock_zone_cannot_discard_the_saved_layout() {
             "header_clock_zone = \"Europe/Warsaw\"",
             Some("Europe/Warsaw"),
         ),
-        ("header_clock_zone = 42", None),
-        ("header_clock_zone = true", None),
-        ("header_clock_zone = [\"Europe/Warsaw\"]", None),
+        ("header_clock_zone = 42", Some("")),
+        ("header_clock_zone = true", Some("")),
+        ("header_clock_zone = [\"Europe/Warsaw\"]", Some("")),
         ("", None),
     ] {
         let doc = format!("analytics_period = \"p-cur-month\"\n{written}\n");

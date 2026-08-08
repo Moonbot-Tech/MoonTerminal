@@ -7,10 +7,12 @@
 //! here rather than open-coded twice and left to drift apart.
 
 use chrono::{NaiveDateTime, NaiveTime};
+use chrono_tz::Tz;
 use gpui::{App, Context, Window};
 use moon_ui::MoonDateTimePickerState;
 
 use crate::design;
+use moon_core::util::display_time::{self, LocalBoundary};
 
 /// One picker step in seconds: the fields pick whole minutes, never seconds.
 pub const MINUTE: i64 = 60;
@@ -99,14 +101,33 @@ pub fn bound_picker(
     state
 }
 
-/// UTC unix seconds → the value a field shows.
-pub fn dt_of_secs(secs: i64) -> Option<NaiveDateTime> {
-    chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.naive_utc())
+/// Convert Unix seconds into the civil value shown by a bound field.
+///
+/// Args:
+///     secs: Absolute Unix seconds.
+///     zone: User-selected display time zone.
+///
+/// Returns:
+///     Local wall-clock value, or `None` when the timestamp is out of range.
+pub fn dt_of_secs(secs: i64, zone: Tz) -> Option<NaiveDateTime> {
+    display_time::at(secs, zone).map(|dt| dt.naive_local())
 }
 
-/// A field's value → UTC unix seconds, the first second of the picked minute.
-pub fn secs_of_dt(dt: NaiveDateTime) -> i64 {
-    dt.and_utc().timestamp()
+/// Convert a bound field's civil value into absolute Unix seconds.
+///
+/// Args:
+///     dt: Local wall-clock value selected by the user.
+///     zone: User-selected display time zone.
+///     bound: Range edge that determines the repeated-hour occurrence.
+///
+/// Returns:
+///     Absolute Unix seconds after applying the shared ambiguity and gap policy.
+pub fn secs_of_dt(dt: NaiveDateTime, zone: Tz, bound: Bound) -> Option<i64> {
+    let boundary = match bound {
+        Bound::From => LocalBoundary::Lower,
+        Bound::To => LocalBoundary::Upper,
+    };
+    display_time::unix_from_local(dt, zone, boundary)
 }
 
 /// The last second an upper bound covers, for an inclusive `<=` filter.
@@ -126,15 +147,29 @@ pub fn exclusive_end(secs: i64) -> i64 {
 ///
 /// Floors to the minute grid the field picks on, so a bound stored by an older build — a whole day
 /// as `midnight + 86_399` — reads back as that day's 23:59 rather than as an unrepresentable value.
-pub fn field_of_inclusive(secs: i64) -> Option<NaiveDateTime> {
-    dt_of_secs(secs.div_euclid(MINUTE) * MINUTE)
+///
+/// Args:
+///     secs: Inclusive absolute upper bound in UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil picker value for the covered minute, or `None` outside chrono's range.
+pub fn field_of_inclusive(secs: i64, zone: Tz) -> Option<NaiveDateTime> {
+    dt_of_secs(secs.div_euclid(MINUTE) * MINUTE, zone)
 }
 
 /// The value an upper field must show for an exclusive stored bound.
 ///
 /// The exclusive edge itself is outside the range, so the field names the last minute inside it.
-pub fn field_of_exclusive(secs: i64) -> Option<NaiveDateTime> {
-    field_of_inclusive(secs - 1)
+///
+/// Args:
+///     secs: Exclusive absolute upper bound in UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil picker value for the final included minute, or `None` outside chrono's range.
+pub fn field_of_exclusive(secs: i64, zone: Tz) -> Option<NaiveDateTime> {
+    field_of_inclusive(secs - 1, zone)
 }
 
 #[cfg(test)]

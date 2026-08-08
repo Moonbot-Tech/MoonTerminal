@@ -2,6 +2,25 @@
 
 use super::support::*;
 
+/// Moving the visibility guard below `aligned_ticks_ms` makes every hidden time axis resolve,
+/// sort, and discard a complete selected-zone DST grid on each chart text preparation.
+#[test]
+fn a_hidden_time_axis_skips_tick_generation() {
+    let source = code_only(&read_src("chartdx/text/prepare.rs"));
+    let prepare = braced_body(&source, "pub(crate) fn prepare_text(");
+    let guard = prepare
+        .find("if !time_axis_visible {\n                continue;\n            }")
+        .expect("hidden time axes must leave the pane before tick generation");
+    let generation = prepare
+        .find("crate::chartdx::axes::aligned_ticks_ms(")
+        .expect("visible time axes must generate selected-zone ticks");
+
+    assert!(
+        guard < generation,
+        "the visibility guard must run before selected-zone tick generation"
+    );
+}
+
 /// A plausible regression is changing any grid fragment back to its interpolated vertex `px`
 /// varying, which makes horizontal lines stop at the quad's diagonal seam. Removing the explicit
 /// half-pixel snap is another regression: a division exactly between pixel centers can disappear

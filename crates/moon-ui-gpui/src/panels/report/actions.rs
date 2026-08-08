@@ -293,12 +293,13 @@ impl ReportPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let backend = self.backend.clone();
         let trade_log = vec![match self.trade_log_request(row, cx) {
             Ok(request) => {
                 MoonMenuItem::with_key("rep-row-trade-log", t!("report.trade_log.open").to_string())
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
-                        trade_log::open_trade_log(request.clone(), window, app);
+                        trade_log::open_trade_log(request.clone(), backend.clone(), window, app);
                     })
             }
             Err(reason) => {
@@ -420,7 +421,13 @@ impl ReportPanel {
         if self.selection.len() == 0 || indices.is_empty() {
             return;
         }
-        let text = selection::selected_tsv(data, &self.cols, &indices, &self.selection);
+        let text = selection::selected_tsv(
+            data,
+            &self.cols,
+            &indices,
+            &self.selection,
+            self.display_zone,
+        );
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         window.push_notification(
             MoonNotification::success(
@@ -536,7 +543,8 @@ impl ReportPanel {
         let filter = self.filter(cx);
         let sort_key = self.sort_key.clone();
         let sort_desc = self.sort_desc;
-        let suggested = export::suggested_name(&filter, fmt, all_cols);
+        let zone = self.display_zone;
+        let suggested = export::suggested_name(&filter, fmt, all_cols, zone);
         let handle = window.window_handle();
         let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
         cx.spawn(async move |_this, cx| {
@@ -547,7 +555,8 @@ impl ReportPanel {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
                 .spawn(async move {
-                    export::run(&path, fmt, &cols, &filter, &sort_key, sort_desc).map(|n| (n, path))
+                    export::run(&path, fmt, &cols, &filter, &sort_key, sort_desc, zone)
+                        .map(|n| (n, path))
                 })
                 .await;
             let note = match result {

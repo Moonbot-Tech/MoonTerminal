@@ -48,17 +48,18 @@ pub(super) fn count_badge(n: usize, color: u32) -> impl IntoElement {
         .render()
 }
 
-/// Format Unix ms as `HH:MM:SS.mmm` UTC time-of-day, by manual arithmetic. Always UTC: a news
-/// item's stamp is compared against the feed, not read as local wall time.
-pub(super) fn hms_ms(ms: i64) -> String {
-    let day = ms.rem_euclid(86_400_000);
-    let (h, m, s, milli) = (
-        day / 3_600_000,
-        (day % 3_600_000) / 60_000,
-        (day % 60_000) / 1000,
-        day % 1000,
-    );
-    format!("{h:02}:{m:02}:{s:02}.{milli:03}")
+/// Format Unix milliseconds as selected-zone `HH:MM:SS.mmm` time-of-day.
+///
+/// Args:
+///     ms: Absolute UTC Unix timestamp in milliseconds.
+///     zone: IANA display zone selected by the header clock.
+///
+/// Returns:
+///     Selected-zone wall-clock time, or an empty string outside chrono's range.
+pub(super) fn hms_ms(ms: i64, zone: chrono_tz::Tz) -> String {
+    moon_core::util::display_time::at_millis(ms, zone)
+        .map(|value| value.format("%H:%M:%S%.3f").to_string())
+        .unwrap_or_default()
 }
 
 /// Body text for the card. `translate` on shows the Russian translation (English fallback until it
@@ -84,6 +85,20 @@ fn pending(item: &NewsItem, translate: bool) -> bool {
 /// Build one news card for `item`. `translate` selects translated vs original body; `expanded`
 /// controls the latency chain (toggled by the chevron via `cx`); tags colour from the user's LOCAL
 /// assignment (`colors`), not the wire.
+///
+/// Args:
+///     item: Logical news item to render.
+///     translate: Whether to prefer the Russian translation.
+///     colors: User-owned tag color settings.
+///     now_ms: Current UTC Unix milliseconds for relative age.
+///     expanded: Whether to show the delivery-latency chain.
+///     arrived: Local arrival instant used by the transient tint.
+///     zone: Selected IANA display zone used by absolute latency clocks.
+///     p: Active MoonUI palette.
+///     cx: News view context used by card listeners.
+///
+/// Returns:
+///     Complete news card.
 pub(super) fn news_card(
     item: &NewsItem,
     translate: bool,
@@ -91,6 +106,7 @@ pub(super) fn news_card(
     now_ms: i64,
     expanded: bool,
     arrived: Option<Instant>,
+    zone: chrono_tz::Tz,
     p: MoonPalette,
     cx: &mut Context<NewsView>,
 ) -> AnyElement {
@@ -209,7 +225,7 @@ pub(super) fn news_card(
         .child(copy)
         .child(chevron);
 
-    let latency = expanded.then(|| latency_block(item, p, cx));
+    let latency = expanded.then(|| latency_block(item, zone, p, cx));
 
     // --- body in the selected translation mode (English fallback) ---
     let text = body_text(item, translate);
@@ -274,7 +290,21 @@ pub(super) fn news_card(
 /// the deltas measured how long ago the terminal was started (−888661 ms on a 15-minute-old item)
 /// rather than anything about delivery. What is left is a property of the news itself: the same item
 /// now shows the same chain whenever it is opened.
-fn latency_block(item: &NewsItem, p: MoonPalette, cx: &App) -> impl IntoElement {
+///
+/// Args:
+///     item: News item carrying publication and delivery timestamps.
+///     zone: Selected IANA display zone for absolute clocks.
+///     p: Active MoonUI palette.
+///     cx: Application context used for sizing.
+///
+/// Returns:
+///     Expanded latency-chain element with missing rows omitted.
+fn latency_block(
+    item: &NewsItem,
+    zone: chrono_tz::Tz,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
     let anchor = (item.time_ms > 0).then_some(item.time_ms);
     let row = |label: String, ms: Option<i64>, from_service: bool| -> Option<Div> {
         let ms = ms.filter(|&t| t > 0)?;
@@ -282,9 +312,14 @@ fn latency_block(item: &NewsItem, p: MoonPalette, cx: &App) -> impl IntoElement 
             Some(a) => {
                 let d = ms - a;
                 let sign = if d >= 0 { "+" } else { "−" };
-                format!("{sign}{} {} · {}", d.abs(), t!("news.lat.unit"), hms_ms(ms))
+                format!(
+                    "{sign}{} {} · {}",
+                    d.abs(),
+                    t!("news.lat.unit"),
+                    hms_ms(ms, zone)
+                )
             }
-            None => hms_ms(ms),
+            None => hms_ms(ms, zone),
         };
         Some(
             h_flex()

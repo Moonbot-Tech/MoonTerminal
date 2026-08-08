@@ -104,9 +104,16 @@ pub(crate) fn tag_palette_sig(p: MoonPalette) -> u64 {
         .fold(0u64, |acc, c| acc.wrapping_mul(31).wrapping_add(c as u64))
 }
 
-/// Format Unix ms as a `DD.MM.YYYY` UTC date for the subscription pill.
-fn fmt_date(ms: i64) -> String {
-    chrono::DateTime::from_timestamp(ms / 1000, 0)
+/// Format Unix milliseconds as a selected-zone `DD.MM.YYYY` subscription date.
+///
+/// Args:
+///     ms: Absolute UTC Unix timestamp in milliseconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil date label, or an empty string outside chrono's range.
+fn fmt_date(ms: i64, zone: chrono_tz::Tz) -> String {
+    moon_core::util::display_time::at_millis(ms, zone)
         .map(|dt| dt.format("%d.%m.%Y").to_string())
         .unwrap_or_default()
 }
@@ -123,6 +130,8 @@ fn item_matches_query(item: &NewsItem, q: &str) -> bool {
 /// Group-scoped News panel for a dock tab or detached window.
 pub struct NewsView {
     backend: Entity<Backend>,
+    /// IANA zone selected by the shared header clock for subscription dates.
+    display_zone: chrono_tz::Tz,
     group: String,
     /// Show the Russian translation (English fallback) when on; the delivered original when off.
     translate: bool,
@@ -170,6 +179,8 @@ impl NewsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let display_zone =
+            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
         // Rebuild + repaint only when the scoped cores' news revision changes. News is event-driven
         // and low-volume, so no periodic idle refresh is needed.
         //
@@ -206,6 +217,18 @@ impl NewsView {
         })
         .detach();
 
+        let display_time_revision = backend.read(cx).display_time_revision.clone();
+        cx.observe(&display_time_revision, |this, _revision, cx| {
+            let zone = crate::chrome::clock::resolved_header_clock_zone(
+                this.backend.read(cx).header_clock_zone(),
+            );
+            if zone != this.display_zone {
+                this.display_zone = zone;
+                cx.notify();
+            }
+        })
+        .detach();
+
         // Search input: a change only re-filters at render time, so just repaint.
         let query =
             cx.new(|cx| MoonInputState::new(window, cx).placeholder(t!("news.search").to_string()));
@@ -218,6 +241,7 @@ impl NewsView {
 
         let mut this = Self {
             backend,
+            display_zone,
             group,
             translate: true,
             coin_filter: HashSet::new(),
@@ -424,11 +448,19 @@ impl NewsView {
     /// and the text is built only when the button is actually pressed. An item that yields no text
     /// at all writes NOTHING: silently wiping what the user had in their clipboard is worse than a
     /// button that appears to do nothing.
+    ///
+    /// Args:
+    ///     id: Stable id of the cached news card being copied.
+    ///     window: Window that receives the success notification.
+    ///     cx: View context used for clipboard access and notification publication.
+    ///
+    /// Returns:
+    ///     Nothing; the clipboard is left untouched when the item is missing or empty.
     fn copy_card(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.cached.iter().find(|it| it.id == id) else {
             return;
         };
-        let text = clip::telegram_text(item, self.translate);
+        let text = clip::telegram_text(item, self.translate, self.display_zone);
         if text.is_empty() {
             return;
         }
@@ -971,7 +1003,11 @@ impl NewsView {
         let (color, text) = match self.subscription_until(self.backend.read(cx)) {
             Some(ms) if ms > now => (
                 design::positive_color(p),
-                format!("{} {}", t!("news.sub.until"), fmt_date(ms)),
+                format!(
+                    "{} {}",
+                    t!("news.sub.until"),
+                    fmt_date(ms, self.display_zone)
+                ),
             ),
             Some(_) => (design::danger_color(p), t!("news.sub.expired").to_string()),
             None => (p.text_muted, t!("news.sub.none").to_string()),
@@ -1173,7 +1209,17 @@ impl Render for NewsView {
                 .children(visible.iter().map(|it| {
                     let exp = expanded.contains(&it.id);
                     let arrived = flash.get(&it.id).copied();
-                    render::news_card(it, translate, &settings, now, exp, arrived, p, cx)
+                    render::news_card(
+                        it,
+                        translate,
+                        &settings,
+                        now,
+                        exp,
+                        arrived,
+                        self.display_zone,
+                        p,
+                        cx,
+                    )
                 }))
                 .into_any_element()
         };

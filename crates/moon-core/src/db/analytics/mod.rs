@@ -27,13 +27,14 @@ mod groups;
 mod profit_monitor;
 mod query;
 mod summary_stream;
+pub(crate) mod time_zone;
 
 pub use calendar::{
     calendar_cells, calendar_hours, hourly_profiles, CalendarPeriod, DayCell, HourStat,
 };
 pub use groups::{coin_groups, strategies_for_coins, GroupStat, KindCore, KindStat, TopTrade};
 pub use profit_monitor::{profit_monitor, ProfitMonitorCore, ProfitMonitorSummary};
-pub use query::Query;
+pub use query::{PreviousPeriodBasis, Query};
 
 use groups::groups;
 pub(in crate::db) use groups::{coin_groups_from_source, strategies_for_coins_on};
@@ -115,7 +116,7 @@ pub struct Summary {
     /// Per-core series on the `days` grid, sorted by descending total profit, for the
     /// Summary charts and their popups.
     pub core_days: Vec<CoreSeries>,
-    /// Most profitable UTC hour as `(hour, profit, trades)`.
+    /// Most profitable selected-zone hour as `(hour, profit, trades)`.
     pub best_hour: Option<(u32, f64, i64)>,
     /// Profit per strategy type, descending. Filled only for periods of one day or less.
     /// The main series is hourly for those periods, daily through 400 days, and weekly
@@ -591,10 +592,14 @@ pub(super) fn summary_on(
         return Err(ReadFail::NotReady);
     };
     let len = (q.to - q.from).max(1);
+    let civil_len = crate::util::display_time::at(q.from, q.time_zone)
+        .zip(crate::util::display_time::at(q.to, q.time_zone))
+        .map(|(from, to)| (to.naive_local() - from.naive_local()).num_seconds().max(1))
+        .unwrap_or(len);
     // A day or less: a daily series would be a single bar and a cumulative curve a single
     // point, so the grid drops to HOURS — the same series, the same charts, just a scale
     // that has something to show. Per-core lines use the same bucket grid.
-    let one_day = len <= 86_400;
+    let one_day = civil_len <= 86_400;
     // The series uses hourly buckets for periods up to a day, daily buckets normally, and
     // weekly buckets for a multi-year All period to avoid thousands of bars.
     let bucket = if one_day {
@@ -661,9 +666,10 @@ fn previous_stats(
     bucket: i64,
     current: &ScopeDecision,
 ) -> Option<PeriodStats> {
+    let previous_from = previous_period_start(q, len);
     if q.metric == ProfitMetric::Quote {
         let mut previous = q.clone();
-        previous.from = q.from - len;
+        previous.from = previous_from;
         previous.to = q.from;
         let compatible = match current {
             ScopeDecision::Comparable {
@@ -691,9 +697,34 @@ fn previous_stats(
             return None;
         }
     }
-    scan_period(conn, src, q.from - len, q.from, bucket)
+    scan_period(conn, src, previous_from, q.from, bucket, q.time_zone)
         .map(|(stats, _, _)| stats)
         .ok()
+}
+
+/// Place Summary's immediately preceding comparison window.
+///
+/// Args:
+///     q: Current query carrying the UI's civil-versus-elapsed comparison decision.
+///     len: Current window's elapsed duration in seconds.
+///
+/// Returns:
+///     Inclusive UTC start of the previous window, whose exclusive end is `q.from`.
+fn previous_period_start(q: &Query, len: i64) -> i64 {
+    match q.previous_period_basis {
+        query::PreviousPeriodBasis::Elapsed => q.from.saturating_sub(len),
+        query::PreviousPeriodBasis::Civil => crate::util::display_time::at(q.from, q.time_zone)
+            .zip(crate::util::display_time::at(q.to, q.time_zone))
+            .and_then(|(from, to)| {
+                let civil_span = to.naive_local() - from.naive_local();
+                crate::util::display_time::unix_from_local(
+                    from.naive_local() - civil_span,
+                    q.time_zone,
+                    crate::util::display_time::LocalBoundary::Lower,
+                )
+            })
+            .unwrap_or(q.from.saturating_sub(len)),
+    }
 }
 
 /// Run a query that may join the ATTACHed strategies DB, retrying WITHOUT names
@@ -748,16 +779,31 @@ fn min_closedate(conn: &Connection) -> ReadResult<i64> {
     Ok(if min == i64::MAX { 1 } else { min })
 }
 
-/// Scan period trades by `closedate` into sequence metrics, buckets, and UTC hours.
+/// Scan period trades by `closedate` into sequence metrics and selected-zone buckets.
 ///
 /// `src` is the filtered source built by [`unified_from`]. Any query or
 /// row-conversion failure aborts the complete aggregation.
+///
+/// Args:
+///     conn: Open report connection or pinned snapshot.
+///     src: Unified filtered report source with `?1`/`?2` period parameters.
+///     from: Inclusive UTC lower bound.
+///     to: Exclusive UTC upper bound.
+///     bucket: Civil bucket width in seconds.
+///     zone: Selected IANA zone used for buckets and hour profiles.
+///
+/// Returns:
+///     Sequence statistics, dense time buckets, and 24 selected-zone hour aggregates.
+///
+/// Errors:
+///     Returns a classified read failure when statement preparation or row decoding fails.
 fn scan_period(
     conn: &Connection,
     src: &str,
     from: i64,
     to: i64,
     bucket: i64,
+    zone: chrono_tz::Tz,
 ) -> ReadResult<(PeriodStats, Vec<DayPoint>, [(f64, i64); 24])> {
     const CTX: &str = "analytics: scan_period";
     let mut st = PeriodStats::default();
@@ -806,7 +852,7 @@ fn scan_period(
         peak = peak.max(cum);
         st.max_dd = st.max_dd.max(peak - cum);
 
-        let start = close.div_euclid(bucket) * bucket;
+        let start = crate::util::display_time::bucket_start(close, bucket, zone).unwrap_or(close);
         match days.last_mut() {
             Some(d) if d.start == start => {
                 d.profit += profit;
@@ -818,8 +864,10 @@ fn scan_period(
                 trades: 1,
             }),
         }
-        let h = close.rem_euclid(86_400) / 3600;
-        let slot = &mut hours[h as usize];
+        let h = crate::util::display_time::minute_of_day(close, zone)
+            .map(|minute| minute as usize / 60)
+            .unwrap_or(0);
+        let slot = &mut hours[h];
         slot.0 += profit;
         slot.1 += 1;
     }
@@ -843,7 +891,10 @@ fn scan_period(
                     trades: 0,
                 });
             }
-            t += bucket;
+            let Some(next) = crate::util::display_time::next_bucket(t, bucket, zone) else {
+                break;
+            };
+            t = next;
         }
         days = filled;
     }

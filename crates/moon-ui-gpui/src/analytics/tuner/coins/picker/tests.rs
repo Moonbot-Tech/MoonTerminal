@@ -38,12 +38,12 @@ fn the_field_follows_the_edit_not_the_saved_list() {
         black: vec![row("BTC", &["BTC"], "BB1", Some(NOW - DAY))],
     };
     // Ticked but not saved.
-    let f = build(&data, &set(&["BTC", "ETH"]), &set(&["BTC"]));
+    let f = build(&data, &set(&["BTC", "ETH"]), &set(&["BTC"]), chrono_tz::UTC);
     assert_eq!(texts(&f), vec!["ETH", "BTC"], "the new tick leads");
     assert!(f[0].pending && !f[1].pending);
 
     // Unticked: gone from the field even though the database still lists it.
-    let f = build(&data, &set(&[]), &set(&["BTC"]));
+    let f = build(&data, &set(&[]), &set(&["BTC"]), chrono_tz::UTC);
     assert!(f.is_empty());
 }
 
@@ -51,7 +51,12 @@ fn the_field_follows_the_edit_not_the_saved_list() {
 /// already holds it.
 #[test]
 fn a_pending_tick_claims_no_date_and_no_core() {
-    let f = build(&CoinListRows::default(), &set(&["ETH"]), &set(&[]));
+    let f = build(
+        &CoinListRows::default(),
+        &set(&["ETH"]),
+        &set(&[]),
+        chrono_tz::UTC,
+    );
     assert_eq!(f.len(), 1);
     assert_eq!(f[0].at, None);
     assert_eq!(f[0].fresh, 1.0, "just added — the brightest there is");
@@ -71,7 +76,7 @@ fn every_written_entry_survives_the_fold() {
             Some(NOW - DAY),
         )],
     };
-    let f = build(&data, &set(&["BTC"]), &set(&["BTC"]));
+    let f = build(&data, &set(&["BTC"]), &set(&["BTC"]), chrono_tz::UTC);
     assert_eq!(texts(&f), vec!["BTC", "BTC_0626", "BTC_0925"]);
 }
 
@@ -91,6 +96,7 @@ fn an_exact_date_outranks_another_cores_bound() {
         },
         &set(&["MAGMA"]),
         &set(&["MAGMA"]),
+        chrono_tz::UTC,
     );
     assert_eq!(f.len(), 1);
     assert_eq!(
@@ -115,7 +121,7 @@ fn a_single_date_list_is_uniformly_bright() {
                 row("B", &["B"], "BB1", Some(NOW - age)),
             ],
         };
-        let f = build(&data, &set(&["A", "B"]), &set(&["A", "B"]));
+        let f = build(&data, &set(&["A", "B"]), &set(&["A", "B"]), chrono_tz::UTC);
         assert!(
             f.iter().all(|c| c.fresh == 1.0),
             "a list saved in one go is all bright, age={age}"
@@ -137,7 +143,7 @@ fn a_spread_runs_newest_bright_to_oldest_dim() {
         ],
     };
     let picked = set(&["NEW", "MID", "OLD"]);
-    let f = build(&data, &picked, &picked);
+    let f = build(&data, &picked, &picked, chrono_tz::UTC);
     assert_eq!(texts(&f), vec!["NEW", "MID", "OLD"]);
     assert_eq!(f[0].fresh, 1.0);
     assert_eq!(f[2].fresh, 0.0);
@@ -159,7 +165,7 @@ fn a_future_date_stays_inside_the_ramp() {
         ],
     };
     let picked = set(&["FUTURE", "PAST"]);
-    let f = build(&data, &picked, &picked);
+    let f = build(&data, &picked, &picked, chrono_tz::UTC);
     assert!(f.iter().all(|c| (0.0..=1.0).contains(&c.fresh)));
     assert_eq!(f[0].fresh, 1.0);
     assert_eq!(f[1].fresh, 0.0);
@@ -177,7 +183,7 @@ fn the_separator_never_reaches_the_saved_text() {
             row("B", &["B"], "BB1", Some(NOW - DAY)),
         ],
     };
-    let f = build(&data, &set(&["A", "B"]), &set(&["A", "B"]));
+    let f = build(&data, &set(&["A", "B"]), &set(&["A", "B"]), chrono_tz::UTC);
     assert!(
         f[0].display.ends_with(", "),
         "all but the last carry a separator"
@@ -186,5 +192,28 @@ fn the_separator_never_reaches_the_saved_text() {
     assert!(
         f.iter().all(|c| !c.text.contains(',')),
         "the written value holds entries only, never separators"
+    );
+}
+
+/// Replacing `picker::build`'s selected-zone formatter with `fmt_unix_date` would show
+/// March 28 for a coin first seen at Warsaw 00:30 on March 29.
+#[test]
+fn hover_date_uses_the_selected_zone() {
+    let seen_ms = 1_774_740_600_000; // 2026-03-28 23:30 UTC = March 29 in Warsaw.
+    let data = CoinListRows {
+        white: Vec::new(),
+        black: vec![row("BTC", &["BTC"], "BB1", Some(seen_ms))],
+    };
+
+    let field = build(
+        &data,
+        &set(&["BTC"]),
+        &set(&["BTC"]),
+        chrono_tz::Europe::Warsaw,
+    );
+
+    assert!(
+        field[0].tip.contains("2026-03-29"),
+        "Warsaw civil date must appear in the tooltip"
     );
 }

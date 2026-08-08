@@ -36,9 +36,17 @@ pub(super) fn fallback_core_color(p: MoonPalette, i: usize) -> u32 {
 
 /// Label of one bucket: the HOUR when the grid is finer than a day (a single-day period),
 /// the date otherwise. Without this every hourly bucket would be titled with the same date.
-pub(super) fn bucket_label(secs: i64, bucket: i64) -> String {
+///
+/// Args:
+///     secs: Bucket start as UTC Unix seconds.
+///     bucket: Civil bucket width in seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     `HH:MM` for hourly grids or `DD.MM` for wider grids.
+pub(super) fn bucket_label(secs: i64, bucket: i64, zone: chrono_tz::Tz) -> String {
     if bucket < 86_400 {
-        let s = moon_core::db::fmt_unix(secs);
+        let s = moon_core::util::display_time::format_minute(secs, zone);
         // "YYYY-MM-DD HH:MM" → "HH:MM"
         if s.len() >= 16 {
             s[11..16].to_string()
@@ -46,7 +54,7 @@ pub(super) fn bucket_label(secs: i64, bucket: i64) -> String {
             s
         }
     } else {
-        dm(secs)
+        dm(secs, zone)
     }
 }
 
@@ -63,9 +71,16 @@ pub(super) fn core_color_by_uid(
     }
 }
 
-/// "dd.mm" from unix seconds (axis labels).
-pub(super) fn dm(secs: i64) -> String {
-    let s = moon_core::db::fmt_unix(secs);
+/// Format UTC Unix seconds as selected-zone `DD.MM` for axis labels.
+///
+/// Args:
+///     secs: Absolute UTC Unix seconds.
+///     zone: Selected IANA display zone.
+///
+/// Returns:
+///     Civil date label, or the shared formatter's fallback text.
+pub(super) fn dm(secs: i64, zone: chrono_tz::Tz) -> String {
+    let s = moon_core::util::display_time::format_minute(secs, zone);
     if s.len() >= 10 {
         format!("{}.{}", &s[8..10], &s[5..7])
     } else {
@@ -77,12 +92,26 @@ pub(super) fn dm(secs: i64) -> String {
 /// the value labelled above a green bar / below a red one (while the bars are
 /// few). Hovering a column pops up that day's per-core breakdown through the shared
 /// `bucket_popup` — the same card the cumulative chart opens, in `Day` mode.
+///
+/// Args:
+///     days: Ordered analytical buckets.
+///     cores: Per-core series aligned to `days`.
+///     colors: Resolved per-core theme colors.
+///     hover: Hovered bucket index, if any.
+///     bucket: Civil bucket width in seconds.
+///     zone: Selected IANA display zone.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Complete daily/hourly bar chart.
 pub(super) fn daily_bars(
     days: &[DayPoint],
     cores: &[CoreSeries],
     colors: &[Hsla],
     hover: Option<usize>,
     bucket: i64,
+    zone: chrono_tz::Tz,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
@@ -194,7 +223,18 @@ pub(super) fn daily_bars(
         // Bars are equal flex cells: bucket `bi` is the (bi+0.5)/n-th of the width.
         .map(|bi| {
             let frac = (bi as f32 + 0.5) / n as f32;
-            bucket_popup(days, cores, colors, bi, frac, bucket, PopupMode::Day, p, cx)
+            bucket_popup(
+                days,
+                cores,
+                colors,
+                bi,
+                frac,
+                bucket,
+                zone,
+                PopupMode::Day,
+                p,
+                cx,
+            )
         });
     let first = days.first().map(|d| d.start).unwrap_or(0);
     let last = days.last().map(|d| d.start).unwrap_or(0);
@@ -203,8 +243,8 @@ pub(super) fn daily_bars(
         .w_full()
         .child(v_flex().w_full().gap(px(4.0)).child(row).child(axis_row(
             p,
-            bucket_label(first, bucket),
-            bucket_label(last, bucket),
+            bucket_label(first, bucket, zone),
+            bucket_label(last, bucket, zone),
         )))
         .children(popup)
         .into_any_element()
@@ -386,6 +426,21 @@ fn anchor_popup(card: Div, frac: f32, cx: &Context<AnalyticsView>) -> AnyElement
 /// `mode` is the only difference between the two time charts: `Day` reports the bucket
 /// alone (what the bars draw), `Running` everything up to and including it (what the
 /// cumulative curve draws). Rendering goes through the shared [`popup_card`].
+///
+/// Args:
+///     days: Ordered authoritative bucket totals.
+///     cores: Per-core series aligned to `days`.
+///     colors: Resolved per-core theme colors.
+///     bi: Selected bucket index.
+///     frac: Horizontal bucket position from zero through one.
+///     bucket: Civil bucket width in seconds.
+///     zone: Selected IANA display zone.
+///     mode: Per-bucket or running-total interpretation.
+///     p: Active MoonUI palette.
+///     cx: Analytics view context.
+///
+/// Returns:
+///     Deferred popup anchored beside the selected bucket.
 pub(super) fn bucket_popup(
     days: &[DayPoint],
     cores: &[CoreSeries],
@@ -393,6 +448,7 @@ pub(super) fn bucket_popup(
     bi: usize,
     frac: f32,
     bucket: i64,
+    zone: chrono_tz::Tz,
     mode: PopupMode,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
@@ -439,7 +495,7 @@ pub(super) fn bucket_popup(
         .collect();
     let title = days
         .get(bi)
-        .map(|d| bucket_label(d.start, bucket))
+        .map(|d| bucket_label(d.start, bucket, zone))
         .unwrap_or_default();
     popup_card(title, total, trades, rows, frac, p, cx)
 }
