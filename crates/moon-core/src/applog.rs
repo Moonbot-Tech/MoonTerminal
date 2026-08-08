@@ -93,13 +93,35 @@ impl LogLine {
     }
 }
 
-static RING: OnceLock<Mutex<VecDeque<LogLine>>> = OnceLock::new();
+/// The Log tab's shared buffer: the lines it can still show, and how many have ever been added.
+///
+/// The count lives INSIDE the mutex with the lines it describes, because [`since`] answers "what
+/// have I not seen" by subtracting a caller's cursor from it and then taking that many rows off the
+/// tail. Were the two readable independently, a line pushed between the two reads would make the
+/// count and the contents describe different instants, and the reader would skip the oldest unseen
+/// line — silently, and only under load.
+struct Ring {
+    lines: VecDeque<LogLine>,
+    /// Lines ever pushed, including those already evicted.
+    pushed: u64,
+}
+
+static RING: OnceLock<Mutex<Ring>> = OnceLock::new();
 /// Monotonic insertion counter for cheaply detecting new lines. The host forces a frame
 /// while the Log tab is active. See [`revision`].
+///
+/// Deliberately outside the mutex: this one only has to CHANGE when lines arrive, and keeping it
+/// out means a poisoned ring still moves it, so a panel watching it does not go silent as well.
+/// Anything that needs the count and the rows to agree reads [`Ring::pushed`] instead.
 static REVISION: AtomicU64 = AtomicU64::new(0);
 
-fn ring() -> &'static Mutex<VecDeque<LogLine>> {
-    RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(RING_CAP)))
+fn ring() -> &'static Mutex<Ring> {
+    RING.get_or_init(|| {
+        Mutex::new(Ring {
+            lines: VecDeque::with_capacity(RING_CAP),
+            pushed: 0,
+        })
+    })
 }
 
 /// Global file writer for the local application log (`logs/<date>_app.log`).
@@ -123,10 +145,11 @@ fn push(line: LogLine) {
         }
     }
     if let Ok(mut r) = ring().lock() {
-        if r.len() >= RING_CAP {
-            r.pop_front();
+        if r.lines.len() >= RING_CAP {
+            r.lines.pop_front();
         }
-        r.push_back(line);
+        r.lines.push_back(line);
+        r.pushed = r.pushed.saturating_add(1);
     }
     REVISION.fetch_add(1, Ordering::Relaxed);
 }
@@ -136,15 +159,66 @@ pub fn revision() -> u64 {
     REVISION.load(Ordering::Relaxed)
 }
 
-/// Snapshot of the latest `max` lines, ordered oldest→newest, for the Log tab.
-pub fn snapshot(max: usize) -> Vec<LogLine> {
+/// Lines pushed since `cursor`, oldest first, and the cursor to store for the next call.
+///
+/// The count and the rows are read together under one lock, so the difference is exactly what the
+/// caller has not seen. When more lines arrived than the ring capacity, the overflow is already
+/// evicted and the survivors come back — the same history loss a full re-read would show, rather
+/// than a silent nothing. This is what lets the Log panel append instead of re-reading and
+/// re-parsing the ring on every revision.
+///
+/// Args:
+///     cursor: Value returned by the previous call, or 0 to read the whole ring.
+///
+/// Returns:
+///     The unseen lines, oldest first, and the cursor for the next call. A poisoned ring yields no
+///     lines and the caller's own cursor, so nothing is counted as delivered that was not.
+pub fn since(cursor: u64) -> (Vec<LogLine>, u64) {
     ring()
         .lock()
         .map(|r| {
-            let start = r.len().saturating_sub(max);
-            r.iter().skip(start).cloned().collect()
+            let take = unseen(r.pushed, r.lines.len(), cursor);
+            (
+                r.lines.iter().skip(r.lines.len() - take).cloned().collect(),
+                r.pushed,
+            )
         })
-        .unwrap_or_default()
+        .unwrap_or_else(|_| (Vec::new(), cursor))
+}
+
+/// How many of the ring's newest lines a reader at `cursor` has not seen.
+///
+/// Split out so the three cases can be checked without driving the global ring: the ordinary
+/// difference, a reader that missed more than the ring holds (the overflow is gone, so it gets the
+/// survivors), and a cursor ahead of the counter, which means the ring was reset under it.
+fn unseen(pushed: u64, len: usize, cursor: u64) -> usize {
+    (pushed.saturating_sub(cursor) as usize).min(len)
+}
+
+/// Snapshot of the latest `max` lines, ordered oldest→newest, for the Log tab.
+pub fn snapshot(max: usize) -> Vec<LogLine> {
+    snapshot_with_cursor(max).0
+}
+
+/// [`snapshot`] plus the cursor that says everything in it has been seen.
+///
+/// One lock acquisition for both, which is the whole point: a reader that took the snapshot and
+/// then asked for the cursor separately would mark a line pushed in between as already delivered
+/// and never show it. Feed threads push here, so that window is real.
+///
+/// Args:
+///     max: Most lines to return, newest kept.
+///
+/// Returns:
+///     The lines oldest first, and the cursor to hand [`since`] next.
+pub fn snapshot_with_cursor(max: usize) -> (Vec<LogLine>, u64) {
+    ring()
+        .lock()
+        .map(|r| {
+            let start = r.lines.len().saturating_sub(max);
+            (r.lines.iter().skip(start).cloned().collect(), r.pushed)
+        })
+        .unwrap_or_else(|_| (Vec::new(), 0))
 }
 
 fn handle() -> Option<&'static Mutex<std::fs::File>> {
@@ -222,11 +296,7 @@ pub fn sanitize_label(name: &str) -> String {
             }
         })
         .collect();
-    if s.is_empty() {
-        "core".to_string()
-    } else {
-        s
-    }
+    if s.is_empty() { "core".to_string() } else { s }
 }
 
 /// Daily-rotating file writer for one log source. Writes to `logs/<date>_<label>.log`

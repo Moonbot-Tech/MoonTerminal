@@ -20,7 +20,7 @@ impl Render for LogPanel {
             self.set_refresh_active(true, cx);
         } else if self.refresh.take_observed_reload() {
             let backend = self.backend.clone();
-            self.reload_rows(backend.read(cx), cx);
+            self.pull_rows(backend.read(cx), cx);
         }
         let p = MoonPalette::active(cx);
 
@@ -28,7 +28,7 @@ impl Render for LogPanel {
         // Only the aggregate and exchange sources fill a row's source column with a CORE name;
         // Local fills it with a module path, which selects nothing.
         let is_agg = matches!(self.source, LogSource::Aggregate | LogSource::Exchange(_));
-        let total = self.total;
+        let total = self.buf.total();
 
         // Build the wrapping filter and follow controls.
         let mut controls = h_flex()
@@ -94,7 +94,7 @@ impl Render for LogPanel {
                 div()
                     .text_size(crate::design::t_body(cx))
                     .text_color(rgb(p.text_muted))
-                    .child(t!("log.count", shown = self.lines.len(), total = total).to_string()),
+                    .child(t!("log.count", shown = self.buf.visible(), total = total).to_string()),
             );
         // A removable chip for the coin filter, in the blue its clickable token wears in the rows.
         // The source name needs none: clicking one selects that core in the source list above,
@@ -118,7 +118,7 @@ impl Render for LogPanel {
 
         // Build the tail-oriented virtualized list or its empty-state message.
         let weak = cx.entity().downgrade();
-        let body: AnyElement = if self.lines.is_empty() {
+        let body: AnyElement = if self.buf.visible() == 0 {
             let msg = if total == 0 {
                 t!("dock.log.empty").to_string()
             } else {
@@ -138,7 +138,7 @@ impl Render for LogPanel {
             let query = self.query.read(cx).value().trim().to_lowercase();
             let list_el = MoonVirtualList::new(
                 "log-virtual-rows",
-                self.lines.len(),
+                self.buf.visible(),
                 // Scale row height with the font because MoonVirtualList accepts raw pixels; a
                 // fixed 18 px row clipped text at the +6 font setting.
                 crate::design::fit_h_value(cx, 18.0, 14.0, 2.0),
@@ -155,8 +155,8 @@ impl Render for LogPanel {
                                 panel: &weak,
                             };
                             panel
-                                .lines
-                                .get(ix)
+                                .buf
+                                .at(ix)
                                 .map(|line| row::log_row(line, &ctx, p, app))
                         })
                         .unwrap_or_else(|| div().into_any_element())
@@ -171,7 +171,7 @@ impl Render for LogPanel {
             // vertical scrollbar instead, bound to this same handle.
             .scrollbar_visibility(MoonScrollbarVisibility::Hidden);
             // Width of the widest row, so long lines scroll sideways instead of being clipped.
-            let content_w = line_list::content_width(self.widest_chars, cx);
+            let content_w = line_list::content_width(self.buf.widest_chars(), cx);
             div()
                 .flex_1()
                 .w_full()

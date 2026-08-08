@@ -509,7 +509,9 @@ fn log_exchange_headers_select_a_live_exchange_aggregate() {
     );
 
     let panel = read_src("panels/log/mod.rs");
-    let gather = braced_body(&panel, "fn gather(");
+    let snapshot = braced_body(&panel, "fn snapshot(");
+    let membership = braced_body(&panel, "fn resolve_membership(");
+    let pull = braced_body(&panel, "fn pull_rows(");
     let reload = braced_body(&panel, "fn reload_rows(");
     // The two places that must treat an exchange source exactly like the aggregate: the reload path
     // in the panel, and the file-selector visibility in its element tree. They live in separate
@@ -521,14 +523,17 @@ fn log_exchange_headers_select_a_live_exchange_aggregate() {
     };
     assert!(
         panel.contains("Exchange(String)")
-            && gather.contains("LogSource::Exchange(_)")
-            && gather.contains("exchange_membership")
+            && snapshot.contains("LogSource::Exchange(_)")
+            && snapshot.contains("exchange_membership")
             && arms(&panel) == 1
             && arms(&view) == 1
-            && reload.contains("render::exchange_core_ids(")
-            && reload.contains("exchange_membership_changed(")
-            && reload.contains("self.following() || membership_changed"),
-        "the selected Log exchange source must gather only its current live membership"
+            && membership.contains("render::exchange_core_ids(")
+            // A membership change cannot be appended to: rows written by a departed core would stay
+            // under the selected exchange's label. Only a full reload drops them.
+            && pull.contains("exchange_membership_changed(")
+            && pull.contains("self.reload_rows(b, cx);")
+            && reload.contains("self.cursors.clear();"),
+        "the selected Log exchange source must read only its current live membership"
     );
 
     let render = read_src("panels/log/render.rs");
@@ -538,6 +543,72 @@ fn log_exchange_headers_select_a_live_exchange_aggregate() {
             && signature.contains("selected_core_log_sig(")
             && render.contains("pub(super) fn exchange_chart_candidates"),
         "exchange rows, refresh signatures, and chart candidates must share exchange scope"
+    );
+}
+
+/// An open Log tab must extend its buffer, never rebuild it.
+///
+/// This is a cost contract, and it is invisible to every other kind of check: a full rebuild
+/// produces exactly the same rows, so the panel looks correct while an open tab re-reads and
+/// re-parses its whole source on every backend revision. Measured here at ten cores that was
+/// ~25 ms per revision at 4 Hz — about a tenth of a core — against ~0.3 ms for the append path,
+/// and it cost the same whether the errors-only filter kept a thousand rows or none.
+///
+/// The plausible regression is a one-line "just reload, it's simpler" in `view.rs`, or a parse
+/// creeping back into the filter pass. Both are shaped exactly like the code that was here before.
+#[test]
+fn an_open_log_tab_appends_new_lines_instead_of_rebuilding() {
+    let view = read_src("panels/log/view.rs");
+    let render_fn = braced_body(&view, "fn render(");
+    assert!(
+        render_fn.contains("self.pull_rows(backend.read(cx), cx);")
+            && !render_fn.contains("self.reload_rows("),
+        "an observed revision must take the incremental path, not a full reload"
+    );
+
+    let panel = read_src("panels/log/mod.rs");
+    let pull = braced_body(&panel, "fn pull_rows(");
+    assert!(
+        pull.contains(".pull(b, &self.source") && !pull.contains("self.snapshot("),
+        "the incremental path must read through the source cursors"
+    );
+
+    // Parsing belongs to arrival. The filter passes run over buffered rows — `refilter` over the
+    // whole buffer on every keystroke, `passes` once per row — and must only READ what arrival
+    // already computed. Naming the parsing calls rather than grepping for `to_lowercase` is
+    // deliberate: an earlier spelling of this check passed the moment the lowering moved one
+    // function along, which is placement, not the property.
+    let buffer = read_src("panels/log/buffer.rs");
+    let parsing = ["LineView::parse", "flatten_lines", "find_coin", "classify_"];
+    for scope in ["fn refilter(", "fn passes(", "fn extend_view_from("] {
+        let body = braced_body(&buffer, scope);
+        assert!(
+            parsing.iter().all(|call| !body.contains(call)),
+            "{scope} must not re-parse buffered rows"
+        );
+    }
+    assert!(
+        braced_body(&buffer, "fn ingest(").contains("LineView::parse"),
+        "new lines are the only ones that get parsed"
+    );
+
+    // The steady state of a busy source is a buffer sitting AT its cap, so eviction happens on
+    // every revision. Rebasing the visible indices has to stay arithmetic; re-running the filters
+    // over the whole buffer there would put the full pass back on the per-revision path by the
+    // back door, with every other check here still green.
+    let evict = braced_body(&buffer, "fn evict(");
+    assert!(
+        !evict.contains("refilter") && evict.contains("-= dropped"),
+        "eviction must rebase the visible list, not refilter it"
+    );
+
+    // Splicing rows in above what is on screen moves the positions a selection is stored as. The
+    // buffer reports that; dropping the report is how a held selection silently starts addressing
+    // lines the user never picked.
+    assert!(
+        braced_body(&buffer, "fn ingest(").contains("Disturbance::Moved")
+            && braced_body(&panel, "fn append_rows(").contains("self.selection.clear()"),
+        "movement under a selection must reach the selection"
     );
 }
 

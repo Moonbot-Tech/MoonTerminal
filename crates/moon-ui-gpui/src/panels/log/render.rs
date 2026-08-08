@@ -1,12 +1,13 @@
 //! Log rebuild signature, aggregation of live core logs, and line classification.
 //!
 //! [`super::LogPanel`] owns filtering, the virtual list, and follow-tail scrolling. Classification
-//! (`line_list::classify_lower`) and coin detection ([`find_coin`]) run once while `apply_filter` builds
-//! [`LineView`] values instead of every frame: parsing is expensive, while the virtual list calls
-//! the row renderer in [`super::row`] for every visible line on each frame.
+//! (`line_list::classify_lower`) and coin detection ([`find_coin`]) run once per line, in
+//! [`LineView::parse`], when that line arrives — never again. Parsing is expensive, while filtering
+//! re-scans the whole buffer on every keystroke and the virtual list calls the row renderer in
+//! [`super::row`] for every visible line on each frame; both only READ what parsing left behind.
 
 use super::*;
-use crate::panels::line_list::{Cat, Class, Sev};
+use crate::panels::line_list::{self, Cat, Sev};
 use moon_core::session::CoreStore;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::ops::Range;
@@ -68,19 +69,40 @@ impl RefreshGate {
     pub(super) fn is_active(&self) -> bool {
         self.active
     }
+
+    /// Returns whether the panel has ever loaded its source, so a catch-up can extend the buffer
+    /// instead of replacing it.
+    pub(super) fn has_loaded(&self) -> bool {
+        self.loaded
+    }
 }
 
 /// Precomputed render-ready line containing time, source, classification, flattened text, and an
 /// optional coin-token byte range into `flat`.
+///
+/// One of these is built ONCE per log line, when the line arrives, and then lives in the panel's
+/// buffer until the ring evicts it. Everything a filter or a frame needs is precomputed here
+/// because both run far more often than lines arrive: the filters re-scan the whole buffer on every
+/// keystroke, and the virtual list renders each visible row on every frame.
 #[derive(Clone)]
 pub(super) struct LineView {
-    /// `HH:MM:SS.mmm` suffix of `ts`.
-    pub(super) time: String,
+    /// Full `YYYY-MM-DD HH:MM:SS.mmm` stamp, as the source spelled it.
+    ///
+    /// The whole stamp rather than the displayed clock: it is the key rows are merged and kept
+    /// sorted by, and cores whose clocks disagree hand over rows that belong before ones already
+    /// buffered — across midnight, a bare clock would sort those backwards.
+    pub(super) ts: String,
     pub(super) target: String,
     pub(super) sev: Sev,
     pub(super) cat: Cat,
     /// Message with line breaks flattened for single-line rendering.
     pub(super) flat: String,
+    /// Lowercase `flat`, kept rather than recomputed.
+    ///
+    /// It is what the text and coin filters match against, and what the row renderer highlights
+    /// search hits from. Both used to allocate it per line per pass — the filters for the whole
+    /// buffer on every rebuild, the renderer for every visible row on every frame.
+    pub(super) lower: String,
     /// Detected coin token: its byte range in `flat` for highlighting and its base for
     /// click-filtering.
     ///
@@ -89,30 +111,38 @@ pub(super) struct LineView {
 }
 
 impl LineView {
-    /// Build a render-ready line from an existing classification.
+    /// Build a render-ready line, classifying and scanning it for a coin once.
     ///
-    /// Coin detection happens here so errors-only filtering can reject a line before scanning it.
-    /// `cl` comes from `line_list::classify_lower`, which the caller runs before that filter to avoid
-    /// classifying twice. `known` contains coin bases collected from the full buffer, allowing bare
-    /// tickers such as `SPK` to be highlighted.
-    pub(super) fn from_parts(line: &LogLine, cl: Class, known: &HashSet<String>) -> Self {
-        let time = line
-            .ts
-            .rsplit(' ')
-            .next()
-            .unwrap_or(line.ts.as_str())
-            .to_string();
+    /// `known` contains coin bases learned from the lines seen so far, allowing bare tickers such as
+    /// `SPK` to be highlighted; callers feed it the new lines' bases BEFORE parsing them, so a base
+    /// stated by one line lights up its neighbours in the same batch.
+    ///
+    /// Classification reads the flattened text rather than the raw message. The two differ only in
+    /// line breaks, which no keyword spans, and using one string for classification, filtering and
+    /// highlighting is what keeps this to a single lowercase allocation per line.
+    pub(super) fn parse(line: &LogLine, known: &HashSet<String>) -> Self {
         // Scan the flattened text because folding can change byte offsets.
         let flat = crate::display_text::flatten_lines(&line.msg);
+        let lower = flat.to_lowercase();
+        let cl = line_list::classify_lower(line.level, &lower);
         let coin = find_coin(&flat, known);
         Self {
-            time,
+            ts: line.ts.clone(),
             target: line.target.clone(),
             sev: cl.sev,
             cat: cl.cat,
             flat,
+            lower,
             coin,
         }
+    }
+
+    /// Clock the row displays: the `HH:MM:SS.mmm` tail of its stamp.
+    ///
+    /// Borrowed from `ts` rather than stored separately — the row renderer asks for it on every
+    /// frame, and a slice costs nothing.
+    pub(super) fn time(&self) -> &str {
+        self.ts.rsplit(' ').next().unwrap_or(self.ts.as_str())
     }
 }
 

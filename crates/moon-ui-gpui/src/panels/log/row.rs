@@ -68,6 +68,9 @@ fn seg_at(idx: usize, coin: &Option<Range<usize>>, matches: &[Range<usize>]) -> 
 /// accent text. An empty query with no coin takes the single-span fast path.
 fn message_spans(
     flat: &str,
+    // Lowercase `flat`, precomputed on the row. Building it here instead cost one allocation per
+    // visible row per frame for as long as a search query was active.
+    lower: &str,
     base: u32,
     coin: &Option<Range<usize>>,
     query: &str,
@@ -77,7 +80,6 @@ fn message_spans(
 ) -> Vec<AnyElement> {
     let mut matches: Vec<Range<usize>> = Vec::new();
     if !query.is_empty() {
-        let lower = flat.to_lowercase();
         let mut from = 0;
         while let Some(pos) = lower[from..].find(query) {
             let s = from + pos;
@@ -173,9 +175,9 @@ fn message_spans(
 /// the same way.
 pub(super) fn row_copy_text(v: &LineView) -> String {
     if v.target.is_empty() {
-        format!("{} {}", v.time, v.flat)
+        format!("{} {}", v.time(), v.flat)
     } else {
-        format!("{} {} {}", v.time, v.target, v.flat)
+        format!("{} {} {}", v.time(), v.target, v.flat)
     }
 }
 
@@ -191,7 +193,7 @@ pub(super) fn row_width_chars(v: &LineView) -> usize {
     } else {
         v.target.chars().count() + 1
     };
-    v.time.chars().count()
+    v.time().chars().count()
         + 1
         + badge_w(badge_tag(v.sev))
         + badge_w(cat_tag(v.cat))
@@ -242,7 +244,7 @@ pub(super) fn log_row(v: &LineView, ctx: &RowCtx, p: MoonPalette, cx: &App) -> A
         div()
             .flex_none()
             .text_color(rgb(p.text_muted))
-            .child(v.time.clone()),
+            .child(v.time().to_string()),
     );
     if let Some((tag, col)) = badge(v.sev, p) {
         row = row.child(
@@ -316,6 +318,7 @@ pub(super) fn log_row(v: &LineView, ctx: &RowCtx, p: MoonPalette, cx: &App) -> A
         // scrolls over.
         h_flex().flex_none().children(message_spans(
             &v.flat,
+            &v.lower,
             base,
             &coin_range,
             query,

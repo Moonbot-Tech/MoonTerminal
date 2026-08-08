@@ -182,6 +182,14 @@ pub struct CoreData {
     /// the six-hourly poll, and not on the receipt stamp alone.
     pub api_expiry_rev: u64,
     pub log_rev: u64,
+    /// Total number of log lines ever pushed into `log`, including those the ring has since
+    /// evicted.
+    ///
+    /// Separate from `log_rev`, which counts BATCHES and so cannot say how many lines a reader
+    /// missed. A consumer that keeps its own copy of the rows stores this value and asks
+    /// [`CoreData::log_since`] for the difference, which is what lets the Log panel append new
+    /// lines instead of re-reading and re-parsing the whole ring on every batch.
+    pub log_seq: u64,
     pub chart_alerts_rev: u64,
     /// Advances when typed `KernelHealth` metric values or the decoded endpoint change, gating
     /// Core Status without repainting for receipt-time-only updates.
@@ -234,6 +242,7 @@ impl CoreData {
             hedge_mode_rev: 0,
             api_expiry_rev: 0,
             log_rev: 0,
+            log_seq: 0,
             chart_alerts_rev: 0,
             sys_rev: 0,
             news_rev: 0,
@@ -244,6 +253,33 @@ impl CoreData {
     pub fn log_snapshot(&self, max: usize) -> Vec<LogLine> {
         let start = self.log.len().saturating_sub(max);
         self.log.iter().skip(start).cloned().collect()
+    }
+
+    /// Return the log lines pushed since `cursor`, oldest first, and the cursor to store next.
+    ///
+    /// The count of missed lines comes from [`CoreData::log_seq`], so a reader gets exactly what it
+    /// has not seen and never a duplicate. Two cases are deliberately NOT duplicates:
+    ///
+    /// * More lines arrived than the ring holds — the overflow is already evicted, so the whole ring
+    ///   is returned and the gap is unrecoverable. That is the same history loss the ring imposes on
+    ///   a full re-read; the alternative, returning nothing, would hide it.
+    /// * `cursor` is ahead of `log_seq` — the store was rebuilt under the reader (a removed and
+    ///   re-added core reuses its id). The counter restarted, so the whole ring is returned and the
+    ///   caller's stale rows belong to a core that no longer exists.
+    ///
+    /// Args:
+    ///     cursor: Value returned by the previous call, or 0 to read the whole ring.
+    ///
+    /// Returns:
+    ///     An iterator over the unseen lines, oldest first, and the cursor for the next call.
+    pub fn log_since(&self, cursor: u64) -> (impl Iterator<Item = &LogLine>, u64) {
+        let missed = if cursor > self.log_seq {
+            self.log.len()
+        } else {
+            (self.log_seq - cursor) as usize
+        };
+        let take = missed.min(self.log.len());
+        (self.log.iter().skip(self.log.len() - take), self.log_seq)
     }
 
     /// Drain queued Engine action results for the active window's shell.
@@ -445,6 +481,7 @@ impl CoreData {
             }
             FeedMsg::ServerLog(lines) => {
                 if !lines.is_empty() {
+                    let pushed = lines.len() as u64;
                     for l in lines {
                         self.server_log_raw.push_back(l.clone());
                         self.log.push_back(LogLine::core(l.time_ms, l.msg));
@@ -458,6 +495,7 @@ impl CoreData {
                         self.server_log_raw.drain(0..drop);
                     }
                     self.log_rev = self.log_rev.wrapping_add(1);
+                    self.log_seq = self.log_seq.saturating_add(pushed);
                 }
             }
             FeedMsg::News(mut news) => {
