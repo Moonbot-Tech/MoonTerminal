@@ -5,7 +5,6 @@ use super::{
     LineView, RefreshGate, aggregate, collect_coin_bases, exchange_chart_candidates,
     exchange_members_from, find_coin, selected_core_log_sig,
 };
-use crate::panels::line_list::classify_lower;
 use crate::panels::log::{
     AGG_PER_CORE, LogSource, LogSourceItem, VIEW_LIMIT, exchange_membership_changed,
 };
@@ -37,8 +36,7 @@ fn row(ts: &str, msg: String) -> LogLine {
 fn multiline_message_flattens_and_keeps_the_coin_range_valid() {
     let line = LogLine::core(0, "SPK order failed\r\n  at retry 2".to_string());
     let known = HashSet::from(["SPK".to_string()]);
-    let lower = line.msg.to_lowercase();
-    let view = LineView::from_parts(&line, classify_lower(line.level, &lower), &known);
+    let view = LineView::parse(&line, &known);
 
     assert!(
         !view.flat.contains('\n') && !view.flat.contains('\r'),

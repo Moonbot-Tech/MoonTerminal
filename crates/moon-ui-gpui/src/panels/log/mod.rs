@@ -7,15 +7,25 @@
 //! sources are Live-only. `MoonVirtualList` virtualizes rows, and effective follow mode keeps
 //! filtered output at the tail.
 //!
+//! A live source is read INCREMENTALLY: each line is parsed once, when it arrives, and appended to
+//! a buffer that outlives the revision that brought it. Only a change the buffer cannot absorb — a
+//! new source or file, an exchange losing a member, a core added, removed or renamed — rereads
+//! everything.
+//!
 //! State, row collection, filtering, and lifecycle live here; source and file selectors are in
-//! [`controls`]; rebuild signatures and aggregation in [`render`]; one row's elements in [`row`];
-//! the panel's own element tree in [`view`]. Line classification, the row-range selection, the copy
-//! commands and the horizontal viewport are shared with the Report's trade-log dialog and live in
+//! [`controls`]; the read cursors behind the incremental path in [`feed`]; rebuild signatures and
+//! aggregation in [`render`]; one row's elements in [`row`]; the panel's own element tree in
+//! [`view`]. Line classification, the row-range selection, the copy commands and the horizontal
+//! viewport are shared with the Report's trade-log dialog and live in
 //! [`crate::panels::line_list`].
 
+mod buffer;
 mod controls;
+mod feed;
 mod render;
 mod row;
+#[cfg(test)]
+mod tests;
 mod view;
 
 use crate::panels::line_list::{self, RowSelection};
@@ -39,10 +49,28 @@ use std::collections::HashSet;
 const VIEW_LIMIT: usize = 5000;
 /// Maximum number of rows taken from each core before building the aggregate.
 const AGG_PER_CORE: usize = 2000;
-/// Buffer cap while tail following is paused. Fresh rows are appended beyond `VIEW_LIMIT` without
-/// replacing the existing prefix so the scroll position does not shift; returning to effective
-/// follow mode replaces it with a normal bounded snapshot.
+/// Buffer cap while tail following is paused. Fresh rows accumulate beyond `VIEW_LIMIT` without
+/// dropping the existing prefix, so the scroll position does not shift under the reader; returning
+/// to effective follow mode trims back to `VIEW_LIMIT`.
 const PAUSED_CAP: usize = 20_000;
+
+/// Starts the revision-path stopwatch, but only when diagnostics are on.
+///
+/// Lazy on purpose: an ordinary run pays one relaxed atomic load and never reads the clock.
+fn diag_timer() -> Option<std::time::Instant> {
+    crate::diag::is_enabled().then(std::time::Instant::now)
+}
+
+/// Adds the elapsed time to `log_work_us`, which is what makes the panel's cost readable in
+/// microseconds instead of inferred from process CPU shared with the charts.
+fn record_work_us(timer: Option<std::time::Instant>) {
+    if let Some(timer) = timer {
+        crate::diag::bump_by(
+            &crate::diag::LOG_WORK_US,
+            timer.elapsed().as_micros() as u64,
+        );
+    }
+}
 
 /// Selected source of log rows.
 #[derive(Clone, PartialEq)]
@@ -101,18 +129,22 @@ pub struct LogPanel {
     /// Cached file list for the selected source; rendering never scans the filesystem for the menu.
     available_files_label: Option<String>,
     available_files: Vec<String>,
-    /// Unfiltered rows for the current source and file, updated outside `render`.
-    raw_lines: Vec<LogLine>,
-    /// Exchange membership used by `raw_lines`; a membership change invalidates paused history.
+    /// Parsed rows for the current source and the filtered view over them.
+    ///
+    /// Live sources APPEND to this: each row is parsed once, when its line arrives, and then stays
+    /// until the cap evicts it. Re-reading and re-parsing the whole source on every backend
+    /// revision is what used to make an open Log tab cost ~25 ms four times a second regardless of
+    /// how many rows the filters kept.
+    buf: buffer::RowBuffer,
+    /// Read positions in the live sources feeding the buffer.
+    cursors: feed::LiveCursors,
+    /// Exchange membership the buffer was filled from; a membership change invalidates it.
     exchange_membership: Option<HashSet<CoreId>>,
-    /// Filtered render rows indexed by the virtual list. Classification and coin detection are
-    /// precomputed in `apply_filter` rather than repeated for each rendered frame.
-    lines: Vec<render::LineView>,
-    /// Character budget of the widest filtered row, sizing the horizontal scroll area.
-    widest_chars: usize,
-    /// Rows selected for copying, as indices into `lines`.
+    /// Identity of the source list the buffer's rows were labelled from. See
+    /// [`LogPanel::sources_sig`].
+    sources_sig: u64,
+    /// Rows selected for copying, as positions in the visible list.
     selection: RowSelection,
-    total: usize,
     /// User intent to follow the tail. Turning Live off manually prevents automatic resumption until
     /// the user enables it again.
     live: bool,
@@ -183,12 +215,11 @@ impl LogPanel {
             loaded_lines: Vec::new(),
             available_files_label: None,
             available_files: Vec::new(),
-            raw_lines: Vec::new(),
+            buf: buffer::RowBuffer::default(),
+            cursors: feed::LiveCursors::default(),
             exchange_membership: None,
-            lines: Vec::new(),
-            widest_chars: 0,
+            sources_sig: 0,
             selection: RowSelection::default(),
-            total: 0,
             live: true,
             scroll_pause: false,
             scroll_gen: 0,
@@ -257,9 +288,10 @@ impl LogPanel {
         self.available_files_label = Some(label.to_string());
     }
 
-    /// Collects rows for the current selection. Live reads the local ring, one core ring, every
-    /// scoped core, or the selected exchange's current membership. Named reads and then caches at
-    /// most `VIEW_LIMIT` rows from disk.
+    /// Reads the current selection in full, for the first load and after any change of source.
+    ///
+    /// Live reads the local ring, one core ring, every scoped core, or the selected exchange's
+    /// current membership. Named reads and then caches at most `VIEW_LIMIT` rows from disk.
     ///
     /// Args:
     ///     b: Backend providing live core stores and file-independent source state.
@@ -268,7 +300,7 @@ impl LogPanel {
     ///
     /// Returns:
     ///     The selected source's bounded live snapshot or cached named-file rows.
-    fn gather(
+    fn snapshot(
         &mut self,
         b: &Backend,
         sources: &[LogSourceItem],
@@ -278,7 +310,14 @@ impl LogPanel {
             LogFile::Live => {
                 self.loaded_name = None;
                 match &self.source {
-                    LogSource::Local => applog::snapshot(VIEW_LIMIT),
+                    LogSource::Local => {
+                        // Rows and cursor under ONE lock: feed threads push into this ring, so
+                        // taking the cursor separately would mark a line that landed in between as
+                        // already delivered and lose it for good.
+                        let (lines, cursor) = applog::snapshot_with_cursor(VIEW_LIMIT);
+                        self.cursors.set_local(cursor);
+                        lines
+                    }
                     LogSource::Core(id) => b
                         .session
                         .store()
@@ -306,66 +345,82 @@ impl LogPanel {
         }
     }
 
-    /// Rebuilds render-ready rows while sharing one lowercase message across all text predicates.
-    fn apply_filter(&mut self, cx: &App) {
-        let query = self.query.read(cx).value().trim().to_lowercase();
-        let errors_only = self.errors_only;
-        let coin = self.coin_filter.as_deref().map(str::to_lowercase);
-        self.total = self.raw_lines.len();
-        // Collect coin bases across the whole raw buffer so bare tickers such as `SPK` can be
-        // recognized after appearing elsewhere in a market form such as `USDT-SPK`.
-        let known = render::collect_coin_bases(&self.raw_lines);
-        // Classify severity and detect the coin once here. Text parsing is expensive, while visible
-        // row rendering runs every frame.
-        self.lines = self
-            .raw_lines
-            .iter()
-            .filter_map(|l| {
-                let lower = l.msg.to_lowercase();
-                let cl = line_list::classify_lower(l.level, &lower);
-                if errors_only && !line_list::is_error(cl.sev) {
-                    return None;
-                }
-                if !query.is_empty()
-                    && !lower.contains(&query)
-                    && !l.target.to_lowercase().contains(&query)
-                {
-                    return None;
-                }
-                if coin.as_ref().is_some_and(|coin| !lower.contains(coin)) {
-                    return None;
-                }
-                Some(render::LineView::from_parts(l, cl, &known))
-            })
-            .collect();
-        // Size the horizontal scroll area from the widest row that survived the filters. The cap is
-        // what keeps ONE outlier from setting the width of the whole panel: a flattened backtrace or
-        // a raw exchange JSON response is a single row tens of thousands of characters wide, and
-        // sizing to it would shrink the scrollbar thumb to nothing for every ordinary line. Past the
-        // cap a row is clipped and read through its copy instead.
-        self.widest_chars = self
-            .lines
-            .iter()
-            .map(row::row_width_chars)
-            .max()
-            .unwrap_or(0)
-            .min(line_list::WIDEST_CHARS_CAP);
-        // A rebuild can drop rows the user had selected; endpoints past the end address other
-        // lines now, so the selection goes rather than moving to strangers.
-        self.selection.clamp_to(self.lines.len());
-        if self.following() && !self.lines.is_empty() {
-            self.scroll
-                .scroll_to_item(self.lines.len() - 1, ScrollStrategy::Bottom);
+    /// Rows the buffer may hold before its oldest are dropped.
+    ///
+    /// Following the tail keeps exactly what a full snapshot would show. A paused panel keeps more
+    /// so the rows under the user's eyes do not move, which is what `PAUSED_CAP` is for; resuming
+    /// trims back down.
+    fn cap(&self) -> usize {
+        if self.following() {
+            VIEW_LIMIT
+        } else {
+            PAUSED_CAP
         }
+    }
+
+    /// The filter terms one pass matches against, lowercased once here rather than per row.
+    fn filters<'a>(&self, query: &'a str, coin: Option<&'a str>) -> buffer::Filters<'a> {
+        buffer::Filters {
+            errors_only: self.errors_only,
+            query,
+            coin,
+        }
+    }
+
+    /// Runs `f` with the current filter terms, which have to outlive the borrow they are read into.
+    fn with_filters<R>(&mut self, cx: &App, f: impl FnOnce(&mut Self, buffer::Filters) -> R) -> R {
+        let query = self.query.read(cx).value().trim().to_lowercase();
+        let coin = self.coin_filter.as_deref().map(str::to_lowercase);
+        let filters = self.filters(&query, coin.as_deref());
+        f(self, filters)
+    }
+
+    /// Rebuilds the filtered view over the whole buffer.
+    ///
+    /// The path for anything that can change which EXISTING rows qualify — a query edit, the
+    /// errors-only toggle, a coin chip. It re-scans the buffer but parses nothing, and it runs on a
+    /// user action, never on a backend revision.
+    fn apply_filter(&mut self, cx: &App) {
+        self.with_filters(cx, |t, filters| t.buf.refilter(filters));
+        self.after_view_change();
+    }
+
+    /// Settles the selection and the tail after the visible list changed.
+    ///
+    /// Both halves have to happen wherever the view is rewritten: a rebuild can drop rows the user
+    /// had selected, and endpoints past the end address other lines now, so the selection goes
+    /// rather than moving to strangers.
+    fn after_view_change(&mut self) {
+        self.selection.clamp_to(self.buf.visible());
+        if self.following() && self.buf.visible() > 0 {
+            self.scroll
+                .scroll_to_item(self.buf.visible() - 1, ScrollStrategy::Bottom);
+        }
+    }
+
+    /// Takes `fresh` into the buffer and settles the selection against what moved.
+    fn append_rows(&mut self, fresh: Vec<LogLine>, cx: &App) {
+        let cap = self.cap();
+        let disturbance = self.with_filters(cx, |t, filters| t.buf.ingest(fresh, cap, filters));
+        // Rows that moved UNDER the selection would slide it onto lines the user never picked, and
+        // `clamp_to` cannot see that — the list is still long. Rows that moved below it change
+        // nothing it addresses, and on a multi-core source that is the common case, so the position
+        // is compared rather than the mere fact.
+        if let buffer::Disturbance::Moved { from } = disturbance
+            && self.selection.range().is_some_and(|rows| rows.end > from)
+        {
+            self.selection.clear();
+        }
+        self.after_view_change();
     }
 
     /// Handles a press on row `ix`, starting or extending the selection.
     ///
-    /// Pressing also pauses tail following the way a wheel scroll does: rows are addressed by index,
-    /// and a following reload REPLACES the buffer, which would leave the selection pointing at
-    /// different lines. While paused, reloads only append, so the indices stay put. An already
-    /// paused panel is left alone — its timer defers itself while the selection lives, so a burst
-    /// of clicks does not each spawn one.
+    /// Pressing also pauses tail following the way a wheel scroll does: selected rows are addressed
+    /// by position in the visible list, and following raises the cap, which evicts the oldest rows
+    /// and shifts every position under the selection. Pausing raises the cap instead, so the
+    /// indices stay put. An already paused panel is left alone — its timer defers itself while the
+    /// selection lives, so a burst of clicks does not each spawn one.
     pub(super) fn on_row_press(&mut self, ix: usize, shift: bool, cx: &mut Context<Self>) {
         if !self.scroll_pause {
             self.pause_follow(cx);
@@ -388,7 +443,18 @@ impl LogPanel {
     /// Copies the current selection, or row `ix` alone when it sits outside one.
     pub(super) fn copy_row_or_selection(&mut self, ix: usize, cx: &mut Context<Self>) {
         let rows = self.selection.range_for(ix);
-        line_list::copy_rows(&self.lines, rows, row::row_copy_text, cx);
+        self.copy_view_rows(rows, cx);
+    }
+
+    /// Copies a range of the VISIBLE list, resolving each position through `view`.
+    fn copy_view_rows(&self, rows: std::ops::Range<usize>, cx: &mut App) {
+        let all = self.buf.rows();
+        line_list::copy_rows(
+            self.buf.visible_rows(),
+            rows,
+            |&ix| all.get(ix).map(row::row_copy_text).unwrap_or_default(),
+            cx,
+        );
     }
 
     /// Handles the panel's copy, select-all, and clear-selection keys.
@@ -403,9 +469,9 @@ impl LogPanel {
             self.clear_selection(cx);
             return;
         }
-        match line_list::handle_list_key(&mut self.selection, ev, self.lines.len()) {
+        match line_list::handle_list_key(&mut self.selection, ev, self.buf.visible()) {
             Some(line_list::ListKey::Copy(rows)) => {
-                line_list::copy_rows(&self.lines, rows, row::row_copy_text, cx);
+                self.copy_view_rows(rows, cx);
             }
             Some(line_list::ListKey::SelectedAll) => {
                 // Selecting everything holds the tail the way a press does.
@@ -473,8 +539,9 @@ impl LogPanel {
     /// Waits five seconds and resumes tail following, unless something newer invalidated this timer.
     ///
     /// A held selection or a held mouse button defers the resume rather than cancelling it: resuming
-    /// replaces the buffer and the selection addresses rows by index, so the wait is simply
-    /// restarted, and a scrollbar drag has no event of its own to restart it with. Giving up
+    /// trims the buffer back to the follow cap and the selection addresses rows by index, so the
+    /// wait is simply restarted, and a scrollbar drag has no event of its own to restart it with.
+    /// Giving up
     /// instead would leave following switched off for good whenever a selection was dropped by a
     /// path other than the one that armed this timer — a filter change, a reload, a cleared chip.
     fn arm_resume(&mut self, want_gen: u64, cx: &mut Context<Self>) {
@@ -607,18 +674,31 @@ impl LogPanel {
         });
     }
 
-    /// Reloads the selected source, records its revision, and reapplies the current filters.
+    /// Membership of an Exchange source right now, or `None` for every other source.
+    fn resolve_membership(&self, b: &Backend) -> Option<HashSet<CoreId>> {
+        match &self.source {
+            LogSource::Exchange(exchange) => {
+                Some(render::exchange_core_ids(b, &self.group, exchange))
+            }
+            LogSource::Aggregate | LogSource::Local | LogSource::Core(_) => None,
+        }
+    }
+
+    /// Discards the buffer and reads the selected source in full.
     ///
-    /// A paused buffer retains ordinary new suffix rows, but an exchange membership change replaces
-    /// it so departed-core rows cannot remain under the selected exchange label.
+    /// This runs when the panel has nothing it can extend: the first load, a source or file change,
+    /// and an exchange membership change — the last because rows written by a departed core must not
+    /// remain under the selected exchange's label.
     ///
     /// Args:
     ///     b: Backend providing source revisions, live memberships, and log rows.
-    ///     cx: Application context used to rebuild filtered render rows.
+    ///     cx: Application context used to rebuild the filtered view.
     ///
     /// Returns:
     ///     Nothing.
     fn reload_rows(&mut self, b: &Backend, cx: &App) {
+        crate::diag::bump(&crate::diag::LOG_RELOAD);
+        let timer = diag_timer();
         self.refresh
             .record_reload(render::log_sig(b, &self.group, &self.source));
         let sources = self.sources(b);
@@ -627,72 +707,138 @@ impl LogPanel {
             let label = self.file_label(&sources);
             self.refresh_available_files(&label);
         }
-        let exchange_membership = match &self.source {
-            LogSource::Exchange(exchange) => {
-                Some(render::exchange_core_ids(b, &self.group, exchange))
-            }
-            LogSource::Aggregate | LogSource::Local | LogSource::Core(_) => None,
-        };
-        let membership_changed = exchange_membership_changed(
-            self.exchange_membership.as_ref(),
-            exchange_membership.as_ref(),
-        );
-        self.exchange_membership = exchange_membership.clone();
-        let fresh = self.gather(b, &sources, exchange_membership.as_ref());
-        if self.following() || membership_changed {
-            // Effective follow replaces the buffer with the current bounded snapshot. Row indices
-            // no longer address the same lines, so a selection cannot survive it.
-            self.selection.clear();
-            self.raw_lines = fresh;
-        } else {
-            // While following is paused, append only unseen suffix rows and retain the existing
-            // prefix so the scroll position stays stable, up to `PAUSED_CAP`.
-            self.merge_paused(fresh);
+        let membership = self.resolve_membership(b);
+        self.exchange_membership = membership.clone();
+        self.sources_sig = Self::sources_sig(&sources);
+        // Row indices no longer address the same lines, so a selection cannot survive this.
+        self.selection.clear();
+        self.buf.clear();
+        self.cursors.clear();
+        let fresh = self.snapshot(b, &sources, membership.as_ref());
+        if matches!(self.file, LogFile::Live) {
+            // The core store is only mutated on this thread, so its counters and the snapshot
+            // describe one instant. The local ring is not — `snapshot` took its cursor under the
+            // ring lock and recorded it already, which is why this cannot do it here.
+            self.cursors
+                .seek_to_end(b, &self.source, &sources, membership.as_ref());
         }
-        self.apply_filter(cx);
+        self.append_rows(fresh, cx);
+        // An empty source still needs its view settled: `append_rows` has nothing to do, and the
+        // selection cleared above has to reach the scroll handle.
+        if self.buf.total() == 0 {
+            self.after_view_change();
+        }
+        record_work_us(timer);
+    }
+
+    /// Identity of the source list: which cores it holds and what they are called.
+    ///
+    /// Rows carry a core's DISPLAY NAME, copied at the moment they were pulled. A rename or a
+    /// removal therefore leaves already-buffered rows labelled with a name that no longer selects
+    /// anything, and appending cannot fix rows it is not touching — so a change here forces the full
+    /// reload that relabels them. The old per-revision rebuild got this for free.
+    fn sources_sig(sources: &[LogSourceItem]) -> u64 {
+        sources.iter().fold(0u64, |sig, item| {
+            let id = match item.source {
+                LogSource::Core(id) => id,
+                _ => 0,
+            };
+            item.display.bytes().fold(
+                sig.wrapping_mul(31).wrapping_add(id).wrapping_mul(31),
+                |sig, byte| sig.wrapping_mul(131).wrapping_add(u64::from(byte)),
+            )
+        })
+    }
+
+    /// Extends the buffer with whatever the live source produced since the last read.
+    ///
+    /// This is the ordinary path, taken on every backend revision while the tab is open. It costs
+    /// one parse per NEW line; a named file has no live tail, and an exchange whose membership
+    /// changed cannot be extended at all and falls back to a full reload.
+    ///
+    /// Args:
+    ///     b: Backend providing source revisions, live memberships, and log rows.
+    ///     cx: Application context used to rebuild the filtered view.
+    ///
+    /// Returns:
+    ///     Nothing.
+    fn pull_rows(&mut self, b: &Backend, cx: &App) {
+        let timer = diag_timer();
+        let membership = self.resolve_membership(b);
+        let sources = self.sources(b);
+        // Two changes the buffer cannot absorb, because both invalidate rows it is not touching:
+        // an exchange losing a member (its rows must not stay under the exchange's label) and a
+        // core being added, removed or renamed (its rows carry the old name).
+        if exchange_membership_changed(self.exchange_membership.as_ref(), membership.as_ref())
+            || self.sources_sig != Self::sources_sig(&sources)
+        {
+            self.reload_rows(b, cx);
+            return;
+        }
+        if !matches!(self.file, LogFile::Live) {
+            // A rotated file has no tail to follow. Resuming follow still has to return the list to
+            // the bottom, which is the only reason this path runs for a file at all.
+            self.refresh
+                .record_reload(render::log_sig(b, &self.group, &self.source));
+            self.after_view_change();
+            return;
+        }
+        // A selected core that left the store — deactivated, or its server removed — has no rows
+        // any more. Keeping the ones already buffered would show a dead core's history under a
+        // selector that now resolves to nothing, and count it in the row total.
+        //
+        // Only while following, though: a paused panel is one the user is READING, and emptying it
+        // under them because a core went away loses the history they stopped to look at. It clears
+        // when they return to the tail.
+        if let LogSource::Core(id) = self.source
+            && b.session.store().core(id).is_none()
+            && self.buf.total() > 0
+            && self.following()
+        {
+            self.reload_rows(b, cx);
+            return;
+        }
+        // BEFORE the pull, and the order matters. For the local ring the signature and the cursor
+        // come from different counters, so whichever is read second may include a line the other
+        // missed. Recording first means the signature can only LAG the cursor: the gate fires once
+        // more with nothing to read, which costs an empty pass. The reverse — recording after —
+        // stamps a line as seen that the cursor has not yet returned, and the gate then sits on it
+        // until some unrelated line arrives.
+        self.refresh
+            .record_reload(render::log_sig(b, &self.group, &self.source));
+        crate::diag::bump(&crate::diag::LOG_PULL);
+        let fresh = self
+            .cursors
+            .pull(b, &self.source, &sources, membership.as_ref());
+        // Resuming follow lowers the cap, so the buffer can need evicting with nothing new in it,
+        // and returning to the tail is this path's whole job when follow resumes.
+        self.append_rows(fresh, cx);
+        record_work_us(timer);
     }
 
     /// Changes visibility-driven refresh activity and catches up immediately when activation is
     /// newer than the last loaded source revision.
+    ///
+    /// Catching up EXTENDS the buffer once the panel has loaded before. Reloading instead would
+    /// throw away what a paused panel is holding — up to `PAUSED_CAP` rows, the selection in them
+    /// and the scroll position — every time the user visits another tab and comes back.
     fn set_refresh_active(&mut self, active: bool, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
         let sig = render::log_sig(backend.read(cx), &self.group, &self.source);
+        let loaded = self.refresh.has_loaded();
         if self.refresh.set_active(active, sig) {
-            self.reload_rows(backend.read(cx), cx);
+            if loaded {
+                self.pull_rows(backend.read(cx), cx);
+            } else {
+                self.reload_rows(backend.read(cx), cx);
+            }
             cx.notify();
         }
     }
 
-    /// Merges a fresh snapshot into the paused buffer by finding its last retained row using
-    /// timestamp, message, and target, then appending the fresh suffix. If the boundary has fallen
-    /// out of the bounded snapshot, the whole snapshot is appended and a history gap can remain.
-    /// Drops the oldest prefix above `PAUSED_CAP`.
-    fn merge_paused(&mut self, fresh: Vec<LogLine>) {
-        match self.raw_lines.last() {
-            None => self.raw_lines = fresh,
-            Some(last) => {
-                let boundary = fresh
-                    .iter()
-                    .rposition(|l| l.ts == last.ts && l.msg == last.msg && l.target == last.target);
-                match boundary {
-                    Some(pos) => self.raw_lines.extend(fresh.into_iter().skip(pos + 1)),
-                    None => self.raw_lines.extend(fresh),
-                }
-            }
-        }
-        if self.raw_lines.len() > PAUSED_CAP {
-            let drop = self.raw_lines.len() - PAUSED_CAP;
-            self.raw_lines.drain(0..drop);
-            // Dropping a prefix shifts every row index down. The selection addresses rows by index,
-            // so keeping it would slide it onto lines the user never picked; `clamp_to` cannot see
-            // this because the list is still long. A selection holds following paused, so this is
-            // reachable: enough lines arrive under a selection held open on a busy aggregate.
-            self.selection.clear();
-        }
-    }
-
     /// Resets effective following after an explicit source or file change and invalidates pending
-    /// scroll-resume timers so `merge_paused` cannot combine rows from different selections.
+    /// scroll-resume timers, so a timer armed under the previous selection cannot fire against the
+    /// new one and trim its buffer to the follow cap behind the user's back.
     fn reset_to_live(&mut self) {
         self.live = true;
         self.scroll_pause = false;

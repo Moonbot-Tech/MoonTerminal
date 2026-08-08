@@ -82,3 +82,22 @@ fn file_name_matches_the_writer_spelling() {
         "2026-08-03_Bin_F1_x.log"
     );
 }
+
+/// The cursor arithmetic behind [`super::since`], in the three shapes it has to survive.
+#[test]
+fn unseen_counts_what_the_reader_missed() {
+    use super::unseen;
+
+    assert_eq!(unseen(10, 5, 8), 2, "the ordinary case is a difference");
+    assert_eq!(unseen(10, 5, 10), 0, "a caught-up reader gets nothing");
+    assert_eq!(
+        unseen(100, 5, 10),
+        5,
+        "a reader further behind than the ring holds gets the survivors, not 90 phantom rows"
+    );
+    assert_eq!(
+        unseen(3, 3, 9_000),
+        0,
+        "a cursor ahead of the counter must not underflow into a huge count"
+    );
+}

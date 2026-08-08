@@ -186,3 +186,65 @@ fn a_changed_day_count_bumps_the_revision() {
 
     assert_eq!(core.api_expiry_rev, after_first + 1);
 }
+
+/// Feeds `msgs` through the real `ServerLog` path so both counters advance as they do in production.
+fn feed_log(cd: &mut CoreData, msgs: &[&str]) {
+    cd.apply(FeedMsg::ServerLog(
+        msgs.iter()
+            .map(|msg| crate::feed::CoreLogLine {
+                time_ms: 0,
+                recv_ms: 0,
+                msg: (*msg).to_string(),
+            })
+            .collect(),
+    ));
+}
+
+/// `log_seq` counts LINES, unlike `log_rev`, which counts batches.
+///
+/// The Log panel subtracts cursors from it to learn how many lines it missed; advancing it per
+/// batch would report one missed line for a batch of two hundred.
+#[test]
+fn log_seq_counts_lines_not_batches() {
+    let mut cd = CoreData::new();
+    feed_log(&mut cd, &["a", "b", "c"]);
+    feed_log(&mut cd, &["d"]);
+
+    assert_eq!(cd.log_seq, 4);
+    assert_eq!(cd.log_rev, 2, "the batch counter must keep its own meaning");
+}
+
+/// A cursor reads each line exactly once, which is what makes appending safe.
+#[test]
+fn log_since_hands_over_each_line_once() {
+    let mut cd = CoreData::new();
+    feed_log(&mut cd, &["a", "b"]);
+
+    let (lines, cursor) = cd.log_since(0);
+    assert_eq!(
+        lines.map(|l| l.msg.clone()).collect::<Vec<_>>(),
+        ["a", "b"],
+        "a zero cursor reads the whole ring"
+    );
+
+    let (lines, cursor) = cd.log_since(cursor);
+    assert_eq!(lines.count(), 0, "nothing new means nothing returned");
+
+    feed_log(&mut cd, &["c"]);
+    let (lines, _) = cd.log_since(cursor);
+    assert_eq!(lines.map(|l| l.msg.clone()).collect::<Vec<_>>(), ["c"]);
+}
+
+/// A cursor ahead of the counter means the store restarted under the reader: read the ring again.
+///
+/// Saturating the subtraction to zero instead would leave that core's rows frozen forever, because
+/// every later comparison stays below the stale cursor.
+#[test]
+fn log_since_recovers_from_a_restarted_counter() {
+    let mut cd = CoreData::new();
+    feed_log(&mut cd, &["fresh"]);
+
+    let (lines, _) = cd.log_since(9_000);
+
+    assert_eq!(lines.map(|l| l.msg.clone()).collect::<Vec<_>>(), ["fresh"]);
+}
