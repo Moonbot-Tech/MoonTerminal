@@ -78,6 +78,12 @@ pub fn rows_under<'a>(rows: &'a [StrategyRow], prefix: &[String]) -> Vec<&'a Str
         .collect()
 }
 
+/// Returns whether any strategy row is at or below a path prefix without allocating a row list.
+pub fn has_row_under(rows: &[StrategyRow], prefix: &[String]) -> bool {
+    rows.iter()
+        .any(|row| starts_with(&split_path(&row.folder_path), prefix))
+}
+
 /// Returns whether every affected strategy is disabled (`!checked`), as deletion requires.
 pub fn all_off(rows: &[&StrategyRow]) -> bool {
     rows.iter().all(|r| !r.checked)

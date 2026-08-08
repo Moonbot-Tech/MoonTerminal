@@ -11,7 +11,7 @@ use super::market_role::MarketRoleState;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
-use crate::feed::{order_edit, trade, CoreCmd, LatestMarketRole, MarketRoleAssignment};
+use crate::feed::{CoreCmd, LatestMarketRole, MarketRoleAssignment, order_edit, trade};
 use crate::util::now_unix_ms as now_ms;
 
 #[cfg(test)]
@@ -75,6 +75,88 @@ fn plan_insert_positions(ids: &[u64], anchors: &[Option<u64>]) -> Vec<usize> {
         out.push(at);
     }
     out
+}
+
+/// Compare complete strategy placements without depending on snapshot list order.
+///
+/// Args:
+///     current: Placements in the feed thread's latest MoonProto snapshot.
+///     expected: Placements captured by the caller before a conditional destructive command.
+///
+/// Returns:
+///     `true` only when both snapshots contain the same strategy ids at the same raw paths.
+fn strategy_placements_unchanged(
+    mut current: Vec<(u64, String)>,
+    mut expected: Vec<(u64, String)>,
+) -> bool {
+    current.sort_unstable();
+    expected.sort_unstable();
+    current == expected
+}
+
+/// Tracks the newest full strategy list accepted by MoonProto's asynchronous runtime queue.
+///
+/// `MoonClient::snapshot()` changes only when that runtime later handles the queued batch. A guard
+/// that reads only the public snapshot can therefore miss an earlier create or move from this same
+/// feed thread. Keeping the queued placements closes that window without predicting server-side
+/// changes: a conditional delete is allowed only when both views match the caller's evidence.
+pub(super) struct StrategyPlacementGuard {
+    queued_sync: Option<Vec<(u64, String)>>,
+}
+
+impl StrategyPlacementGuard {
+    /// Create an empty guard before the feed thread has queued any full-list synchronization.
+    pub(super) fn new() -> Self {
+        Self { queued_sync: None }
+    }
+
+    /// Remember the placements in a full-list synchronization accepted by MoonProto's queue.
+    fn note_queued_sync(&mut self, placements: Vec<(u64, String)>) {
+        self.queued_sync = Some(placements);
+    }
+
+    /// Return whether live and still-pending placement views both match the caller's snapshot.
+    ///
+    /// Once the live snapshot catches up exactly, the redundant queued shadow is discarded. A
+    /// later external mutation is then checked solely against the new live snapshot.
+    fn allows_snapshot(
+        &mut self,
+        live: Option<Vec<(u64, String)>>,
+        expected: Vec<(u64, String)>,
+    ) -> bool {
+        let Some(live) = live else {
+            return false;
+        };
+        if self
+            .queued_sync
+            .as_ref()
+            .is_some_and(|queued| strategy_placements_unchanged(live.clone(), queued.clone()))
+        {
+            self.queued_sync = None;
+        }
+        strategy_placements_unchanged(live, expected.clone())
+            && self
+                .queued_sync
+                .as_ref()
+                .is_none_or(|queued| strategy_placements_unchanged(queued.clone(), expected))
+    }
+
+    /// Read MoonProto's current placements and apply [`Self::allows_snapshot`].
+    fn allows(&mut self, client: &MoonClient, expected: Vec<(u64, String)>) -> bool {
+        self.allows_snapshot(snapshot_strategy_placements(client), expected)
+    }
+}
+
+/// Clone only strategy ids and raw paths from MoonProto's current public snapshot.
+fn snapshot_strategy_placements(client: &MoonClient) -> Option<Vec<(u64, String)>> {
+    Some(
+        client
+            .snapshot()?
+            .strats()
+            .snapshots()
+            .map(|strategy| (strategy.strategy_id, strategy.path.to_string()))
+            .collect(),
+    )
 }
 
 /// Result of one bounded command-drain pass.
@@ -199,6 +281,7 @@ fn rebuild_sync(
     client: &MoonClient,
     server_id: u64,
     action: &str,
+    strategy_placements: &mut StrategyPlacementGuard,
     build: impl FnOnce(&mut Vec<StrategySnapshot>, Option<&StrategySchema>, u64) -> usize,
 ) {
     if let Some(snap) = client.snapshot() {
@@ -208,11 +291,23 @@ fn rebuild_sync(
         let mut full: Vec<StrategySnapshot> = strats.snapshots().cloned().collect();
         let changed = build(&mut full, schema, now);
         if changed > 0 {
-            let _ = client.strategies().sync_local_strategies(full);
-            log::info!(
-                "core {} {action} {changed} strategies",
-                crate::feed::core_label(server_id)
-            );
+            let placements = full
+                .iter()
+                .map(|strategy| (strategy.strategy_id, strategy.path.to_string()))
+                .collect();
+            match client.strategies().sync_local_strategies(full) {
+                Ok(()) => {
+                    strategy_placements.note_queued_sync(placements);
+                    log::info!(
+                        "core {} {action} {changed} strategies",
+                        crate::feed::core_label(server_id)
+                    );
+                }
+                Err(error) => log::warn!(
+                    "core {} {action} strategies failed: {error}",
+                    crate::feed::core_label(server_id)
+                ),
+            }
         }
     }
 }
@@ -232,6 +327,7 @@ pub(super) fn drain_commands(
     force_market_sample: &mut bool,
     orders_mutated: &mut bool,
     local_strat_edits: &mut LocalStratEdits,
+    strategy_placements: &mut StrategyPlacementGuard,
     client_settings_sequence: &mut ClientSettingsSequence,
 ) -> CommandDrain {
     apply_latest_market_role(
@@ -299,45 +395,54 @@ pub(super) fn drain_commands(
                 // replace_with_snapshots). Patch EVERY entry listed in `edits` in one pass and
                 // issue one sync; separate commands for one core's strategies would overwrite
                 // each other.
-                rebuild_sync(client, server.id, "edit", |full, schema, now| {
-                    let mut edited = 0usize;
-                    for sc in full.iter_mut() {
-                        let Some((_, changes)) = edits.iter().find(|(id, _)| *id == sc.strategy_id)
-                        else {
-                            continue;
-                        };
-                        for (name, val) in changes {
-                            let existing = sc.fields.get(name).cloned();
-                            let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
-                            sc.fields
-                                .insert(name.as_str(), fv_from_str(existing.as_ref(), stype, val));
-                        }
-                        // Changing SignalType changes the strategy kind. The snapshot stores the
-                        // kind in a separate `pub(crate)` byte rather than a field, so rebuild it
-                        // with the new `kind`; otherwise the tree's kind badge stays stale.
-                        if let Some((_, sig)) = changes
-                            .iter()
-                            .find(|(n, _)| n.eq_ignore_ascii_case("SignalType"))
-                        {
-                            if let Some(ord) = signaltype_to_kind_ordinal(schema, sig) {
-                                if ord != sc.kind().ordinal() {
-                                    *sc = StrategySnapshot::new(
-                                        sc.strategy_id,
-                                        sc.strategy_ver,
-                                        sc.last_date,
-                                        sc.checked,
-                                        StrategyKind::from_ordinal(ord),
-                                        sc.path.clone(),
-                                        sc.fields.clone(),
-                                    );
+                rebuild_sync(
+                    client,
+                    server.id,
+                    "edit",
+                    strategy_placements,
+                    |full, schema, now| {
+                        let mut edited = 0usize;
+                        for sc in full.iter_mut() {
+                            let Some((_, changes)) =
+                                edits.iter().find(|(id, _)| *id == sc.strategy_id)
+                            else {
+                                continue;
+                            };
+                            for (name, val) in changes {
+                                let existing = sc.fields.get(name).cloned();
+                                let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
+                                sc.fields.insert(
+                                    name.as_str(),
+                                    fv_from_str(existing.as_ref(), stype, val),
+                                );
+                            }
+                            // Changing SignalType changes the strategy kind. The snapshot stores the
+                            // kind in a separate `pub(crate)` byte rather than a field, so rebuild it
+                            // with the new `kind`; otherwise the tree's kind badge stays stale.
+                            if let Some((_, sig)) = changes
+                                .iter()
+                                .find(|(n, _)| n.eq_ignore_ascii_case("SignalType"))
+                            {
+                                if let Some(ord) = signaltype_to_kind_ordinal(schema, sig) {
+                                    if ord != sc.kind().ordinal() {
+                                        *sc = StrategySnapshot::new(
+                                            sc.strategy_id,
+                                            sc.strategy_ver,
+                                            sc.last_date,
+                                            sc.checked,
+                                            StrategyKind::from_ordinal(ord),
+                                            sc.path.clone(),
+                                            sc.fields.clone(),
+                                        );
+                                    }
                                 }
                             }
+                            sc.last_date = now.max(sc.last_date + 1);
+                            edited += 1;
                         }
-                        sc.last_date = now.max(sc.last_date + 1);
-                        edited += 1;
-                    }
-                    edited
-                });
+                        edited
+                    },
+                );
             }
             Ok(CoreCmd::DeleteStrategy { id }) => {
                 // `TStratDelete(strategy_id=id, folder_path="")` deletes one strategy.
@@ -353,6 +458,29 @@ pub(super) fn drain_commands(
                     crate::feed::core_label(server.id)
                 );
             }
+            Ok(CoreCmd::DeleteStrategyIfUnchanged {
+                id,
+                expected_placements,
+            }) => {
+                if strategy_placements.allows(client, expected_placements) {
+                    if let Err(error) = client.strategies().delete(id, "") {
+                        log::warn!(
+                            "core {} delete unchanged strategy {id} failed: {error}",
+                            crate::feed::core_label(server.id)
+                        );
+                    } else {
+                        log::info!(
+                            "core {} delete unchanged strategy {id}",
+                            crate::feed::core_label(server.id)
+                        );
+                    }
+                } else {
+                    log::warn!(
+                        "core {} delete unchanged strategy {id} skipped: live or queued placements changed",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+            }
             Ok(CoreCmd::DeleteFolder { path }) => {
                 // `TStratDelete(strategy_id=0, folder_path=path)` deletes an entire folder.
                 if let Err(error) = client.strategies().delete(0, path.as_str()) {
@@ -366,47 +494,79 @@ pub(super) fn drain_commands(
                     crate::feed::core_label(server.id)
                 );
             }
+            Ok(CoreCmd::DeleteEmptyFolder {
+                path,
+                expected_placements,
+            }) => {
+                if strategy_placements.allows(client, expected_placements) {
+                    // MoonProto has no atomic delete-if-empty precondition. This last local guard
+                    // covers both its live snapshot and queued full-list syncs; an external client
+                    // can still change the folder after this check.
+                    if let Err(error) = client.strategies().delete(0, path.as_str()) {
+                        log::warn!(
+                            "core {} delete empty folder {path} failed: {error}",
+                            crate::feed::core_label(server.id)
+                        );
+                    } else {
+                        log::info!(
+                            "core {} delete empty folder {path}",
+                            crate::feed::core_label(server.id)
+                        );
+                    }
+                } else {
+                    log::warn!(
+                        "core {} delete empty folder {path} skipped: live or queued placements changed",
+                        crate::feed::core_label(server.id)
+                    );
+                }
+            }
             Ok(CoreCmd::CreateStrategies { specs }) => {
                 // New ids are assigned inside `rebuild_sync` (max + 1), so mark an edit to any id.
                 local_strat_edits.mark_all();
                 // Add new snapshots to the complete set. The id is max + 1 for the TARGET core,
                 // which is safe for cross-core paste. Parse fields from strings according to the
                 // schema type, as `fv_from_str` does for edits, with `existing=None`.
-                rebuild_sync(client, server.id, "create", |full, schema, now| {
-                    let mut next_id = full.iter().map(|s| s.strategy_id).max().unwrap_or(0) + 1;
-                    // Plan the whole batch before insertion because each insertion shifts every
-                    // later position; id assignment still scans the complete vector.
-                    let ids: Vec<u64> = full.iter().map(|s| s.strategy_id).collect();
-                    // The drain knows the destination core authoritatively, so it is the safe
-                    // boundary for rejecting a foreign placement anchor.
-                    let anchors: Vec<Option<u64>> = specs
-                        .iter()
-                        .map(|spec| anchor_on_core(spec.insert_after, server.id))
-                        .collect();
-                    let positions = plan_insert_positions(&ids, &anchors);
-                    for (spec, at) in specs.iter().zip(positions) {
-                        let id = next_id;
-                        next_id += 1;
-                        let mut fields = StrategyFields::new();
-                        for (name, val) in &spec.fields {
-                            let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
-                            fields.insert(name.as_str(), fv_from_str(None, stype, val));
+                rebuild_sync(
+                    client,
+                    server.id,
+                    "create",
+                    strategy_placements,
+                    |full, schema, now| {
+                        let mut next_id = full.iter().map(|s| s.strategy_id).max().unwrap_or(0) + 1;
+                        // Plan the whole batch before insertion because each insertion shifts every
+                        // later position; id assignment still scans the complete vector.
+                        let ids: Vec<u64> = full.iter().map(|s| s.strategy_id).collect();
+                        // The drain knows the destination core authoritatively, so it is the safe
+                        // boundary for rejecting a foreign placement anchor.
+                        let anchors: Vec<Option<u64>> = specs
+                            .iter()
+                            .map(|spec| anchor_on_core(spec.insert_after, server.id))
+                            .collect();
+                        let positions = plan_insert_positions(&ids, &anchors);
+                        for (spec, at) in specs.iter().zip(positions) {
+                            let id = next_id;
+                            next_id += 1;
+                            let mut fields = StrategyFields::new();
+                            for (name, val) in &spec.fields {
+                                let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
+                                fields.insert(name.as_str(), fv_from_str(None, stype, val));
+                            }
+                            full.insert(
+                                at,
+                                StrategySnapshot::new(
+                                    id,
+                                    0,
+                                    now,
+                                    false,
+                                    StrategyKind::from_ordinal(spec.kind_ordinal),
+                                    spec.folder_path.clone(),
+                                    fields,
+                                ),
+                            );
                         }
-                        full.insert(
-                            at,
-                            StrategySnapshot::new(
-                                id,
-                                0,
-                                now,
-                                false,
-                                StrategyKind::from_ordinal(spec.kind_ordinal),
-                                spec.folder_path.clone(),
-                                fields,
-                            ),
-                        );
-                    }
-                    specs.len()
-                });
+                        specs.len()
+                    },
+                );
             }
             Ok(CoreCmd::RestoreStrategy {
                 id,
@@ -415,43 +575,55 @@ pub(super) fn drain_commands(
                 fields,
             }) => {
                 local_strat_edits.mark(id);
-                rebuild_sync(client, server.id, "restore", |full, schema, now| {
-                    // It is already live (double-click in the menu or an echo), so do not duplicate it.
-                    if full.iter().any(|s| s.strategy_id == id) {
-                        return 0;
-                    }
-                    let mut f = StrategyFields::new();
-                    for (name, val) in &fields {
-                        let stype = schema.and_then(|s| s.field(name)).map(|x| x.type_id);
-                        f.insert(name.as_str(), fv_from_str(None, stype, val));
-                    }
-                    full.push(StrategySnapshot::new(
-                        id,
-                        0,
-                        now,
-                        false, // A restored strategy is always UNCHECKED and must be enabled deliberately.
-                        StrategyKind::from_ordinal(kind_ordinal),
-                        folder_path.clone(),
-                        f,
-                    ));
-                    1
-                });
+                rebuild_sync(
+                    client,
+                    server.id,
+                    "restore",
+                    strategy_placements,
+                    |full, schema, now| {
+                        // It is already live (double-click in the menu or an echo), so do not duplicate it.
+                        if full.iter().any(|s| s.strategy_id == id) {
+                            return 0;
+                        }
+                        let mut f = StrategyFields::new();
+                        for (name, val) in &fields {
+                            let stype = schema.and_then(|s| s.field(name)).map(|x| x.type_id);
+                            f.insert(name.as_str(), fv_from_str(None, stype, val));
+                        }
+                        full.push(StrategySnapshot::new(
+                            id,
+                            0,
+                            now,
+                            false, // A restored strategy is always UNCHECKED and must be enabled deliberately.
+                            StrategyKind::from_ordinal(kind_ordinal),
+                            folder_path.clone(),
+                            f,
+                        ));
+                        1
+                    },
+                );
             }
             Ok(CoreCmd::MoveStrategies { moves }) => {
                 // Change `path` and increment `last_date` for the selected strategies in one sync.
-                rebuild_sync(client, server.id, "move", |full, _schema, now| {
-                    let mut changed = 0usize;
-                    for sc in full.iter_mut() {
-                        if let Some((_, new_path)) =
-                            moves.iter().find(|(id, _)| *id == sc.strategy_id)
-                        {
-                            sc.path = new_path.as_str().into();
-                            sc.last_date = now.max(sc.last_date + 1);
-                            changed += 1;
+                rebuild_sync(
+                    client,
+                    server.id,
+                    "move",
+                    strategy_placements,
+                    |full, _schema, now| {
+                        let mut changed = 0usize;
+                        for sc in full.iter_mut() {
+                            if let Some((_, new_path)) =
+                                moves.iter().find(|(id, _)| *id == sc.strategy_id)
+                            {
+                                sc.path = new_path.as_str().into();
+                                sc.last_date = now.max(sc.last_date + 1);
+                                changed += 1;
+                            }
                         }
-                    }
-                    changed
-                });
+                        changed
+                    },
+                );
             }
             Ok(CoreCmd::TransferAsset {
                 asset,

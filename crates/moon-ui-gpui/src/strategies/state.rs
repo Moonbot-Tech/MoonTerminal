@@ -67,7 +67,11 @@ impl StrategiesView {
             let b = backend.read(cx);
             let goto = b.strategies_goto.is_some();
             let sig = strategies_sig(b);
-            if sig != this.last_sig || goto {
+            let strategies_changed = sig != this.last_sig;
+            if strategies_changed || goto {
+                if strategies_changed {
+                    this.reconcile_ui_folders(b.session.store());
+                }
                 this.last_sig = sig;
                 this.sync_pending_select(cx);
                 this.clamp_selected_section(cx);

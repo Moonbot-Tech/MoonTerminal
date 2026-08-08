@@ -260,10 +260,23 @@ pub enum CoreCmd {
     /// history remains in `strat_db`, and the UI can restore it under the same ID. The UI enforces
     /// that only unchecked strategies can be deleted before sending the command.
     DeleteStrategy { id: u64 },
+    /// Delete one strategy only if both the live snapshot and any full-list sync already queued to
+    /// MoonProto still match the caller's complete placements. This prevents a queued move from
+    /// changing which folder the purge should clean after the strategy disappears.
+    DeleteStrategyIfUnchanged {
+        id: u64,
+        expected_placements: Vec<(u64, String)>,
+    },
     /// Delete an entire folder by path using `TStratDelete` with `strategy_id=0`.
-    /// The server removes an empty folder; the UI guarantees that contained strategies are moved
-    /// or deleted first.
+    /// The server removes the folder and its contents; the calling UI owns any safety checks.
     DeleteFolder { path: String },
+    /// Delete a folder only if the live snapshot and any full-list sync already queued to MoonProto
+    /// still match the caller's placements. The protocol itself has no conditional precondition,
+    /// so the handler fails closed when either local view is absent or changed.
+    DeleteEmptyFolder {
+        path: String,
+        expected_placements: Vec<(u64, String)>,
+    },
     /// Create new strategies, including clipboard pastes within or between cores. The feed adds
     /// each strategy to the full set through `StrategySnapshot::new`, assigns `max + 1` from the
     /// target core, converts string fields through the schema, sets `last_date=now`, and sends one

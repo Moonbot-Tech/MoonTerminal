@@ -1,9 +1,9 @@
-//! "Delete the strategy and its trades from the report": the confirmation dialog and the ordered,
-//! core-confirmed sequence behind it.
+//! "Delete the strategy and its trades from the report": the confirmation dialog, its ordered
+//! core-confirmed strategy sequence, and the optional empty-folder request that follows it.
 //!
-//! # Why this is a sequence and not three calls
+//! # Why this is a sequence and not a command batch
 //!
-//! The three commands do NOT keep their order on the wire. `TRepSetRowsDeleted` and
+//! The destructive commands do NOT keep their order on the wire. `TRepSetRowsDeleted` and
 //! `TStratCheckedSync` are `Sliced` priority while `TStratDelete` is `High`; the protocol builds
 //! sliced datagrams first but flushes the High bytes to the socket BEFORE transmitting the first
 //! sliced block, so the delete overtakes the other two deterministically. On top of that, every
@@ -14,6 +14,11 @@
 //! rows leave the replica (the core echoes `RowsDeleted`), and the core acknowledges the checkbox
 //! delta or drops the strategy from its list. Each wait is bounded; a step that never confirms
 //! stops the sequence rather than letting the next command race ahead of it.
+//! Empty-folder cleanup has no separate acknowledgement. It is queued only after the strategy is
+//! confirmed absent and a fresh snapshot shows no remaining strategy in that folder or its
+//! descendants. The feed thread rechecks both MoonProto's live placements and any full-list sync
+//! already accepted by its runtime queue; MoonProto itself has no atomic delete-if-empty
+//! precondition.
 //!
 //! The ordering rule and its evidence policy are really a session-layer concern — the Strategies
 //! window would want the same operation, and today it can only refuse to delete an enabled
@@ -39,6 +44,7 @@ use rust_i18n::t;
 use super::AnalyticsView;
 use crate::design;
 use crate::design::{moon, moon_alpha};
+use crate::strategies::tree::ops::{has_row_under, join_path, split_path};
 
 /// How often a wait re-checks its evidence.
 const POLL: Duration = Duration::from_millis(300);
@@ -107,6 +113,8 @@ enum PurgeStop {
     Abandoned,
     /// A specific step could not be sent or confirmed.
     Failed(PurgeStep, PurgeFail),
+    /// The strategy is already confirmed deleted, but its folder request was not locally queued.
+    FolderSend,
 }
 
 /// What the dialog is showing right now.
@@ -122,6 +130,8 @@ pub(super) enum PurgeState {
     Running(PurgeStep),
     /// Every step completed and was confirmed where confirmation was required.
     Done,
+    /// The confirmed sequence completed, but the optional folder request did not enter the queue.
+    FolderSendFailed,
     /// The named step stopped for the stated reason.
     Failed { step: PurgeStep, fail: PurgeFail },
 }
@@ -172,6 +182,29 @@ pub(super) fn purge_summary_lines(total: usize, period: i64, legacy: i64) -> Vec
         lines.push(t!("analytics.purge.legacy_note", n = legacy).to_string());
     }
     lines
+}
+
+/// Choose the containing folder that became empty after one live strategy disappeared.
+///
+/// The candidate must come from the live row captured immediately before deletion. Both the
+/// occupancy check and the command target use the shared path parser, so non-canonical separators
+/// cannot make the UI inspect one folder and ask the core to delete another.
+///
+/// Args:
+///     deleted_folder: Raw live folder path captured immediately before the delete command.
+///     remaining: Fresh live strategy snapshot after the strategy disappeared.
+///
+/// Returns:
+///     The canonical non-root folder path only when it has no direct or descendant strategies.
+fn deletable_folder_after(
+    deleted_folder: Option<&str>,
+    remaining: &[StrategyRow],
+) -> Option<String> {
+    let path = split_path(deleted_folder?);
+    if path.is_empty() || has_row_under(remaining, &path) {
+        return None;
+    }
+    Some(join_path(&path))
 }
 
 /// Read the strategy's addressable rows, reusing `reader` when it is still usable.
@@ -315,6 +348,62 @@ impl PurgeRun {
             Ok(())
         } else {
             Err(PurgeStop::Failed(step, PurgeFail::Send))
+        }
+    }
+
+    /// Queue the conditional empty-folder intent after the confirmed strategy sequence.
+    ///
+    /// Unlike [`Self::send`], a local failure has its own outcome because the Delete step has
+    /// already succeeded and reporting that whole step as unsent would misstate the partial result.
+    fn send_empty_folder(
+        &self,
+        cx: &mut AsyncApp,
+        folder: String,
+        expected_placements: Vec<(u64, String)>,
+    ) -> Result<(), PurgeStop> {
+        if !self.still_mine(cx) {
+            return Err(PurgeStop::Abandoned);
+        }
+        let queued = self
+            .with_view(cx, |view, cx| {
+                view.backend
+                    .read(cx)
+                    .session
+                    .delete_empty_folder(self.core_uid, folder, expected_placements)
+                    .is_ok()
+            })
+            .unwrap_or(false);
+        if queued {
+            Ok(())
+        } else {
+            Err(PurgeStop::FolderSend)
+        }
+    }
+
+    /// Inspect the current live strategy snapshot after proving the core can receive commands.
+    ///
+    /// Args:
+    ///     cx: Async application context used to read the owning Analytics view.
+    ///     step: Step that should own any connection failure.
+    ///     inspect: Projection that copies only the strategy evidence needed after this UI read.
+    ///
+    /// Returns:
+    ///     The caller's projection over every live strategy row for the ready core.
+    fn inspect_strategies<T>(
+        &self,
+        cx: &mut AsyncApp,
+        step: PurgeStep,
+        inspect: impl FnOnce(&[StrategyRow]) -> T,
+    ) -> Result<T, PurgeStop> {
+        let result = self.with_view(cx, |view, cx| {
+            let backend = view.backend.read(cx);
+            let core = backend.session.store().core(self.core_uid)?;
+            (core.status == ConnStatus::Ready).then(|| inspect(&core.strategies))
+        });
+        match result {
+            None => Err(PurgeStop::Abandoned),
+            Some(None) => Err(PurgeStop::Failed(step, PurgeFail::CoreLost)),
+            Some(Some(result)) => Ok(result),
         }
     }
 
@@ -473,11 +562,44 @@ impl PurgeRun {
         self.purge_rows(cx, PurgeStep::Sweep).await?;
 
         self.open_step(cx, PurgeStep::Delete)?;
-        self.send(cx, PurgeStep::Delete, |session| {
-            session.delete_strategy(core_uid, sid)
-        })?;
+        // Capture provenance immediately before deletion. Analytics labels and report rows do not
+        // carry the core's authoritative folder spelling, and a strategy already absent here must
+        // never fabricate a folder target.
+        let (deleted_folder, before_delete) =
+            self.inspect_strategies(cx, PurgeStep::Delete, |strategies| {
+                let folder = strategies
+                    .iter()
+                    .find(|strategy| strategy.id == sid)
+                    .map(|strategy| strategy.folder_path.clone());
+                let placements = strategies
+                    .iter()
+                    .map(|strategy| (strategy.id, strategy.folder_path.clone()))
+                    .collect();
+                (folder, placements)
+            })?;
+        if deleted_folder.is_some() {
+            self.send(cx, PurgeStep::Delete, |session| {
+                session.delete_strategy_if_unchanged(core_uid, sid, before_delete)
+            })?;
+        }
         self.await_strategy(cx, PurgeStep::Delete, |strategy, _| strategy.is_none())
-            .await
+            .await?;
+
+        // Folder deletion has no dedicated acknowledgement. Capture the complete placement state
+        // with the fresh post-delete snapshot so the feed thread can fail closed if this terminal
+        // queues a create, move, or delete before it serializes the folder-wide command.
+        let cleanup = self.inspect_strategies(cx, PurgeStep::Delete, |remaining| {
+            let folder = deletable_folder_after(deleted_folder.as_deref(), remaining)?;
+            let expected_placements = remaining
+                .iter()
+                .map(|strategy| (strategy.id, strategy.folder_path.clone()))
+                .collect();
+            Some((folder, expected_placements))
+        })?;
+        if let Some((folder, expected_placements)) = cleanup {
+            self.send_empty_folder(cx, folder, expected_placements)?;
+        }
+        Ok(())
     }
 }
 
@@ -644,6 +766,13 @@ impl AnalyticsView {
                             this.request_report_refresh(false, cx);
                         }
                         Err(PurgeStop::Abandoned) => {}
+                        Err(PurgeStop::FolderSend) => {
+                            this.publish_purge(seq, cx, |op| {
+                                op.state = PurgeState::FolderSendFailed;
+                            });
+                            this.mark_report_data_stale();
+                            this.request_report_refresh(false, cx);
+                        }
                         Err(PurgeStop::Failed(step, fail)) => {
                             this.publish_purge(seq, cx, |op| {
                                 op.state = PurgeState::Failed { step, fail };
@@ -702,7 +831,10 @@ fn purge_body(view: Entity<AnalyticsView>, cx: &mut gpui::App) -> AnyElement {
                 );
             }
         }
-        state @ (PurgeState::Running(_) | PurgeState::Done | PurgeState::Failed { .. }) => {
+        state @ (PurgeState::Running(_)
+        | PurgeState::Done
+        | PurgeState::FolderSendFailed
+        | PurgeState::Failed { .. }) => {
             body = body.child(purge_progress(state, p));
             if matches!(state, PurgeState::Done) {
                 body = body.child(
@@ -731,6 +863,12 @@ fn purge_body(view: Entity<AnalyticsView>, cx: &mut gpui::App) -> AnyElement {
                 };
                 body = body.child(MoonAlert::error("an-purge-error", message));
             }
+            if matches!(state, PurgeState::FolderSendFailed) {
+                body = body.child(MoonAlert::error(
+                    "an-purge-folder-error",
+                    t!("analytics.purge.folder_send_failed").to_string(),
+                ));
+            }
         }
     }
 
@@ -738,7 +876,7 @@ fn purge_body(view: Entity<AnalyticsView>, cx: &mut gpui::App) -> AnyElement {
         .into_any_element()
 }
 
-/// The four steps with their state: confirmed, in flight, failed, or still ahead.
+/// The four confirmable steps with their state: confirmed, in flight, failed, or still ahead.
 ///
 /// Everything before the step in flight has been confirmed by the core, which is what makes it
 /// safe to tell the user those steps stand.
@@ -792,7 +930,10 @@ fn purge_actions(view: Entity<AnalyticsView>, state: &PurgeState, p: MoonPalette
     let confirmable = matches!(state, PurgeState::Ready { .. });
     let ended = matches!(
         state,
-        PurgeState::Done | PurgeState::Failed { .. } | PurgeState::CountFailed(_)
+        PurgeState::Done
+            | PurgeState::FolderSendFailed
+            | PurgeState::Failed { .. }
+            | PurgeState::CountFailed(_)
     );
 
     let close_view = view.clone();

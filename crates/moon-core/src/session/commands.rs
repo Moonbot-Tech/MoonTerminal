@@ -1,7 +1,7 @@
 //! Commands to cores (strategy, trading, and Engine actions) through the per-core `CoreCmd`
 //! channel, plus read-only manager accessors (`store`, `sessions`, `market_source`, etc.).
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::data::OrderBookModel;
 use crate::feed::{
@@ -66,13 +66,67 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::DeleteStrategy { id }, "delete strategy")
     }
 
-    /// Delete an entire core folder by path. The UI guarantees that contained strategies are
-    /// moved or deleted first.
+    /// Request strategy deletion only while its core-wide placement snapshot is unchanged.
+    ///
+    /// Args:
+    ///     core: Core that owns the strategy.
+    ///     id: Strategy id to delete.
+    ///     expected_placements: Full `(strategy id, raw folder path)` snapshot inspected by the
+    ///         caller immediately before queueing deletion.
+    ///
+    /// Returns:
+    ///     Success when the conditional intent entered the core's local command queue.
+    pub fn delete_strategy_if_unchanged(
+        &self,
+        core: CoreId,
+        id: u64,
+        expected_placements: Vec<(u64, String)>,
+    ) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::DeleteStrategyIfUnchanged {
+                id,
+                expected_placements,
+            },
+            "delete unchanged strategy",
+        )
+    }
+
+    /// Delete an entire core folder by path, including any strategies it still contains.
     pub fn delete_folder(&self, core: CoreId, path: String) -> Result<()> {
         if path.is_empty() {
             return Ok(());
         }
         self.send_core_cmd(core, CoreCmd::DeleteFolder { path }, "delete folder")
+    }
+
+    /// Request removal of an empty folder while guarding against queued placement changes.
+    ///
+    /// Args:
+    ///     core: Core that owns the folder.
+    ///     path: Canonical folder path sent to MoonProto.
+    ///     expected_placements: Full `(strategy id, raw folder path)` snapshot inspected by the
+    ///         caller after the target strategy disappeared.
+    ///
+    /// Returns:
+    ///     Success when the conditional intent entered the core's local command queue.
+    pub fn delete_empty_folder(
+        &self,
+        core: CoreId,
+        path: String,
+        expected_placements: Vec<(u64, String)>,
+    ) -> Result<()> {
+        if path.is_empty() {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::DeleteEmptyFolder {
+                path,
+                expected_placements,
+            },
+            "delete empty folder",
+        )
     }
 
     /// Create new core strategies directly or from the clipboard. The feed adds them to the full

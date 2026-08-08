@@ -917,9 +917,9 @@ fn strategy_purge_never_stops_the_whole_core() {
     );
 }
 
-/// The initial hide, disable, and final delete run in the order the confirmation promises.
+/// The report hide, disable, and strategy delete run in the order the confirmation promises.
 ///
-/// The plausible edit is firing all three commands together while "simplifying away" the waits —
+/// The plausible edit is firing the three confirmed actions together while simplifying the waits —
 /// which reads as a harmless cleanup and is not: the delete command is High priority while the
 /// other two are Sliced, so it reaches the core FIRST and the strategy is deleted while still
 /// enabled and still holding its trades.
@@ -945,8 +945,74 @@ fn strategy_purge_hides_trades_before_disabling_and_deleting() {
     );
     assert!(
         body.contains("await_strategy("),
-        "each core-side step must be waited for; a fire-and-forget sequence loses its order on \
-         the wire because the delete travels at a higher priority than the other two"
+        "the confirmable strategy actions must be waited for; a fire-and-forget sequence loses \
+         its order on the wire because the delete travels at a higher priority than the other two"
+    );
+}
+
+/// `analytics/purge.rs:PurgeRun::run`: moving the folder decision before the disappearance wait or
+/// disconnecting it from `remaining` could send a folder-wide delete from stale UI evidence.
+///
+/// The pre-delete placement snapshot must also feed the conditional strategy command; otherwise a
+/// queued move can change which folder is emptied before the target is deleted.
+#[test]
+fn strategy_purge_requests_empty_folder_only_after_strategy_disappearance() {
+    let purge = read_src("analytics/purge.rs");
+    let body = code_only(braced_body(&purge, "async fn run("));
+    let delete_strategy = body
+        .find("session.delete_strategy_if_unchanged(core_uid, sid, before_delete)")
+        .expect("the purge must guard deletion with its pre-delete placement snapshot");
+    let final_delete = &body[delete_strategy..];
+    let wait_for_absence = final_delete
+        .find("strategy.is_none()")
+        .expect("the purge must wait until the strategy disappears");
+    let fresh_snapshot = final_delete
+        .find("let cleanup = self.inspect_strategies(cx, PurgeStep::Delete, |remaining|")
+        .expect("the purge must inspect fresh placements after strategy disappearance");
+    let empty_folder_decision = final_delete
+        .find("deletable_folder_after(deleted_folder.as_deref(), remaining)")
+        .expect("the empty-folder decision must consume the captured folder and fresh rows");
+    let placement_projection = final_delete
+        .find("(strategy.id, strategy.folder_path.clone())")
+        .expect("the fresh rows must produce the feed-thread placement guard");
+    let cleanup_binding = final_delete
+        .find("if let Some((folder, expected_placements)) = cleanup")
+        .expect("only a successful empty-folder decision may expose the request values");
+    let delete_folder = final_delete
+        .find("self.send_empty_folder(cx, folder, expected_placements)")
+        .expect("the conditional request must consume the fresh decision values");
+
+    assert!(
+        wait_for_absence < fresh_snapshot
+            && fresh_snapshot < empty_folder_decision
+            && empty_folder_decision < placement_projection
+            && placement_projection < cleanup_binding
+            && cleanup_binding < delete_folder,
+        "strategy disappearance must precede the fresh placement read, empty-folder decision, \
+         and conditional folder command"
+    );
+}
+
+/// `analytics/purge.rs:AnalyticsView::confirm_purge`: removing the refresh calls from the
+/// `FolderSend` outcome would leave already-deleted trades and strategy visible after only the
+/// optional folder request failed.
+#[test]
+fn strategy_purge_refreshes_after_an_empty_folder_queue_failure() {
+    let purge = read_src("analytics/purge.rs");
+    let body = code_only(braced_body(&purge, "fn confirm_purge("));
+    let start = body
+        .find("Err(PurgeStop::FolderSend)")
+        .expect("folder queue failure must have a distinct outcome");
+    let end = body[start..]
+        .find("Err(PurgeStop::Failed")
+        .map(|offset| start + offset)
+        .expect("the ordinary failure arm must follow the folder failure arm");
+    let arm = &body[start..end];
+
+    assert!(
+        arm.contains("this.mark_report_data_stale()")
+            && arm.contains("this.request_report_refresh(false, cx)"),
+        "a folder queue failure still needs the successful purge's Analytics refresh"
     );
 }
 
