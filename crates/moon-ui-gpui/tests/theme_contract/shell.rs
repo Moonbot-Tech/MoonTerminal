@@ -612,6 +612,112 @@ fn an_open_log_tab_appends_new_lines_instead_of_rebuilding() {
     );
 }
 
+/// The Log panel's cost must stay visible in `render_diag.log`.
+///
+/// This work is invisible to every other signal: the panel does it inside `render`, so a regression
+/// shows up only as process CPU mixed in with the charts — which is exactly why the original defect
+/// survived. Each counter has to sit at the site that does the work it names, or the number drifts
+/// away from the thing it is trusted to measure and the log starts lying with confidence.
+#[test]
+fn the_log_panels_work_is_counted_where_it_happens() {
+    let diag = read_src("diag.rs");
+    // Inside the macro invocation, not merely somewhere in the file: a counter declared as a bare
+    // `static` would still read as present here while `snapshot_and_reset` never samples or clears
+    // it, so it would print nothing and silently accumulate.
+    let declared = diag
+        .split_once("diag_counters!(")
+        .and_then(|(_, rest)| rest.split_once("\n);"))
+        .map(|(list, _)| list)
+        .expect("the counter list must stay a single macro invocation");
+    for counter in [
+        "LOG_RENDER",
+        "LOG_PULL",
+        "LOG_LINES_PARSED",
+        "LOG_ROWS_FILTERED",
+        "LOG_ROWS_EVICTED",
+        "LOG_REFILTER",
+        "LOG_RELOAD",
+        "LOG_WORK_US",
+    ] {
+        assert!(
+            declared.contains(counter),
+            "{counter} must be declared inside diag_counters!, or it is never sampled"
+        );
+    }
+
+    let buffer = read_src("panels/log/buffer.rs");
+    let panel = read_src("panels/log/mod.rs");
+    let view = read_src("panels/log/view.rs");
+
+    // The render rate, as every sibling panel reports it. Without it a per-frame cost reads as a
+    // per-revision one.
+    assert!(
+        braced_body(&view, "fn render(").contains("LOG_RENDER"),
+        "the Log panel must report its render rate like Orders, Assets and News do"
+    );
+
+    // Volumes must be summed, not counted per call: `bump` here instead of `bump_by` would turn
+    // "lines parsed" into "batches parsed" and hide a whole-buffer re-parse behind a rate of 4.
+    for (scope, source, counter) in [
+        ("fn ingest(", &buffer, "LOG_LINES_PARSED"),
+        ("fn extend_view_from(", &buffer, "LOG_ROWS_FILTERED"),
+        ("fn evict(", &buffer, "LOG_ROWS_EVICTED"),
+    ] {
+        let body = braced_body(source, scope);
+        // Spelled as two independent facts rather than one exact call string: rustfmt reflows a long
+        // call across lines, and a test pinned to one layout would go green by accident.
+        assert!(
+            body.contains(counter)
+                && body.contains("bump_by(")
+                && !body.contains(&format!("bump(&crate::diag::{counter}")),
+            "{scope} must add its VOLUME to {counter}, not one event per call"
+        );
+    }
+
+    // Whole-buffer filter passes and full re-reads are events, counted where they happen.
+    assert!(
+        braced_body(&buffer, "fn refilter(")
+            .contains("crate::diag::bump(&crate::diag::LOG_REFILTER")
+            && braced_body(&panel, "fn reload_rows(")
+                .contains("crate::diag::bump(&crate::diag::LOG_RELOAD"),
+        "whole passes and full re-reads must be counted at their own sites"
+    );
+
+    // Eviction must count what it DROPPED. Counting the rows that stayed would sit at the cap
+    // forever — a busy panel is always at its cap — and print the correct state as a fault.
+    let evict = braced_body(&buffer, "fn evict(");
+    assert!(
+        evict.contains("LOG_ROWS_EVICTED, dropped as u64")
+            && !evict.contains("cap + self.view.len()"),
+        "eviction must count dropped rows, not the buffer that survived"
+    );
+
+    // The revision path is timed at both ends of it, or the figure silently excludes the expensive
+    // half: a full re-read is where the old whole-source cost lived.
+    for scope in ["fn pull_rows(", "fn reload_rows("] {
+        let body = braced_body(&panel, scope);
+        assert!(
+            body.contains("diag_timer()") && body.contains("record_work_us(timer)"),
+            "{scope} must be timed into log_work_us"
+        );
+    }
+
+    // `pull_rows` returns early into `reload_rows` for the cases a buffer cannot absorb. The bump
+    // has to sit AFTER those, or reloads are reported as incremental reads — the one confusion that
+    // would make the whole set say the opposite of the truth.
+    let pull = braced_body(&panel, "fn pull_rows(");
+    let bump_at = pull
+        .find("LOG_PULL")
+        .expect("the incremental read must be counted");
+    let last_reload = pull
+        .rfind("self.reload_rows(b, cx);")
+        .expect("pull_rows must still fall back to a full reload");
+    assert!(
+        bump_at > last_reload,
+        "LOG_PULL must be bumped after the reload fallbacks, not on every call"
+    );
+}
+
 #[test]
 fn toolbar_row_budget_counts_every_rule_it_draws() {
     // `controls::toolbar::row_fit` decides which of the row's labels collapse by summing the row's

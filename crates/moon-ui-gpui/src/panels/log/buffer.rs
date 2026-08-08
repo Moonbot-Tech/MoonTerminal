@@ -123,6 +123,7 @@ impl RowBuffer {
     /// toggle, a coin chip. It re-scans, but parses nothing — severity, the lowercase text and the
     /// coin range were all computed when each row arrived.
     pub(super) fn refilter(&mut self, f: Filters) {
+        crate::diag::bump(&crate::diag::LOG_REFILTER);
         self.view.clear();
         self.widest_chars = 0;
         self.extend_view_from(0, f);
@@ -154,6 +155,9 @@ impl RowBuffer {
         // Learn the batch's coin names BEFORE parsing it, so a base one line states outright
         // highlights its bare mentions in the same batch.
         self.known.extend(render::collect_coin_bases(&fresh));
+        // Counted here rather than at the call site: this is the one place a line is turned into a
+        // row, so the number cannot drift from the work it measures.
+        crate::diag::bump_by(&crate::diag::LOG_LINES_PARSED, fresh.len() as u64);
         let mut parsed: Vec<LineView> = fresh
             .iter()
             .map(|line| LineView::parse(line, &self.known))
@@ -214,6 +218,10 @@ impl RowBuffer {
 
     /// Appends the rows from `from` onwards that pass `f` to the visible list.
     fn extend_view_from(&mut self, from: usize, f: Filters) {
+        crate::diag::bump_by(
+            &crate::diag::LOG_ROWS_FILTERED,
+            self.rows.len().saturating_sub(from) as u64,
+        );
         let mut widest = self.widest_chars;
         let added: Vec<usize> = self
             .rows
@@ -239,6 +247,10 @@ impl RowBuffer {
             return Disturbance::AppendedOnly;
         }
         let dropped = self.rows.len() - cap;
+        // What was dropped, NOT the buffer that stayed: in the steady state a following panel sits
+        // exactly at its cap, so counting the survivors would print thousands per second forever and
+        // the number would read as a defect in the one state that is correct.
+        crate::diag::bump_by(&crate::diag::LOG_ROWS_EVICTED, dropped as u64);
         self.rows.drain(0..dropped);
         let before = self.view.len();
         self.view.retain(|&ix| ix >= dropped);

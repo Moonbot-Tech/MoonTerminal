@@ -54,6 +54,24 @@ const AGG_PER_CORE: usize = 2000;
 /// to effective follow mode trims back to `VIEW_LIMIT`.
 const PAUSED_CAP: usize = 20_000;
 
+/// Starts the revision-path stopwatch, but only when diagnostics are on.
+///
+/// Lazy on purpose: an ordinary run pays one relaxed atomic load and never reads the clock.
+fn diag_timer() -> Option<std::time::Instant> {
+    crate::diag::is_enabled().then(std::time::Instant::now)
+}
+
+/// Adds the elapsed time to `log_work_us`, which is what makes the panel's cost readable in
+/// microseconds instead of inferred from process CPU shared with the charts.
+fn record_work_us(timer: Option<std::time::Instant>) {
+    if let Some(timer) = timer {
+        crate::diag::bump_by(
+            &crate::diag::LOG_WORK_US,
+            timer.elapsed().as_micros() as u64,
+        );
+    }
+}
+
 /// Selected source of log rows.
 #[derive(Clone, PartialEq)]
 pub(super) enum LogSource {
@@ -679,6 +697,8 @@ impl LogPanel {
     /// Returns:
     ///     Nothing.
     fn reload_rows(&mut self, b: &Backend, cx: &App) {
+        crate::diag::bump(&crate::diag::LOG_RELOAD);
+        let timer = diag_timer();
         self.refresh
             .record_reload(render::log_sig(b, &self.group, &self.source));
         let sources = self.sources(b);
@@ -708,6 +728,7 @@ impl LogPanel {
         if self.buf.total() == 0 {
             self.after_view_change();
         }
+        record_work_us(timer);
     }
 
     /// Identity of the source list: which cores it holds and what they are called.
@@ -742,6 +763,7 @@ impl LogPanel {
     /// Returns:
     ///     Nothing.
     fn pull_rows(&mut self, b: &Backend, cx: &App) {
+        let timer = diag_timer();
         let membership = self.resolve_membership(b);
         let sources = self.sources(b);
         // Two changes the buffer cannot absorb, because both invalidate rows it is not touching:
@@ -784,12 +806,14 @@ impl LogPanel {
         // until some unrelated line arrives.
         self.refresh
             .record_reload(render::log_sig(b, &self.group, &self.source));
+        crate::diag::bump(&crate::diag::LOG_PULL);
         let fresh = self
             .cursors
             .pull(b, &self.source, &sources, membership.as_ref());
         // Resuming follow lowers the cap, so the buffer can need evicting with nothing new in it,
         // and returning to the tail is this path's whole job when follow resumes.
         self.append_rows(fresh, cx);
+        record_work_us(timer);
     }
 
     /// Changes visibility-driven refresh activity and catches up immediately when activation is

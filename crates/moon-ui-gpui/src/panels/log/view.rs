@@ -16,6 +16,10 @@ impl Render for LogPanel {
     /// Returns:
     ///     The complete responsive Log panel element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // First line, as every sibling panel does it. Without a render rate, a cost inside this
+        // element tree cannot be told apart from one on the revision path — and the whole point of
+        // the counters below is telling those two apart.
+        crate::diag::bump(&crate::diag::LOG_RENDER);
         if !self.refresh.is_active() {
             self.set_refresh_active(true, cx);
         } else if self.refresh.take_observed_reload() {

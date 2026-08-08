@@ -136,6 +136,56 @@ diag_counters!(
     CHART_ORDER_SYNC => "chart_order_sync",
     // Self-rearming roughly 1 Hz chart-stack compaction timers, one per non-empty Add/Custom stack.
     COMPACT_TICK => "compact_tick",
+    // Log panel. An open Log tab used to re-read and re-parse its whole source on every backend
+    // revision — whether or not a single row survived the errors-only filter — and nothing here
+    // could see it: the panel works inside `render`, so it moved no counter and the cost surfaced
+    // only as process CPU, mixed in with the charts.
+    //
+    // ALL of these are process-wide sums over every ACTIVE Log panel — the dock tab plus each
+    // detached and group window — so three open panels triple the event rates. A panel behind
+    // another dock tab is inactive and contributes nothing, which is the intended zero.
+    //
+    // None of them measures milliseconds except `log_ingest_us`; the rest are frequencies and
+    // volumes. Read them as a set:
+    //
+    //   * `log_render` — panel renders, the same way `orders_render` and `news_render` read. Without
+    //     it a per-frame cost inside the element tree is indistinguishable from a per-revision one.
+    //   * `log_pull` — calls that reached the incremental read. NOT comparable to `backend_notify`:
+    //     that one is a 250 ms-throttled whole-backend notify, while this fires only when the
+    //     SELECTED source's signature moved, so a quiet source under a busy backend correctly prints
+    //     `log_pull=0 backend_notify=4`.
+    //   * `log_lines_parsed` — lines turned into rows. In the steady state this equals the rate the
+    //     cores are writing at; a burst up to the 5000-row view limit is legitimate whenever
+    //     `log_reload` moved in the same sample. A batch bigger than the buffer cap is truncated
+    //     before parsing, so on a catch-up this reports rows KEPT, not lines the feed handed over.
+    //   * `log_rows_filtered` — rows put through the filter predicate. Together with
+    //     `log_lines_parsed` this is the pass/fail pair: an arrival filters the new rows plus, when a
+    //     row landed out of order, the tail after it, so the two should stay the same order of
+    //     magnitude. Thousands against tens is a whole-buffer pass — legitimate if `log_refilter`
+    //     moved too (that is a keystroke), a regression if it did not.
+    //   * `log_rows_evicted` — rows dropped past the cap. Tracks the arrival rate once the buffer is
+    //     full, which is the ordinary state; it deliberately does NOT count the rows that stayed,
+    //     because that number would sit at the cap forever and read as a fault in the correct state.
+    //   * `log_refilter` — whole-buffer filter passes, one per keystroke in the search box or
+    //     toggled filter, so typing legitimately prints several per sample. Any of these while
+    //     nobody is touching the panel is a defect: no revision path reaches it.
+    //   * `log_reload` — full source re-reads, which re-parse everything they read. Legitimate on
+    //     the first load of a tab, a source or file change, an exchange losing a member, a selected
+    //     core leaving the store, and a core added, removed or renamed — so a handful in a row while
+    //     the user clicks around is normal. A steady rate with nobody clicking means something
+    //     forces a reload per revision and the incremental path is dead.
+    //   * `log_work_us` — microseconds per second spent on the panel's revision path: resolving the
+    //     source list, reading the cursors, parsing, filtering and evicting, plus a full re-read when
+    //     one happens. The direct answer to "what does an open Log tab cost", and the only one here
+    //     a time regression cannot hide from. It excludes the element tree — that is `log_render`.
+    LOG_RENDER => "log_render",
+    LOG_PULL => "log_pull",
+    LOG_LINES_PARSED => "log_lines_parsed",
+    LOG_ROWS_FILTERED => "log_rows_filtered",
+    LOG_ROWS_EVICTED => "log_rows_evicted",
+    LOG_REFILTER => "log_refilter",
+    LOG_RELOAD => "log_reload",
+    LOG_WORK_US => "log_work_us",
 );
 
 #[derive(Clone, Debug)]
