@@ -55,21 +55,14 @@ const AGG_PER_CORE: usize = 2000;
 const PAUSED_CAP: usize = 20_000;
 
 /// Starts the revision-path stopwatch, but only when diagnostics are on.
-///
-/// Lazy on purpose: an ordinary run pays one relaxed atomic load and never reads the clock.
 fn diag_timer() -> Option<std::time::Instant> {
-    crate::diag::is_enabled().then(std::time::Instant::now)
+    crate::diag::timer()
 }
 
 /// Adds the elapsed time to `log_work_us`, which is what makes the panel's cost readable in
 /// microseconds instead of inferred from process CPU shared with the charts.
 fn record_work_us(timer: Option<std::time::Instant>) {
-    if let Some(timer) = timer {
-        crate::diag::bump_by(
-            &crate::diag::LOG_WORK_US,
-            timer.elapsed().as_micros() as u64,
-        );
-    }
+    crate::diag::record_us(&crate::diag::LOG_WORK_US, timer);
 }
 
 /// Selected source of log rows.
