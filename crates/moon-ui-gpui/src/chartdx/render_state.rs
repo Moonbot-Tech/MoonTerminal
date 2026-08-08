@@ -79,6 +79,33 @@ const ARRIVAL_PULSE_TICK: Duration = crate::pulse::PULSE_TICK;
 /// Stroke width of the arrival border, in logical px before the DPI scale is applied.
 const ARRIVAL_BORDER_PX: f32 = 2.0;
 
+/// Whether the arrival border flash runs at all.
+///
+/// `MOON_ARRIVAL_FLASH=0` (also `false`/`no`/`off`) turns it off for the whole process, so a
+/// measurement run can compare the same binary with and against without it. Its cost is not a
+/// question code reading answers: the flash paces PRESENTS, and a present is a WINDOW present, so
+/// every sibling canvas re-runs its own pass — which is exactly the kind of load only a live A/B
+/// establishes.
+///
+/// Gated here rather than at the three `flash_arrival` call sites: this is the one place a flash
+/// becomes state, so a caller added later is covered without knowing the switch exists. Read once —
+/// a per-frame `var_os` on the chart path would itself distort what it is meant to measure.
+pub(crate) fn arrival_flash_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("MOON_ARRIVAL_FLASH")
+            .ok()
+            .map(|value| {
+                !matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "0" | "false" | "no" | "off"
+                )
+            })
+            .unwrap_or(true)
+    })
+}
+
 fn sync_readout_resolution(rects: &mut [ReadoutRect], res: [f32; 2]) {
     let w = res[0].max(1.0);
     let h = res[1].max(1.0);
@@ -224,6 +251,9 @@ impl RenderState {
     /// so the caller neither notifies nor keeps a timer. That is the whole point — a GPUI repaint
     /// of the owning stack re-renders every chart panel in the tab.
     pub(super) fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: [f32; 4]) -> bool {
+        // Switched off: every start becomes a clear, so a run with the flash disabled cannot be
+        // left with one already in flight from before the call.
+        let at = if arrival_flash_enabled() { at } else { None };
         // The colour is refreshed even when the stamp is unchanged: a theme switch mid-flash must
         // not leave the border in the old accent for the rest of its 2.6 s.
         let recolored = self.arrival_pulse_color != accent;

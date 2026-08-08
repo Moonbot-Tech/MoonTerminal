@@ -44,6 +44,21 @@ const IDLE_FLOOR: Duration = Duration::from_millis(5000);
 /// Head of the idle window that is not sampled, so the last frames of the preceding forced
 /// high-present mode do not count as idle work.
 const IDLE_FLOOR_WARMUP: Duration = Duration::from_millis(1500);
+/// Outer bound on the arrival-flash window. Its own clock ends the stage after `config.flash`, so
+/// this only fires if that stops working — and it is generous enough that raising the window with
+/// `MOON_FIRETEST_FLASH_MS` does not silently start tripping it.
+const ARRIVAL_FLASH_TIMEOUT: Duration = Duration::from_secs(120);
+/// Outer bound on the flash+cursor storm. Its own clock ends it after `config.storm`, so this is
+/// the same guard-on-the-guard the flash window carries.
+const FLASH_STORM_TIMEOUT: Duration = Duration::from_secs(120);
+/// Head of the flash window that is not sampled.
+///
+/// Samples arrive once a second on their own clock, not on the stage's, so the first one after the
+/// handover covers part of the PREVIOUS stage — here, part of an idle floor with no flash in it.
+/// Counting it would blend the two phases being compared and understate the flash by up to a whole
+/// second out of five. Slightly longer than the sampling interval so the mixed sample cannot
+/// survive by landing early.
+const ARRIVAL_FLASH_WARMUP: Duration = Duration::from_millis(1200);
 /// Timeout for finding an active visible core/window to open the chart on.
 const OPEN_TIMEOUT: Duration = Duration::from_millis(10_000);
 /// Timeout for the chart reporting its real on-screen bounds after it opened.
@@ -67,8 +82,10 @@ pub(super) enum Phase {
     WaitProbe,
     Settle,
     IdleFloor,
+    ArrivalFlash,
     Baseline,
     Storm,
+    FlashStorm,
     StaticTextGap,
     StaticTextWarmup,
     StaticTextStorm,
@@ -283,6 +300,18 @@ pub(super) const CHART_SMOKE: &[StageDef] = &[
     StageDef::new(Phase::IdleFloor, "idle_floor", stages::idle_floor::measure)
         .dwell(IDLE_FLOOR)
         .warmup(IDLE_FLOOR_WARMUP),
+    // Directly after the idle floor and in the same cold present mode, because that is what it is
+    // compared against: same charts, same feed, nothing forcing a present — the only difference is
+    // the flash. Any other position would compare it against a phase the flash is not the only
+    // difference from.
+    //
+    StageDef::new(
+        Phase::ArrivalFlash,
+        "arrival_flash",
+        stages::arrival_flash::drive,
+    )
+    .deadline(ARRIVAL_FLASH_TIMEOUT, "arrival_flash did not finish")
+    .warmup(ARRIVAL_FLASH_WARMUP),
     StageDef::new(Phase::Baseline, "baseline", stages::perf::start_storm)
         .dwell(BASELINE)
         .hot()
@@ -291,6 +320,17 @@ pub(super) const CHART_SMOKE: &[StageDef] = &[
     StageDef::new(Phase::Storm, "mouse_storm", stages::perf::await_storm)
         .hot()
         .probes(),
+    // Before the text layer, not after: that layer has no disable path, so a flash+cursor phase
+    // placed later would carry 10k retained labels as well and could not say which of the three
+    // paid for what.
+    StageDef::new(
+        Phase::FlashStorm,
+        "flash_storm",
+        stages::arrival_flash::drive_storm,
+    )
+    .deadline(FLASH_STORM_TIMEOUT, "flash_storm did not finish")
+    .hot()
+    .probes(),
     StageDef::new(
         Phase::StaticTextGap,
         "static_text_gap",

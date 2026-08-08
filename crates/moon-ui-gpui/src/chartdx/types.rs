@@ -19,6 +19,14 @@ pub fn rgb4(c: [u8; 3]) -> [f32; 4] {
     ]
 }
 
+/// Convert a packed `0xRRGGBB` palette token to the chart layers' sRGB channels.
+///
+/// `MoonPalette` stores colours packed; every chart layer takes them unpacked. One place does the
+/// unpacking so a second caller cannot get the shifts subtly wrong.
+pub fn accent_rgb4(accent: u32) -> [f32; 4] {
+    rgb4([(accent >> 16) as u8, (accent >> 8) as u8, accent as u8])
+}
+
 /// Fill the GPU trade-cross buffer from ticks, converting time relative to the epoch.
 pub fn fill_cross_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>) {
     out.clear();

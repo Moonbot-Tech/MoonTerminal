@@ -42,6 +42,7 @@ pub mod pane;
 #[cfg(windows)]
 pub mod readout;
 mod render_state;
+pub(crate) use render_state::arrival_flash_enabled;
 mod text;
 pub mod types;
 #[cfg(windows)]
@@ -684,6 +685,25 @@ impl ChartDataHandle {
         };
         let render = inner.borrow().render.clone();
         render.borrow_mut().set_firetest_force_present(enabled)
+    }
+
+    /// Start or clear the arrival border flash on this chart for a measurement stage.
+    ///
+    /// The same state a real arrival sets, reached without one: a live detect is not something a
+    /// run can schedule, so measuring the flash's cost by waiting for one measures the market's
+    /// mood instead. `accent` is the palette token, exactly as `ChartPanel::set_arrival_pulse`
+    /// passes it, so the measured flash is the one the user sees and not a stand-in.
+    ///
+    /// Returns whether the chart is still alive and took the stamp.
+    pub fn set_firetest_arrival_flash(&self, at: Option<Instant>, accent: u32) -> bool {
+        let Some(inner) = self.inner.upgrade() else {
+            return false;
+        };
+        let render = inner.borrow().render.clone();
+        render
+            .borrow_mut()
+            .set_arrival_pulse(at, types::accent_rgb4(accent));
+        true
     }
 
     pub fn order_render_probe(&self, core: CoreId, market: &str) -> Option<OrderRenderProbe> {

@@ -11,6 +11,10 @@ const DEFAULT_MARKET: &str = "BTCUSDT";
 const DEFAULT_MOUSE_HZ: f64 = 5000.0;
 const DEFAULT_STORM: Duration = Duration::from_millis(5000);
 const STATIC_TEXT_LABELS: usize = 10_000;
+/// Default length of the arrival-flash window. The same 5000 ms the idle floor measures over, so
+/// the two phases are compared over equal windows and one cannot be quieter merely for being
+/// shorter.
+const DEFAULT_FLASH: Duration = Duration::from_millis(5000);
 
 /// The scenario a run executes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +32,8 @@ pub(crate) struct Config {
     pub(super) storm: Duration,
     pub(super) mouse_hz: f64,
     pub(super) text_labels: usize,
+    /// How long the arrival-flash stage keeps every live chart flashing.
+    pub(super) flash: Duration,
     pub(super) order_cancel_lag: bool,
     pub(super) order_cancel_size: Option<f64>,
     pub(super) order_cancel_quote_size: Option<f64>,
@@ -78,6 +84,12 @@ impl Config {
             .map(Duration::from_millis)
             .filter(|v| *v >= Duration::from_millis(1000))
             .unwrap_or(DEFAULT_STORM);
+        let flash = std::env::var("MOON_FIRETEST_FLASH_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .filter(|v| *v >= Duration::from_millis(1000))
+            .unwrap_or(DEFAULT_FLASH);
         let text_labels = std::env::var("MOON_FIRETEST_TEXT_LABELS")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
@@ -109,6 +121,7 @@ impl Config {
             storm,
             mouse_hz,
             text_labels,
+            flash,
             order_cancel_lag,
             order_cancel_size,
             order_cancel_quote_size,

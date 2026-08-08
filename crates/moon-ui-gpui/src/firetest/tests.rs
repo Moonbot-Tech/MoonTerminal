@@ -64,8 +64,10 @@ fn chart_smoke_stage_plan_is_one_contiguous_scenario() {
             "wait_chart_probe",
             "settle_live_chart",
             "idle_floor",
+            "arrival_flash",
             "baseline",
             "mouse_storm",
+            "flash_storm",
             "static_text_gap",
             "static_text_warmup",
             "static_text_storm",
@@ -127,7 +129,7 @@ fn the_storms_and_their_baseline_are_all_equally_hot() {
     // an exception rather than left to look like an oversight.
     for stage in CHART_SMOKE {
         match stage.phase {
-            Phase::Baseline | Phase::Storm | Phase::StaticTextStorm => assert!(
+            Phase::Baseline | Phase::Storm | Phase::StaticTextStorm | Phase::FlashStorm => assert!(
                 stage.present_pressure,
                 "{} is compared against its baseline, so it must run under forced present \
                  pressure: comparing a storm against a chart that was not equally hot measures \
@@ -138,9 +140,41 @@ fn the_storms_and_their_baseline_are_all_equally_hot() {
                 !stage.present_pressure,
                 "the idle floor exists to measure the app when nothing forces it to work"
             ),
+            // The flash phase is compared against the idle floor, so it must run in the idle
+            // floor's present mode. Under forced presents the flash's own presents would be
+            // indistinguishable from FireTest's, which is the whole measurement.
+            Phase::ArrivalFlash => assert!(
+                !stage.present_pressure,
+                "arrival_flash is scored against the cold idle floor and must run equally cold"
+            ),
             _ => {}
         }
     }
+}
+
+#[test]
+fn the_arrival_flash_is_measured_directly_after_the_idle_floor() {
+    // Adjacency is the control, not a cosmetic ordering: the two phases are compared as if the
+    // flash were their only difference, and every stage between them — a tool window opened, 10k
+    // text labels attached — would be a second one nobody accounted for.
+    let position = |phase: Phase| {
+        CHART_SMOKE
+            .iter()
+            .position(|stage| stage.phase == phase)
+            .unwrap_or_else(|| panic!("{phase:?} must be placed in chart-smoke"))
+    };
+    assert_eq!(
+        position(Phase::ArrivalFlash),
+        position(Phase::IdleFloor) + 1,
+        "arrival_flash must follow idle_floor immediately: it is scored as the difference from it"
+    );
+    // The flash+cursor storm must land BEFORE the text layer. That layer has no disable path, so a
+    // phase placed after it carries 10k retained labels too, and "flash plus cursor" would silently
+    // become "flash plus cursor plus text" — three variables, one number.
+    assert!(
+        position(Phase::FlashStorm) < position(Phase::StaticTextGap),
+        "flash_storm must run before the static text layer is attached"
+    );
 }
 
 #[test]
@@ -161,6 +195,9 @@ fn the_columns_match_the_run_they_replaced() {
             "settle_live_chart",
             "baseline",
             "mouse_storm",
+            // Held hot like the other storms: it is scored against the same baseline through the
+            // same function, and a storm measured in a different present mode is not comparable.
+            "flash_storm",
             "static_text_warmup",
             "static_text_storm",
         ],
@@ -179,8 +216,10 @@ fn the_columns_match_the_run_they_replaced() {
             "settle_live_chart",
             "baseline",
             // `idle_floor` sits between settle and baseline and is deliberately absent: it aims
-            // no storm, so it has no reason to accept a fresh probe.
+            // no storm, so it has no reason to accept a fresh probe. `arrival_flash` is absent for
+            // the same reason — it lights a border, it does not aim a cursor.
             "mouse_storm",
+            "flash_storm",
             "static_text_gap",
             "static_text_warmup",
             "static_text_storm",
@@ -192,7 +231,9 @@ fn the_columns_match_the_run_they_replaced() {
         .filter(|stage| !stage.sample_warmup.is_zero())
         .map(|stage| stage.name)
         .collect();
-    assert_eq!(warming, vec!["idle_floor", "baseline"]);
+    // `arrival_flash` joined the original two: it is compared against the phase immediately before
+    // it, so the one sample straddling the handover would blend the two sides of that comparison.
+    assert_eq!(warming, vec!["idle_floor", "arrival_flash", "baseline"]);
 
     // The reason too, not just which rows carry one: swapping two deadlines' messages would send
     // the developer looking at the wrong stage.
@@ -212,6 +253,10 @@ fn the_columns_match_the_run_they_replaced() {
                 "wait_chart_probe",
                 "chart opened but no chart bounds probe arrived"
             ),
+            // Also not inherited: `arrival_flash` polls every tick and ends on its own clock, which
+            // is the shape this list exists to require a backstop for.
+            ("arrival_flash", "arrival_flash did not finish"),
+            ("flash_storm", "flash_storm did not finish"),
             ("order_cancel_lag", "order_cancel_lag timed out"),
         ]
     );

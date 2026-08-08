@@ -7,6 +7,7 @@
 //! What a stage does NOT own is when it runs. Its dwell, deadline, present mode and sampling rule
 //! are cells in the table, not code here, so they can be read against every other stage's at once.
 
+pub(super) mod arrival_flash;
 pub(super) mod chart;
 pub(super) mod command_error;
 pub(super) mod idle_floor;

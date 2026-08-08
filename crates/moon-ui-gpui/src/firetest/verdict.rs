@@ -10,7 +10,7 @@ use crate::firetest::Runtime;
 use crate::firetest::bench::BenchShape;
 use crate::firetest::logging::{firetest_error, firetest_info};
 use crate::firetest::plan::Phase;
-use crate::firetest::sample::PhaseStats;
+use crate::firetest::sample::{PhaseStats, Sample};
 
 impl Runtime {
     /// Score the run and exit the process: `0` for PASS, `2` for FAIL.
@@ -46,7 +46,7 @@ impl Runtime {
             bench.cores, bench.charts, bench.windows
         ));
         firetest_info(&format!(
-            "[firetest] idle_floor avg/max shell={} orders={} news={} chart_render={} detached={} backend_notify={} chart_present={} clock={} order_sync={} compact={} assets={} cpu={:.1}/{:.1}%",
+            "[firetest] idle_floor avg/max shell={} orders={} news={} chart_render={} detached={} backend_notify={} chart_present={} clock={} order_sync={} compact={} assets={} arrival_pulse={} cpu={:.1}/{:.1}%",
             idle_rate("shell_render"),
             idle_rate("orders_render"),
             idle_rate("news_render"),
@@ -58,13 +58,19 @@ impl Runtime {
             idle_rate("chart_order_sync"),
             idle_rate("compact_tick"),
             idle_rate("assets_render"),
+            idle_rate("chart_arrival_pulse"),
             idle.avg_cpu(),
             idle.max_cpu(),
         ));
+        if let Some(reason) = report_arrival_flash(&self.samples, &idle, bench, self.flash_charts) {
+            self.fail(&reason);
+            return;
+        }
 
         let baseline = PhaseStats::of(&self.samples, Phase::Baseline);
         let clean_storm = PhaseStats::of(&self.samples, Phase::Storm);
         let static_text_storm = PhaseStats::of(&self.samples, Phase::StaticTextStorm);
+        let flash_storm = PhaseStats::of(&self.samples, Phase::FlashStorm);
         let storm = PhaseStats::joined(&clean_storm, &static_text_storm);
         // Guarded like every other scored phase. An empty baseline is not "no work" — it makes
         // every reference 0.0, so each delta silently becomes an absolute check and the run goes
@@ -85,9 +91,16 @@ impl Runtime {
             self.fail("no static text storm diag samples");
             return;
         }
+        if flash_storm.is_empty() {
+            self.fail("no flash storm diag samples");
+            return;
+        }
 
+        // What remains here feeds the SUMMARY line, not the gates: every threshold now lives in
+        // `check_storm_input` / `check_storm` / `check_storm_load`, one call per storm phase. The
+        // summary still reads the joined storms, so the headline numbers keep meaning what they
+        // meant in every previously recorded run.
         let avg_rate = |label: &str| storm.avg_rate(label);
-        let max_rate = |label: &str| storm.max_rate(label);
         let static_text_avg_rate = |label: &str| static_text_storm.avg_rate(label);
         let static_text_max_rate = |label: &str| static_text_storm.max_rate(label);
         // The storm's average above the baseline's PEAK: the one comparison a live feed cannot make
@@ -101,31 +114,18 @@ impl Runtime {
         let rate_delta =
             |label: &str| (clean_storm.avg_rate(label) - baseline.max_rate(label)).max(0.0);
 
-        let baseline_cpu = baseline.avg_cpu();
         let avg_cpu = storm.avg_cpu();
-        let max_cpu = storm.max_cpu();
-        let cpu_delta = (avg_cpu - baseline_cpu).max(0.0);
+        let cpu_delta = (avg_cpu - baseline.avg_cpu()).max(0.0);
         let static_text_avg_cpu = static_text_storm.avg_cpu();
-        let static_text_max_cpu = static_text_storm.max_cpu();
-        let static_text_cpu_delta = (static_text_avg_cpu - baseline_cpu).max(0.0);
 
-        let baseline_gpu_process = baseline.avg_gpu_process();
         let avg_gpu_process = storm.avg_gpu_process();
         let max_gpu_process = storm.max_gpu_process();
-        let gpu_process_delta = (avg_gpu_process - baseline_gpu_process).max(0.0);
+        let gpu_process_delta = (avg_gpu_process - baseline.avg_gpu_process()).max(0.0);
         let static_text_avg_gpu_process = static_text_storm.avg_gpu_process();
-        let static_text_max_gpu_process = static_text_storm.max_gpu_process();
-        let static_text_gpu_process_delta =
-            (static_text_avg_gpu_process - baseline_gpu_process).max(0.0);
 
         let avg_gpu_frame_ms = storm.avg_gpu_frame_ms();
         let max_gpu_frame_ms = storm.max_gpu_frame_ms();
-        let static_text_avg_gpu_frame_ms = static_text_storm.avg_gpu_frame_ms();
-        let static_text_max_gpu_frame_ms = static_text_storm.max_gpu_frame_ms();
         let mem_growth = storm.mem_growth();
-
-        let chart_mouse_min = chart_mouse_min_hz(avg_rate("chart_present"));
-        let static_text_chart_mouse_min = chart_mouse_min_hz(static_text_avg_rate("chart_present"));
 
         // Does the baseline actually reach the storm's present rate? Every `*_delta` threshold
         // assumes it does — that is the entire premise of comparing against a hot baseline rather
@@ -141,6 +141,33 @@ impl Runtime {
             clean_storm.avg_rate("bg_draw"),
             baseline.len(),
             clean_storm.len(),
+        ));
+
+        // What the two costs are TOGETHER, against the cursor alone. The gates below already hold
+        // the flash storm to every storm ceiling, but a ceiling only speaks when it is breached —
+        // and the question this phase exists to answer ("does moving the mouse over a flashing
+        // border cost more than the sum of the two?") needs the number on a passing run too.
+        firetest_info(&format!(
+            "[firetest] flash_storm clean->flash present={:.0}->{:.0}/s chart_render={:.0}->{:.0}/s per_frame bg_draw={:.2}->{:.2} base_bake={:.2}->{:.2} gpu_prepare={:.2}->{:.2} cpu={:.1}->{:.1}% entity={:.0}->{:.0}/s input_notify={:.0}->{:.0}/s pulse={:.1}/s samples={}->{}",
+            clean_storm.avg_rate("chart_present"),
+            flash_storm.avg_rate("chart_present"),
+            clean_storm.avg_rate("chart_render"),
+            flash_storm.avg_rate("chart_render"),
+            per_present(&clean_storm, "bg_draw"),
+            per_present(&flash_storm, "bg_draw"),
+            per_present(&clean_storm, "base_bake"),
+            per_present(&flash_storm, "base_bake"),
+            per_present(&clean_storm, "chart_gpu_prepare"),
+            per_present(&flash_storm, "chart_gpu_prepare"),
+            clean_storm.avg_cpu(),
+            flash_storm.avg_cpu(),
+            clean_storm.max_rate("chart_mouse_move_entity"),
+            flash_storm.max_rate("chart_mouse_move_entity"),
+            clean_storm.max_rate("chart_input_notify"),
+            flash_storm.max_rate("chart_input_notify"),
+            flash_storm.avg_rate("chart_arrival_pulse"),
+            clean_storm.len(),
+            flash_storm.len(),
         ));
 
         let mut fail = Vec::new();
@@ -222,183 +249,64 @@ impl Runtime {
         );
         check_max(&mut fail, "idle_cpu_process_avg", idle.avg_cpu(), 12.0);
         check_max(&mut fail, "idle_cpu_process_max", idle.max_cpu(), 20.0);
-        // Idle `ChartPanel::render` measured 5-6/s per chart on the recorded bench. The ceiling is
-        // far above that because the same counter has been seen in the hundreds under the storm
-        // (see `chart_render_per_chart`) and the wake source is not yet identified — until it is,
-        // a tight idle ceiling would fail for the same unknown reason rather than for a regression.
+        // Idle `ChartPanel::render`, retightened 2026-08-08 from 150 to 30 on ten pooled runs
+        // (`docs-internal/firetest-runs/arrival-flash-*.csv`): the per-chart idle average sat at
+        // 4.4-5.9 in every one of them, so 150 was 25x above anything observed and could only ever
+        // have caught a catastrophe.
+        //
+        // The 150 was set because the flash was suspected of waking this counter and the wake
+        // source was "not yet identified". It has now been measured directly — the `arrival_flash`
+        // phase moves this counter by a median of +0.15/s, i.e. not at all — so the reason for the
+        // slack is gone. 30 keeps the same margin over the observed peak that Shell and Orders
+        // carry, and matches `chart_render_per_chart` under the storm.
         check_max(
             &mut fail,
             "idle_chart_render_avg_per_chart",
             bench.per_chart(idle.avg_rate("chart_render")),
-            150.0,
+            30.0,
+        );
+        // The stuck-flash gate the storm ceiling could not express, now that the numbers exist.
+        //
+        // A lit flash asks for a present every 100 ms, so a canvas that never expires one averages
+        // 10/s for the whole window. One REAL arrival is 2.6 s of a 5 s window — 5.2/s — and is
+        // legitimate. Ten recorded idle windows saw a real arrival exactly zero times, so 7 sits
+        // above the legitimate case, below the stuck one, and far above anything measured.
+        //
+        // On the AVERAGE, deliberately: what separates a burst from a permanent floor is duration,
+        // not rate. A flash stuck at its design rate has a perfectly normal peak.
+        check_max(
+            &mut fail,
+            "idle_chart_arrival_pulse_avg_per_chart",
+            bench.per_chart(idle.avg_rate("chart_arrival_pulse")),
+            7.0,
         );
 
-        check_min(
-            &mut fail,
-            "firetest_mouse_sent",
-            avg_rate("firetest_mouse_sent"),
-            1000.0,
-        );
-        check_min(
-            &mut fail,
-            "chart_mouse_move",
-            avg_rate("chart_mouse_move"),
-            chart_mouse_min,
-        );
-        let chart_mouse = avg_rate("chart_mouse_move");
-        let fast_mouse = avg_rate("chart_mouse_move_fast");
-        if chart_mouse > 1.0 {
-            check_min(
-                &mut fail,
-                "chart_mouse_fast_coverage",
-                fast_mouse / chart_mouse,
-                0.90,
-            );
-        }
-        check_max(
-            &mut fail,
-            "chart_mouse_move_entity",
-            max_rate("chart_mouse_move_entity"),
-            5.0,
-        );
-        // Each storm scored against the baseline separately and through the same function, so one
-        // phase cannot quietly carry a ceiling the other lacks. Scoring them jointly used to charge
-        // the static-text phase's draw cost — 10k retained labels — to "cursor-only mousemove".
+        // Every storm through the SAME three functions, so a phase cannot quietly carry a ceiling
+        // another lacks — the drift that once left the static-text phase with no draw or bake
+        // ceiling at all, i.e. blind to exactly what it exists to catch.
         //
-        // Both get the SAME ceilings: the per-present ratios below are what makes that possible.
-        // The text layer's cost showed up as more frames, not as more work per frame, so once the
-        // frame count is divided out there is nothing left to make an allowance for.
-        check_storm(&mut fail, "", &clean_storm, &baseline, bench);
-        check_storm(
-            &mut fail,
-            "static_text_",
-            &static_text_storm,
-            &baseline,
-            bench,
-        );
-        check_max(
-            &mut fail,
-            "chart_input_notify",
-            max_rate("chart_input_notify"),
-            5.0,
-        );
-        check_max(
-            &mut fail,
-            "chart_canvas_notify",
-            max_rate("chart_canvas_notify"),
-            5.0,
-        );
+        // Per storm, never joined: joined was a real attribution bug. The static-text phase hangs
+        // 10k retained labels on the chart, so its rates rise for a reason that has nothing to do
+        // with the cursor, and averaging the phases charged that cost to "cursor-only mousemove".
+        // Every ceiling below survives the split because the per-present ratios divide the frame
+        // count out.
+        for (prefix, phase) in [
+            ("", &clean_storm),
+            ("static_text_", &static_text_storm),
+            ("flash_storm_", &flash_storm),
+        ] {
+            check_storm_input(&mut fail, prefix, phase);
+            check_storm(&mut fail, prefix, phase, &baseline, bench);
+            check_storm_load(&mut fail, prefix, phase, &baseline);
+        }
         if self.config.text_labels > 0 {
+            // The one gate that belongs to a single phase: only the text storm has a text layer.
             check_max(
                 &mut fail,
                 "firetest_text_cold",
-                max_rate("firetest_text_cold"),
+                static_text_max_rate("firetest_text_cold"),
                 100.0,
             );
-            check_min(
-                &mut fail,
-                "static_text_firetest_mouse_sent",
-                static_text_avg_rate("firetest_mouse_sent"),
-                1000.0,
-            );
-            check_min(
-                &mut fail,
-                "static_text_chart_mouse_move",
-                static_text_avg_rate("chart_mouse_move"),
-                static_text_chart_mouse_min,
-            );
-            let static_text_chart_mouse = static_text_avg_rate("chart_mouse_move");
-            let static_text_fast_mouse = static_text_avg_rate("chart_mouse_move_fast");
-            if static_text_chart_mouse > 1.0 {
-                check_min(
-                    &mut fail,
-                    "static_text_chart_mouse_fast_coverage",
-                    static_text_fast_mouse / static_text_chart_mouse,
-                    0.90,
-                );
-            }
-            check_max(
-                &mut fail,
-                "static_text_chart_mouse_move_entity",
-                static_text_max_rate("chart_mouse_move_entity"),
-                5.0,
-            );
-            check_max(
-                &mut fail,
-                "static_text_chart_input_notify",
-                static_text_max_rate("chart_input_notify"),
-                5.0,
-            );
-            check_max(
-                &mut fail,
-                "static_text_chart_canvas_notify",
-                static_text_max_rate("chart_canvas_notify"),
-                5.0,
-            );
-            check_max(
-                &mut fail,
-                "static_text_cpu_process_avg",
-                static_text_avg_cpu,
-                25.0,
-            );
-            check_max(
-                &mut fail,
-                "static_text_cpu_process_delta",
-                static_text_cpu_delta,
-                12.0,
-            );
-            check_max(
-                &mut fail,
-                "static_text_cpu_process_max",
-                static_text_max_cpu,
-                40.0,
-            );
-            if static_text_max_gpu_process > 0.1 {
-                check_max(
-                    &mut fail,
-                    "static_text_gpu_process_avg",
-                    static_text_avg_gpu_process,
-                    35.0,
-                );
-                check_max(
-                    &mut fail,
-                    "static_text_gpu_process_delta",
-                    static_text_gpu_process_delta,
-                    25.0,
-                );
-                check_max(
-                    &mut fail,
-                    "static_text_gpu_process_max",
-                    static_text_max_gpu_process,
-                    70.0,
-                );
-            }
-            if static_text_max_gpu_frame_ms > 0.01 {
-                check_max(
-                    &mut fail,
-                    "static_text_gpu_frame_ms_avg",
-                    static_text_avg_gpu_frame_ms,
-                    6.0,
-                );
-                check_max(
-                    &mut fail,
-                    "static_text_gpu_frame_ms_max",
-                    static_text_max_gpu_frame_ms,
-                    16.0,
-                );
-            }
-        }
-        check_max(&mut fail, "cpu_process_avg", avg_cpu, 25.0);
-        check_max(&mut fail, "cpu_process_delta", cpu_delta, 12.0);
-        check_max(&mut fail, "cpu_process_max", max_cpu, 40.0);
-        if max_gpu_process > 0.1 {
-            check_max(&mut fail, "gpu_process_avg", avg_gpu_process, 35.0);
-            check_max(&mut fail, "gpu_process_delta", gpu_process_delta, 25.0);
-            check_max(&mut fail, "gpu_process_max", max_gpu_process, 70.0);
-        }
-        if max_gpu_frame_ms > 0.01 {
-            check_max(&mut fail, "gpu_frame_ms_avg", avg_gpu_frame_ms, 6.0);
-            check_max(&mut fail, "gpu_frame_ms_max", max_gpu_frame_ms, 16.0);
         }
         // Memory growth is reported below but not gated: a live multi-core config legitimately
         // grows by gigabytes during the smoke run as cores stream balance snapshots, candles, and
@@ -457,6 +365,102 @@ impl Runtime {
         ));
         std::process::exit(2);
     }
+}
+
+/// Report what the arrival flash cost, against the idle floor that ran under the same conditions.
+///
+/// Still a REPORT, not a ceiling, and now for a measured reason rather than an absent one. Ten
+/// pooled runs (2026-08-08) put the flash's cost at roughly +10 presents/s per flashing chart —
+/// exactly the 10 Hz the own-pass paces it at — while `chart_render` moved by a median +0.15/s and
+/// the per-frame own-pass work went DOWN (`bg_draw` 0.74 -> 0.59 per present: the extra frames
+/// reuse the base cache). So the flash costs frames, not work per frame, and a ceiling here would
+/// gate the pacing constant rather than a regression. What would earn one is a rate that is not
+/// 10 Hz per chart — and `pulse_per_chart` below already says that number out loud.
+///
+/// What it DOES fail on is the phase not measuring what it claims: with the flash enabled it must
+/// actually have pulsed, and with `MOON_ARRIVAL_FLASH=0` it must not have pulsed at all. Both are
+/// oracles independent of the code under test — one says the A ran, the other says the B really was
+/// a B — and without them a run with a broken hook would pool in as "the flash is free".
+///
+/// Returns the failure reason, or `None` when the phase is sound.
+fn report_arrival_flash(
+    samples: &[Sample],
+    idle: &PhaseStats,
+    bench: BenchShape,
+    flash_charts: Option<usize>,
+) -> Option<String> {
+    let flash = PhaseStats::of(samples, Phase::ArrivalFlash);
+    if flash.is_empty() {
+        return Some("no arrival flash diag samples".into());
+    }
+    // Each phase divided by ITS OWN chart count, not both by the bench shape. The shape is captured
+    // when the idle floor ends, and live detects open charts after that: measured over ten runs,
+    // four grew during the flash window and one went 1 → 4, which reported that phase's per-chart
+    // rates up to four times too high. Falls back to the bench only if the stage never reported.
+    let flash_charts = flash_charts.unwrap_or(bench.charts).max(1);
+    let per_flash_chart = |rate: f64| rate / flash_charts as f64;
+
+    // Per chart for the LEVELS — a five-chart layout flashes five borders — and per present for
+    // the own-pass work, for the same reason the storm is scored that way: how many frames happened
+    // is the bench, what each frame cost is the code. Both printed, because the flash is expected
+    // to move the first and the whole question is whether it also moves the second.
+    let pair = |label: &str| {
+        format!(
+            "{:.1}->{:.1}",
+            bench.per_chart(idle.avg_rate(label)),
+            per_flash_chart(flash.avg_rate(label))
+        )
+    };
+    let frame_pair = |label: &str| {
+        format!(
+            "{:.2}->{:.2}",
+            per_present(idle, label),
+            per_present(&flash, label)
+        )
+    };
+
+    let pulse_avg = per_flash_chart(flash.avg_rate("chart_arrival_pulse"));
+    let pulse_max = per_flash_chart(flash.max_rate("chart_arrival_pulse"));
+    firetest_info(&format!(
+        "[firetest] arrival_flash idle->flash charts={}->{flash_charts} per_chart present={} chart_render={} shell_render={} per_frame bg_draw={} grid_draw={} base_bake={} combo_bake={} userdata_draw={} gpu_prepare={} cpu={:.1}->{:.1}% cpu_max={:.1}->{:.1}% gpu_frame_ms={:.3}->{:.3} pulse_per_chart={pulse_avg:.1}/{pulse_max:.1} samples={}->{}",
+        bench.charts,
+        pair("chart_present"),
+        pair("chart_render"),
+        pair("shell_render"),
+        frame_pair("bg_draw"),
+        frame_pair("grid_draw"),
+        frame_pair("base_bake"),
+        frame_pair("combo_bake"),
+        frame_pair("userdata_draw"),
+        frame_pair("chart_gpu_prepare"),
+        idle.avg_cpu(),
+        flash.avg_cpu(),
+        idle.max_cpu(),
+        flash.max_cpu(),
+        idle.avg_gpu_frame_ms(),
+        flash.avg_gpu_frame_ms(),
+        idle.len(),
+        flash.len(),
+    ));
+
+    if crate::chartdx::arrival_flash_enabled() {
+        // A lit flash bumps the counter once per `ARRIVAL_PULSE_TICK`, i.e. 10/s per canvas. The
+        // floor is half that rather than 10: the first and last sampled seconds are partial, and a
+        // present the pacer skipped is a frame not counted, neither of which is a broken hook.
+        if pulse_avg < 5.0 {
+            return Some(format!(
+                "arrival_flash pulse_per_chart {pulse_avg:.1} < 5.0: the flash never lit, so this \
+                 run measures nothing about it"
+            ));
+        }
+    } else if pulse_max > 0.0 {
+        return Some(
+            "MOON_ARRIVAL_FLASH=0 but the flash still pulsed; the control side of the comparison \
+             is not a control"
+                .into(),
+        );
+    }
+    None
 }
 
 /// The floor for chart mouse-move throughput, derived from how fast the chart is presenting.
@@ -615,6 +619,116 @@ fn check_storm(
             &named(&format!("{label}_per_frame")),
             per_frame(label),
             abs_max,
+        );
+    }
+}
+
+/// One phase's rate for a counter, divided by the frames it happened over.
+///
+/// The only honest way to compare own-pass counters across phases that present at different rates:
+/// a raw rate mixes "how many frames" with "what each frame cost", and only the second is about the
+/// code. Zero when the phase barely presented, so a near-empty phase cannot report a huge ratio.
+fn per_present(stats: &PhaseStats, label: &str) -> f64 {
+    let present = stats.avg_rate("chart_present");
+    if present < 1.0 {
+        0.0
+    } else {
+        stats.avg_rate(label) / present
+    }
+}
+
+/// The input-path contract every storm phase carries: the storm really happened, the chart saw it
+/// on the fast path, and none of it woke the entity layer.
+///
+/// One function for every storm, so a phase added later cannot arrive without these. The wake
+/// counters are the narrow oracle — they read 0 on a healthy run — and `check_storm`'s per-frame
+/// ratios are the backstop for a wake arriving by another route.
+fn check_storm_input(fail: &mut Vec<String>, prefix: &str, storm: &PhaseStats) {
+    let named = |name: &str| format!("{prefix}{name}");
+    check_min(
+        fail,
+        &named("firetest_mouse_sent"),
+        storm.avg_rate("firetest_mouse_sent"),
+        1000.0,
+    );
+    let chart_mouse = storm.avg_rate("chart_mouse_move");
+    check_min(
+        fail,
+        &named("chart_mouse_move"),
+        chart_mouse,
+        chart_mouse_min_hz(storm.avg_rate("chart_present")),
+    );
+    // Guarded: with no mouse moves at all the ratio is 0/0, and the floor above already reported
+    // the real problem — a second failure naming coverage would point at the wrong thing.
+    if chart_mouse > 1.0 {
+        check_min(
+            fail,
+            &named("chart_mouse_fast_coverage"),
+            storm.avg_rate("chart_mouse_move_fast") / chart_mouse,
+            0.90,
+        );
+    }
+    for label in [
+        "chart_mouse_move_entity",
+        "chart_input_notify",
+        "chart_canvas_notify",
+    ] {
+        check_max(fail, &named(label), storm.max_rate(label), 5.0);
+    }
+}
+
+/// The process-load contract every storm phase carries: CPU, process GPU and GPU frame time.
+///
+/// The deltas are against the baseline's average, which is the same hot chart without a cursor, so
+/// a busy market cannot produce them on its own. GPU checks are skipped when the platform reports
+/// nothing rather than asserting on a fabricated zero.
+fn check_storm_load(
+    fail: &mut Vec<String>,
+    prefix: &str,
+    storm: &PhaseStats,
+    baseline: &PhaseStats,
+) {
+    let named = |name: &str| format!("{prefix}{name}");
+    check_max(fail, &named("cpu_process_avg"), storm.avg_cpu(), 25.0);
+    check_max(
+        fail,
+        &named("cpu_process_delta"),
+        (storm.avg_cpu() - baseline.avg_cpu()).max(0.0),
+        12.0,
+    );
+    check_max(fail, &named("cpu_process_max"), storm.max_cpu(), 40.0);
+    if storm.max_gpu_process() > 0.1 {
+        check_max(
+            fail,
+            &named("gpu_process_avg"),
+            storm.avg_gpu_process(),
+            35.0,
+        );
+        check_max(
+            fail,
+            &named("gpu_process_delta"),
+            (storm.avg_gpu_process() - baseline.avg_gpu_process()).max(0.0),
+            25.0,
+        );
+        check_max(
+            fail,
+            &named("gpu_process_max"),
+            storm.max_gpu_process(),
+            70.0,
+        );
+    }
+    if storm.max_gpu_frame_ms() > 0.01 {
+        check_max(
+            fail,
+            &named("gpu_frame_ms_avg"),
+            storm.avg_gpu_frame_ms(),
+            6.0,
+        );
+        check_max(
+            fail,
+            &named("gpu_frame_ms_max"),
+            storm.max_gpu_frame_ms(),
+            16.0,
         );
     }
 }
