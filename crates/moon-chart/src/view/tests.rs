@@ -247,7 +247,10 @@ fn a_narrowed_pane_cannot_push_the_live_edge_off_screen() {
     let mut view = panned_to_the_future_limit(NOW, WIDTH);
 
     let narrowed = WIDTH * 0.5;
-    assert!(view.clamp_future_anchor(NOW, narrowed), "nothing was clamped");
+    assert!(
+        view.clamp_future_anchor(NOW, narrowed),
+        "nothing was clamped"
+    );
 
     let x_now = live_edge_px(&view, NOW, narrowed);
     assert!(

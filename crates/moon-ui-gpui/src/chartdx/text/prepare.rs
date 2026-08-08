@@ -430,7 +430,9 @@ impl RenderState {
                 // `Price` or a `PctDelta`, while a scale's level arrives already formatted as
                 // `Ready`. Naming the hover kinds one by one was tried and was wrong the moment a
                 // second one existed; this asks the positive question instead.
-                if label.permanent && !self.line_labels && matches!(label.text, FigLabelValue::Ready(_))
+                if label.permanent
+                    && !self.line_labels
+                    && matches!(label.text, FigLabelValue::Ready(_))
                 {
                     continue;
                 }

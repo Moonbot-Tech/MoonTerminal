@@ -196,9 +196,9 @@ pub fn encode(
             out.extend_from_slice(&f.a.to_le_bytes()); // @48
             out.extend_from_slice(&f.b.to_le_bytes()); // @56
             out.extend_from_slice(&unix_ms_to_tdatetime(f.time_ms).to_le_bytes()); // @64
-            // @72, @80 and @88 are zero in every sample, including across samples whose geometry
-            // differs, so they are written back as the constants they were read as rather than
-            // guessed at.
+                                                                                   // @72, @80 and @88 are zero in every sample, including across samples whose geometry
+                                                                                   // differs, so they are written back as the constants they were read as rather than
+                                                                                   // guessed at.
             out.extend_from_slice(&0f64.to_le_bytes());
             out.extend_from_slice(&0f64.to_le_bytes());
             out.push(0u8);

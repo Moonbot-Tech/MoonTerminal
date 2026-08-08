@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use moon_core::alert_blob;
 use moon_core::figures::{
-    DrawStyle, Figure, FigureKey, FigureTool, ToolSetting, ToolSettings, DEFAULT_FILL_ALPHA,
+    DEFAULT_FILL_ALPHA, DrawStyle, Figure, FigureKey, FigureTool, ToolSetting, ToolSettings,
 };
 use moon_core::session::CoreId;
 
@@ -121,7 +121,12 @@ impl Backend {
         let Some((core, market, id)) = self.fig_selected.clone() else {
             return false;
         };
-        let Some(armed) = self.figures.borrow().get(core, &market, id).map(|f| f.alert) else {
+        let Some(armed) = self
+            .figures
+            .borrow()
+            .get(core, &market, id)
+            .map(|f| f.alert)
+        else {
             return false;
         };
         self.set_figure_alert(core, &market, id, !armed)
@@ -184,7 +189,9 @@ impl Backend {
             return false;
         }
         let sent = match (on, upsert_blob) {
-            (true, Some(blob)) => self.session.chart_alert_upsert(core, market.clone(), id, blob),
+            (true, Some(blob)) => self
+                .session
+                .chart_alert_upsert(core, market.clone(), id, blob),
             (false, _) => self.session.chart_alert_delete(core, market.clone(), id),
             // Arming produced no blob: a tool the encoder has no chart-object type for. Nothing was
             // sent and nothing can be, so the flag it just set is a lie and rolls back below.

@@ -11,12 +11,8 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     let chart_tabs_mod = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
     let chart_tabs_windows =
         fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
-    let chart_detached_host = fs::read_to_string(
-        root.join("chart_tabs")
-            .join("detached_host")
-            .join("mod.rs"),
-    )
-    .unwrap();
+    let chart_detached_host =
+        fs::read_to_string(root.join("chart_tabs").join("detached_host").join("mod.rs")).unwrap();
 
     assert!(
         windowing.contains("fn detached_panel_window_options(")
@@ -118,12 +114,8 @@ fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let monitor =
         fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
-    let chart_detached_host = fs::read_to_string(
-        root.join("chart_tabs")
-            .join("detached_host")
-            .join("mod.rs"),
-    )
-    .unwrap();
+    let chart_detached_host =
+        fs::read_to_string(root.join("chart_tabs").join("detached_host").join("mod.rs")).unwrap();
 
     // Comments stripped: both constructors document the re-arm by naming the exact helper and
     // `observe_window_activation`, which must not itself satisfy a check about calling them. The

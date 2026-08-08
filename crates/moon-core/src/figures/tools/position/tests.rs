@@ -1,6 +1,6 @@
 use super::*;
 use crate::figures::kind::FigureKind;
-use crate::figures::tools::tests::{TestProj, build, ctx};
+use crate::figures::tools::tests::{build, ctx, TestProj};
 
 /// A long: opened at 100, taken at 120, and — by default — cut at 90.
 fn long() -> Position {
@@ -20,7 +20,10 @@ fn two_clicks_place_a_stop_at_two_to_one() {
     assert_eq!((p.entry, p.target), (100.0, 120.0));
     assert_eq!(p.stop, 90.0);
     assert_eq!(p.risk_reward(), Some(2.0));
-    assert_eq!((p.t0_ms, p.t1_ms), (TestProj::T0_MS, TestProj::T0_MS + 10_000.0));
+    assert_eq!(
+        (p.t0_ms, p.t1_ms),
+        (TestProj::T0_MS, TestProj::T0_MS + 10_000.0)
+    );
 }
 
 /// The same two clicks the other way round are a SHORT, and the stop lands above the entry.
@@ -59,7 +62,10 @@ fn the_stop_handle_moves_no_edge_in_time() {
     assert!(p.move_handle(2, FigNode::new(t_before + 99_000.0, 95.0)));
     assert_eq!(p.stop, 95.0);
     assert_eq!(p.t1_ms, t_before, "the stop must not stretch the box");
-    assert!(!p.move_handle(2, FigNode::new(0.0, 95.0)), "no change reported");
+    assert!(
+        !p.move_handle(2, FigNode::new(0.0, 95.0)),
+        "no change reported"
+    );
 }
 
 /// A stop dragged onto the entry has no ratio to state. It must answer `None` rather than divide
@@ -126,16 +132,14 @@ fn a_body_drag_keeps_the_ratio() {
 #[test]
 fn a_position_is_not_alertable() {
     assert!(!FigureTool::Position.def().alertable);
-    assert!(
-        crate::alert_blob::encode(
-            &FigureKind::Position(long()),
-            [1, 2, 3, 4],
-            1.0,
-            crate::figures::LineKind::Solid,
-            0.0,
-            0,
-            1,
-        )
-        .is_none()
-    );
+    assert!(crate::alert_blob::encode(
+        &FigureKind::Position(long()),
+        [1, 2, 3, 4],
+        1.0,
+        crate::figures::LineKind::Solid,
+        0.0,
+        0,
+        1,
+    )
+    .is_none());
 }

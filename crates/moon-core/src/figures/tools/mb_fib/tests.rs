@@ -79,7 +79,11 @@ fn unusable_levels_are_not_drawn() {
     f.levels[2] = 0.0;
     f.levels[3] = -5.0;
     let drawn: Vec<f64> = f.drawn().collect();
-    assert_eq!(drawn.len(), 4, "a NaN, a zero and a negative are not levels");
+    assert_eq!(
+        drawn.len(),
+        4,
+        "a NaN, a zero and a negative are not levels"
+    );
     assert!(drawn.iter().all(|p| p.is_finite() && *p > 0.0));
 }
 
@@ -103,7 +107,11 @@ fn stretching_one_end_holds_the_other_and_keeps_every_ratio() {
 
     // Pull the high end up; the low end must not move.
     assert!(f.move_handle(1, FigNode::new(0.0, high + 20.0)));
-    assert_eq!(f.handle(0).expect("still there").price, low, "the far end held");
+    assert_eq!(
+        f.handle(0).expect("still there").price,
+        low,
+        "the far end held"
+    );
     assert!(
         (f.handle(1).expect("still there").price - (high + 20.0)).abs() < 1e-9,
         "the dragged end landed under the cursor"
@@ -133,7 +141,10 @@ fn the_free_level_moves_by_itself() {
             assert_eq!(*now, was, "level {i} moved with it");
         }
     }
-    assert!(!f.move_handle(2, FigNode::new(0.0, to)), "no move is no change");
+    assert!(
+        !f.move_handle(2, FigNode::new(0.0, to)),
+        "no move is no change"
+    );
 }
 
 /// The whole figure still travels on a body drag, carrying every stored price.
@@ -172,7 +183,10 @@ fn a_fib_drawn_here_uses_moonbots_ratios() {
     let f = MbFib::spanning(FigNode::new(1_000.0, 100.0), FigNode::new(9_000.0, 200.0));
     assert_eq!(f.a, 100.0);
     assert_eq!(f.b, 200.0);
-    assert_eq!(f.time_ms, 1_000.0, "the time it was drawn from, not an edge");
+    assert_eq!(
+        f.time_ms, 1_000.0,
+        "the time it was drawn from, not an edge"
+    );
     for (level, ratio) in f.levels.iter().zip(MB_FIB_RATIOS) {
         assert_eq!(*level, 100.0 + ratio * 100.0);
         assert_eq!(f.ratio_of(*level), Some(ratio));
@@ -290,7 +304,10 @@ fn the_picture_matches_moonbots() {
             inner.len() + 2,
             "every level plus the two ends"
         );
-        assert!(rec.hlines.contains(&lo) && rec.hlines.contains(&hi), "the ends are drawn");
+        assert!(
+            rec.hlines.contains(&lo) && rec.hlines.contains(&hi),
+            "the ends are drawn"
+        );
         // Every readout is present: a ratio for each level, a percentage for each end.
         assert_eq!(rec.labels.len(), inner.len() + 2, "nothing is left unnamed");
 
