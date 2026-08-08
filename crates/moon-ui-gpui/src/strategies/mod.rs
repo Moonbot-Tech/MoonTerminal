@@ -74,6 +74,12 @@ pub struct StrategiesView {
     /// They appear flat in the tree's Deleted folder because their core paths no longer exist.
     deleted: HashMap<CoreId, Vec<moon_core::strat_db::stats::HeadRow>>,
     deleted_gen: u64,
+    /// Advances whenever `deleted` actually changes.
+    ///
+    /// Separate from `deleted_gen`, which moves when a load STARTS: the load is asynchronous, so its
+    /// result lands on a later frame, and a signature keyed on the generation would already have
+    /// cached the tree built without it. See [`tree::cache::data_sig`].
+    deleted_rev: u64,
     deleted_inflight: bool,
     /// Cores whose Deleted folder is expanded.
     expanded_deleted: HashSet<CoreId>,
@@ -143,6 +149,9 @@ pub struct StrategiesView {
     last_tree_shape: Option<u64>,
     /// Whether the parameters panel hides dependency-inactive fields.
     only_active_params: bool,
+    /// Previous frame's tree adapter, reused while its input signature is unchanged.
+    /// See [`tree::cache`] for why a per-frame rebuild is the wrong cost and what keeps it honest.
+    tree_cache: Option<tree::cache::TreeCache>,
     /// A key `sync_pending_select` resolved off-frame, waiting for render to scroll to it.
     ///
     /// Selection alone does not bring a row on screen: only `MoonTreeState::scroll_to_item`
@@ -154,6 +163,7 @@ pub struct StrategiesView {
 impl Render for StrategiesView {
     /// Renders the window and uses a structural signature to avoid redundant MoonTree pushes.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::diag::bump(&crate::diag::STRAT_RENDER);
         // Drain navigation from an order-line context menu or Orders Strat click before building
         // the tree so filter, expansion, and selection changes appear in this frame.
         // A reveal by name may precede the core echo that assigns its id. Both immediate and
@@ -172,22 +182,60 @@ impl Render for StrategiesView {
         };
 
         // Build the owned MoonTree adapter without leaking a store borrow, then synchronize state.
-        let build = {
+        //
+        // Only when the data behind it moved: a hover highlight repaints this window at monitor
+        // rate, and rebuilding the whole adapter for it measured 1.0-1.3 ms per frame on a live
+        // account. `tree::cache` owns the signature and the argument for why it is complete.
+        let tree_timer = crate::diag::timer();
+        let sig = {
             let store = self.backend.read(cx).session.store();
-            tree::moon::build(self, store, &cores)
+            tree::cache::data_sig(self, store, &cores)
         };
-        self.flat_order = build.flat;
-        let searching = build.searching;
-        // Push the forest into MoonTree only when its shape actually changed.
-        let shape = tree::moon::shape_sig(&build.items, &build.expanded_ids, searching);
-        if self.last_tree_shape != Some(shape) {
-            self.last_tree_shape = Some(shape);
-            self.tree_state.update(cx, |st, c| {
-                st.set_items(build.items, c);
-                st.set_force_expanded(searching, c);
-                st.set_expanded(build.expanded_ids, c);
-            });
-        }
+        let cached = self.tree_cache.as_ref().and_then(|c| c.get(sig));
+        let node_data = match cached {
+            // `flat_order` is not restored: this frame is the only writer, so it already holds the
+            // order that belongs to this very `node_data`.
+            Some(node_data) => node_data,
+            None => {
+                crate::diag::bump(&crate::diag::STRAT_TREE_BUILD);
+                // Attribute the miss before the entry is replaced: on a busy account this is the
+                // difference between "the cores moved" and "the signature churns".
+                if let Some((store_moved, view_moved)) =
+                    self.tree_cache.as_ref().map(|c| c.moved(sig))
+                {
+                    if store_moved {
+                        crate::diag::bump(&crate::diag::STRAT_SIG_STORE);
+                    }
+                    if view_moved {
+                        crate::diag::bump(&crate::diag::STRAT_SIG_VIEW);
+                    }
+                }
+                let build = {
+                    let store = self.backend.read(cx).session.store();
+                    tree::moon::build(self, store, &cores)
+                };
+                crate::diag::bump_by(&crate::diag::STRAT_TREE_NODES, build.node_data.len() as u64);
+                let searching = build.searching;
+                self.flat_order = build.flat;
+                // Push the forest into MoonTree only when its shape actually changed. A miss does
+                // not imply a new shape: staging a checkbox or selecting a row changes row CONTENT,
+                // which the signature must see and the forest must not be rebuilt for.
+                let shape = tree::moon::shape_sig(&build.items, &build.expanded_ids, searching);
+                if self.last_tree_shape != Some(shape) {
+                    self.last_tree_shape = Some(shape);
+                    crate::diag::bump(&crate::diag::STRAT_TREE_PUSH);
+                    self.tree_state.update(cx, |st, c| {
+                        st.set_items(build.items, c);
+                        st.set_force_expanded(searching, c);
+                        st.set_expanded(build.expanded_ids, c);
+                    });
+                }
+                let node_data = std::rc::Rc::new(build.node_data);
+                self.tree_cache = Some(tree::cache::TreeCache::store(sig, node_data.clone()));
+                node_data
+            }
+        };
+        crate::diag::record_us(&crate::diag::STRAT_TREE_US, tree_timer);
         // Navigate by temporarily selecting the MoonTree item to obtain its index and scroll to
         // it, then clear that selection because `sel` renders the highlight. Independent of the
         // push above: an unchanged shape means MoonTree already holds the forest to resolve
@@ -202,23 +250,38 @@ impl Render for StrategiesView {
                 st.set_selected_item(None, c);
             });
         }
-        let node_data = std::rc::Rc::new(build.node_data);
 
         // Prepare the Versions panel and deleted-strategy cache before borrowing the store because
         // they can spawn background loads.
+        //
+        // Each pane is timed on its own: a mouse-over repaints this whole window, so the question
+        // "which pane does that cost" has to be answerable without a second measuring run.
+        let t = crate::diag::timer();
         self.ensure_deleted(cx);
         let versions = self.versions_panel(cx);
+        crate::diag::record_us(&crate::diag::STRAT_VERSIONS_US, t);
         let (tree, sections, params_model) = {
             let store = self.backend.read(cx).session.store();
-            // Both panels read the same dependency values; build them once.
+            let t = crate::diag::timer();
+            let tree = self.tree_panel(store, &cores, node_data, cx);
+            crate::diag::record_us(&crate::diag::STRAT_TREEPANE_US, t);
+            // Both panels read the same dependency values; build them once. The computed halves are
+            // timed apart from the element trees because only they could be cached the way the tree
+            // adapter is — see `strat_model_us`.
+            let t = crate::diag::timer();
             let values = selected_values(self, store);
-            (
-                self.tree_panel(store, &cores, node_data, cx),
-                self.sections_panel(store, &values, cx),
-                self.params_model(store, values),
-            )
+            crate::diag::record_us(&crate::diag::STRAT_MODEL_US, t);
+            let t = crate::diag::timer();
+            let sections = self.sections_panel(store, &values, cx);
+            crate::diag::record_us(&crate::diag::STRAT_SECTIONS_US, t);
+            let t = crate::diag::timer();
+            let params_model = self.params_model(store, values);
+            crate::diag::record_us(&crate::diag::STRAT_MODEL_US, t);
+            (tree, sections, params_model)
         };
+        let t = crate::diag::timer();
         let params = self.params_panel(params_model, window, cx);
+        crate::diag::record_us(&crate::diag::STRAT_PARAMS_US, t);
         let split_tree = self.panel_splitter(PanelSplit::Tree, cx);
         let split_versions =
             (!self.versions.collapsed).then(|| self.panel_splitter(PanelSplit::Versions, cx));

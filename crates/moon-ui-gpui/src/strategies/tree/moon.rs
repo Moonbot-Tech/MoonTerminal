@@ -564,9 +564,11 @@ fn render_row(
     app: &mut App,
 ) -> AnyElement {
     let _ = meta;
+    crate::diag::bump(&crate::diag::STRAT_ROW_RENDER);
     let p = MoonPalette::active(app);
     let depth = entry.depth();
     let indent = design::ui_px(app, 6.0 + 12.0 * depth as f32);
+    let node_id = entry.item().id().clone();
     let Some(node) = data.get(entry.item().id()) else {
         return div().into_any_element();
     };
@@ -587,6 +589,7 @@ fn render_row(
             };
             core_folder_row(
                 view,
+                node_id,
                 entry.is_expanded(),
                 false,
                 indent,
@@ -610,6 +613,7 @@ fn render_row(
             let txt = format!("{label}  {active}/{total}");
             core_folder_row(
                 view,
+                node_id,
                 entry.is_expanded(),
                 *selected,
                 indent,
@@ -649,6 +653,7 @@ fn render_row(
             let core = *core;
             core_folder_row(
                 view,
+                node_id,
                 entry.is_expanded(),
                 false,
                 indent,
@@ -695,6 +700,7 @@ enum ToggleTarget {
 ///
 /// Args:
 ///     view: Strategies view updated by row interactions.
+///     row_id: The node's own tree id, used verbatim as this row's `ElementId`.
 ///     expanded: Whether the heading's children are visible.
 ///     selected: Whether to draw the selected-folder highlight.
 ///     indent: Leading indentation for the tree depth.
@@ -708,6 +714,7 @@ enum ToggleTarget {
 ///     The complete interactive tree row.
 fn core_folder_row(
     view: &Entity<StrategiesView>,
+    row_id: SharedString,
     expanded: bool,
     selected: bool,
     indent: Pixels,
@@ -727,7 +734,12 @@ fn core_folder_row(
     let view_click = view.clone();
     let view_menu = view.clone();
     h_flex()
-        .id(SharedString::from(format!("strat-tree-cf-{text}")))
+        // The node's own id, NEVER the rendered text. GPUI keeps `pending_mouse_down` in element
+        // state looked up by `ElementId`, so an id derived from the caption ("core  3/10  (2)")
+        // becomes a DIFFERENT element the moment a counter moves — and a repaint between press and
+        // release, which a trading core produces constantly, silently discards the click. That was
+        // the "clicking a folder sometimes does not expand it" defect.
+        .id(row_id)
         .w_full()
         .h(design::fit_h_px(app, 23.0, 14.0, 4.5))
         .pl(indent)

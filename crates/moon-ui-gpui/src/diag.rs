@@ -186,7 +186,85 @@ diag_counters!(
     LOG_REFILTER => "log_refilter",
     LOG_RELOAD => "log_reload",
     LOG_WORK_US => "log_work_us",
+    // Strategies window. Its cost is invisible from the outside for the same reason the Log panel's
+    // was: everything happens inside `render`, so the only symptom is process CPU. Two different
+    // repaints reach this window and they cost wildly different amounts, which is why they are
+    // counted apart:
+    //
+    //   * `strat_render` — whole-window renders of `StrategiesView`. EVERY one of these rebuilds the
+    //     tree adapter, the versions pane, the schema sections and the parameter model from scratch.
+    //     A mouse press refreshes the window unconditionally (GPUI `div.rs` arms `window.refresh()`
+    //     on mouse-down), and a backend revision notifies it, so a few per second while the user
+    //     works is expected; a steady rate with nobody touching the window is not.
+    //   * `strat_row_render` — individual tree ROW renders, driven by MoonTree's own repaint. Hover
+    //     moves between rows notify the tree state only, so these can run hot while `strat_render`
+    //     stays flat. Divide by the number of visible rows (roughly the tree's height in rows) to
+    //     read it as a tree repaint rate. This is the counter that says whether moving the mouse
+    //     costs the whole window or just the list.
+    //   * `strat_tree_us` — microseconds per second on the tree adapter, covering BOTH the cache
+    //     signature every frame pays and the rebuild only a miss does. Divide by `strat_render` for
+    //     the per-frame cost, and read it together with `strat_tree_build` below.
+    //   * `strat_tree_build` — actual rebuilds, i.e. cache MISSES. `strat_tree_build / strat_render`
+    //     is the miss rate: near 1 means the cache never helps and some input churns every frame,
+    //     which is a defect in the signature rather than in the tree. Data changes at most a few
+    //     times a second, so a mouse sweep should show a handful of builds against ~85 renders.
+    //   * `strat_tree_nodes` — nodes put into the side map per second, counted ONLY on a rebuild.
+    //     Divided by `strat_tree_build` (not by `strat_render`) it gives the visible node count,
+    //     which is what makes the rebuild cost interpretable: 400 µs over 3000 expanded rows is a
+    //     different verdict than 400 µs over 12.
+    //   * `strat_tree_push` — forest pushes actually handed to MoonTree, after the shape-signature
+    //     gate. Each one deep-clones the item forest twice inside MoonTree, so this should stay near
+    //     zero while only data changes; tracking `strat_render` means the gate is defeated.
+    //
+    // The remaining four split the element tree by pane, because the first measurement showed the
+    // panes costing three times what the tree adapter does — and a single figure for "the panes"
+    // cannot say which of them to fix. Together they account for everything after the adapter:
+    //
+    //   * `strat_sig_store` / `strat_sig_view` — which HALF of the tree signature moved on a miss:
+    //     the cores (strategy snapshots, open-order counts) or the user (filter, expansion,
+    //     selection, staging). They answer the only question a bare miss rate raises. `store`
+    //     climbing while nobody touches the window means an input churns faster than the tree it
+    //     describes actually changes — a signature defect, not a data one.
+    //   * `strat_versions_us` — the versions pane plus the gated deleted/version cache checks that
+    //     run just before it.
+    //   * `strat_treepane_us` — the LEFT pane's own element tree: search box, kind and direction
+    //     combos, the create dropdown and the action bar. It contains `kinds_present`, a second full
+    //     walk over every core's strategies, so it is not the cheap half it looks like.
+    //   * `strat_sections_us` / `strat_params_us` — the schema-section list and the parameter rows.
+    //   * `strat_model_us` — the COMPUTED half of those two: dependency values and the parameter
+    //     model, both of which are pure functions of the selection and could be cached the way the
+    //     tree is. The two above are then the element trees, which cannot: GPUI only reuses a view
+    //     it was told to cache, and these panes are functions returning elements, not views. So
+    //     this split is the go/no-go for caching them — a large `strat_model_us` is worth a cache,
+    //     a small one means the cost is in element construction and only a real view would help.
+    STRAT_RENDER => "strat_render",
+    STRAT_ROW_RENDER => "strat_row_render",
+    STRAT_TREE_US => "strat_tree_us",
+    STRAT_TREE_BUILD => "strat_tree_build",
+    STRAT_TREE_NODES => "strat_tree_nodes",
+    STRAT_TREE_PUSH => "strat_tree_push",
+    STRAT_SIG_STORE => "strat_sig_store",
+    STRAT_SIG_VIEW => "strat_sig_view",
+    STRAT_VERSIONS_US => "strat_versions_us",
+    STRAT_TREEPANE_US => "strat_treepane_us",
+    STRAT_SECTIONS_US => "strat_sections_us",
+    STRAT_PARAMS_US => "strat_params_us",
+    STRAT_MODEL_US => "strat_model_us",
 );
+
+/// Starts a stopwatch, but only when diagnostics are on.
+///
+/// Lazy on purpose: an ordinary run pays one relaxed atomic load and never reads the clock.
+pub fn timer() -> Option<std::time::Instant> {
+    is_enabled().then(std::time::Instant::now)
+}
+
+/// Adds a stopwatch's elapsed time to a microsecond counter.
+pub fn record_us(counter: &AtomicU64, timer: Option<std::time::Instant>) {
+    if let Some(timer) = timer {
+        bump_by(counter, timer.elapsed().as_micros() as u64);
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct DiagRate {
