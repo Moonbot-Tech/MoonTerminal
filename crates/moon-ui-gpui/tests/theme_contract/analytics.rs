@@ -1905,6 +1905,49 @@ fn calendar_nav_wraps_between_its_control_groups() {
     );
 }
 
+/// Every panel that owns a core selector must adopt the Profit Monitor's broadcast core filter,
+/// and it must adopt it through the one shared rule.
+///
+/// Breakage: dropping an observer leaves that panel showing every core while its neighbours are
+/// narrowed, with nothing on screen saying why the two disagree. Bypassing `apply_core_broadcast`
+/// and assigning the broadcast directly is worse than a missing observer: Assets prunes a retained
+/// set against its own scope, so a foreign id lands as the empty set — which that panel reads as
+/// ALL cores, widening the one surface the click was meant to narrow.
+#[test]
+fn the_broadcast_core_filter_reaches_every_core_selector() {
+    for (observer, adopter, label) in [
+        ("panels/orders/mod.rs", "panels/orders/mod.rs", "Orders"),
+        ("panels/alerts/mod.rs", "panels/alerts/mod.rs", "Alerts"),
+        ("panels/assets/mod.rs", "panels/assets/mod.rs", "Assets"),
+        (
+            "panels/core_status/mod.rs",
+            "panels/core_status/interactions.rs",
+            "Core Status",
+        ),
+        (
+            "panels/report/state.rs",
+            "panels/report/actions.rs",
+            "Report",
+        ),
+    ] {
+        assert!(
+            code_only(&read_src(observer)).contains("cx.observe(&core_filter_revision"),
+            "{label} owns a core selector and must follow the broadcast core filter"
+        );
+        assert!(
+            code_only(&read_src(adopter))
+                .contains("crate::controls::apply_core_broadcast(&mut self.sel_cores"),
+            "{label} must resolve the broadcast through the shared release/ignore/intersect rule"
+        );
+    }
+    let monitor = code_only(&read_module("analytics/profit_monitor"));
+    assert!(
+        monitor.contains("backend.set_core_filter(next, backend_cx)")
+            && monitor.contains("cx.observe(&revision"),
+        "the monitor must publish the filter through Backend and repaint from the same value"
+    );
+}
+
 /// Every Profit Monitor feature added after its first release must be reachable from the ⚙ popup,
 /// persisted like the older choices, and drawn through the surfaces the rest of the terminal uses.
 ///
@@ -1940,6 +1983,7 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor_exchange_icons",
         "profit_monitor_last_trade",
         "profit_monitor_flash",
+        "profit_monitor_core_filter",
     ] {
         assert!(
             settings.matches(key).count() == 2,
@@ -1956,6 +2000,7 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor.settings.exchange_icons",
         "profit_monitor.settings.last_trade",
         "profit_monitor.settings.flash",
+        "profit_monitor.settings.core_filter",
     ] {
         assert!(
             settings.contains(key),

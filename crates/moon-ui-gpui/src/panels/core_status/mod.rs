@@ -197,6 +197,11 @@ impl CoreStatusView {
             cx.notify();
         })
         .detach();
+        let core_filter_revision = backend.read(cx).core_filter_revision();
+        cx.observe(&core_filter_revision, |this, _revision, cx| {
+            this.adopt_broadcast_core_filter(cx)
+        })
+        .detach();
 
         let widths_id = crate::persistence::table_persist::ctx_id("core-status-table", detached);
         let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
@@ -250,6 +255,9 @@ impl CoreStatusView {
             dock: None,
             focus,
         };
+        // A panel created while a filter is on air joins it, so a detached or restored tab is not
+        // the one surface still showing every core.
+        this.adopt_broadcast_core_filter(cx);
         this.rebuild_cache(cx);
         this
     }

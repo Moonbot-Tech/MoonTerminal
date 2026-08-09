@@ -180,6 +180,11 @@ impl AlertsPanel {
         let workspace_revision = backend.read(cx).workspace_revision();
         cx.observe(&workspace_revision, |this, _revision, cx| this.refresh(cx))
             .detach();
+        let core_filter_revision = backend.read(cx).core_filter_revision();
+        cx.observe(&core_filter_revision, |this, _revision, cx| {
+            this.adopt_broadcast_core_filter(cx)
+        })
+        .detach();
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |_this, _revision, cx| cx.notify())
             .detach();
@@ -231,6 +236,9 @@ impl AlertsPanel {
             this.col_order_cache = order.clone();
             this.table_state.update(cx, |s, _| s.column_order = order);
         }
+        // A panel created while a filter is on air joins it, so a detached or restored tab is not
+        // the one surface still showing every core.
+        this.adopt_broadcast_core_filter(cx);
         this.reload(cx);
         this.sync_table_sort(cx);
         this
@@ -582,6 +590,41 @@ impl AlertsPanel {
                     self.sel_cores.insert(id);
                 }
             }
+        }
+        self.refresh(cx);
+    }
+
+    /// Replace the retained Classic filter with the one the Profit Monitor broadcast.
+    ///
+    /// `apply_core_broadcast` owns the release / ignore / intersect rule shared by every adopting
+    /// panel. The retained set is written even under Auto, where it is dormant, so returning to
+    /// Classic does not resurrect a filter older than the user's last click; only the refresh is
+    /// skipped there.
+    ///
+    /// Args:
+    ///     cx: Panel context used to refresh rows.
+    ///
+    /// Returns:
+    ///     Nothing; a broadcast about other groups and an unchanged selection both refresh nothing.
+    fn adopt_broadcast_core_filter(&mut self, cx: &mut Context<Self>) {
+        let broadcast = self.backend.read(cx).core_filter().clone();
+        // Nothing published and nothing retained: leave before paying for the group's core list.
+        if broadcast.is_empty() && self.sel_cores.is_empty() {
+            return;
+        }
+        let available: Vec<CoreId> = self
+            .group_cores(self.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        if !crate::controls::apply_core_broadcast(&mut self.sel_cores, &broadcast, available) {
+            return;
+        }
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
         }
         self.refresh(cx);
     }

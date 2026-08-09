@@ -122,6 +122,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let workspace_revision = cx.new(|_| crate::workspace::WorkspaceRevision::default());
     let auto_workspace_layout_revision =
         cx.new(|_| crate::workspace::AutoWorkspaceLayoutRevision::default());
+    let core_filter_revision = cx.new(|_| crate::CoreFilterRevision);
     crate::chartdx::axes::set_display_zone(crate::chrome::clock::resolved_header_clock_zone(
         layout.header_clock_zone.as_deref(),
     ));
@@ -145,6 +146,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         display_time_revision: display_time_revision.clone(),
         workspace_revision: workspace_revision.clone(),
         auto_workspace_layout_revision: auto_workspace_layout_revision.clone(),
+        core_filter: HashSet::new(),
+        core_filter_revision,
         workspace_focus: None,
         metrics: Metrics::new(),
         snap: MetricsSnapshot::default(),

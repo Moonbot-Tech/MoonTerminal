@@ -1,5 +1,6 @@
 //! Independent, automatically refreshed desktop Profit Monitor window.
 
+mod broadcast;
 mod rows;
 mod settings;
 mod table;
@@ -733,6 +734,11 @@ impl ProfitMonitorView {
         // not. `quitting` separates them, exactly as the detached-panel windows do — during
         // shutdown the layout has already been flushed, so a release-time write here would replace
         // "the monitor was open" with "the monitor was closed" on every ordinary exit.
+        // Deliberately NOT released here: the broadcast core filter outlives this window. Closing a
+        // tool window must not silently change what five panels are showing, and the filter is not
+        // invisible without the monitor — every panel that adopted it says "N cores" in its own
+        // selector and can widen from there. The ⚙ checkbox is the one place that releases it,
+        // because switching the feature off IS a request to stop filtering.
         cx.on_release(|this, app| {
             this.taskbar_hide.cancel();
             this.backend.update(app, |backend, cx| {
@@ -805,6 +811,7 @@ impl ProfitMonitorView {
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _, cx| this.sync_context(cx))
             .detach();
+        broadcast::observe_core_filter(&backend, cx);
         let mut this = Self {
             backend,
             window_id,
@@ -1353,6 +1360,7 @@ impl ProfitMonitorView {
                     self.sort,
                     self.prefs,
                     &self.flash,
+                    self.backend.read(cx).core_filter(),
                     &self.scroll,
                     palette,
                     view,

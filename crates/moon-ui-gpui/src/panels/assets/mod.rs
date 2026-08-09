@@ -173,6 +173,11 @@ impl AssetsView {
             cx.notify();
         })
         .detach();
+        let core_filter_revision = backend.read(cx).core_filter_revision();
+        cx.observe(&core_filter_revision, |this, _revision, cx| {
+            this.adopt_broadcast_core_filter(cx)
+        })
+        .detach();
 
         // Only the global standalone window owns persisted geometry; a dock panel uses its group window.
         if windowed {
@@ -292,6 +297,9 @@ impl AssetsView {
                 );
             }
         }
+        // A group panel created while a filter is on air joins it, so a detached or restored tab is
+        // not the one surface still showing every core.
+        this.adopt_broadcast_core_filter(cx);
         let backend_for_initial_cache = this.backend.clone();
         this.rebuild_cache(backend_for_initial_cache.read(cx));
         this
@@ -489,10 +497,52 @@ impl AssetsView {
         {
             return;
         }
-        if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
-            self.sel_cores.clear();
-        } else {
-            self.sel_cores = HashSet::from([id]);
+        self.sel_cores = crate::controls::next_core_filter(&self.sel_cores, &[id], false);
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
+    }
+
+    /// Replace the retained filter with the one the Profit Monitor broadcast.
+    ///
+    /// Only a GROUP view adopts. The global Assets window is an application-wide aggregate by
+    /// design — it has no workspace scope at all, which is the fact this reads — and the broadcast
+    /// is a main-window gesture; narrowing that window from another one would take away the only
+    /// surface that answers "everything I hold, everywhere".
+    ///
+    /// The intersection matters more here than anywhere else: `rebuild_cache` prunes the retained
+    /// set against this scope on the very next line, and a set pruned empty means ALL cores — so a
+    /// raw foreign id would WIDEN Assets while narrowing its neighbours.
+    ///
+    /// Args:
+    ///     cx: View context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the global window, a broadcast about other groups, and an unchanged selection
+    ///     all rebuild nothing.
+    fn adopt_broadcast_core_filter(&mut self, cx: &mut Context<Self>) {
+        let broadcast = self.backend.read(cx).core_filter().clone();
+        // Nothing published and nothing retained: leave before paying for the scope's core list.
+        if broadcast.is_empty() && self.sel_cores.is_empty() {
+            return;
+        }
+        // An absent scope IS the global window — the same authority that makes it an
+        // application-wide aggregate everywhere else, rather than a second test for the same fact.
+        // `is_workspace_owned` reads the group's mode, not the retained set, so one resolve before
+        // the write answers both questions.
+        let Some(scope) = self.effective_scope(self.backend.read(cx)) else {
+            return;
+        };
+        let available: Vec<CoreId> = self
+            .scope_cores(self.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        if !crate::controls::apply_core_broadcast(&mut self.sel_cores, &broadcast, available) {
+            return;
+        }
+        if scope.is_workspace_owned() {
+            return;
         }
         let backend = self.backend.clone();
         self.rebuild_cache(backend.read(cx));

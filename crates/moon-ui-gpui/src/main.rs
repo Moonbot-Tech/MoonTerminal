@@ -115,6 +115,12 @@ struct Backend {
     workspace_revision: Entity<workspace::WorkspaceRevision>,
     /// Dedicated wake channel for shared Auto dock-topology and rail-width transitions.
     auto_workspace_layout_revision: Entity<workspace::AutoWorkspaceLayoutRevision>,
+    /// Cores broadcast by the Profit Monitor's core click; empty means every core, as in a panel's
+    /// own retained filter. Process-lifetime like those filters, and never serialized.
+    core_filter: HashSet<CoreId>,
+    /// Dedicated wake channel for `core_filter`, observed only by the panels that own a core
+    /// selector and by the monitor that publishes it.
+    core_filter_revision: Entity<CoreFilterRevision>,
     /// Last live Auto group to own Analytics and Strategies scope; never serialized.
     workspace_focus: Option<workspace::WorkspaceFocus>,
     metrics: Metrics,
@@ -491,6 +497,9 @@ struct MarketDataRevision;
 
 /// Notification-only entity for a changed application-wide display zone.
 struct DisplayTimeRevision;
+
+/// Notification-only entity for a changed cross-window core filter.
+struct CoreFilterRevision;
 
 fn main() -> anyhow::Result<()> {
     startup::run()
