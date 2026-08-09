@@ -1,0 +1,221 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 2` format: key → locale-to-string map. Interpolation: %{var}.
+_version: 2
+
+# --- Settings → General → Security ---
+security.title:
+  ru: "Безопасность"
+  en: "Security"
+  es: "Seguridad"
+security.preview_notice:
+  ru: "Предпросмотр: пароли пока не сохраняются"
+  en: "Preview: passwords are not stored yet"
+  es: "Vista previa: las contraseñas aún no se guardan"
+security.login_preview:
+  ru: "Окно входа"
+  en: "Login window"
+  es: "Ventana de acceso"
+security.password:
+  ru: "Пароль"
+  en: "Password"
+  es: "Contraseña"
+security.confirm:
+  ru: "Ещё раз"
+  en: "Repeat"
+  es: "Repetir"
+security.mismatch:
+  ru: "Пароли не совпадают"
+  en: "Passwords do not match"
+  es: "Las contraseñas no coinciden"
+
+# --- Launch gate ---
+security.launch:
+  ru: "Пароль при запуске"
+  en: "Password on launch"
+  es: "Contraseña al iniciar"
+security.launch_hint:
+  ru: "Локальная защёлка: спрашивается при каждом старте. Длина любая. Ключи ядер она НЕ шифрует — тот, кто имеет доступ к файлам, читает их и без неё."
+  en: "A local latch asked for at every start. Any length. It does NOT encrypt the core keys — anyone with file access still reads them."
+  es: "Un pestillo local que se pide en cada inicio. Cualquier longitud. NO cifra las claves de los núcleos: quien acceda a los archivos las lee igual."
+
+# --- servers.enc encryption password ---
+security.file:
+  ru: "Пароль шифрования servers.enc"
+  en: "servers.enc encryption password"
+  es: "Contraseña de cifrado de servers.enc"
+security.file_hint:
+  ru: "Спрашивается только там, где файл не открывается ключом машины: на новой машине или после потери хранилища ключей ОС. Введённый верно — он запоминается для этой машины, больше спрашивать не будем."
+  en: "Asked only where the file cannot be opened with the machine key: on a new machine, or after the OS keyring is lost. Once entered correctly it is remembered for this machine and not asked again."
+  es: "Se pide solo donde el archivo no se abre con la clave de la máquina: en una máquina nueva o tras perder el llavero del sistema. Una vez introducida correctamente se recuerda para esta máquina."
+security.file_warning:
+  ru: "Этот пароль восстановить нельзя. Забыв его вместе с ключом машины, ядра теряются."
+  en: "This password cannot be recovered. Losing it together with the machine key loses the cores."
+  es: "Esta contraseña no se puede recuperar. Perderla junto con la clave de la máquina significa perder los núcleos."
+security.rule:
+  ru: "Минимум %{min} символов и два разных класса символов."
+  en: "At least %{min} characters and two different character classes."
+  es: "Al menos %{min} caracteres y dos clases de caracteres distintas."
+security.bits:
+  ru: "≈%{bits} бит"
+  en: "≈%{bits} bits"
+  es: "≈%{bits} bits"
+
+# --- Strength meter ---
+security.level.empty:
+  ru: "—"
+  en: "—"
+  es: "—"
+security.level.weak:
+  ru: "Слабый"
+  en: "Weak"
+  es: "Débil"
+security.level.fair:
+  ru: "Средний"
+  en: "Fair"
+  es: "Regular"
+security.level.good:
+  ru: "Хороший"
+  en: "Good"
+  es: "Buena"
+security.level.strong:
+  ru: "Надёжный"
+  en: "Strong"
+  es: "Fuerte"
+security.issue.none:
+  ru: "Подходит"
+  en: "Accepted"
+  es: "Aceptada"
+security.issue.short:
+  ru: "Слишком короткий: нужно минимум %{min} символов"
+  en: "Too short: at least %{min} characters"
+  es: "Demasiado corta: mínimo %{min} caracteres"
+security.issue.common:
+  ru: "Содержит известное слово — подбирается целиком"
+  en: "Contains a well-known word — guessed as one chunk"
+  es: "Contiene una palabra conocida: se adivina de una vez"
+security.issue.repeats:
+  ru: "Слишком много повторов одного символа"
+  en: "Too much of it is one repeated character"
+  es: "Demasiada repetición del mismo carácter"
+security.issue.sequence:
+  ru: "Подряд идущие символы подбираются мгновенно"
+  en: "Runs of consecutive characters are guessed instantly"
+  es: "Las secuencias de caracteres consecutivos se adivinan al instante"
+security.issue.one_class:
+  ru: "Только один класс символов — добавьте цифру, заглавную или знак"
+  en: "Only one character class — add a digit, a capital, or a symbol"
+  es: "Solo una clase de caracteres: añada un dígito, una mayúscula o un símbolo"
+security.issue.low_entropy:
+  ru: "Слишком предсказуемый — сделайте длиннее и разнообразнее"
+  en: "Too predictable — make it longer and more varied"
+  es: "Demasiado predecible: hágala más larga y variada"
+
+# --- Machine key slots ---
+security.machines:
+  ru: "Машин с доступом: %{used} из %{max}"
+  en: "Machines with access: %{used} of %{max}"
+  es: "Máquinas con acceso: %{used} de %{max}"
+security.machines_unknown:
+  ru: "Машин с доступом: — из %{max}"
+  en: "Machines with access: — of %{max}"
+  es: "Máquinas con acceso: — de %{max}"
+security.forget_machines:
+  ru: "Забыть остальные"
+  en: "Forget the others"
+  es: "Olvidar las demás"
+security.machines_forgotten:
+  ru: "Доступ остальных машин отозван"
+  en: "Access revoked for the other machines"
+  es: "Acceso revocado para las demás máquinas"
+
+# --- Apply results ---
+security.applied:
+  ru: "Пароли сохранены"
+  en: "Passwords saved"
+  es: "Contraseñas guardadas"
+security.not_implemented:
+  ru: "Шифрование паролем ещё не подключено — пароль не сохранён"
+  en: "Password encryption is not wired up yet — nothing was stored"
+  es: "El cifrado por contraseña aún no está conectado: no se guardó nada"
+security.err.empty:
+  ru: "Введите пароль"
+  en: "Enter a password"
+  es: "Introduzca una contraseña"
+security.err.mismatch:
+  ru: "Пароли не совпадают"
+  en: "Passwords do not match"
+  es: "Las contraseñas no coinciden"
+security.err.weak:
+  ru: "Пароль шифрования слишком слабый"
+  en: "The encryption password is too weak"
+  es: "La contraseña de cifrado es demasiado débil"
+
+# --- Login window ---
+login.window_title:
+  ru: "MoonTerminal — Вход"
+  en: "MoonTerminal — Login"
+  es: "MoonTerminal — Acceso"
+login.title:
+  ru: "Вход"
+  en: "Login"
+  es: "Acceso"
+login.placeholder:
+  ru: "Пароль"
+  en: "Password"
+  es: "Contraseña"
+login.enter:
+  ru: "Войти"
+  en: "Enter"
+  es: "Entrar"
+login.exit:
+  ru: "Выход"
+  en: "Exit"
+  es: "Salir"
+login.start_over:
+  ru: "Начать с нуля"
+  en: "Start over"
+  es: "Empezar de cero"
+login.file_subtitle:
+  ru: "servers.enc не открывается ключом этой машины. Введите пароль шифрования — после этого машина запомнит доступ."
+  en: "servers.enc cannot be opened with this machine's key. Enter the encryption password; the machine will remember the access afterwards."
+  es: "servers.enc no se abre con la clave de esta máquina. Introduzca la contraseña de cifrado; después la máquina recordará el acceso."
+login.launch_subtitle:
+  ru: "Введите пароль запуска."
+  en: "Enter the launch password."
+  es: "Introduzca la contraseña de inicio."
+login.locked_subtitle:
+  ru: "servers.enc зашифрован ключом другой машины, а пароль шифрования на нём не задавали. Открыть файл нечем."
+  en: "servers.enc is encrypted with another machine's key and carries no encryption password. There is nothing to open it with."
+  es: "servers.enc está cifrado con la clave de otra máquina y no tiene contraseña de cifrado. No hay con qué abrirlo."
+login.throttled:
+  ru: "После нескольких ошибок ввод замедляется"
+  en: "Entry slows down after repeated failures"
+  es: "La entrada se ralentiza tras varios fallos"
+login.err.empty:
+  ru: "Введите пароль"
+  en: "Enter a password"
+  es: "Introduzca una contraseña"
+login.err.wrong:
+  ru: "Неверный пароль"
+  en: "Wrong password"
+  es: "Contraseña incorrecta"
+login.err.preview:
+  ru: "Предпросмотр: проверять пароль пока нечем"
+  en: "Preview: there is nothing to verify the password against yet"
+  es: "Vista previa: todavía no hay con qué verificar la contraseña"
+login.preview_notice:
+  ru: "Предпросмотр окна — состояния переключаются кнопками ниже"
+  en: "Window preview — switch states with the buttons below"
+  es: "Vista previa de la ventana: cambie de estado con los botones de abajo"
+login.step.file:
+  ru: "Пароль файла"
+  en: "File password"
+  es: "Contraseña del archivo"
+login.step.launch:
+  ru: "Пароль запуска"
+  en: "Launch password"
+  es: "Contraseña de inicio"
+login.step.locked:
+  ru: "Нет ключа"
+  en: "No key"
+  es: "Sin clave"

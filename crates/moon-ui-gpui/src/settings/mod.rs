@@ -20,6 +20,7 @@ mod import_preview;
 mod interface;
 mod lines;
 mod render;
+mod security;
 mod share;
 mod storage;
 
@@ -175,6 +176,8 @@ pub struct SettingsView {
     idle_last_secs: std::cell::Cell<u32>,
     /// Open MoonBot settings import preview, or `None` when closed; see [`import_preview`].
     import: Option<import_preview::ImportState>,
+    /// Launch and `servers.enc` password editors on the General tab; see [`security`].
+    security: security::SecurityEd,
 }
 
 impl SettingsView {
@@ -216,6 +219,7 @@ impl SettingsView {
         let lines = lines::build(&backend, window, cx);
         let badges = badges::build(&backend, window, cx);
         let conn = connections::build_conn(&backend, window, cx);
+        let security_ed = security::build(&backend, window, cx);
 
         // Build the General tab's personal `settings.toml` UI-font control: a labeled slider and
         // bidirectionally synchronized numeric input. Edits reinstall the MoonUI theme live so
@@ -410,6 +414,7 @@ impl SettingsView {
             last_sig: initial_sig,
             idle_last_secs: std::cell::Cell::new(0),
             import: None,
+            security: security_ed,
         }
     }
 }

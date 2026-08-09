@@ -188,6 +188,10 @@ impl SettingsView {
                 moon_core::backups::update_daily_sources(&after);
                 self.status = Some((super::StatusMsg::Key("settings.saved"), false));
                 self.apply_settings(&before, cx);
+                // Passwords are not part of `AppConfig`, so they are applied after the config
+                // write and only replace the status. A rejected password must not discard the
+                // settings the user just saved alongside it.
+                self.apply_security(cx);
             }
             Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),
         }
