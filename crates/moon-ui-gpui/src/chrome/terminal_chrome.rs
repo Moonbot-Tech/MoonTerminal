@@ -9,10 +9,12 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonMenuItem, MoonMenuSize,
     MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill,
-    MoonSelectorSegment, MoonTag, MoonWindowFrame, h_flex,
+    MoonSelectorSegment, MoonTag, MoonToggle, MoonToggleLabelSide, MoonToggleSize, MoonWindowFrame,
+    h_flex,
 };
 use rust_i18n::t;
 
+use moon_core::config::WorkspaceMode;
 use moon_core::feed::ConnStatus;
 use moon_core::session::BalanceState;
 use moon_core::util::fmt;
@@ -72,6 +74,7 @@ pub fn header(
     h_flex()
         .w_full()
         .h(design::header_height_px(cx))
+        .flex_none()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
         // One spacing rule across BOTH chrome strips — see `design::CHROME_GAP`: 8px inside a
@@ -87,9 +90,12 @@ pub fn header(
                 .flex_none()
                 .h_full(),
         )
-        // Active trade core first: the balance, the manual strategy and even the ticker are all
-        // read through it, so the control everything else depends on leads the row. Interactive
-        // widgets, so NOT a drag zone (a click would otherwise drag the window).
+        // Workspace mode is fixed chrome rather than dock content, so it remains reachable while
+        // Auto independently controls which dock operations are allowed.
+        .child(design::chrome_section(cx).child(workspace_mode_selector(group, &backend, cx)))
+        .child(design::chrome_divider(cx, p))
+        // Active trade core leads the trading context after the workspace preset. Balance, manual
+        // strategy, and ticker all read through it. Interactive widgets are never a drag zone.
         .child(
             design::chrome_section(cx)
                 .child(core_selector(
@@ -143,6 +149,7 @@ pub fn header(
                 .children(design::ticker_visible(cx, chrome_width).then(|| {
                     design::chrome_section(cx)
                         .child(ticker_readout(
+                            group.to_string(),
                             ticker_sel,
                             design::ticker_deltas_visible(cx, chrome_width),
                             &backend,
@@ -166,12 +173,66 @@ pub fn header(
         )
 }
 
+/// Build the persisted workspace-mode control as a compact Auto toggle.
+///
+/// Args:
+///     group: Group whose preset is selected.
+///     backend: Shared persisted workspace authority.
+///     cx: Application context used to read the controlled mode.
+///
+/// Returns:
+///     A compact MoonUI toggle that publishes mode changes through `WorkspaceRevision`.
+fn workspace_mode_selector(group: &str, backend: &Entity<Backend>, cx: &App) -> impl IntoElement {
+    let mode = backend.read(cx).workspace_mode(group);
+    let auto = mode == WorkspaceMode::AutoTrading;
+    let tooltip = if auto {
+        t!("workspace.mode.auto_tip").to_string()
+    } else {
+        t!("workspace.mode.classic_tip").to_string()
+    };
+    let backend = backend.clone();
+    let group = group.to_string();
+    div()
+        .id("header-workspace-mode-tip")
+        .tooltip(crate::panels::common::text_tooltip(tooltip))
+        .child(
+            MoonToggle::new("header-workspace-mode")
+                .label(t!("workspace.mode.auto").to_string())
+                .label_side(MoonToggleLabelSide::Left)
+                .checked(auto)
+                .size(MoonToggleSize::Compact)
+                .on_change(move |checked, _, cx| {
+                    let mode = if *checked {
+                        WorkspaceMode::AutoTrading
+                    } else {
+                        WorkspaceMode::Classic
+                    };
+                    backend.update(cx, |backend, backend_cx| {
+                        backend.set_workspace_mode(&group, mode, backend_cx);
+                    });
+                }),
+        )
+}
+
 /// Render the header ticker as `1 BTC = 61 333$ 1h +0.1% 24h +2.0%`.
 ///
 /// Price and signed deltas come from `MarketDataSource::market_ticker`. A click opens the market;
 /// a double-click opens the source popup hosted by [`Shell`]. When `show_deltas` is false, only the
 /// price remains.
+///
+/// Args:
+///     group: Group whose current Auto authority owns the retained ticker callback.
+///     sel: Resolved ticker core and market, or `None` for the fallback source picker.
+///     show_deltas: Whether one-hour and one-day changes fit in the current chrome width.
+///     backend: Shared market data and chart-request authority.
+///     shell: Header owner used to toggle the ticker source popup.
+///     p: Active Moon palette.
+///     cx: Application context used to read data and render scaled metrics.
+///
+/// Returns:
+///     A ticker element whose delayed chart navigation cannot bypass the Auto rail.
 fn ticker_readout(
+    group: String,
     sel: Option<(moon_core::session::CoreId, String)>,
     show_deltas: bool,
     backend: &Entity<Backend>,
@@ -278,8 +339,9 @@ fn ticker_readout(
             return;
         };
         backend.update(cx, |b, bcx| {
-            b.open_on_main((core, market), false);
-            bcx.notify();
+            if b.open_on_main_if_authorized(Some(&group), (core, market), false) {
+                bcx.notify();
+            }
         });
     })
 }
@@ -328,10 +390,12 @@ fn fit_header_core_trigger(
     (label, (label_w + chrome_w).ceil())
 }
 
-/// Build the selector for a group's active trading core.
+/// Build the active-core control for Classic or the passive Auto workspace scope indicator.
 ///
-/// The choices come from the group's cores. [`Backend::active_trade_core`] prefers a still-valid
-/// remembered selection, then the current trading target, and finally the group's first core.
+/// Classic choices come from the group's cores. [`Backend::active_trade_core`] prefers a still-valid
+/// remembered Classic selection, the current trading target, and finally the group's first core.
+/// Auto instead reads only the rail-owned workspace selection, displays Overview when it is empty,
+/// and returns a disabled caret-free pill without building a popover.
 /// The trading target can come from Main's active fullscreen chart or a locked comparison anchor
 /// in an Add or Custom tab. All toolbar and header trading controls read the same active core.
 ///
@@ -346,7 +410,8 @@ fn fit_header_core_trigger(
 ///
 /// # Returns
 ///
-/// The selector element, or a static placeholder when the group has no cores.
+/// The interactive Classic selector, passive Auto indicator, or a Classic placeholder when the
+/// group has no cores.
 fn core_selector(
     group: &str,
     backend: &Entity<Backend>,
@@ -361,11 +426,16 @@ fn core_selector(
 
     let b = backend.read(cx);
     let cores = b.group_cores(group);
-    let active = b.active_trade_core(group);
+    let auto = b.workspace_mode(group) == WorkspaceMode::AutoTrading;
+    let active = if auto {
+        b.valid_auto_workspace_core(group)
+    } else {
+        b.active_trade_core(group)
+    };
     let store = b.session.store();
 
     // Render a static placeholder instead of an empty drop-down when the group has no cores.
-    if cores.is_empty() {
+    if cores.is_empty() && !auto {
         return MoonTag::new()
             .outline()
             .rounded_full()
@@ -378,7 +448,9 @@ fn core_selector(
         .and_then(|id| store.core(id))
         .map(|c| c.status == ConnStatus::Ready)
         .unwrap_or(false);
-    let dot_color = if active_ready {
+    let dot_color = if auto && active.is_none() {
+        p.accent
+    } else if active_ready {
         design::positive_color(p)
     } else {
         design::danger_color(p)
@@ -388,7 +460,13 @@ fn core_selector(
     let raw_active_name = active
         .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
         .map(|(_, n)| n.clone())
-        .unwrap_or_else(|| "—".to_string());
+        .unwrap_or_else(|| {
+            if auto {
+                t!("workspace.overview").to_string()
+            } else {
+                "—".to_string()
+            }
+        });
     // Chrome outside the label: left/right padding, status dot, gap, and borders. The absolute
     // caret occupies the right-padding reservation instead of adding another flex child.
     let (active_name, trigger_w) = fit_header_core_trigger(
@@ -401,7 +479,7 @@ fn core_selector(
 
     // The header renders continuously, but exchange discovery scans every client snapshot. Build
     // the hidden menu only after controlled open state triggers a repaint.
-    let items = if open {
+    let items = if open && !auto {
         let exchange_names = b.session.market_source().core_exchange_names();
         let unknown_exchange = t!("common.exchange_unknown").to_string();
         let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
@@ -421,6 +499,9 @@ fn core_selector(
                         .checked(active == Some(id))
                         .on_click(move |_, _, cx| {
                             backend.update(cx, |b, bcx| {
+                                if b.workspace_mode(&group) == WorkspaceMode::AutoTrading {
+                                    return;
+                                }
                                 b.set_active_trade_core(&group, id);
                                 bcx.notify();
                             });
@@ -445,6 +526,30 @@ fn core_selector(
     // The pill uses `p.panel` as its background and `p.border` as an explicit border, keeping the
     // shape legible against the `shell_high` header unlike the old borderless Panel variant.
     //
+    let pill = div()
+        .relative()
+        .flex_none()
+        .w(px(trigger_w))
+        .h(px(trigger_h))
+        .child(
+            MoonSelectorPill::new("header-core-pill")
+                .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
+                .height(SEL_H)
+                .radius(SEL_H / 2.0)
+                .leading_dot(dot_color)
+                .disabled(auto)
+                .caret(!auto)
+                .segment(
+                    MoonSelectorSegment::new(active_name)
+                        .color(p.text)
+                        .weight(500.0),
+                )
+                .render(),
+        );
+    if auto {
+        return pill.into_any_element();
+    }
+
     MoonPopover::new("header-core-selector")
         .placement(MoonPopoverPlacement::BottomStart)
         .fit_content()
@@ -457,24 +562,7 @@ fn core_selector(
         .trigger(
             // MoonSelectorPill::bounds is absolute. This explicit in-flow box therefore owns the
             // exact geometry MoonPopover measures and keeps BottomStart anchored to its left edge.
-            div()
-                .relative()
-                .flex_none()
-                .w(px(trigger_w))
-                .h(px(trigger_h))
-                .child(
-                    MoonSelectorPill::new("header-core-pill")
-                        .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
-                        .height(SEL_H)
-                        .radius(SEL_H / 2.0)
-                        .leading_dot(dot_color)
-                        .segment(
-                            MoonSelectorSegment::new(active_name)
-                                .color(p.text)
-                                .weight(500.0),
-                        )
-                        .render(),
-                ),
+            pill,
         )
         .content(
             MoonPopupMenu::new("header-core-menu")

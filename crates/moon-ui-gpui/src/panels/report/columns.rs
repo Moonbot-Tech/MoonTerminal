@@ -71,7 +71,7 @@ pub(super) fn report_data_row(
             let cname = cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
             if cname == "coin" {
-                cells.push(coin_cell(ri, val, core_uid, backend, p));
+                cells.push(coin_cell(ri, val, core_uid, backend, view, p));
             } else if cname == "core_name" {
                 cells.push(core_cell(ri, val, core_uid, view, p));
             } else if cname == "deleted" {
@@ -96,6 +96,7 @@ pub(super) fn report_data_row(
 ///     cols: Runtime report schema in source order.
 ///     core_uid: Core that recorded the row.
 ///     selected_cores: Cores the panel's filter currently scopes to.
+///     workspace_group: Group owning mutating menu actions, or `None` for standalone Report.
 ///     trailing: Entries only the Report can build, appended after the shared ones.
 ///     backend: Shared backend read for market, core, and strategy names.
 ///     cx: Application context.
@@ -107,6 +108,7 @@ pub(super) fn row_coin_menu_ctx(
     cols: &[String],
     core_uid: u64,
     selected_cores: Vec<u64>,
+    workspace_group: Option<String>,
     trailing: Vec<MoonMenuItem>,
     backend: &Entity<Backend>,
     cx: &App,
@@ -162,6 +164,7 @@ pub(super) fn row_coin_menu_ctx(
         strat_id,
         strat_name,
         order_uid: None,
+        workspace_group,
         side: None,
         short: false,
         origin: CoinMenuOrigin::OrderTable,
@@ -173,15 +176,28 @@ pub(super) fn row_coin_menu_ctx(
 ///
 /// Left-click opens the resolved market on the transaction's core in Main without activating Main.
 /// The right-click menu is not here: it belongs to the ROW, so that every cell opens the same one.
+///
+/// Args:
+///     ri: Visible row index used to make the cell identity stable.
+///     val: Report coin value rendered by this cell.
+///     core_uid: Core that recorded the transaction.
+///     backend: Shared backend used to resolve and queue the market.
+///     view: Owning Report panel used to distinguish group and standalone authority.
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A clickable data cell whose delayed navigation revalidates the current Auto scope.
 fn coin_cell(
     ri: usize,
     val: &Value,
     core_uid: u64,
     backend: &Entity<Backend>,
+    view: &Entity<ReportPanel>,
     p: MoonPalette,
 ) -> MoonDataCell {
     let coin = value_to_string(val);
     let backend = backend.clone();
+    let view = view.clone();
     let el = div()
         .id(SharedString::from(format!("rep-coin-{ri}")))
         .w_full()
@@ -211,9 +227,18 @@ fn coin_cell(
             // market universe.
             let market = backend.read(app);
             let market = resolve_market(market, core_uid, &coin);
+            let workspace_group = {
+                let panel = view.read(app);
+                (!panel.standalone).then(|| panel.group.clone())
+            };
             backend.update(app, |b, bcx| {
-                b.open_on_main((core_uid, market.clone()), false);
-                bcx.notify();
+                if b.open_on_main_if_authorized(
+                    workspace_group.as_deref(),
+                    (core_uid, market.clone()),
+                    false,
+                ) {
+                    bcx.notify();
+                }
             });
         });
     MoonDataCell::element(el)
@@ -274,8 +299,9 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
 
 /// Build a full-cell core cell with the shared muted tone.
 ///
-/// Clicking filters by exactly this core; clicking the sole selected core again clears the
-/// filter and shows all cores.
+/// In standalone or Classic mode, clicking filters to this core and a repeat click clears the sole
+/// selection. In group Auto mode, clicking is ignored because only the Shell rail selects cores;
+/// the retained Classic filter is never changed.
 fn core_cell(
     ri: usize,
     val: &Value,
@@ -295,8 +321,9 @@ fn core_cell(
         .text_color(rgb(MoonTone::Muted.color(p)))
         .child(name)
         .on_click(move |_, window, app| {
-            // Filtering to the core is the whole gesture; see the coin cell above for why a plain
-            // click must not also reach the row handler, and why a modified one must.
+            // Changing the Classic filter, or consuming an ignored Auto shortcut, is the whole
+            // gesture; see the coin cell above for why a plain click must not also reach the row
+            // handler, and why a modified one must.
             let modifiers = window.modifiers();
             if modifiers.shift || modifiers.secondary() {
                 return;
@@ -540,5 +567,4 @@ pub(super) fn width_for(col: &str) -> f32 {
 }
 
 #[cfg(test)]
-/// Tests for raw identity values and generic report-cell display text.
 mod tests;

@@ -70,6 +70,7 @@ impl ChartTabs {
             .into_any_element()
     }
 
+    /// Render the figure-tool selector and explicitly unscoped tool-default settings surface.
     pub(super) fn render_fig_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (draw_mode, tool) = {
             let b = self.backend.read(cx);
@@ -180,6 +181,7 @@ impl ChartTabs {
                     crate::figstyle::render_tool_defaults(
                         &self.backend,
                         tool,
+                        crate::figstyle::WorkspaceAuthority::Unscoped,
                         Some(self.custom_color_cell()),
                         cx,
                     )

@@ -175,6 +175,10 @@ assets.market_sell_q:
   ru: "Точно продать %{coin} по маркету?"
   en: "Really market-sell %{coin}?"
   es: "¿Vender %{coin} a mercado?"
+assets.market_sell_scope_changed:
+  ru: "Продажа отменена: ядро больше не входит в текущую область активов."
+  en: "Sale cancelled: the core is no longer in the current Assets scope."
+  es: "Venta cancelada: el núcleo ya no está en el ámbito actual de Activos."
 assets.order:
   ru: "Order"
   en: "Order"
@@ -186,9 +190,9 @@ assets.wallets_hint:
   en: "Wallets · drag a coin between containers"
   es: "Carteras · arrastra una moneda entre contenedores"
 assets.transfer_title:
-  ru: "Перенос %{coin}: %{from} → %{to}"
-  en: "Transfer %{coin}: %{from} → %{to}"
-  es: "Transferir %{coin}: %{from} → %{to}"
+  ru: "Перенос %{coin}: %{from} -> %{to}"
+  en: "Transfer %{coin}: %{from} -> %{to}"
+  es: "Transferir %{coin}: %{from} -> %{to}"
 assets.free:
   ru: "свободно: %{n}"
   en: "free: %{n}"

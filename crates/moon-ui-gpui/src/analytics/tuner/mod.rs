@@ -83,6 +83,22 @@ pub(super) fn parse_strat_key(key: &str) -> Option<(i64, Option<u64>)> {
     }
 }
 
+/// Return whether a retained strategy row belongs to the effective Analytics workspace.
+///
+/// Args:
+///     key: Retained `strategy@core` row identity.
+///     workspace: Effective Auto core ids, or `None` for Classic.
+///
+/// Returns:
+///     `true` when the row may participate in current queries and writes.
+fn strategy_selection_visible(key: &str, workspace: Option<&[u64]>) -> bool {
+    workspace.is_none_or(|cores| {
+        parse_strat_key(key)
+            .and_then(|(_, core)| core)
+            .is_some_and(|core| cores.contains(&core))
+    })
+}
+
 /// Right-panel mode of the "Strategy tuning" tab (default — "By filter"):
 /// by filter (thresholds), by coin (table), by time (the "hour of day" profile).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -144,6 +160,18 @@ impl AnalyticsView {
             return;
         };
         let query = self.query();
+        let workspace_group = self
+            .backend
+            .read(cx)
+            .singleton_workspace()
+            .map(|workspace| workspace.group);
+        if !self
+            .backend
+            .read(cx)
+            .workspace_action_allows_core(workspace_group.as_deref(), core_uid)
+        {
+            return;
+        }
         let (date_from, date_to) = list::inclusive_report_bounds(query.from, query.to);
         let owner_display = window.display(cx).map(|display| display.id());
         crate::panels::open_scoped_report(
@@ -207,11 +235,17 @@ impl AnalyticsView {
         let Some((core_uid, strategy_id)) = self.live_strategy_target(key, cx) else {
             return;
         };
+        let workspace_group = self
+            .backend
+            .read(cx)
+            .singleton_workspace()
+            .map(|workspace| workspace.group);
         let owner_display = window.display(cx).map(|display| display.id());
         crate::strategies::open_goto(
             self.backend.clone(),
             core_uid,
             strategy_id,
+            workspace_group,
             Some(window.window_handle()),
             owner_display,
             cx,
@@ -243,9 +277,19 @@ impl AnalyticsView {
     /// All currently selected strategies as write targets: the anchor first, then the
     /// Additional Ctrl- or Shift-selected targets. Each key `strategyid@core_uid` maps to
     /// `(sid, core, name)`.
+    ///
+    /// Returns:
+    ///     Effective targets only; hidden retained Classic rows are omitted without mutation.
     fn selected_targets(&self) -> Vec<shared::SaveTarget> {
         let mut out = Vec::new();
+        let workspace = self
+            .workspace_scope
+            .as_ref()
+            .map(|scope| scope.core_ids.as_slice());
         let mut push = |key: &str, name: &str| {
+            if !strategy_selection_visible(key, workspace) {
+                return;
+            }
             if let Some((sid, core)) = parse_strat_key(key) {
                 out.push(shared::SaveTarget {
                     sid,
@@ -261,6 +305,37 @@ impl AnalyticsView {
             push(k, n);
         }
         out
+    }
+
+    /// Return effective selected row keys without changing retained Classic selection state.
+    ///
+    /// Returns:
+    ///     Retained anchor and extra keys whose cores are visible now.
+    pub(in crate::analytics) fn effective_strategy_selection(&self) -> Vec<String> {
+        let workspace = self
+            .workspace_scope
+            .as_ref()
+            .map(|scope| scope.core_ids.as_slice());
+        self.sel_strategy
+            .iter()
+            .chain(self.sel_extra.iter())
+            .filter(|(key, _)| strategy_selection_visible(key, workspace))
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
+    /// Retire tuner state whose retained selection became hidden by an Auto workspace change.
+    ///
+    /// Returns:
+    ///     Nothing; retained selection fields remain untouched for Classic restoration.
+    pub(in crate::analytics) fn reconcile_workspace_strategy_scope(&mut self) {
+        self.cancel_axis_reads();
+        self.tuner.invalidate();
+        self.time_tuner.reset_grid();
+        self.time_tuner.invalidate();
+        self.coins.invalidate();
+        self.coin_lists.invalidate();
+        self.write_error = None;
     }
 
     /// The shared filters WITHOUT the strategy scope — the query for questions asked ABOUT
@@ -319,7 +394,7 @@ impl AnalyticsView {
 
     /// Whether any Ctrl- or Shift-selected strategies extend the anchor selection.
     pub(super) fn is_multi(&self) -> bool {
-        !self.sel_extra.is_empty()
+        self.selected_targets().len() > 1
     }
 
     /// Label for "what these numbers cover", used by every card title on the page.
@@ -328,10 +403,11 @@ impl AnalyticsView {
     /// anchor while several rows are highlighted would assert one strategy over N
     /// strategies' figures — a count is the only honest label there.
     pub(super) fn scope_label(&self) -> String {
-        let n = self.selected_targets().len();
-        match self.sel_strategy.as_ref() {
+        let targets = self.selected_targets();
+        let n = targets.len();
+        match targets.first() {
             None => t!("analytics.strat.scope_all").to_string(),
-            Some((_, name)) if n <= 1 => name.clone(),
+            Some(target) if n <= 1 => target.name.clone(),
             _ => t!("analytics.strat.scope_many", n = n).to_string(),
         }
     }
@@ -342,7 +418,7 @@ impl AnalyticsView {
     /// blank instead of the anchor's (which would misrepresent the rest). Both tuning axes and
     /// the save dialog go through this so the behavior can't drift between them.
     pub(super) fn current_if_single<T>(&self, value: T) -> Option<T> {
-        (!self.is_multi()).then_some(value)
+        (self.selected_targets().len() == 1).then_some(value)
     }
 
     /// The SET of selected strategies changed while the anchor stayed put. Every number on the

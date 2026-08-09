@@ -1,7 +1,8 @@
 //! Custom chart tab strip ported from the egui chart tabs: Main plus AddToChart-N.
 //! It owns active-tab selection without automatically switching on a detect, chart double-click
-//! routing to Main, and detaching tabs into OS windows. The center `DockArea` panel contains this
-//! strip and the active `ChartPanel`; detects, orders, and lower tabs are separate dock panels.
+//! routing to Main, and detaching tabs into OS windows when Classic owns the workspace. Auto keeps
+//! its chart tabs inside the group window. The center `DockArea` panel contains this strip and the
+//! active `ChartPanel`; detects, orders, and lower tabs are separate dock panels.
 //!
 //! The detached-tab OS-window subsystem, including detach, restore, repin, persistence, and
 //! `DetachedChartHost`, lives in [`windows`].
@@ -21,6 +22,8 @@ mod settings;
 mod sig;
 mod stack;
 mod strip;
+#[cfg(test)]
+mod tests;
 mod windows;
 
 use std::collections::HashMap;
@@ -41,8 +44,143 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::persistence::chart_persist;
-use moon_core::config::{ChartBucket, ChartTheme};
+use moon_core::config::{ChartBucket, ChartTheme, WorkspaceMode};
+use moon_core::market::MarketLabel;
 use moon_core::session::CoreId;
+
+/// Maximum candidates inspected while preserving a Main chart's market across Auto cores.
+const AUTO_MARKET_SEARCH_LIMIT: usize = 256;
+
+/// Return the concrete Auto core that may retarget one group's Main chart.
+///
+/// Args:
+///     backend: Shared state holding persisted mode and validated workspace selection.
+///     group: Group whose chart controller consumes the selection.
+///
+/// Returns:
+///     A live selected core in Auto mode, or `None` for Classic and Auto Overview.
+fn auto_workspace_chart_core(backend: &Backend, group: &str) -> Option<CoreId> {
+    (backend.workspace_mode(group) == WorkspaceMode::AutoTrading)
+        .then(|| backend.valid_auto_workspace_core(group))
+        .flatten()
+}
+
+/// Retry identity for one unresolved Auto chart target.
+type AutoWorkspaceChartAttempt = (CoreId, Option<(CoreId, u64)>, Option<(CoreId, String)>);
+
+/// Tracks only successfully applied Auto targets while deduplicating unresolved retries.
+#[derive(Debug, Default)]
+struct AutoWorkspaceChartState {
+    applied_core: Option<CoreId>,
+    last_attempt: Option<AutoWorkspaceChartAttempt>,
+}
+
+impl AutoWorkspaceChartState {
+    /// Seed startup state from the restored Auto selection and actual Main target.
+    ///
+    /// Args:
+    ///     selected_core: Concrete Auto core restored for the owning group.
+    ///     current_target: Actual restored Main target, if Main has an active chart.
+    ///
+    /// Returns:
+    ///     A tracker with no pending market-resolution attempt.
+    fn seeded(selected_core: Option<CoreId>, current_target: Option<(CoreId, String)>) -> Self {
+        Self {
+            applied_core: selected_core.filter(|selected| {
+                current_target
+                    .as_ref()
+                    .is_some_and(|(current, _)| current == selected)
+            }),
+            last_attempt: None,
+        }
+    }
+
+    /// Return a concrete target only for a new or newly resolvable attempt.
+    ///
+    /// Args:
+    ///     next: Current concrete Auto selection, or `None` for Classic/Overview.
+    ///     market_revision: Cheap target-core catalog revision used to retry after feed readiness.
+    ///     current_target: Current Main core and market, included so an initially empty Main retries.
+    ///
+    /// Returns:
+    ///     The concrete target to resolve. An unchanged successful target or identical failed
+    ///     attempt returns `None`.
+    fn candidate(
+        &mut self,
+        next: Option<CoreId>,
+        market_revision: Option<(CoreId, u64)>,
+        current_target: Option<(CoreId, String)>,
+    ) -> Option<CoreId> {
+        let Some(target_core) = next else {
+            self.applied_core = None;
+            self.last_attempt = None;
+            return None;
+        };
+        let main_matches = current_target
+            .as_ref()
+            .is_some_and(|(current_core, _)| *current_core == target_core);
+        if self.applied_core == Some(target_core) && main_matches {
+            self.last_attempt = None;
+            return None;
+        }
+        if !main_matches {
+            self.applied_core = None;
+        }
+        let attempt = (target_core, market_revision, current_target);
+        if self.last_attempt.as_ref() == Some(&attempt) {
+            return None;
+        }
+        self.last_attempt = Some(attempt);
+        Some(target_core)
+    }
+
+    /// Commit a target only after Main has accepted its resolved market.
+    ///
+    /// Args:
+    ///     core: Concrete Auto core now represented by Main.
+    ///
+    /// Returns:
+    ///     Nothing; the successful core suppresses focus-only repeats.
+    fn commit(&mut self, core: CoreId) {
+        self.applied_core = Some(core);
+        self.last_attempt = None;
+    }
+}
+
+/// Pick the target-core market that best preserves the current Main instrument.
+///
+/// Args:
+///     current_market: Canonical market name on the current core.
+///     current_label: Catalog-backed coin and quote for that market.
+///     candidates: Target-core market names paired with labels from the same market source.
+///
+/// Returns:
+///     Exact market-name availability first, then the same match key and quote, then the same
+///     match key alone. `None` leaves the chart unchanged.
+fn preferred_auto_workspace_market(
+    current_market: &str,
+    current_label: &MarketLabel,
+    candidates: &[(String, MarketLabel)],
+) -> Option<String> {
+    if let Some((market, _)) = candidates
+        .iter()
+        .find(|(market, _)| market == current_market)
+    {
+        return Some(market.clone());
+    }
+    let match_key = current_label.match_key();
+    candidates
+        .iter()
+        .find(|(_, label)| {
+            label.match_key() == match_key && label.quote.eq_ignore_ascii_case(&current_label.quote)
+        })
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|(_, label)| label.match_key() == match_key)
+        })
+        .map(|(market, _)| market.clone())
+}
 
 /// Return the chart-tab strip height in pixels.
 /// This must equal `MoonTabStrip`'s tab height (`fit_height(28, 13, 7.5)` in `tab.rs`) so UI and
@@ -104,6 +242,12 @@ pub struct ChartTabs {
     /// Signature of inputs that change the tab strip: AddToChart detects, split configuration,
     /// and explicit requests to open a market on Main.
     last_sig: u64,
+    /// Successfully applied Auto chart target plus one deduplicated unresolved retry identity.
+    ///
+    /// Construction seeds `applied_core` only when the actual restored Main target already belongs
+    /// to the selected core. A mismatched or absent Main remains pending for catalog resolution.
+    /// Classic and Overview are both `None`; later concrete selection changes are explicit.
+    auto_workspace_chart_state: AutoWorkspaceChartState,
     /// Last observed toolbar `price_scale_rev`; a larger revision applies the selected scale only
     /// to the active panel, while unchanged revisions mirror the active tab's displayed scale.
     last_scale_rev: u64,
@@ -183,6 +327,8 @@ impl ChartTabs {
             )
         });
         let initial_sig = chart_tabs_sig(backend.read(cx), &group);
+        let initial_auto_workspace_core = auto_workspace_chart_core(backend.read(cx), &group);
+        let initial_main_target = main.read(cx).active_target(cx);
         let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
         #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
         {
@@ -320,6 +466,9 @@ impl ChartTabs {
         cx.observe(&main, |this, _main, cx| {
             // Main owns focus changes, while ChartTabs owns the visible anchor-aware group target.
             this.sync_main_chart_target(cx);
+            // A selected Auto core may have arrived before Main had an active slot. Include the
+            // new target identity in the retry key so that opening Main resumes the pending move.
+            this.sync_auto_workspace_chart(cx);
             #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
             this.sync_debug_main_chart(cx);
         })
@@ -329,6 +478,9 @@ impl ChartTabs {
             this.drain_apply_all(cx);
             // Shift+middle-click in this window applies its scale to every stack and persists it.
             this.drain_x_sync(cx);
+            // A target core's catalog can become ready without another workspace-selection edge.
+            // The retry tracker makes this cheap unless its snapshot revision actually changed.
+            this.sync_auto_workspace_chart(cx);
             // The tool-settings panel belongs to an ARMED tool. Disarming — through the picker's
             // Cursor entry or a per-tool hotkey — closes it HERE, before the signature early return
             // below, so the flag cannot survive to re-open a panel nobody asked for the next time a
@@ -343,7 +495,7 @@ impl ChartTabs {
             this.last_sig = sig;
             #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
             this.drain_debug_fill_main_chart(cx);
-            this.handle_open_request(cx);
+            this.handle_open_request(true, cx);
             this.handle_open_compare_request(cx);
             this.ingest(cx);
             this.drain_chart_repin(cx);
@@ -357,6 +509,18 @@ impl ChartTabs {
             this.sync_inactive_chart_visibility(cx);
             this.last_sig = chart_tabs_sig(backend.read(cx), &this.group);
             cx.notify();
+        })
+        .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            this.sync_auto_workspace_chart(cx);
+        })
+        .detach();
+        let market_data_revision = backend.read(cx).market_data_revision();
+        cx.observe(&market_data_revision, |this, _revision, cx| {
+            // A failed rail retarget must wake when its target catalog becomes resolvable even if
+            // no unrelated Backend or workspace state changes.
+            this.sync_auto_workspace_chart(cx);
         })
         .detach();
         let coin_input = cx.new(|cx| {
@@ -475,6 +639,10 @@ impl ChartTabs {
             seen: HashMap::new(),
             add_seq: HashMap::new(),
             last_sig: initial_sig,
+            auto_workspace_chart_state: AutoWorkspaceChartState::seeded(
+                initial_auto_workspace_core,
+                initial_main_target,
+            ),
             last_scale_rev: 0,
             last_switch_charts_rev: 0,
             last_close_all_charts_rev: 0,
@@ -496,43 +664,118 @@ impl ChartTabs {
         };
         this.restore_detached(cx);
         this.restore_custom_tabs(cx);
+        // A request can predate this group window. Consume it after the observers and child stacks
+        // exist, but leave startup window/tab presentation to Shell's seeded revision cursor.
+        this.handle_open_request(false, cx);
         this.sync_active_scale(cx);
         this.initialize_main_chart_target(cx);
         this.persist_scales(cx);
         this
     }
 
-    fn handle_open_request(&mut self, cx: &mut Context<Self>) {
+    /// Retarget Main after a changed concrete Auto rail selection without opening another slot.
+    ///
+    /// The current Main instrument is preserved only when the target core can actually serve it:
+    /// exact market name, then catalog match key plus quote, then match key alone. Construction
+    /// seeds the applied core only when the actual restored Main belongs to that core. Focus-only
+    /// revisions compare equal, while a later Main move away from the selected core becomes a new
+    /// retarget attempt. Overview clears the marker but deliberately leaves Main untouched.
+    /// Failed resolution remains pending and retries only when the target catalog or Main target
+    /// identity changes.
+    ///
+    /// Args:
+    ///     cx: ChartTabs context used to resolve markets and replace or focus Main.
+    ///
+    /// Returns:
+    ///     Nothing; missing current or target markets leave the visible chart and tab unchanged.
+    fn sync_auto_workspace_chart(&mut self, cx: &mut Context<Self>) {
+        let next = auto_workspace_chart_core(self.backend.read(cx), &self.group);
+        let current_target = self.main.read(cx).active_target(cx);
+        let market_revision = next.and_then(|core| {
+            self.backend
+                .read(cx)
+                .session
+                .market_source()
+                .snapshot_revision(core)
+        });
+        let Some(target_core) = self.auto_workspace_chart_state.candidate(
+            next,
+            market_revision,
+            current_target.clone(),
+        ) else {
+            return;
+        };
+        let Some((current_core, current_market)) = current_target else {
+            return;
+        };
+        let target_market = {
+            let backend = self.backend.read(cx);
+            let source = backend.session.market_source();
+            let current_label = source.market_label(current_core, &current_market);
+            let match_key = current_label.match_key();
+            let mut market_names = Vec::new();
+            for query in [&current_market, &current_label.coin, &match_key] {
+                for market in source.search_markets(target_core, query, AUTO_MARKET_SEARCH_LIMIT) {
+                    if !market_names.contains(&market) {
+                        market_names.push(market);
+                    }
+                }
+            }
+            let names: Vec<&str> = market_names.iter().map(String::as_str).collect();
+            let labels = source.market_labels(target_core, &names);
+            let candidates: Vec<(String, MarketLabel)> =
+                market_names.into_iter().zip(labels).collect();
+            preferred_auto_workspace_market(&current_market, &current_label, &candidates)
+        };
+        let Some(target_market) = target_market else {
+            return;
+        };
+        self.main.update(cx, |main, main_cx| {
+            main.replace_or_focus(target_core, target_market, main_cx)
+        });
+        self.auto_workspace_chart_state.commit(target_core);
+        self.active = Tab::Main;
+        self.sync_inactive_chart_visibility(cx);
+        self.sync_seen_for_active(cx);
+        self.sync_active_scale(cx);
+        self.sync_main_chart_target(cx);
+        self.persist_scales(cx);
+        cx.notify();
+    }
+
+    /// Drain this group's current atomic Main-open request and reveal its target chart.
+    ///
+    /// Args:
+    ///     allow_window_activation: Whether an activating request may raise the native window;
+    ///         construction passes `false` so an older pending request cannot steal startup focus.
+    ///     cx: ChartTabs context used to update Main and optionally activate the group window.
+    ///
+    /// Returns:
+    ///     Nothing; requests owned by another group or replaced during the read phase stay intact.
+    fn handle_open_request(&mut self, allow_window_activation: bool, cx: &mut Context<Self>) {
         let pending = {
             let b = self.backend.read(cx);
-            b.open_request
-                .as_ref()
+            b.pending_open_main_request_for_group(self.group.as_str())
                 .cloned()
-                .filter(|(core, _)| b.core_belongs_to_group(self.group.as_str(), *core))
         };
         let Some((pending_core, pending_market)) = pending else {
             return;
         };
-        let req = self.backend.update(cx, |b, _| {
-            if b.open_request
-                .as_ref()
-                .is_some_and(|(core, market)| *core == pending_core && market == &pending_market)
-            {
-                let activate = b.open_request_activate;
-                b.open_request_activate = false;
-                b.open_request.take().map(|(c, m)| (c, m, activate))
-            } else {
-                None
-            }
+        let req = self.backend.update(cx, |b, bcx| {
+            b.take_open_main_request_if_matches(
+                self.group.as_str(),
+                &(pending_core, pending_market.clone()),
+                bcx,
+            )
         });
         if let Some((core, market, activate)) = req {
             self.main
                 .update(cx, |p, pcx| p.open_or_focus(core, market, pcx));
             self.active = Tab::Main;
             self.last_sig = chart_tabs_sig(self.backend.read(cx), self.group.as_str());
-            // Raise and focus Main when `open_request_activate` is set by a chart double-click or
-            // an Alerts coin click; Orders, Detects, and other sources open without stealing focus.
-            if activate {
+            // Raise and focus Main for a live activating request from a chart double-click or
+            // Alerts coin click; construction still consumes the request without stealing focus.
+            if activate && allow_window_activation {
                 let handle = self.window_handle;
                 cx.defer(move |app| {
                     let _ = handle.update(app, |_, window, _| window.activate_window());
@@ -547,27 +790,10 @@ impl ChartTabs {
     }
 
     /// Drain a detect context-menu request to open a new custom tab in comparison mode.
-    /// Compare-and-take mirrors `handle_open_request` so another group cannot consume the request.
+    /// The Backend atomically revalidates the captured producer authority before consumption.
     fn handle_open_compare_request(&mut self, cx: &mut Context<Self>) {
-        let pending = {
-            let b = self.backend.read(cx);
-            b.open_compare_request
-                .as_ref()
-                .cloned()
-                .filter(|(core, _)| b.core_belongs_to_group(self.group.as_str(), *core))
-        };
-        let Some((pending_core, pending_market)) = pending else {
-            return;
-        };
         let req = self.backend.update(cx, |b, _| {
-            if b.open_compare_request
-                .as_ref()
-                .is_some_and(|(core, market)| *core == pending_core && market == &pending_market)
-            {
-                b.open_compare_request.take()
-            } else {
-                None
-            }
+            b.take_open_compare_request_for_group(self.group.as_str())
         });
         if let Some((core, market)) = req {
             self.open_compare_tab(core, market, cx);

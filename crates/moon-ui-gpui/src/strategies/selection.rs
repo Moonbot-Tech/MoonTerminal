@@ -67,7 +67,16 @@ impl StrategiesView {
     /// Returns:
     ///     Whether the pending strategy was found and selected.
     pub(super) fn sync_pending_select(&mut self, cx: &App) -> bool {
-        let Some((core, name)) = self.pending_select.clone() else {
+        let Some(request) = self.pending_select.clone() else {
+            return false;
+        };
+        if !request.is_authorized(self.backend.read(cx)) {
+            self.pending_select = None;
+            return false;
+        }
+        let core = request.core;
+        let RevealTarget::Name(name) = request.target else {
+            self.pending_select = None;
             return false;
         };
         let found = {
@@ -91,6 +100,28 @@ impl StrategiesView {
         self.pending_select = None;
         self.clamp_selected_section(cx);
         true
+    }
+
+    /// Queue a local create/paste echo selection with the current singleton workspace authority.
+    ///
+    /// Args:
+    ///     core: Core expected to echo the new strategy.
+    ///     name: Exact strategy name to resolve from the future snapshot.
+    ///     cx: Application context used to capture current singleton ownership.
+    ///
+    /// Returns:
+    ///     Nothing; the request remains pending until an authorized matching row arrives.
+    pub(super) fn queue_pending_name(&mut self, core: CoreId, name: String, cx: &App) {
+        let workspace_group = self
+            .backend
+            .read(cx)
+            .singleton_workspace()
+            .map(|workspace| workspace.group);
+        self.pending_select = Some(StrategyRevealRequest::new(
+            core,
+            RevealTarget::Name(name),
+            workspace_group,
+        ));
     }
 
     /// Clear every filter that could hide a strategy the user explicitly asked to see.
@@ -120,8 +151,14 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Key> {
-        let (core, target) = self.backend.read(cx).strategies_goto.clone()?;
+        let request = self.backend.read(cx).strategies_goto.clone()?;
         self.backend.update(cx, |b, _| b.strategies_goto = None);
+        if !request.is_authorized(self.backend.read(cx)) {
+            self.pending_select = None;
+            return None;
+        }
+        let core = request.core;
+        let target = request.target;
         let row = {
             let store = self.backend.read(cx).session.store();
             store.core(core).and_then(|cd| {
@@ -141,7 +178,11 @@ impl StrategiesView {
                 // The row is unknown, so `filter.matches` cannot be consulted — clear
                 // everything that could hide it rather than reveal it into a filtered-out list.
                 self.clear_filters_for_reveal(window, cx);
-                self.pending_select = Some((core, name));
+                self.pending_select = Some(StrategyRevealRequest::new(
+                    core,
+                    RevealTarget::Name(name),
+                    request.workspace_group,
+                ));
             }
             return None;
         };

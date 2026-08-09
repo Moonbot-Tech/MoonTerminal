@@ -1,0 +1,47 @@
+# Auto-trading workspace selector, navigation rail, and availability labels.
+_version: 2
+
+workspace.mode.auto:
+  ru: "Авто"
+  en: "Auto"
+  es: "Auto"
+workspace.mode.classic_tip:
+  ru: "Обычное рабочее пространство с редактируемой раскладкой"
+  en: "Standard workspace with an editable layout"
+  es: "Espacio de trabajo estándar con un diseño editable"
+workspace.mode.auto_tip:
+  ru: "Рабочее пространство для автоторговли; раскладка общая для всех серверов, открепление окон выключено"
+  en: "Auto-trading workspace; layout is shared across servers and window detachment is disabled"
+  es: "Espacio de autotrading; el diseño se comparte entre servidores y no permite separar ventanas"
+workspace.summary:
+  ru: "Ядер: %{configured} · готово: %{ready} · проблем: %{problem}"
+  en: "Cores: %{configured} · ready: %{ready} · problems: %{problem}"
+  es: "Núcleos: %{configured} · listos: %{ready} · problemas: %{problem}"
+workspace.overview:
+  ru: "Обзор"
+  en: "Overview"
+  es: "Resumen"
+workspace.overview_tip:
+  ru: "Все доступные ядра группы %{group}"
+  en: "All available cores in group %{group}"
+  es: "Todos los núcleos disponibles del grupo %{group}"
+workspace.core_tip:
+  ru: "%{name} · группа %{group} · %{status}"
+  en: "%{name} · group %{group} · %{status}"
+  es: "%{name} · grupo %{group} · %{status}"
+workspace.status.disabled:
+  ru: "Отключено"
+  en: "Disabled"
+  es: "Deshabilitado"
+workspace.status.unavailable:
+  ru: "Недоступно"
+  en: "Unavailable"
+  es: "No disponible"
+workspace.status.problem:
+  ru: "Проблема"
+  en: "Problem"
+  es: "Problema"
+workspace.status.ready:
+  ru: "Готово"
+  en: "Ready"
+  es: "Listo"

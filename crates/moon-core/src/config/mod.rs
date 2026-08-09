@@ -56,7 +56,11 @@ pub use hotkeys::{
     HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
 };
 pub use lang::Language;
-pub use layout::{DetachedLayout, GeomRect, GroupLayout, WindowLayout};
+pub use layout::{
+    clamp_auto_workspace_rail_width, DetachedLayout, GeomRect, GroupLayout, WindowLayout,
+    WorkspaceMode, AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
+    AUTO_WORKSPACE_RAIL_WIDTH_MIN,
+};
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
 pub use schema::UiThemeMode;

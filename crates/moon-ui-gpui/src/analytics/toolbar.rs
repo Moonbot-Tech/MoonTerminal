@@ -117,16 +117,25 @@ pub(super) fn toggle_analytics_core_selection(
     }
 }
 
-/// Convert the exclusive Analytics selection into database filter ids.
+/// Convert the effective Analytics selection into database filter ids.
 ///
 /// Args:
-///     selected: Explicit core ids; only an empty set represents the All row.
+///     selected: Retained explicit core ids; only an empty set represents the Classic All row.
+///     workspace: Concrete Auto-workspace ids, when a live singleton owner pins Analytics.
 ///
 /// Returns:
-///     Every explicit id, including complete and stale selections, or an empty unfiltered list for
-///     the exclusive All state.
-pub(super) fn analytics_core_filter_ids(selected: &HashSet<u64>) -> Vec<u64> {
-    selected.iter().copied().collect()
+///     Workspace ids when pinned, every retained explicit id in Classic, or an empty unfiltered
+///     list only for Classic All. An empty Auto group uses core id zero, which cannot be assigned to
+///     a reconciled server, so it stays an explicit no-match query instead of broadening globally.
+pub(super) fn analytics_core_filter_ids(
+    selected: &HashSet<u64>,
+    workspace: Option<&[u64]>,
+) -> Vec<u64> {
+    match workspace {
+        Some([]) => vec![0],
+        Some(cores) => cores.to_vec(),
+        None => selected.iter().copied().collect(),
+    }
 }
 
 /// Decide what the strip shows, given only the read outcome and whether the user opened it.
@@ -201,6 +210,20 @@ impl AnalyticsView {
     /// Returns:
     ///     The rendered tab-strip element.
     pub(super) fn tabs_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
+        let workspace_pinned = self.workspace_scope.is_some();
+        let presented_selection: HashSet<u64> = match &self.workspace_scope {
+            Some(scope) => scope.selected_core.into_iter().collect(),
+            None => self.sel_cores.clone(),
+        };
+        let presented_cores: Vec<(u64, String)> = match &self.workspace_scope {
+            Some(scope) => self
+                .cores
+                .iter()
+                .filter(|(core, _)| scope.core_ids.contains(core))
+                .cloned()
+                .collect(),
+            None => self.cores.clone(),
+        };
         let mut row = h_flex()
             .flex_none()
             .w_full()
@@ -300,7 +323,7 @@ impl AnalyticsView {
         // the caption, so the whole semantic group moves to the next line before any control is
         // clipped. MoonUI scales Action dropdown widths from their 10.5px reference font.
         let action_trigger_scale = design::font_value(cx, 10.5) / 10.5;
-        let clear_core_filter_w = if self.sel_cores.is_empty() {
+        let clear_core_filter_w = if workspace_pinned || self.sel_cores.is_empty() {
             0.0
         } else {
             design::glyph_btn_w(cx) + design::ui_value(cx, TOOLBAR_GAP)
@@ -312,7 +335,7 @@ impl AnalyticsView {
                 + METRIC_TRIGGER_W)
                 * action_trigger_scale
             + design::ui_value(cx, TOOLBAR_GAP * 4.0);
-        let clear_core_filter = (!self.sel_cores.is_empty()).then(|| {
+        let clear_core_filter = (!workspace_pinned && !self.sel_cores.is_empty()).then(|| {
             MoonButton::new("an-core-clear")
                 .width(design::glyph_btn_w(cx))
                 .variant(MoonButtonVariant::Ghost)
@@ -347,7 +370,7 @@ impl AnalyticsView {
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
                     .children(
-                        sole_core_name(&self.cores, &self.sel_cores)
+                        sole_core_name(&presented_cores, &presented_selection)
                             .map(crate::display_text::flatten_lines),
                     ),
             )
@@ -418,23 +441,46 @@ impl AnalyticsView {
     ///     The configured fixed-trigger dropdown.
     fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let workspace_pinned = self.workspace_scope.is_some();
+        let selected: HashSet<u64> = match &self.workspace_scope {
+            Some(scope) => scope.selected_core.into_iter().collect(),
+            None => self.sel_cores.clone(),
+        };
         // Raw DB result (names from `reports.sqlite`, possibly including cores whose server was
         // deleted) — ranked here, on render, against the current config.
         let (cores, exchange_names) = {
             let backend = self.backend.read(cx);
+            let db_cores = match &self.workspace_scope {
+                Some(scope) => self
+                    .cores
+                    .iter()
+                    .filter(|(core, _)| scope.core_ids.contains(core))
+                    .cloned()
+                    .collect(),
+                None => self.cores.clone(),
+            };
             (
-                crate::core_order::CoreOrder::new(&backend.config).from_db(self.cores.clone()),
+                crate::core_order::CoreOrder::new(&backend.config).from_db(db_cores),
                 backend.session.market_source().core_exchange_names(),
             )
+        };
+        let all_label = if self
+            .workspace_scope
+            .as_ref()
+            .is_some_and(|scope| scope.selected_core.is_none())
+        {
+            t!("workspace.overview").to_string()
+        } else {
+            t!("report.all_cores").to_string()
         };
         let toggle_view = view.clone();
         crate::controls::core_combo(
             "an-core",
             &cores,
             &exchange_names,
-            &self.sel_cores,
+            &selected,
             crate::controls::CoreAllRowMode::ImplicitOnly,
-            t!("report.all_cores").to_string(),
+            all_label,
             |n| t!("report.cores_n", n = n).to_string(),
             180.0,
             move |uid, app| {
@@ -446,6 +492,7 @@ impl AnalyticsView {
                 });
             },
         )
+        .disabled(workspace_pinned)
     }
 
     /// Side combo (All/Long/Short). Analytics keeps it a field of its own; the Report folds the

@@ -1,5 +1,6 @@
 //! [ReportPanel] table element, sort handling, and the panel and render trait impls.
 
+use super::state::{ReportPreferenceWrite, schedule_report_preference};
 use super::*;
 
 impl ReportPanel {
@@ -107,12 +108,18 @@ impl ReportPanel {
         }
         self.sort_key = col.to_string();
         self.sort_desc = sort_desc;
+        self.preference_revisions.sort = self.preference_revisions.sort.wrapping_add(1);
         self.table_state.update(cx, |state, _| {
             state.set_sort(col.to_string(), !sort_desc);
         });
-        if let Some(conn) = &self.conn {
-            db::save_sort(conn, &self.sort_key, self.sort_desc);
-        }
+        let sort_key = self.sort_key.clone();
+        schedule_report_preference(
+            cx,
+            ReportPreferenceWrite::Sort {
+                key: sort_key,
+                desc: sort_desc,
+            },
+        );
         self.request_requery(cx);
     }
 }
@@ -293,7 +300,7 @@ impl Render for ReportPanel {
             // No caption beside the field: the placeholder says "coin" from inside it, which costs
             // no row width and disappears the moment something is typed.
             .child(coin_field)
-            .child(self.scope_combo(cx))
+            .child(self.scope_control.clone())
             .child(self.period_combo(cx))
             // Show manual From/To dates only in detached windows. Docked tabs rely on period presets
             // to keep the core, coin, scope (side/kind/deleted), period and column controls compact.

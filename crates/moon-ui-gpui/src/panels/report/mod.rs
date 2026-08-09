@@ -26,6 +26,7 @@ mod widths;
 mod window;
 
 use columns::{as_i64, value_to_string};
+use controls::ReportScopeControl;
 use query::ReportData;
 use selection::ReportSelection;
 use strategy_filter::{
@@ -37,8 +38,8 @@ use widths::{NaturalWidthsCache, complete_widths};
 
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::Datelike as _;
 use chrono_tz::Tz;
@@ -54,18 +55,19 @@ use moon_ui::{
     MoonNotification, MoonPalette, MoonScrollbarVisibility, MoonTone, MoonWindowFrame, Panel,
     PanelEvent, PanelState, Root, StyledExt, h_flex, rgba_from, v_flex,
 };
-use rusqlite::Connection;
 use rusqlite::types::Value;
 use rust_i18n::t;
 
 use crate::controls::date_range::{self, Bound};
 use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use crate::{Backend, design};
 use moon_core::db::valuation::ValuationStatus;
 use moon_core::db::{
     self, ReadResult, ReportFilter, ReportStrategy, ReportStrategyKey, SideFilter,
 };
+use moon_core::session::CoreId;
 
 pub use window::open_scoped;
 
@@ -277,7 +279,6 @@ pub struct ReportPanel {
     /// moves no data generation, so the queried mode is tracked separately.
     last_valuation_mode: moon_core::db::valuation::ValuationMode,
 
-    conn: Option<Connection>,
     pub(super) cores: Vec<(u64, String)>,
     /// Strategy identities currently available to the exact strategy selector.
     pub(super) strategies: Vec<ReportStrategy>,
@@ -292,7 +293,8 @@ pub struct ReportPanel {
     sort_key: String,
     sort_desc: bool,
 
-    /// Multi-selected core UIDs; an empty set means all cores.
+    /// Retained core filter for Classic group views and standalone Reports; empty means all cores.
+    /// Group Auto mode pins its effective workspace scope without using or mutating this set.
     pub(super) sel_cores: HashSet<u64>,
     /// Exact selected strategies, or `None` for implicit All as in the shared core selector.
     pub(super) selected_strategies: Option<HashSet<ReportStrategyKey>>,
@@ -340,9 +342,15 @@ pub struct ReportPanel {
     /// Show ONLY soft-deleted trades when set; hide them when clear (the default).
     pub(super) deleted_only: bool,
     /// Whether the full-width comment pane is shown between the table and the totals. On by
-    /// default and persisted in `app_meta` per host — a docked tab and a detached window keep
+    /// default and persisted in `app_meta` per host: a docked tab and a detached window keep
     /// separate answers, exactly as their column sets and widths do. A display choice, not a filter.
     pub(super) show_comment: bool,
+    /// Whether the background metadata read has supplied the current host preference.
+    comment_metadata_loaded: bool,
+    /// User-edit generations that reject stale initial or host-specific metadata.
+    preference_revisions: state::ReportPreferenceRevisions,
+    /// Retained owner-scoped dropdown whose popup invalidations never rebuild the Report body.
+    scope_control: Entity<ReportScopeControl>,
     /// Whether this Analytics-scoped panel excludes undated/non-positive close timestamps.
     closed_only: bool,
     /// Controlled multi-selection keyed by stable report row identity.
@@ -369,7 +377,7 @@ pub struct ReportPanel {
     table_state: Entity<MoonDataTableState>,
     /// Versioned context-qualified width-storage ID for docked or detached Report layouts.
     widths_id: String,
-    /// Content-derived base widths cached until report data or font scale changes.
+    /// Content-derived base widths cached until report data, locale, or resolved typography changes.
     natural_widths: NaturalWidthsCache,
     /// Whether the panel is detached; docked tabs omit manual date fields for a compact filter row.
     detached: bool,
@@ -378,4 +386,45 @@ pub struct ReportPanel {
     // `table_state()` exposes the retained state to the detached window's automatic-width button.
     dock: Option<WeakEntity<DockArea>>,
     focus: FocusHandle,
+}
+
+impl ReportPanel {
+    /// Resolve workspace scope for group-owned Report instances.
+    ///
+    /// The Analytics-owned standalone window deliberately returns `None` and keeps its exact
+    /// `ReportScope`, including offline historical core identities.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     Effective group scope, or `None` for an explicit standalone report.
+    pub(super) fn workspace_scope(&self, b: &Backend) -> Option<EffectiveCoreScope> {
+        if self.standalone {
+            return None;
+        }
+        let retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
+        let retained = if retained.is_empty() {
+            RetainedCoreScope::All
+        } else {
+            RetainedCoreScope::Explicit(&retained)
+        };
+        Some(b.effective_workspace_scope(&self.group, retained))
+    }
+
+    /// Return deterministic core IDs used by rows, totals, exports, menus, and metadata queries.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority.
+    ///
+    /// Returns:
+    ///     Effective group IDs or the standalone report's sorted retained IDs.
+    pub(super) fn effective_core_ids(&self, b: &Backend) -> Vec<CoreId> {
+        if let Some(scope) = self.workspace_scope(b) {
+            return scope.ids().to_vec();
+        }
+        let mut retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
+        retained.sort_unstable();
+        retained
+    }
 }

@@ -19,6 +19,9 @@ mod clip;
 mod render;
 mod unread;
 
+#[cfg(test)]
+mod tests;
+
 // The chart's news-mark hover card reuses this panel's badge so a source reads the same on both.
 pub(crate) use render::badge as news_badge;
 
@@ -163,6 +166,16 @@ pub struct NewsView {
 }
 
 impl NewsView {
+    /// Build a group News collector whose merge and actions follow the effective workspace scope.
+    ///
+    /// Args:
+    ///     backend: Shared terminal data, settings, and workspace authority.
+    ///     group: Window group whose news feeds supply this panel.
+    ///     window: Owning window used to initialize input state.
+    ///     cx: Panel context used to register feed, workspace, clock, and settings observers.
+    ///
+    /// Returns:
+    ///     Initialized News panel with its initial scoped cache and unread watermark reconciled.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
@@ -199,6 +212,18 @@ impl NewsView {
                 this.recount(b);
                 cx.notify();
             }
+        })
+        .detach();
+
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            let backend = this.backend.clone();
+            let b = backend.read(cx);
+            // WorkspaceRevision is authoritative even when two scopes collide in the folded news
+            // signature. Replacing scope-owned caches is silent: history revealed by navigation
+            // is not a fresh arrival and must not flash.
+            this.rebuild_workspace_scope(b);
+            cx.notify();
         })
         .detach();
 
@@ -257,9 +282,13 @@ impl NewsView {
         this
     }
 
-    /// Return this panel group's cores in canonical order.
+    /// Return the effective workspace cores in canonical group order.
     fn scope_cores(&self, b: &Backend) -> OrderedCores {
-        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
+        let scope =
+            b.effective_workspace_scope(&self.group, crate::workspace::RetainedCoreScope::All);
+        CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |session| {
+            session.group == self.group && scope.contains(session.id)
+        })
     }
 
     /// Fold the scoped cores' id + news revision, plus the local tag-colour revision and the tab-
@@ -372,6 +401,21 @@ impl NewsView {
         let live: HashSet<&str> = self.cached.iter().map(|i| i.id.as_str()).collect();
         self.flash.retain_live(|id| live.contains(id.as_str()));
         self.catalog = self.collect_catalog(b);
+        self.recount(b);
+    }
+
+    /// Replace every scope-owned cache after an authoritative workspace revision.
+    ///
+    /// Args:
+    ///     b: Backend snapshot carrying the new effective scope and news stores.
+    ///
+    /// Returns:
+    ///     Nothing; feed, catalog, flash state, signature, and counters are replaced in place.
+    fn rebuild_workspace_scope(&mut self, b: &Backend) {
+        self.cache_sig = Some(self.news_sig(b));
+        self.cached = Rc::new(self.collect(b));
+        self.catalog = self.collect_catalog(b);
+        self.flash.clear();
         self.recount(b);
     }
 
@@ -892,6 +936,7 @@ impl NewsView {
     ///
     /// Returns:
     ///     Nothing; the method opens a chart directly, opens a picker, or leaves state unchanged.
+    ///     Picker callbacks revalidate live Auto authority and silently refuse stale candidates.
     fn open_coin(
         &mut self,
         coin: &str,
@@ -904,18 +949,20 @@ impl NewsView {
         // base coin and keep the first market per core.
         let (rows, exchanges) = {
             let b = self.backend.read(cx);
-            let mut seen: HashSet<CoreId> = HashSet::new();
-            let mut rows: Vec<(CoreId, String, String)> = Vec::new();
+            let scope = self.scope_cores(b);
+            let scope_ids: Vec<CoreId> = scope.iter().map(|(core, _)| *core).collect();
+            let mut candidates: Vec<(CoreId, String, String)> = Vec::new();
             // Match against the label the CORE gives the market, not a reading of its name: on
             // Hyperliquid spot the name is an index and carries no coin at all. Compared through
             // the shared match key, NOT by raw equality — the catalog token carries a contract
             // tail (`AAVE_RP`, `SOL_0925`), and a news item names the bare coin.
             let wanted = moon_core::symbol::coin_match_key(coin);
             for hit in coin_search::search(b, &self.group, None, coin) {
-                if hit.label.match_key() == wanted && seen.insert(hit.core) {
-                    rows.push((hit.core, hit.market, hit.server));
+                if hit.label.match_key() == wanted {
+                    candidates.push((hit.core, hit.market, hit.server));
                 }
             }
+            let rows = scoped_chart_candidates(candidates, &scope_ids);
             // Exchange labels are only needed to disambiguate the multi-core picker.
             let exchanges = if rows.len() > 1 {
                 b.session.market_source().core_exchange_names()
@@ -928,7 +975,11 @@ impl NewsView {
             0 => {}
             1 => {
                 let (core, market, _) = rows.into_iter().next().unwrap();
+                let group = self.group.clone();
                 self.backend.update(cx, |b, bcx| {
+                    if !b.workspace_action_allows_core(Some(&group), core) {
+                        return;
+                    }
                     // `false`: open without stealing focus, matching every other coin-nav site.
                     b.open_on_main((core, market), false);
                     bcx.notify();
@@ -936,6 +987,7 @@ impl NewsView {
             }
             _ => {
                 let backend = self.backend.clone();
+                let group = self.group.clone();
                 let items: Vec<MoonMenuItem> = rows
                     .into_iter()
                     .map(|(core, market, name)| {
@@ -946,10 +998,14 @@ impl NewsView {
                             _ => name,
                         };
                         let backend = backend.clone();
+                        let group = group.clone();
                         MoonMenuItem::with_key(format!("news-coin-core-{core}"), label).on_click(
                             move |_, window, app| {
                                 window.close_context_menu(app);
                                 backend.update(app, |b, bcx| {
+                                    if !b.workspace_action_allows_core(Some(&group), core) {
+                                        return;
+                                    }
                                     b.open_on_main((core, market.clone()), false);
                                     bcx.notify();
                                 });
@@ -1034,6 +1090,26 @@ impl NewsView {
             .child(div().flex_1())
             .child(pill)
     }
+}
+
+/// Filter chart candidates to the effective scope before keeping one market per core.
+///
+/// Args:
+///     candidates: Exact-coin search hits in search order.
+///     scope: Effective workspace core ids.
+///
+/// Returns:
+///     First candidate for every in-scope core, preserving search order.
+fn scoped_chart_candidates(
+    candidates: impl IntoIterator<Item = (CoreId, String, String)>,
+    scope: &[CoreId],
+) -> Vec<(CoreId, String, String)> {
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|(core, _, _)| scope.contains(core))
+        .filter(|(core, _, _)| seen.insert(*core))
+        .collect()
 }
 
 impl EventEmitter<PanelEvent> for NewsView {}

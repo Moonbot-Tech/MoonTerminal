@@ -15,15 +15,150 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::shared::{SaveDialog, SaveTarget};
+use super::shared::{SaveAuthority, SaveDialog, SaveTarget};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 
+#[cfg(test)]
+mod tests;
+
+/// Normalize an unordered concrete core set for stable authority comparison.
+fn normalized_cores(cores: impl IntoIterator<Item = u64>) -> Vec<u64> {
+    let mut cores: Vec<u64> = cores.into_iter().collect();
+    cores.sort_unstable();
+    cores.dedup();
+    cores
+}
+
+/// Return the ordered strategy identities whose per-target payload positions must stay aligned.
+fn save_target_identities(targets: &[SaveTarget]) -> Vec<(i64, Option<u64>)> {
+    targets
+        .iter()
+        .map(|target| (target.sid, target.core))
+        .collect()
+}
+
+/// Verify a Save authority without admitting a surviving subset of its original targets.
+///
+/// Args:
+///     authority: Producer token carried by the confirmation.
+///     dialog_seq: Current draft/selection sequence.
+///     workspace_generation: Current Auto generation, or `None` in Classic.
+///     workspace_cores: Current concrete Auto scope, or `None` in Classic.
+///     targets: Current complete effective target list.
+///
+/// Returns:
+///     `true` only when generation, scope, and ordered target identity all still match.
+fn save_authority_matches(
+    authority: &SaveAuthority,
+    dialog_seq: u64,
+    workspace_generation: Option<u64>,
+    workspace_cores: Option<&[u64]>,
+    targets: &[SaveTarget],
+) -> bool {
+    let current_cores = workspace_cores.map(|cores| normalized_cores(cores.iter().copied()));
+    authority.dialog_seq == dialog_seq
+        && authority.workspace_generation == workspace_generation
+        && authority.workspace_cores == current_cores
+        && authority.targets == save_target_identities(targets)
+}
+
+/// Resolve every target's live core set atomically before grouping commands.
+///
+/// A concrete target missing from its live strategy set rejects the complete operation. Legacy
+/// `None` targets retain Classic's intentional fan-out over their current live cores.
+fn resolve_complete_target_cores(
+    targets: &[SaveTarget],
+    live: &HashMap<i64, Vec<u64>>,
+) -> Option<Vec<Vec<u64>>> {
+    targets
+        .iter()
+        .map(|target| {
+            let live_cores = live.get(&target.sid).map(Vec::as_slice).unwrap_or(&[]);
+            match target.core {
+                Some(core) if live_cores.contains(&core) => Some(vec![core]),
+                Some(_) => None,
+                None => (!live_cores.is_empty()).then(|| live_cores.to_vec()),
+            }
+        })
+        .collect()
+}
+
 impl AnalyticsView {
+    /// Capture the complete workspace and selection identity for a Save or Copy producer.
+    ///
+    /// Args:
+    ///     targets: Ordered effective strategy targets represented by the producer.
+    ///     cx: Application context used to read the shared workspace generation.
+    ///
+    /// Returns:
+    ///     Immutable authority token; Classic deliberately carries no workspace generation/scope.
+    fn capture_save_authority(&self, targets: &[SaveTarget], cx: &App) -> SaveAuthority {
+        let workspace_cores = self
+            .workspace_scope
+            .as_ref()
+            .map(|scope| normalized_cores(scope.core_ids.iter().copied()));
+        let workspace_generation = workspace_cores.as_ref().map(|_| {
+            let revision = self.backend.read(cx).workspace_revision();
+            revision.read(cx).generation()
+        });
+        SaveAuthority {
+            dialog_seq: self.tuner.dialog_seq,
+            workspace_generation,
+            workspace_cores,
+            targets: save_target_identities(targets),
+        }
+    }
+
+    /// Return whether a carried Save authority still equals the live workspace and selection.
+    ///
+    /// Args:
+    ///     authority: Producer authority carried through preview and confirmation.
+    ///     targets: Exact dialog targets whose payload would be dispatched.
+    ///     cx: Application context used to read current revision and effective selection.
+    ///
+    /// Returns:
+    ///     `true` only when no scope, selection, or draft transition occurred.
+    fn save_authority_is_current(
+        &self,
+        authority: &SaveAuthority,
+        targets: &[SaveTarget],
+        cx: &App,
+    ) -> bool {
+        let current_targets = self.selected_targets();
+        let workspace_cores = self
+            .workspace_scope
+            .as_ref()
+            .map(|scope| scope.core_ids.as_slice());
+        let workspace_generation = workspace_cores.map(|_| {
+            let revision = self.backend.read(cx).workspace_revision();
+            revision.read(cx).generation()
+        });
+        save_authority_matches(
+            authority,
+            self.tuner.dialog_seq,
+            workspace_generation,
+            workspace_cores,
+            &current_targets,
+        ) && authority.targets == save_target_identities(targets)
+    }
+
     /// Open the confirmation dialog (write/copy): the parameters' current values
     /// ("now → next") are pulled from strategies.sqlite in the background.
     /// `notes` is indexed like `changes` and may be shorter or empty — an axis whose fields
     /// read fine as "now → next" supplies nothing.
+    ///
+    /// Args:
+    ///     targets: Ordered complete strategy identities and labels represented by the action.
+    ///     changes: Shared serialized field edits.
+    ///     per_target: Optional ordered field edits specific to each target.
+    ///     notes: Optional human-readable descriptions aligned with `changes`.
+    ///     warns: Confirmation warnings produced while preparing the edit.
+    ///     copy: Whether confirmation creates a copy instead of editing targets.
+    ///     cx: View context used to capture authority and prepare current values.
+    ///
+    /// Returns:
+    ///     Nothing; empty or stale preparations do not publish a dialog.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn open_change_dialog(
         &mut self,
@@ -40,6 +175,7 @@ impl AnalyticsView {
         let Some((sid, core)) = targets.first().map(|t| (t.sid, t.core)) else {
             return;
         };
+        let authority = self.capture_save_authority(&targets, cx);
         // A row that carries a NOTE never draws the "now" side, so reading it would be a
         // round trip whose result is discarded. The coins axis annotates every row.
         let needs_olds =
@@ -47,6 +183,7 @@ impl AnalyticsView {
         if !needs_olds {
             let olds = vec![None; changes.len()];
             self.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                authority,
                 targets,
                 changes,
                 per_target,
@@ -63,13 +200,13 @@ impl AnalyticsView {
         // analytical results, while scope changes and draft edits advance `dialog_seq`. Without
         // this separate guard, a live report refresh dropped valid Save clicks; using no guard
         // instead resurrected dialogs for selections the panel had already discarded.
-        let req = self.tuner.dialog_seq;
+        let req = authority.clone();
         self.spawn_db(
             true,
             cx,
             move || moon_core::db::tuner::strategy_current_values(sid, core, &keys),
             move |this, olds_map, cx| {
-                if this.tuner.dialog_seq != req {
+                if !this.save_authority_is_current(&req, &targets, cx) {
                     log::info!("analytics: the confirmation's scope changed, dialog dropped");
                     return;
                 }
@@ -78,6 +215,7 @@ impl AnalyticsView {
                     .map(|(k, _)| olds_map.get(k).cloned())
                     .collect();
                 this.tuner.save_dialog = Some(Arc::new(SaveDialog {
+                    authority: req,
                     targets,
                     changes,
                     per_target,
@@ -96,6 +234,13 @@ impl AnalyticsView {
     /// `window` is threaded through for the copy path alone: a created strategy never appears in
     /// this list (it is grouped from TRADES, and a new one has none), so the only way to say
     /// where it went is a notification.
+    ///
+    /// Args:
+    ///     window: Analytics window used by copy notifications.
+    ///     cx: View context used to revalidate authority and dispatch the chosen operation.
+    ///
+    /// Returns:
+    ///     Nothing; stale confirmation authority sends no commands.
     pub(super) fn confirm_save_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dlg) = self.tuner.save_dialog.take() else {
             return;
@@ -103,6 +248,10 @@ impl AnalyticsView {
         // A new attempt supersedes the previous complaint — it is about to be answered by
         // this write's own outcome.
         self.write_error = None;
+        if !self.save_authority_is_current(&dlg.authority, &dlg.targets, cx) {
+            log::info!("analytics: stale Save/Copy confirmation refused before dispatch");
+            return;
+        }
         if dlg.copy {
             self.create_strategy_copy(&dlg, window, cx);
         } else {
@@ -112,6 +261,7 @@ impl AnalyticsView {
                 dlg.targets.clone(),
                 dlg.changes.clone(),
                 dlg.per_target.clone(),
+                dlg.authority.clone(),
                 cx,
             );
         }
@@ -143,6 +293,9 @@ impl AnalyticsView {
         let Some(target) = dlg.targets.first() else {
             return;
         };
+        if !self.save_target_in_workspace(target) {
+            return;
+        }
         let sid = target.sid as u64;
         let target_core = target.core;
         let desired = {
@@ -160,7 +313,11 @@ impl AnalyticsView {
             String,
         )> = Vec::new();
         for (cid, cd) in b.session.store().cores() {
-            // A missing target core applies the copy to every core containing the strategy.
+            if !self.workspace_core_visible(cid) {
+                continue;
+            }
+            // In Classic, a missing target core applies the copy to every core containing the
+            // strategy; Auto rejects that legacy aggregate target before reaching this loop.
             if let Some(tc) = target_core {
                 if cid != tc {
                     continue;
@@ -257,13 +414,25 @@ impl AnalyticsView {
     /// applies a whole core's set in a single `sync_local_strategies`, so several strategies on
     /// the SAME core MUST go in one command (separate commands would clobber each other — see
     /// the `edit_strategies` doc). Each `(sid, core)` is validated against the strategy's live
-    /// core set (strategies.sqlite) so a stale/foreign core writes nowhere; a `None`-core legacy
-    /// target fans out to all of its live cores. One reload afterwards (not per target).
+    /// core set (strategies.sqlite) so a stale/foreign core writes nowhere. In Classic only, a
+    /// `None`-core legacy target fans out to all of its live cores. One reload afterwards (not per
+    /// target).
+    ///
+    /// Args:
+    ///     targets: Complete ordered strategy identities captured by the confirmation.
+    ///     changes: Shared serialized edits applied when no per-target value is supplied.
+    ///     per_target: Optional ordered edits whose positions correspond to `targets`.
+    ///     authority: Workspace generation, dialog sequence, and target identity producer token.
+    ///     cx: View context used to run the live-core read and dispatch commands.
+    ///
+    /// Returns:
+    ///     Nothing; authority or target drift rejects the whole plan before its first command.
     fn send_bulk_changes(
         &mut self,
         targets: Vec<SaveTarget>,
         changes: Vec<(String, String)>,
         per_target: Option<Vec<Vec<(String, String)>>>,
+        authority: SaveAuthority,
         cx: &mut Context<Self>,
     ) {
         if targets.is_empty() {
@@ -286,25 +455,30 @@ impl AnalyticsView {
             let wrote = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     let changes = Arc::new(changes);
+                    if !this.save_authority_is_current(&authority, &targets, cx) {
+                        log::info!(
+                            "analytics: Save authority changed during live-target read; nothing sent"
+                        );
+                        return false;
+                    }
+                    let Some(resolved_cores) = resolve_complete_target_cores(&targets, &live)
+                    else {
+                        log::warn!(
+                            "analytics: at least one Save target left its captured core; nothing sent"
+                        );
+                        this.set_write_error(
+                            t!("analytics.write_failed_stale", n = targets.len()).to_string(),
+                            cx,
+                        );
+                        return false;
+                    };
                     // Group validated targets by core: one edit command per core.
                     let mut by_core: HashMap<u64, Vec<(u64, Vec<(String, String)>)>> =
                         HashMap::new();
-                    let mut skipped = 0usize;
-                    for (i, t) in targets.iter().enumerate() {
-                        let live_cores = live.get(&t.sid).map(Vec::as_slice).unwrap_or(&[]);
-                        let cores: Vec<u64> = match t.core {
-                            Some(c) if live_cores.contains(&c) => vec![c],
-                            Some(c) => {
-                                log::warn!(
-                                    "analytics: changes → '{}': core {c} is not in the \
-                                     strategy's live set — skipping",
-                                    t.name
-                                );
-                                skipped += 1;
-                                continue;
-                            }
-                            None => live_cores.to_vec(),
-                        };
+                    // A Classic aggregate target with no live copies retains the legacy skipped
+                    // count; concrete stale targets already refused the whole operation above.
+                    let skipped = resolved_cores.iter().filter(|cores| cores.is_empty()).count();
+                    for (i, (t, cores)) in targets.iter().zip(resolved_cores).enumerate() {
                         // Each target's OWN value when the axis supplied one — the coin
                         // lists differ per strategy, and one shared value would copy the
                         // first strategy's list onto all of them.
@@ -312,7 +486,7 @@ impl AnalyticsView {
                         // A missing entry is an INVARIANT BREACH, not a default: falling back
                         // to the shared value would write the anchor's list onto this target,
                         // which is precisely the defect per-target values exist to prevent.
-                        // Refuse this target and say so.
+                        // Refuse the whole payload before any command and say so.
                         let mine = match per_target.as_ref() {
                             None => changes.as_ref().clone(),
                             Some(v) => match v.get(i) {
@@ -320,13 +494,17 @@ impl AnalyticsView {
                                 None => {
                                     log::error!(
                                         "analytics: no value for target '{}' ({} of {}) — \
-                                         skipped rather than written with another's value",
+                                         whole write refused",
                                         t.name,
                                         i,
                                         v.len()
                                     );
-                                    skipped += 1;
-                                    continue;
+                                    this.set_write_error(
+                                        t!("analytics.write_failed_stale", n = targets.len())
+                                            .to_string(),
+                                        cx,
+                                    );
+                                    return false;
                                 }
                             },
                         };
@@ -431,6 +609,33 @@ impl AnalyticsView {
             }
         })
         .detach();
+    }
+
+    /// Return whether a concrete core remains inside the effective Analytics workspace.
+    ///
+    /// Args:
+    ///     core: Core that a pending write would target.
+    ///
+    /// Returns:
+    ///     `true` in Classic or while the core belongs to the current Auto scope.
+    fn workspace_core_visible(&self, core: u64) -> bool {
+        self.workspace_scope
+            .as_ref()
+            .is_none_or(|scope| scope.core_ids.contains(&core))
+    }
+
+    /// Validate one dialog target immediately before a Save or Copy dispatch.
+    ///
+    /// Args:
+    ///     target: Retained dialog target awaiting dispatch.
+    ///
+    /// Returns:
+    ///     `true` only for a concrete visible core, or a legacy aggregate target in Classic.
+    fn save_target_in_workspace(&self, target: &SaveTarget) -> bool {
+        match target.core {
+            Some(core) => self.workspace_core_visible(core),
+            None => self.workspace_scope.is_none(),
+        }
     }
 
     /// The "Write to strategy" overlay: the list of edits + Yes/No.

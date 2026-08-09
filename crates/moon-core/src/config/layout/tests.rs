@@ -1,4 +1,119 @@
+//! Persistence, lenient-decoding, and UID high-water regressions for workspace layout fields.
+
 use super::*;
+
+/// Protects both workspace maps as a restart-stable, backwards-compatible layout contract.
+///
+/// Plausible breakage: marking either map as skipped/default-only makes a saved Auto workspace
+/// silently return to Classic or Overview after restart. Literal TOML is independent of the
+/// serializer and therefore catches a matching encoder/decoder mistake.
+#[test]
+fn legacy_and_current_toml_restore_workspace_state() {
+    let legacy: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
+        .expect("legacy layout must remain readable");
+    assert_eq!(
+        legacy
+            .workspace_mode_by_group
+            .get("desk")
+            .copied()
+            .unwrap_or_default(),
+        WorkspaceMode::Classic
+    );
+    assert_eq!(legacy.auto_workspace_core_by_group.get("desk"), None);
+
+    let current = "analytics_period = \"p-cur-month\"\n\
+                   [workspace_mode_by_group]\n\
+                   desk = \"auto-trading\"\n\
+                   [auto_workspace_core_by_group]\n\
+                   desk = 73\n";
+    let decoded: WindowLayout =
+        toml::from_str(current).expect("current workspace layout must load");
+    assert_eq!(
+        decoded.workspace_mode_by_group.get("desk"),
+        Some(&WorkspaceMode::AutoTrading)
+    );
+    assert_eq!(decoded.auto_workspace_core_by_group.get("desk"), Some(&73));
+
+    let encoded = toml::to_string(&decoded).expect("workspace layout must serialize");
+    assert!(encoded.contains("desk = \"auto-trading\""));
+}
+
+/// Protects the Auto selection as a durable UID high-water reference.
+///
+/// Plausible breakage: dropping this map from `WindowLayout::max_core_uid` allows a deleted core's
+/// UID to be reused and binds the saved workspace selection to an unrelated server.
+#[test]
+fn workspace_core_contributes_to_uid_high_water_mark() {
+    let mut layout = WindowLayout::default();
+    layout
+        .active_trade_core_by_group
+        .insert("desk".to_string(), 11);
+    layout
+        .auto_workspace_core_by_group
+        .insert("desk".to_string(), 97);
+
+    assert_eq!(layout.max_core_uid(), Some(97));
+}
+
+/// Protects the rest of the schema-less layout from malformed workspace preferences.
+///
+/// Plausible breakage: replacing either lenient map reader with ordinary deserialization makes a
+/// hand-edited wrong type reject every saved window position and column width in the document.
+#[test]
+fn malformed_workspace_fields_do_not_discard_other_layout() {
+    for written in [
+        "workspace_mode_by_group = 17",
+        "workspace_mode_by_group = [\"auto-trading\"]",
+        "auto_workspace_core_by_group = \"desk\"",
+        "auto_workspace_core_by_group = [73]",
+    ] {
+        let doc = format!("analytics_period = \"p-cur-month\"\n{written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+        assert!(decoded.workspace_mode_by_group.is_empty());
+        assert!(decoded.auto_workspace_core_by_group.is_empty());
+    }
+
+    let unknown = "analytics_period = \"p-cur-month\"\n\
+                   [workspace_mode_by_group]\n\
+                   desk = \"future-preset\"\n";
+    let decoded: WindowLayout = toml::from_str(unknown).expect("unknown mode must remain readable");
+    assert_eq!(
+        decoded.workspace_mode_by_group.get("desk"),
+        Some(&WorkspaceMode::Classic)
+    );
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+}
+
+/// Protects the global Auto rail width as a lenient, bounded restart preference.
+///
+/// Plausible breakage: replacing the custom decoder with ordinary `f32` deserialization makes a
+/// quoted or malformed width discard every saved window position, while omitting the clamp can
+/// restore a rail that consumes the complete workspace.
+#[test]
+fn auto_workspace_rail_width_defaults_decodes_and_clamps() {
+    let legacy: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
+        .expect("legacy layout must remain readable");
+    // The accepted UX contract is independent of the production default constant.
+    assert_eq!(legacy.auto_workspace_rail_width(), 340.0);
+
+    for (written, expected) in [
+        ("480.5", 480.5),
+        ("\"300\"", 300.0),
+        ("1", 52.0),
+        ("900", 560.0),
+        ("\"wide\"", 340.0),
+        ("true", 340.0),
+    ] {
+        let doc =
+            format!("analytics_period = \"p-cur-month\"\nauto_workspace_rail_width = {written}\n");
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+        assert_eq!(decoded.auto_workspace_rail_width(), expected);
+    }
+}
 
 /// Protects `layout.rs:WindowLayout::max_core_uid` from dropping active Main-core references.
 ///

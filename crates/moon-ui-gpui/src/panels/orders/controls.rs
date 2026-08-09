@@ -4,24 +4,37 @@ use super::*;
 use rust_i18n::t;
 
 impl OrdersPanel {
-    /// Builds the multi-select core dropdown shared with the Report and Assets panels through
+    /// Build the effective core dropdown shared with the Report and Assets panels through
     /// [`crate::controls::core_combo`].
     ///
-    /// Its fixed-width label shows All Cores for an empty or complete selection and the localized
-    /// current-core count otherwise, including a sole selection. Clicking a known exchange header
-    /// batch-toggles its currently available cores.
+    /// Classic mode shows the retained selection and permits core or exchange toggles. Auto mode
+    /// shows the pinned workspace label and disables the control without mutating Classic state.
     ///
     /// Args:
     ///     cores: Group cores in canonical display order.
     ///     cx: Panel context used to read exchanges and wire selection callbacks.
     ///
     /// Returns:
-    ///     The configured fixed-trigger dropdown.
+    ///     Interactive Classic selector or disabled Auto scope indicator.
     pub(super) fn source_combo(
         &self,
         cores: &OrderedCores,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let scope = self.effective_scope(self.backend.read(cx));
+        let workspace_owned = scope.is_workspace_owned();
+        let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
+        let pinned_label = match scope.label() {
+            crate::workspace::EffectiveScopeLabel::Overview => {
+                Some(t!("workspace.overview").to_string())
+            }
+            crate::workspace::EffectiveScopeLabel::Core(core) => cores
+                .iter()
+                .find(|(id, _)| *id == core)
+                .map(|(_, name)| name.clone()),
+            crate::workspace::EffectiveScopeLabel::All
+            | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
+        };
         let view = cx.entity();
         let exchange_view = view.clone();
         let exchange_names = self
@@ -30,11 +43,15 @@ impl OrdersPanel {
             .session
             .market_source()
             .core_exchange_names();
-        crate::controls::core_combo(
+        let combo = crate::controls::core_combo(
             "orders-source",
             cores,
             &exchange_names,
-            &self.sel_cores,
+            if workspace_owned {
+                &effective_selection
+            } else {
+                &self.sel_cores
+            },
             crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("orders.all_cores").to_string(),
             |n| t!("orders.cores_n", n = n).to_string(),
@@ -48,6 +65,12 @@ impl OrdersPanel {
                 });
             },
         )
+        .disabled(workspace_owned);
+        if let Some(label) = pinned_label {
+            combo.label(label)
+        } else {
+            combo
+        }
     }
 
     /// Builds the All, Real, and Emulated order-kind dropdown.

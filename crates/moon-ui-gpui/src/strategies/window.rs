@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) const STRATEGIES_HEADER_H: f32 = 32.0;
 
 pub(super) fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
@@ -37,7 +40,7 @@ pub(super) fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
 /// Which strategy a `Backend::strategies_goto` request points at.
 ///
 /// Two forms because the two kinds of caller know different things: a chart order line or an
-/// Orders row already holds the id, while a just-created copy does not — its id is assigned by
+/// Orders row already holds the id, while a just-created copy does not; its id is assigned by
 /// the core and only arrives with the echo, so it can be named but not numbered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RevealTarget {
@@ -47,23 +50,99 @@ pub enum RevealTarget {
     Name(String),
 }
 
+/// One queued Strategies reveal plus immutable optional group workspace authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StrategyRevealRequest {
+    pub(super) core: CoreId,
+    pub(super) target: RevealTarget,
+    pub(super) workspace_group: Option<String>,
+}
+
+impl StrategyRevealRequest {
+    /// Capture one exact reveal request at its producer boundary.
+    ///
+    /// Args:
+    ///     core: Core that owns the requested strategy.
+    ///     target: Exact id or echo-resolved name to reveal.
+    ///     workspace_group: Immutable owning group, or `None` for an unscoped producer.
+    ///
+    /// Returns:
+    ///     One request carrying both the reveal identity and its workspace authority.
+    pub(super) fn new(core: CoreId, target: RevealTarget, workspace_group: Option<String>) -> Self {
+        Self {
+            core,
+            target,
+            workspace_group,
+        }
+    }
+
+    /// Revalidate this request without changing the current workspace selection.
+    ///
+    /// Args:
+    ///     backend: Current live session and workspace authority.
+    ///
+    /// Returns:
+    ///     Whether the captured core remains visible to the original producer.
+    pub(super) fn is_authorized(&self, backend: &Backend) -> bool {
+        workspace_allows_reveal(backend, self.workspace_group.as_deref(), self.core)
+    }
+}
+
+/// Revalidate one strategy reveal against the captured group workspace authority.
+///
+/// Args:
+///     backend: Shared state containing current workspace scope.
+///     workspace_group: Group that owned the callback, or `None` for an unscoped caller.
+///     core: Core that owns the requested strategy.
+///
+/// Returns:
+///     Whether the captured target remains visible without changing workspace selection.
+fn workspace_allows_reveal(backend: &Backend, workspace_group: Option<&str>, core: CoreId) -> bool {
+    backend.workspace_action_allows_core(workspace_group, core)
+}
+
 /// Open or focus the Strategies window and navigate to `strat_id` on `core`.
 /// Render drains the request, disables the active-only filter, expands the target core and folders,
 /// and selects the strategy. Entry points include chart order-line context menus and the Orders
-/// table's Strat column.
+/// table's Strat column. Group-owned callers pass their workspace group so a retained callback
+/// cannot switch or reveal a core hidden by a later rail selection; unscoped callers pass `None`.
+///
+/// Args:
+///     backend: Shared state and singleton-window authority.
+///     core: Core captured by the navigation producer.
+///     strat_id: Exact live strategy identity on `core`.
+///     workspace_group: Group owning the callback, or `None` for an unscoped caller.
+///     owner: Optional native owner window.
+///     owner_display: Display used when a new tool window is required.
+///     cx: Application context used to validate, queue, and open.
+///
+/// Returns:
+///     Nothing; a stale group-owned target is rejected without changing workspace state.
 pub fn open_goto(
     backend: Entity<Backend>,
     core: CoreId,
     strat_id: u64,
+    workspace_group: Option<String>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    backend.update(cx, |b, bcx| {
-        b.strategies_goto = Some((core, RevealTarget::Id(strat_id)));
+    let queued = backend.update(cx, |b, bcx| {
+        if !workspace_allows_reveal(b, workspace_group.as_deref(), core) {
+            return false;
+        }
+        b.strategies_goto = Some(StrategyRevealRequest::new(
+            core,
+            RevealTarget::Id(strat_id),
+            workspace_group.clone(),
+        ));
         // Wake an existing window's observer because `open` only focuses a deduplicated window.
         bcx.notify();
+        true
     });
+    if !queued {
+        return;
+    }
     open(backend, owner, owner_display, cx);
 }
 
@@ -79,8 +158,14 @@ pub fn open_goto(
 /// Liveness is proved by UPDATING the handle rather than by `is_some()`: nothing clears
 /// `strategies_window` when the user closes the window, so the handle outlives it.
 ///
+/// Args:
+///     backend: Shared state and existing Strategies window handle.
+///     core: Core that should own the echoed strategy.
+///     name: Strategy name assigned by the core.
+///     cx: Application context used to validate and queue the reveal.
+///
 /// Returns:
-///     Whether a live window accepted the request.
+///     Whether a live window accepted a still-authorized request.
 pub fn reveal_name(backend: &Entity<Backend>, core: CoreId, name: String, cx: &mut App) -> bool {
     let Some(handle) = backend.read(cx).strategies_window else {
         return false;
@@ -88,10 +173,22 @@ pub fn reveal_name(backend: &Entity<Backend>, core: CoreId, name: String, cx: &m
     if handle.update(cx, |_, _, _| ()).is_err() {
         return false;
     }
-    backend.update(cx, |b, bcx| {
-        b.strategies_goto = Some((core, RevealTarget::Name(name)));
+    let queued = backend.update(cx, |b, bcx| {
+        let workspace_group = b.singleton_workspace().map(|workspace| workspace.group);
+        if !workspace_allows_reveal(b, workspace_group.as_deref(), core) {
+            return false;
+        }
+        b.strategies_goto = Some(StrategyRevealRequest::new(
+            core,
+            RevealTarget::Name(name),
+            workspace_group,
+        ));
         bcx.notify();
+        true
     });
+    if !queued {
+        return false;
+    }
     true
 }
 

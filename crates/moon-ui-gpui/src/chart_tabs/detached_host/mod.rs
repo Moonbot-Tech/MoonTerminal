@@ -80,14 +80,18 @@ pub(super) struct DetachedChartHost {
     /// The root receives focus on creation. Clicking market input moves focus there, but key events
     /// bubble back to the root. This currently covers Scale +/- for the window panel.
     focus: FocusHandle,
+    /// Exact cancellation authority for this window's current background taskbar-hide burst.
+    taskbar_hide: crate::window::windowing::TaskbarHideTask,
 }
 
 impl DetachedChartHost {
     /// Construct a detached chart host and attach its window and persistence observers.
     ///
     /// Taskbar suppression is armed at construction and after every activation while the host
-    /// remains an independent window; [`crate::window::windowing::hide_window_from_taskbar_soon`]
-    /// owns the platform timing rationale.
+    /// remains an independent window. Active-window transitions also attribute singleton scope to
+    /// this host's Auto group; repeated activation of the same owner is suppressed by Backend.
+    /// [`crate::window::windowing::hide_window_from_taskbar_soon`] owns the platform timing
+    /// rationale.
     ///
     /// Args:
     ///     panel: Chart-stack panel rendered by this host.
@@ -150,6 +154,7 @@ impl DetachedChartHost {
         // request is not handled, leaving the spec detached so the window restores next launch.
         let (g, n, c) = (group.clone(), num, bucket.clone());
         cx.on_release(move |this, app| {
+            this.taskbar_hide.cancel();
             this.backend.update(app, |b, cx| {
                 let mine = b
                     .detached_chart_windows
@@ -165,11 +170,18 @@ impl DetachedChartHost {
             });
         })
         .detach();
-        // Apply the shared independent-window taskbar policy now and after every activation;
+        // Apply the shared independent-window taskbar policy now and after every activation.
+        // Active transitions also own Auto singleton scope independently of idle-chart polling;
         // `hide_window_from_taskbar_soon` owns the delayed retry rationale.
-        crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
-        cx.observe_window_activation(window, |_this, window, cx| {
-            crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
+        let taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
+        cx.observe_window_activation(window, |this, window, cx| {
+            this.taskbar_hide.cancel();
+            this.taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
+            if window.is_window_active() {
+                let group = this.group.clone();
+                this.backend
+                    .update(cx, |b, bcx| b.focus_auto_workspace(&group, bcx));
+            }
         })
         .detach();
         let initial_x_sync_rev = backend.read(cx).chart_x_sync_rev;
@@ -351,6 +363,7 @@ impl DetachedChartHost {
             coin_query: String::new(),
             coin_popup_open: false,
             focus,
+            taskbar_hide,
         }
     }
 

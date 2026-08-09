@@ -2,13 +2,41 @@
 
 use super::*;
 
+/// Decide whether a group-originated editor may still target its captured core.
+///
+/// Args:
+///     workspace_owned: Whether Auto currently owns the originating group scope.
+///     effective_core_ids: Current effective group membership.
+///     core: Core captured when the editor opened.
+///
+/// Returns:
+///     `true` for Classic/global authority or while Auto still contains the captured core.
+pub(super) fn order_edit_core_is_authorized(
+    workspace_owned: bool,
+    effective_core_ids: &[CoreId],
+    core: CoreId,
+) -> bool {
+    !workspace_owned || effective_core_ids.contains(&core)
+}
+
 /// Builds and submits edits from the dialog draft. A changed, positive, finite active-leg price is
 /// sent through `move_order`; each changed stop group is included in `OrderStopsForm`, while an
 /// untouched group remains `None`. `update_order_stops` treats an entirely empty form as a no-op.
 /// The move command is queued before the stop form; submission is not atomic, and the first error is
-/// returned so the OK handler can keep the dialog open and show a notification.
+/// returned so the OK handler can keep the dialog open and show a notification. Group-owned
+/// editors revalidate current Auto membership once inside the Backend update before either command.
+///
+/// Args:
+///     state: Dialog draft plus originating dispatch authority.
+///     cx: Application context used to read inputs and submit through Backend.
+///
+/// Returns:
+///     Success after applicable commands were queued, including a no-op unchanged stop form.
+///
+/// Errors:
+///     Returns a stale-scope refusal or the first session command error.
 pub(super) fn apply(state: &Entity<OrderEditState>, cx: &mut App) -> anyhow::Result<()> {
-    let (backend, core, uid, form, new_price) = {
+    let (backend, authority_group, core, uid, form, new_price) = {
         let s = state.read(cx);
         let init = s.init;
         let val = |input: &Entity<MoonInputState>| parse_num(&input.read(cx).value());
@@ -61,10 +89,28 @@ pub(super) fn apply(state: &Entity<OrderEditState>, cx: &mut App) -> anyhow::Res
                 vol: vs_vol,
             });
         }
-        (s.backend.clone(), s.core, s.uid, form, new_price)
+        (
+            s.backend.clone(),
+            s.authority_group.clone(),
+            s.core,
+            s.uid,
+            form,
+            new_price,
+        )
     };
 
     backend.update(cx, |b, _| -> anyhow::Result<()> {
+        if let Some(group) = authority_group.as_deref() {
+            let retained = [core];
+            let scope = b.effective_workspace_scope(
+                group,
+                crate::workspace::RetainedCoreScope::Explicit(&retained),
+            );
+            anyhow::ensure!(
+                order_edit_core_is_authorized(scope.is_workspace_owned(), scope.ids(), core),
+                "order editor scope changed; reopen it from the current workspace core"
+            );
+        }
         if let Some(price) = new_price {
             b.session.move_order(core, uid, price)?;
         }

@@ -1,21 +1,53 @@
 //! [ReportPanel] filters, controlled row selection, row actions, column toggles, and export.
 
+use super::state::{ReportPreferenceWrite, schedule_report_preference};
 use super::*;
 
+/// Workspace authority captured while an export destination picker is open.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReportExportScopeIdentity {
+    /// Group-workspace generation, or `None` for an explicit standalone Report scope.
+    workspace_generation: Option<u64>,
+    /// Deterministic effective core ids represented by the export request.
+    core_ids: Vec<CoreId>,
+}
+
+/// Return whether a post-picker export still belongs to its originating scope.
+///
+/// Args:
+///     requested: Scope captured before opening the native path picker.
+///     current: Scope rebuilt from the live panel and Backend after the picker returns.
+///
+/// Returns:
+///     `true` only when neither group generation nor effective core membership changed.
+fn report_export_scope_is_current(
+    requested: &ReportExportScopeIdentity,
+    current: &ReportExportScopeIdentity,
+) -> bool {
+    requested == current
+}
+
 impl ReportPanel {
-    /// Toggle a core in the multi-selection.
+    /// Toggle a core in the retained Classic or standalone multi-selection.
     ///
     /// `None` is the All toggle: it builds the current core set, then clears the selection when
     /// every current core is selected. Otherwise it replaces the selection with the current set;
-    /// stale ids never stand in for current cores.
+    /// stale ids never stand in for current cores. Group Auto mode owns the effective scope and
+    /// leaves this retained selection unchanged.
     ///
     /// Args:
     ///     uid: Core to toggle, or `None` for the All row.
     ///     cx: Panel context used to request a filtered database query.
     ///
     /// Returns:
-    ///     Nothing; the in-memory filter is updated and a requery is scheduled.
+    ///     Nothing; Classic or standalone mode schedules a requery, while group Auto is a no-op.
     pub(super) fn toggle_core(&mut self, uid: Option<u64>, cx: &mut Context<Self>) {
+        if self
+            .workspace_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
         match uid {
             None => {
                 let all: HashSet<u64> = self.cores.iter().map(|(u, _)| *u).collect();
@@ -31,23 +63,31 @@ impl ReportPanel {
         self.request_requery(cx);
     }
 
-    /// Toggle every still-available core from one clicked exchange section.
+    /// Toggle one exchange section in the retained Classic or standalone core filter.
     ///
     /// Empty means All before the click, so the first exchange selection becomes explicit. A
     /// fully selected exchange is removed without changing selections from other exchanges.
-    /// Database cores that disappeared after rendering are ignored.
+    /// Database cores that disappeared after rendering are ignored. Group Auto mode leaves the
+    /// retained selection unchanged.
     ///
     /// Args:
     ///     exchange_cores: Core ids captured from one rendered exchange section.
     ///     cx: Panel context used to request a filtered database query.
     ///
     /// Returns:
-    ///     Nothing; a changed selection schedules one requery, while a stale-only batch is a no-op.
+    ///     Nothing; a retained-scope change schedules one requery, while stale-only and group Auto
+    ///     calls are no-ops.
     pub(super) fn toggle_exchange_cores(
         &mut self,
         exchange_cores: Vec<u64>,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .workspace_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
         let available = self.cores.iter().map(|(core, _)| *core).collect();
         if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
             self.reconcile_strategy_core(cx);
@@ -55,17 +95,25 @@ impl ReportPanel {
         }
     }
 
-    /// Set the filter to only the clicked Core-cell UID, or clear it when already the sole selection.
+    /// Handle a Core-cell click under standalone, Classic, or Auto authority.
     ///
-    /// This matches Core-cell filtering in Orders and Assets.
+    /// Standalone and Classic group Reports set the retained filter to the clicked core, or clear
+    /// it when that core is already the sole selection. Group Auto ignores this shortcut because
+    /// only the Shell rail owns selection.
     ///
     /// Args:
     ///     uid: Core identity from the clicked report row.
     ///     cx: Panel context used to request the replacement query.
     ///
     /// Returns:
-    ///     Nothing.
+    ///     Nothing; only a retained-filter change requests a local requery.
     pub(super) fn filter_to_core(&mut self, uid: u64, cx: &mut Context<Self>) {
+        if self
+            .workspace_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
         if self.sel_cores.len() == 1 && self.sel_cores.contains(&uid) {
             self.sel_cores.clear();
         } else {
@@ -174,9 +222,16 @@ impl ReportPanel {
     ///     Nothing. This is a display toggle: it changes no filter and triggers no query.
     pub(super) fn toggle_comment_pane(&mut self, cx: &mut Context<Self>) {
         self.show_comment = !self.show_comment;
-        if let Some(conn) = &self.conn {
-            db::save_comment_pane(conn, self.detached, self.show_comment);
-        }
+        self.preference_revisions.comment = self.preference_revisions.comment.wrapping_add(1);
+        let detached = self.detached;
+        let show_comment = self.show_comment;
+        schedule_report_preference(
+            cx,
+            ReportPreferenceWrite::Comment {
+                detached,
+                visible: show_comment,
+            },
+        );
         cx.notify();
     }
 
@@ -308,11 +363,8 @@ impl ReportPanel {
         }];
         // With no explicit filter the coin actions may act on every core the selector currently
         // knows, exactly as the coin cell's menu did.
-        let selected_cores: Vec<u64> = if self.sel_cores.is_empty() {
-            self.cores.iter().map(|(uid, _)| *uid).collect()
-        } else {
-            self.sel_cores.iter().copied().collect()
-        };
+        let selected_cores = self.effective_core_ids(self.backend.read(cx));
+        let workspace_group = (!self.standalone).then(|| self.group.clone());
         let Some(data) = self.data.data().cloned() else {
             return;
         };
@@ -324,6 +376,7 @@ impl ReportPanel {
             &self.cols,
             data.core_uids.get(row).copied().unwrap_or(0),
             selected_cores,
+            workspace_group,
             trade_log,
             &self.backend,
             cx,
@@ -374,19 +427,31 @@ impl ReportPanel {
             return Err("report.trade_log.no_task");
         }
         let core_uid = data.core_uids.get(row).copied().unwrap_or(0);
-        let config_name = self
-            .backend
-            .read(cx)
-            .config
-            .servers
-            .iter()
-            .find(|server| server.id == core_uid)
-            .map(|server| server.name.clone());
+        let (config_name, workspace) = {
+            let backend = self.backend.read(cx);
+            let config_name = backend
+                .config
+                .servers
+                .iter()
+                .find(|server| server.id == core_uid)
+                .map(|server| server.name.clone());
+            let workspace = if self.standalone {
+                None
+            } else {
+                let revision = backend.workspace_revision();
+                Some(trade_log::TradeLogWorkspaceIdentity::new(
+                    self.group.clone(),
+                    core_uid,
+                    revision.read(cx).generation(),
+                ))
+            };
+            (config_name, workspace)
+        };
         // Report dates are unix seconds; the log files are named from milliseconds.
         let secs_to_ms = |v: Option<i64>| v.unwrap_or(0).saturating_mul(1000);
         // With no name for the core there is no file to open at all, and the dialog could only ever
         // report "nothing found" for a reason it does not know — so that is refused below, named.
-        let request = trade_log::trade_log_request(
+        let mut request = trade_log::trade_log_request(
             &column("core_name").map(value_to_string).unwrap_or_default(),
             config_name.as_deref(),
             &column("coin").map(value_to_string).unwrap_or_default(),
@@ -395,6 +460,7 @@ impl ReportPanel {
             secs_to_ms(column("closedate").and_then(as_i64)),
             moon_core::util::now_unix_ms_i64(),
         );
+        request.workspace = workspace;
         if request.labels.is_empty() {
             return Err("report.trade_log.no_core");
         }
@@ -437,7 +503,7 @@ impl ReportPanel {
         );
     }
 
-    /// Queue soft-delete or restore for every selected replicated row.
+    /// Queue soft-delete or restore after revalidating every selected row against live scope.
     ///
     /// Args:
     ///     deleted: `true` sends the protocol's delete flag; `false` sends restore.
@@ -460,9 +526,16 @@ impl ReportPanel {
         if targets.is_empty() {
             return;
         }
+        let workspace_group = (!self.standalone).then(|| self.group.clone());
         let mut queued = 0usize;
         let mut failed = false;
         self.backend.update(cx, |backend, _| {
+            if targets.iter().any(|(core_uid, _)| {
+                !backend.workspace_action_allows_core(workspace_group.as_deref(), *core_uid)
+            }) {
+                failed = true;
+                return;
+            }
             for (core_uid, rec_ids) in targets {
                 let count = rec_ids.len();
                 if backend
@@ -515,11 +588,64 @@ impl ReportPanel {
         self.persist_visible(cx);
         cx.notify();
     }
+
+    /// Return export columns in runtime order for the selected visible-or-complete mode.
+    ///
+    /// Args:
+    ///     all_cols: Whether to ignore the visible-column selection.
+    ///
+    /// Returns:
+    ///     Runtime column names in source order.
+    fn export_columns(&self, all_cols: bool) -> Vec<String> {
+        if all_cols {
+            (*self.cols).clone()
+        } else {
+            self.cols
+                .iter()
+                .filter(|column| self.visible.contains(column.as_str()))
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// Capture the current effective export authority without applying workspace state to a
+    /// standalone Analytics-owned Report.
+    ///
+    /// Args:
+    ///     cx: Application context used to read Backend and workspace revision state.
+    ///
+    /// Returns:
+    ///     Group generation plus effective ids, or explicit standalone ids without a generation.
+    fn export_scope_identity(&self, cx: &App) -> ReportExportScopeIdentity {
+        let (workspace_revision, core_ids) = {
+            let backend = self.backend.read(cx);
+            (
+                (!self.standalone).then(|| backend.workspace_revision()),
+                self.effective_core_ids(backend),
+            )
+        };
+        ReportExportScopeIdentity {
+            workspace_generation: workspace_revision.map(|revision| revision.read(cx).generation()),
+            core_ids,
+        }
+    }
+
     /// Prompt for a destination, then export the current filter and sort order.
     ///
     /// `all_cols` selects the full runtime schema instead of visible columns. A
     /// `NotReady` or `Failed` read aborts before any file write; completion or
-    /// failure is reported in the originating window.
+    /// failure is reported in the originating window. Group scope is captured before the picker
+    /// and revalidated with a freshly rebuilt filter afterward; standalone explicit scope does not
+    /// inherit workspace generation changes.
+    ///
+    /// Args:
+    ///     fmt: CSV or XLSX destination format.
+    ///     all_cols: Whether to export the complete runtime schema instead of visible columns.
+    ///     window: Originating window for the path picker and completion notification.
+    ///     cx: Panel context used to capture and later rebuild live export state.
+    ///
+    /// Returns:
+    ///     Nothing; cancellation, released panels, empty columns, or stale scope write no file.
     pub(super) fn export_report(
         &mut self,
         fmt: export::Format,
@@ -527,29 +653,43 @@ impl ReportPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let cols: Vec<String> = if all_cols {
-            (*self.cols).clone()
-        } else {
-            self.cols
-                .iter()
-                .filter(|c| self.visible.contains(c.as_str()))
-                .cloned()
-                .collect()
-        };
-        if cols.is_empty() {
+        if self.export_columns(all_cols).is_empty() {
             log::warn!("report export has no columns (table empty?)");
             return;
         }
-        let filter = self.filter(cx);
-        let sort_key = self.sort_key.clone();
-        let sort_desc = self.sort_desc;
-        let zone = self.display_zone;
-        let suggested = export::suggested_name(&filter, fmt, all_cols, zone);
+        let requested_scope = self.export_scope_identity(cx);
+        let suggested_filter = self.filter(cx);
+        let suggested = export::suggested_name(&suggested_filter, fmt, all_cols, self.display_zone);
         let handle = window.window_handle();
         let rx = cx.prompt_for_new_path(&export::default_dir(), Some(&suggested));
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             // A cancelled or closed destination dialog requires no notification.
             let Ok(Ok(Some(path))) = rx.await else {
+                return;
+            };
+            let Ok(Some((cols, filter, sort_key, sort_desc, zone))) = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    let current_scope = this.export_scope_identity(cx);
+                    if !report_export_scope_is_current(&requested_scope, &current_scope) {
+                        log::warn!(
+                            "report export cancelled because its scope changed while choosing a destination"
+                        );
+                        return None;
+                    }
+                    let cols = this.export_columns(all_cols);
+                    if cols.is_empty() {
+                        log::warn!("report export has no columns after destination selection");
+                        return None;
+                    }
+                    Some((
+                        cols,
+                        this.filter(cx),
+                        this.sort_key.clone(),
+                        this.sort_desc,
+                        this.display_zone,
+                    ))
+                })
+            }) else {
                 return;
             };
             let executor = cx.update(|cx| cx.background_executor().clone());
@@ -583,3 +723,6 @@ impl ReportPanel {
         .detach();
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,5 +1,6 @@
-//! Detached chart tabs: OS-window lifecycle, including creation, restoration, repinning, geometry
-//! and scale persistence, plus the `DetachedChartHost` window view. The tab strip interacts with
+//! Detached chart tabs: OS-window lifecycle, including Classic-mode creation, restoration,
+//! repinning, geometry and scale persistence, plus the `DetachedChartHost` window view. Auto
+//! refuses new detachment before any lifecycle or persistence work. The tab strip interacts with
 //! this subsystem through a small set of `pub(super)` methods called from event and observe paths.
 
 use gpui::*;
@@ -8,8 +9,17 @@ use moon_ui::{MoonBackgroundPolicy, Root};
 use super::detached_host::DetachedChartHost;
 use super::{AddChartStack, ChartTabs, Tab, chart_pane_label, coin_search};
 use crate::persistence::chart_persist::{self, StackLayoutMode, StackOrientation};
-use moon_core::config::ChartBucket;
+use moon_core::config::{ChartBucket, WorkspaceMode};
 use moon_core::session::CoreId;
+
+/// Return whether ChartTabs may create a new independent chart window in this workspace mode.
+///
+/// Auto permits in-window dock editing but owns all navigation through the shared main window, so
+/// its independent chart detach path must stop before geometry lookup, window creation, or spec
+/// mutation. Existing detached windows and their persistence remain untouched.
+pub(super) fn chart_detach_allowed(mode: WorkspaceMode) -> bool {
+    mode != WorkspaceMode::AutoTrading
+}
 
 impl ChartTabs {
     /// Gather this group's detached chart windows from the Main window's tab-strip control.
@@ -41,8 +51,11 @@ impl ChartTabs {
     ///     cx: Parent context used to open the window and synchronize active state.
     ///
     /// Returns:
-    ///     Nothing; Main and missing tabs are ignored, as is a failed window creation.
+    ///     Nothing; Auto, Main, missing tabs, and failed window creation are ignored.
     pub(super) fn detach(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        if !chart_detach_allowed(self.backend.read(cx).workspace_mode(&self.group)) {
+            return;
+        }
         let (n, bucket, is_custom) = match tab.clone() {
             Tab::Add(n, b) => (n, b, false),
             Tab::Custom(n, b) => (n, b, true),
@@ -313,8 +326,16 @@ impl ChartTabs {
                 // clicking a chart on another display. Policy plus a Windows fallback hides taskbar entries.
                 for (n, bucket, geom, scale) in pending {
                     let backend = this.backend.clone();
+                    let workspace_group = this.group.clone();
                     let panel = cx.new(|_| {
-                        AddChartStack::new(backend, n, bucket.clone(), epoch, theme.clone())
+                        AddChartStack::new(
+                            backend,
+                            workspace_group,
+                            n,
+                            bucket.clone(),
+                            epoch,
+                            theme.clone(),
+                        )
                     });
                     if scale.is_some() {
                         panel.update(cx, |p, pcx| p.set_scale(scale, pcx));

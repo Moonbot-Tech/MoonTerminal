@@ -27,7 +27,8 @@ const MAX_DAYS: usize = 8;
 ///     now_ms: Current time in unix milliseconds.
 ///
 /// Returns:
-///     The labels and UTC days to scan, plus the title fields.
+///     The labels and UTC days to scan, plus title fields and an explicitly unscoped workspace
+///     identity for the Report caller to retain or bind.
 pub(crate) fn trade_log_request(
     row_core_name: &str,
     config_core_name: Option<&str>,
@@ -64,6 +65,7 @@ pub(crate) fn trade_log_request(
         task_id,
         labels,
         dates: log_dates(start, end, MAX_DAYS),
+        workspace: None,
     }
 }
 
@@ -139,5 +141,4 @@ pub(super) fn scan_trade_log(request: &TradeLogRequest, max: usize) -> applog::S
 }
 
 #[cfg(test)]
-/// Tests for resolving a trade into the files and days to scan.
 mod tests;

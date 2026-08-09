@@ -28,10 +28,7 @@ impl CoreStatusView {
         // against different days in the same frame.
         let now_ms = moon_core::util::now_unix_ms_i64();
         let mut out = Vec::new();
-        for (id, name) in self.scope_cores(b) {
-            if !self.sel_cores.is_empty() && !self.sel_cores.contains(&id) {
-                continue;
-            }
+        for (id, name) in self.query_cores(b) {
             // One store lookup per core: this loop runs for every core on every cache rebuild.
             let core = store.core(id);
             let endpoint = core.and_then(|core| core.endpoint);

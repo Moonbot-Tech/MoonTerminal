@@ -6,7 +6,7 @@
 
 use moon_core::feed::StrategyRow;
 
-use super::FolderCounts;
+use super::{FolderCounts, visible_strategy_keys};
 use crate::strategies::filter::{PreparedFilter, StrategyFilter};
 use crate::strategies::tree::ops::path_segments;
 
@@ -210,4 +210,36 @@ fn the_joined_key_round_trips_through_the_window_splitter() {
         let resplit: Vec<&str> = path_segments(&joined).collect();
         assert_eq!(segs, resplit, "path {:?}", r.folder_path);
     }
+}
+
+/// `logic.rs:selected_keys` returning the retained set unchanged would let a hidden Classic
+/// selection drive copy, delete, version, parameter, or edit actions on another core in Auto mode.
+#[test]
+fn hidden_classic_selection_cannot_drive_auto_actions() {
+    let retained = vec![(11, 101), (22, 202), (11, 303)];
+
+    assert_eq!(
+        visible_strategy_keys(retained.clone(), Some(&[22])),
+        vec![(22, 202)]
+    );
+    assert_eq!(retained, vec![(11, 101), (22, 202), (11, 303)]);
+    assert_eq!(
+        visible_strategy_keys(retained.clone(), None),
+        retained,
+        "Classic must restore the retained selection unchanged"
+    );
+
+    let logic = include_str!("../logic.rs");
+    let selected_keys = logic
+        .split("pub(super) fn selected_keys(")
+        .nth(1)
+        .and_then(|tail| tail.split("\n}").next())
+        .expect("effective selection adapter must exist");
+    assert!(selected_keys.contains("visible_strategy_keys"));
+
+    let actions = include_str!("../actions.rs");
+    assert!(actions.contains("strategy_action_authorized"));
+    assert!(actions.contains("pub(super) fn start_stop_plan"));
+    assert!(actions.contains("field_edit_plan_authorized"));
+    assert!(include_str!("../tree/mod.rs").contains("self.start_stop_plan"));
 }

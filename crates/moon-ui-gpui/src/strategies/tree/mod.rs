@@ -238,13 +238,23 @@ impl StrategiesView {
     ///
     /// The selection group is on the LEFT with copy/paste and a full-width delete button below;
     /// stacked Start Checked/Stop Checked actions are on the RIGHT, with the staged count in the center.
+    ///
+    /// Args:
+    ///     cores: Canonical visible roots represented by the rendered Start/Stop buttons.
+    ///     store: Strategy snapshot used to capture their exact target plan.
+    ///     cx: View context used to build callbacks and capture workspace authority.
+    ///
+    /// Returns:
+    ///     Bottom action bar whose delayed callbacks refuse stale target plans atomically.
     fn action_bar(
         &self,
         cores: Arc<Vec<(CoreId, String)>>,
         store: &CoreStore,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let cs = cores.clone();
+        // Each callback owns the exact plan this rendered button described. A workspace change
+        // before dispatch cannot silently reduce that old multi-core action to a surviving subset.
+        let plan = Arc::new(self.start_stop_plan(cores.as_ref(), store, cx));
         // Right-align the stacked Start Checked/Stop Checked action group.
         let right = v_flex()
             .gap_1()
@@ -255,10 +265,9 @@ impl StrategiesView {
                     .size(MoonButtonSize::Micro)
                     .label(format!("▶ {}", t!("strat.start_checked")))
                     .on_click({
-                        let cs = cs.clone();
+                        let plan = plan.clone();
                         cx.listener(move |this, _, _, cx| {
-                            let cores_v = cs.as_ref().clone();
-                            this.apply_start_stop(&cores_v, true, cx);
+                            this.apply_start_stop(plan.as_ref(), true, cx);
                         })
                     })
                     .render(),
@@ -269,10 +278,9 @@ impl StrategiesView {
                     .size(MoonButtonSize::Micro)
                     .label(format!("■ {}", t!("strat.stop_checked")))
                     .on_click({
-                        let cs = cs.clone();
+                        let plan = plan.clone();
                         cx.listener(move |this, _, _, cx| {
-                            let cores_v = cs.as_ref().clone();
-                            this.apply_start_stop(&cores_v, false, cx);
+                            this.apply_start_stop(plan.as_ref(), false, cx);
                         })
                     })
                     .render(),
@@ -285,12 +293,13 @@ impl StrategiesView {
             .items_start()
             .justify_between()
             .child(self.selection_toolbar(store, cx));
-        if !self.staged.is_empty() {
+        let staged = staged_count(self);
+        if staged > 0 {
             bar = bar.child(
                 div()
                     .text_size(design::t_body(cx))
                     .text_color(rgb(MoonPalette::active(cx).amber))
-                    .child(t!("strat.staged", n = self.staged.len()).to_string()),
+                    .child(t!("strat.staged", n = staged).to_string()),
             );
         }
         bar.child(right).into_any_element()

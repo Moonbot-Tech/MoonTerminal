@@ -60,18 +60,33 @@ pub(crate) enum TreeOp {
         core: CoreId,
         target: String,
         kind: Option<u8>,
+        workspace_generation: Option<u64>,
     },
     /// Create a UI-only folder under the target parent.
-    CreateFolder { core: CoreId, target: String },
+    CreateFolder {
+        core: CoreId,
+        target: String,
+        workspace_generation: Option<u64>,
+    },
     /// Rename a folder identified by its core and path segments.
-    RenameFolder { core: CoreId, old_path: Vec<String> },
-    /// Confirm deletion of selected strategies; IDs are derived again on confirmation.
-    ConfirmDeleteStrategies { label: String },
+    RenameFolder {
+        core: CoreId,
+        old_path: Vec<String>,
+        workspace_generation: Option<u64>,
+    },
+    /// Confirm deletion of the exact selected strategies captured when the dialog opened.
+    ConfirmDeleteStrategies {
+        label: String,
+        targets: Vec<Key>,
+        workspace_generation: Option<u64>,
+    },
     /// Confirm folder deletion using its core, path, and display label.
     ConfirmDeleteFolder {
         core: CoreId,
         path: Vec<String>,
         label: String,
+        targets: Vec<(u64, bool)>,
+        workspace_generation: Option<u64>,
     },
 }
 
@@ -175,13 +190,15 @@ impl StrategiesView {
         store: &CoreStore,
         cores: &crate::core_order::OrderedCores,
     ) -> (CoreId, String) {
-        let from_row = self
-            .selected
+        let from_row = selected_key(self)
             .and_then(|(core, id)| row(store, core, id).map(|r| (core, r.folder_path.clone())));
         resolve_paste_target(
-            self.selected_folder.clone(),
+            selected_folder(self),
             from_row,
-            cores.first().map(|(c, _)| *c),
+            cores
+                .iter()
+                .find(|(core, _)| strategy_core_is_visible(self.workspace_cores.as_deref(), *core))
+                .map(|(core, _)| *core),
         )
     }
 
@@ -253,6 +270,18 @@ impl StrategiesView {
 
     // ── Keyboard: Ctrl+C, Ctrl+V, and Delete ──────────────────────────────────
 
+    /// Dispatch tree keyboard actions only through the current workspace-visible selection.
+    ///
+    /// Copy, Paste, and Delete resolve effective strategies, folders, and fallback cores at the
+    /// keystroke, while retained hidden Classic selection and clipboard state remain untouched.
+    ///
+    /// Args:
+    ///     ev: Keyboard event received by the strategy tree.
+    ///     window: Strategies window used for destructive confirmation dialogs.
+    ///     cx: View context used to resolve current scope and dispatch the selected action.
+    ///
+    /// Returns:
+    ///     Nothing; unsupported keys and unavailable effective targets are no-ops.
     pub(crate) fn handle_tree_key(
         &mut self,
         ev: &KeyDownEvent,
@@ -262,14 +291,14 @@ impl StrategiesView {
         let m = &ev.keystroke.modifiers;
         let key = ev.keystroke.key.as_str();
         if m.control && key == "c" {
-            // When no strategies are selected but a folder was clicked, match Moonbot by copying
-            // the entire folder and its contents.
+            // When no workspace-visible strategies are selected but a visible folder was clicked,
+            // match Moonbot by copying the entire folder and its contents.
             let no_sel = {
                 let store = self.backend.read(cx).session.store();
                 !self.selection_summary(store).0
             };
             if no_sel {
-                if let Some((core, path)) = self.selected_folder.clone() {
+                if let Some((core, path)) = selected_folder(self) {
                     let path = ops::split_path(&path);
                     self.copy_folder(core, path, cx);
                     return;
@@ -281,8 +310,7 @@ impl StrategiesView {
                 let b = self.backend.read(cx);
                 // Canonical order, so `default_target`'s "first core" means the first one the
                 // user actually sees rather than whichever session happens to lead the vec.
-                let cores = crate::core_order::CoreOrder::new(&b.config)
-                    .from_sessions(b.session.sessions(), |_| true);
+                let cores = visible_strategy_cores(self, b);
                 self.default_target(b.session.store(), &cores)
             };
             self.paste_into(core, target, cx);
@@ -296,7 +324,8 @@ impl StrategiesView {
     /// Builds selection and clipboard action buttons for the lower action panel.
     pub(super) fn selection_toolbar(&self, store: &CoreStore, cx: &Context<Self>) -> AnyElement {
         let (has_sel, all_off) = self.selection_summary(store);
-        let can_paste = self.clipboard.is_some();
+        let can_paste = self.clipboard.is_some()
+            && !visible_strategy_cores(self, self.backend.read(cx)).is_empty();
         // Use a fixed-width left group: Copy and Paste each fill half of the first row, while
         // Delete spans the row below through `MoonButton::full_width()`.
         v_flex()
@@ -330,8 +359,7 @@ impl StrategiesView {
                                     // Paste into the primary strategy's folder or the default root.
                                     let (core, target) = {
                                         let b = this.backend.read(cx);
-                                        let cores = crate::core_order::CoreOrder::new(&b.config)
-                                            .from_sessions(b.session.sessions(), |_| true);
+                                        let cores = visible_strategy_cores(this, b);
                                         this.default_target(b.session.store(), &cores)
                                     };
                                     this.paste_into(core, target, cx);

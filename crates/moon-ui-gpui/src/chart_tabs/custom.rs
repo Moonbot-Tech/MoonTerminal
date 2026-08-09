@@ -123,6 +123,7 @@ impl ChartTabs {
         let stack = cx.new(|_| {
             AddChartStack::new(
                 self.backend.clone(),
+                self.group.clone(),
                 num,
                 bucket.clone(),
                 self.epoch,
@@ -243,6 +244,7 @@ impl ChartTabs {
         let stack = cx.new(|_| {
             AddChartStack::new(
                 self.backend.clone(),
+                self.group.clone(),
                 num,
                 bucket.clone(),
                 self.epoch,
@@ -473,6 +475,7 @@ impl ChartTabs {
             let stack = cx.new(|_| {
                 AddChartStack::new(
                     self.backend.clone(),
+                    self.group.clone(),
                     num,
                     bucket.clone(),
                     self.epoch,

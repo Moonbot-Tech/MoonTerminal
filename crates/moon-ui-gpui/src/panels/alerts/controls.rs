@@ -49,8 +49,20 @@ impl AlertsPanel {
             .child(self.columns_menu(cx))
     }
 
-    /// Builds the multi-select core dropdown shared with the Orders, Report and Assets panels.
+    /// Build the shared core dropdown from the effective Classic or Auto scope.
+    ///
+    /// Classic mode presents the retained multi-selection. Auto mode pins the workspace label and
+    /// disables the control so callbacks cannot alter the retained Classic selection.
+    ///
+    /// Args:
+    ///     cx: Panel context used to resolve workspace ownership and wire Classic callbacks.
+    ///
+    /// Returns:
+    ///     Interactive Classic selector or disabled Auto scope indicator.
     fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let scope = self.effective_scope(self.backend.read(cx));
+        let workspace_owned = scope.is_workspace_owned();
+        let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
         let view = cx.entity();
         let exchange_view = view.clone();
         let (cores, exchange_names) = {
@@ -60,11 +72,26 @@ impl AlertsPanel {
                 b.session.market_source().core_exchange_names(),
             )
         };
-        crate::controls::core_combo(
+        let pinned_label = match scope.label() {
+            crate::workspace::EffectiveScopeLabel::Overview => {
+                Some(t!("workspace.overview").to_string())
+            }
+            crate::workspace::EffectiveScopeLabel::Core(core) => cores
+                .iter()
+                .find(|(id, _)| *id == core)
+                .map(|(_, name)| name.clone()),
+            crate::workspace::EffectiveScopeLabel::All
+            | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
+        };
+        let combo = crate::controls::core_combo(
             "alerts-cores",
             &cores,
             &exchange_names,
-            &self.sel_cores,
+            if workspace_owned {
+                &effective_selection
+            } else {
+                &self.sel_cores
+            },
             crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("alerts.all_cores").to_string(),
             |n| t!("alerts.cores_n", n = n).to_string(),
@@ -78,6 +105,12 @@ impl AlertsPanel {
                 });
             },
         )
+        .disabled(workspace_owned);
+        if let Some(label) = pinned_label {
+            combo.label(label)
+        } else {
+            combo
+        }
     }
 
     /// Builds the scope field: where a figure came from, and whether it is armed — in ONE dropdown.

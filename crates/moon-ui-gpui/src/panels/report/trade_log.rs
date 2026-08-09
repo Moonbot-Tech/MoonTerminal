@@ -18,8 +18,8 @@
 //!     lead-in and tail;
 //!   - two cores configured under the SAME display name write one file, so their lines mix.
 //!
-//! [`open_trade_log`] resolves those inputs and hands the file scan to a background thread; the
-//! dialog itself lives in [`view`].
+//! [`open_trade_log`] revalidates group workspace authority and hands the file scan to a background
+//! thread; the dialog itself lives in [`view`].
 
 mod scan;
 mod view;
@@ -44,6 +44,51 @@ pub(super) struct TradeLogRequest {
     pub(super) labels: Vec<String>,
     /// UTC days the trade spans, as `YYYY-MM-DD`.
     pub(super) dates: Vec<String>,
+    /// Group-owned workspace authority captured when the row menu was built. Standalone Reports
+    /// deliberately leave this absent because Analytics owns their explicit scope.
+    pub(super) workspace: Option<TradeLogWorkspaceIdentity>,
+}
+
+/// Group workspace identity that must still authorize a delayed trade-log scan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct TradeLogWorkspaceIdentity {
+    /// Group whose Report produced the request.
+    group: String,
+    /// Row core that owns the log files.
+    core: moon_core::session::CoreId,
+    /// Workspace generation observed while the row menu was built.
+    generation: u64,
+}
+
+impl TradeLogWorkspaceIdentity {
+    /// Capture one group Report's workspace identity.
+    ///
+    /// Args:
+    ///     group: Owning group of the Report panel.
+    ///     core: Core recorded by the selected report row.
+    ///     generation: Current workspace-authority generation.
+    ///
+    /// Returns:
+    ///     Immutable identity carried through menu delay and background scanning.
+    pub(super) fn new(group: String, core: moon_core::session::CoreId, generation: u64) -> Self {
+        Self {
+            group,
+            core,
+            generation,
+        }
+    }
+
+    /// Check the captured generation and selected-core authority against live state.
+    ///
+    /// Args:
+    ///     current_generation: Current workspace-authority generation.
+    ///     core_allowed: Whether the live workspace still permits this core.
+    ///
+    /// Returns:
+    ///     `true` only when neither identity component became stale.
+    fn is_current(&self, current_generation: u64, core_allowed: bool) -> bool {
+        self.generation == current_generation && core_allowed
+    }
 }
 
 /// Outcome of the background scan, as the dialog needs to present it.
@@ -92,13 +137,17 @@ const MAX_LINES: usize = 5000;
 ///     cx: Application context used to spawn the scan and open the dialog.
 ///
 /// Returns:
-///     Nothing; the dialog updates itself when the scan lands.
+///     Nothing; stale group requests open no dialog, and a still-current dialog updates when its
+///     scan lands. A scope change during the scan prevents the old-core result from publishing.
 pub(super) fn open_trade_log(
     request: TradeLogRequest,
     backend: Entity<Backend>,
     window: &mut Window,
     cx: &mut App,
 ) {
+    if !trade_log_request_is_current(&request, backend.read(cx), cx) {
+        return;
+    }
     let display_time_revision = backend.read(cx).display_time_revision.clone();
     let display_zone =
         crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
@@ -147,6 +196,8 @@ pub(super) fn open_trade_log(
     // the future holds a WEAK handle: a strong one would close the loop (state -> task -> future ->
     // state) and neither would ever be freed.
     let scan_entity = entity.downgrade();
+    let completion_backend = backend.clone();
+    let completion_request = request.clone();
     let scan = cx.spawn(async move |cx| {
         let executor = cx.update(|cx| cx.background_executor().clone());
         let found = executor
@@ -156,6 +207,9 @@ pub(super) fn open_trade_log(
             return; // The dialog is gone; nothing to publish into.
         };
         cx.update(|cx| {
+            if !trade_log_request_is_current(&completion_request, completion_backend.read(cx), cx) {
+                return;
+            }
             scan_entity.update(cx, |this, cx| {
                 let lines = view::build_lines(found.lines, this.display_zone);
                 this.widest_chars = view::widest_chars(&lines);
@@ -170,3 +224,26 @@ pub(super) fn open_trade_log(
     entity.update(cx, |this, _| this._scan = Some(scan));
     view::open_dialog(entity, window, cx);
 }
+
+/// Revalidate a delayed group Report request while leaving standalone Reports explicitly unscoped.
+///
+/// Args:
+///     request: Trade-log request captured from the report row.
+///     backend: Live backend containing workspace mode and selected-core authority.
+///     cx: Application context used to read the workspace generation entity.
+///
+/// Returns:
+///     `true` for standalone requests or for an unchanged, still-authorized group identity.
+fn trade_log_request_is_current(request: &TradeLogRequest, backend: &Backend, cx: &App) -> bool {
+    let Some(workspace) = &request.workspace else {
+        return true;
+    };
+    let revision = backend.workspace_revision();
+    workspace.is_current(
+        revision.read(cx).generation(),
+        backend.workspace_action_allows_core(Some(&workspace.group), workspace.core),
+    )
+}
+
+#[cfg(test)]
+mod tests;

@@ -13,22 +13,10 @@ use crate::Backend;
 /// Returns:
 ///     A cheap deterministic signature for early-return comparisons.
 pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
-    let mut sig = if b
-        .open_request
-        .as_ref()
-        .is_some_and(|(core, _)| b.core_belongs_to_group(group, *core))
-    {
-        b.open_request_rev
-    } else {
-        0
-    };
-    if b.open_compare_request
-        .as_ref()
-        .is_some_and(|(core, _)| b.core_belongs_to_group(group, *core))
-    {
-        sig = sig
-            .wrapping_mul(31)
-            .wrapping_add(b.open_compare_request_rev);
+    let mut sig = b.pending_open_main_revision_for_group(group);
+    let compare_revision = b.pending_open_compare_revision_for_group(group);
+    if compare_revision != 0 {
+        sig = sig.wrapping_mul(31).wrapping_add(compare_revision);
     }
     sig = sig
         .wrapping_mul(31)

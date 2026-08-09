@@ -7,7 +7,7 @@ mod window;
 
 // The window's own lifecycle lives in `window.rs`; the toolbar and startup reach it through here,
 // so the module path callers use does not change when the file it lives in does.
-pub(crate) use window::{open, restore};
+pub(crate) use window::{ProfitMonitorOpenRequest, open, restore};
 
 #[cfg(test)]
 mod tests;
@@ -647,6 +647,10 @@ impl Render for ProfitMonitorBodyView {
 /// State of the independent Profit Monitor window.
 pub(crate) struct ProfitMonitorView {
     backend: Entity<Backend>,
+    /// Exact native identity used so an old release cannot clear a replacement singleton.
+    window_id: WindowId,
+    /// Cancellation authority for this window's current background taskbar-hide burst.
+    taskbar_hide: crate::window::windowing::TaskbarHideTask,
     clock: Entity<MonitorClockView>,
     content: Entity<ProfitMonitorBodyView>,
     report_generation: Option<Arc<AtomicU64>>,
@@ -696,11 +700,13 @@ impl ProfitMonitorView {
     /// Returns:
     ///     Fully initialized monitor state.
     fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let window_id = window.window_handle().window_id();
         // Apply the shared independent-window taskbar policy now and after every activation;
         // `hide_window_from_taskbar_soon` owns the delayed retry rationale.
-        crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
-        cx.observe_window_activation(window, |_this, window, cx| {
-            crate::window::windowing::hide_window_from_taskbar_soon(window.window_handle(), cx);
+        let taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
+        cx.observe_window_activation(window, |this, window, _cx| {
+            this.taskbar_hide.cancel();
+            this.taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
         })
         .detach();
 
@@ -727,25 +733,25 @@ impl ProfitMonitorView {
         // not. `quitting` separates them, exactly as the detached-panel windows do — during
         // shutdown the layout has already been flushed, so a release-time write here would replace
         // "the monitor was open" with "the monitor was closed" on every ordinary exit.
-        let window_id = window.window_handle().window_id();
-        cx.on_release(move |this, app| {
-            this.backend.update(app, |backend, _| {
+        cx.on_release(|this, app| {
+            this.taskbar_hide.cancel();
+            this.backend.update(app, |backend, cx| {
                 // Everything here is guarded by the window id. A view released AFTER its
                 // replacement registered — close and reopen inside one effect flush — would
                 // otherwise clear the flag while a live monitor is on screen, and the next launch
                 // would not reopen it.
                 if backend
                     .profit_monitor_window
-                    .is_none_or(|handle| handle.window_id() != window_id)
+                    .is_none_or(|handle| handle.window_id() != this.window_id)
                 {
                     return;
                 }
                 backend.profit_monitor_window = None;
-                if backend.quitting || !backend.layout.profit_monitor_open {
-                    return;
+                if !backend.quitting && backend.layout.profit_monitor_open {
+                    backend.layout.profit_monitor_open = false;
+                    backend.layout_dirty = true;
                 }
-                backend.layout.profit_monitor_open = false;
-                backend.layout_dirty = true;
+                cx.notify();
             });
         })
         .detach();
@@ -801,6 +807,8 @@ impl ProfitMonitorView {
             .detach();
         let mut this = Self {
             backend,
+            window_id,
+            taskbar_hide,
             clock,
             content,
             report_generation,

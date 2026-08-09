@@ -28,10 +28,17 @@ impl Render for LogPanel {
         }
         let p = MoonPalette::active(cx);
 
-        let sources = self.sources(self.backend.read(cx));
+        let (effective_source, sources) = {
+            let backend = self.backend.read(cx);
+            let (source, _, _) = self.effective_selection(backend);
+            (source, self.sources(backend))
+        };
         // Only the aggregate and exchange sources fill a row's source column with a CORE name;
         // Local fills it with a module path, which selects nothing.
-        let is_agg = matches!(self.source, LogSource::Aggregate | LogSource::Exchange(_));
+        let is_agg = matches!(
+            effective_source,
+            LogSource::Aggregate | LogSource::Exchange(_)
+        );
         let total = self.buf.total();
 
         // Build the wrapping filter and follow controls.

@@ -29,6 +29,8 @@ use moon_core::session::CoreId;
 /// model, where moving the mouse over one chart repainted every overlay.
 pub(crate) struct AddChartStack {
     backend: Entity<Backend>,
+    /// Group whose Auto rail authorizes actions in every chart owned by this stack.
+    workspace_group: String,
     num: u32,
     bucket: ChartBucket,
     epoch: f64,
@@ -96,8 +98,21 @@ pub(crate) struct AddChartStack {
 }
 
 impl AddChartStack {
+    /// Construct one numbered chart stack for a workspace group.
+    ///
+    /// Args:
+    ///     backend: Shared application state and market session.
+    ///     workspace_group: Group whose Auto rail authorizes child-chart actions.
+    ///     num: Numbered AddToChart or Custom tab identifier.
+    ///     bucket: Detect routing bucket owned by the tab.
+    ///     epoch: Chart time origin.
+    ///     theme: Runtime chart theme.
+    ///
+    /// Returns:
+    ///     An empty stack ready to create group-authorized chart panels.
     pub(super) fn new(
         backend: Entity<Backend>,
+        workspace_group: String,
         num: u32,
         bucket: ChartBucket,
         epoch: f64,
@@ -105,6 +120,7 @@ impl AddChartStack {
     ) -> Self {
         Self {
             backend,
+            workspace_group,
             num,
             bucket,
             epoch,
@@ -302,12 +318,15 @@ impl AddChartStack {
 
         // Append a new chart; render sorting raises pinned charts in FIT-stretch mode.
         let backend = self.backend.clone();
+        let workspace_group = self.workspace_group.clone();
         let num = self.num;
         let bucket = self.bucket.clone();
         let epoch = self.epoch;
         let theme = self.theme.clone();
         let scale = self.scale;
-        let panel = cx.new(|cx| ChartPanel::new_addto(backend, num, bucket, epoch, theme, cx));
+        let panel = cx.new(|cx| {
+            ChartPanel::new_addto(backend, workspace_group, num, bucket, epoch, theme, cx)
+        });
         // Repaint the stack after any panel change, including a pin toggle: empty-panel pruning and
         // sorting pinned charts to the top happen during render.
         cx.observe(&panel, |this, _, cx| {

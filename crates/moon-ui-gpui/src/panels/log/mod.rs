@@ -41,6 +41,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::core_order::CoreOrder;
+use crate::workspace::{EffectiveScopeLabel, RetainedCoreScope};
 use moon_core::applog::{self, LogLine};
 use moon_core::session::CoreId;
 use std::collections::HashSet;
@@ -66,7 +67,7 @@ fn record_work_us(timer: Option<std::time::Instant>) {
 }
 
 /// Selected source of log rows.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum LogSource {
     Aggregate,
     Exchange(String),
@@ -93,10 +94,36 @@ fn exchange_membership_changed(
 }
 
 /// Whether to show live in-memory rows or a named rotated file from disk.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum LogFile {
     Live,
     Named(String),
+}
+
+/// Resolve Auto's temporary source/file overlay without changing retained Classic state.
+///
+/// Args:
+///     workspace_owned: Whether Auto currently owns this group panel's selectors.
+///     workspace_core: Selected Auto core, or `None` for Auto Overview.
+///     retained_source: User-selected Classic source.
+///     retained_file: User-selected Classic file.
+///
+/// Returns:
+///     Effective source, effective file, and the ownership flag used by controls.
+fn resolve_workspace_log_selection(
+    workspace_owned: bool,
+    workspace_core: Option<CoreId>,
+    retained_source: &LogSource,
+    retained_file: &LogFile,
+) -> (LogSource, LogFile, bool) {
+    if workspace_owned {
+        let source = workspace_core
+            .map(LogSource::Core)
+            .unwrap_or(LogSource::Aggregate);
+        (source, LogFile::Live, true)
+    } else {
+        (retained_source.clone(), retained_file.clone(), false)
+    }
 }
 
 /// One source-selector entry with its UI label and sanitized log-file label.
@@ -112,6 +139,8 @@ pub struct LogPanel {
     pub(super) group: String,
     pub(super) source: LogSource,
     pub(super) file: LogFile,
+    /// Source and file that currently own the incremental buffer.
+    loaded_selection: Option<(LogSource, LogFile)>,
     errors_only: bool,
     /// Coin substring filter set by clicking a detected ticker; `None` disables it.
     coin_filter: Option<String>,
@@ -194,14 +223,32 @@ impl LogPanel {
             }
         })
         .detach();
-        // Reload only while visible and only when the selected live source's revision changes.
+        // Reload only while visible and only when the effective live source's revision changes.
         cx.observe(&backend, |this, backend, cx| {
-            if !this.refresh.is_active() || !matches!(this.file, LogFile::Live) {
+            let (source, file, _) = this.effective_selection(backend.read(cx));
+            if !this.refresh.is_active() || !matches!(file, LogFile::Live) {
                 return;
             }
-            let sig = render::log_sig(backend.read(cx), &this.group, &this.source);
+            let sig = render::log_sig(backend.read(cx), &this.group, &source);
             if this.refresh.observe(sig) {
                 cx.notify();
+            }
+        })
+        .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            let (source, file, _) = this.effective_selection(this.backend.read(cx));
+            if this.loaded_selection.as_ref() == Some(&(source, file)) {
+                return;
+            }
+            // A scope switch must never append into a buffer loaded for the prior effective pair.
+            this.loaded_selection = None;
+            if this.refresh.is_active() {
+                let backend = this.backend.clone();
+                this.reload_rows(backend.read(cx), cx);
+                cx.notify();
+            } else {
+                this.refresh.request_reload();
             }
         })
         .detach();
@@ -222,6 +269,7 @@ impl LogPanel {
             group,
             source: LogSource::Aggregate,
             file: LogFile::Live,
+            loaded_selection: None,
             errors_only: true,
             coin_filter: None,
             query,
@@ -286,10 +334,63 @@ impl LogPanel {
         v
     }
 
-    pub(super) fn file_label(&self, sources: &[LogSourceItem]) -> String {
+    /// Resolve the non-mutating source and file that own this panel right now.
+    ///
+    /// Args:
+    ///     b: Backend providing the current workspace mode and selected core.
+    ///
+    /// Returns:
+    ///     Effective source, effective file, and whether Auto owns the selectors.
+    fn effective_selection(&self, b: &Backend) -> (LogSource, LogFile, bool) {
+        let scope = b.effective_workspace_scope(&self.group, RetainedCoreScope::All);
+        let workspace_core = match scope.label() {
+            EffectiveScopeLabel::Core(core) => Some(core),
+            EffectiveScopeLabel::All
+            | EffectiveScopeLabel::Selection(_)
+            | EffectiveScopeLabel::Overview => None,
+        };
+        resolve_workspace_log_selection(
+            scope.is_workspace_owned(),
+            workspace_core,
+            &self.source,
+            &self.file,
+        )
+    }
+
+    /// Limit data-facing source metadata to the effective Auto core.
+    ///
+    /// Args:
+    ///     b: Backend providing the configured group core universe.
+    ///     source: Effective source whose rows are being queried.
+    ///     workspace_owned: Whether Auto currently owns the source selector.
+    ///
+    /// Returns:
+    ///     Source metadata needed by the current query and its cache signature.
+    fn data_sources(
+        &self,
+        b: &Backend,
+        source: &LogSource,
+        workspace_owned: bool,
+    ) -> Vec<LogSourceItem> {
+        let mut sources = self.sources(b);
+        if workspace_owned && let LogSource::Core(core) = source {
+            sources.retain(|item| matches!(item.source, LogSource::Core(id) if id == *core));
+        }
+        sources
+    }
+
+    /// Resolve the sanitized file label for one effective source.
+    ///
+    /// Args:
+    ///     sources: Source metadata for the current data query.
+    ///     source: Effective source whose rotated files are listed.
+    ///
+    /// Returns:
+    ///     Sanitized source label, or the local application fallback.
+    pub(super) fn file_label(sources: &[LogSourceItem], source: &LogSource) -> String {
         sources
             .iter()
-            .find(|s| s.source == self.source)
+            .find(|s| s.source == *source)
             .map(|s| s.file_label.clone())
             .unwrap_or_else(|| "app".into())
     }
@@ -309,6 +410,8 @@ impl LogPanel {
     ///
     /// Args:
     ///     b: Backend providing live core stores and file-independent source state.
+    ///     source: Effective source to snapshot without changing the retained selector.
+    ///     file: Effective live or named file selection.
     ///     sources: Canonically ordered source entries in the panel scope.
     ///     exchange_membership: Pre-resolved membership for an Exchange source.
     ///
@@ -317,13 +420,15 @@ impl LogPanel {
     fn snapshot(
         &mut self,
         b: &Backend,
+        source: &LogSource,
+        file: &LogFile,
         sources: &[LogSourceItem],
         exchange_membership: Option<&HashSet<CoreId>>,
     ) -> Vec<LogLine> {
-        match &self.file {
+        match file {
             LogFile::Live => {
                 self.loaded_name = None;
-                match &self.source {
+                match source {
                     LogSource::Local => {
                         // Rows and cursor under ONE lock: feed threads push into this ring, so
                         // taking the cursor separately would mark a line that landed in between as
@@ -592,11 +697,10 @@ impl LogPanel {
 
     /// Selects the core a row's source name belongs to, as if it were picked from the source list.
     ///
-    /// This is the Report's core-cell gesture: the click narrows the panel to one core through the
-    /// SAME control the user would otherwise open, and that control is then both the indicator and
-    /// the way back. There is deliberately no toggle-back on a second click: only the aggregate and
-    /// exchange sources label their rows with a core name, so once this switches to that core the
-    /// name is no longer on screen to click (a core's own ring lines carry no source label).
+    /// This is the row core-cell gesture. Classic narrows the retained source through the same
+    /// selector the user can open; Auto ignores it because only the Shell rail selects a workspace
+    /// core. There is deliberately no toggle-back on a second Classic click: once a core's own ring
+    /// is shown, its lines carry no source label to click again.
     ///
     /// Only real cores are matched — never the `All`/`Local` pseudo-entries, whose labels a core
     /// could otherwise be named after. A name matching no configured core does nothing: it belongs
@@ -640,6 +744,7 @@ impl LogPanel {
     pub(super) fn open_coin_chart(&mut self, base: String, target: String, cx: &mut Context<Self>) {
         let resolved = {
             let b = self.backend.read(cx);
+            let (source, _, _) = self.effective_selection(b);
             let ms = b.session.market_source();
             let scoped = !self.group.is_empty();
             let scoped_candidates = || {
@@ -650,7 +755,7 @@ impl LogPanel {
                     .map(|server| server.id)
                     .collect::<Vec<_>>()
             };
-            let candidates = match &self.source {
+            let candidates = match &source {
                 LogSource::Core(id) => vec![*id],
                 LogSource::Exchange(exchange) => {
                     let members = render::exchange_core_ids(b, &self.group, exchange);
@@ -682,15 +787,24 @@ impl LogPanel {
         let Some((core, market)) = resolved else {
             return; // No candidate core resolved the coin to a market; leave the UI unchanged.
         };
+        let workspace_group = (!self.group.is_empty()).then(|| self.group.clone());
         self.backend.update(cx, |b, bcx| {
-            b.open_on_main((core, market), false);
-            bcx.notify();
+            if b.open_on_main_if_authorized(workspace_group.as_deref(), (core, market), false) {
+                bcx.notify();
+            }
         });
     }
 
-    /// Membership of an Exchange source right now, or `None` for every other source.
-    fn resolve_membership(&self, b: &Backend) -> Option<HashSet<CoreId>> {
-        match &self.source {
+    /// Resolve current membership for an effective Exchange source.
+    ///
+    /// Args:
+    ///     b: Backend providing the exchange membership map.
+    ///     source: Effective source whose membership is requested.
+    ///
+    /// Returns:
+    ///     Current Exchange members, or `None` for every other source.
+    fn resolve_membership(&self, b: &Backend, source: &LogSource) -> Option<HashSet<CoreId>> {
+        match source {
             LogSource::Exchange(exchange) => {
                 Some(render::exchange_core_ids(b, &self.group, exchange))
             }
@@ -713,28 +827,30 @@ impl LogPanel {
     fn reload_rows(&mut self, b: &Backend, cx: &App) {
         crate::diag::bump(&crate::diag::LOG_RELOAD);
         let timer = diag_timer();
+        let (source, file, workspace_owned) = self.effective_selection(b);
         self.refresh
-            .record_reload(render::log_sig(b, &self.group, &self.source));
-        let sources = self.sources(b);
-        let is_agg = matches!(self.source, LogSource::Aggregate | LogSource::Exchange(_));
+            .record_reload(render::log_sig(b, &self.group, &source));
+        let sources = self.data_sources(b, &source, workspace_owned);
+        let is_agg = matches!(source, LogSource::Aggregate | LogSource::Exchange(_));
         if !is_agg {
-            let label = self.file_label(&sources);
+            let label = Self::file_label(&sources, &source);
             self.refresh_available_files(&label);
         }
-        let membership = self.resolve_membership(b);
+        let membership = self.resolve_membership(b, &source);
         self.exchange_membership = membership.clone();
         self.sources_sig = Self::sources_sig(&sources);
+        self.loaded_selection = Some((source.clone(), file.clone()));
         // Row indices no longer address the same lines, so a selection cannot survive this.
         self.selection.clear();
         self.buf.clear();
         self.cursors.clear();
-        let fresh = self.snapshot(b, &sources, membership.as_ref());
-        if matches!(self.file, LogFile::Live) {
+        let fresh = self.snapshot(b, &source, &file, &sources, membership.as_ref());
+        if matches!(file, LogFile::Live) {
             // The core store is only mutated on this thread, so its counters and the snapshot
             // describe one instant. The local ring is not — `snapshot` took its cursor under the
             // ring lock and recorded it already, which is why this cannot do it here.
             self.cursors
-                .seek_to_end(b, &self.source, &sources, membership.as_ref());
+                .seek_to_end(b, &source, &sources, membership.as_ref());
         }
         self.append_rows(fresh, cx);
         // An empty source still needs its view settled: `append_rows` has nothing to do, and the
@@ -778,8 +894,13 @@ impl LogPanel {
     ///     Nothing.
     fn pull_rows(&mut self, b: &Backend, cx: &App) {
         let timer = diag_timer();
-        let membership = self.resolve_membership(b);
-        let sources = self.sources(b);
+        let (source, file, workspace_owned) = self.effective_selection(b);
+        if self.loaded_selection.as_ref() != Some(&(source.clone(), file.clone())) {
+            self.reload_rows(b, cx);
+            return;
+        }
+        let membership = self.resolve_membership(b, &source);
+        let sources = self.data_sources(b, &source, workspace_owned);
         // Two changes the buffer cannot absorb, because both invalidate rows it is not touching:
         // an exchange losing a member (its rows must not stay under the exchange's label) and a
         // core being added, removed or renamed (its rows carry the old name).
@@ -789,11 +910,11 @@ impl LogPanel {
             self.reload_rows(b, cx);
             return;
         }
-        if !matches!(self.file, LogFile::Live) {
+        if !matches!(file, LogFile::Live) {
             // A rotated file has no tail to follow. Resuming follow still has to return the list to
             // the bottom, which is the only reason this path runs for a file at all.
             self.refresh
-                .record_reload(render::log_sig(b, &self.group, &self.source));
+                .record_reload(render::log_sig(b, &self.group, &source));
             self.after_view_change();
             return;
         }
@@ -804,8 +925,8 @@ impl LogPanel {
         // Only while following, though: a paused panel is one the user is READING, and emptying it
         // under them because a core went away loses the history they stopped to look at. It clears
         // when they return to the tail.
-        if let LogSource::Core(id) = self.source
-            && b.session.store().core(id).is_none()
+        if let LogSource::Core(id) = &source
+            && b.session.store().core(*id).is_none()
             && self.buf.total() > 0
             && self.following()
         {
@@ -819,11 +940,9 @@ impl LogPanel {
         // stamps a line as seen that the cursor has not yet returned, and the gate then sits on it
         // until some unrelated line arrives.
         self.refresh
-            .record_reload(render::log_sig(b, &self.group, &self.source));
+            .record_reload(render::log_sig(b, &self.group, &source));
         crate::diag::bump(&crate::diag::LOG_PULL);
-        let fresh = self
-            .cursors
-            .pull(b, &self.source, &sources, membership.as_ref());
+        let fresh = self.cursors.pull(b, &source, &sources, membership.as_ref());
         // Resuming follow lowers the cap, so the buffer can need evicting with nothing new in it,
         // and returning to the tail is this path's whole job when follow resumes.
         self.append_rows(fresh, cx);
@@ -838,7 +957,8 @@ impl LogPanel {
     /// and the scroll position — every time the user visits another tab and comes back.
     fn set_refresh_active(&mut self, active: bool, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
-        let sig = render::log_sig(backend.read(cx), &self.group, &self.source);
+        let (source, _, _) = self.effective_selection(backend.read(cx));
+        let sig = render::log_sig(backend.read(cx), &self.group, &source);
         let loaded = self.refresh.has_loaded();
         if self.refresh.set_active(active, sig) {
             if loaded {
@@ -860,7 +980,20 @@ impl LogPanel {
         self.selection.clear();
     }
 
+    /// Select a retained Classic source or ignore an Auto source shortcut owned by the Shell rail.
+    ///
+    /// Args:
+    ///     s: Requested source from a selector or source-name shortcut.
+    ///     cx: Panel context used to reload Classic data.
+    ///
+    /// Returns:
+    ///     Nothing; every Auto request leaves workspace and retained state unchanged.
     pub(super) fn set_source(&mut self, s: LogSource, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        let (_, _, workspace_owned) = self.effective_selection(backend.read(cx));
+        if workspace_owned {
+            return;
+        }
         if self.source != s {
             self.source = s;
             // A source change returns to Live and invalidates both named-file caches.
@@ -869,16 +1002,26 @@ impl LogPanel {
             self.available_files_label = None;
             self.available_files.clear();
             self.reset_to_live();
-            let backend = self.backend.clone();
             self.reload_rows(backend.read(cx), cx);
             cx.notify();
         }
     }
+    /// Select a retained Classic file while keeping Auto permanently pinned to Live.
+    ///
+    /// Args:
+    ///     f: Requested live or named file selection.
+    ///     cx: Panel context used to reload the selected Classic file.
+    ///
+    /// Returns:
+    ///     Nothing; Auto requests are ignored without mutating the retained file.
     pub(super) fn set_file(&mut self, f: LogFile, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        if self.effective_selection(backend.read(cx)).2 {
+            return;
+        }
         if self.file != f {
             self.file = f;
             self.reset_to_live();
-            let backend = self.backend.clone();
             self.reload_rows(backend.read(cx), cx);
             cx.notify();
         }

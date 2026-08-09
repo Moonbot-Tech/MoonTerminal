@@ -2,11 +2,23 @@
 
 use super::*;
 
-fn strategies_sig(b: &Backend) -> u64 {
+/// Resolve the concrete core roots inherited from the current singleton Auto owner.
+fn singleton_strategy_cores(b: &Backend) -> Option<Vec<CoreId>> {
+    let workspace = b.singleton_workspace()?;
+    Some(
+        b.effective_workspace_scope(&workspace.group, crate::workspace::RetainedCoreScope::All)
+            .ids()
+            .to_vec(),
+    )
+}
+
+/// Fold strategy and schema revisions only for cores visible in the current singleton scope.
+fn strategies_sig(b: &Backend, workspace_cores: Option<&[CoreId]>) -> u64 {
     let store = b.session.store();
     b.session
         .sessions()
         .iter()
+        .filter(|session| strategy_core_is_visible(workspace_cores, session.id))
         .filter_map(|s| store.core(s.id))
         .fold(0u64, |a, c| {
             a.wrapping_mul(31)
@@ -41,7 +53,8 @@ impl StrategiesView {
         })
         .detach();
 
-        let initial_sig = strategies_sig(backend.read(cx));
+        let workspace_cores = singleton_strategy_cores(backend.read(cx));
+        let initial_sig = strategies_sig(backend.read(cx), workspace_cores.as_deref());
 
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         // MoonTree can mutate expansion from keyboard input, but `expanded_cores` and
@@ -66,7 +79,7 @@ impl StrategiesView {
         cx.observe(&backend, |this, backend, cx| {
             let b = backend.read(cx);
             let goto = b.strategies_goto.is_some();
-            let sig = strategies_sig(b);
+            let sig = strategies_sig(b, this.workspace_cores.as_deref());
             let strategies_changed = sig != this.last_sig;
             if strategies_changed || goto {
                 if strategies_changed {
@@ -77,6 +90,27 @@ impl StrategiesView {
                 this.clamp_selected_section(cx);
                 cx.notify();
             }
+        })
+        .detach();
+
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            let next = singleton_strategy_cores(this.backend.read(cx));
+            if next == this.workspace_cores {
+                return;
+            }
+            this.workspace_cores = next;
+            this.last_sig = strategies_sig(this.backend.read(cx), this.workspace_cores.as_deref());
+            this.tree_cache = None;
+            this.last_tree_shape = None;
+            // In-flight version results compare against `versions.key`; retiring it prevents an
+            // old hidden core from publishing after the owner changes.
+            this.versions.key = None;
+            this.versions.sel = None;
+            this.versions.row = None;
+            this.versions.changed.clear();
+            this.versions.section = None;
+            cx.notify();
         })
         .detach();
 
@@ -134,6 +168,7 @@ impl StrategiesView {
             display_zone,
             search,
             filter: StrategyFilter::default(),
+            workspace_cores,
             selected: None,
             sel: HashSet::new(),
             versions: versions::VersionsState {

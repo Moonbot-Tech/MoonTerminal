@@ -43,6 +43,7 @@ mod strategies;
 mod ui_session;
 mod valuation_health;
 mod window;
+mod workspace;
 
 pub(crate) use startup::install_moon_theme_for_config;
 
@@ -56,7 +57,7 @@ use persistence::chart_persist;
 use ui_session::UiSessionState;
 use window::detached;
 
-use moon_ui::{DockAreaState, Root};
+use moon_ui::{DockAreaState, DockTopologyByName, Root};
 
 use moon_core::config::{AppConfig, WindowLayout};
 use moon_core::metrics::{Metrics, MetricsSnapshot};
@@ -106,8 +107,16 @@ struct Backend {
     valuation: Option<moon_core::db::valuation::ValuationHandle>,
     /// Dedicated wake channel for report-derived consumers.
     report_revision: Entity<ReportRevision>,
+    /// Dedicated wake channel for consumers that must retry after retained market data changes.
+    market_data_revision: Entity<MarketDataRevision>,
     /// Dedicated wake channel for surfaces whose civil-time meaning follows the header clock.
     display_time_revision: Entity<DisplayTimeRevision>,
+    /// Dedicated wake channel for every effective workspace-scope transition.
+    workspace_revision: Entity<workspace::WorkspaceRevision>,
+    /// Dedicated wake channel for shared Auto dock-topology and rail-width transitions.
+    auto_workspace_layout_revision: Entity<workspace::AutoWorkspaceLayoutRevision>,
+    /// Last live Auto group to own Analytics and Strategies scope; never serialized.
+    workspace_focus: Option<workspace::WorkspaceFocus>,
     metrics: Metrics,
     snap: MetricsSnapshot,
     /// Desired open markets as `(core, market)`, derived from `chart_market_refs`.
@@ -137,22 +146,15 @@ struct Backend {
     /// and disk, while closing without saving discards it and restores `config`.
     /// This mirrors egui's `SettingsState.draft`.
     preview: Option<AppConfig>,
-    /// Request to open a market on Main, consumed by the target group's Shell.
-    /// Ported from egui's `open_detect -> host` path.
-    open_request: Option<(CoreId, String)>,
-    /// Revision of `open_request`, allowing `ChartTabs` to wake for a specific request rather than
-    /// relying on a fallback backend render.
-    open_request_rev: u64,
-    /// Whether an `open_request` should activate the Main window.
-    /// Sources that should raise Main, currently chart double-clicks and Alerts coin clicks, set
-    /// this to `true`; other request sources open the market without raising it. Every request sets it.
-    open_request_activate: bool,
+    /// Atomic Main-open request identity: target, owning group, revision, activation, and pending
+    /// state move together so no producer or consumer can observe mismatched parallel fields.
+    open_main_request: backend::OpenMainRequest,
     /// Request to open a market in a new custom comparison tab from a detect context menu.
     /// The detect's market anchors the tab alongside that market from other group cores,
     /// deduplicated by exchange, with lock and clear controls. See `open_compare_tab`.
-    open_compare_request: Option<(CoreId, String)>,
-    /// Revision of `open_compare_request`, waking `ChartTabs` through its signature like
-    /// `open_request_rev`.
+    open_compare_request: Option<backend::OpenCompareRequest>,
+    /// Revision of `open_compare_request`, waking `ChartTabs` through its signature like the
+    /// atomic Main-open request revision.
     open_compare_request_rev: u64,
     /// Diagnostic chart auto-open for runtime counters, disabled by default and enabled only by
     /// the `MOON_RENDER_DIAG_OPEN_FIRST_MARKET` environment variable.
@@ -205,6 +207,13 @@ struct Backend {
     /// `docks.json` after `DockEvent::LayoutChanged` through the same debounce loop.
     dock_states: HashMap<String, DockAreaState>,
     dock_dirty: bool,
+    /// Process-wide topology-only Auto dock authority loaded from `auto_dock.json`.
+    auto_dock_topology: Option<DockTopologyByName>,
+    /// Whether programmatic Auto seed and repair transitions may persist the current topology.
+    /// Invalid or unreadable startup data keeps this false until a user changes the topology.
+    auto_dock_automatic_persistence_allowed: bool,
+    /// Whether the Auto topology authority changed since the last debounced atomic save.
+    auto_dock_dirty: bool,
     /// Y-axis price scale of the window's active chart; `None` means automatic scaling.
     /// Scale is stored per tab, so this field mirrors the active tab for the toolbar. A toolbar
     /// selection increments `price_scale_rev`, causing `ChartTabs` to update the active panel.
@@ -288,15 +297,17 @@ struct Backend {
     show_group_request: Vec<String>,
     /// Open group windows mapped from group to handle, used for eye-button focus and deduplication.
     group_windows: HashMap<String, WindowHandle<Root>>,
+    /// Groups whose `open_window` call is constructing a Shell before its handle can be registered.
+    /// Availability accepts this narrow bootstrap state but no other missing-window condition.
+    opening_group_windows: HashSet<String>,
     /// Floating Settings tool window handle for deduplication and focus.
     settings_window: Option<WindowHandle<Root>>,
     /// Application-wide Strategies OS window handle for deduplication and focus.
     strategies_window: Option<WindowHandle<Root>>,
-    /// Request to show a strategy in the Strategies window as `(core, RevealTarget)`.
-    /// Set from a chart order-line context menu, an Orders-table strategy cell, or a freshly
-    /// created copy, then consumed by `StrategiesView` during render to disable the active-only
-    /// filter, expand the core and folders, and select the row.
-    strategies_goto: Option<(CoreId, strategies::RevealTarget)>,
+    /// Atomic Strategies reveal request carrying its core, target, and immutable producer group.
+    /// Set from a chart order-line context menu or Orders-table strategy cell, then revalidated by
+    /// `StrategiesView` before it disables filters, expands folders, and selects the row.
+    strategies_goto: Option<strategies::StrategyRevealRequest>,
     /// Global singleton Assets window for all cores, retained for deduplication and focus.
     assets_window: Option<WindowHandle<Root>>,
     /// Singleton Screener window covering all exchanges with provider deduplication.
@@ -305,6 +316,8 @@ struct Backend {
     analytics_window: Option<WindowHandle<Root>>,
     /// Independent singleton Profit Monitor desktop window.
     profit_monitor_window: Option<WindowHandle<Root>>,
+    /// Single-flight Profit Monitor create request, including monotonic foreground intent.
+    profit_monitor_open_pending: Option<analytics::profit_monitor::ProfitMonitorOpenRequest>,
     /// Singleton Report window opened from an Analytics strategy row.
     report_window: Option<WindowHandle<Root>>,
     /// Live scoped Report panel retained weakly so repeated double-clicks can replace its filter.
@@ -472,6 +485,9 @@ struct Backend {
 
 /// Notification-only entity for committed report revisions.
 struct ReportRevision;
+
+/// Notification-only entity for retained market-data revisions.
+struct MarketDataRevision;
 
 /// Notification-only entity for a changed application-wide display zone.
 struct DisplayTimeRevision;

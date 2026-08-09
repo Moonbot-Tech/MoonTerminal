@@ -140,6 +140,18 @@ impl Shell {
             dock.update(cx, |area, cx| area.set_center(center, window, cx));
         }
 
+        // Seed Shell's chart-reveal cursor from the latest existing request. A request produced
+        // before this group window existed must not steal the Auto tab after startup.
+        let (initial_workspace_mode, last_open_main_revision) = {
+            let backend = backend.read(cx);
+            (
+                backend.workspace_mode(&group),
+                backend.open_main_request.revision(),
+            )
+        };
+        let workspace_resize_state = cx.new(|_| moon_ui::MoonResizableState::default());
+        let initial_auto_rail_width = backend.read(cx).auto_workspace_rail_width();
+
         // Header and status bar read Backend, but a top-down GPUI repaint also pulls in the heavy
         // Orders view. Throttle ordinary notifications to at most 4 Hz; book/CPU/FPS updates need
         // no faster visual cadence even if their source changes up to 10 Hz.
@@ -154,6 +166,9 @@ impl Shell {
             this.drain_repin_requests(cx);
             this.drain_panel_detach_requests(cx);
             this.drain_engine_action_toasts(cx);
+            // Main-open requests live on Backend, while DockArea activation needs this native
+            // window. Coalesce the bridge through the stored handle after this observer returns.
+            this.defer_workspace_window_sync(cx);
             let now = Instant::now();
             // User-triggered Follow/Live and scale changes, plus any order-size revision, bypass
             // the 250ms throttle. Autonomous book/CPU/FPS updates remain throttled to 4 Hz.
@@ -182,6 +197,24 @@ impl Shell {
         })
         .detach();
 
+        // Workspace mode, selected core, singleton owner, and window lifecycle publish on a
+        // dedicated channel so an otherwise idle Shell redraws and applies a cross-group switch.
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _, cx| {
+            this.defer_workspace_window_sync(cx);
+            cx.notify();
+        })
+        .detach();
+
+        // Shared Auto topology and rail width have a separate channel: edits in one group must
+        // update every other open Auto Shell without waking all scoped panel queries.
+        let auto_layout_revision = backend.read(cx).auto_workspace_layout_revision();
+        cx.observe(&auto_layout_revision, |this, _, cx| {
+            this.defer_workspace_window_sync(cx);
+            cx.notify();
+        })
+        .detach();
+
         // Wake Shell once per second so the header clock advances while idle; backend notifications
         // are data-gated and would otherwise leave it frozen. One 1 Hz timer per window is below
         // the status bar's 4 Hz cadence and stops when the Shell entity is gone.
@@ -203,17 +236,26 @@ impl Shell {
         })
         .detach();
 
-        // Dump every dock event, including drag, split, resize, detach, and close, into Backend.
-        // The drain timer debounces persistence to `docks.json`.
+        // Route one dock's events to its current mode authority. Classic dumps retain panel payload
+        // and group-local state in `docks.json`; Auto publishes only normalized name topology to
+        // the process-wide `auto_dock.json` authority.
         cx.subscribe_in(
             &dock,
             window,
             |this, dock, event: &DockEvent, window, cx| {
+                let auto = this.backend.read(cx).workspace_mode(&this.group)
+                    == moon_core::config::WorkspaceMode::AutoTrading;
                 match event {
                     DockEvent::DetachRequested { panel_name } => {
+                        if auto {
+                            return;
+                        }
                         this.defer_detach_panel(panel_name.to_string(), cx);
                     }
                     DockEvent::PanelCloseRequested { panel_name } => {
+                        if auto {
+                            return;
+                        }
                         this.defer_restore_closed_panel(panel_name.to_string(), cx);
                     }
                     DockEvent::TabContextMenu {
@@ -234,11 +276,20 @@ impl Shell {
                     }
                     DockEvent::LayoutChanged => {}
                 }
+                if auto {
+                    if this.applying_auto_topology {
+                        return;
+                    }
+                    let topology = dock.read(cx).topology_by_name(cx);
+                    this.backend.update(cx, |backend, backend_cx| {
+                        backend.set_auto_dock_topology(topology, backend_cx);
+                    });
+                    return;
+                }
                 let state = dock.read(cx).dump(cx);
                 let group = this.group.clone();
                 this.backend.update(cx, |b, _| {
-                    b.dock_states.insert(group, state);
-                    b.dock_dirty = true;
+                    b.store_classic_dock_state(group, state);
                 });
             },
         )
@@ -246,6 +297,9 @@ impl Shell {
 
         cx.observe_window_bounds(window, |this, window, cx| {
             this.persist_group_geometry(window, cx);
+            // MoonUI proportionally repairs live panel sizes when the native viewport changes.
+            // Reapply the global preference with this window's fit clamp after that local repair.
+            this.sync_auto_rail_width(window, cx);
         })
         .detach();
 
@@ -256,7 +310,10 @@ impl Shell {
             this.window_active = window.is_window_active();
             if this.window_active {
                 let group = this.group.clone();
-                this.backend.update(cx, |b, _| b.note_main_input(&group));
+                this.backend.update(cx, |b, bcx| {
+                    b.note_main_input(&group);
+                    b.focus_auto_workspace(&group, bcx);
+                });
             }
         })
         .detach();
@@ -510,10 +567,18 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
 
-        Self {
+        let mut shell = Self {
             backend,
             group,
             dock,
+            classic_dock_layout: None,
+            auto_only_panels: Vec::new(),
+            applying_auto_topology: false,
+            workspace_resize_state,
+            applied_auto_rail_width: initial_auto_rail_width,
+            applied_workspace_mode: moon_core::config::WorkspaceMode::Classic,
+            last_open_main_revision,
+            workspace_sync_pending: false,
             last_frame: None,
             fps: 0.0,
             last_notify: None,
@@ -553,7 +618,11 @@ impl Shell {
             ticker_popup_open: false,
             ticker_popup_hovered: false,
             ticker_input,
-        }
+        };
+        // Every Shell is constructed from its saved/default Classic dock first. Persisted Auto then
+        // captures that local named layout and applies the process-wide topology before first frame.
+        shell.apply_workspace_mode(initial_workspace_mode, window, cx);
+        shell
     }
 
     /// Subscribe the TP/SL/leverage popup editors to guarded writes and live field updates.

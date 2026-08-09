@@ -66,18 +66,25 @@ pub(super) fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
     });
 }
 
-/// Return the group's order-table signature from each core's table revision.
+/// Return the effective scope's order-table signature from each core's table revision.
 ///
 /// This deliberately uses the table revision rather than chart-line revisions so numeric fields and
-/// statuses refresh independently of chart userdata.
-pub(super) fn orders_sig(b: &Backend, group: &str) -> u64 {
+/// statuses refresh independently of chart userdata. Core IDs keep membership changes observable
+/// even when two cores currently share the same revision.
+///
+/// Args:
+///     b: Backend snapshot containing the per-core order stores.
+///     scope: Effective query scope whose changes may affect this panel.
+///
+/// Returns:
+///     Deterministic signature independent of out-of-scope core activity.
+pub(super) fn orders_sig(b: &Backend, scope: &EffectiveCoreScope) -> u64 {
     let store = b.session.store();
-    b.session
-        .sessions()
-        .iter()
-        .filter(|s| s.group == group)
-        .filter_map(|s| store.core(s.id))
-        .fold(0u64, |a, c| {
-            a.wrapping_mul(31).wrapping_add(c.orders_table_rev)
-        })
+    scope.ids().iter().fold(0u64, |signature, core| {
+        signature
+            .wrapping_mul(31)
+            .wrapping_add(*core)
+            .wrapping_mul(31)
+            .wrapping_add(store.core(*core).map_or(0, |data| data.orders_table_rev))
+    })
 }

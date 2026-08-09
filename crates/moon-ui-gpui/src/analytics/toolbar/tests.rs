@@ -176,7 +176,7 @@ fn a_stale_selected_id_names_no_core() {
 fn all_is_exclusive_and_the_next_core_starts_a_fresh_selection() {
     let mut selected = HashSet::from([1, 2]);
     assert_eq!(
-        analytics_core_filter_ids(&selected)
+        analytics_core_filter_ids(&selected, None)
             .into_iter()
             .collect::<HashSet<_>>(),
         selected,
@@ -186,7 +186,7 @@ fn all_is_exclusive_and_the_next_core_starts_a_fresh_selection() {
     assert!(toggle_analytics_core_selection(&mut selected, None));
     assert!(selected.is_empty(), "All must discard every explicit check");
     assert!(
-        analytics_core_filter_ids(&selected).is_empty(),
+        analytics_core_filter_ids(&selected, None).is_empty(),
         "only the exclusive All state may produce an unfiltered query"
     );
 
@@ -195,5 +195,47 @@ fn all_is_exclusive_and_the_next_core_starts_a_fresh_selection() {
         selected,
         HashSet::from([2]),
         "the first core after All must be the only explicit check"
+    );
+}
+
+/// Assigning Auto ids into `sel_cores`, or bypassing the workspace argument in
+/// `analytics/mod.rs:cores_selected`, would either destroy the retained Classic filter or query
+/// its hidden cores while Auto is pinned.
+#[test]
+fn workspace_query_wiring_preserves_retained_classic_selection() {
+    let retained = HashSet::from([3, 5]);
+
+    assert_eq!(analytics_core_filter_ids(&retained, Some(&[11])), vec![11]);
+    assert_eq!(retained, HashSet::from([3, 5]));
+    assert_eq!(
+        analytics_core_filter_ids(&retained, None)
+            .into_iter()
+            .collect::<HashSet<_>>(),
+        retained
+    );
+
+    let analytics = include_str!("../mod.rs");
+    let cores_selected = analytics
+        .split("fn cores_selected(&self)")
+        .nth(1)
+        .and_then(|tail| tail.split("\n    }").next())
+        .expect("Analytics query core selector must exist");
+    assert!(cores_selected.contains("self.workspace_scope"));
+
+    let observer = analytics
+        .split("cx.observe(&workspace_revision")
+        .nth(1)
+        .and_then(|tail| tail.split(".detach();").next())
+        .expect("workspace observer must exist");
+    assert!(!observer.contains("sel_cores ="));
+}
+
+/// `toolbar.rs:analytics_core_filter_ids` returning an empty vector for an empty Auto owner would
+/// broaden a temporarily coreless workspace to every core in the reports database.
+#[test]
+fn empty_workspace_scope_is_an_explicit_no_match_query() {
+    assert_eq!(
+        analytics_core_filter_ids(&HashSet::new(), Some(&[])),
+        vec![0]
     );
 }

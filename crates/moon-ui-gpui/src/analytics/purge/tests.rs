@@ -3,7 +3,86 @@
 
 use moon_core::feed::StrategyRow;
 
-use super::{deletable_folder_after, purge_summary_lines};
+use super::{deletable_folder_after, purge_core_visible, purge_summary_lines};
+
+/// Extract one method from the `PurgeRun` implementation up to the next documented method.
+///
+/// Args:
+///     src: Full purge module source.
+///     anchor: Unique method signature fragment.
+///
+/// Returns:
+///     The method source including its signature and body.
+fn purge_run_method<'a>(src: &'a str, anchor: &str) -> &'a str {
+    src.split(anchor)
+        .nth(1)
+        .and_then(|tail| tail.split("\n    ///").next())
+        .expect("PurgeRun method must exist")
+}
+
+/// Removing the guard before `Ready -> Running` would let a dialog opened on core A dispatch its
+/// destructive sequence after Auto ownership switches to core B.
+#[test]
+fn workspace_switch_before_confirm_refuses_purge_without_dispatch() {
+    assert!(purge_core_visible(None, 11));
+    assert!(purge_core_visible(Some(&[11]), 11));
+    assert!(!purge_core_visible(Some(&[22]), 11));
+
+    let src = include_str!("../purge.rs");
+    let confirm = src
+        .split("fn confirm_purge(")
+        .nth(1)
+        .and_then(|tail| tail.split("\n    }").next())
+        .expect("purge confirmation must exist");
+    let guard = confirm
+        .find("if !purge_core_visible(workspace, core_uid)")
+        .expect("confirmation must revalidate its captured core");
+    let running = confirm
+        .find("op.state = PurgeState::Running(PurgeStep::Rows)")
+        .expect("confirmation must still start the sequence");
+    assert!(guard < running, "scope refusal must precede Running");
+    assert!(confirm[guard..running].contains("PurgeState::CountFailed"));
+    assert!(!confirm[..running].contains("cx.spawn(async move"));
+}
+
+/// `analytics/purge.rs:PurgeRun::send_empty_folder`: removing its `guard_current` call would let
+/// Auto switch from core A to core B after confirmation, then queue folder deletion on hidden A.
+#[test]
+fn workspace_switch_after_confirm_blocks_every_later_operation() {
+    assert!(!purge_core_visible(Some(&[22]), 11));
+
+    let src = include_str!("../purge.rs");
+    let guarded = [
+        "fn open_step(",
+        "async fn rec_ids(",
+        "fn send(",
+        "fn send_empty_folder(",
+        "fn inspect_strategies<",
+        "async fn await_rows_gone(",
+        "async fn await_strategy(",
+    ];
+    for anchor in guarded {
+        assert!(
+            purge_run_method(src, anchor).contains("self.guard_current(cx)?;"),
+            "{anchor} must revalidate the live workspace before it advances"
+        );
+    }
+
+    let still_mine = purge_run_method(src, "fn still_mine(");
+    assert!(still_mine.contains("purge_core_visible(workspace, op.core_uid)"));
+    let guard = purge_run_method(src, "fn guard_current(");
+    assert!(guard.contains("Err(PurgeStop::ScopeMoved)"));
+    let outcome = src
+        .rsplit_once("match outcome {")
+        .map(|(_, outcome)| outcome)
+        .expect("running purge outcome must be published");
+    assert!(
+        outcome.contains("Err(PurgeStop::ScopeMoved)")
+            && outcome.contains("PurgeState::CountFailed")
+            && outcome.contains("analytics.write_failed_stale"),
+        "a workspace move must stop visibly instead of abandoning the running dialog"
+    );
+}
 
 /// Build the only strategy fields the folder decision reads while keeping the fixture explicit.
 fn strategy(id: u64, folder_path: &str) -> StrategyRow {

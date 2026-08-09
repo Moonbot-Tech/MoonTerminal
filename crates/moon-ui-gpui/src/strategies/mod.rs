@@ -24,6 +24,7 @@ mod versions;
 mod window;
 
 use split::{PanelResizeDrag, PanelSplit};
+pub(crate) use window::StrategyRevealRequest;
 pub use window::{RevealTarget, open, open_goto, reveal_name};
 use window::{STRATEGIES_HEADER_H, strategies_header};
 
@@ -63,6 +64,8 @@ pub struct StrategiesView {
     search: Entity<MoonInputState>,
     /// Tree filters for kind, direction, active state, and search text synchronized from the input.
     filter: StrategyFilter,
+    /// Concrete singleton Auto scope; `None` leaves the all-core Classic tree authoritative.
+    workspace_cores: Option<Vec<CoreId>>,
     /// Primary strategy key supplying the schema and sections.
     selected: Option<Key>,
     /// Multi-selection used for highlighting and merged parameter display.
@@ -134,7 +137,7 @@ pub struct StrategiesView {
     op_input_init: String,
     /// Strategy expected from a core echo after create/paste, keyed by core and name.
     /// Selected in the tree when it arrives, then cleared.
-    pending_select: Option<(CoreId, String)>,
+    pending_select: Option<StrategyRevealRequest>,
     /// Signature of strategy and schema data that materially changes the window.
     last_sig: u64,
     /// Signature of the tree shape last pushed into [`MoonTreeState`]: node ids, labels, folder
@@ -177,8 +180,7 @@ impl Render for StrategiesView {
         // Root nodes are connected cores in canonical order.
         let cores = {
             let b = self.backend.read(cx);
-            crate::core_order::CoreOrder::new(&b.config)
-                .from_sessions(b.session.sessions(), |_| true)
+            visible_strategy_cores(self, b)
         };
 
         // Build the owned MoonTree adapter without leaking a store borrow, then synchronize state.

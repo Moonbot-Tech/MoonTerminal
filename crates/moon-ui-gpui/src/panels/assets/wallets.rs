@@ -7,6 +7,9 @@ use anyhow::Result;
 use moon_ui::{MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
 
+#[cfg(test)]
+mod tests;
+
 /// Drag-and-drop payload for moving an asset between wallets.
 #[derive(Clone)]
 pub(super) struct AssetDrag {
@@ -26,6 +29,21 @@ pub(super) struct PendingTransfer {
     to: WalletKind,
     /// Raw available quantity displayed through `num` and used to derive the input's initial text.
     free: f64,
+}
+
+/// Return whether a pending transfer still targets the currently effective wallet core.
+///
+/// Args:
+///     pending: Transfer captured when the amount dialog opened.
+///     effective_wallet_core: Current Auto or Classic wallet target at validation time.
+///
+/// Returns:
+///     `true` only when the pending core remains the exact effective wallet core.
+fn pending_transfer_matches_wallet_core(
+    pending: &PendingTransfer,
+    effective_wallet_core: Option<CoreId>,
+) -> bool {
+    effective_wallet_core == Some(pending.core)
 }
 
 /// Coin-transfer preview displayed under the drag cursor.
@@ -222,7 +240,17 @@ impl AssetsView {
     /// Opens an amount dialog for a dropped coin.
     ///
     /// Seeds the input with `num(drag.free)`, an adaptive representation that may round and need
-    /// not equal the exact raw available quantity.
+    /// not equal the exact raw available quantity. A stale drag whose core no longer owns the
+    /// wallet surface is ignored.
+    ///
+    /// Args:
+    ///     drag: Captured source core, asset, wallet, and available quantity.
+    ///     to: Destination wallet selected by the drop target.
+    ///     window: Host window used to open the unique amount dialog.
+    ///     cx: Panel context used to validate scope and retain dialog state.
+    ///
+    /// Returns:
+    ///     Nothing; a current target opens the dialog and a stale target is ignored.
     fn open_transfer_dialog(
         &mut self,
         drag: &AssetDrag,
@@ -230,6 +258,9 @@ impl AssetsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.effective_wallet_core(self.backend.read(cx)) != Some(drag.core) {
+            return;
+        }
         let default_qty = num(drag.free);
         let input = cx.new(|cx| MoonInputState::new(window, cx).default_value(&default_qty));
         let pending = PendingTransfer {
@@ -340,13 +371,24 @@ impl AssetsView {
 
     /// Parses and confirms the pending transfer amount.
     ///
-    /// A positive amount sends the transfer command; invalid, zero, or negative input sends
-    /// nothing. Success clears dialog state, while a command error is returned so the caller can
-    /// keep the dialog open and show a notification.
+    /// The pending core is revalidated against the effective wallet target immediately before
+    /// dispatch. A stale core, invalid input, zero, or negative amount sends nothing. Success or a
+    /// stale target clears dialog state, while a command error keeps it open for notification.
+    ///
+    /// Args:
+    ///     cx: Panel context used to resolve effective scope, read input, and clear dialog state.
+    ///
+    /// Returns:
+    ///     Success for a dispatched or intentionally refused transfer, or the session command error.
     fn confirm_transfer(&mut self, cx: &mut Context<Self>) -> Result<()> {
         let Some(pt) = self.pending_transfer.clone() else {
             return Ok(());
         };
+        let effective_wallet_core = self.effective_wallet_core(self.backend.read(cx));
+        if !pending_transfer_matches_wallet_core(&pt, effective_wallet_core) {
+            self.close_transfer_dialog(cx);
+            return Ok(());
+        }
         let qty = self
             .transfer_input
             .as_ref()
@@ -366,6 +408,34 @@ impl AssetsView {
         Ok(())
     }
 
+    /// Clear a pending transfer whose captured core no longer owns the wallet detail surface.
+    ///
+    /// Args:
+    ///     effective_wallet_core: Current Auto or Classic wallet target after scope reconciliation.
+    ///
+    /// Returns:
+    ///     `true` when stale dialog state was invalidated.
+    pub(super) fn invalidate_pending_transfer_for_wallet_core(
+        &mut self,
+        effective_wallet_core: Option<CoreId>,
+    ) -> bool {
+        let stale = self.pending_transfer.as_ref().is_some_and(|pending| {
+            !pending_transfer_matches_wallet_core(pending, effective_wallet_core)
+        });
+        if stale {
+            self.pending_transfer = None;
+            self.transfer_input = None;
+        }
+        stale
+    }
+
+    /// Clear all transfer-dialog state and notify the panel.
+    ///
+    /// Args:
+    ///     cx: Panel context used to repaint dialog-dependent state.
+    ///
+    /// Returns:
+    ///     Nothing.
     fn close_transfer_dialog(&mut self, cx: &mut Context<Self>) {
         self.pending_transfer = None;
         self.transfer_input = None;

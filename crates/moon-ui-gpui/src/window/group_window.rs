@@ -29,6 +29,18 @@ pub(crate) fn groups(cfg: &AppConfig) -> Vec<String> {
 /// Opens a group window or focuses it when already open. Startup calls this once per group, and the
 /// settings Show Group action calls it on demand, matching egui `App::show_group`. Geometry comes
 /// from the saved layout or uses a cascade derived from `offset`.
+///
+/// Args:
+///     cx: Application context used to create or focus the native window.
+///     backend: Shared runtime state that owns group-window lifecycle registries.
+///     cfg: Committed configuration used to construct the Shell and window appearance.
+///     group: Unique group name to open or focus.
+///     epoch: Shared chart/session time origin.
+///     layout: Persisted geometry and window state.
+///     offset: Cascade offset applied when no geometry was saved.
+///
+/// Returns:
+///     Nothing; a successful new window publishes its final workspace transition immediately.
 pub(crate) fn spawn_group_window(
     cx: &mut App,
     backend: &Entity<Backend>,
@@ -37,6 +49,62 @@ pub(crate) fn spawn_group_window(
     epoch: f64,
     layout: &WindowLayout,
     offset: f32,
+) {
+    spawn_group_window_inner(cx, backend, cfg, group, epoch, layout, offset, true);
+}
+
+/// Open one settings-managed group window without publishing an intermediate workspace revision.
+///
+/// Settings pre-registers every intended group as Opening, calls this for each group, and publishes
+/// once after the complete registry is restored. All arguments otherwise match
+/// [`spawn_group_window`].
+///
+/// Args:
+///     cx: Application context used to create the native window.
+///     backend: Shared runtime state with the pre-registered Opening group.
+///     cfg: Committed configuration used to construct the Shell and window appearance.
+///     group: Unique group name to create during the batch.
+///     epoch: Shared chart/session time origin.
+///     layout: Persisted geometry and window state.
+///     offset: Cascade offset applied when no geometry was saved.
+///
+/// Returns:
+///     Nothing; the caller owns the single publication after every intended open completes.
+pub(crate) fn spawn_group_window_deferred(
+    cx: &mut App,
+    backend: &Entity<Backend>,
+    cfg: &AppConfig,
+    group: String,
+    epoch: f64,
+    layout: &WindowLayout,
+    offset: f32,
+) {
+    spawn_group_window_inner(cx, backend, cfg, group, epoch, layout, offset, false);
+}
+
+/// Implement immediate and settings-batched group-window creation through one lifecycle path.
+///
+/// Args:
+///     cx: Application context used to create or focus the native window.
+///     backend: Shared runtime state that owns group-window lifecycle registries.
+///     cfg: Committed configuration used to construct the Shell and window appearance.
+///     group: Unique group name to create or focus.
+///     epoch: Shared chart/session time origin.
+///     layout: Persisted geometry and window state.
+///     offset: Cascade offset applied when no geometry was saved.
+///     publish_workspace_change: Whether a successful open publishes immediately.
+///
+/// Returns:
+///     Nothing; failed opens remove their Opening marker without registering a handle.
+fn spawn_group_window_inner(
+    cx: &mut App,
+    backend: &Entity<Backend>,
+    cfg: &AppConfig,
+    group: String,
+    epoch: f64,
+    layout: &WindowLayout,
+    offset: f32,
+    publish_workspace_change: bool,
 ) {
     // Focus an existing live window. handle.update returns an error for a window already closed.
     if let Some(handle) = backend.read(cx).group_windows.get(&group).copied() {
@@ -106,18 +174,28 @@ pub(crate) fn spawn_group_window(
     opts.window_clear_color = Some(gpui::rgb(
         ((cbg[0] as u32) << 16) | ((cbg[1] as u32) << 8) | cbg[2] as u32,
     ));
+    // `open_window` constructs Shell before returning its handle. Record that narrow lifecycle
+    // interval so a restored Auto core remains available during the first render.
+    backend.update(cx, |bk, _| {
+        bk.opening_group_windows.insert(group.clone());
+    });
     let theme = cfg.chart_theme().clone();
     let b = backend.clone();
     let g = group.clone();
-    if let Ok(handle) = cx.open_window(opts, move |window, cx| {
+    let opened = cx.open_window(opts, move |window, cx| {
         windowing::configure_dwm_window(window);
         windowing::configure_shell_clear_color(window, cx);
         windowing::set_group_window_icon(window, icon_id);
         let view = cx.new(|cx| Shell::new(b, g, focus, epoch, theme, window, cx));
         cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
-    }) {
-        backend.update(cx, |bk, _| {
-            bk.group_windows.insert(group, handle);
+    });
+    if let Ok(handle) = opened {
+        backend.update(cx, |bk, bcx| {
+            bk.opening_group_windows.remove(&group);
+            bk.group_windows.insert(group.clone(), handle);
+            if publish_workspace_change {
+                bk.publish_workspace_window_change(&[], bcx);
+            }
         });
         // A group window owns the detached panel windows of its group: they are OS-owned children
         // and died with the previous one, while their `DetachedSpec`s survived and the restored
@@ -127,5 +205,9 @@ pub(crate) fn spawn_group_window(
         // deferred and skips panels that already have a window, so the routes that also restore
         // panels themselves cannot produce a duplicate.
         crate::window::detached::respawn_all(backend, cx);
+    } else {
+        backend.update(cx, |bk, _| {
+            bk.opening_group_windows.remove(&group);
+        });
     }
 }

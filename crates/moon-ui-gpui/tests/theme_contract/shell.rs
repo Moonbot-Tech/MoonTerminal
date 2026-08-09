@@ -114,13 +114,17 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
         .expect("Main target getter must follow its setter");
     let target_setter = &backend[target_start..target_end];
     assert!(
-        target_setter.contains("if prev_core != Some(*new_core)")
-            && target_setter.contains("self.set_active_trade_core(group, *new_core);")
+        target_setter.contains("Self::classic_trade_core_for_main_transition(")
             && target_setter
-                .matches("self.set_active_trade_core(group, *new_core);")
+                .matches("Self::classic_trade_core_for_main_transition(")
+                .count()
+                == 1
+            && target_setter.contains("self.set_active_trade_core(group, new_core);")
+            && target_setter
+                .matches("self.set_active_trade_core(group, new_core);")
                 .count()
                 == 1,
-        "same-core Main syncs must preserve a manual choice; only a core change may replace it"
+        "one canonical transition decision must guard the sole durable Classic writer"
     );
     assert!(
         target_setter
@@ -554,8 +558,9 @@ fn log_exchange_headers_select_a_live_exchange_aggregate() {
 /// ~25 ms per revision at 4 Hz — about a tenth of a core — against ~0.3 ms for the append path,
 /// and it cost the same whether the errors-only filter kept a thousand rows or none.
 ///
-/// The plausible regression is a one-line "just reload, it's simpler" in `view.rs`, or a parse
-/// creeping back into the filter pass. Both are shaped exactly like the code that was here before.
+/// The plausible regressions are a one-line "just reload, it's simpler" in `view.rs`, reading the
+/// retained Classic source after effective Auto scope was resolved, or a parse creeping back into
+/// the filter pass. All are shaped exactly like code that existed before the incremental path.
 #[test]
 fn an_open_log_tab_appends_new_lines_instead_of_rebuilding() {
     let view = read_src("panels/log/view.rs");
@@ -568,9 +573,23 @@ fn an_open_log_tab_appends_new_lines_instead_of_rebuilding() {
 
     let panel = read_src("panels/log/mod.rs");
     let pull = braced_body(&panel, "fn pull_rows(");
+    let coherent_anchors = [
+        "let (source, file, workspace_owned) = self.effective_selection(b);",
+        "let membership = self.resolve_membership(b, &source);",
+        "let sources = self.data_sources(b, &source, workspace_owned);",
+        ".record_reload(render::log_sig(b, &self.group, &source));",
+        "let fresh = self.cursors.pull(b, &source, &sources, membership.as_ref());",
+        "self.append_rows(fresh, cx);",
+    ];
+    let anchor_positions = coherent_anchors.map(|anchor| {
+        pull.find(anchor)
+            .unwrap_or_else(|| panic!("the incremental Log path must contain `{anchor}`"))
+    });
     assert!(
-        pull.contains(".pull(b, &self.source") && !pull.contains("self.snapshot("),
-        "the incremental path must read through the source cursors"
+        anchor_positions.windows(2).all(|pair| pair[0] < pair[1])
+            && !pull.contains("self.snapshot("),
+        "the incremental path must snapshot one effective scope, record its signature, pull its \
+         cursors, and append without rebuilding"
     );
 
     // Parsing belongs to arrival. The filter passes run over buffered rows — `refilter` over the

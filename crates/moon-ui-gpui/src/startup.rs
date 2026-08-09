@@ -3,7 +3,9 @@
 //! Extracted verbatim from `main.rs` (the former `main()` body is now [`run`]).
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -16,12 +18,103 @@ use moon_core::metrics::{Metrics, MetricsSnapshot};
 use moon_core::session::{CoreId, SessionManager};
 
 use crate::diagnostics::crash;
+use crate::persistence::coordinator::{
+    PersistenceAck, PersistenceCoordinator, PersistenceSnapshot,
+};
 use crate::persistence::{chart_persist, dock_persist};
 use crate::window::detached;
 use crate::{Backend, UiSessionState, diag, firetest};
 
 /// Minimum spacing between background report-data UI revision publications.
 const BACKGROUND_REVISION_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Restore dirty state for persistence classes whose background write failed.
+///
+/// Args:
+///     backend: Shared state whose current authority must be retried after failure.
+///     acknowledgement: Per-class result returned by the serial worker.
+///
+/// Returns:
+///     Nothing; failures mark the complete affected authority dirty for a later full snapshot.
+fn apply_persistence_ack(backend: &mut Backend, acknowledgement: PersistenceAck) {
+    let failed = acknowledgement.failed();
+    if failed.layout {
+        backend.layout_dirty = true;
+    }
+    if failed.classic {
+        backend.dock_dirty = true;
+        backend.detached_dirty = true;
+    }
+    if failed.auto {
+        backend.auto_dock_dirty = true;
+    }
+}
+
+/// Poll the serial worker and enqueue at most one immutable live persistence snapshot.
+///
+/// Dirty flags are cleared when their complete authority is accepted, not when an older write
+/// later succeeds. A mutation arriving while that request is in flight therefore remains dirty.
+/// Failed acknowledgements restore the affected class for retry. This function only communicates
+/// over channels and never performs file I/O.
+///
+/// Args:
+///     backend: Shared state containing complete authorities and their dirty flags.
+///     coordinator: Application-thread dispatch side of the serial persistence worker.
+///
+/// Returns:
+///     Nothing; accepted work completes asynchronously and is polled on a later tick.
+fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut PersistenceCoordinator) {
+    if let Some(acknowledgement) = coordinator.poll() {
+        apply_persistence_ack(backend, acknowledgement);
+    }
+    if coordinator.is_in_flight() {
+        return;
+    }
+
+    let save_layout = backend.layout_dirty;
+    let save_classic = backend.dock_dirty || backend.detached_dirty;
+    let auto_topology = (backend.auto_dock_dirty
+        && backend.auto_dock_automatic_persistence_allowed)
+        .then(|| backend.auto_dock_topology.clone())
+        .flatten();
+    let save_auto = auto_topology.is_some();
+    let mut snapshot = PersistenceSnapshot::empty();
+    if save_layout {
+        snapshot = snapshot.with_layout(backend.layout.clone());
+    }
+    if save_classic {
+        snapshot = snapshot.with_classic(backend.dock_states.clone(), backend.detached.clone());
+    }
+    if let Some(topology) = auto_topology {
+        snapshot = snapshot.with_auto(topology);
+    }
+    if snapshot.is_empty() {
+        return;
+    }
+
+    if save_layout {
+        backend.layout_dirty = false;
+    }
+    if save_classic {
+        backend.dock_dirty = false;
+        backend.detached_dirty = false;
+    }
+    if save_auto {
+        backend.auto_dock_dirty = false;
+    }
+    if !coordinator.dispatch(snapshot) {
+        if save_layout {
+            backend.layout_dirty = true;
+        }
+        if save_classic {
+            backend.dock_dirty = true;
+            backend.detached_dirty = true;
+        }
+        if save_auto {
+            backend.auto_dock_dirty = true;
+        }
+    }
+}
 
 /// Side effects selected for one report/valuation coordination tick.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -338,9 +431,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
         cx.text_system()
             .add_fonts(embedded_fonts())
             .expect("failed to add embedded Moonbot fonts");
+        let persistence = Rc::new(RefCell::new(PersistenceCoordinator::start()));
 
-        let dock_states = dock_persist::load_all();
-        let detached = detached::load_all();
+        let (dock_states, detached) =
+            crate::persistence::window_state_persist::load_all();
+        let auto_dock_startup =
+            crate::persistence::auto_dock_persist::load().into_startup_state();
 
         // One-time charts.json remap: before schema v11, tabs stored POSITIONAL CoreId values;
         // CoreId is now a stable uid. Rebind while server order still matches the order recorded
@@ -382,7 +478,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
             );
         }
         let report_revision = cx.new(|_| crate::ReportRevision);
+        let market_data_revision = cx.new(|_| crate::MarketDataRevision);
         let display_time_revision = cx.new(|_| crate::DisplayTimeRevision);
+        let workspace_revision = cx.new(|_| crate::workspace::WorkspaceRevision::default());
+        let auto_workspace_layout_revision =
+            cx.new(|_| crate::workspace::AutoWorkspaceLayoutRevision::default());
         crate::chartdx::axes::set_display_zone(
             crate::chrome::clock::resolved_header_clock_zone(layout.header_clock_zone.as_deref()),
         );
@@ -402,7 +502,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
             reports,
             valuation,
             report_revision: report_revision.clone(),
+            market_data_revision: market_data_revision.clone(),
             display_time_revision: display_time_revision.clone(),
+            workspace_revision: workspace_revision.clone(),
+            auto_workspace_layout_revision: auto_workspace_layout_revision.clone(),
+            workspace_focus: None,
             metrics: Metrics::new(),
             snap: MetricsSnapshot::default(),
             // open = markets of OPEN chart panels, as in App::about_to_wait in egui.
@@ -420,9 +524,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             main_open_markets: HashMap::new(),
             config: cfg.clone(),
             preview: None,
-            open_request: None,
-            open_request_rev: 0,
-            open_request_activate: false,
+            open_main_request: crate::backend::OpenMainRequest::default(),
             open_compare_request: None,
             open_compare_request_rev: 0,
             diag_open_first_market: std::env::var_os("MOON_RENDER_DIAG_OPEN_FIRST_MARKET")
@@ -450,6 +552,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
             last_header_ticker_refresh: None,
             dock_states,
             dock_dirty: false,
+            auto_dock_topology: auto_dock_startup.topology,
+            auto_dock_automatic_persistence_allowed: auto_dock_startup
+                .automatic_persistence_allowed,
+            auto_dock_dirty: false,
             price_scale: None,
             price_scale_group: None,
             price_scale_rev: 0,
@@ -482,6 +588,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             reconnect_request: Vec::new(),
             show_group_request: Vec::new(),
             group_windows: HashMap::new(),
+            opening_group_windows: HashSet::new(),
             settings_window: None,
             strategies_window: None,
             strategies_goto: None,
@@ -489,6 +596,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             screener_window: None,
             analytics_window: None,
             profit_monitor_window: None,
+            profit_monitor_open_pending: None,
             report_window: None,
             report_window_view: None,
             firetest: firetest_config.clone().map(firetest::Runtime::new),
@@ -560,16 +668,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let quit_backend = backend.clone();
         cx.on_window_closed(move |app, closed_id| {
             // Return (detached windows to close, whether the app should quit).
-            let (to_close, quit) = quit_backend.update(app, |b, _| {
-                // Determine whether this is a group window and, if so, which group owns it.
-                let group = b
-                    .group_windows
-                    .iter()
-                    .find(|(_, h)| h.window_id() == closed_id)
-                    .map(|(g, _)| g.clone());
-                if let Some(group) = group {
-                    b.group_windows.remove(&group);
-                    if b.group_windows.is_empty() {
+            let (to_close, quit) = quit_backend.update(app, |b, bcx| {
+                if let Some((group, last_group_window)) =
+                    b.close_group_window(closed_id, bcx)
+                {
+                    if last_group_window {
                         // The last group window triggers a full exit; quit closes everything detached too.
                         return (Vec::new(), true);
                     }
@@ -636,15 +739,16 @@ pub(crate) fn run() -> anyhow::Result<()> {
         // during exit repins them (detached -> None) and they are not restored. quitting also
         // suppresses repin draining (drain_chart_repin) so it cannot clear detached.
         let app_quit_backend = backend.clone();
+        let app_quit_persistence = persistence.clone();
         cx.on_app_quit(move |cx| {
             moon_core::detect_diag::line("[quit] on_app_quit → сохраняю charts.json");
-            app_quit_backend.update(cx, |b, _| {
+            let final_persistence = app_quit_backend.update(cx, |b, _| {
                 b.quitting = true;
                 // One of the two DEBOUNCED flush sites; the other is the coordinator tick below.
                 // Not reached by FireTest at all, which exits through `std::process::exit` — kept
                 // gated so the rule holds however the run ends.
                 if !b.persist_allowed {
-                    return;
+                    return PersistenceSnapshot::empty();
                 }
                 if b.config_dirty {
                     if let Err(e) = b.config.save() {
@@ -654,21 +758,6 @@ pub(crate) fn run() -> anyhow::Result<()> {
                     }
                 }
                 chart_persist::save_all(&b.chart_specs);
-                // Flush debounced persistence because the 100 ms tick may not run after the final
-                // change. This matters especially for detached.json: otherwise "repin a panel,
-                // then close immediately" leaves a stale record that restores as a separate window.
-                if b.layout_dirty {
-                    b.layout.save();
-                    b.layout_dirty = false;
-                }
-                if b.dock_dirty {
-                    dock_persist::save_all(&b.dock_states);
-                    b.dock_dirty = false;
-                }
-                if b.detached_dirty {
-                    detached::save_all(&b.detached);
-                    b.detached_dirty = false;
-                }
                 if b.tab_badges_dirty {
                     b.tab_badges.save();
                     b.tab_badges_dirty = false;
@@ -676,6 +765,24 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 if b.figures.borrow().dirty {
                     b.figures.borrow_mut().save();
                 }
+                // The full final authorities supersede any debounced snapshot already in flight.
+                // The serial worker receives this request behind prior work, so no second writer
+                // can race the same atomic temp paths during shutdown.
+                let mut snapshot = PersistenceSnapshot::empty()
+                    .with_layout(b.layout.clone())
+                    .with_classic(b.dock_states.clone(), b.detached.clone());
+                if b.auto_dock_automatic_persistence_allowed
+                    && let Some(topology) = b.auto_dock_topology.clone()
+                {
+                    snapshot = snapshot.with_auto(topology);
+                }
+                snapshot
+            });
+            let final_acknowledgement = app_quit_persistence
+                .borrow_mut()
+                .shutdown(final_persistence);
+            app_quit_backend.update(cx, |b, _| {
+                apply_persistence_ack(b, final_acknowledgement);
             });
             async move {}
         })
@@ -724,6 +831,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
                                 chart.sync_orders_if_visible(&b.session, false);
                             }
                         }
+                        if drain.market_data {
+                            b.market_data_revision.update(cx, |_, cx| cx.notify());
+                        }
                         if drain.ui_state {
                             b.mark_backend_dirty(cx);
                         }
@@ -743,6 +853,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
         let coord_valuation_dirty = valuation_dirty;
         let coord_valuation_status_dirty = valuation_status_dirty;
         let coord_report_revision = report_revision;
+        let coord_persistence = persistence.clone();
         cx.spawn(async move |cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let mut report_revision_gate = ReportRevisionGate::new(Instant::now());
@@ -795,18 +906,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
                         // the dirty-flag mechanism entirely. `order-cancel-lag` in particular
                         // places a real order that lands permanently in `reports.sqlite`.
                         if b.persist_allowed {
-                            if b.layout_dirty {
-                                b.layout.save();
-                                b.layout_dirty = false;
-                            }
-                            if b.dock_dirty {
-                                dock_persist::save_all(&b.dock_states);
-                                b.dock_dirty = false;
-                            }
-                            if b.detached_dirty {
-                                detached::save_all(&b.detached);
-                                b.detached_dirty = false;
-                            }
+                            dispatch_live_persistence(b, &mut coord_persistence.borrow_mut());
                             if b.chart_specs_dirty {
                                 chart_persist::save_all(&b.chart_specs);
                                 b.chart_specs_dirty = false;

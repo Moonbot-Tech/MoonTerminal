@@ -37,6 +37,7 @@ use moon_ui::{
 use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup};
 use moon_core::session::CoreId;
 use rust_i18n::t;
@@ -100,7 +101,8 @@ pub struct CoreStatusView {
     pub(super) backend: Entity<Backend>,
     /// Window group whose cores define this panel's scope, matching the Assets panel.
     group: String,
-    /// Multi-select core filter; an empty set means every core in the group.
+    /// Retained Classic multi-select core filter; an empty set means every group core. Auto mode
+    /// pins its effective workspace scope without using or mutating this selection.
     pub(super) sel_cores: HashSet<CoreId>,
     /// Unix ms of the last repaint; telemetry repaints at most once per second.
     last_repaint_ms: i64,
@@ -185,6 +187,12 @@ impl CoreStatusView {
 
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
+            this.rebuild_cache(cx);
+            cx.notify();
+        })
+        .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
             this.rebuild_cache(cx);
             cx.notify();
         })
@@ -274,6 +282,38 @@ impl CoreStatusView {
     /// Return this panel group's cores in canonical order.
     pub(super) fn scope_cores(&self, b: &Backend) -> OrderedCores {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
+    }
+
+    /// Resolve the effective core scope without overwriting the retained Classic filter.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     Effective core scope used by status data and controls.
+    pub(super) fn effective_scope(&self, b: &Backend) -> EffectiveCoreScope {
+        let retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
+        let retained = if retained.is_empty() {
+            RetainedCoreScope::All
+        } else {
+            RetainedCoreScope::Explicit(&retained)
+        };
+        b.effective_workspace_scope(&self.group, retained)
+    }
+
+    /// Return canonically ordered core/name pairs in the current effective scope.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing canonical configured core order.
+    ///
+    /// Returns:
+    ///     Effective core/name pairs for queries and caches.
+    pub(super) fn query_cores(&self, b: &Backend) -> Vec<(CoreId, String)> {
+        let scope = self.effective_scope(b);
+        self.scope_cores(b)
+            .into_iter()
+            .filter(|(core, _)| scope.contains(*core))
+            .collect()
     }
 }
 
@@ -387,7 +427,12 @@ impl Render for CoreStatusView {
             }
             CoreStatusMode::Warnings => {
                 let b = self.backend.read(cx);
-                let episodes = b.warn_episodes_recent(WARN_LIST_LIMIT);
+                let scope = self.effective_scope(b);
+                let core_ids: HashSet<CoreId> = scope.ids().iter().copied().collect();
+                let server_addresses: HashSet<IpAddr> =
+                    groups.iter().filter_map(|group| group.address).collect();
+                let episodes =
+                    b.warn_episodes_recent_for_scope(&core_ids, &server_addresses, WARN_LIST_LIMIT);
                 // Resolve each server IP to its display name (connected group, then a saved custom
                 // name), never the raw IP — matching how the panel masks addresses.
                 let server_names: HashMap<IpAddr, String> = episodes
@@ -527,17 +572,32 @@ impl Render for CoreStatusView {
 }
 
 impl CoreStatusView {
-    /// Render the core multi-selector in the top bar.
+    /// Render the effective core scope in the top bar.
     ///
-    /// Clicking a known exchange header batch-toggles its currently available group cores.
+    /// Classic mode exposes the retained multi-selector and exchange batch toggles. Auto mode pins
+    /// the workspace label and disables the selector without changing retained Classic state.
     ///
     /// Args:
-    ///     cores: Scoped cores in canonical display order.
+    ///     cores: Group cores in canonical display order.
     ///     cx: View context used to read exchanges and wire selection callbacks.
     ///
     /// Returns:
-    ///     The top-bar row containing the fixed-trigger dropdown.
+    ///     The top-bar row containing an interactive Classic selector or pinned Auto indicator.
     fn core_bar(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
+        let scope = self.effective_scope(self.backend.read(cx));
+        let workspace_owned = scope.is_workspace_owned();
+        let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
+        let pinned_label = match scope.label() {
+            crate::workspace::EffectiveScopeLabel::Overview => {
+                Some(t!("workspace.overview").to_string())
+            }
+            crate::workspace::EffectiveScopeLabel::Core(core) => cores
+                .iter()
+                .find(|(id, _)| *id == core)
+                .map(|(_, name)| name.clone()),
+            crate::workspace::EffectiveScopeLabel::All
+            | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
+        };
         let view = cx.entity();
         let exchange_view = view.clone();
         let exchange_names = self
@@ -550,7 +610,11 @@ impl CoreStatusView {
             "core-status-core",
             cores,
             &exchange_names,
-            &self.sel_cores,
+            if workspace_owned {
+                &effective_selection
+            } else {
+                &self.sel_cores
+            },
             crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("core_status.all_cores").to_string(),
             |n| t!("core_status.cores_n", n = n).to_string(),
@@ -563,7 +627,13 @@ impl CoreStatusView {
                     t.toggle_exchange_cores(exchange_cores, c);
                 });
             },
-        );
+        )
+        .disabled(workspace_owned);
+        let combo = if let Some(label) = pinned_label {
+            combo.label(label)
+        } else {
+            combo
+        };
         let weak_view = cx.entity().downgrade();
         let modes = MoonSegmentedControl::new("core-status-mode")
             .items([

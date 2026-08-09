@@ -2,6 +2,7 @@
 //! deletion. MoonUI Root owns the open dialog; this module builds its body and footer and
 //! dispatches confirmed operations to `moon-core`.
 
+use super::super::actions::strategy_action_authorized;
 use super::super::*;
 use super::ops;
 use super::ui::TreeOp;
@@ -9,6 +10,69 @@ use anyhow::Result;
 use moon_core::feed::NewStrategySpec;
 use moon_ui::{MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
+
+#[cfg(test)]
+mod tests;
+
+/// Return whether a modal still owns the same workspace generation and visible core.
+///
+/// Args:
+///     captured_generation: Auto generation captured when the modal opened, or Classic.
+///     current_generation: Current Auto generation immediately before dispatch, or Classic.
+///     workspace: Current effective Auto core set, or `None` in Classic.
+///     core: Core captured by the modal producer.
+///
+/// Returns:
+///     `true` only while both generation and effective-core authority remain unchanged.
+fn tree_op_authorized(
+    captured_generation: Option<u64>,
+    current_generation: Option<u64>,
+    workspace: Option<&[CoreId]>,
+    core: CoreId,
+) -> bool {
+    captured_generation == current_generation && strategy_core_is_visible(workspace, core)
+}
+
+/// Build the exact sorted strategy identity and enabled-state snapshot below one folder.
+///
+/// Args:
+///     rows: Current live rows under the folder being considered.
+///
+/// Returns:
+///     Stable `(strategy id, enabled)` identities suitable for confirmation revalidation.
+fn folder_targets(rows: &[&StrategyRow]) -> Vec<(u64, bool)> {
+    let mut targets = rows
+        .iter()
+        .map(|row| (row.id, row.checked))
+        .collect::<Vec<_>>();
+    targets.sort_unstable();
+    targets
+}
+
+/// Return whether a destructive folder confirmation still describes the complete live folder.
+///
+/// Args:
+///     captured_generation: Auto generation captured before confirmation, or Classic.
+///     current_generation: Current Auto generation immediately before dispatch, or Classic.
+///     workspace: Current effective Auto core set, or `None` in Classic.
+///     core: Core that owns the folder.
+///     captured_targets: Exact child identities and enabled states shown for confirmation.
+///     current_targets: Fresh child identities and enabled states from the live store.
+///
+/// Returns:
+///     `true` only for the same visible, entirely disabled folder snapshot.
+fn folder_delete_authorized(
+    captured_generation: Option<u64>,
+    current_generation: Option<u64>,
+    workspace: Option<&[CoreId]>,
+    core: CoreId,
+    captured_targets: &[(u64, bool)],
+    current_targets: &[(u64, bool)],
+) -> bool {
+    tree_op_authorized(captured_generation, current_generation, workspace, core)
+        && captured_targets == current_targets
+        && current_targets.iter().all(|(_, checked)| !checked)
+}
 
 fn op_title(op: &TreeOp) -> String {
     match op {
@@ -56,7 +120,9 @@ fn op_dialog_body(
     };
 
     match op {
-        TreeOp::CreateStrategy { core, target, kind } => {
+        TreeOp::CreateStrategy {
+            core, target, kind, ..
+        } => {
             let mut kinds: Vec<(u8, String)> = backend
                 .read(cx)
                 .session
@@ -152,15 +218,14 @@ fn op_dialog_body(
             }
             Some(body.into_any_element())
         }
-        TreeOp::ConfirmDeleteStrategies { label } | TreeOp::ConfirmDeleteFolder { label, .. } => {
-            Some(
-                div()
-                    .w_full()
-                    .text_color(moon(p.text))
-                    .child(t!("dialogs.delete_confirm", what = label).to_string())
-                    .into_any_element(),
-            )
-        }
+        TreeOp::ConfirmDeleteStrategies { label, .. }
+        | TreeOp::ConfirmDeleteFolder { label, .. } => Some(
+            div()
+                .w_full()
+                .text_color(moon(p.text))
+                .child(t!("dialogs.delete_confirm", what = label).to_string())
+                .into_any_element(),
+        ),
     }
 }
 
@@ -224,6 +289,16 @@ fn op_dialog_footer(
 impl StrategiesView {
     // ── Opening modals ────────────────────────────────────────────────────────
 
+    /// Open a create-strategy modal with the current workspace generation.
+    ///
+    /// Args:
+    ///     core: Core that will own the new strategy.
+    ///     target: Canonical destination folder path.
+    ///     window: Native owner used to open the modal.
+    ///     cx: View context used to capture generation and construct dialog state.
+    ///
+    /// Returns:
+    ///     Nothing; confirmation performs the dispatch-time revalidation.
     pub(super) fn open_create_strategy(
         &mut self,
         core: CoreId,
@@ -242,11 +317,26 @@ impl StrategiesView {
             .map(|(o, _)| *o);
         self.op_input_init = String::new();
         self.op_input = None; // Give every opening a fresh input entity and layout.
-        self.op = Some(TreeOp::CreateStrategy { core, target, kind });
+        self.op = Some(TreeOp::CreateStrategy {
+            core,
+            target,
+            kind,
+            workspace_generation: self.action_workspace_generation(cx),
+        });
         self.open_op_dialog(window, cx);
         cx.notify();
     }
 
+    /// Open a create-folder modal with the current workspace generation.
+    ///
+    /// Args:
+    ///     core: Core that will own the UI folder.
+    ///     target: Canonical parent folder path.
+    ///     window: Native owner used to open the modal.
+    ///     cx: View context used to capture generation and construct dialog state.
+    ///
+    /// Returns:
+    ///     Nothing; confirmation performs the dispatch-time revalidation.
     pub(super) fn open_create_folder(
         &mut self,
         core: CoreId,
@@ -256,11 +346,25 @@ impl StrategiesView {
     ) {
         self.op_input_init = String::new();
         self.op_input = None;
-        self.op = Some(TreeOp::CreateFolder { core, target });
+        self.op = Some(TreeOp::CreateFolder {
+            core,
+            target,
+            workspace_generation: self.action_workspace_generation(cx),
+        });
         self.open_op_dialog(window, cx);
         cx.notify();
     }
 
+    /// Open a folder-rename modal with the current workspace generation.
+    ///
+    /// Args:
+    ///     core: Core that owns the folder.
+    ///     old_path: Exact canonical path captured by the producer.
+    ///     window: Native owner used to open the modal.
+    ///     cx: View context used to capture generation and construct dialog state.
+    ///
+    /// Returns:
+    ///     Nothing; confirmation performs the dispatch-time revalidation.
     pub(super) fn open_rename_folder(
         &mut self,
         core: CoreId,
@@ -271,7 +375,11 @@ impl StrategiesView {
         let cur = old_path.last().cloned().unwrap_or_default();
         self.op_input_init = cur;
         self.op_input = None;
-        self.op = Some(TreeOp::RenameFolder { core, old_path });
+        self.op = Some(TreeOp::RenameFolder {
+            core,
+            old_path,
+            workspace_generation: self.action_workspace_generation(cx),
+        });
         self.open_op_dialog(window, cx);
         cx.notify();
     }
@@ -293,13 +401,28 @@ impl StrategiesView {
         cx.notify();
     }
 
+    /// Confirm the current tree operation against the workspace-visible target at dispatch time.
+    ///
+    /// Hidden retained Classic selection and folder state never become fallback targets when Auto
+    /// moves; an operation whose captured core is no longer visible closes without dispatch.
+    ///
+    /// Args:
+    ///     cx: View context used to resolve inputs, effective selection, and session commands.
+    ///
+    /// Returns:
+    ///     Whether the dialog may close, or a session dispatch error.
     fn confirm_op_dialog(&mut self, cx: &mut Context<Self>) -> Result<bool> {
         let Some(op) = self.op.clone() else {
             return Ok(true);
         };
 
         match op {
-            TreeOp::CreateStrategy { core, target, kind } => {
+            TreeOp::CreateStrategy {
+                core,
+                target,
+                kind,
+                workspace_generation,
+            } => {
                 let name = self
                     .op_input
                     .as_ref()
@@ -309,34 +432,72 @@ impl StrategiesView {
                     return Ok(false);
                 }
                 if let Some(kind) = kind {
-                    self.confirm_create_strategy(core, target, kind, name, cx)?;
+                    self.confirm_create_strategy(
+                        core,
+                        target,
+                        kind,
+                        name,
+                        workspace_generation,
+                        cx,
+                    )?;
                 }
             }
-            TreeOp::CreateFolder { core, target } => {
+            TreeOp::CreateFolder {
+                core,
+                target,
+                workspace_generation,
+            } => {
                 let name = self
                     .op_input
                     .as_ref()
                     .map(|i| i.read(cx).value().to_string())
                     .unwrap_or_default();
-                if !name.trim().is_empty() {
+                if !name.trim().is_empty()
+                    && tree_op_authorized(
+                        workspace_generation,
+                        self.action_workspace_generation(cx),
+                        self.workspace_cores.as_deref(),
+                        core,
+                    )
+                {
                     self.add_ui_folder(core, &target, name.trim());
                 }
             }
-            TreeOp::RenameFolder { core, old_path } => {
+            TreeOp::RenameFolder {
+                core,
+                old_path,
+                workspace_generation,
+            } => {
                 let name = self
                     .op_input
                     .as_ref()
                     .map(|i| i.read(cx).value().to_string())
                     .unwrap_or_default();
                 if !name.trim().is_empty() {
-                    self.confirm_rename_folder(core, &old_path, name.trim(), cx)?;
+                    self.confirm_rename_folder(
+                        core,
+                        &old_path,
+                        name.trim(),
+                        workspace_generation,
+                        cx,
+                    )?;
                 }
             }
-            TreeOp::ConfirmDeleteStrategies { .. } => {
-                self.delete_selection(cx)?;
+            TreeOp::ConfirmDeleteStrategies {
+                targets,
+                workspace_generation,
+                ..
+            } => {
+                self.delete_selection(&targets, workspace_generation, cx)?;
             }
-            TreeOp::ConfirmDeleteFolder { core, path, .. } => {
-                self.delete_folder(core, &path, cx)?;
+            TreeOp::ConfirmDeleteFolder {
+                core,
+                path,
+                targets,
+                workspace_generation,
+                ..
+            } => {
+                self.delete_folder(core, &path, &targets, workspace_generation, cx)?;
             }
         }
 
@@ -422,10 +583,13 @@ impl StrategiesView {
         if rows.iter().any(|(_, r)| r.checked) {
             return;
         }
-        // A selection may span cores. Use one confirmation; `delete_selection` derives the
-        // selection again and dispatches each strategy to its core.
+        // A selection may span cores. Keep its complete identity in the confirmation so a later
+        // workspace transition cannot silently delete only the surviving subset.
+        let targets = rows.iter().map(|(core, row)| (*core, row.id)).collect();
         self.op = Some(TreeOp::ConfirmDeleteStrategies {
             label: t!("strat.count_strategies", n = rows.len()).to_string(),
+            targets,
+            workspace_generation: self.action_workspace_generation(cx),
         });
         self.open_op_dialog(window, cx);
         cx.notify();
@@ -450,7 +614,13 @@ impl StrategiesView {
             name = path.last().cloned().unwrap_or_default()
         )
         .to_string();
-        self.op = Some(TreeOp::ConfirmDeleteFolder { core, path, label });
+        self.op = Some(TreeOp::ConfirmDeleteFolder {
+            core,
+            path,
+            label,
+            targets: folder_targets(&under),
+            workspace_generation: self.action_workspace_generation(cx),
+        });
         self.open_op_dialog(window, cx);
         cx.notify();
     }
@@ -461,14 +631,34 @@ impl StrategiesView {
     ///
     /// The shared `NewStrategy` conversion keeps dialog creation aligned with paste and drop
     /// dispatch, including placement metadata.
+    ///
+    /// Args:
+    ///     core: Core captured when the modal opened.
+    ///     target: Canonical destination folder path.
+    ///     kind_ord: Exact schema kind ordinal selected by the user.
+    ///     name: Strategy name entered in the modal.
+    ///     workspace_generation: Auto generation captured with the modal, or Classic.
+    ///     cx: View context used for live authority/schema lookup and dispatch.
+    ///
+    /// Returns:
+    ///     Success for a dispatched create or stale-scope no-op, otherwise a session error.
     fn confirm_create_strategy(
         &mut self,
         core: CoreId,
         target: String,
         kind_ord: u8,
         name: String,
+        workspace_generation: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Result<()> {
+        if !tree_op_authorized(
+            workspace_generation,
+            self.action_workspace_generation(cx),
+            self.workspace_cores.as_deref(),
+            core,
+        ) {
+            return Ok(());
+        }
         let spec = {
             let store = self.backend.read(cx).session.store();
             let Some(kind) = store
@@ -490,17 +680,37 @@ impl StrategiesView {
         self.filter.only_active = false;
         self.expanded_cores.insert(core);
         // Select it after the core echoes it back.
-        self.pending_select = Some((core, name));
+        self.queue_pending_name(core, name, cx);
         Ok(())
     }
 
+    /// Rename a folder only while its captured core remains workspace-visible.
+    ///
+    /// Args:
+    ///     core: Core captured when the rename dialog opened.
+    ///     old_path: Existing canonical folder segments.
+    ///     new_name: Replacement leaf name entered by the user.
+    ///     workspace_generation: Auto generation captured with the modal, or Classic.
+    ///     cx: View context used to revalidate scope and dispatch the move.
+    ///
+    /// Returns:
+    ///     Success for a dispatched rename or a stale-scope no-op, otherwise a session error.
     fn confirm_rename_folder(
         &mut self,
         core: CoreId,
         old_path: &[String],
         new_name: &str,
+        workspace_generation: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Result<()> {
+        if !tree_op_authorized(
+            workspace_generation,
+            self.action_workspace_generation(cx),
+            self.workspace_cores.as_deref(),
+            core,
+        ) {
+            return Ok(());
+        }
         let moves = {
             let store = self.backend.read(cx).session.store();
             let Some(cd) = store.core(core) else {
@@ -514,29 +724,93 @@ impl StrategiesView {
         Ok(())
     }
 
-    /// Deletes the selection; the request path already checked the disabled-only rule.
-    fn delete_selection(&mut self, cx: &mut Context<Self>) -> Result<()> {
+    /// Delete one exact confirmed selection only while every target retains workspace authority.
+    ///
+    /// Args:
+    ///     targets: Complete `(core, strategy)` identities captured before confirmation.
+    ///     workspace_generation: Auto generation captured with the confirmation, or Classic.
+    ///     cx: View context used to revalidate all targets before the first command.
+    ///
+    /// Returns:
+    ///     Success for a complete authority-approved dispatch or a stale-scope no-op.
+    fn delete_selection(
+        &mut self,
+        targets: &[Key],
+        workspace_generation: Option<u64>,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        if !strategy_action_authorized(
+            workspace_generation,
+            self.action_workspace_generation(cx),
+            self.workspace_cores.as_deref(),
+            targets,
+        ) {
+            return Ok(());
+        }
         let rows = {
             let store = self.backend.read(cx).session.store();
-            self.selection_rows(store)
+            let rows: Option<Vec<(CoreId, StrategyRow)>> = targets
+                .iter()
+                .map(|(core, id)| row(store, *core, *id).cloned().map(|row| (*core, row)))
+                .collect();
+            let Some(rows) = rows else {
+                return Ok(());
+            };
+            // Revalidate the destructive precondition atomically too: one restarted strategy
+            // rejects the whole confirmation instead of deleting its disabled siblings.
+            if rows.iter().any(|(_, row)| row.checked) {
+                return Ok(());
+            }
+            rows
         };
+        let deleted: HashSet<Key> = targets.iter().copied().collect();
         {
             let b = self.backend.read(cx);
             for (core, r) in &rows {
                 b.session.delete_strategy(*core, r.id)?;
             }
         }
-        self.sel.clear();
-        self.selected = None;
+        self.sel.retain(|key| !deleted.contains(key));
+        if self.selected.is_some_and(|key| deleted.contains(&key)) {
+            self.selected = None;
+        }
         Ok(())
     }
 
+    /// Delete a folder only while its captured core remains workspace-visible.
+    ///
+    /// Args:
+    ///     core: Core captured when the delete confirmation opened.
+    ///     path: Canonical folder segments captured by the confirmation.
+    ///     cx: View context used to revalidate scope and dispatch deletion.
+    ///
+    /// Returns:
+    ///     Success for a dispatched deletion or a stale-scope no-op, otherwise a session error.
     fn delete_folder(
         &mut self,
         core: CoreId,
         path: &[String],
+        targets: &[(u64, bool)],
+        workspace_generation: Option<u64>,
         cx: &mut Context<Self>,
     ) -> Result<()> {
+        let current_targets = {
+            let store = self.backend.read(cx).session.store();
+            let Some(cd) = store.core(core) else {
+                return Ok(());
+            };
+            folder_targets(&ops::rows_under(&cd.strategies, path))
+        };
+        if !folder_delete_authorized(
+            workspace_generation,
+            self.action_workspace_generation(cx),
+            self.workspace_cores.as_deref(),
+            core,
+            targets,
+            &current_targets,
+        ) {
+            return Ok(());
+        }
         self.backend
             .read(cx)
             .session

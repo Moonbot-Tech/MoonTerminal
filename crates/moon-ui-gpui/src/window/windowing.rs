@@ -4,7 +4,10 @@
 //! configuration, and HWND/geometry helpers. It also provides Windows AppUserModelIDs and group
 //! icons embedded in the executable by `build.rs` through `embed_group_icons`.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 
@@ -516,47 +519,57 @@ pub(crate) fn set_group_window_icon(window: &Window, icon_id: u32) {
 /// * `_` - Embedded icon ID accepted for API parity.
 pub(crate) fn set_group_window_icon(_: &Window, _: u32) {}
 
-/// Attempt to remove a Windows taskbar item without changing the window's native style.
+/// Cancellation authority for one background taskbar-suppression burst.
 ///
-/// This is one best-effort `ITaskbarList::DeleteTab` attempt. Scheduling and the rationale for
-/// repeated attempts belong to [`hide_window_from_taskbar_soon`].
-///
-/// # Arguments
-///
-/// * `window` - Displayed window whose taskbar item should be removed.
-#[cfg(target_os = "windows")]
-pub(crate) fn hide_window_from_taskbar(window: &Window) {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
-    use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+/// Dropping or replacing the token prevents an old activation from continuing after a window is
+/// released or a newer burst takes ownership of the same native window.
+pub(crate) struct TaskbarHideTask {
+    cancelled: Arc<AtomicBool>,
+}
 
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
-    };
-    let RawWindowHandle::Win32(h) = handle.as_raw() else {
-        return;
-    };
-    let hwnd = HWND(h.hwnd.get() as *mut _);
-    unsafe {
-        let taskbar: ITaskbarList = match CoCreateInstance(&TaskbarList, None, CLSCTX_ALL) {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-        if taskbar.HrInit().is_err() {
-            return;
-        }
-        let _ = taskbar.DeleteTab(hwnd);
+impl TaskbarHideTask {
+    /// Cancel this burst without waiting for its worker thread to finish.
+    ///
+    /// Returns:
+    ///     Nothing; the worker observes the flag before its next native call.
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Return whether cancellation has been requested.
+    ///
+    /// Returns:
+    ///     Current cancellation state exposed only to lifecycle regressions.
+    #[cfg(test)]
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-/// Leave taskbar state unchanged outside Windows.
+impl Drop for TaskbarHideTask {
+    /// Cancel a still-running burst when its owning view is released or re-armed.
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// Copy a Win32 HWND value while the GPUI window is leased on the application thread.
 ///
-/// # Arguments
+/// Args:
+///     window: Live independent window whose taskbar item should be suppressed.
 ///
-/// * `_` - Window accepted for API parity with the Windows implementation.
-pub(crate) fn hide_window_from_taskbar(_: &Window) {}
+/// Returns:
+///     Integer HWND safe to move to the dedicated native worker, or `None` off Win32.
+#[cfg(target_os = "windows")]
+fn taskbar_hwnd(window: &Window) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let RawWindowHandle::Win32(h) = handle.as_raw() else {
+        return None;
+    };
+    Some(h.hwnd.get())
+}
 
 /// Maximum deletion attempts in one bounded taskbar-suppression burst.
 #[cfg(target_os = "windows")]
@@ -566,12 +579,56 @@ const TASKBAR_HIDE_ATTEMPTS: u32 = 20;
 #[cfg(target_os = "windows")]
 const TASKBAR_HIDE_RETRY: Duration = Duration::from_millis(150);
 
-/// Consecutive unreachable-window probes accepted before a burst gives up.
+/// Run one complete taskbar burst inside a dedicated COM apartment thread.
 ///
-/// `AnyWindowHandle::update` also fails while the window is busy inside another update, so a single
-/// failure is not proof that the window closed.
+/// The COM interface is created, used, and dropped without an await or thread hop. The worker owns
+/// no GPUI entity; a per-window cancellation token is its only lifetime input.
+///
+/// Args:
+///     hwnd_value: Integer HWND copied while the GPUI window was live.
+///     cancelled: Exact owning view's cancellation flag.
+///
+/// Returns:
+///     Nothing; failures remain best-effort because taskbar visibility is cosmetic.
 #[cfg(target_os = "windows")]
-const TASKBAR_HIDE_MAX_FAILURES: u32 = 3;
+fn run_taskbar_hide_worker(hwnd_value: isize, cancelled: Arc<AtomicBool>) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+    };
+    use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+
+    unsafe {
+        if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_err() {
+            return;
+        }
+        struct ComApartment;
+        impl Drop for ComApartment {
+            fn drop(&mut self) {
+                unsafe { CoUninitialize() };
+            }
+        }
+        let _apartment = ComApartment;
+        let taskbar: ITaskbarList = match CoCreateInstance(&TaskbarList, None, CLSCTX_ALL) {
+            Ok(taskbar) => taskbar,
+            Err(_) => return,
+        };
+        if taskbar.HrInit().is_err() {
+            return;
+        }
+        let hwnd = HWND(hwnd_value as *mut _);
+        for attempt in 0..TASKBAR_HIDE_ATTEMPTS {
+            if cancelled.load(Ordering::Acquire) || !IsWindow(Some(hwnd)).as_bool() {
+                break;
+            }
+            let _ = taskbar.DeleteTab(hwnd);
+            if attempt + 1 < TASKBAR_HIDE_ATTEMPTS {
+                std::thread::sleep(TASKBAR_HIDE_RETRY);
+            }
+        }
+    }
+}
 
 /// Delete a window's taskbar item over the next few seconds.
 ///
@@ -583,43 +640,45 @@ const TASKBAR_HIDE_MAX_FAILURES: u32 = 3;
 ///
 /// The shell publishes the item shortly after the native window is shown and republishes it when
 /// an iconic window is restored. Callers therefore arm this burst at construction and after every
-/// activation. The burst is bounded, so overlapping arms cannot accumulate into standing work,
-/// and it stops early once the window is gone.
+/// activation, replacing the token stored by the owning view. Replacement cancels an older burst,
+/// so synchronous COM calls never accumulate on the application thread.
 ///
-/// # Arguments
+/// Args:
+///     window: Live independent window used only to copy its integer HWND.
 ///
-/// * `handle` - Window whose taskbar item should be deleted.
-/// * `cx` - Application context owning the deletion task.
+/// Returns:
+///     Cancellation token that must remain owned by the exact window view.
 #[cfg(target_os = "windows")]
-pub(crate) fn hide_window_from_taskbar_soon(handle: AnyWindowHandle, cx: &mut App) {
-    cx.spawn(async move |cx| {
-        let mut failures: u32 = 0;
-        for attempt in 0..TASKBAR_HIDE_ATTEMPTS {
-            if attempt > 0 {
-                cx.background_executor().timer(TASKBAR_HIDE_RETRY).await;
-            }
-            let alive = cx.update(|cx| {
-                handle
-                    .update(cx, |_, window, _| hide_window_from_taskbar(window))
-                    .is_ok()
-            });
-            failures = if alive { 0 } else { failures + 1 };
-            if failures >= TASKBAR_HIDE_MAX_FAILURES {
-                break;
-            }
-        }
-    })
-    .detach();
+pub(crate) fn hide_window_from_taskbar_soon(window: &Window) -> TaskbarHideTask {
+    let task = TaskbarHideTask {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    if let Some(hwnd) = taskbar_hwnd(window) {
+        let cancelled = task.cancelled.clone();
+        let _ = std::thread::Builder::new()
+            .name("moon-taskbar-hide".to_string())
+            .spawn(move || run_taskbar_hide_worker(hwnd, cancelled));
+    }
+    task
 }
 
 /// Leave taskbar state unchanged outside Windows.
 ///
-/// # Arguments
+/// Args:
 ///
-/// * `_` - Window handle accepted for API parity with the Windows implementation.
-/// * `_` - Application context accepted for API parity.
+///     window: Window accepted for API parity.
+///
+/// Returns:
+///     Inert cancellation token with the same ownership contract as Windows.
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn hide_window_from_taskbar_soon(_: AnyWindowHandle, _: &mut App) {}
+pub(crate) fn hide_window_from_taskbar_soon(_: &Window) -> TaskbarHideTask {
+    TaskbarHideTask {
+        cancelled: Arc::new(AtomicBool::new(false)),
+    }
+}
+
+#[cfg(test)]
+mod tests;
 
 /// Restore a Windows window and move it into an on-screen cascade near the primary origin.
 ///

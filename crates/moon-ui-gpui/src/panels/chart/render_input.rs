@@ -177,11 +177,15 @@ pub(super) fn mouse_down_left(
     };
     let mut opened_to_main = false;
     if let Some((core, market)) = this.input.pending_to_main.take() {
-        this.backend.update(cx, |b, bcx| {
+        let workspace_group = this.workspace_group.clone();
+        opened_to_main = this.backend.update(cx, |b, bcx| {
+            if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                return false;
+            }
             b.open_on_main((core, market), true);
             bcx.notify();
+            true
         });
-        opened_to_main = true;
     }
     if input_changed || opened_to_main {
         crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);

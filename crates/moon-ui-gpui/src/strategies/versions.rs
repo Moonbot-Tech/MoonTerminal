@@ -55,7 +55,7 @@ impl StrategiesView {
     pub(super) fn version_override(&self) -> Option<(Key, &StrategyRow)> {
         let vf = self.versions.sel?;
         let (key, row_vf, row) = self.versions.row.as_ref()?;
-        (Some(*key) == self.selected && *row_vf == vf).then_some((*key, row))
+        (Some(*key) == logic::selected_key(self) && *row_vf == vf).then_some((*key, row))
     }
 
     /// Return the changed-fields-only filter when viewing a persisted snapshot with a nonempty diff.
@@ -71,7 +71,7 @@ impl StrategiesView {
 
     /// Fire-and-forget reload of the version list after the selection or DB generation changes.
     fn ensure_versions(&mut self, cx: &mut Context<Self>) {
-        let key = self.selected;
+        let key = logic::selected_key(self);
         let db_gen = moon_core::strat_db::generation();
         if self.versions.key == key && (self.versions.db_gen == db_gen || self.versions.inflight) {
             return;
@@ -158,7 +158,7 @@ impl StrategiesView {
     /// current strategy are staged, and cosmetic fields on the ignore list remain untouched. The
     /// Apply button submits the changes and creates a new version.
     pub(super) fn stage_version_into_current(&mut self, vf: i64, cx: &mut Context<Self>) {
-        let Some((core, id)) = self.selected else {
+        let Some((core, id)) = logic::selected_key(self) else {
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -180,7 +180,7 @@ impl StrategiesView {
                     let Some((fields, ignore)) = payload else {
                         return;
                     };
-                    if this.selected != Some((core, id)) {
+                    if logic::selected_key(this) != Some((core, id)) {
                         return;
                     }
                     let vmap: std::collections::HashMap<String, String> =
@@ -273,6 +273,21 @@ impl StrategiesView {
                     log::warn!("восстановление {id}: нет head/версий в strat_db");
                     return;
                 };
+                let hidden = backend
+                    .read(cx)
+                    .singleton_workspace()
+                    .is_some_and(|workspace| {
+                        !backend
+                            .read(cx)
+                            .effective_workspace_scope(
+                                &workspace.group,
+                                crate::workspace::RetainedCoreScope::All,
+                            )
+                            .contains(core)
+                    });
+                if hidden {
+                    return;
+                }
                 if let Err(e) = backend.read(cx).session.restore_strategy(
                     core,
                     id,
@@ -311,7 +326,7 @@ impl StrategiesView {
         self.versions.changed.clear();
         self.versions.section = None; // A loaded nonempty diff interprets None as "All".
         cx.notify();
-        let (Some((core, id)), Some(vf)) = (self.selected, vf) else {
+        let (Some((core, id)), Some(vf)) = (logic::selected_key(self), vf) else {
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -327,7 +342,9 @@ impl StrategiesView {
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
                     let Some(view) = view else { return };
-                    if this.versions.sel != Some(vf) || this.selected != Some((core, id)) {
+                    if this.versions.sel != Some(vf)
+                        || logic::selected_key(this) != Some((core, id))
+                    {
                         return; // The selection has already moved elsewhere.
                     }
                     // Build a synthetic row from the live snapshot's kind/folder/check state plus
@@ -378,7 +395,8 @@ impl StrategiesView {
     pub(super) fn versions_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
-        let single = self.selected.is_some() && self.sel.len() <= 1;
+        let effective = logic::selected_keys(self);
+        let single = logic::selected_key(self).is_some() && effective.len() <= 1;
         if self.versions.collapsed {
             if single {
                 self.ensure_versions(cx); // Keep the count on the collapsed strip current.
@@ -454,13 +472,13 @@ impl StrategiesView {
             .child(div().w_full().h(px(1.0)).bg(border));
 
         let hint = |s: String| div().mt_2().text_color(moon(p.text_muted)).child(s);
-        if self.selected.is_none() {
+        if logic::selected_key(self).is_none() {
             return col
                 .child(hint(t!("strat.no_selection").to_string()))
                 .into_any_element();
         }
         // Versions are unavailable for multi-selection because the panes show merged live values.
-        if self.sel.len() > 1 {
+        if effective.len() > 1 {
             self.versions.sel = None;
             self.versions.row = None;
             return col

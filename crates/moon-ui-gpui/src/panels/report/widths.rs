@@ -2,12 +2,37 @@
 
 use super::*;
 
-/// Cached content-derived Report widths for one published data snapshot and font scale.
+/// Rendering identity for one content-derived Report width batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NaturalWidthsEnvironment {
+    locale: String,
+    font: design::MonoBodyFontSignature,
+}
+
+/// Build the exact rendering identity that owns one natural-width cache.
+///
+/// Args:
+///     locale: Active translation locale used by Report headers and cells.
+///     font: Resolved normal/semibold font identity and rendered size.
+///
+/// Returns:
+///     Comparable cache environment.
+fn natural_widths_environment(
+    locale: &str,
+    font: design::MonoBodyFontSignature,
+) -> NaturalWidthsEnvironment {
+    NaturalWidthsEnvironment {
+        locale: locale.to_string(),
+        font,
+    }
+}
+
+/// Cached content-derived Report widths for one published data snapshot and rendering identity.
 #[derive(Default)]
 pub(super) struct NaturalWidthsCache {
     /// Base widths keyed by runtime column name.
     pub(super) widths: std::collections::HashMap<String, f32>,
-    scale: f32,
+    environment: Option<NaturalWidthsEnvironment>,
 }
 
 impl NaturalWidthsCache {
@@ -19,7 +44,7 @@ impl NaturalWidthsCache {
         self.widths.clear();
     }
 
-    /// Refresh cached widths when data is new or the UI font scale changed.
+    /// Refresh cached widths when data, locale, or resolved Report typography changed.
     ///
     /// Args:
     ///     cols: Complete runtime Report schema.
@@ -40,10 +65,11 @@ impl NaturalWidthsCache {
         zone: Tz,
         cx: &App,
     ) {
-        let scale = design::font_scale(cx);
-        if (self.scale - scale).abs() >= f32::EPSILON {
+        let mut measurer = design::MonoBodyTextMeasurer::new(cx);
+        let environment = natural_widths_environment(&rust_i18n::locale(), measurer.signature());
+        if self.environment.as_ref() != Some(&environment) {
             self.widths.clear();
-            self.scale = scale;
+            self.environment = Some(environment);
         }
         let missing: Vec<usize> = visible
             .iter()
@@ -54,7 +80,7 @@ impl NaturalWidthsCache {
             })
             .collect();
         self.widths
-            .extend(natural_widths(cols, rows, &missing, p, zone, cx));
+            .extend(natural_widths(cols, rows, &missing, p, zone, &mut measurer));
     }
 }
 
@@ -70,7 +96,7 @@ impl NaturalWidthsCache {
 ///     visible: Source-column indices requiring measurement.
 ///     p: Active palette used by cell formatting.
 ///     zone: User-selected display time zone.
-///     cx: Application context used for text measurement.
+///     measurer: Exact per-refresh text measurer shared across every visible column.
 ///
 /// Returns:
 ///     Content-derived base width for every runtime column.
@@ -80,22 +106,18 @@ fn natural_widths(
     visible: &[usize],
     p: MoonPalette,
     zone: Tz,
-    cx: &App,
+    measurer: &mut design::MonoBodyTextMeasurer<'_>,
 ) -> std::collections::HashMap<String, f32> {
     visible
         .iter()
         .filter_map(|&column_index| {
             let column = cols.get(column_index)?;
             let header = columns::header_for(column);
-            let mut width = design::mono_body_text_width(cx, &header, FontWeight::SEMIBOLD.0);
+            let mut width = measurer.text_width(&header, FontWeight::SEMIBOLD);
             for row in rows.iter().take(query::MAX_REPORT_ROWS) {
                 let value = row.get(column_index).unwrap_or(&Value::Null);
                 let text = columns::cell(column, value, p, zone).0;
-                width = width.max(design::mono_body_text_width(
-                    cx,
-                    &text,
-                    FontWeight::NORMAL.0,
-                ));
+                width = width.max(measurer.text_width(&text, FontWeight::NORMAL));
             }
             let (floor, ceiling) = width_bounds(column);
             Some((column.clone(), (width + 28.0).ceil().clamp(floor, ceiling)))

@@ -257,10 +257,13 @@ impl SettingsView {
             // market mode; the following setter is a no-op unless the saved mode changed, in which
             // case it applies the new mode. Keep `chart_market_refs`: surviving windows retain their
             // subscriptions, closed panels release theirs, and new panels register when opened.
-            self.backend.update(cx, |b, _| {
+            self.backend.update(cx, |b, bcx| {
                 let reports = b.reports.as_ref().map(|h| &h.tx);
                 b.session.reconcile(&b.config, reports);
                 b.session.set_market_mode(b.config.market_mode);
+                if b.reconcile_open_main_request_group() {
+                    bcx.notify();
+                }
             });
             // A rebuild closes every group window, and with it every chart tab those windows
             // hold: only Main's settings and detached tabs come back from `charts.json`, ordinary
@@ -321,15 +324,30 @@ impl SettingsView {
     /// `detached_panel_windows` first — silencing their repin, which would otherwise return each
     /// panel to the dock and erase its `DetachedSpec` from `detached.json` — and reopened against
     /// the new group windows below.
+    ///
+    /// Every intended group is pre-registered as Opening. Individual opens suppress workspace
+    /// publication, and one final revision is published after the complete registry is restored.
     fn rebuild_group_windows(
         &mut self,
         delta: &CoreDelta,
         bucket_keys_changed: bool,
         cx: &mut Context<Self>,
     ) {
-        let (close, cfg, epoch, layout) = self.backend.update(cx, |b, _| {
+        let (close, cfg, epoch, layout, groups, gone_groups) = self.backend.update(cx, |b, _| {
+            let groups = crate::window::group_window::groups(&b.config);
+            let intended: HashSet<&str> = groups.iter().map(String::as_str).collect();
+            let mut gone_groups: Vec<String> = b
+                .group_windows
+                .keys()
+                .filter(|group| !intended.contains(group.as_str()))
+                .cloned()
+                .collect();
+            gone_groups.sort();
             let mut close: Vec<WindowHandle<Root>> = b.group_windows.values().copied().collect();
             b.group_windows.clear();
+            // Pre-register the complete intended registry before the first Shell is built.
+            // Singleton resolution therefore keeps an owner reopened later in this batch.
+            b.opening_group_windows = groups.iter().cloned().collect();
             // Draining the registry silences the hosts about to be destroyed: nobody asked for
             // their tabs back, and a repin would clear the very `detached` markers this rebuild
             // preserves and resurrect the specs it prunes.
@@ -338,10 +356,7 @@ impl SettingsView {
             // A rebuild can retire a group outright (a rename moves every core out of the old
             // name). Requests still addressed to it would otherwise wait for a future window of
             // that same name and be replayed against it.
-            let live: HashSet<String> = crate::window::group_window::groups(&b.config)
-                .into_iter()
-                .collect();
-            crate::window::detached::prune_requests(b, |g| !live.contains(g));
+            crate::window::detached::prune_requests(b, |group| !intended.contains(group));
             let mut changed = false;
             // Only a change that rekeys the buckets forces detached chart tabs back into the strip:
             // their windows are keyed by bucket, so a stale one would duplicate or point nowhere.
@@ -355,7 +370,14 @@ impl SettingsView {
             }
             changed |= prune_orphaned_chart_specs(&mut b.chart_specs, &delta.moved, &delta.removed);
             b.chart_specs_dirty |= changed;
-            (close, b.config.clone(), b.epoch, b.layout.clone())
+            (
+                close,
+                b.config.clone(),
+                b.epoch,
+                b.layout.clone(),
+                groups,
+                gone_groups,
+            )
         });
         crate::window::windowing::close_all(close, cx);
         // Requests already queued before this save belong to windows the user closed, whose tabs
@@ -364,11 +386,8 @@ impl SettingsView {
         // checks before queueing anything.
         self.backend
             .update(cx, |b, _| b.chart_repin_request.clear());
-        for (i, g) in crate::window::group_window::groups(&cfg)
-            .into_iter()
-            .enumerate()
-        {
-            crate::window::group_window::spawn_group_window(
+        for (i, g) in groups.into_iter().enumerate() {
+            crate::window::group_window::spawn_group_window_deferred(
                 cx,
                 &self.backend,
                 &cfg,
@@ -378,6 +397,9 @@ impl SettingsView {
                 i as f32 * 40.0,
             );
         }
+        self.backend.update(cx, |b, bcx| {
+            b.publish_workspace_window_change(&gone_groups, bcx)
+        });
     }
 
     /// Reconcile group windows incrementally instead of calling [`Self::rebuild_group_windows`].
@@ -385,61 +407,69 @@ impl SettingsView {
     /// Close removed groups and their detached hosts, and open new groups.
     ///
     /// Retained group windows stay intact. Their `ChartTabs` signatures pick up added or removed
-    /// cores, preserving open tabs and layout across server membership changes.
+    /// cores, preserving open tabs and layout across server membership changes. Config invalidation,
+    /// removals, and new windows are coalesced into one publication after the final registry state.
     fn reconcile_group_windows(&mut self, cx: &mut Context<Self>) {
-        let (close, spawn_groups, cfg, epoch, layout) = self.backend.update(cx, |b, _| {
-            let want = crate::window::group_window::groups(&b.config);
-            let want_set: HashSet<&str> = want.iter().map(String::as_str).collect();
-            // Collect windows belonging to groups that no longer exist.
-            let mut close: Vec<WindowHandle<Root>> = b
-                .group_windows
-                .iter()
-                .filter(|(g, _)| !want_set.contains(g.as_str()))
-                .map(|(_, h)| *h)
-                .collect();
-            let gone: HashSet<String> = b
-                .group_windows
-                .keys()
-                .filter(|g| !want_set.contains(g.as_str()))
-                .cloned()
-                .collect();
-            b.group_windows.retain(|g, _| want_set.contains(g.as_str()));
-            // A detached host keeps its group for life, so removed groups close their hosts.
-            close.extend(
-                b.detached_chart_windows
+        let (close, spawn_groups, gone_groups, cfg, epoch, layout) =
+            self.backend.update(cx, |b, _| {
+                let want = crate::window::group_window::groups(&b.config);
+                let want_set: HashSet<&str> = want.iter().map(String::as_str).collect();
+                // Collect windows belonging to groups that no longer exist.
+                let mut close: Vec<WindowHandle<Root>> = b
+                    .group_windows
                     .iter()
-                    .filter(|(g, _)| gone.contains(g))
-                    .map(|(_, h)| *h),
-            );
-            b.detached_chart_windows.retain(|(g, _)| !gone.contains(g));
-            // Detached panel windows of a removed group have no dock left to return to, and
-            // `take_windows` unregisters them before they close so their release stays silent.
-            // Their SPECS stay: the group can come back (a deactivated server, a rename undone) and
-            // the panel is absent from `dock_states`, so forgetting the spec would leave it nowhere.
-            close.extend(crate::window::detached::take_windows(b, |g| {
-                gone.contains(g)
-            }));
-            crate::window::detached::prune_requests(b, |g| gone.contains(g));
-            // Same reasoning for the chart tabs of those windows: no `ChartTabs` exists for a
-            // departed group, so the request would wait for a future window of that name.
-            b.chart_repin_request.retain(|(g, _, _)| !gone.contains(g));
-            // Spawn groups requested by the config that do not already have a window.
-            let spawn_groups: Vec<String> = want
-                .iter()
-                .filter(|g| !b.group_windows.contains_key(g.as_str()))
-                .cloned()
-                .collect();
-            (
-                close,
-                spawn_groups,
-                b.config.clone(),
-                b.epoch,
-                b.layout.clone(),
-            )
-        });
+                    .filter(|(g, _)| !want_set.contains(g.as_str()))
+                    .map(|(_, h)| *h)
+                    .collect();
+                let gone: HashSet<String> = b
+                    .group_windows
+                    .keys()
+                    .filter(|g| !want_set.contains(g.as_str()))
+                    .cloned()
+                    .collect();
+                b.group_windows.retain(|g, _| want_set.contains(g.as_str()));
+                b.opening_group_windows
+                    .retain(|group| want_set.contains(group.as_str()));
+                // A detached host keeps its group for life, so removed groups close their hosts.
+                close.extend(
+                    b.detached_chart_windows
+                        .iter()
+                        .filter(|(g, _)| gone.contains(g))
+                        .map(|(_, h)| *h),
+                );
+                b.detached_chart_windows.retain(|(g, _)| !gone.contains(g));
+                // Detached panel windows of a removed group have no dock left to return to, and
+                // `take_windows` unregisters them before they close so their release stays silent.
+                // Their SPECS stay: the group can come back (a deactivated server, a rename undone) and
+                // the panel is absent from `dock_states`, so forgetting the spec would leave it nowhere.
+                close.extend(crate::window::detached::take_windows(b, |g| {
+                    gone.contains(g)
+                }));
+                crate::window::detached::prune_requests(b, |g| gone.contains(g));
+                // Same reasoning for the chart tabs of those windows: no `ChartTabs` exists for a
+                // departed group, so the request would wait for a future window of that name.
+                b.chart_repin_request.retain(|(g, _, _)| !gone.contains(g));
+                // Spawn groups requested by the config that do not already have a window.
+                let spawn_groups: Vec<String> = want
+                    .iter()
+                    .filter(|g| !b.group_windows.contains_key(g.as_str()))
+                    .cloned()
+                    .collect();
+                b.opening_group_windows.extend(spawn_groups.iter().cloned());
+                let mut gone_groups: Vec<String> = gone.iter().cloned().collect();
+                gone_groups.sort();
+                (
+                    close,
+                    spawn_groups,
+                    gone_groups,
+                    b.config.clone(),
+                    b.epoch,
+                    b.layout.clone(),
+                )
+            });
         crate::window::windowing::close_all(close, cx);
         for (i, g) in spawn_groups.into_iter().enumerate() {
-            crate::window::group_window::spawn_group_window(
+            crate::window::group_window::spawn_group_window_deferred(
                 cx,
                 &self.backend,
                 &cfg,
@@ -449,6 +479,9 @@ impl SettingsView {
                 i as f32 * 40.0,
             );
         }
+        self.backend.update(cx, |b, bcx| {
+            b.publish_workspace_window_change(&gone_groups, bcx)
+        });
     }
 }
 

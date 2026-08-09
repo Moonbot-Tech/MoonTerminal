@@ -6,7 +6,7 @@ impl AssetsView {
     /// Render-gate signature for asset, transfer, sale-marker, and balance-freshness inputs.
     pub(super) fn assets_sig(&self, b: &Backend) -> u64 {
         let store = b.session.store();
-        self.scope_cores(b)
+        self.query_cores(b)
             .iter()
             // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
             .map(|(id, _)| (*id, store.core(*id)))
@@ -37,25 +37,32 @@ impl AssetsView {
     }
 
     /// Rebuild all render caches from one backend snapshot.
+    ///
+    /// Args:
+    ///     b: Backend snapshot providing full validity and effective query scopes.
+    ///
+    /// Returns:
+    ///     Nothing; retained state is reconciled and every render cache is replaced in place.
     pub(super) fn rebuild_cache(&mut self, b: &Backend) {
         let sig = self.assets_sig(b);
         // Cache membership data; the dropdown ranks again at render time.
         let cores: Vec<(CoreId, String)> = self.scope_cores(b).into_iter().collect();
-        let selected_valid = self
-            .selected_core
-            .is_some_and(|core| cores.iter().any(|(id, _)| *id == core));
-        if !selected_valid {
-            self.selected_core = cores.first().map(|(id, _)| *id);
+        let valid: Vec<CoreId> = cores.iter().map(|(core, _)| *core).collect();
+        let query_cores = self.query_cores(b);
+        let effective: Vec<CoreId> = query_cores.iter().map(|(core, _)| *core).collect();
+        if super::reconcile_retained_assets_state(
+            &valid,
+            &effective,
+            &mut self.sel_cores,
+            &mut self.selected_core,
+        ) {
             self.cached_wallet_key = None;
         }
-        self.cached_cores = cores;
-        // Drop filter entries whose core is gone. Without this, deleting the one selected core
-        // leaves a set that matches nothing, and "empty means all" never resumes — every
-        // remaining core is filtered out and the panel reads as an empty account.
-        if !self.sel_cores.is_empty() {
-            self.sel_cores
-                .retain(|id| self.cached_cores.iter().any(|(cid, _)| cid == id));
-        }
+        let effective_wallet_core = self.effective_wallet_core(b);
+        self.invalidate_pending_transfer_for_wallet_core(effective_wallet_core);
+        self.cached_cores = query_cores;
+        // Retained filters were reconciled against `cores`, the full configured/live universe;
+        // `cached_cores` is intentionally only the effective query scope.
         self.request_missing_transfers(b);
         self.sell_marked = Rc::new(self.collect_sell_marked(b));
         // Apply the header sort here, over the collector's default order: rows are rebuilt on data
@@ -100,16 +107,19 @@ impl AssetsView {
         }
     }
 
+    /// Build the wallet-detail cache identity from effective scope and transfer data.
+    ///
+    /// Args:
+    ///     b: Backend snapshot providing workspace ownership and transfer revisions.
+    ///
+    /// Returns:
+    ///     Effective wallet core, its transfer revision, and the dust-threshold bit pattern.
     pub(super) fn wallet_cache_key(&self, b: &Backend) -> (Option<CoreId>, u64, u64) {
-        let transfer_rev = self
-            .selected_core
+        let selected_core = self.effective_wallet_core(b);
+        let transfer_rev = selected_core
             .and_then(|core| b.session.store().core(core).map(|cd| cd.transfer_rev))
             .unwrap_or(0);
-        (
-            self.selected_core,
-            transfer_rev,
-            self.min_value_usd.to_bits(),
-        )
+        (selected_core, transfer_rev, self.min_value_usd.to_bits())
     }
 
     pub(super) fn rebuild_wallet_cache(&mut self, b: &Backend) {

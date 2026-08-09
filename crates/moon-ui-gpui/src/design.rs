@@ -5,6 +5,7 @@
 
 use gpui::*;
 use moon_ui::{MoonMetrics, MoonPalette, MoonTheme, rgba_from};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const M: MoonMetrics = MoonMetrics::TERMINAL;
@@ -399,6 +400,149 @@ pub fn mono_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width(cx, text, base_text(cx), weight, true)
 }
 
+/// Cache key for one glyph advance under an exact resolved font and requested weight.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct MonoGlyphKey {
+    font_id: FontId,
+    weight_bits: u32,
+    character: char,
+}
+
+/// Per-batch glyph-advance cache shared across many measured strings.
+#[derive(Default)]
+struct MonoGlyphWidthCache {
+    widths: HashMap<MonoGlyphKey, f32>,
+}
+
+impl MonoGlyphWidthCache {
+    /// Measure text by looking up each distinct font, weight, and character tuple once.
+    ///
+    /// Args:
+    ///     font_id: Exact font resolved for the requested weight.
+    ///     weight: Numeric GPUI font weight used to resolve `font_id`.
+    ///     text: Unicode text whose per-character advances are summed in order.
+    ///     lookup: Uncached glyph lookup used only for missing tuples.
+    ///
+    /// Returns:
+    ///     The same ordered sum as uncached per-character measurement.
+    fn text_width(
+        &mut self,
+        font_id: FontId,
+        weight: FontWeight,
+        text: &str,
+        mut lookup: impl FnMut(FontId, FontWeight, char) -> f32,
+    ) -> f32 {
+        text.chars()
+            .map(|character| {
+                let key = MonoGlyphKey {
+                    font_id,
+                    weight_bits: weight.0.to_bits(),
+                    character,
+                };
+                *self
+                    .widths
+                    .entry(key)
+                    .or_insert_with(|| lookup(font_id, weight, character))
+            })
+            .sum()
+    }
+}
+
+/// Exact batched measurer for monospaced Report text at the terminal body size.
+///
+/// Normal cells and semibold headers resolve separate fonts up front. Repeated characters across
+/// all columns and rows in one natural-width batch then share exact glyph advances without merging
+/// different weights or fallback-resolved font identities.
+pub(crate) struct MonoBodyTextMeasurer<'a> {
+    text_system: &'a TextSystem,
+    size: Pixels,
+    family: SharedString,
+    fonts: HashMap<u32, FontId>,
+    glyphs: MonoGlyphWidthCache,
+}
+
+/// Exact resolved font identity used to invalidate cached Report measurements.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonoBodyFontSignature {
+    /// Resolved normal-weight font.
+    pub(crate) normal: FontId,
+    /// Resolved semibold font used by table headers.
+    pub(crate) semibold: FontId,
+    /// Rendered body size encoded for exact floating-point identity.
+    pub(crate) size_bits: u32,
+}
+
+impl<'a> MonoBodyTextMeasurer<'a> {
+    /// Resolve the normal and semibold mono fonts for one Report width batch.
+    ///
+    /// Args:
+    ///     cx: Application context providing theme font tokens and the text system.
+    ///
+    /// Returns:
+    ///     A measurer with separate resolved fonts and an empty glyph cache.
+    pub(crate) fn new(cx: &'a App) -> Self {
+        let tokens = MoonTheme::active_tokens(cx);
+        let size = px(tokens.font(base_text(cx)));
+        let family = SharedString::from(tokens.font_family(true));
+        let text_system = cx.text_system();
+        let mut fonts = HashMap::with_capacity(2);
+        for weight in [FontWeight::NORMAL, FontWeight::SEMIBOLD] {
+            let resolved = text_system.resolve_font(&Font {
+                weight,
+                ..font(family.clone())
+            });
+            fonts.insert(weight.0.to_bits(), resolved);
+        }
+        Self {
+            text_system,
+            size,
+            family,
+            fonts,
+            glyphs: MonoGlyphWidthCache::default(),
+        }
+    }
+
+    /// Return the resolved normal/semibold font and size identity for this batch.
+    ///
+    /// Returns:
+    ///     Stable signature that changes when rendered Report typography changes.
+    pub(crate) fn signature(&self) -> MonoBodyFontSignature {
+        MonoBodyFontSignature {
+            normal: self.fonts[&FontWeight::NORMAL.0.to_bits()],
+            semibold: self.fonts[&FontWeight::SEMIBOLD.0.to_bits()],
+            size_bits: self.size.as_f32().to_bits(),
+        }
+    }
+
+    /// Measure one string with the exact resolved font for its weight.
+    ///
+    /// Args:
+    ///     text: Unicode text to measure.
+    ///     weight: Font weight used by the rendered Report text.
+    ///
+    /// Returns:
+    ///     Sum of exact cached glyph advances in pixels.
+    pub(crate) fn text_width(&mut self, text: &str, weight: FontWeight) -> f32 {
+        let weight_bits = weight.0.to_bits();
+        let font_id = if let Some(font_id) = self.fonts.get(&weight_bits).copied() {
+            font_id
+        } else {
+            let font_id = self.text_system.resolve_font(&Font {
+                weight,
+                ..font(self.family.clone())
+            });
+            self.fonts.insert(weight_bits, font_id);
+            font_id
+        };
+        let text_system = self.text_system;
+        let size = self.size;
+        self.glyphs
+            .text_width(font_id, weight, text, |font_id, _, character| {
+                f32::from(text_system.layout_width(font_id, size, character))
+            })
+    }
+}
+
 /// Estimate text width at an unscaled base size using the active theme font.
 ///
 /// Font scaling is applied internally, matching `MoonText`. The estimate sums per-character glyph
@@ -707,9 +851,22 @@ pub fn chrome_divider(cx: &App, p: MoonPalette) -> impl IntoElement {
 }
 
 pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {
+    status_dot_sized(color, 5.0, cx)
+}
+
+/// Draw a status dot at a caller-selected logical size.
+///
+/// Args:
+///     color: Theme-resolved RGB color.
+///     size: Unscaled logical diameter.
+///     cx: Application context used to apply the UI scale.
+///
+/// Returns:
+///     A circular status marker whose diameter tracks the active UI scale.
+pub fn status_dot_sized(color: u32, size: f32, cx: &App) -> impl IntoElement {
     div()
-        .w(px(status_dot_w(cx)))
-        .h(px(status_dot_w(cx)))
+        .w(ui_px(cx, size))
+        .h(ui_px(cx, size))
         .rounded(ui_px(cx, 999.0))
         .bg(solid(color))
 }
@@ -721,3 +878,6 @@ pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {
 pub fn status_dot_w(cx: &App) -> f32 {
     ui_value(cx, 5.0)
 }
+
+#[cfg(test)]
+mod tests;

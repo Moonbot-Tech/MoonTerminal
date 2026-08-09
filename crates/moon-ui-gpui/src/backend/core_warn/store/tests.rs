@@ -2,6 +2,7 @@
 //!
 //! Explicit imports (no `use super::*`) per the crate's test convention.
 
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 
 use rusqlite::Connection;
@@ -91,6 +92,59 @@ fn roundtrip_filters_by_server_and_time() {
     assert_eq!(wide[1].snap.order_api_latency_ms, 95);
     assert_eq!(wide[2].axis, WarnAxis::Unreachable);
     assert_eq!(wide[2].end_ms, Some(9_000));
+}
+
+/// `store.rs:WarnStore::recent_episodes_for_scope` must apply SQL scope predicates before LIMIT.
+///
+/// Mutation: call `recent_episodes(limit)` and filter its result in Rust. The two newer foreign
+/// rows then consume the limit and the assertions lose both older warnings owned by the selected
+/// core/server.
+#[test]
+fn scoped_recent_query_filters_before_limit() {
+    let store = store();
+    let selected_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+    let foreign_ip = [10, 0, 0, 2];
+    for start_ms in [4_000, 3_000] {
+        store
+            .insert_episode(&episode(
+                WarnAxis::MemGrowth,
+                foreign_ip,
+                Some(99),
+                start_ms,
+                start_ms + 1,
+                10,
+            ))
+            .unwrap();
+    }
+    store
+        .insert_episode(&episode(
+            WarnAxis::MemGrowth,
+            [10, 0, 0, 1],
+            Some(7),
+            2_000,
+            2_001,
+            20,
+        ))
+        .unwrap();
+    store
+        .insert_episode(&episode(
+            WarnAxis::SysCpu,
+            [10, 0, 0, 1],
+            None,
+            1_000,
+            1_001,
+            30,
+        ))
+        .unwrap();
+
+    let rows = store
+        .recent_episodes_for_scope(&HashSet::from([7]), &HashSet::from([selected_ip]), 2)
+        .unwrap();
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].core_id, Some(7));
+    assert_eq!(rows[1].server_ip, Some(selected_ip));
+    assert_eq!(rows[1].core_id, None);
 }
 
 /// A persisted ±1 min history slice must round-trip by episode id and subject; an absent subject or

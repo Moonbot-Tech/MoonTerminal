@@ -564,7 +564,8 @@ fn report_layout_uses_the_versioned_context_for_dock_and_window() {
 /// A Report column added later must be migrated into the PER-CONTEXT visible sets, not only into
 /// the `app_meta` seed.
 ///
-/// `apply_ctx_columns` replaces the seeded set wholesale wherever a `:dock` or `:win` entry exists,
+/// The constructor reads a per-context set wherever a `:dock` entry exists, while detached mode
+/// applies the corresponding `:win` set through `apply_ctx_columns`;
 /// so a migration that touches `app_meta` alone reaches exactly the users who never arranged their
 /// columns — and misses everyone who did, the person who asked for the column first among them.
 ///
@@ -581,8 +582,8 @@ fn report_columns_added_later_migrate_the_per_context_sets() {
         .find("migrate_ctx_visible(")
         .expect("panel construction must migrate the per-context column sets");
     let applied = construction
-        .find("apply_ctx_columns(")
-        .expect("panel construction must still apply the per-context column sets");
+        .find("crate::persistence::table_persist::visible(")
+        .expect("panel construction must read the migrated per-context column set");
     assert!(
         migration < applied,
         "the migration must run before the set it migrates is read"
@@ -877,12 +878,14 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     );
     assert!(
         toolbar.contains("crate::controls::CoreAllRowMode::ImplicitOnly")
-            && body.contains("let clear_core_filter = (!self.sel_cores.is_empty()).then(||")
+            && body.contains(
+                "let clear_core_filter = (!workspace_pinned && !self.sel_cores.is_empty()).then(||"
+            )
             && body.contains(".on_click(cx.listener(|this, _, _, cx| this.toggle_core(None, cx)))"),
-        "Analytics must keep All exclusive and route its conditional clear button through the core filter"
+        "Classic Analytics must keep All exclusive while Auto hides retained-filter mutation controls"
     );
     for needle in [
-        "let clear_core_filter_w = if self.sel_cores.is_empty()",
+        "let clear_core_filter_w = if workspace_pinned || self.sel_cores.is_empty()",
         "design::glyph_btn_w(cx) + design::ui_value(cx, TOOLBAR_GAP)",
         "let filters_min_w = clear_core_filter_w",
     ] {
@@ -891,6 +894,12 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
             "the conditional core-clear button must participate in the responsive floor via {needle:?}"
         );
     }
+    let core_combo_body = braced_body(&toolbar, "fn core_combo(");
+    assert!(
+        core_combo_body.contains("let workspace_pinned = self.workspace_scope.is_some();")
+            && core_combo_body.contains(".disabled(workspace_pinned)"),
+        "the Auto-owned core selector must display effective scope without mutating retained Classic state"
+    );
 
     let selectors_start = body
         .find("let selectors = h_flex()")
@@ -1004,9 +1013,25 @@ fn analytics_reopen_state_is_process_lifetime_only() {
             && tuner.contains("backend.ui_session.analytics.strat_mode = mode;"),
         "Analytics construction and all reopen choices must share the Backend UI-session snapshot"
     );
+    let cores_selected = braced_body(&analytics, "fn cores_selected(");
+    let filter_ids = braced_body(&toolbar, "pub(super) fn analytics_core_filter_ids(");
     assert!(
-        analytics.contains("toolbar::analytics_core_filter_ids(&self.sel_cores)"),
-        "Analytics queries must preserve every nonempty exclusive core selection"
+        cores_selected.contains("&self.sel_cores")
+            && cores_selected.contains("self.workspace_scope")
+            && cores_selected.contains("scope.core_ids.as_slice()")
+            && filter_ids.contains("Some([]) => vec![0]")
+            && filter_ids.contains("Some(cores) => cores.to_vec()")
+            && filter_ids.contains("None => selected.iter().copied().collect()"),
+        "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match"
+    );
+    let workspace_observer = analytics
+        .split("cx.observe(&workspace_revision")
+        .nth(1)
+        .and_then(|tail| tail.split(".detach();").next())
+        .expect("Analytics must observe the shared workspace revision");
+    assert!(
+        !workspace_observer.contains("sel_cores ="),
+        "workspace changes must never overwrite the process-lifetime Classic core selection"
     );
     let tab_init = analytics
         .find("tab: if probe {")
@@ -1945,14 +1970,14 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
     );
 
     assert!(
-        open.matches("mark_open(&backend, cx)").count() == 2
+        open.matches("mark_open(&backend, cx)").count() == 3
             && mark_open.contains("backend.layout.profit_monitor_open = true")
             && mark_open.contains("backend.layout_dirty = true"),
-        "both opening and refocusing the monitor must record that it is open"
+        "immediate refocus, yielded refocus, and successful creation must record that the monitor is open"
     );
     assert!(
         code.contains("backend.layout.profit_monitor_open = false")
-            && code.contains("if backend.quitting"),
+            && code.contains("if !backend.quitting && backend.layout.profit_monitor_open"),
         "closing by hand must clear the flag while quitting must leave it alone"
     );
     assert!(
