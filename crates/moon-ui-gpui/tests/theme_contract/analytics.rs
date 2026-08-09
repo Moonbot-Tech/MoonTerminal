@@ -9,6 +9,7 @@ use super::support::*;
 /// Breakage: removing the Report observer leaves its date fields in the old city after a header
 /// clock change; the same edit in Analytics, Charts, Strategies, News, Alerts, or Log leaves that
 /// surface stale until an unrelated data event happens.
+
 #[test]
 fn selected_display_zone_reaches_every_cached_time_surface() {
     let backend = read_src("backend/mod.rs");
@@ -64,7 +65,7 @@ fn selected_display_zone_reaches_every_cached_time_surface() {
         "an open Report trade-log dialog must rebuild its cached clocks after a zone change"
     );
 
-    let profit_monitor = code_only(&read_src("analytics/profit_monitor/mod.rs"));
+    let profit_monitor = code_only(&read_module("analytics/profit_monitor"));
     assert_eq!(
         profit_monitor
             .matches("cx.observe(&display_time_revision")
@@ -84,7 +85,7 @@ fn selected_display_zone_reaches_every_cached_time_surface() {
 /// count at the wrong boundary instead of preserving the 310px Name-plus-Profit tier.
 #[test]
 fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
-    let source = read_src("analytics/profit_monitor/mod.rs");
+    let source = read_module("analytics/profit_monitor");
     let state = code_only(braced_body(&source, "pub(crate) struct ProfitMonitorView"));
     let construction = code_only(braced_body(
         &source,
@@ -165,7 +166,7 @@ fn profit_monitor_table_keeps_large_core_sets_scrollable_and_single_line() {
 /// visible.
 #[test]
 fn profit_monitor_clock_ticks_in_one_retained_child_view() {
-    let source = read_src("analytics/profit_monitor/mod.rs");
+    let source = read_module("analytics/profit_monitor");
     let shared_clock = read_src("chrome/clock.rs");
     let state = code_only(braced_body(&source, "pub(crate) struct ProfitMonitorView"));
     let construction = code_only(braced_body(
@@ -270,7 +271,7 @@ fn profit_monitor_clock_ticks_in_one_retained_child_view() {
 /// weight, background, or accent border makes `Total` indistinguishable from the final data row.
 #[test]
 fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
-    let source = read_src("analytics/profit_monitor/mod.rs");
+    let source = read_module("analytics/profit_monitor");
     let table = code_only(braced_body(&source, "fn table("));
     let row = code_only(braced_body(&source, "fn table_row("));
     let split = code_only(braced_body(&source, "fn split_body("));
@@ -318,7 +319,7 @@ fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
 /// round-trip remains green.
 #[test]
 fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
-    let source = read_src("analytics/profit_monitor/mod.rs");
+    let source = read_module("analytics/profit_monitor");
     let construction = code_only(braced_body(
         &source,
         "fn new(backend: Entity<Backend>, window:",
@@ -1890,7 +1891,7 @@ fn calendar_nav_wraps_between_its_control_groups() {
 /// window silently gone after a restart.
 #[test]
 fn profit_monitor_display_preferences_and_open_state_stay_wired() {
-    let source = read_src("analytics/profit_monitor/mod.rs");
+    let source = read_module("analytics/profit_monitor");
     let settings_source = read_src("analytics/profit_monitor/settings.rs");
     let code = code_only(&source);
     let settings = code_only(&settings_source);

@@ -11,12 +11,10 @@
 //! An exchange with no logo simply renders without one — never a placeholder glyph pretending to
 //! be a brand.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use gpui::RenderImage;
-use image::{Frame, ImageBuffer, Rgba};
 use include_dir::{Dir, include_dir};
 
 /// Embedded logo set: every SVG under `assets/exchanges`, a few kilobytes in total.
@@ -143,8 +141,7 @@ fn load(slug: &str) -> Option<Arc<RenderImage>> {
         let color = pixel.demultiply();
         bgra.extend_from_slice(&[color.blue(), color.green(), color.red(), color.alpha()]);
     }
-    let buffer = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(RASTER_PX, RASTER_PX, bgra)?;
-    Some(Arc::new(RenderImage::new(vec![Frame::new(buffer)])))
+    super::render_image_bgra(RASTER_PX, RASTER_PX, bgra)
 }
 
 /// Return the lazily rasterized logo for a core-reported exchange name.
@@ -159,27 +156,8 @@ fn load(slug: &str) -> Option<Arc<RenderImage>> {
 /// Returns:
 ///     The cached texture, or `None` for an unknown brand or an unreadable file.
 pub(crate) fn exchange_logo(exchange: &str) -> Option<Arc<RenderImage>> {
-    /// Rasterized logos kept for the process lifetime, including the decodes that produced nothing.
-    type LogoCache = Mutex<HashMap<&'static str, Option<Arc<RenderImage>>>>;
-
-    static CACHE: OnceLock<LogoCache> = OnceLock::new();
-    let slug = logo_slug(exchange)?;
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let lock = || {
-        cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    };
-    if let Some(cached) = lock().get(slug) {
-        return cached.clone();
-    }
-    // Rasterized OUTSIDE the lock. The whole point of the cache is that this happens at most seven
-    // times, but holding a process-global mutex across a disk read and an SVG raster would block
-    // every other caller behind it — and the callers are render passes. Two threads racing the
-    // same miss both decode, and both then agree, which is the cheaper trade.
-    let texture = load(slug);
-    lock().insert(slug, texture.clone());
-    texture
+    static CACHE: OnceLock<super::TextureCache<&'static str>> = OnceLock::new();
+    super::cached(&CACHE, logo_slug(exchange)?, |slug| load(slug))
 }
 
 /// Decode every shipped logo, for a caller that will run this OFF the render path.

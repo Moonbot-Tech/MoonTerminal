@@ -9,9 +9,9 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAccent, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown,
-    MoonMenuSize, MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSegmentItem, MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
+    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize,
+    MoonNotification, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
+    MoonSegmentedControl, MoonSlider, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -117,16 +117,11 @@ pub(super) fn toolbar(
     cx: &mut Context<DetectsPanel>,
 ) -> Div {
     let entity = cx.entity();
-    // The same icon the chart strip's layout gear uses. A "⚙" label drew noticeably heavier and
-    // lighter-toned than the stroke icons beside it — the glyph carries its own rendering rather
-    // than taking the button's colour — and any label at all costs MoonUI's square icon-only
-    // geometry, which is what left this button a different size from its neighbours.
-    let gear = MoonButton::new("detects-view-gear")
-        .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
-        .size(MoonButtonSize::Micro)
-        .variant(MoonButtonVariant::Ghost)
-        .tooltip(t!("detects.cfg.title").to_string())
-        .render();
+    let gear = crate::panels::popup_gear_trigger(
+        "detects-view-gear",
+        t!("detects.cfg.title").to_string(),
+        this.popup_open,
+    );
     // Built ONLY while open: `MoonPopover` takes its content eagerly, so a shut popover would
     // otherwise rebuild three group boxes, three sliders and the whole slot grid with its per-slot
     // dropdowns on every render of the panel, and throw the tree away.

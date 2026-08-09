@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::RenderImage;
-use image::{Frame, ImageBuffer, Rgba};
 use include_dir::{Dir, include_dir};
 
 /// Embedded group-icon set containing all PNG files under `assets/icons`, approximately 64 KB.
@@ -35,14 +34,7 @@ fn load_render_image(id: u32) -> Option<Arc<RenderImage>> {
         Ok(b) => b,
         Err(_) => EMBEDDED.get_file(&file)?.contents().to_vec(),
     };
-    let mut img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    // Convert RGBA to the BGRA channel order expected by GPUI's RenderImage.
-    for px in img.pixels_mut() {
-        px.0.swap(0, 2);
-    }
-    let (w, h) = img.dimensions();
-    let buf = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(w, h, img.into_raw())?;
-    Some(Arc::new(RenderImage::new(vec![Frame::new(buf)])))
+    super::render_image_from_png(&bytes)
 }
 
 /// Per-settings-window group-icon catalog and lazy cache keyed by numeric ID.

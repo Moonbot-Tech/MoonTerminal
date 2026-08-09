@@ -21,6 +21,8 @@
 //! fixes a smaller wart: an element that scrolled into view late used to restart its pulse from
 //! zero instead of showing the tail it was already in.
 
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
@@ -83,6 +85,115 @@ pub fn with_arrival_tint(element: Div, color: u32, at: Option<Instant>) -> Div {
         at.and_then(|at| arrival_tint(color, at)),
         |element, tint| element.child(tint),
     )
+}
+
+/// Which items lit up and when, plus the "a timer is already running" flag that fades them.
+///
+/// Two surfaces keep an arrival highlight — the News feed keyed by item id, the Profit Monitor
+/// keyed by core — and both need the same four things: stamp what just arrived, ask whether
+/// anything is still fading, drop what has finished, and remember whether the repaint chain is
+/// armed. Sharing the tint and its timing while copying this machine beside it is how the two
+/// drifted apart once already.
+///
+/// It does NOT prune itself, and cannot: only the owner knows when its items changed. Every owner
+/// therefore has to call [`Self::prune`] or [`Self::retain_live`] on the same beat it calls
+/// [`Self::mark`] — the News feed does it when the feed is rebuilt, the Profit Monitor on each pulse
+/// tick. Skip that and the map keeps expired stamps for the life of the view.
+pub struct Arrivals<K> {
+    /// When each item was observed arriving.
+    stamps: HashMap<K, Instant>,
+    /// Whether [`arm_with`] already has a chain running for these stamps.
+    armed: bool,
+}
+
+impl<K> Default for Arrivals<K> {
+    /// Start with nothing lit and no timer.
+    fn default() -> Self {
+        Self {
+            stamps: HashMap::new(),
+            armed: false,
+        }
+    }
+}
+
+impl<K: Eq + Hash> Arrivals<K> {
+    /// Borrow the armed flag for [`arm`] / [`arm_with`].
+    ///
+    /// Returns:
+    ///     The owner's "a timer is already running" flag, so several arrivals in one update cannot
+    ///     stack several chains.
+    pub fn armed(&mut self) -> &mut bool {
+        &mut self.armed
+    }
+
+    /// Stamp every key as having arrived now.
+    ///
+    /// Args:
+    ///     keys: Items that just appeared or changed.
+    pub fn mark(&mut self, keys: impl IntoIterator<Item = K>) {
+        let at = Instant::now();
+        self.stamps.extend(keys.into_iter().map(|key| (key, at)));
+    }
+
+    /// Return one item's arrival stamp, if it is still recorded.
+    ///
+    /// Args:
+    ///     key: Item being drawn.
+    ///
+    /// Returns:
+    ///     Its stamp, which [`arrival_tint`] turns into an opacity or into nothing.
+    pub fn get(&self, key: &K) -> Option<Instant> {
+        self.stamps.get(key).copied()
+    }
+
+    /// Whether any recorded arrival is still inside [`FLASH`].
+    ///
+    /// Returns:
+    ///     Whether a highlight still has something to draw — the `live` predicate every pulse
+    ///     chain ends on.
+    pub fn live(&self) -> bool {
+        self.stamps.values().any(|at| at.elapsed() < FLASH)
+    }
+
+    /// Drop every finished stamp.
+    pub fn prune(&mut self) {
+        self.stamps.retain(|_, at| at.elapsed() < FLASH);
+    }
+
+    /// Drop finished stamps and anything the caller no longer shows.
+    ///
+    /// A surface whose items come and go — a feed that rotates ids, a table whose rows change with
+    /// the period — would otherwise keep stamps for items nobody can see.
+    ///
+    /// Args:
+    ///     keep: Whether an item is still on screen.
+    pub fn retain_live(&mut self, keep: impl Fn(&K) -> bool) {
+        self.stamps
+            .retain(|key, at| at.elapsed() < FLASH && keep(key));
+    }
+
+    /// Copy the stamps out for a render that cannot borrow their owner.
+    ///
+    /// A view building its children while `cx` is borrowed mutably cannot also hold `&self`. The
+    /// copy is as big as the map, which is as big as the owner's pruning lets it be — see the type
+    /// doc: nothing here expires a stamp on its own.
+    ///
+    /// Returns:
+    ///     An owned snapshot of the current stamps.
+    pub fn snapshot(&self) -> HashMap<K, Instant>
+    where
+        K: Clone,
+    {
+        self.stamps.clone()
+    }
+
+    /// Forget every stamp, ending the fade immediately.
+    ///
+    /// Used where the highlight stops being meaningful rather than finishing: the feature switched
+    /// off, or the question the surface was answering changed.
+    pub fn clear(&mut self) {
+        self.stamps.clear();
+    }
 }
 
 /// Progress of a pulse that started at `at` and runs for `total`, normalised to `0.0..1.0`.

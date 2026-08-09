@@ -10,10 +10,11 @@ use moon_core::db::{ProfitUnit, QuoteCurrency};
 use moon_core::util::fmt::DeltaSign;
 
 use super::rows::{GroupMode, LiveContext, RowLabels, grouped_rows};
+use super::table::{format_profit, profit_column_width};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
-    duration_until_period_refresh, format_profit, monitor_zone, next_sort,
-    retain_last_known_exchange_names, sort_rows,
+    duration_until_period_refresh, monitor_zone, next_sort, retain_last_known_exchange_names,
+    sort_rows,
 };
 
 /// Return deterministic fallback labels for pure grouping tests.
@@ -563,16 +564,13 @@ fn last_trade_suffix_shares_the_total_unit_and_rounding() {
 /// the suffix below its own tier truncates a money value instead of dropping it.
 #[test]
 fn last_trade_column_never_starves_the_name_column() {
+    assert_eq!(profit_column_width(false), super::PROFIT_COLUMN_WIDTH);
     assert_eq!(
-        super::profit_column_width(false),
-        super::PROFIT_COLUMN_WIDTH
-    );
-    assert_eq!(
-        super::profit_column_width(true),
+        profit_column_width(true),
         super::PROFIT_COLUMN_WIDTH + super::PROFIT_LAST_TRADE_EXTRA
     );
     // Narrowest width that turns the suffix on, spending it on every column that tier shows.
-    let used = super::profit_column_width(true)
+    let used = profit_column_width(true)
         + super::TRADES_COLUMN_WIDTH
         + 2.0 * super::TABLE_HORIZONTAL_PADDING
         + 2.0 * super::TABLE_COLUMN_GAP;

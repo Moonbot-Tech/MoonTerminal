@@ -89,8 +89,7 @@ fn terminal_secondary_tool_windows_use_tool_window_options() {
 fn profit_monitor_is_independent_but_carries_no_taskbar_button() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let windowing = fs::read_to_string(root.join("window").join("windowing.rs")).unwrap();
-    let monitor =
-        fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
+    let monitor = read_module("analytics/profit_monitor");
     let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
     let factory = code_only(braced_body(&windowing, "fn profit_monitor_window_options("));
 
@@ -112,8 +111,7 @@ fn profit_monitor_is_independent_but_carries_no_taskbar_button() {
 #[test]
 fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let monitor =
-        fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
+    let monitor = read_module("analytics/profit_monitor");
     let chart_detached_host =
         fs::read_to_string(root.join("chart_tabs").join("detached_host").join("mod.rs")).unwrap();
 
@@ -213,7 +211,7 @@ fn decorative_animation_goes_through_the_pulse_timer() {
             ("panels/news/mod.rs", "panels/news/render.rs", "pulse::arm("),
             (
                 "analytics/profit_monitor/mod.rs",
-                "analytics/profit_monitor/mod.rs",
+                "analytics/profit_monitor/table.rs",
                 "pulse::arm_with(",
             ),
         ] {

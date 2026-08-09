@@ -22,9 +22,8 @@ mod unread;
 // The chart's news-mark hover card reuses this panel's badge so a source reads the same on both.
 pub(crate) use render::badge as news_badge;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
-use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -40,9 +39,6 @@ use crate::Backend;
 use crate::controls::coin_search;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
-// The arrival tint and its timing live in `crate::pulse`, shared with the Profit Monitor: both
-// surfaces make the user the same promise, and two copies of it drift apart.
-use crate::pulse::FLASH;
 use moon_core::config::NewsTagSettings;
 use moon_core::feed::NewsItem;
 // The tag filter is shared with the chart's news marks so hiding a topic clears it from both.
@@ -147,10 +143,9 @@ pub struct NewsView {
     ///
     /// Filled by comparing consecutive feeds rather than from `recv_terminal_ms`: that stamp is set
     /// for the WHOLE ring when a core first connects, so it would light every card at startup.
-    /// Pruned to items still in the feed and still within [`FLASH`], so it cannot grow.
-    flash: HashMap<String, Instant>,
-    /// Whether the [`crate::pulse`] repaint timer that fades the arrival tint is armed.
-    flash_timer_armed: bool,
+    /// The shared [`crate::pulse::Arrivals`] owns the pruning and the timer flag, so this panel and
+    /// the Profit Monitor cannot disagree about how long a highlight lasts.
+    flash: crate::pulse::Arrivals<String>,
     /// What the counters were last computed from: `(watermark, counters_on, merged)`. Cached so the
     /// per-frame badge path tests fields instead of hashing panel names in the settings maps, and
     /// so the observe hook can tell a badge-only change from a feed change.
@@ -198,12 +193,7 @@ impl NewsView {
                 // Fade the arrival tint from a 10 Hz timer rather than a GPUI animation: an
                 // animation repaints the whole window at vblank for its full 2 s. See
                 // `crate::pulse`.
-                crate::pulse::arm(
-                    this,
-                    cx,
-                    |s| &mut s.flash_timer_armed,
-                    |s| s.flash.values().any(|at| at.elapsed() < FLASH),
-                );
+                crate::pulse::arm(this, cx, |s| s.flash.armed(), |s| s.flash.live());
                 cx.notify();
             } else if this.badge != this.badge_state(b) {
                 this.recount(b);
@@ -246,8 +236,7 @@ impl NewsView {
             tags_open: false,
             cache_sig: None,
             cached: Rc::new(Vec::new()),
-            flash: HashMap::new(),
-            flash_timer_armed: false,
+            flash: crate::pulse::Arrivals::default(),
             badge: (0, true, false),
             unread: unread::Counts::default(),
             unread_total: 0,
@@ -375,15 +364,13 @@ impl NewsView {
                 .map(|i| i.id.clone())
                 .collect();
             if !fresh.is_empty() && fresh.len() <= FLASH_BATCH_MAX {
-                let at = Instant::now();
-                self.flash.extend(fresh.into_iter().map(|id| (id, at)));
+                self.flash.mark(fresh);
             }
         }
         self.cached = Rc::new(next);
         // Keep only tints that can still be drawn: an item still in the feed, still inside FLASH.
         let live: HashSet<&str> = self.cached.iter().map(|i| i.id.as_str()).collect();
-        self.flash
-            .retain(|id, at| at.elapsed() < FLASH && live.contains(id.as_str()));
+        self.flash.retain_live(|id| live.contains(id.as_str()));
         self.catalog = self.collect_catalog(b);
         self.recount(b);
     }
@@ -1133,9 +1120,9 @@ impl Render for NewsView {
         let translate = self.translate;
         let settings = self.backend.read(cx).news_tag_settings.clone();
         let expanded = self.expanded.clone();
-        // Small by construction (at most FLASH_BATCH_MAX live entries), so this clone keeps the card
-        // loop free of borrowing self while `cx` is used mutably.
-        let flash = self.flash.clone();
+        // Small by construction (at most FLASH_BATCH_MAX live entries), so this snapshot keeps the
+        // card loop free of borrowing self while `cx` is used mutably.
+        let flash = self.flash.snapshot();
         let q = self.query.read(cx).value().trim().to_lowercase();
         // Apply the coin / tag / search filters (small N, cheap to materialize).
         let visible: Vec<NewsItem> = self

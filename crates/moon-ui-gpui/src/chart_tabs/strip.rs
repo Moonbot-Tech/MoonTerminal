@@ -207,17 +207,11 @@ impl Render for ChartTabs {
         let settings_btn = common::layout_popup_host(
             self,
             "chart-layout",
-            MoonButton::new("chart-layout-settings")
-                .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
-                .tooltip(t!("chart.layout.tip").to_string())
-                .size(MoonButtonSize::Micro)
-                .variant(if popup_open {
-                    MoonButtonVariant::Blue
-                } else {
-                    MoonButtonVariant::Ghost
-                })
-                .selected(popup_open)
-                .render(),
+            crate::panels::popup_gear_trigger(
+                "chart-layout-settings",
+                t!("chart.layout.tip").to_string(),
+                popup_open,
+            ),
             apply_all_label,
             cx,
         );

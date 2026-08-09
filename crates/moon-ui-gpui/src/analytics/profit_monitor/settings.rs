@@ -142,7 +142,7 @@ impl ProfitMonitorView {
         (row.set)(&mut self.prefs, value);
         if !self.prefs.flash {
             // Turning the highlight off must clear what is already glowing, not wait it out: the
-            // repaint chain reads `flash_live`, so an unrendered stamp would keep ticking.
+            // repaint chain re-arms on `Arrivals::live`, so an unrendered stamp would keep ticking.
             self.flash.clear();
         }
         let store = row.store;
