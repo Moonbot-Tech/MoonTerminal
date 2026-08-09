@@ -19,7 +19,7 @@ mod table;
 mod view;
 
 pub(crate) use sort::executed;
-use sort::{orders_sig, sort_entries};
+use sort::sort_entries;
 use view::{ALL_COLUMNS_MASK, MainOnTop, OrdCol, OrderKind, OrdersViewState, PrimarySort};
 
 use std::collections::HashSet;
@@ -39,6 +39,7 @@ use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use moon_core::feed::OrderRow;
 use moon_core::session::CoreId;
 
@@ -53,12 +54,13 @@ pub(super) struct OrderEntry {
     pub(super) row: OrderRow,
 }
 
+/// Complete identity of the cached Orders rows and their presentation-sensitive ordering.
 #[derive(Clone, PartialEq, Eq)]
 struct OrdersCacheKey {
     data_sig: u64,
     view: OrdersViewState,
-    /// Sorted core-filter selection; changing it changes the row set.
-    sel_cores: Vec<CoreId>,
+    /// Canonically ordered effective scope; any Classic or Auto scope change changes the row set.
+    scope_cores: Vec<CoreId>,
     current: Option<(CoreId, String)>,
     /// Markets open in the group's Main stack; changes affect row highlighting and ordering.
     main_open: Vec<(CoreId, String)>,
@@ -69,7 +71,8 @@ pub struct OrdersPanel {
     pub(super) backend: Entity<Backend>,
     pub(super) group: String,
     pub(super) view: OrdersViewState,
-    /// Multi-select core filter; an empty set means every core in the group.
+    /// Retained Classic multi-select core filter; an empty set means every group core. Auto mode
+    /// pins its effective workspace scope without using or mutating this selection.
     pub(super) sel_cores: HashSet<CoreId>,
     /// Repaint gate for frequent order and market-driven price/PnL updates.
     ///
@@ -112,6 +115,16 @@ pub struct OrdersPanel {
 }
 
 impl OrdersPanel {
+    /// Build a group-scoped Orders panel and subscribe it to data and workspace revisions.
+    ///
+    /// Args:
+    ///     backend: Shared terminal state and workspace authority.
+    ///     group: Window group whose cores supply order rows.
+    ///     _window: Owning window; retained for the panel-constructor contract.
+    ///     cx: Panel context used to create table state and subscriptions.
+    ///
+    /// Returns:
+    ///     Initialized panel with an effective-scope row cache.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
@@ -132,6 +145,13 @@ impl OrdersPanel {
                 crate::diag::bump(&crate::diag::ORDERS_OBS_NOTIFY);
                 cx.notify();
             }
+        })
+        .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            let backend = this.backend.clone();
+            this.rebuild_cache(backend.read(cx));
+            cx.notify();
         })
         .detach();
         // Column reordering and resizing mutate `table_state` and emit `notify`. Observe those
@@ -208,15 +228,19 @@ impl OrdersPanel {
         b.main_chart_target(&self.group)
     }
 
+    /// Build the complete row-cache identity from effective data and presentation inputs.
+    ///
+    /// Args:
+    ///     b: Backend snapshot providing effective scope, order revisions, and Main chart state.
+    ///
+    /// Returns:
+    ///     Cache key that changes for every input consumed by [`Self::build_entries`].
     fn cache_key(&self, b: &Backend) -> OrdersCacheKey {
+        let scope = self.effective_scope(b);
         OrdersCacheKey {
-            data_sig: orders_sig(b, &self.group),
+            data_sig: sort::orders_sig(b, &scope),
             view: self.view,
-            sel_cores: {
-                let mut v: Vec<CoreId> = self.sel_cores.iter().copied().collect();
-                v.sort_unstable();
-                v
-            },
+            scope_cores: scope.ids().to_vec(),
             current: self
                 .view
                 .only_current_market
@@ -228,6 +252,23 @@ impl OrdersPanel {
         }
     }
 
+    /// Resolve the rows and actions owned by the current Classic or Auto core scope.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     Canonically ordered effective core scope without mutating `sel_cores`.
+    pub(super) fn effective_scope(&self, b: &Backend) -> EffectiveCoreScope {
+        let retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
+        let retained = if retained.is_empty() {
+            RetainedCoreScope::All
+        } else {
+            RetainedCoreScope::Explicit(&retained)
+        };
+        b.effective_workspace_scope(&self.group, retained)
+    }
+
     /// Return the group's cores in canonical order for the source selector.
     ///
     /// Built on render so an open panel immediately reflects sort-mode changes.
@@ -235,19 +276,26 @@ impl OrdersPanel {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
     }
 
-    /// Toggle the selected-core filter.
+    /// Toggle the retained Classic selected-core filter.
     ///
     /// `None` represents the All item: if every group core is selected, clear the set back to the
     /// empty-means-all form; otherwise select every group core. Stale ids do not stand in for
     /// current cores. `Some(id)` toggles one core. The selection is not persisted and resets to all.
+    /// Auto owns and pins the effective scope, so this method does nothing in that mode.
     ///
     /// Args:
     ///     id: Core to toggle, or `None` for the All row.
     ///     cx: Panel context used to rebuild cached rows and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; the in-memory filter and cached rows are updated in place.
+    ///     Nothing; Classic updates the retained filter and rows, while Auto changes neither.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
         let all: HashSet<CoreId> = self
             .backend
             .read(cx)
@@ -270,24 +318,31 @@ impl OrdersPanel {
         cx.notify();
     }
 
-    /// Toggle every still-available core from one clicked exchange section.
+    /// Toggle every still-available core from one exchange section in the Classic filter.
     ///
     /// Empty means All before the click, so the first exchange selection becomes explicit. A
     /// fully selected exchange is removed without changing selections from other exchanges.
-    /// Rendered ids that left this panel's group are ignored.
+    /// Rendered ids that left this panel's group are ignored. Auto leaves the retained Classic
+    /// selection and cached rows unchanged.
     ///
     /// Args:
     ///     exchange_cores: Core ids captured from one rendered exchange section.
     ///     cx: Panel context used to rebuild cached rows and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; a changed selection rebuilds the cache once, while a stale-only batch is a
-    ///     no-op.
+    ///     Nothing; a Classic change rebuilds once, while stale-only and Auto-owned calls are
+    ///     no-ops.
     pub(super) fn toggle_exchange_cores(
         &mut self,
         exchange_cores: Vec<CoreId>,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
         let available = self
             .group_cores(self.backend.read(cx))
             .into_iter()
@@ -300,9 +355,24 @@ impl OrdersPanel {
         }
     }
 
-    /// Set the filter to exactly one core after a Core-cell click, or clear it when that core is
-    /// already the sole selection. Unlike [`Self::toggle_core`], this is not a multi-select toggle.
+    /// Handle a Core-cell click under the current workspace authority.
+    ///
+    /// Classic sets the retained filter to the clicked core, or clears it when that core is already
+    /// the sole selection. Auto ignores the shortcut because only the Shell rail owns selection.
+    ///
+    /// Args:
+    ///     id: Core identity from the clicked order row.
+    ///     cx: Panel context used to update the owning authority and visible cache.
+    ///
+    /// Returns:
+    ///     Nothing.
     pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
         if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
             self.sel_cores.clear();
         } else {
@@ -324,10 +394,11 @@ impl OrdersPanel {
         current: &Option<(CoreId, String)>,
     ) -> (Vec<OrderEntry>, usize, usize) {
         let mut entries = self.collect(b);
-        // Apply the multi-select core filter, where empty means all, and the current-market filter
-        // before applying the order-kind filter.
+        // Apply the effective Classic or Auto core scope and the current-market filter before the
+        // order-kind filter.
+        let scope = self.effective_scope(b);
         entries.retain(|e| {
-            let by_source = self.sel_cores.is_empty() || self.sel_cores.contains(&e.core);
+            let by_source = scope.contains(e.core);
             by_source
                 && (!view.only_current_market
                     || match current {

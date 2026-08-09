@@ -13,18 +13,19 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use gpui::Context;
+use gpui::{Context, WindowId};
 
 use crate::Backend;
 use crate::backend::core_warn::axis_has_series;
 use crate::chartdx::ChartDataHandle;
 use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::config::{
-    DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
+    DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode, WorkspaceMode,
 };
 use moon_core::db::valuation::ValuationMode;
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
+use moon_ui::{DockAreaState, DockTopologyByName};
 
 /// Milliseconds of history kept on each side of a warning start for its persisted graphs (±30 s, a
 /// 60 s window — enough context for analysis without bloating the per-core slices).
@@ -39,6 +40,266 @@ const WARN_PRUNE_INTERVAL_MS: i64 = 24 * 3600 * 1000;
 /// Cap on episodes queued for slice capture, so a burst of warnings cannot grow the queue without
 /// bound; the oldest pending capture is dropped past it.
 const WARN_PENDING_CAP: usize = 1024;
+
+/// Filter, prioritize, and cap warning episodes for one effective workspace list.
+///
+/// Args:
+///     all: Open and persisted warning episodes to reconcile.
+///     enabled: Current warning-axis switches.
+///     core_ids: Effective core identities accepted by core-specific warning axes.
+///     server_ips: Effective server identities accepted by server-wide warning axes.
+///     limit: Maximum rows to publish after filtering and ordering.
+///
+/// Returns:
+///     Enabled in-scope episodes with open warnings first, then newest, capped only after scope
+///     membership is applied.
+fn finalize_recent_warning_episodes(
+    mut all: Vec<crate::backend::core_warn::WarnEpisode>,
+    enabled: crate::backend::core_warn::WarnEnabled,
+    core_ids: &HashSet<CoreId>,
+    server_ips: &HashSet<IpAddr>,
+    limit: usize,
+) -> Vec<crate::backend::core_warn::WarnEpisode> {
+    all.retain(|episode| {
+        enabled.allows(episode.axis)
+            && (episode.core_id.is_some_and(|core| core_ids.contains(&core))
+                || (episode.core_id.is_none()
+                    && episode.server_ip.is_some_and(|ip| server_ips.contains(&ip))))
+    });
+    // Still-open episodes lead, then newest first. Without the pin, a warning that has been
+    // ongoing for weeks -- an expiring API key is exactly that -- has the oldest start time and is
+    // the first row the limit drops, hiding the one warning that is still true.
+    all.sort_by(|a, b| {
+        b.end_ms
+            .is_none()
+            .cmp(&a.end_ms.is_none())
+            .then(b.start_ms.cmp(&a.start_ms))
+    });
+    all.truncate(limit);
+    all
+}
+
+/// Atomic identity of the most recent request to open a market on a group's Main chart.
+///
+/// The target and group remain available after consumption so the Shell can reveal Auto's hidden
+/// ChartTabs for the same revision. Draining clears `pending` and the one-shot `activate` bit
+/// together; no parallel field can retain a stale group, activation bit, or revision.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OpenMainRequest {
+    target: Option<(CoreId, String)>,
+    group: Option<String>,
+    authority_group: Option<String>,
+    revision: u64,
+    activate: bool,
+    pending: bool,
+}
+
+impl OpenMainRequest {
+    /// Replace the current request with one internally consistent identity.
+    ///
+    /// Args:
+    ///     target: Live core and canonical market to open.
+    ///     group: Owning group resolved from that same live core.
+    ///     authority_group: Immutable group that owned the producer, or `None` for an unscoped
+    ///         global/internal request that may follow a core moved by Settings.
+    ///     activate: Whether the consumer should raise the group window.
+    ///
+    /// Returns:
+    ///     Nothing; the wrapping revision advances and the request becomes pending.
+    fn request(
+        &mut self,
+        target: (CoreId, String),
+        group: String,
+        authority_group: Option<String>,
+        activate: bool,
+    ) {
+        self.target = Some(target);
+        self.group = Some(group);
+        self.authority_group = authority_group;
+        self.revision = self.revision.wrapping_add(1);
+        self.activate = activate;
+        self.pending = true;
+    }
+
+    /// Return whether an undrained Main-open request exists.
+    ///
+    /// Returns:
+    ///     `true` between the producer API call and the owning `ChartTabs` drain.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.pending
+    }
+
+    /// Return the core carried by the current pending request.
+    ///
+    /// Returns:
+    ///     Pending core identity, or `None` after consumption/cancellation.
+    fn pending_core(&self) -> Option<CoreId> {
+        self.pending
+            .then_some(())
+            .and(self.target.as_ref().map(|(core, _)| *core))
+    }
+
+    /// Return the target carried by the current pending request without trusting stored routing.
+    ///
+    /// Returns:
+    ///     Borrowed target while the request is pending.
+    fn pending_target(&self) -> Option<&(CoreId, String)> {
+        self.pending.then_some(()).and(self.target.as_ref())
+    }
+
+    /// Return the immutable group authority captured by a group-owned producer.
+    ///
+    /// Returns:
+    ///     Captured group, or `None` for an explicitly unscoped request.
+    fn authority_group(&self) -> Option<&str> {
+        self.authority_group.as_deref()
+    }
+
+    /// Retarget or cancel a pending request after session/config reconciliation.
+    ///
+    /// Args:
+    ///     current_group: Current live owner resolved from the target core, or `None` when the core
+    ///         no longer has a session.
+    ///
+    /// Returns:
+    ///     `true` when routing/reveal metadata changed and observers need a new revision.
+    fn reconcile_group(&mut self, current_group: Option<String>) -> bool {
+        if !self.pending {
+            return false;
+        }
+        let current_group = match self.authority_group.as_deref() {
+            Some(authority) if current_group.as_deref() != Some(authority) => None,
+            _ => current_group,
+        };
+        if current_group.is_some() && self.group == current_group {
+            return false;
+        }
+        self.revision = self.revision.wrapping_add(1);
+        if let Some(group) = current_group {
+            self.group = Some(group);
+        } else {
+            self.target = None;
+            self.group = None;
+            self.activate = false;
+            self.pending = false;
+        }
+        true
+    }
+
+    /// Return the pending target only to its atomically recorded owning group.
+    ///
+    /// Args:
+    ///     group: Group whose `ChartTabs` is asking for work.
+    ///
+    /// Returns:
+    ///     Borrowed target while this exact group owns a pending request.
+    #[cfg(test)]
+    pub(crate) fn pending_for_group(&self, group: &str) -> Option<&(CoreId, String)> {
+        (self.pending && self.group.as_deref() == Some(group))
+            .then_some(())
+            .and(self.target.as_ref())
+    }
+
+    /// Return the request revision relevant to one group's chart-tab signature.
+    ///
+    /// Args:
+    ///     group: Group whose signature is being assembled.
+    ///
+    /// Returns:
+    ///     Current revision for a pending request owned by `group`, otherwise zero.
+    #[cfg(test)]
+    pub(crate) fn pending_revision_for_group(&self, group: &str) -> u64 {
+        if self.pending && self.group.as_deref() == Some(group) {
+            self.revision
+        } else {
+            0
+        }
+    }
+
+    /// Return the group addressed by the latest revision, including after it was drained.
+    ///
+    /// Returns:
+    ///     Borrowed owning group, or `None` before the first valid request and after reconciliation
+    ///     cancels a request whose core no longer has an owner.
+    pub(crate) fn addressed_group(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    /// Return the latest request revision for Shell reveal tracking.
+    ///
+    /// Returns:
+    ///     Wrapping revision, zero before the first request.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Drain a still-matching request from its owning group.
+    ///
+    /// Args:
+    ///     group: Group whose `ChartTabs` is consuming the request.
+    ///     expected: Target copied during the preceding read phase.
+    ///
+    /// Returns:
+    ///     Owned core, market, and activation bit, or `None` if another producer replaced it.
+    pub(crate) fn take_if_matches(
+        &mut self,
+        group: &str,
+        expected: &(CoreId, String),
+    ) -> Option<(CoreId, String, bool)> {
+        if !self.pending
+            || self.group.as_deref() != Some(group)
+            || self.target.as_ref() != Some(expected)
+        {
+            return None;
+        }
+        self.pending = false;
+        let activate = std::mem::take(&mut self.activate);
+        self.target
+            .as_ref()
+            .map(|(core, market)| (*core, market.clone(), activate))
+    }
+}
+
+/// One comparison-tab navigation plus the immutable group authority of its producer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OpenCompareRequest {
+    target: (CoreId, String),
+    authority_group: Option<String>,
+}
+
+impl OpenCompareRequest {
+    /// Capture one comparison target and its optional group workspace authority.
+    ///
+    /// Args:
+    ///     target: Live core and canonical market selected by the producer.
+    ///     authority_group: Immutable owning group, or `None` for an explicitly unscoped route.
+    ///
+    /// Returns:
+    ///     One atomic request that cannot be retargeted across a scoped workspace boundary.
+    fn new(target: (CoreId, String), authority_group: Option<String>) -> Self {
+        Self {
+            target,
+            authority_group,
+        }
+    }
+
+    /// Decide whether one group may consume this request after live ownership revalidation.
+    ///
+    /// Args:
+    ///     group: Group whose `ChartTabs` is attempting to consume the request.
+    ///     live_group: Current group resolved from the target core.
+    ///     workspace_allowed: Whether the target remains in the current Auto scope.
+    ///
+    /// Returns:
+    ///     `true` only when live ownership matches and any captured authority remains valid.
+    fn allows_group(&self, group: &str, live_group: Option<&str>, workspace_allowed: bool) -> bool {
+        live_group == Some(group)
+            && self
+                .authority_group
+                .as_deref()
+                .is_none_or(|authority| authority == group && workspace_allowed)
+    }
+}
 
 /// A closed, persisted episode whose ±1 min history slice is captured later — once its forward tail
 /// (`start_ms + WARN_SLICE_FWD_MS`) has accumulated in the live ring — and written to `warn_store`.
@@ -609,6 +870,92 @@ impl Backend {
             .any(|session| session.id == core && session.group == group)
     }
 
+    /// Resolve the pending Main request's current owner from live session state.
+    ///
+    /// Returns:
+    ///     Current group of the pending target core, or `None` after removal/consumption.
+    fn current_open_main_group(&self) -> Option<&str> {
+        let core = self.open_main_request.pending_core()?;
+        self.session
+            .sessions()
+            .iter()
+            .find(|session| session.id == core)
+            .map(|session| session.group.as_str())
+    }
+
+    /// Reconcile pending Main routing and Shell reveal metadata after session topology changes.
+    ///
+    /// Returns:
+    ///     `true` when a moved core retargeted the request or a removed core cancelled it.
+    pub(crate) fn reconcile_open_main_request_group(&mut self) -> bool {
+        let current_group = self.current_open_main_group().map(str::to_string);
+        let authority_valid = match (
+            self.open_main_request.authority_group(),
+            self.open_main_request.pending_core(),
+        ) {
+            (Some(authority_group), Some(core)) => {
+                current_group.as_deref() == Some(authority_group)
+                    && self.workspace_action_allows_core(Some(authority_group), core)
+            }
+            (None, Some(_)) => true,
+            (_, None) => false,
+        };
+        let current_group = authority_valid.then_some(current_group).flatten();
+        self.open_main_request.reconcile_group(current_group)
+    }
+
+    /// Return a pending Main target only to its current live group.
+    ///
+    /// Args:
+    ///     group: ChartTabs group requesting a read-phase target copy.
+    ///
+    /// Returns:
+    ///     Borrowed target only when the target core currently belongs to `group`.
+    pub(crate) fn pending_open_main_request_for_group(
+        &self,
+        group: &str,
+    ) -> Option<&(CoreId, String)> {
+        (self.current_open_main_group().as_deref() == Some(group))
+            .then_some(())
+            .and(self.open_main_request.pending_target())
+    }
+
+    /// Return the pending Main revision only to its current live group.
+    ///
+    /// Args:
+    ///     group: ChartTabs group assembling its observer signature.
+    ///
+    /// Returns:
+    ///     Request revision when the pending core currently belongs to `group`, otherwise zero.
+    pub(crate) fn pending_open_main_revision_for_group(&self, group: &str) -> u64 {
+        if self.current_open_main_group().as_deref() == Some(group) {
+            self.open_main_request.revision()
+        } else {
+            0
+        }
+    }
+
+    /// Revalidate and drain a matching Main request from its current live group.
+    ///
+    /// Args:
+    ///     group: ChartTabs group attempting consumption.
+    ///     expected: Target copied during the preceding read phase.
+    ///     cx: Backend context used to wake the request's newly resolved owner.
+    ///
+    /// Returns:
+    ///     Owned target and activation bit only when current session ownership still matches.
+    pub(crate) fn take_open_main_request_if_matches(
+        &mut self,
+        group: &str,
+        expected: &(CoreId, String),
+        cx: &mut Context<Self>,
+    ) -> Option<(CoreId, String, bool)> {
+        if self.reconcile_open_main_request_group() {
+            cx.notify();
+        }
+        self.open_main_request.take_if_matches(group, expected)
+    }
+
     /// Return whether this panel is currently recorded as detached from `group`.
     ///
     /// The question every detach route asks before opening a window: a panel already pulled out
@@ -648,11 +995,12 @@ impl Backend {
         self.store_main_chart_target(group, target);
     }
 
-    /// Publish the group's current Main trading target and remember a genuine core change.
+    /// Publish the group's current Main target and remember a genuine Classic core change.
     ///
-    /// Repeated synchronization of the same target preserves a manual header selection. Moving
-    /// Main or a locked comparison anchor to another core makes that core the new durable
-    /// selection, matching what the header shows after the existing sticky choice yields.
+    /// Repeated synchronization of the same target preserves a manual header selection. In
+    /// Classic, moving Main or a locked comparison anchor to another core makes that core the new
+    /// durable selection. In Auto, the target remains runtime chart context and cannot overwrite
+    /// `active_trade_core_by_group`.
     ///
     /// Args:
     ///     group: Window group whose target changed.
@@ -660,19 +1008,46 @@ impl Backend {
     ///         whose live core no longer belongs to `group` is treated as `None`.
     ///
     /// Returns:
-    ///     Nothing; runtime target state and, on a core change, layout state are updated in place.
+    ///     Nothing; runtime target state and, only for a Classic core change, layout state update.
     pub(crate) fn set_main_chart_target(&mut self, group: &str, target: Option<(CoreId, String)>) {
         let target = target.filter(|(core, _)| self.core_belongs_to_group(group, *core));
         if self.main_chart_targets.get(group) == target.as_ref() {
             return;
         }
         let prev_core = self.main_chart_targets.get(group).map(|(core, _)| *core);
-        if let Some((new_core, _)) = &target {
-            if prev_core != Some(*new_core) {
-                self.set_active_trade_core(group, *new_core);
-            }
+        if let Some(new_core) = target.as_ref().and_then(|(new_core, _)| {
+            Self::classic_trade_core_for_main_transition(
+                self.workspace_mode(group),
+                prev_core,
+                *new_core,
+            )
+        }) {
+            self.set_active_trade_core(group, new_core);
         }
         self.store_main_chart_target(group, target);
+    }
+
+    /// Resolve whether a Main target transition may update durable Classic trade state.
+    ///
+    /// This is the exact production guard used by [`Self::set_main_chart_target`]. It remains a
+    /// narrow associated function so the Auto chart-open regression can mutate and prove the real
+    /// decision without constructing the unrelated report, chart, and window fields of Backend.
+    ///
+    /// Args:
+    ///     mode: Current group workspace mode.
+    ///     previous_core: Core previously targeted by Main, if any.
+    ///     new_core: Newly published Main core.
+    ///
+    /// Returns:
+    ///     Core to remember only for a genuine Classic transition, otherwise `None`.
+    fn classic_trade_core_for_main_transition(
+        mode: WorkspaceMode,
+        previous_core: Option<CoreId>,
+        new_core: CoreId,
+    ) -> Option<CoreId> {
+        (previous_core != Some(new_core)
+            && crate::workspace::should_remember_classic_trade_core(mode))
+        .then_some(new_core)
     }
 
     /// Replace one group's process-lifetime Main target cache entry.
@@ -761,8 +1136,9 @@ impl Backend {
 
     /// Return the group's active trading core for the header and toolbar.
     ///
-    /// A still-valid remembered header selection takes precedence, followed by the visible chart
-    /// target and then the group's first core. This keeps the toolbar populated before a chart opens.
+    /// A valid selected Auto workspace core takes precedence. Auto Overview and Classic then use
+    /// the still-valid remembered header selection, followed by the visible chart target and the
+    /// group's first core. This keeps manual controls singular even while Overview shows all cores.
     ///
     /// Args:
     ///     group: Window group whose trading controls need a core.
@@ -770,6 +1146,11 @@ impl Backend {
     /// Returns:
     ///     A live core belonging to the group, or `None` when the group has no live cores.
     pub(crate) fn active_trade_core(&self, group: &str) -> Option<CoreId> {
+        if self.workspace_mode(group) == WorkspaceMode::AutoTrading
+            && let Some(core) = self.valid_auto_workspace_core(group)
+        {
+            return Some(core);
+        }
         if let Some(&core) = self.layout.active_trade_core_by_group.get(group) {
             if self.core_belongs_to_group(group, core) {
                 return Some(core);
@@ -781,15 +1162,22 @@ impl Backend {
             .or_else(|| self.group_cores(group).first().map(|(id, _)| *id))
     }
 
-    /// Set the group's active trading core in the shared durable layout.
+    /// Set the group's active trading core in the shared durable Classic layout.
     ///
     /// Args:
     ///     group: Window group that owns the selection.
     ///     core: Stable UID of the selected live core. Values outside `group` are ignored.
     ///
     /// Returns:
-    ///     Nothing; a changed selection marks layout persistence dirty.
+    ///     Nothing; Auto mode refuses this legacy writer, while a changed Classic selection marks
+    ///     layout persistence dirty.
     pub(crate) fn set_active_trade_core(&mut self, group: &str, core: CoreId) {
+        // The Auto Shell rail uses `select_auto_workspace_core`, whose revision wakes scoped
+        // consumers. Refusing the legacy writer here is the final guard against chart/header paths
+        // silently replacing the user's remembered Classic manual-trading core.
+        if !crate::workspace::should_remember_classic_trade_core(self.workspace_mode(group)) {
+            return;
+        }
         if !self.core_belongs_to_group(group, core) {
             return;
         }
@@ -799,6 +1187,627 @@ impl Backend {
                 .insert(group.to_string(), core);
             self.layout_dirty = true;
         }
+    }
+
+    /// Return the persisted workspace mode for one group, defaulting legacy layouts to Classic.
+    ///
+    /// Args:
+    ///     group: Group window whose preset is requested.
+    ///
+    /// Returns:
+    ///     Saved mode or [`WorkspaceMode::Classic`] when the group has no entry.
+    pub(crate) fn workspace_mode(&self, group: &str) -> WorkspaceMode {
+        self.layout
+            .workspace_mode_by_group
+            .get(group)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Return the shared Auto-workspace availability facts for one configured core.
+    ///
+    /// Args:
+    ///     group: Owning group expected by the caller.
+    ///     core: Stable core UID to resolve across config, session, and window lifecycle.
+    ///
+    /// Returns:
+    ///     Complete availability record consumed by scope, setters, trade overlay, and roster.
+    pub(crate) fn workspace_core_availability(
+        &self,
+        group: &str,
+        core: CoreId,
+    ) -> crate::workspace::WorkspaceCoreAvailability {
+        let server = self
+            .config
+            .servers
+            .iter()
+            .find(|server| server.id == core && server.group == group);
+        let window = if self.group_windows.contains_key(group) {
+            crate::workspace::WorkspaceWindowState::Live
+        } else if self.opening_group_windows.contains(group) {
+            crate::workspace::WorkspaceWindowState::Opening
+        } else {
+            crate::workspace::WorkspaceWindowState::Missing
+        };
+        crate::workspace::WorkspaceCoreAvailability {
+            // Missing group metadata means the configured server uses GroupConfig's active
+            // defaults; requiring an explicit groups.toml row would disable legacy groups.
+            group_active: self
+                .config
+                .group_ref(group)
+                .is_none_or(|group| group.active),
+            core_active: server.is_some_and(|server| server.active),
+            live_session: self.core_belongs_to_group(group, core),
+            window,
+        }
+    }
+
+    /// Return a saved Auto core only while it remains a live member of the owning group.
+    ///
+    /// Args:
+    ///     group: Group whose Auto workspace selection is requested.
+    ///
+    /// Returns:
+    ///     Valid selected core, or `None` for Overview and stale persisted references.
+    pub(crate) fn valid_auto_workspace_core(&self, group: &str) -> Option<CoreId> {
+        self.layout
+            .auto_workspace_core_by_group
+            .get(group)
+            .copied()
+            .filter(|core| {
+                self.workspace_core_availability(group, *core)
+                    .is_available()
+            })
+    }
+
+    /// Resolve one group panel's effective scope without mutating its retained Classic filter.
+    ///
+    /// Args:
+    ///     group: Owning group window.
+    ///     retained: Panel-owned Classic all/subset filter.
+    ///
+    /// Returns:
+    ///     Canonical live core IDs selected by Classic, Auto Overview, or Auto selected-core mode.
+    pub(crate) fn effective_workspace_scope(
+        &self,
+        group: &str,
+        retained: crate::workspace::RetainedCoreScope<'_>,
+    ) -> crate::workspace::EffectiveCoreScope {
+        let cores: Vec<CoreId> = self
+            .group_cores(group)
+            .into_iter()
+            .map(|(core, _)| core)
+            .filter(|core| {
+                self.workspace_core_availability(group, *core)
+                    .is_available()
+            })
+            .collect();
+        crate::workspace::resolve_group_scope(
+            self.workspace_mode(group),
+            self.valid_auto_workspace_core(group),
+            &cores,
+            retained,
+        )
+    }
+
+    /// Authorize a delayed core-specific action against the current Auto workspace.
+    ///
+    /// Args:
+    ///     group: Optional owning group. Group panels and charts pass their owner; standalone and
+    ///         deliberately global callers pass `None` and preserve their existing authority.
+    ///     core: Core captured by the row, menu, dialog, or asynchronous request.
+    ///
+    /// Returns:
+    ///     `false` only when an Auto-owned group no longer exposes `core`; Classic and unscoped
+    ///     callers retain their existing behavior.
+    pub(crate) fn workspace_action_allows_core(&self, group: Option<&str>, core: CoreId) -> bool {
+        let Some(group) = group else {
+            return true;
+        };
+        self.core_belongs_to_group(group, core)
+            && (self.workspace_mode(group) != WorkspaceMode::AutoTrading
+                || self
+                    .effective_workspace_scope(group, crate::workspace::RetainedCoreScope::All)
+                    .contains(core))
+    }
+
+    /// Queue one Main-chart navigation only while its captured core remains workspace-visible.
+    ///
+    /// Args:
+    ///     group: Group that owned the rendered callback, or `None` for a standalone/global host.
+    ///     target: Captured core and market to reveal on Main.
+    ///     activate: Whether the receiving group window may be raised for this request.
+    ///
+    /// Returns:
+    ///     `true` when the request was authorized and queued; stale Auto callbacks return `false`.
+    pub(crate) fn open_on_main_if_authorized(
+        &mut self,
+        group: Option<&str>,
+        target: (CoreId, String),
+        activate: bool,
+    ) -> bool {
+        if !self.workspace_action_allows_core(group, target.0) {
+            return false;
+        }
+        self.queue_open_on_main(target, group.map(str::to_string), activate);
+        true
+    }
+
+    /// Queue one comparison navigation only while its captured core remains workspace-visible.
+    ///
+    /// Args:
+    ///     group: Group that owned the rendered callback, or `None` for an unscoped host.
+    ///     target: Captured core and market used to seed the comparison tab.
+    ///
+    /// Returns:
+    ///     `true` when the current authority accepted and published the request.
+    pub(crate) fn open_compare_if_authorized(
+        &mut self,
+        group: Option<&str>,
+        target: (CoreId, String),
+    ) -> bool {
+        if !self.workspace_action_allows_core(group, target.0) {
+            return false;
+        }
+        self.open_compare_request =
+            Some(OpenCompareRequest::new(target, group.map(str::to_string)));
+        self.open_compare_request_rev = self.open_compare_request_rev.wrapping_add(1);
+        true
+    }
+
+    /// Revalidate and drain one comparison request only for its live authorized group.
+    ///
+    /// Args:
+    ///     group: ChartTabs group attempting to consume the request.
+    ///
+    /// Returns:
+    ///     Owned target when live ownership and captured authority still match; stale scoped
+    ///     requests are discarded rather than rerouted.
+    pub(crate) fn take_open_compare_request_for_group(
+        &mut self,
+        group: &str,
+    ) -> Option<(CoreId, String)> {
+        let request = self.open_compare_request.as_ref()?;
+        let (core, _) = &request.target;
+        let live_group = self
+            .session
+            .sessions()
+            .iter()
+            .find(|session| session.id == *core)
+            .map(|session| session.group.as_str());
+        let workspace_allowed = request
+            .authority_group
+            .as_deref()
+            .is_none_or(|authority| self.workspace_action_allows_core(Some(authority), *core));
+        if !request.allows_group(group, live_group, workspace_allowed) {
+            if request.authority_group.is_some() {
+                self.open_compare_request = None;
+            }
+            return None;
+        }
+        self.open_compare_request
+            .take()
+            .map(|request| request.target)
+    }
+
+    /// Return the comparison revision only to the request's current authorized group.
+    ///
+    /// Args:
+    ///     group: ChartTabs group assembling its observer signature.
+    ///
+    /// Returns:
+    ///     Current request revision when this group may consume it, otherwise zero.
+    pub(crate) fn pending_open_compare_revision_for_group(&self, group: &str) -> u64 {
+        let Some(request) = self.open_compare_request.as_ref() else {
+            return 0;
+        };
+        let (core, _) = &request.target;
+        let live_group = self
+            .session
+            .sessions()
+            .iter()
+            .find(|session| session.id == *core)
+            .map(|session| session.group.as_str());
+        let workspace_allowed = request
+            .authority_group
+            .as_deref()
+            .is_none_or(|authority| self.workspace_action_allows_core(Some(authority), *core));
+        if request.allows_group(group, live_group, workspace_allowed) {
+            self.open_compare_request_rev
+        } else {
+            0
+        }
+    }
+
+    /// Resolve the live Auto owner inherited by Analytics and Strategies.
+    ///
+    /// Returns:
+    ///     Last focused live Auto group plus its valid selected core, or `None` so the singleton
+    ///     retains its own Classic filter.
+    pub(crate) fn singleton_workspace(&self) -> Option<crate::workspace::SingletonWorkspace> {
+        let focus = self.workspace_focus.as_ref()?;
+        let group = focus.group();
+        let owner_registered =
+            self.group_windows.contains_key(group) || self.opening_group_windows.contains(group);
+        let live_cores = self
+            .group_cores(group)
+            .into_iter()
+            .map(|(core, _)| core)
+            .filter(|core| {
+                self.workspace_core_availability(group, *core)
+                    .is_available()
+            })
+            .collect::<Vec<_>>();
+        crate::workspace::resolve_singleton_workspace(
+            group,
+            owner_registered,
+            self.workspace_mode(group),
+            self.layout.auto_workspace_core_by_group.get(group).copied(),
+            &live_cores,
+        )
+    }
+
+    /// Return the dedicated entity observed by cached and asynchronous workspace consumers.
+    ///
+    /// Returns:
+    ///     Shared revision entity whose notifications describe effective-scope invalidations.
+    pub(crate) fn workspace_revision(&self) -> gpui::Entity<crate::workspace::WorkspaceRevision> {
+        self.workspace_revision.clone()
+    }
+
+    /// Return the revision entity notified after retained market data changes.
+    ///
+    /// Returns:
+    ///     A narrow wake channel for catalog-sensitive consumers such as Auto chart retargeting.
+    pub(crate) fn market_data_revision(&self) -> gpui::Entity<crate::MarketDataRevision> {
+        self.market_data_revision.clone()
+    }
+
+    /// Return the revision entity observed by every Auto Shell layout consumer.
+    ///
+    /// Returns:
+    ///     Shared notification authority for topology and global rail-width changes.
+    pub(crate) fn auto_workspace_layout_revision(
+        &self,
+    ) -> gpui::Entity<crate::workspace::AutoWorkspaceLayoutRevision> {
+        self.auto_workspace_layout_revision.clone()
+    }
+
+    /// Borrow the persisted process-wide Auto dock topology authority.
+    ///
+    /// Returns:
+    ///     Normalized panel-name topology loaded from or destined for `auto_dock.json`, or `None`
+    ///     so a Shell uses the deterministic safe preset for missing or protected invalid data.
+    pub(crate) fn auto_dock_topology(&self) -> Option<&DockTopologyByName> {
+        self.auto_dock_topology.as_ref()
+    }
+
+    /// Accept a user-edited shared Auto dock topology when its normalized value changed.
+    ///
+    /// Args:
+    ///     topology: Topology-only panel-name tree projected from the user-edited Auto dock.
+    ///     cx: Backend context used to notify every other open Auto Shell.
+    ///
+    /// Returns:
+    ///     `true` when the authority changed and now awaits persistence to `auto_dock.json`.
+    pub(crate) fn set_auto_dock_topology(
+        &mut self,
+        topology: DockTopologyByName,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let topology = topology.normalized();
+        if self.auto_dock_topology.as_ref() == Some(&topology) {
+            return false;
+        }
+        self.auto_dock_automatic_persistence_allowed = true;
+        self.auto_dock_topology = Some(topology);
+        self.auto_dock_dirty = true;
+        self.publish_auto_workspace_layout_revision(cx);
+        true
+    }
+
+    /// Store a live dock dump only while the group is in Classic mode.
+    ///
+    /// Args:
+    ///     group: Group whose live DockArea produced the state.
+    ///     state: Complete serialized live dock state.
+    ///
+    /// Returns:
+    ///     `true` when Classic persistence accepted the state; Auto callers are ignored so their
+    ///     shared topology and temporary panel instances cannot overwrite `docks.json`.
+    pub(crate) fn store_classic_dock_state(&mut self, group: String, state: DockAreaState) -> bool {
+        if self.workspace_mode(&group) == WorkspaceMode::AutoTrading {
+            return false;
+        }
+        self.dock_states.insert(group, state);
+        self.dock_dirty = true;
+        true
+    }
+
+    /// Reconcile topology produced by a programmatic Auto install or name-based repair.
+    ///
+    /// Missing first-run state and valid loaded state may persist this automatic transition.
+    /// Invalid or unreadable startup state remains protected until
+    /// [`Self::set_auto_dock_topology`] receives a distinct user-edited topology.
+    ///
+    /// Args:
+    ///     topology: Actual normalized topology resolved against one Shell's live panel names.
+    ///     cx: Backend context used to notify other Auto Shells when the authority changes.
+    ///
+    /// Returns:
+    ///     `true` when the in-memory authority changed.
+    pub(crate) fn reconcile_auto_dock_topology(
+        &mut self,
+        topology: DockTopologyByName,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let topology = topology.normalized();
+        if self.auto_dock_topology.as_ref() == Some(&topology) {
+            return false;
+        }
+        self.auto_dock_topology = Some(topology);
+        if self.auto_dock_automatic_persistence_allowed {
+            self.auto_dock_dirty = true;
+        }
+        self.publish_auto_workspace_layout_revision(cx);
+        true
+    }
+
+    /// Return the persisted logical-pixel Auto rail width shared by every group window.
+    ///
+    /// Returns:
+    ///     Finite width clamped by the layout decoder and every runtime setter.
+    pub(crate) fn auto_workspace_rail_width(&self) -> f32 {
+        self.layout.auto_workspace_rail_width()
+    }
+
+    /// Persist and publish a global Auto rail resize only when its normalized value changed.
+    ///
+    /// Args:
+    ///     requested: Raw logical-pixel width reported by one Shell resize state.
+    ///     cx: Backend context used to notify every other open Shell.
+    ///
+    /// Returns:
+    ///     `true` when the clamped preference changed; repeated equal samples are ignored.
+    pub(crate) fn set_auto_workspace_rail_width(
+        &mut self,
+        requested: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(width) = crate::workspace::changed_auto_workspace_rail_width(
+            self.auto_workspace_rail_width(),
+            requested,
+        ) else {
+            return false;
+        };
+        self.layout.auto_workspace_rail_width = Some(width);
+        self.layout_dirty = true;
+        self.publish_auto_workspace_layout_revision(cx);
+        true
+    }
+
+    /// Persist a group workspace mode and publish one effective-scope transition.
+    ///
+    /// Args:
+    ///     group: Live configured group whose preset changes.
+    ///     mode: New workspace preset.
+    ///     cx: Backend context used to publish the dedicated revision.
+    ///
+    /// Returns:
+    ///     `true` when mode or singleton ownership changed.
+    pub(crate) fn set_workspace_mode(
+        &mut self,
+        group: &str,
+        mode: WorkspaceMode,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.group_is_configured(group) {
+            return false;
+        }
+        let mode_changed = self.workspace_mode(group) != mode;
+        let focus_changed = match mode {
+            WorkspaceMode::Classic => {
+                crate::workspace::close_workspace_owner(&mut self.workspace_focus, group)
+            }
+            WorkspaceMode::AutoTrading => {
+                crate::workspace::focus_workspace_owner(&mut self.workspace_focus, group)
+            }
+        };
+        if !mode_changed && !focus_changed {
+            return false;
+        }
+        if mode_changed {
+            self.layout
+                .workspace_mode_by_group
+                .insert(group.to_string(), mode);
+            self.layout_dirty = true;
+        }
+        self.publish_workspace_revision(cx);
+        true
+    }
+
+    /// Select one live core or Overview for an already active Auto workspace.
+    ///
+    /// Args:
+    ///     group: Owning group window.
+    ///     core: Live group core, or `None` for Overview.
+    ///     cx: Backend context used to publish one revision.
+    ///
+    /// Returns:
+    ///     `true` when persisted selection or singleton ownership changed.
+    pub(crate) fn select_auto_workspace_core(
+        &mut self,
+        group: &str,
+        core: Option<CoreId>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.workspace_mode(group) != WorkspaceMode::AutoTrading
+            || core
+                .is_some_and(|core| !self.workspace_core_availability(group, core).is_available())
+        {
+            return false;
+        }
+        let previous = self.layout.auto_workspace_core_by_group.get(group).copied();
+        if let Some(core) = core {
+            self.layout
+                .auto_workspace_core_by_group
+                .insert(group.to_string(), core);
+        } else {
+            self.layout.auto_workspace_core_by_group.remove(group);
+        }
+        let selection_changed = previous != core;
+        let focus_changed =
+            crate::workspace::focus_workspace_owner(&mut self.workspace_focus, group);
+        if !selection_changed && !focus_changed {
+            return false;
+        }
+        if selection_changed {
+            self.layout_dirty = true;
+        }
+        self.publish_workspace_revision(cx);
+        true
+    }
+
+    /// Enter Auto mode and select a destination core as one cross-group transition.
+    ///
+    /// Args:
+    ///     group: Destination group whose existing window will be activated by the caller.
+    ///     core: Live core in that destination group.
+    ///     cx: Backend context used to publish one revision.
+    ///
+    /// Returns:
+    ///     `true` when the validated transition changed state.
+    pub(crate) fn activate_auto_workspace_core(
+        &mut self,
+        group: &str,
+        core: CoreId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.workspace_core_availability(group, core).is_available() {
+            return false;
+        }
+        let mode_changed = self.workspace_mode(group) != WorkspaceMode::AutoTrading;
+        let selection_changed = self.valid_auto_workspace_core(group) != Some(core);
+        let focus_changed =
+            crate::workspace::focus_workspace_owner(&mut self.workspace_focus, group);
+        if !mode_changed && !selection_changed && !focus_changed {
+            return false;
+        }
+        self.layout
+            .workspace_mode_by_group
+            .insert(group.to_string(), WorkspaceMode::AutoTrading);
+        self.layout
+            .auto_workspace_core_by_group
+            .insert(group.to_string(), core);
+        self.layout_dirty |= mode_changed || selection_changed;
+        self.publish_workspace_revision(cx);
+        true
+    }
+
+    /// Record a live Auto group as the owner of singleton scope.
+    ///
+    /// Args:
+    ///     group: Group whose toolbar or interaction established ownership.
+    ///     cx: Backend context used to publish one revision.
+    ///
+    /// Returns:
+    ///     `true` when focus moved to this group.
+    pub(crate) fn focus_auto_workspace(&mut self, group: &str, cx: &mut Context<Self>) -> bool {
+        if self.workspace_mode(group) != WorkspaceMode::AutoTrading
+            || !self.group_windows.contains_key(group)
+            || !crate::workspace::focus_workspace_owner(&mut self.workspace_focus, group)
+        {
+            return false;
+        }
+        self.publish_workspace_revision(cx);
+        true
+    }
+
+    /// Remove one registered primary group window and publish its workspace transition once.
+    ///
+    /// Args:
+    ///     closed_id: Native window identity reported by GPUI.
+    ///     cx: Backend context used for the single workspace revision publication.
+    ///
+    /// Returns:
+    ///     Closed group and whether it was the last primary window, or `None` for detached and
+    ///     already-processed window identities.
+    pub(crate) fn close_group_window(
+        &mut self,
+        closed_id: WindowId,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, bool)> {
+        let group = self
+            .group_windows
+            .iter()
+            .find(|(_, handle)| handle.window_id() == closed_id)
+            .map(|(group, _)| group.clone())?;
+        self.group_windows.remove(&group)?;
+        self.opening_group_windows.remove(&group);
+        crate::workspace::close_workspace_owner(&mut self.workspace_focus, &group);
+        self.publish_workspace_revision(cx);
+        Some((group, self.group_windows.is_empty()))
+    }
+
+    /// Publish one final combined config and group-window lifecycle transition.
+    ///
+    /// Args:
+    ///     closed_groups: Groups removed in this final transition; empty for a completed open.
+    ///     cx: Backend context used to publish exactly one transition.
+    ///
+    /// Returns:
+    ///     Nothing; ownership is reconciled once against final state before the notification.
+    pub(crate) fn publish_workspace_window_change(
+        &mut self,
+        closed_groups: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        let focus_valid = self.workspace_focus.as_ref().is_none_or(|focus| {
+            self.workspace_mode(focus.group()) == WorkspaceMode::AutoTrading
+                && self.group_is_configured(focus.group())
+                && !closed_groups.iter().any(|group| group == focus.group())
+                && (self.group_windows.contains_key(focus.group())
+                    || self.opening_group_windows.contains(focus.group()))
+        });
+        crate::workspace::reconcile_workspace_focus(&mut self.workspace_focus, focus_valid);
+        self.publish_workspace_revision(cx);
+    }
+
+    /// Return whether a group still has an active configured window owner.
+    ///
+    /// Args:
+    ///     group: Group name to validate against the committed configuration.
+    ///
+    /// Returns:
+    ///     `true` when the group appears in the canonical group-window enumeration.
+    fn group_is_configured(&self, group: &str) -> bool {
+        crate::window::group_window::groups(&self.config)
+            .iter()
+            .any(|configured| configured == group)
+    }
+
+    /// Advance and notify the dedicated workspace revision entity.
+    ///
+    /// Args:
+    ///     cx: Backend context whose app handle updates the revision entity.
+    ///
+    /// Returns:
+    ///     Nothing; one call produces one generation increment and one notification.
+    fn publish_workspace_revision(&mut self, cx: &mut Context<Self>) {
+        self.workspace_revision
+            .update(cx, |revision, revision_cx| revision.advance(revision_cx));
+    }
+
+    /// Publish one equality-guarded Auto topology or rail-width transition.
+    ///
+    /// Args:
+    ///     cx: Backend context whose app handle updates the shared revision entity.
+    ///
+    /// Returns:
+    ///     Nothing; callers must update their authority before publishing.
+    fn publish_auto_workspace_layout_revision(&mut self, cx: &mut Context<Self>) {
+        self.auto_workspace_layout_revision
+            .update(cx, |revision, revision_cx| revision.advance(revision_cx));
     }
 
     /// Refresh the cached fallback ticker from the first canonical live core.
@@ -1614,40 +2623,31 @@ impl Backend {
         out
     }
 
-    /// Warning episodes for the Warnings list: the ones still open first, then newest.
+    /// Warning episodes for one effective workspace scope, filtered before the persisted limit.
     ///
-    /// Merges still-open episodes (not yet persisted) with the persisted log, so an in-progress
-    /// warning appears at the top.
+    /// Open episodes are filtered in memory. Persisted episodes are filtered in SQLite before its
+    /// `ORDER BY` and `LIMIT`, so unrelated cores cannot crowd the selected workspace out.
     ///
     /// Args:
-    ///     limit: Maximum rows to return.
+    ///     core_ids: Effective core identities accepted by core-specific warning axes.
+    ///     server_ips: Effective server identities accepted by server-wide warning axes.
+    ///     limit: Maximum rows to return after merging open and persisted episodes.
     ///
     /// Returns:
-    ///     Still-open episodes first, then closed ones newest first, capped to `limit`.
-    pub(crate) fn warn_episodes_recent(
+    ///     Still-open episodes first, then closed ones newest first, capped once to `limit`.
+    pub(crate) fn warn_episodes_recent_for_scope(
         &self,
+        core_ids: &HashSet<CoreId>,
+        server_ips: &HashSet<IpAddr>,
         limit: usize,
     ) -> Vec<crate::backend::core_warn::WarnEpisode> {
         let mut all = self.warn.open_episodes();
-        if let Some(store) = &self.warn_store {
-            if let Ok(closed) = store.recent_episodes(limit) {
-                all.extend(closed);
-            }
+        if let Some(store) = &self.warn_store
+            && let Ok(closed) = store.recent_episodes_for_scope(core_ids, server_ips, limit)
+        {
+            all.extend(closed);
         }
-        // A disabled axis is also dropped from the Warnings list, matching the charts.
-        let enabled = self.warn_enabled();
-        all.retain(|episode| enabled.allows(episode.axis));
-        // Still-open episodes lead, then newest first. Without the pin, a warning that has been
-        // ongoing for weeks — an expiring API key is exactly that — has the OLDEST start time and is
-        // the first row the limit drops, hiding the one warning that is still true.
-        all.sort_by(|a, b| {
-            b.end_ms
-                .is_none()
-                .cmp(&a.end_ms.is_none())
-                .then(b.start_ms.cmp(&a.start_ms))
-        });
-        all.truncate(limit);
-        all
+        finalize_recent_warning_episodes(all, self.warn_enabled(), core_ids, server_ips, limit)
     }
 
     pub(crate) fn mark_backend_dirty(&mut self, cx: &mut Context<Self>) {
@@ -1671,8 +2671,19 @@ impl Backend {
         cx.notify();
     }
 
+    /// Queue the first configured market for the render diagnostic once its owner is available.
+    ///
+    /// Args:
+    ///     cx: Backend context used to notify diagnostic observers after the request is queued.
+    ///
+    /// Returns:
+    ///     Nothing. With no group window it remains pending; once a window exists it either queues
+    ///     the first eligible market or finishes with a diagnostic warning when none exists.
     pub(crate) fn maybe_diag_open_first_market(&mut self, cx: &mut Context<Self>) {
-        if !self.diag_open_first_market || self.diag_open_done || self.open_request.is_some() {
+        if !self.diag_open_first_market
+            || self.diag_open_done
+            || self.open_main_request.is_pending()
+        {
             return;
         }
         if self.group_windows.is_empty() {
@@ -1681,23 +2692,17 @@ impl Backend {
 
         let candidate = self.config.servers.iter().find_map(|server| {
             let market = server.market.trim();
-            let session_exists = self
-                .session
-                .sessions()
-                .iter()
-                .any(|session| session.id == server.id && session.group == server.group);
-            (server.active
-                && server.show_window
-                && self.config.group(&server.group).active
-                && self.group_windows.contains_key(&server.group)
+            (self
+                .workspace_core_availability(&server.group, server.id)
+                .is_available()
                 && !market.is_empty()
-                && session_exists)
-                .then(|| (server.id, market.to_string()))
+                && self.group_windows.contains_key(&server.group))
+            .then(|| (server.id, market.to_string()))
         });
 
         let Some((core, market)) = candidate else {
             self.diag_open_done = true;
-            log::warn!("diag auto-open: no active visible server with default market");
+            log::warn!("diag auto-open: no available server with default market");
             return;
         };
 
@@ -1713,16 +2718,40 @@ impl Backend {
         cx.notify();
     }
 
-    /// Request opening `target` on the group's Main chart, bumping `open_request_rev` so the
-    /// group's `ChartTabs` wakes for exactly this request instead of a fallback render.
+    /// Request opening `target` on its group's Main chart as one atomic identity.
     ///
     /// `activate` raises and focuses the Main window: the chart double-click and the Alerts coin
     /// click pass `true`, while table, detect, log, and screener navigation pass `false` to open
     /// the market without stealing focus from the current window.
+    ///
+    /// Args:
+    ///     target: Live core and canonical market to address atomically.
+    ///     activate: Whether ChartTabs should raise the owning group window after opening.
+    ///
+    /// Returns:
+    ///     Nothing; a target without a live session is ignored.
     pub(crate) fn open_on_main(&mut self, target: (CoreId, String), activate: bool) {
-        self.open_request = Some(target);
-        self.open_request_rev = self.open_request_rev.wrapping_add(1);
-        self.open_request_activate = activate;
+        self.queue_open_on_main(target, None, activate);
+    }
+
+    /// Resolve and queue one Main request with immutable optional producer authority.
+    fn queue_open_on_main(
+        &mut self,
+        target: (CoreId, String),
+        authority_group: Option<String>,
+        activate: bool,
+    ) {
+        let Some(group) = self
+            .session
+            .sessions()
+            .iter()
+            .find(|session| session.id == target.0)
+            .map(|session| session.group.clone())
+        else {
+            return;
+        };
+        self.open_main_request
+            .request(target, group, authority_group, activate);
     }
 
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]

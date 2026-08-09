@@ -208,7 +208,11 @@ impl ChartPanel {
             return false;
         };
 
+        let workspace_group = self.workspace_group.clone();
         let placed = self.backend.update(cx, |b, _| {
+            if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                return false;
+            }
             let Some(terms) = b.manual_order_terms(core, None) else {
                 log::warn!(
                     "manual chart order blocked: core={} market={market} has no complete local terms or valid base/USD rate",
@@ -415,8 +419,12 @@ impl ChartPanel {
             return false;
         }
         let (core, uid) = (hit.core, hit.uid);
-        self.backend
-            .update(cx, |b, _| match b.session.cancel_order(core, uid) {
+        let workspace_group = self.workspace_group.clone();
+        self.backend.update(cx, |b, _| {
+            if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                return;
+            }
+            match b.session.cancel_order(core, uid) {
                 Ok(()) => log::info!(
                     "chart start-cross cancel: core={} uid={uid}",
                     moon_core::feed::core_label(core)
@@ -427,7 +435,8 @@ impl ChartPanel {
                         moon_core::feed::core_label(core)
                     )
                 }
-            });
+            }
+        });
         true
     }
 
@@ -435,7 +444,16 @@ impl ChartPanel {
     ///
     /// The context supplies order UID, position direction, strategy, core, and market so the shared
     /// menu can expose its side-specific edit/cancel or join/split actions. Other line kinds have no
-    /// coin menu. Returns whether the menu opened so the caller can suppress further right-click handling.
+    /// coin menu.
+    ///
+    /// Args:
+    ///     local_pos: Chart-local hit-test position.
+    ///     menu_pos: Window-coordinate popup position.
+    ///     window: Chart window that owns the context menu.
+    ///     cx: Panel context used to resolve the live order row.
+    ///
+    /// Returns:
+    ///     Whether a menu opened, allowing the caller to suppress further right-click handling.
     pub(super) fn try_open_order_menu(
         &mut self,
         local_pos: (f32, f32),
@@ -462,6 +480,9 @@ impl ChartPanel {
         // denotes manual/join orders. The row's `coin` was resolved with this core's exchange
         // rules and is what the menu writes into the coin blacklists.
         let b = self.backend.read(cx);
+        if !self.workspace_action_allowed(&b, core) {
+            return false;
+        }
         let order = b
             .session
             .store()
@@ -496,6 +517,7 @@ impl ChartPanel {
             strat_id,
             strat_name,
             order_uid: Some(uid),
+            workspace_group: self.workspace_group.clone(),
             side: Some(side),
             short,
             origin: crate::controls::CoinMenuOrigin::ChartLine,
@@ -515,7 +537,11 @@ impl ChartPanel {
             return false;
         };
         let (core, uid) = (hover.core, hover.uid);
+        let workspace_group = self.workspace_group.clone();
         self.backend.update(cx, |b, _| {
+            if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                return;
+            }
             if let Err(error) = b.session.cancel_order(core, uid) {
                 log::warn!("hotkey cancel hovered order failed: {error}");
             }
@@ -634,6 +660,9 @@ impl ChartPanel {
         if hit.on_start_cross {
             return false;
         }
+        if !self.workspace_action_allowed(&self.backend.read(cx), hit.core) {
+            return false;
+        }
         let price = hit.price as f64;
         self.order_drag = Some(OrderDrag {
             core: hit.core,
@@ -686,21 +715,16 @@ impl ChartPanel {
             self.apply_order_visual(cx);
             return true;
         }
-        self.pending_order_drag = Some(PendingOrderDrag {
-            core: drag.core,
-            uid: drag.uid,
-            kind: drag.kind,
-            price: drag.current_price as f32,
-            started: Instant::now(),
-        });
-        self.apply_order_visual(cx);
-        self.arm_order_drag_preview_timeout(cx);
         // Match Moonbot drag routing:
         // - Buy/Sell replaces that order leg through `move_order`. The core performs cancel-and-new;
         //   a new crossing Sell limit in the order book executes at market. This avoids leaving the
         //   reserve-limit orphan that a separate `DoSellOrder` path would create.
         // - Stop/Trailing/TakeProfit uses `move_order_stop_price` with an absolute price.
+        let workspace_group = self.workspace_group.clone();
         let sent = self.backend.update(cx, |b, _| {
+            if !b.workspace_action_allows_core(workspace_group.as_deref(), drag.core) {
+                return false;
+            }
             let price = drag.current_price;
             // Before moving a Sell line under panic sell, clear the panic flag for this order.
             // Otherwise the core's panic worker holds the price at the AllowedDrop floor and moves
@@ -768,7 +792,17 @@ impl ChartPanel {
                 }
             }
         });
-        if !sent {
+        if sent {
+            self.pending_order_drag = Some(PendingOrderDrag {
+                core: drag.core,
+                uid: drag.uid,
+                kind: drag.kind,
+                price: drag.current_price as f32,
+                started: Instant::now(),
+            });
+            self.apply_order_visual(cx);
+            self.arm_order_drag_preview_timeout(cx);
+        } else {
             self.pending_order_drag = None;
             self.apply_order_visual(cx);
         }

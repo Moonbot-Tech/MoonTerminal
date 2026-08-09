@@ -11,7 +11,7 @@
 //! All paths are based on `data_dir()`; on Windows, `data_dir() == exe_dir()`.
 //!
 //! UI settings and layout (plaintext `settings.toml`/`theme.toml`/`orders.toml`/
-//! `layout.toml`/`docks.json`/`detached.json`/`charts.json`) live in `cfg/` under
+//! `layout.toml`/`docks.json`/`auto_dock.json`/`detached.json`/`charts.json`) live in `cfg/` under
 //! `data_dir`. The data root retains the `servers.enc` secret, logs in `logs/`, and config
 //! snapshots in `backups/`; databases use `db_dir()` (`data/` on Windows, the data root
 //! elsewhere). See `config::backup`. Flat config files are moved to `cfg/` once at startup;
@@ -155,10 +155,22 @@ pub fn docks_path() -> PathBuf {
     cfg_dir().join("docks.json")
 }
 
+/// Shared topology-only Auto workspace layout as separate JSON.
+///
+/// This file never contains Classic dock panel state or detached-window records.
+pub fn auto_dock_path() -> PathBuf {
+    cfg_dir().join("auto_dock.json")
+}
+
 /// Detached GPUI shell dock panels (panel, source group, and window geometry) as separate JSON.
 /// Detached windows are restored at startup.
 pub fn detached_path() -> PathBuf {
     cfg_dir().join("detached.json")
+}
+
+/// Pending joint Classic dock/detached snapshot used to recover an interrupted two-file commit.
+pub fn window_state_pending_path() -> PathBuf {
+    cfg_dir().join("window-state.pending.json")
 }
 
 /// Chart-tab state (per-tab scale + detached-tab window geometry) as JSON. Detached tabs are
@@ -507,6 +519,7 @@ const CFG_FILES: &[&str] = &[
     "orders.toml",
     "layout.toml",
     "docks.json",
+    "auto_dock.json",
     "detached.json",
     "charts.json",
     "badges.json",

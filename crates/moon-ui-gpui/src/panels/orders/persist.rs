@@ -104,8 +104,7 @@ impl OrdersPanel {
         };
         let state = dock.read(app).dump(app);
         backend.update(app, |b, _| {
-            b.dock_states.insert(group, state);
-            b.dock_dirty = true;
+            b.store_classic_dock_state(group, state);
         });
     }
 }

@@ -60,6 +60,18 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 /// while the final bound prevents an endlessly busy strategy from looping forever.
 const PURGE_PASSES: usize = 3;
 
+/// Return whether a purge target remains inside the current Analytics workspace.
+///
+/// Args:
+///     workspace: Concrete Auto core ids, or `None` for Classic.
+///     core_uid: Core captured when the purge dialog opened.
+///
+/// Returns:
+///     `true` in Classic or while Auto still exposes the captured core.
+fn purge_core_visible(workspace: Option<&[u64]>, core_uid: u64) -> bool {
+    workspace.is_none_or(|cores| cores.contains(&core_uid))
+}
+
 /// One step of the purge, in the order the user is promised.
 ///
 /// Declaration order IS the run order, and `Ord` derives from it — the progress list compares
@@ -111,6 +123,8 @@ pub(super) enum PurgeFail {
 enum PurgeStop {
     /// The dialog was closed or replaced; there is nobody left to report to.
     Abandoned,
+    /// Auto ownership moved away from this operation's core between confirmed steps.
+    ScopeMoved,
     /// A specific step could not be sent or confirmed.
     Failed(PurgeStep, PurgeFail),
     /// The strategy is already confirmed deleted, but its folder request was not locally queued.
@@ -257,19 +271,68 @@ impl PurgeRun {
         cx.update(|cx| self.view.update(cx, edit).ok())
     }
 
-    /// Is this operation still the one the dialog is showing?
+    /// Return whether this operation still owns the dialog and its core remains visible.
     ///
     /// Re-checked immediately before every send, not merely when a step opens: each step awaits a
     /// background scan first, and Cancel, Escape or a replacement operation can land during that
     /// await. Without this, a cancelled purge would still fire its destructive command, with no
     /// dialog left to report it.
+    ///
+    /// Args:
+    ///     cx: Async application context used to resolve the current workspace and dialog owner.
+    ///
+    /// Returns:
+    ///     `true` only while the same operation is visible in Classic or its core remains in Auto.
     fn still_mine(&self, cx: &mut AsyncApp) -> bool {
         self.with_view(cx, |view, _| {
-            view.strat_purge
+            let Some(op) = view.strat_purge.as_ref().filter(|op| op.seq == self.seq) else {
+                return false;
+            };
+            let workspace = view
+                .workspace_scope
                 .as_ref()
-                .is_some_and(|op| op.seq == self.seq)
+                .map(|scope| scope.core_ids.as_slice());
+            purge_core_visible(workspace, op.core_uid)
         })
         .unwrap_or(false)
+    }
+
+    /// Return whether the same dialog operation now falls outside the Auto workspace.
+    ///
+    /// Args:
+    ///     cx: Async application context used to resolve the current workspace and dialog owner.
+    ///
+    /// Returns:
+    ///     `true` only for a live matching operation whose captured core is no longer visible.
+    fn scope_moved(&self, cx: &mut AsyncApp) -> bool {
+        self.with_view(cx, |view, _| {
+            let Some(op) = view.strat_purge.as_ref().filter(|op| op.seq == self.seq) else {
+                return false;
+            };
+            let workspace = view
+                .workspace_scope
+                .as_ref()
+                .map(|scope| scope.core_ids.as_slice());
+            !purge_core_visible(workspace, op.core_uid)
+        })
+        .unwrap_or(false)
+    }
+
+    /// Revalidate ownership immediately before one operation in the running sequence.
+    ///
+    /// Args:
+    ///     cx: Async application context used to resolve the current workspace and dialog owner.
+    ///
+    /// Returns:
+    ///     Success while the operation is current, or the precise reason it must stop.
+    fn guard_current(&self, cx: &mut AsyncApp) -> Result<(), PurgeStop> {
+        if self.still_mine(cx) {
+            Ok(())
+        } else if self.scope_moved(cx) {
+            Err(PurgeStop::ScopeMoved)
+        } else {
+            Err(PurgeStop::Abandoned)
+        }
     }
 
     /// Is the core connected right now? A retained snapshot is not evidence — `CoreStore` keeps a
@@ -292,8 +355,16 @@ impl PurgeRun {
             .unwrap_or(0)
     }
 
-    /// Publish the step the sequence is entering, after confirming the core can still receive it.
+    /// Publish the step the sequence is entering after revalidating scope and connectivity.
+    ///
+    /// Args:
+    ///     cx: Async application context used to validate and publish the step.
+    ///     step: Destructive sequence step about to begin.
+    ///
+    /// Returns:
+    ///     Success after publishing, or the reason the sequence must stop.
     fn open_step(&self, cx: &mut AsyncApp, step: PurgeStep) -> Result<(), PurgeStop> {
+        self.guard_current(cx)?;
         if !self.core_ready(cx) {
             return Err(PurgeStop::Failed(step, PurgeFail::CoreLost));
         }
@@ -312,8 +383,16 @@ impl PurgeRun {
         }
     }
 
-    /// The strategy's still-addressable rec ids.
-    async fn rec_ids(&mut self, step: PurgeStep) -> Result<Vec<i64>, PurgeStop> {
+    /// Read the strategy's still-addressable rec ids after revalidating workspace ownership.
+    ///
+    /// Args:
+    ///     cx: Async application context used to validate the current workspace.
+    ///     step: Step that should own a database read failure.
+    ///
+    /// Returns:
+    ///     The addressable record ids, or the reason the sequence must stop.
+    async fn rec_ids(&mut self, cx: &mut AsyncApp, step: PurgeStep) -> Result<Vec<i64>, PurgeStop> {
+        self.guard_current(cx)?;
         let (reader, key) = (self.reader.take(), self.key);
         let executor = self.executor.clone();
         let (reader, result) = executor
@@ -330,15 +409,21 @@ impl PurgeRun {
     /// Success proves only local queue acceptance. Any later serialization, socket, or protocol
     /// failure is logged on the feed thread and cannot reach this caller, so the caller must wait
     /// for separate core-originated evidence before advancing.
+    ///
+    /// Args:
+    ///     cx: Async application context used to validate scope and reach the session.
+    ///     step: Step that owns a local queue failure.
+    ///     command: One atomic session command to queue after validation.
+    ///
+    /// Returns:
+    ///     Success when the command entered the local queue, or the reason the sequence must stop.
     fn send(
         &self,
         cx: &mut AsyncApp,
         step: PurgeStep,
         command: impl FnOnce(&moon_core::session::SessionManager) -> anyhow::Result<()>,
     ) -> Result<(), PurgeStop> {
-        if !self.still_mine(cx) {
-            return Err(PurgeStop::Abandoned);
-        }
+        self.guard_current(cx)?;
         let queued = self
             .with_view(cx, |view, cx| {
                 command(&view.backend.read(cx).session).is_ok()
@@ -355,15 +440,21 @@ impl PurgeRun {
     ///
     /// Unlike [`Self::send`], a local failure has its own outcome because the Delete step has
     /// already succeeded and reporting that whole step as unsent would misstate the partial result.
+    ///
+    /// Args:
+    ///     cx: Async application context used to validate scope and reach the session.
+    ///     folder: Canonical empty folder path to delete.
+    ///     expected_placements: Live placement snapshot that makes deletion conditional.
+    ///
+    /// Returns:
+    ///     Success when the request entered the local queue, or the reason cleanup must stop.
     fn send_empty_folder(
         &self,
         cx: &mut AsyncApp,
         folder: String,
         expected_placements: Vec<(u64, String)>,
     ) -> Result<(), PurgeStop> {
-        if !self.still_mine(cx) {
-            return Err(PurgeStop::Abandoned);
-        }
+        self.guard_current(cx)?;
         let queued = self
             .with_view(cx, |view, cx| {
                 view.backend
@@ -395,6 +486,7 @@ impl PurgeRun {
         step: PurgeStep,
         inspect: impl FnOnce(&[StrategyRow]) -> T,
     ) -> Result<T, PurgeStop> {
+        self.guard_current(cx)?;
         let result = self.with_view(cx, |view, cx| {
             let backend = view.backend.read(cx);
             let core = backend.session.store().core(self.core_uid)?;
@@ -416,7 +508,7 @@ impl PurgeRun {
     /// fails, rather than deleting a strategy whose trades are still in the report.
     async fn purge_rows(&mut self, cx: &mut AsyncApp, step: PurgeStep) -> Result<(), PurgeStop> {
         for pass in 0..PURGE_PASSES {
-            let ids = self.rec_ids(step).await?;
+            let ids = self.rec_ids(cx, step).await?;
             if ids.is_empty() {
                 return Ok(());
             }
@@ -443,6 +535,15 @@ impl PurgeRun {
     ///
     /// The core commits the batch and echoes it back, and that echo is what clears the rows
     /// locally — so those ids leaving the replica IS the confirmation.
+    ///
+    /// Args:
+    ///     cx: Async application context used for workspace and report reads.
+    ///     step: Purge step whose confirmation is awaited.
+    ///     sent: Exact record ids queued by the completed atomic send.
+    ///     baseline: Report generation observed before that send.
+    ///
+    /// Returns:
+    ///     Success after every sent id disappears, or the reason the sequence must stop.
     async fn await_rows_gone(
         &mut self,
         cx: &mut AsyncApp,
@@ -455,6 +556,7 @@ impl PurgeRun {
         let mut seen_generation = baseline;
         loop {
             self.executor.timer(POLL).await;
+            self.guard_current(cx)?;
             if Instant::now() >= deadline {
                 return Err(PurgeStop::Failed(step, PurgeFail::Confirm));
             }
@@ -466,7 +568,7 @@ impl PurgeRun {
                 continue;
             }
             seen_generation = generation;
-            let left = self.rec_ids(step).await?;
+            let left = self.rec_ids(cx, step).await?;
             if !left.iter().any(|id| sent.contains(id)) {
                 return Ok(());
             }
@@ -478,6 +580,14 @@ impl PurgeRun {
     /// A core that leaves `Ready`, or disappears from the store entirely, fails as `CoreLost`:
     /// `store.core(..)` would otherwise yield `None`, which both predicates would read as "the
     /// strategy is gone" and report as success for a command that may never have left the machine.
+    ///
+    /// Args:
+    ///     cx: Async application context used for workspace and strategy reads.
+    ///     step: Step whose core acknowledgement is awaited.
+    ///     check: Predicate over the current strategy and core acknowledgement revision.
+    ///
+    /// Returns:
+    ///     Success once the predicate holds, or the reason the sequence must stop.
     async fn await_strategy(
         &self,
         cx: &mut AsyncApp,
@@ -486,6 +596,7 @@ impl PurgeRun {
     ) -> Result<(), PurgeStop> {
         let deadline = Instant::now() + STEP_TIMEOUT;
         loop {
+            self.guard_current(cx)?;
             let outcome = self
                 .with_view(cx, |view, cx| {
                     let backend = view.backend.read(cx);
@@ -727,11 +838,35 @@ impl AnalyticsView {
     }
 
     /// Start the ordered sequence for the open operation.
+    ///
+    /// Args:
+    ///     cx: Analytics context used to validate scope and spawn the sequence.
+    ///
+    /// Returns:
+    ///     Nothing; stale or non-ready confirmations remain command-free and visibly refused.
     fn confirm_purge(&mut self, cx: &mut Context<Self>) {
-        let Some(op) = self.strat_purge.as_mut() else {
+        let Some(op) = self
+            .strat_purge
+            .as_ref()
+            .filter(|op| matches!(op.state, PurgeState::Ready { .. }))
+        else {
             return;
         };
         let (seq, core_uid, sid) = (op.seq, op.core_uid, op.sid);
+        let workspace = self
+            .workspace_scope
+            .as_ref()
+            .map(|scope| scope.core_ids.as_slice());
+        if !purge_core_visible(workspace, core_uid) {
+            self.publish_purge(seq, cx, |op| {
+                op.state =
+                    PurgeState::CountFailed(t!("analytics.write_failed_stale", n = 1).to_string());
+            });
+            return;
+        }
+        let Some(op) = self.strat_purge.as_mut().filter(|op| op.seq == seq) else {
+            return;
+        };
         op.state = PurgeState::Running(PurgeStep::Rows);
         cx.notify();
 
@@ -766,6 +901,13 @@ impl AnalyticsView {
                             this.request_report_refresh(false, cx);
                         }
                         Err(PurgeStop::Abandoned) => {}
+                        Err(PurgeStop::ScopeMoved) => {
+                            this.publish_purge(seq, cx, |op| {
+                                op.state = PurgeState::CountFailed(
+                                    t!("analytics.write_failed_stale", n = 1).to_string(),
+                                );
+                            });
+                        }
                         Err(PurgeStop::FolderSend) => {
                             this.publish_purge(seq, cx, |op| {
                                 op.state = PurgeState::FolderSendFailed;

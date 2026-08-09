@@ -181,24 +181,8 @@ impl Render for Shell {
                 chrome_width,
                 cx,
             ))
-            // ── One DockArea: ChartTabs=center-left, Detects=right, Orders/utilities=bottom ──
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .w_full()
-                    .min_h(px(0.0))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .right_0()
-                            .bottom_0()
-                            .left_0()
-                            .child(self.dock.clone()),
-                    ),
-            )
+            // One DockArea: Classic keeps its local tree; Auto adds the rail around shared topology.
+            .child(self.workspace_body(chrome_width, p, cx))
             // ── Status bar, fully ported from egui's lower `shell::ui` panel ──
             .child(self.status_bar(conn, license, snap, book_levels, fps, chrome_width, cx))
             .child(

@@ -27,6 +27,8 @@ mod collect;
 mod columns;
 mod render;
 mod table;
+#[cfg(test)]
+mod tests;
 mod wallets;
 mod window;
 
@@ -52,6 +54,7 @@ use crate::Backend;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
 use moon_core::util::fmt;
@@ -87,7 +90,8 @@ pub struct AssetsView {
     pub(super) min_value_usd: f64,
     /// Top-bar threshold slider state, ranging from 0 through 100 USD in steps of 1, defaulting to 1.
     min_value_slider: Entity<MoonSliderState>,
-    /// Multi-selected core filter, like Orders and Report. Empty means every core in scope.
+    /// Retained core filter for Classic group views and the global aggregate view; empty means all
+    /// scoped cores. Group Auto pins its effective workspace scope without mutating this set.
     pub(super) sel_cores: HashSet<CoreId>,
     /// Whether the core list and Spot, Futures, and Quarterly wallet section is collapsed.
     pub(super) wallets_collapsed: bool,
@@ -160,6 +164,13 @@ impl AssetsView {
                 this.rebuild_cache(b);
                 cx.notify();
             }
+        })
+        .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            let backend = this.backend.clone();
+            this.rebuild_cache(backend.read(cx));
+            cx.notify();
         })
         .detach();
 
@@ -259,16 +270,21 @@ impl AssetsView {
         // Request transfer assets from every scoped core. Spot wallets feed both the selected
         // core's lower containers and the upper table because some exchanges, including Bitget,
         // expose purchased coins only through `transfer_assets`, not per-market balances.
-        let cores: Vec<CoreId> = this
+        let all_cores: Vec<CoreId> = this
             .scope_cores(this.backend.read(cx))
             .into_iter()
             .map(|(id, _)| id)
             .collect();
-        this.selected_core = cores.first().copied();
+        this.selected_core = all_cores.first().copied();
+        let query_cores: Vec<CoreId> = this
+            .query_cores(this.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
         // Restore the persisted field set before the first cache build so the initial frame already
         // renders the user's columns.
         this.apply_ctx_columns(cx);
-        for core in &cores {
+        for core in &query_cores {
             if let Err(error) = this.backend.read(cx).session.refresh_transfer_assets(*core) {
                 log::warn!(
                     "assets initial refresh failed for core {}: {error}",
@@ -310,18 +326,83 @@ impl AssetsView {
         })
     }
 
+    /// Resolve workspace ownership for a group view while leaving the global Assets window alone.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     Effective group scope, or `None` for the deliberately aggregate global view.
+    pub(super) fn effective_scope(&self, b: &Backend) -> Option<EffectiveCoreScope> {
+        let AssetsScope::Group(group) = &self.scope else {
+            return None;
+        };
+        let retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
+        let retained = if retained.is_empty() {
+            RetainedCoreScope::All
+        } else {
+            RetainedCoreScope::Explicit(&retained)
+        };
+        Some(b.effective_workspace_scope(group, retained))
+    }
+
+    /// Return the exact core/name pairs used by Assets queries and render caches.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing configured cores and workspace authority.
+    ///
+    /// Returns:
+    ///     Canonically ordered effective core/name pairs, or every core for global Assets.
+    pub(super) fn query_cores(&self, b: &Backend) -> Vec<(CoreId, String)> {
+        let all: Vec<(CoreId, String)> = self.scope_cores(b).into_iter().collect();
+        let Some(scope) = self.effective_scope(b) else {
+            return all;
+        };
+        all.into_iter()
+            .filter(|(core, _)| scope.contains(*core))
+            .collect()
+    }
+
+    /// Return the wallet-detail core visible under the effective workspace scope.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority.
+    ///
+    /// Returns:
+    ///     Auto's selected core, `None` for Auto Overview, otherwise the retained Classic core.
+    pub(super) fn effective_wallet_core(&self, b: &Backend) -> Option<CoreId> {
+        let scope = self.effective_scope(b);
+        let workspace_owned = scope
+            .as_ref()
+            .is_some_and(EffectiveCoreScope::is_workspace_owned);
+        let workspace_core = scope.as_ref().and_then(|scope| match scope.label() {
+            crate::workspace::EffectiveScopeLabel::Core(core) => Some(core),
+            crate::workspace::EffectiveScopeLabel::All
+            | crate::workspace::EffectiveScopeLabel::Selection(_)
+            | crate::workspace::EffectiveScopeLabel::Overview => None,
+        });
+        resolve_workspace_wallet_core(workspace_owned, workspace_core, self.selected_core)
+    }
+
     /// Toggles the multi-core filter. `None` represents All: a selection containing every scoped
     /// core collapses to the equivalent empty-means-all state; otherwise it selects every scoped
     /// core. Stale ids do not stand in for current cores. `Some(id)` toggles one core. The filter is
-    /// not persisted and reopens as All.
+    /// not persisted and reopens as All. Group Auto owns the effective scope, so this method leaves
+    /// the retained Classic selection unchanged.
     ///
     /// Args:
     ///     id: Core to toggle, or `None` for the All row.
     ///     cx: View context used to rebuild cached rows and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; the in-memory filter and cached rows are updated in place.
+    ///     Nothing; Classic or global mode updates the filter, while group Auto is a no-op.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
         let all: HashSet<CoreId> = self
             .scope_cores(self.backend.read(cx))
             .into_iter()
@@ -340,24 +421,31 @@ impl AssetsView {
         cx.notify();
     }
 
-    /// Toggle every still-available core from one clicked exchange section.
+    /// Toggle one exchange section in the retained Classic or global Assets filter.
     ///
     /// Empty means All before the click, so the first exchange selection becomes explicit. A
     /// fully selected exchange is removed without changing selections from other exchanges.
-    /// Rendered ids that left the current group or global scope are ignored.
+    /// Rendered ids that left the current group or global scope are ignored. Group Auto leaves the
+    /// retained Classic selection unchanged.
     ///
     /// Args:
     ///     exchange_cores: Core ids captured from one rendered exchange section.
     ///     cx: View context used to rebuild cached rows and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; a changed selection rebuilds the cache once, while a stale-only batch is a
-    ///     no-op.
+    ///     Nothing; a retained-scope change rebuilds once, while stale-only and group Auto calls
+    ///     are no-ops.
     pub(super) fn toggle_exchange_cores(
         &mut self,
         exchange_cores: Vec<CoreId>,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
         let available = self
             .scope_cores(self.backend.read(cx))
             .into_iter()
@@ -382,9 +470,25 @@ impl AssetsView {
         });
     }
 
-    /// Handles a Core-cell click as set-to-single or clear rather than a multi-toggle. Clicking the
-    /// sole selected core again resets the filter to All.
+    /// Handle a Core-cell click under global, Classic, or Auto authority.
+    ///
+    /// Global and Classic group views set the retained filter to the clicked core, or clear it when
+    /// that core is already the sole selection. Group Auto ignores the shortcut because only the
+    /// Shell rail owns selection.
+    ///
+    /// Args:
+    ///     id: Core identity from the clicked asset row.
+    ///     cx: View context used to update the owning authority and visible cache.
+    ///
+    /// Returns:
+    ///     Nothing.
     pub(super) fn filter_to_core(&mut self, id: CoreId, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
         if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
             self.sel_cores.clear();
         } else {
@@ -393,5 +497,56 @@ impl AssetsView {
         let backend = self.backend.clone();
         self.rebuild_cache(backend.read(cx));
         cx.notify();
+    }
+}
+
+/// Reconcile retained Classic Assets state only against the full configured/live scope.
+///
+/// Args:
+///     valid: Full configured/live scope, never the narrower effective Auto query scope.
+///     effective: Current query scope, supplied explicitly to prevent the two domains being
+///         accidentally conflated during future cache refactors.
+///     selected_filter: Retained Classic multi-core filter to prune for removed cores.
+///     selected_wallet: Retained Classic wallet/detail core to repair when removed.
+///
+/// Returns:
+///     `true` when the retained wallet/detail core changed and its cache must be rebuilt.
+fn reconcile_retained_assets_state(
+    valid: &[CoreId],
+    effective: &[CoreId],
+    selected_filter: &mut HashSet<CoreId>,
+    selected_wallet: &mut Option<CoreId>,
+) -> bool {
+    debug_assert!(effective.iter().all(|core| valid.contains(core)));
+    // Auto's one-core `effective` slice is not evidence that any retained Classic selection was
+    // removed from the configured/live universe.
+    selected_filter.retain(|core| valid.contains(core));
+    if selected_wallet.is_some_and(|core| valid.contains(&core)) {
+        return false;
+    }
+    let next = valid.first().copied();
+    let changed = *selected_wallet != next;
+    *selected_wallet = next;
+    changed
+}
+
+/// Resolve Auto's temporary wallet target without overwriting the retained Classic detail core.
+///
+/// Args:
+///     workspace_owned: Whether Auto currently owns the group panel's core selection.
+///     workspace_core: Selected Auto core, or `None` for Auto Overview.
+///     retained_core: User-selected Classic wallet/detail core.
+///
+/// Returns:
+///     Auto's exact selected core or Overview absence; otherwise the retained Classic core.
+fn resolve_workspace_wallet_core(
+    workspace_owned: bool,
+    workspace_core: Option<CoreId>,
+    retained_core: Option<CoreId>,
+) -> Option<CoreId> {
+    if workspace_owned {
+        workspace_core
+    } else {
+        retained_core
     }
 }

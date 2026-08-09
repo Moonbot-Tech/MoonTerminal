@@ -180,6 +180,25 @@ fn strategy_metadata_request(
     (periodic_refresh || published_scope != Some(&scope)).then_some(scope)
 }
 
+/// Return whether a completed read still belongs to the panel's current semantic query.
+///
+/// Args:
+///     request_id: Sequence captured when the background read started.
+///     current_id: Panel sequence at publication time.
+///     requested: Exact filter used by the background read.
+///     current: Filter represented by the controls and workspace at publication time.
+///
+/// Returns:
+///     `true` only when neither sequence nor any filter predicate drifted.
+fn report_query_result_is_current(
+    request_id: u64,
+    current_id: u64,
+    requested: &ReportFilter,
+    current: &ReportFilter,
+) -> bool {
+    request_id == current_id && requested == current
+}
+
 /// Read selector metadata when requested, rows, and totals from one WAL snapshot.
 ///
 /// `NotReady` means the reports replica is absent. `Failed` means opening the
@@ -273,7 +292,7 @@ impl ReportPanel {
         // pair is that one minute rather than an empty range.
         let date_to = pto.or_else(|| self.to_query.map(date_range::inclusive_end));
         ReportFilter {
-            core_uids: self.sel_cores.iter().copied().collect(),
+            core_uids: self.effective_core_ids(self.backend.read(cx)),
             date_from,
             date_to,
             // Normalize Russian-layout keystrokes for the SQL filter as well as the search popup;
@@ -354,6 +373,7 @@ impl ReportPanel {
 
         let request_id = self.query_seq;
         let filter = self.filter(cx);
+        let request_filter = filter.clone();
         let strategy_scope = strategy_metadata_request(
             &filter,
             self.last_strategy_scope.as_ref(),
@@ -378,7 +398,15 @@ impl ReportPanel {
 
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
-                    if this.query_seq != request_id {
+                    if !report_query_result_is_current(
+                        request_id,
+                        this.query_seq,
+                        &request_filter,
+                        &this.filter(cx),
+                    ) {
+                        this.query_inflight = false;
+                        this.needs_query = true;
+                        cx.notify();
                         return;
                     }
                     this.query_inflight = false;

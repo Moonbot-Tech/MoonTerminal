@@ -9,10 +9,11 @@
 //! figure will be drawn with ([`Target::ToolDefaults`], opened from the toolbar's settings button).
 //!
 //! Only the WRITE differs between the two, and it differs in exactly two functions — [`edit_style`]
-//! and [`edit_switch`]. A figure's edit goes through `Backend::edit_figure`, which persists the
-//! store and re-upserts an armed figure's blob; a tool default goes to `Backend::fig_style_mut` and
-//! `Backend::set_tool_setting`, where the next draft picks it up. Every row of this module calls
-//! one of those two and knows nothing else about where it is writing.
+//! and [`edit_switch`]. An authorized figure edit goes through `Backend::edit_figure`, which
+//! persists the store and re-upserts an armed figure's blob; a stale Alerts-owned figure is refused
+//! before that write. A tool default goes to `Backend::fig_style_mut` and
+//! `Backend::set_tool_setting`, where the next draft picks it up. Every row calls one of those two
+//! funnels and knows only the explicit [`WorkspaceAuthority`] supplied by its host.
 //!
 //! Two asymmetries between the targets are deliberate and are NOT "the same rows drifting apart":
 //! a host may inject an arbitrary-colour wheel (`custom_color`), which needs an `Entity` only the
@@ -20,7 +21,7 @@
 //! fill, because the alert blob has no field for one and the next reconcile would revert it.
 //!
 //! The CONTAINER is the host's, not this module's: over a chart the panel is placed at the clicked
-//! point and kept inside the slot that clips it, in the tab strip it hangs under its button, and in
+//! window point and snapped inside that window, in the tab strip it hangs under its button, and in
 //! the Alerts table it is a `MoonPopover` anchored to the row's gear — that host takes [`rows`]
 //! alone, because a popover paints its own surface. [`shell`] is the one frame this module owns,
 //! carrying the surface and the input guards for the two hosts that float over a chart.
@@ -52,11 +53,49 @@ pub(crate) struct FigStyleTarget {
 /// What the panel is aimed at.
 #[derive(Clone, PartialEq)]
 pub(crate) enum Target {
-    /// One figure already on a chart. Edits reach the store, the file and the core.
+    /// One figure already on a chart. Authorized edits reach the store, file, and core; a scoped
+    /// host may refuse the write when this core is no longer visible.
     Figure(FigStyleTarget),
     /// The style and switches the next figure of this tool will be drawn with. Edits reach nothing
     /// already on the chart.
     ToolDefaults(FigureTool),
+}
+
+/// Workspace authority applied when a delayed figure-settings callback finally dispatches.
+///
+/// Chart and tool-default hosts are deliberately unscoped. A group-hosted Alerts popover carries
+/// its owner so every style or switch write can reject a row that stopped belonging to the active
+/// Auto workspace after the popover was rendered.
+#[derive(Clone)]
+pub(crate) enum WorkspaceAuthority {
+    /// Preserve the existing chart and tool-default behavior.
+    Unscoped,
+    /// Revalidate a figure core against this group before writing.
+    Group(String),
+}
+
+impl WorkspaceAuthority {
+    /// Return the group/core pair that needs a live workspace check.
+    ///
+    /// Tool defaults have no core identity and unscoped chart editors intentionally retain their
+    /// existing authority, so both return `None`.
+    fn guarded_core<'a>(&'a self, target: &Target) -> Option<(&'a str, CoreId)> {
+        match (self, target) {
+            (Self::Group(group), Target::Figure(target)) => Some((group, target.core)),
+            _ => None,
+        }
+    }
+
+    /// Check the current backend authority for a delayed settings write.
+    ///
+    /// Returns `true` for explicitly unscoped callers and tool defaults, or the backend's current
+    /// Auto-workspace decision for an Alerts-owned figure.
+    fn allows(&self, backend: &Backend, target: &Target) -> bool {
+        match self.guarded_core(target) {
+            Some((group, core)) => backend.workspace_action_allows_core(Some(group), core),
+            None => true,
+        }
+    }
 }
 
 /// Everything the panel draws, read once per render so the store is not borrowed while building
@@ -129,9 +168,18 @@ fn opacity_step(a: u8, up: bool) -> u8 {
 /// Applies a style edit to whichever target the panel is aimed at.
 ///
 /// The single write path for everything but the tool's own switches, so no row can reach past it
-/// and edit one target while the panel is showing the other.
-/// Returns whether anything changed, so a click that moved nothing wakes no observer.
-fn edit_style(b: &mut Backend, target: &Target, f: impl FnOnce(&mut DrawStyle) -> bool) -> bool {
+/// and edit one target while the panel is showing the other. `authority` is checked before the
+/// callback, so a stale group-owned figure changes nothing. Returns whether an authorized edit
+/// changed anything, so a refused click or one that moved nothing wakes no observer.
+fn edit_style(
+    b: &mut Backend,
+    target: &Target,
+    authority: &WorkspaceAuthority,
+    f: impl FnOnce(&mut DrawStyle) -> bool,
+) -> bool {
+    if !authority.allows(b, target) {
+        return false;
+    }
     match target {
         Target::Figure(t) => b.edit_figure(t.core, &t.market, t.id, |fig| {
             let mut style = fig.style();
@@ -142,7 +190,19 @@ fn edit_style(b: &mut Backend, target: &Target, f: impl FnOnce(&mut DrawStyle) -
 }
 
 /// Applies one of the tool's own switches to whichever target the panel is aimed at.
-fn edit_switch(b: &mut Backend, target: &Target, key: &str, on: bool) -> bool {
+///
+/// `authority` is checked before either the figure or tool-default writer. Returns `false` when a
+/// scoped figure is stale or the selected switch already has the requested value.
+fn edit_switch(
+    b: &mut Backend,
+    target: &Target,
+    authority: &WorkspaceAuthority,
+    key: &str,
+    on: bool,
+) -> bool {
+    if !authority.allows(b, target) {
+        return false;
+    }
     match target {
         Target::Figure(t) => b.edit_figure(t.core, &t.market, t.id, |fig| {
             fig.kind.shape_mut().set_setting(key, on)
@@ -158,9 +218,12 @@ fn edit_switch(b: &mut Backend, target: &Target, key: &str, on: bool) -> bool {
 /// `custom_color` is the host's arbitrary-colour picker, placed at the end of the swatch row. It
 /// needs an `Entity` of its own to hold the open/closed wheel, which belongs to the view that hosts
 /// the panel rather than to the panel; a host without one passes `None` and offers the swatches.
+/// `authority` is cloned into every write callback so an Alerts-hosted surface can refuse a stale
+/// core while chart and tool-default hosts remain explicitly unscoped.
 pub(crate) fn rows<V: 'static>(
     backend: &Entity<Backend>,
     target: &Target,
+    authority: WorkspaceAuthority,
     custom_color: Option<AnyElement>,
     cx: &mut Context<V>,
 ) -> Option<AnyElement> {
@@ -179,6 +242,7 @@ pub(crate) fn rows<V: 'static>(
                 .child(swatch_row(
                     backend,
                     target,
+                    &authority,
                     "figset-color",
                     snap.style.color,
                     true,
@@ -189,6 +253,7 @@ pub(crate) fn rows<V: 'static>(
         .child(stepper_row(
             backend,
             target,
+            &authority,
             "figset-th",
             &t!("chart.fig.thickness"),
             format!("{:.1}", snap.style.thickness),
@@ -208,6 +273,7 @@ pub(crate) fn rows<V: 'static>(
         .child(stepper_row(
             backend,
             target,
+            &authority,
             "figset-op",
             &t!("chart.fig.opacity"),
             format!(
@@ -224,15 +290,16 @@ pub(crate) fn rows<V: 'static>(
             },
         ))
         .child(label(&t!("chart.fig.kind")))
-        .child(kind_row(backend, target, snap.style.kind));
+        .child(kind_row(backend, target, &authority, snap.style.kind));
 
     if snap.fills {
         rows = rows
             .child(label(&t!("chart.fig.fill")))
-            .child(fill_row(backend, target, &snap, p, cx));
+            .child(fill_row(backend, target, &authority, &snap, p, cx));
         rows = rows.child(stepper_row(
             backend,
             target,
+            &authority,
             "figset-fop",
             &t!("chart.fig.fill_opacity"),
             format!(
@@ -260,6 +327,7 @@ pub(crate) fn rows<V: 'static>(
         rows = rows.child(label(&t!("chart.fig.parts"))).child(switch_row(
             backend,
             target,
+            &authority,
             &snap.switches,
         ));
     }
@@ -305,14 +373,22 @@ fn shell<V: 'static>(id: &'static str, cx: &mut Context<V>) -> Stateful<Div> {
 /// replaced a hand-written clamp against the chart slot: the clamp had to know the slot's size, its
 /// scale factor and a guess at how much of the panel must stay visible, and it still left the panel
 /// running under the dock below, where the slot clipped it instead of scrolling it. The window is
-/// the only box that can answer "does this fit", so it is asked.
+/// the only box that can answer "does this fit", so it is asked. `authority` governs every delayed
+/// write from the returned panel.
 pub(crate) fn render<V: 'static>(
     backend: &Entity<Backend>,
     target: &FigStyleTarget,
+    authority: WorkspaceAuthority,
     at: Point<Pixels>,
     cx: &mut Context<V>,
 ) -> Option<AnyElement> {
-    let content = rows(backend, &Target::Figure(target.clone()), None, cx)?;
+    let content = rows(
+        backend,
+        &Target::Figure(target.clone()),
+        authority,
+        None,
+        cx,
+    )?;
     Some(
         deferred(
             anchored()
@@ -338,13 +414,21 @@ pub(crate) fn render<V: 'static>(
 /// Positioned by its trigger rather than by the window: it hangs from a button in the tab strip,
 /// which never moves out from under it. The height is a fixed cap and the content scrolls inside
 /// it, which is what keeps a ratio scale's eleven switches reachable in a short window.
+/// `authority` is explicit even though the toolbar currently supplies `Unscoped` tool defaults.
 pub(crate) fn render_tool_defaults<V: 'static>(
     backend: &Entity<Backend>,
     tool: FigureTool,
+    authority: WorkspaceAuthority,
     custom_color: Option<AnyElement>,
     cx: &mut Context<V>,
 ) -> Option<AnyElement> {
-    let content = rows(backend, &Target::ToolDefaults(tool), custom_color, cx)?;
+    let content = rows(
+        backend,
+        &Target::ToolDefaults(tool),
+        authority,
+        custom_color,
+        cx,
+    )?;
     Some(
         shell("figstyle-tool-panel", cx)
             .top_full()
@@ -359,10 +443,12 @@ pub(crate) fn render_tool_defaults<V: 'static>(
     )
 }
 
-/// A row of colour swatches writing either the line colour or the fill colour.
+/// A row of colour swatches writing either the line colour or the fill colour. Every swatch clones
+/// `authority` and refuses a stale scoped figure before changing its style.
 fn swatch_row<V: 'static>(
     backend: &Entity<Backend>,
     target: &Target,
+    authority: &WorkspaceAuthority,
     id_prefix: &'static str,
     current: [u8; 4],
     line: bool,
@@ -374,6 +460,7 @@ fn swatch_row<V: 'static>(
         let sw = *sw;
         let backend = backend.clone();
         let target = target.clone();
+        let authority = authority.clone();
         let selected = current[..3] == sw[..3] && (line || current[3] > 0);
         row = row.child(
             div()
@@ -393,7 +480,7 @@ fn swatch_row<V: 'static>(
                 .cursor_pointer()
                 .on_click(move |_, _w, app| {
                     backend.update(app, |b, bcx| {
-                        let changed = edit_style(b, &target, |s| {
+                        let changed = edit_style(b, &target, &authority, |s| {
                             // Opacity is a separate control; picking a colour must not reset it.
                             if line {
                                 let next = [sw[0], sw[1], sw[2], s.color[3]];
@@ -426,10 +513,12 @@ fn swatch_row<V: 'static>(
 }
 
 /// The fill row: the "no fill" cell plus either the swatches or, for a tool that colours itself
-/// from a typed scale, a single cell that switches the fill back on in the scale's own hues.
+/// from a typed scale, a single cell that switches the fill back on in the scale's own hues. All
+/// callbacks carry `authority` through the shared style-write funnel.
 fn fill_row<V: 'static>(
     backend: &Entity<Backend>,
     target: &Target,
+    authority: &WorkspaceAuthority,
     snap: &Snapshot,
     p: MoonPalette,
     cx: &mut Context<V>,
@@ -437,6 +526,7 @@ fn fill_row<V: 'static>(
     let has_fill = snap.style.fill[3] > 0;
     let backend_off = backend.clone();
     let target_off = target.clone();
+    let authority_off = authority.clone();
     let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap().child(
         div()
             .id("figset-fill-off")
@@ -459,7 +549,7 @@ fn fill_row<V: 'static>(
             })
             .on_click(move |_, _w, app| {
                 backend_off.update(app, |b, bcx| {
-                    if edit_style(b, &target_off, |s| {
+                    if edit_style(b, &target_off, &authority_off, |s| {
                         let changed = s.fill[3] != 0;
                         s.fill[3] = 0;
                         changed
@@ -472,6 +562,7 @@ fn fill_row<V: 'static>(
     if let Some([r, g, b]) = snap.scale_swatch {
         let backend_on = backend.clone();
         let target_on = target.clone();
+        let authority_on = authority.clone();
         row = row.child(
             div()
                 .id("figset-fill-scale")
@@ -492,7 +583,7 @@ fn fill_row<V: 'static>(
                 })
                 .on_click(move |_, _w, app| {
                     backend_on.update(app, |b, bcx| {
-                        if edit_style(b, &target_on, |s| {
+                        if edit_style(b, &target_on, &authority_on, |s| {
                             if s.fill[3] != 0 {
                                 return false;
                             }
@@ -509,6 +600,7 @@ fn fill_row<V: 'static>(
     row.child(swatch_row(
         backend,
         target,
+        authority,
         "figset-fill",
         snap.style.fill,
         false,
@@ -517,11 +609,13 @@ fn fill_row<V: 'static>(
     .into_any_element()
 }
 
-/// A label, a minus, a value and a plus — the shape every numeric setting takes here.
+/// A label, a minus, a value and a plus — the shape every numeric setting takes here. The two
+/// delayed buttons clone `authority` and refuse stale scoped figures before applying `edit`.
 #[allow(clippy::too_many_arguments)]
 fn stepper_row<V: 'static>(
     backend: &Entity<Backend>,
     target: &Target,
+    authority: &WorkspaceAuthority,
     id_prefix: &'static str,
     text: &str,
     value: String,
@@ -533,6 +627,7 @@ fn stepper_row<V: 'static>(
     let btn = |glyph: &'static str, up: bool| {
         let backend = backend.clone();
         let target = target.clone();
+        let authority = authority.clone();
         MoonButton::new(ElementId::Name(SharedString::from(format!(
             "{id_prefix}-{}",
             if up { "up" } else { "dn" }
@@ -542,7 +637,7 @@ fn stepper_row<V: 'static>(
         .variant(MoonButtonVariant::Ghost)
         .on_click(move |_, _w, app| {
             backend.update(app, |b, bcx| {
-                if edit_style(b, &target, |s| edit(s, up)) {
+                if edit_style(b, &target, &authority, |s| edit(s, up)) {
                     bcx.notify();
                 }
             });
@@ -565,12 +660,19 @@ fn stepper_row<V: 'static>(
 }
 
 /// The five line kinds as buttons rather than a dropdown: five is few enough to show at once, and
-/// a row of chips needs no state of its own to live in the view that hosts this panel.
-fn kind_row(backend: &Entity<Backend>, target: &Target, current: LineKind) -> impl IntoElement {
+/// a row of chips needs no state of its own to live in the view that hosts this panel. Each button
+/// carries `authority` through the shared style writer.
+fn kind_row(
+    backend: &Entity<Backend>,
+    target: &Target,
+    authority: &WorkspaceAuthority,
+    current: LineKind,
+) -> impl IntoElement {
     let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap();
     for (i, kind) in LineKind::ALL.into_iter().enumerate() {
         let backend = backend.clone();
         let target = target.clone();
+        let authority = authority.clone();
         let selected = kind == current;
         row = row.child(
             MoonButton::new(ElementId::Name(SharedString::from(format!(
@@ -586,7 +688,7 @@ fn kind_row(backend: &Entity<Backend>, target: &Target, current: LineKind) -> im
             .selected(selected)
             .on_click(move |_, _w, app| {
                 backend.update(app, |b, bcx| {
-                    if edit_style(b, &target, |s| {
+                    if edit_style(b, &target, &authority, |s| {
                         let changed = s.kind != kind;
                         s.kind = kind;
                         changed
@@ -602,16 +704,19 @@ fn kind_row(backend: &Entity<Backend>, target: &Target, current: LineKind) -> im
 }
 
 /// The tool's own switches, as chips that read as pressed when on. Labelled by the tool, so this
-/// row draws a ratio scale's levels without knowing what a level is.
+/// row draws a ratio scale's levels without knowing what a level is. Each chip carries `authority`
+/// through the shared switch writer and may refuse a stale group-owned figure.
 fn switch_row(
     backend: &Entity<Backend>,
     target: &Target,
+    authority: &WorkspaceAuthority,
     switches: &[ToolSetting],
 ) -> impl IntoElement {
     let mut row = h_flex().items_center().gap(px(3.0)).flex_wrap();
     for (i, s) in switches.iter().enumerate() {
         let backend = backend.clone();
         let target = target.clone();
+        let authority = authority.clone();
         let key = s.key.clone();
         let on = s.on;
         row = row.child(
@@ -628,7 +733,7 @@ fn switch_row(
             .selected(on)
             .on_click(move |_, _w, app| {
                 backend.update(app, |b, bcx| {
-                    if edit_switch(b, &target, &key, !on) {
+                    if edit_switch(b, &target, &authority, &key, !on) {
                         bcx.notify();
                     }
                 });

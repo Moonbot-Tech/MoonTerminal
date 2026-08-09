@@ -11,6 +11,9 @@
 mod cards;
 mod popup;
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
@@ -80,6 +83,15 @@ const MAX_DETECT_BTNS: usize = 48;
 const DEFAULT_SERVER_COLOR: [u8; 3] = [0xff, 0xb3, 0x47];
 
 impl DetectsPanel {
+    /// Build a group collector whose retained cards are filtered only at presentation time.
+    ///
+    /// Args:
+    ///     backend: Shared terminal state and workspace authority.
+    ///     group: Window group whose detection feeds are continuously ingested.
+    ///     cx: Panel context used to register data, workspace, and settings observers.
+    ///
+    /// Returns:
+    ///     Initialized detection panel with group-wide cursors and retained cards.
     pub fn new(backend: Entity<Backend>, group: String, cx: &mut Context<Self>) -> Self {
         let initial_sig = detects_sig(backend.read(cx), &group);
         cx.observe(&backend, |this, backend, cx| {
@@ -95,6 +107,13 @@ impl DetectsPanel {
             if changed {
                 cx.notify();
             }
+        })
+        .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |_this, _revision, cx| {
+            // Detection cursors and retained cards remain group-wide. A scope change only alters
+            // presentation, so repaint without ingesting or discarding anything.
+            cx.notify();
         })
         .detach();
         let initial_backend = backend.clone();
@@ -331,30 +350,60 @@ impl DetectsPanel {
         .detach();
     }
 
-    /// Removes this card and requests its market on the group's Main chart through `Backend`.
+    /// Remove an authorized card and request its market on the group's Main chart.
+    ///
+    /// Args:
+    ///     core: Core captured by the rendered detection card.
+    ///     market: Exact captured market.
+    ///     cx: Panel context used to revalidate authority and update the queue.
+    ///
+    /// Returns:
+    ///     Nothing; a stale callback leaves both the card and chart request unchanged.
     fn open(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        let authorized = self.backend.update(cx, |b, bcx| {
+            let authorized =
+                b.open_on_main_if_authorized(Some(&group), (core, market.clone()), false);
+            if authorized {
+                bcx.notify();
+            }
+            authorized
+        });
+        if !authorized {
+            return;
+        }
         self.items
             .retain(|it| !(it.core == core && it.market == market));
-        self.backend.update(cx, |b, bcx| {
-            b.open_on_main((core, market.clone()), false);
-            bcx.notify();
-        });
         self.arm_prune_timer(cx);
         cx.notify();
     }
 
-    /// Removes this card and requests a custom comparison tab through `Backend`. The group's
+    /// Remove an authorized card and request a custom comparison tab through `Backend`. The group's
     /// `ChartTabs` handler focuses an existing tab with the same coin label or creates a horizontal
     /// tab anchored on this market, adds its exact market from other group cores with at most one
     /// core per market-data provider, pins every chart, and enables anchor lock and broom mode.
+    ///
+    /// Args:
+    ///     core: Core captured by the rendered detection card.
+    ///     market: Exact captured market used as the comparison anchor.
+    ///     cx: Panel context used to revalidate authority and update the queue.
+    ///
+    /// Returns:
+    ///     Nothing; a stale callback leaves both the card and comparison request unchanged.
     fn open_compare(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        let authorized = self.backend.update(cx, |b, bcx| {
+            let authorized = b.open_compare_if_authorized(Some(&group), (core, market.clone()));
+            if authorized {
+                bcx.notify();
+            }
+            authorized
+        });
+        if !authorized {
+            return;
+        }
         self.items
             .retain(|it| !(it.core == core && it.market == market));
-        self.backend.update(cx, |b, bcx| {
-            b.open_compare_request = Some((core, market.clone()));
-            b.open_compare_request_rev = b.open_compare_request_rev.wrapping_add(1);
-            bcx.notify();
-        });
         self.arm_prune_timer(cx);
         cx.notify();
     }
@@ -398,6 +447,14 @@ impl Panel for DetectsPanel {
 }
 
 impl Render for DetectsPanel {
+    /// Render retained detection cards visible in the current effective workspace scope.
+    ///
+    /// Args:
+    ///     _window: Owning window; unused because card interactions use the application context.
+    ///     cx: Panel context providing workspace scope, theme, and configuration.
+    ///
+    /// Returns:
+    ///     Toolbar and filtered card grid without discarding out-of-scope retained cards.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let is_light = p.is_light();
@@ -409,6 +466,12 @@ impl Render for DetectsPanel {
         // The chart theme supplies colors for card candle and line vectors.
         let theme = self.backend.read(cx).config.chart_theme().clone();
         let now = now_unix_ms();
+        let visible_cores = self
+            .backend
+            .read(cx)
+            .effective_workspace_scope(&self.group, crate::workspace::RetainedCoreScope::All)
+            .ids()
+            .to_vec();
 
         // Place the gear-triggered configuration toolbar and divider above the feed.
         let toolbar = popup::toolbar(self, &cfg, p, cx);
@@ -417,7 +480,13 @@ impl Render for DetectsPanel {
         // Render fixed-size cards in reverse insertion order in a wrapping grid. Newly inserted
         // markets appear first; a repeated core-market detection refreshes its existing position.
         let mut container = h_flex().flex_wrap().gap_1p5().content_start();
-        for (i, it) in self.items.iter().enumerate().rev() {
+        for (i, it) in self
+            .items
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, item)| detection_core_visible(item.core, &visible_cores))
+        {
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
             let (core, market) = (it.core, it.market.clone());
             let market_rmb = it.market.clone();
@@ -458,4 +527,16 @@ impl Render for DetectsPanel {
             .child(divider)
             .child(scroll)
     }
+}
+
+/// Return whether a retained detection card belongs to the current presentation scope.
+///
+/// Args:
+///     core: Core attached to one retained card.
+///     visible: Effective workspace core ids.
+///
+/// Returns:
+///     `true` only when presentation may render the retained card.
+fn detection_core_visible(core: CoreId, visible: &[CoreId]) -> bool {
+    visible.contains(&core)
 }

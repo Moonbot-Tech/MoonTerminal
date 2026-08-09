@@ -1020,9 +1020,21 @@ fn meta_delete(conn: &Connection, key: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Save the Report sort key and direction as one atomic SQLite statement.
+///
+/// Args:
+///     conn: Open report metadata connection.
+///     key: Runtime column name.
+///     desc: Whether the selected column sorts descending.
+///
+/// Returns:
+///     Nothing; preference write failures remain non-fatal.
 pub fn save_sort(conn: &Connection, key: &str, desc: bool) {
-    let _ = meta_set(conn, "sort_key", key);
-    let _ = meta_set(conn, "sort_desc", if desc { "1" } else { "0" });
+    let _ = conn.execute(
+        "INSERT INTO app_meta(key,value) VALUES('sort_key',?1),('sort_desc',?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        rusqlite::params![key, if desc { "1" } else { "0" }],
+    );
 }
 
 /// Storage key for the Report comment pane in one host.

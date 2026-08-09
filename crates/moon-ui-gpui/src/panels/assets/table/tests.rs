@@ -1,6 +1,8 @@
+//! Regression tests for Assets table columns and scope-sensitive Market Sell actions.
+
 // Explicit imports, NOT `use super::*`: the parent re-exports `gpui::*`, which carries its
 // own `test` and shadows the built-in attribute — `#[test]` then expands recursively.
-use super::assets_columns;
+use super::{AssetsScope, assets_columns, market_sell_core_is_authorized};
 use crate::panels::assets::columns::AssetCol;
 
 /// Pins `.no_grow()` on the actions column of
@@ -37,4 +39,47 @@ fn the_columns_follow_the_selected_fields_exactly() {
     let columns = assets_columns(&[AssetCol::Coin, AssetCol::Pnl]);
     let keys: Vec<&str> = columns.iter().map(|c| c.key.as_ref()).collect();
     assert_eq!(keys, vec!["coin", "pnl"]);
+}
+
+/// `table.rs:market_sell_core_is_authorized` must reject a group dialog after navigation removes
+/// its captured core, while the explicitly global Assets window keeps its prior authority.
+///
+/// Mutation: treat every confirmation as global or test only whether the current scope is nonempty.
+/// The stale dialog could then sell on core 7 while Auto shows core 9.
+#[test]
+fn stale_market_sell_dialog_cannot_target_the_previous_auto_core() {
+    let group = AssetsScope::Group("desk".to_string());
+    let global = AssetsScope::All;
+
+    assert!(market_sell_core_is_authorized(&group, Some(&[7]), 7));
+    assert!(!market_sell_core_is_authorized(&group, Some(&[9]), 7));
+    assert!(!market_sell_core_is_authorized(&group, None, 7));
+    assert!(market_sell_core_is_authorized(&global, None, 7));
+}
+
+/// The Market Sell Yes callback must re-read and validate effective scope before either command.
+///
+/// Mutation: bypass the helper in the dialog callback. The pure decision test remains green, but
+/// this wiring assertion reddens before a stale confirmation can submit the sell.
+#[test]
+fn market_sell_yes_revalidates_scope_before_dispatch() {
+    let source = include_str!("../table.rs");
+    let callback = source
+        .split_once("MoonButton::new(\"assets-msell-yes\")")
+        .expect("Market Sell Yes callback must exist")
+        .1;
+    let scope_read = callback
+        .find("let effective_scope = this.effective_scope(b);")
+        .expect("Yes must re-read current effective scope");
+    let authority = callback
+        .find("market_sell_core_is_authorized(")
+        .expect("Yes must validate the captured core");
+    let position = callback
+        .find("b.session.market_sell_position(")
+        .expect("position sell command must remain reachable");
+    let token = callback
+        .find("b.session.market_sell_token(")
+        .expect("token sell command must remain reachable");
+
+    assert!(scope_read < authority && authority < position && authority < token);
 }

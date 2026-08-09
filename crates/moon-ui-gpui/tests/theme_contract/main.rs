@@ -23,3 +23,4 @@ mod strategies;
 mod theme;
 mod tuner;
 mod windowing;
+mod workspace;

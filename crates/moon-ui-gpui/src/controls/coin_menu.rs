@@ -58,6 +58,10 @@ pub struct CoinMenuCtx {
     pub strat_name: Option<String>,
     /// Order UID enabling the order section. None represents a token point without an order.
     pub order_uid: Option<u64>,
+    /// Group whose current workspace scope authorizes mutating actions. Group panels supply their
+    /// owner; group-owned chart lines retain that group, while global windows and standalone
+    /// reports supply `None`.
+    pub workspace_group: Option<String>,
     /// Side for chart lines. A table supplies None, producing Edit and Cancel order actions.
     pub side: Option<OrderSide>,
     /// Order position direction used by `join_sells`.
@@ -90,6 +94,14 @@ pub fn open_coin_menu(
 
 /// Builds context-dependent entries. It reads core state through `cx` to mark existing blacklist
 /// membership and gates the strategy entry on its schema.
+///
+/// Args:
+///     ctx: Captured row or chart context, including optional workspace mutation authority.
+///     backend: Shared live terminal and workspace state.
+///     cx: Application context used to read initial checked-state snapshots.
+///
+/// Returns:
+///     Navigation and currently applicable mutation entries for the clicked token or order.
 fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
     let b = backend.read(cx);
     let core = ctx.core;
@@ -102,13 +114,19 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
     if has_market && ctx.origin != CoinMenuOrigin::ChartLine {
         let backend_open = backend.clone();
         let market = ctx.market.clone();
+        let workspace_group = ctx.workspace_group.clone();
         items.push(
             MoonMenuItem::with_key("coin-open", t!("coin_menu.open").to_string()).on_click(
                 move |_, window, app| {
                     window.close_context_menu(app);
                     backend_open.update(app, |b, bcx| {
-                        b.open_on_main((core, market.clone()), false);
-                        bcx.notify();
+                        if b.open_on_main_if_authorized(
+                            workspace_group.as_deref(),
+                            (core, market.clone()),
+                            false,
+                        ) {
+                            bcx.notify();
+                        }
                     });
                 },
             ),
@@ -117,14 +135,18 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
     if has_market {
         let backend_cmp = backend.clone();
         let market = ctx.market.clone();
+        let workspace_group = ctx.workspace_group.clone();
         items.push(
             MoonMenuItem::with_key("coin-compare", t!("coin_menu.compare").to_string()).on_click(
                 move |_, window, app| {
                     window.close_context_menu(app);
                     backend_cmp.update(app, |b, bcx| {
-                        b.open_compare_request = Some((core, market.clone()));
-                        b.open_compare_request_rev = b.open_compare_request_rev.wrapping_add(1);
-                        bcx.notify();
+                        if b.open_compare_if_authorized(
+                            workspace_group.as_deref(),
+                            (core, market.clone()),
+                        ) {
+                            bcx.notify();
+                        }
                     });
                 },
             ),
@@ -144,6 +166,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
         {
             let backend_bl = backend.clone();
             let coin_c = coin.clone();
+            let workspace_group = ctx.workspace_group.clone();
             items.push(
                 MoonMenuItem::with_key(
                     "coin-bl-core",
@@ -152,7 +175,11 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                 .checked(in_core)
                 .on_click(move |_, window, app| {
                     window.close_context_menu(app);
-                    backend_bl.update(app, |b, _| add_to_core_blacklist(b, core, &coin_c));
+                    backend_bl.update(app, |b, _| {
+                        if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core]) {
+                            add_to_core_blacklist(b, core, &coin_c);
+                        }
+                    });
                 }),
             );
         }
@@ -165,6 +192,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                 .all(|&c| blacklist_contains(&core_blacklist(b, c).1, &coin));
             let backend_m = backend.clone();
             let coin_m = coin.clone();
+            let workspace_group = ctx.workspace_group.clone();
             items.push(
                 MoonMenuItem::with_key(
                     "coin-bl-cores",
@@ -174,6 +202,9 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                 .on_click(move |_, window, app| {
                     window.close_context_menu(app);
                     backend_m.update(app, |b, _| {
+                        if !workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
+                            return;
+                        }
                         for &c in &cores {
                             add_to_core_blacklist(b, c, &coin_m);
                         }
@@ -193,13 +224,21 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                 };
                 let backend_s = backend.clone();
                 let coin_s = coin.clone();
+                let workspace_group = ctx.workspace_group.clone();
                 items.push(
                     MoonMenuItem::with_key("coin-bl-strat", label)
                         .checked(in_strat)
                         .on_click(move |_, window, app| {
                             window.close_context_menu(app);
                             backend_s.update(app, |b, _| {
-                                add_to_strategy_blacklist(b, core, sid, &coin_s)
+                                if workspace_action_allows_cores(
+                                    b,
+                                    workspace_group.as_deref(),
+                                    &[core],
+                                ) && strategy_has_blacklist_field(b, core, sid)
+                                {
+                                    add_to_strategy_blacklist(b, core, sid, &coin_s);
+                                }
                             });
                         }),
                 );
@@ -211,6 +250,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
     if let Some(sid) = ctx.strat_id {
         items.push(MoonMenuItem::separator());
         let backend_g = backend.clone();
+        let workspace_group = ctx.workspace_group.clone();
         items.push(
             MoonMenuItem::with_key("coin-strat-goto", t!("coin_menu.strategy_goto").to_string())
                 .on_click(move |_, window, app| {
@@ -220,6 +260,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                         backend_g.clone(),
                         core,
                         sid,
+                        workspace_group.clone(),
                         Some(window.window_handle()),
                         owner_display,
                         app,
@@ -232,11 +273,25 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
     if let Some(uid) = ctx.order_uid {
         items.push(MoonMenuItem::separator());
         let backend_e = backend.clone();
+        let workspace_group = ctx.workspace_group.clone();
         items.push(
             MoonMenuItem::with_key("coin-order-edit", t!("chart.order_menu.edit").to_string())
                 .on_click(move |_, window, app| {
                     window.close_context_menu(app);
-                    crate::panels::open_order_edit(backend_e.clone(), core, uid, window, app);
+                    let authorized = backend_e.update(app, |b, _| {
+                        workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
+                    });
+                    if !authorized {
+                        return;
+                    }
+                    crate::panels::open_order_edit(
+                        backend_e.clone(),
+                        workspace_group.clone(),
+                        core,
+                        uid,
+                        window,
+                        app,
+                    );
                 }),
         );
         match ctx.side {
@@ -244,6 +299,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                 let backend_j = backend.clone();
                 let market_j = ctx.market.clone();
                 let short = ctx.short;
+                let workspace_group = ctx.workspace_group.clone();
                 items.push(
                     MoonMenuItem::with_key(
                         "coin-order-join",
@@ -252,11 +308,15 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
                         backend_j.update(app, |b, _| {
-                            let _ = b.session.join_sells(core, market_j.clone(), short);
+                            if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
+                            {
+                                let _ = b.session.join_sells(core, market_j.clone(), short);
+                            }
                         });
                     }),
                 );
                 let backend_sp = backend.clone();
+                let workspace_group = ctx.workspace_group.clone();
                 items.push(
                     MoonMenuItem::with_key(
                         "coin-order-split",
@@ -265,7 +325,10 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
                         backend_sp.update(app, |b, _| {
-                            let _ = b.session.split_order(core, uid, SPLIT_PARTS);
+                            if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
+                            {
+                                let _ = b.session.split_order(core, uid, SPLIT_PARTS);
+                            }
                         });
                     }),
                 );
@@ -273,6 +336,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
             // A chart Buy line or a table row with side=None cancels the entire order by UID.
             Some(OrderSide::Buy) | None => {
                 let backend_c = backend.clone();
+                let workspace_group = ctx.workspace_group.clone();
                 items.push(
                     MoonMenuItem::with_key(
                         "coin-order-cancel",
@@ -282,7 +346,10 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                     .on_click(move |_, window, app| {
                         window.close_context_menu(app);
                         backend_c.update(app, |b, _| {
-                            let _ = b.session.cancel_order(core, uid);
+                            if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
+                            {
+                                let _ = b.session.cancel_order(core, uid);
+                            }
                         });
                     }),
                 );
@@ -303,6 +370,21 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
 
 /// Number of parts produced by Split Order, matching the chart-line action and Moonbot's default.
 const SPLIT_PARTS: i32 = 2;
+
+/// Validate every captured mutation target against one current workspace authority snapshot.
+///
+/// Args:
+///     backend: Current terminal and workspace state.
+///     group: Group-owned authority, or `None` for an intentionally unscoped caller.
+///     cores: Complete target set for the pending action.
+///
+/// Returns:
+///     `true` only when every target remains allowed, preventing partial multi-core writes.
+fn workspace_action_allows_cores(backend: &Backend, group: Option<&str>, cores: &[CoreId]) -> bool {
+    cores
+        .iter()
+        .all(|core| backend.workspace_action_allows_core(group, *core))
+}
 
 // Blacklist read and write helpers.
 

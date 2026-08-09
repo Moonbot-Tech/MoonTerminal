@@ -380,6 +380,7 @@ pub fn toolbar(
         .id("toolbar")
         .w_full()
         .h(px(design::toolbar_height(cx)))
+        .flex_none()
         .items_center()
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .px(design::ui_px(cx, design::HEADER_PAD_X))
@@ -546,6 +547,7 @@ pub fn toolbar(
                     t!("toolbar.strategies").to_string(),
                     "icons/bot.svg",
                     None,
+                    Some(group.to_string()),
                     backend.clone(),
                     crate::strategies::open,
                     p,
@@ -554,6 +556,7 @@ pub fn toolbar(
                     "toolbar-screener",
                     t!("toolbar.screener").to_string(),
                     "icons/chart-pie.svg",
+                    None,
                     None,
                     backend.clone(),
                     crate::screener::open,
@@ -568,6 +571,7 @@ pub fn toolbar(
                     t!("toolbar.profit_monitor").to_string(),
                     "icons/chart-candlestick.svg",
                     None,
+                    None,
                     backend.clone(),
                     crate::analytics::profit_monitor::open,
                     p,
@@ -577,6 +581,7 @@ pub fn toolbar(
                     t!("toolbar.analytics").to_string(),
                     "icons/layout-dashboard.svg",
                     None,
+                    Some(group.to_string()),
                     backend.clone(),
                     crate::analytics::open,
                     p,
@@ -589,6 +594,7 @@ pub fn toolbar(
                     // not. A fixed width rather than padding: `MoonButton` has pad_x = 0
                     // (FORK_BUGS), and centres its content inside the width it is given.
                     fit.settings_width,
+                    None,
                     backend.clone(),
                     crate::settings::open,
                     p,
@@ -606,6 +612,7 @@ pub fn toolbar(
 ///     label: Localized visible label or icon tooltip.
 ///     icon: MoonUI asset path for the launcher glyph.
 ///     labeled_width: Fixed labeled width, or `None` for an icon-only button.
+///     workspace_owner: Group to record before opening a workspace-scoped singleton.
 ///     backend: Shared terminal state passed to the destination.
 ///     open: Singleton-window entry point invoked by the click.
 ///     p: Active palette used for icon and text colors.
@@ -618,6 +625,7 @@ fn open_window_button(
     label: String,
     icon: &'static str,
     labeled_width: Option<f32>,
+    workspace_owner: Option<String>,
     backend: Entity<Backend>,
     open: fn(Entity<Backend>, Option<AnyWindowHandle>, Option<DisplayId>, &mut App),
     p: MoonPalette,
@@ -634,6 +642,11 @@ fn open_window_button(
         btn.tooltip(label)
     };
     btn.on_click(move |_, window, cx| {
+        if let Some(group) = workspace_owner.as_deref() {
+            backend.update(cx, |backend, backend_cx| {
+                backend.focus_auto_workspace(group, backend_cx);
+            });
+        }
         let owner_display = window.display(cx).map(|d| d.id());
         open(
             backend.clone(),

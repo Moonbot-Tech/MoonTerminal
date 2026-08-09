@@ -14,7 +14,9 @@
 //! panel state requires serialization.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 #[cfg(test)]
 mod tests;
@@ -147,27 +149,52 @@ fn owns_panel(b: &Backend, key: &(String, String), window_id: WindowId) -> bool 
 /// Loads detached panel specifications from `detached.json`, returning an empty list if absent or invalid.
 pub fn load_all() -> Vec<DetachedSpec> {
     match std::fs::read_to_string(paths::detached_path()) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+        Ok(s) => deduplicated(serde_json::from_str(&s).unwrap_or_else(|e| {
             log::warn!("detached.json битый ({e}) → без откреплённых");
             Vec::new()
-        }),
+        })),
         Err(_) => Vec::new(),
     }
 }
 
-/// Saves detached panel specifications to `detached.json`; failures are logged but nonfatal.
-pub fn save_all(list: &[DetachedSpec]) {
+/// Retain the first specification for every stable `(group, panel)` identity.
+///
+/// Args:
+///     list: Loaded or in-memory detached specifications in persistence order.
+///
+/// Returns:
+///     Stable deduplicated list so one identity can never spawn multiple native windows.
+pub(crate) fn deduplicated(list: Vec<DetachedSpec>) -> Vec<DetachedSpec> {
+    let mut seen = HashSet::new();
+    list.into_iter()
+        .filter(|spec| seen.insert(spec.key()))
+        .collect()
+}
+
+/// Serialize detached panel specifications and atomically write an exact destination.
+///
+/// Args:
+///     list: Complete Classic detached-window specification list.
+///     path: Destination supplied by production or an isolated failure-path regression.
+///
+/// Returns:
+///     `true` only after serialization and the atomic write both succeed.
+pub(crate) fn save_all_to_path(list: &[DetachedSpec], path: &Path) -> bool {
     match serde_json::to_string_pretty(list) {
         Ok(s) => {
-            if let Err(e) = moon_core::config::write_file_atomic(
-                &paths::detached_path(),
-                s.as_bytes(),
-                "detached.json",
-            ) {
-                log::warn!("не записал detached.json: {e}");
+            if let Err(e) =
+                moon_core::config::write_file_atomic(path, s.as_bytes(), "detached.json")
+            {
+                log::warn!("could not write detached.json: {e}");
+                false
+            } else {
+                true
             }
         }
-        Err(e) => log::warn!("не сериализовал detached.json: {e}"),
+        Err(e) => {
+            log::warn!("could not serialize detached.json: {e}");
+            false
+        }
     }
 }
 
@@ -176,10 +203,20 @@ pub fn supports_panel(name: &str) -> bool {
     registry::supports(name)
 }
 
-/// Builds a fresh dock-panel instance by name as `Rc<dyn PanelView>` for repinning into a dock.
+/// Build a fresh dock-panel instance by name for Classic repinning or temporary Auto hosting.
 ///
-/// `None` info means the panel starts from defaults, which is correct for a repin: the panel's
-/// view state was not persisted in the dock JSON while it lived in a detached window.
+/// `None` info means the panel starts from defaults. The detached instance owns its live state;
+/// neither Classic repinning nor Auto's temporary attached replacement may copy that payload.
+///
+/// Args:
+///     name: Stable panel registry name.
+///     group: Group that owns the new panel instance.
+///     backend: Shared application state supplied to the panel factory.
+///     window: Window that will host the new docked instance.
+///     cx: Application context used by the registry factory.
+///
+/// Returns:
+///     A fresh panel view, or `None` when the registry does not support the name.
 pub fn build_panel(
     name: &str,
     group: &str,
@@ -213,6 +250,19 @@ pub struct DetachedWindow {
 }
 
 impl DetachedWindow {
+    /// Construct a detached group-panel host and attach its lifecycle observers.
+    ///
+    /// Args:
+    ///     backend: Shared terminal state used for geometry, ownership, activity, and repin updates.
+    ///     group: Group whose workspace and primary window own the panel logically.
+    ///     panel: Stable panel name used by persistence and the detached-window registry.
+    ///     content: Existing live panel view rendered inside this OS window.
+    ///     widths_reset: Optional header action and table state for resetting column widths.
+    ///     window: Newly created detached window observed for bounds and native activation.
+    ///     cx: View context used to register lifecycle observers.
+    ///
+    /// Returns:
+    ///     Fully initialized host that repins only while it still owns its registry entry.
     fn new(
         backend: Entity<Backend>,
         group: String,
@@ -227,19 +277,34 @@ impl DetachedWindow {
             this.persist_geometry(window, cx);
         })
         .detach();
-        // Closing requests a repin into the owner's dock. During shutdown, the final on_app_quit
-        // flush persists the detached specifications before windows are released, so release-time
-        // repin requests cannot erase the saved detachment for the next launch.
+        // Native activation is a deliberate interaction even before the mouse moves. Attribute
+        // singleton scope to this panel's Auto group while preserving Classic no-op behavior.
+        let activation_backend = backend.clone();
+        let activation_group = group.clone();
+        cx.observe_window_activation(window, move |_this, window, cx| {
+            if window.is_window_active() {
+                activation_backend.update(cx, |b, bcx| {
+                    b.note_main_input(&activation_group);
+                    b.focus_auto_workspace(&activation_group, bcx);
+                });
+            }
+        })
+        .detach();
+        // A user-owned close queues a repin, removes ownership, and wakes Shell in that order.
+        // Programmatic teardown first removes ownership through `take_windows`, so its later
+        // release remains deliberately silent. During shutdown, the final on_app_quit flush
+        // persists detached specifications before windows are released.
         let key = (group.clone(), panel.clone());
         let window_id = window.window_handle().window_id();
         cx.on_release(move |this, app| {
-            this.backend.update(app, |b, _| {
+            this.backend.update(app, |b, cx| {
                 if !owns_panel(b, &key, this.window_id) {
                     return;
                 }
                 b.repin_request.push(key.clone());
                 // Same edge, so the handle map can never outlive the window it points at.
                 b.detached_panel_windows.remove(&key);
+                cx.notify();
             });
         })
         .detach();
@@ -305,6 +370,14 @@ impl DetachedWindow {
 }
 
 impl Render for DetachedWindow {
+    /// Render the detached panel chrome and attribute active-window interaction to its group.
+    ///
+    /// Args:
+    ///     window: Detached OS window that supplies capture-phase mouse events and active state.
+    ///     cx: View context used to update Backend activity and workspace focus.
+    ///
+    /// Returns:
+    ///     Full-window element containing the detached panel titlebar and live content.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::DETACHED_RENDER);
         // Detached panels share Main's group but live in a separate OS window whose mouse movement
@@ -317,7 +390,10 @@ impl Render for DetachedWindow {
             // and cannot be suppressed by their stop_propagation calls.
             window.on_mouse_event::<MouseMoveEvent>(move |_e, phase, window, cx| {
                 if phase == DispatchPhase::Capture && window.is_window_active() {
-                    backend.update(cx, |b, _| b.note_main_input(&group));
+                    backend.update(cx, |b, bcx| {
+                        b.note_main_input(&group);
+                        b.focus_auto_workspace(&group, bcx);
+                    });
                 }
             });
         }
@@ -480,67 +556,107 @@ pub fn spawn(
 pub(crate) fn should_reopen(
     spec: &DetachedSpec,
     live_groups: &HashSet<&str>,
+    auto_groups: &HashSet<&str>,
     open_windows: &HashSet<(&str, &str)>,
     pending_repins: &HashSet<(&str, &str)>,
     docked: &HashSet<(&str, &str)>,
 ) -> bool {
     let key = spec.key_ref();
     live_groups.contains(spec.group.as_str())
+        && !auto_groups.contains(spec.group.as_str())
         && !open_windows.contains(&key)
         && !pending_repins.contains(&key)
         && !docked.contains(&key)
 }
 
+/// Revalidate one saved detached specification against current application ownership.
+///
+/// The caller invokes this only after its timer yield. Building every authority set here ensures
+/// a group rebuild, mode transition, repin, dock restore, or competing respawn that happened during
+/// the yield wins over the stale initial specification snapshot.
+///
+/// Args:
+///     backend: Current shared application state after the scheduling yield.
+///     spec: One stable-order detached specification being considered.
+///
+/// Returns:
+///     `true` only when no current owner accounts for the panel and Classic may reopen it.
+fn should_reopen_now(backend: &Backend, spec: &DetachedSpec) -> bool {
+    if backend.quitting {
+        return false;
+    }
+    let live_groups: HashSet<&str> = backend.group_windows.keys().map(String::as_str).collect();
+    let auto_groups: HashSet<&str> = backend
+        .group_windows
+        .keys()
+        .filter(|group| {
+            backend.workspace_mode(group) == moon_core::config::WorkspaceMode::AutoTrading
+        })
+        .map(String::as_str)
+        .collect();
+    let open_windows: HashSet<(&str, &str)> = backend
+        .detached_panel_windows
+        .keys()
+        .map(|(group, panel)| (group.as_str(), panel.as_str()))
+        .collect();
+    let pending_repins: HashSet<(&str, &str)> = backend
+        .repin_request
+        .iter()
+        .map(|(group, panel)| (group.as_str(), panel.as_str()))
+        .collect();
+    let docked = crate::persistence::dock_persist::docked_panels(&backend.dock_states);
+    should_reopen(
+        spec,
+        &live_groups,
+        &auto_groups,
+        &open_windows,
+        &pending_repins,
+        &docked,
+    )
+}
+
+/// Minimal real delay used to yield native window creation to a later application turn.
+const DETACHED_RESPAWN_YIELD: Duration = Duration::from_millis(1);
+
 /// Reopen the detached panel windows that nothing else accounts for, leaving every spec in place.
 ///
-/// Called after group windows are recreated, from both settings paths. Deferred because
-/// `open_window` draws synchronously and the callers run while their own entity is still leased.
+/// Called after group windows are recreated, from both settings paths. A foreground task yields
+/// before every synchronous `open_window`, then revalidates exactly that specification so native
+/// creation is distributed across later turns without racing current dock or mode ownership.
+///
+/// Args:
+///     backend: Shared application state containing persisted specs and live ownership.
+///     cx: Application context used to schedule serialized foreground recreation.
 pub(crate) fn respawn_all(backend: &Entity<Backend>, cx: &mut App) {
+    let specs = deduplicated(backend.read(cx).detached.clone());
+    if specs.is_empty() {
+        return;
+    }
     let backend = backend.clone();
-    cx.defer(move |app| {
-        let specs: Vec<DetachedSpec> = {
-            let b = backend.read(app);
-            if b.detached.is_empty() {
-                return;
-            }
-            let live_groups: HashSet<&str> = b.group_windows.keys().map(String::as_str).collect();
-            let open_windows: HashSet<(&str, &str)> = b
-                .detached_panel_windows
-                .keys()
-                .map(|(g, p)| (g.as_str(), p.as_str()))
-                .collect();
-            let pending_repins: HashSet<(&str, &str)> = b
-                .repin_request
-                .iter()
-                .map(|(g, p)| (g.as_str(), p.as_str()))
-                .collect();
-            let docked = crate::persistence::dock_persist::docked_panels(&b.dock_states);
-            b.detached
-                .iter()
-                .filter(|s| should_reopen(s, &live_groups, &open_windows, &pending_repins, &docked))
-                .cloned()
-                .collect()
-        };
-        if specs.is_empty() {
-            return;
-        }
+    cx.spawn(async move |cx| {
+        let executor = cx.update(|app| app.background_executor().clone());
         log::info!("reopening {} detached panel window(s)", specs.len());
         for spec in specs {
-            if let Err(err) = spawn(app, &backend, &spec, None) {
-                log::warn!(
-                    "reopen detached panel failed group={} panel={}: {err:#}",
-                    spec.group,
-                    spec.panel
-                );
-                // Without a window the panel exists nowhere: its dock tab was removed when it was
-                // detached. Ask its Shell to take it back rather than lose it until restart, and
-                // notify — the drain runs from a Backend observer, so an unannounced request would
-                // wait for an unrelated update to carry it.
-                backend.update(app, |b, cx| {
-                    b.repin_request.push(spec.key());
-                    cx.notify();
-                });
-            }
+            executor.timer(DETACHED_RESPAWN_YIELD).await;
+            cx.update(|app| {
+                if !should_reopen_now(backend.read(app), &spec) {
+                    return;
+                }
+                if let Err(err) = spawn(app, &backend, &spec, None) {
+                    log::warn!(
+                        "reopen detached panel failed group={} panel={}: {err:#}",
+                        spec.group,
+                        spec.panel
+                    );
+                    // Without a window the panel exists nowhere: its dock tab was removed when it
+                    // was detached. Ask Shell to take it back and wake its Backend observer.
+                    backend.update(app, |b, cx| {
+                        b.repin_request.push(spec.key());
+                        cx.notify();
+                    });
+                }
+            });
         }
-    });
+    })
+    .detach();
 }

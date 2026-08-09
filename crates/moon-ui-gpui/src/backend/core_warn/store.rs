@@ -7,11 +7,13 @@
 //! Kept separate from `reports.sqlite` on purpose: warning history is the only copy and must survive
 //! a report-replica reset (see `paths::core_warnings_db_path`).
 
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::path::Path;
 
 use moon_core::session::CoreId;
-use rusqlite::{Connection, Row, params};
+use rusqlite::types::Value;
+use rusqlite::{Connection, Row, params, params_from_iter};
 
 use super::{WarnAxis, WarnEpisode, WarnSnapshot};
 
@@ -163,6 +165,7 @@ impl WarnStore {
     ///
     /// Returns:
     ///     Episodes ordered by `start_ms` descending, or a SQLite error.
+    #[cfg(test)]
     pub(crate) fn recent_episodes(&self, limit: usize) -> rusqlite::Result<Vec<WarnEpisode>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
@@ -170,6 +173,63 @@ impl WarnStore {
              ORDER BY start_ms DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], row_to_episode)?;
+        rows.collect()
+    }
+
+    /// Return recent persisted episodes inside one effective core/server scope.
+    ///
+    /// Filtering happens in SQLite before ordering and limiting. A busy foreign core therefore
+    /// cannot occupy the global newest rows and crowd an older in-scope warning out of the panel.
+    /// Core-specific episodes match `core_ids`; server-wide episodes match `server_ips` only when
+    /// their `core_id` is null. An empty scope or zero limit returns without preparing a statement.
+    ///
+    /// Args:
+    ///     core_ids: Effective core identities accepted by the panel.
+    ///     server_ips: Effective server identities accepted for server-wide warning axes.
+    ///     limit: Maximum rows to return.
+    ///
+    /// Returns:
+    ///     In-scope episodes ordered by `start_ms` descending, or a SQLite error.
+    pub(crate) fn recent_episodes_for_scope(
+        &self,
+        core_ids: &HashSet<CoreId>,
+        server_ips: &HashSet<IpAddr>,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<WarnEpisode>> {
+        if limit == 0 || (core_ids.is_empty() && server_ips.is_empty()) {
+            return Ok(Vec::new());
+        }
+
+        let mut clauses = Vec::with_capacity(2);
+        let mut values = Vec::with_capacity(core_ids.len() + server_ips.len() + 1);
+        if !core_ids.is_empty() {
+            clauses.push(format!(
+                "core_id IN ({})",
+                std::iter::repeat_n("?", core_ids.len())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            values.extend(core_ids.iter().map(|core| Value::Integer(*core as i64)));
+        }
+        if !server_ips.is_empty() {
+            clauses.push(format!(
+                "(core_id IS NULL AND server_ip IN ({}))",
+                std::iter::repeat_n("?", server_ips.len())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            values.extend(server_ips.iter().map(|ip| Value::Text(ip.to_string())));
+        }
+        values.push(Value::Integer(i64::try_from(limit).unwrap_or(i64::MAX)));
+
+        let sql = format!(
+            "SELECT id, axis, server_ip, core_id, start_ms, end_ms, peak, sys_cpu, occ_mem, free_mb, \
+             used_mb, logical_cpus, rtt_ms, order_ms FROM core_warnings \
+             WHERE ({}) ORDER BY start_ms DESC LIMIT ?",
+            clauses.join(" OR ")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(values.iter()), row_to_episode)?;
         rows.collect()
     }
 

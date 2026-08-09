@@ -12,6 +12,7 @@
 //! - [`docks`] detaches, restores, and repins ordinary panels and persists OS-window geometry;
 //! - [`status_bar`] renders connection, license, and diagnostic status;
 //! - [`ticker`] owns the header ticker-source picker.
+//! - [`workspace`] owns independent mode layouts, the all-core rail, and chart reveal.
 
 mod actions;
 mod core_settings;
@@ -23,12 +24,17 @@ mod metrics;
 mod render;
 mod status_bar;
 mod ticker;
+mod workspace;
 
+use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::*;
 
-use moon_ui::{DockArea, MoonInputState, MoonSliderState};
+use moon_core::config::WorkspaceMode;
+use moon_ui::{
+    DockArea, DockNamedLayout, MoonInputState, MoonResizableState, MoonSliderState, PanelView,
+};
 
 use crate::{Backend, controls};
 
@@ -42,6 +48,22 @@ pub(crate) struct Shell {
     backend: Entity<Backend>,
     group: String,
     dock: Entity<DockArea>,
+    /// Full local Classic layout retained while Auto applies the shared name-only topology.
+    classic_dock_layout: Option<DockNamedLayout>,
+    /// Temporary local instances for panels whose Classic copies are suspended detached windows.
+    auto_only_panels: Vec<Rc<dyn PanelView>>,
+    /// Suppress DockEvent persistence while Auto topology is installed programmatically.
+    applying_auto_topology: bool,
+    /// One persistent resize state per Shell, synchronized through Backend's global rail width.
+    workspace_resize_state: Entity<MoonResizableState>,
+    /// Last global logical rail width applied to this Shell's resize state.
+    applied_auto_rail_width: f32,
+    /// Workspace mode currently applied to `dock`, kept separate from persisted desired state.
+    applied_workspace_mode: WorkspaceMode,
+    /// Latest Main-open revision already considered for Auto-only ChartTabs reveal.
+    last_open_main_revision: u64,
+    /// Coalesces backend and workspace-revision notifications into one window-aware dock update.
+    workspace_sync_pending: bool,
     /// Previous-frame time and smoothed render FPS shown in the status bar, as in the egui host.
     last_frame: Option<Instant>,
     fps: f32,

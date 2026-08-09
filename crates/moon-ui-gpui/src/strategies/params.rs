@@ -101,6 +101,18 @@ impl StrategiesView {
         }
     }
 
+    /// Render parameters for the workspace-visible selection captured in `model`.
+    ///
+    /// Editor callbacks receive only the model's effective row keys, so retained selection and
+    /// drafts on hidden Classic cores cannot be staged or dispatched from the Auto panel.
+    ///
+    /// Args:
+    ///     model: Prepared parameter content or the reason no effective content is available.
+    ///     window: Strategies window owning retained input widgets.
+    ///     cx: View context used to construct controls and their callbacks.
+    ///
+    /// Returns:
+    ///     The parameter panel for the effective selection.
     pub(super) fn params_panel(
         &mut self,
         model: ParamsPanelModel,
@@ -145,7 +157,10 @@ impl StrategiesView {
         } else {
             t!("strat.fields_count", n = section.fields.len()).to_string()
         };
-        let dirty = self.field_edits.len();
+        let dirty = field_edit_count(self);
+        // Capture the complete visible draft set in the rendered Apply button. If the singleton
+        // workspace moves before its callback runs, `apply_field_edits` rejects this plan whole.
+        let apply_plan = Arc::new(self.field_edit_plan(cx));
         let mut header = h_flex()
             .w_full()
             .h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
@@ -173,7 +188,12 @@ impl StrategiesView {
                                 .success()
                                 .size(MoonButtonSize::Micro)
                                 .label(t!("strat.fields_apply", n = dirty).to_string())
-                                .on_click(cx.listener(|this, _, _, cx| this.apply_field_edits(cx)))
+                                .on_click({
+                                    let apply_plan = apply_plan.clone();
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.apply_field_edits(apply_plan.as_ref(), cx)
+                                    })
+                                })
                                 .render(),
                         )
                         .child(
@@ -486,7 +506,7 @@ impl StrategiesView {
         let cur_note: Option<String> = if frozen {
             let b = self.backend.read(cx);
             let store = b.session.store();
-            self.selected
+            selected_key(self)
                 .and_then(|(c, id)| row(store, c, id))
                 .map(|r| field_value(r, f))
         } else {
@@ -530,7 +550,7 @@ impl StrategiesView {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 // Intentionally bypass the viewing_version gate: copying from a
                                 // version is the only permitted edit in this view.
-                                if let Some((core, id)) = this.selected {
+                                if let Some((core, id)) = selected_key(this) {
                                     this.field_edits
                                         .insert((core, id, fname.clone()), vval.clone());
                                     this.focused_field = Some(fname.clone());

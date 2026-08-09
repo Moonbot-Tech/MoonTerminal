@@ -167,11 +167,7 @@ impl AssetsView {
         // The top-bar dust threshold; a non-positive value shows every row.
         let thr = self.min_value_usd;
         let mut out = Vec::new();
-        for (id, name) in self.scope_cores(b) {
-            // An empty multi-core selection means every core in scope.
-            if !balances::in_scope(&self.sel_cores, id) {
-                continue;
-            }
+        for (id, name) in self.query_cores(b) {
             let Some(cd) = store.core(id) else { continue };
             // `MOON_ASSETS_DIAG` logs the core's raw balance-position rows, distinguishing a row
             // hidden by filtering from one absent at the source.
@@ -334,7 +330,7 @@ impl AssetsView {
     /// Missing store entries are represented as `Awaiting` so every scoped core remains visible.
     pub(super) fn per_core(&self, b: &Backend) -> Vec<CoreAgg> {
         let store = b.session.store();
-        self.scope_cores(b)
+        self.query_cores(b)
             .into_iter()
             .map(|(id, name)| {
                 let Some(cd) = store.core(id) else {
@@ -370,9 +366,6 @@ impl AssetsView {
         let store = b.session.store();
         let mut seen = false;
         for (id, _) in &self.cached_cores {
-            if !balances::in_scope(&self.sel_cores, *id) {
-                continue;
-            }
             let Some(cd) = store.core(*id) else {
                 return false;
             };

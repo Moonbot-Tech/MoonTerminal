@@ -282,6 +282,32 @@ pub(crate) struct AnalyticsSessionState {
     undated_expanded: bool,
 }
 
+/// Effective Auto-workspace scope inherited from the last live singleton owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AnalyticsWorkspaceScope {
+    /// Selected core, or `None` when the owning group is on Overview.
+    selected_core: Option<u64>,
+    /// Concrete live group cores used by every Analytics query.
+    core_ids: Vec<u64>,
+}
+
+/// Resolve the current singleton workspace without changing Analytics' retained selection.
+///
+/// Args:
+///     backend: Shared authority for singleton ownership and group-effective scope.
+///
+/// Returns:
+///     Concrete Auto scope, or `None` when Analytics owns its Classic filter.
+fn analytics_workspace_scope(backend: &Backend) -> Option<AnalyticsWorkspaceScope> {
+    let workspace = backend.singleton_workspace()?;
+    let scope = backend
+        .effective_workspace_scope(&workspace.group, crate::workspace::RetainedCoreScope::All);
+    Some(AnalyticsWorkspaceScope {
+        selected_core: workspace.selected_core,
+        core_ids: scope.ids().to_vec(),
+    })
+}
+
 impl Default for AnalyticsSessionState {
     /// Create the state used for the first Analytics open in a fresh process.
     ///
@@ -337,6 +363,8 @@ pub struct AnalyticsView {
     core_refresh_needed: bool,
     /// Whether a trailing core-list refresh timer is already scheduled.
     core_refresh_timer_armed: bool,
+    /// Auto scope mirrored from `WorkspaceRevision`; `None` leaves the retained filter authoritative.
+    workspace_scope: Option<AnalyticsWorkspaceScope>,
     sel_cores: HashSet<u64>,
     side: SideFilter,
     /// `None` means all, `Some(false)` real, and `Some(true)` emulated.
@@ -580,6 +608,23 @@ impl AnalyticsView {
             cx.notify();
         })
         .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            let previous_selection = this.effective_strategy_selection();
+            let next = analytics_workspace_scope(this.backend.read(cx));
+            if next == this.workspace_scope {
+                return;
+            }
+            this.workspace_scope = next;
+            if this.effective_strategy_selection() != previous_selection {
+                this.reconcile_workspace_strategy_scope();
+            }
+            // Retire every pending query identity before rebuilding from the new singleton scope.
+            // The retained `sel_cores` and process-lifetime session snapshot are never written.
+            this.reload(cx);
+            cx.notify();
+        })
+        .detach();
 
         // Period: the previous layout selection, defaulting to the current calendar month.
         let saved_period = backend
@@ -636,6 +681,7 @@ impl AnalyticsView {
             .and_then(calendar::CalMode::from_id)
             .unwrap_or(calendar::CalMode::Month);
         let session = backend.read(cx).ui_session.analytics.clone();
+        let workspace_scope = analytics_workspace_scope(backend.read(cx));
 
         // From/to date+time fields: any day or clock change switches the period to Custom. The
         // popup stays open after a day is clicked so the clock drums under the calendar remain
@@ -702,6 +748,7 @@ impl AnalyticsView {
             last_cores_at: None,
             core_refresh_needed: false,
             core_refresh_timer_armed: false,
+            workspace_scope,
             sel_cores: session.sel_cores,
             side: SideFilter::All,
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
@@ -1062,12 +1109,18 @@ impl AnalyticsView {
         }
     }
 
-    /// Return selected cores for a query, using an empty vector only for the exclusive All state.
+    /// Return the effective core filter without overwriting the retained Classic selection.
     ///
     /// Returns:
-    ///     Every explicit selected id, including complete or stale selections, or empty for All.
+    ///     Explicit Auto workspace ids, the no-match sentinel for an empty Auto scope, retained
+    ///     explicit Classic ids, or an empty vector only for Classic All.
     fn cores_selected(&self) -> Vec<u64> {
-        toolbar::analytics_core_filter_ids(&self.sel_cores)
+        toolbar::analytics_core_filter_ids(
+            &self.sel_cores,
+            self.workspace_scope
+                .as_ref()
+                .map(|scope| scope.core_ids.as_slice()),
+        )
     }
 
     /// Start accounting for a blocking background operation.
@@ -1526,14 +1579,19 @@ impl AnalyticsView {
     ///
     /// The All row clears every explicit selection so only its own checkmark remains. A specific
     /// core toggles independently and therefore removes the All checkmark from the empty state.
+    /// Auto pins the selector to its effective scope, so clicks are no-ops and the retained
+    /// Classic selection remains byte-for-byte available when Auto ownership ends.
     ///
     /// Args:
     ///     core: Core to toggle, or `None` for the All row.
     ///     cx: Analytics context used to reload data and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; the in-memory filter and loaded analytics are updated in place.
+    ///     Nothing; Classic updates in place, while Auto leaves the retained filter unchanged.
     fn toggle_core(&mut self, core: Option<u64>, cx: &mut Context<Self>) {
+        if self.workspace_scope.is_some() {
+            return;
+        }
         if toolbar::toggle_analytics_core_selection(&mut self.sel_cores, core) {
             self.core_selection_changed(cx);
         }
@@ -1544,14 +1602,19 @@ impl AnalyticsView {
     /// Empty means All before the click, so the first exchange selection becomes explicit. A second
     /// click removes the exchange when all of its available cores are selected. Partial selections
     /// retain cores from other exchanges, while a stale-only batch is a no-op.
+    /// Auto pins every exchange section to the workspace-derived scope, so clicks are no-ops and
+    /// the retained Classic selection is neither persisted nor reloaded.
     ///
     /// Args:
     ///     exchange_cores: Core ids captured from the rendered Analytics exchange section.
     ///     cx: Analytics context used to persist and reload a changed selection.
     ///
     /// Returns:
-    ///     Nothing; a changed selection is persisted and loaded atomically.
+    ///     Nothing; Classic changes persist atomically, while Auto retains the prior filter.
     fn toggle_exchange_cores(&mut self, exchange_cores: Vec<u64>, cx: &mut Context<Self>) {
+        if self.workspace_scope.is_some() {
+            return;
+        }
         let available = self.cores.iter().map(|(core, _)| *core).collect();
         if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
             self.core_selection_changed(cx);

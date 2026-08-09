@@ -4,6 +4,31 @@ use super::*;
 use rusqlite::types::Value;
 use std::cell::Cell;
 
+/// Splitting `db/mod.rs:save_sort` back into two independent `meta_set` calls must fail this test:
+/// a failure on the direction write would persist the new column beside the previous direction.
+#[test]
+fn report_sort_key_and_direction_commit_atomically() {
+    let connection = Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO app_meta(key,value) VALUES('sort_key','buydate'),('sort_desc','0');
+             CREATE TRIGGER reject_desc
+             BEFORE UPDATE OF value ON app_meta
+             WHEN OLD.key='sort_desc' AND NEW.value='1'
+             BEGIN SELECT RAISE(ABORT, 'forced failure'); END;",
+        )
+        .unwrap();
+
+    save_sort(&connection, "profitpct", true);
+
+    assert_eq!(
+        load_sort(&connection),
+        Some(("buydate".to_string(), false)),
+        "one rejected direction write must roll back the key from the same statement"
+    );
+}
+
 /// `db/mod.rs:tune_reader` must actually raise the page-cache budget it is handed.
 ///
 /// Dropping its `pragma_update` line leaves every report reader on SQLite's ~2 MiB default

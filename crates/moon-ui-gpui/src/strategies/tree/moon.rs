@@ -17,12 +17,17 @@ use moon_ui::{
 };
 
 use super::super::filter::PreparedFilter;
-use super::super::logic::{FolderCounts, build_node, ensure_folder, toggle};
+use super::super::logic::{
+    FolderCounts, build_node, ensure_folder, strategy_core_is_visible, toggle,
+};
 use super::super::{Key, StrategiesView, moon_alpha};
 use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
 use crate::design;
 use moon_core::feed::StrategyRow;
 use moon_core::session::{CoreId, CoreStore};
+
+#[cfg(test)]
+mod tests;
 
 // ── Node ID encoding: stable string IDs for MoonTree ─────────────────────────
 fn id_core(core: CoreId) -> SharedString {
@@ -912,6 +917,24 @@ fn deleted_strategy_row(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Render one strategy row already admitted by the effective workspace tree.
+///
+/// Args:
+///     view: Owning Strategies view used by row callbacks.
+///     core: Workspace-visible core containing the strategy.
+///     id: Live strategy id within the core.
+///     name: Displayed strategy name.
+///     kind: Displayed strategy kind.
+///     open_orders: Current open-order count.
+///     server_checked: Checkbox state acknowledged by the core.
+///     staged: Visible retained checkbox override, when one exists for this row.
+///     highlighted: Whether filtering should emphasize the row.
+///     is_short: Whether the strategy trades the short side.
+///     indent: Tree indentation for the row.
+///     app: Application context used for theme and design tokens.
+///
+/// Returns:
+///     The rendered row; staging retained on hidden Classic cores never reaches this function.
 fn strategy_row(
     view: &Entity<StrategiesView>,
     core: CoreId,
@@ -1040,6 +1063,9 @@ fn strategy_row(
                 .on_change(move |ch: &bool, _window, app| {
                     let v = *ch;
                     view_chk.update(app, |this, cx| {
+                        if !strategy_core_is_visible(this.workspace_cores.as_deref(), key.0) {
+                            return;
+                        }
                         let before = this.staged.get(&key).copied();
                         if v == server_checked {
                             this.staged.remove(&key);

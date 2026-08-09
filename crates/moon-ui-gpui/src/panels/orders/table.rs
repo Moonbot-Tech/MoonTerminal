@@ -9,9 +9,24 @@ use std::collections::HashSet;
 
 /// Open the shared coin context menu for an order row from its token or strategy cell.
 ///
-/// The menu's selected cores come from the panel's `sel_cores` filter: an empty set expands to all
-/// cores in the group, while a non-empty set is passed through directly. The selected-cores
-/// blacklist entry appears only when that resulting list contains more than one core.
+/// The menu's selected cores come from the panel's effective workspace scope, so Auto actions
+/// cannot target a retained Classic selection hidden behind the pinned selector.
+///
+/// Args:
+///     core: Core that owns the clicked order.
+///     market: Order market used by navigation and sell actions.
+///     coin: Core-native token spelling used by blacklist actions.
+///     uid: Stable order identity on `core`.
+///     strat_id: Optional strategy identity for strategy actions.
+///     strat_name: Optional strategy display name.
+///     short: Whether the order represents a short position.
+///     view: Owning group Orders panel.
+///     pos: Window-coordinate popup position.
+///     window: Window that owns the context menu.
+///     app: Application context used to snapshot live scope and open the menu.
+///
+/// Returns:
+///     Nothing; an applicable menu is opened at `pos`.
 #[allow(clippy::too_many_arguments)]
 fn open_row_coin_menu(
     core: CoreId,
@@ -27,26 +42,14 @@ fn open_row_coin_menu(
     app: &mut App,
 ) {
     app.stop_propagation();
-    let (backend, group, sel_cores) = {
+    let (backend, workspace_group) = {
         let panel = view.read(app);
-        (
-            panel.backend.clone(),
-            panel.group.clone(),
-            panel.sel_cores.clone(),
-        )
+        (panel.backend.clone(), panel.group.clone())
     };
     let (selected_cores, core_name) = {
         let b = backend.read(app);
         let sessions = b.session.sessions();
-        let selected: Vec<CoreId> = if sel_cores.is_empty() {
-            sessions
-                .iter()
-                .filter(|s| s.group == group)
-                .map(|s| s.id)
-                .collect()
-        } else {
-            sel_cores.iter().copied().collect()
-        };
+        let selected = view.read(app).effective_scope(b).ids().to_vec();
         let name = sessions
             .iter()
             .find(|s| s.id == core)
@@ -63,6 +66,7 @@ fn open_row_coin_menu(
         strat_id,
         strat_name,
         order_uid: Some(uid),
+        workspace_group: Some(workspace_group),
         // A table row is not a specific chart leg, so its order section offers Edit and Cancel.
         side: None,
         short,
@@ -455,6 +459,16 @@ fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
 ///
 /// Clicking sends the inverse effective state through `set_order_stop`. When re-enabled, the feed
 /// layer restores the stop level from memory, strategy settings, or defaults.
+///
+/// Args:
+///     e: Order row supplying core and order identity.
+///     view: Owning group panel and current workspace authority.
+///     kind: Stop protection toggled by the cell.
+///     on: Current effective stop state.
+///     p: Active palette used for the state tone.
+///
+/// Returns:
+///     Clickable cell that dispatches only while the row's core remains authorized.
 fn flag_toggle_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
@@ -496,25 +510,37 @@ fn flag_toggle_cell(
                 !on
             );
             view.update(app, |this, cx| {
-                // Draw the target state immediately. Feed rows remain authoritative and replace a
-                // disagreeing overlay after its lifetime of at most three seconds.
-                this.stop_overlay.insert(
-                    (core, uid, stop_tag(kind)),
-                    (!on, std::time::Instant::now()),
-                );
-                this.backend.update(cx, |b, _| {
+                let group = this.group.clone();
+                let authorized = this.backend.update(cx, |b, _| {
+                    if !b.workspace_action_allows_core(Some(&group), core) {
+                        return false;
+                    }
                     if let Err(err) = b.session.set_order_stop(core, uid, kind, !on) {
                         log::warn!(
                             "orders toggle stop failed core={} uid={uid} kind={kind:?}: {err:#}",
                             moon_core::feed::core_label(core)
                         );
                     }
+                    true
                 });
+                if !authorized {
+                    return;
+                }
+                // Draw the target state only after live workspace authority admitted the command.
+                // Feed rows remain authoritative and replace a disagreeing overlay after its
+                // lifetime of at most three seconds.
+                this.stop_overlay.insert(
+                    (core, uid, stop_tag(kind)),
+                    (!on, std::time::Instant::now()),
+                );
                 cx.notify();
             });
         });
     MoonDataCell::element(el)
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Build a clickable BUY, SELL, Short-S, or Short-B cell that opens the order editor.
 ///
@@ -539,8 +565,11 @@ fn side_cell(
         .font_weight(FontWeight::MEDIUM)
         .child(side)
         .on_click(move |_, window, app| {
-            let backend = view.read(app).backend.clone();
-            crate::panels::open_order_edit(backend, core, uid, window, app);
+            let (backend, group) = {
+                let panel = view.read(app);
+                (panel.backend.clone(), panel.group.clone())
+            };
+            crate::panels::open_order_edit(backend, Some(group), core, uid, window, app);
         })
 }
 
@@ -548,6 +577,16 @@ fn side_cell(
 ///
 /// Shared by the `Strat` (kind) and `StratName` (name) cells, which both navigate to the same
 /// strategy. Clears active-only mode before expanding and selecting it.
+///
+/// Args:
+///     view: Owning group Orders panel and its workspace authority.
+///     core: Core captured by the rendered row.
+///     strat_id: Strategy identity captured by the rendered row.
+///     window: Owner window used for placement and focus.
+///     app: Application context used to revalidate and open the singleton.
+///
+/// Returns:
+///     Nothing; a stale Auto target opens no Strategies window.
 fn open_strat_goto(
     view: &Entity<OrdersPanel>,
     core: CoreId,
@@ -555,12 +594,16 @@ fn open_strat_goto(
     window: &mut Window,
     app: &mut App,
 ) {
-    let backend = view.read(app).backend.clone();
+    let (backend, workspace_group) = {
+        let panel = view.read(app);
+        (panel.backend.clone(), panel.group.clone())
+    };
     let owner_display = window.display(app).map(|d| d.id());
     crate::strategies::open_goto(
         backend,
         core,
         strat_id,
+        Some(workspace_group),
         Some(window.window_handle()),
         owner_display,
         app,
@@ -653,11 +696,11 @@ fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> Moo
     MoonDataCell::element(el)
 }
 
-/// Build the core-name cell as a quick single-core filter.
+/// Build the core-name cell as a quick single-core target.
 ///
-/// Clicking sets the panel filter to exactly this core. Clicking it again when it is the sole
-/// selection clears the set back to All. The text retains the muted style of the former plain
-/// `MoonDataCell::text` cell.
+/// Classic toggles the retained one-core filter and clears it back to All on a repeated click.
+/// Auto ignores the shortcut because only the Shell rail may select a workspace core. The text
+/// retains the muted style of the former plain cell.
 fn core_cell(
     e: &OrderEntry,
     view: &Entity<OrdersPanel>,
@@ -719,9 +762,11 @@ fn token_cell(
         .child(token)
         .on_click(move |_, _window, app| {
             view.update(app, |this, cx| {
+                let group = this.group.clone();
                 this.backend.update(cx, |b, bcx| {
-                    b.open_on_main((core, market.clone()), false);
-                    bcx.notify();
+                    if b.open_on_main_if_authorized(Some(&group), (core, market.clone()), false) {
+                        bcx.notify();
+                    }
                 });
             });
         })

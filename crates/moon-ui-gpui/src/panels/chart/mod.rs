@@ -1,7 +1,7 @@
 //! Central `DockArea` chart panel with an own-pass GPU renderer and input handling. As a dock panel
-//! it can be detached into a window. Main markets come from focus or `Backend.open_request`,
-//! detection ingestion populates numbered AddToChart panels, and manual selection or restoration
-//! populates numbered Custom panels.
+//! it can be detached into a window. Main markets come from focus or `Backend::open_on_main` through
+//! its atomic `open_main_request`, detection ingestion populates numbered AddToChart panels, and
+//! manual selection or restoration populates numbered Custom panels.
 //!
 //! `ChartEngine.canvas()` supplies a GPUI `gpu_canvas` below the scene, rendering composed layers
 //! directly into GPUI's backbuffer without readback; prepare updates the view and uploads new ticks.
@@ -19,6 +19,8 @@ mod news;
 mod refs;
 mod render;
 mod render_input;
+#[cfg(test)]
+mod tests;
 mod trade;
 mod warn;
 
@@ -90,6 +92,8 @@ fn chart_settings_sig(backend: &Backend) -> ChartSettingsSig {
 
 pub struct ChartPanel {
     backend: Entity<Backend>,
+    /// Group whose Auto rail authorizes chart navigation and trading; diagnostics stay unscoped.
+    workspace_group: Option<String>,
     chart: ChartEngine,
     input: input::ChartInput,
     market: Option<String>,
@@ -274,11 +278,24 @@ impl ChartPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_main(backend, focus_open, epoch, theme, cx)
+        Self::new_main(backend, None, focus_open, epoch, theme, cx)
     }
 
+    /// Construct a Main chart with an optional group-scoped Auto action authority.
+    ///
+    /// Args:
+    ///     backend: Shared application state and session command surface.
+    ///     workspace_group: Owning group for rail-authority checks, or `None` for diagnostics.
+    ///     focus_open: Optional initial core and market.
+    ///     epoch: Chart time origin.
+    ///     theme: Runtime chart theme.
+    ///     cx: Panel context used for observers and market references.
+    ///
+    /// Returns:
+    ///     A fully initialized Main chart panel.
     pub fn new_main(
         backend: Entity<Backend>,
+        workspace_group: Option<String>,
         focus_open: Option<(CoreId, String)>,
         epoch: f64,
         theme: ChartTheme,
@@ -366,6 +383,7 @@ impl ChartPanel {
         .detach();
         Self {
             backend,
+            workspace_group,
             chart,
             input: input::ChartInput::default(),
             market,
@@ -430,11 +448,26 @@ impl ChartPanel {
         self.chart.active_target()
     }
 
-    /// Builds numbered AddToChart or Custom panel `num`. Detections populate AddToChart panels and
-    /// manual selection or restoration populates Custom panels through [`Self::add_coin`]. It needs
-    /// no `Window`, allowing deferred restoration of detached windows from data alone.
+    /// Check whether the current workspace still authorizes one chart core.
+    ///
+    /// Args:
+    ///     backend: Live state read in the same callback that will dispatch the side effect.
+    ///     core: Chart core targeted by the action.
+    ///
+    /// Returns:
+    ///     `false` only when this panel belongs to an Auto group whose rail selected another core.
+    fn workspace_action_allowed(&self, backend: &Backend, core: CoreId) -> bool {
+        backend.workspace_action_allows_core(self.workspace_group.as_deref(), core)
+    }
+
+    /// Builds numbered AddToChart or Custom panel `num` with its owning workspace authority.
+    ///
+    /// Detections populate AddToChart panels and manual selection or restoration populates Custom
+    /// panels through [`Self::add_coin`]. It needs no `Window`, allowing deferred restoration of
+    /// detached windows from data alone.
     pub fn new_addto(
         backend: Entity<Backend>,
+        workspace_group: String,
         num: u32,
         bucket: ChartBucket,
         epoch: f64,
@@ -499,6 +532,7 @@ impl ChartPanel {
         .detach();
         Self {
             backend,
+            workspace_group: Some(workspace_group),
             chart,
             input: input::ChartInput::default(),
             market: None,

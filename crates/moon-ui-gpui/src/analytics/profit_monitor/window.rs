@@ -12,6 +12,40 @@ use super::{MIN_WINDOW_WIDTH, ProfitMonitorView};
 use crate::Backend;
 use crate::design;
 
+#[cfg(test)]
+mod tests;
+
+/// Single native-create authority with foreground intent that can only be upgraded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ProfitMonitorOpenRequest {
+    /// Whether a user action requires the eventual live window to take foreground.
+    activate: bool,
+}
+
+impl ProfitMonitorOpenRequest {
+    /// Create the first request in an otherwise idle single-flight slot.
+    ///
+    /// Args:
+    ///     activate: Whether this producer is an explicit user action.
+    ///
+    /// Returns:
+    ///     One pending request carrying the producer's foreground intent.
+    fn new(activate: bool) -> Self {
+        Self { activate }
+    }
+
+    /// Merge a later caller without allowing startup restore to downgrade a user click.
+    ///
+    /// Args:
+    ///     activate: Foreground intent of the later caller.
+    ///
+    /// Returns:
+    ///     Nothing; explicit activation is retained monotonically in place.
+    fn upgrade(&mut self, activate: bool) {
+        self.activate |= activate;
+    }
+}
+
 /// Open or focus the independent singleton Profit Monitor window.
 ///
 /// This toolbar action is one route back to the taskbar-hidden monitor; Alt+Tab is the other.
@@ -80,61 +114,100 @@ fn open_window(
             return;
         }
     }
-    // Saved geometry is restored as-is, with NO off-screen guard of our own. There was one, and
-    // removing it was deliberate — read this before adding another.
-    //
-    // The platform already rescues the case it existed for: `moon-gpui-windows`'s
-    // `retrieve_window_placement` tests the requested bounds' CENTRE against the monitors and
-    // substitutes `display.default_bounds()` when it lands on none, so a rectangle left on a display
-    // that is now unplugged never opens where nothing can click it.
-    //
-    // Our guard, meanwhile, asked whether any display CONTAINED the saved origin — and answered "no"
-    // for two windows that are perfectly fine: one dragged past the left screen edge (a legal
-    // negative x), and every window at all while the display list is momentarily empty (monitors
-    // asleep, a session switching). It then moved them, and `observe_window_bounds` saved that move
-    // over the user's own position. A rescue that destroys the thing it rescues is worse than none.
-    //
-    // What we give up: in the genuinely-unplugged case the platform's rescue replaces the whole
-    // rectangle, so the saved SIZE goes with the origin, where our guard used to keep it. That is
-    // one window to resize once, against a class of positions silently overwritten.
-    let saved = backend.read(cx).layout.profit_monitor_window;
-    let bounds = saved.map_or(
-        Bounds {
-            origin: point(px(160.0), px(120.0)),
-            size: size(px(720.0), px(520.0)),
-        },
-        |geometry| Bounds {
-            origin: point(px(geometry.x as f32), px(geometry.y as f32)),
-            size: size(px(geometry.w as f32), px(geometry.h as f32)),
-        },
-    );
-    let display_id = crate::window::windowing::saved_or_owner_display_id(
-        saved.map(|geometry| point(px(geometry.x as f32), px(geometry.y as f32))),
-        owner,
-        owner_display,
-        cx,
-    );
-    let options = crate::window::windowing::profit_monitor_window_options(
-        t!("profit_monitor.window_title").to_string(),
-        WindowBounds::Windowed(bounds),
-        display_id,
-        Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0))),
-    );
-    let view_backend = backend.clone();
-    if let Ok(handle) = cx.open_window(options, move |window, cx| {
-        crate::window::windowing::configure_shell_clear_color(window, cx);
-        crate::window::windowing::set_group_window_icon(window, 0);
-        let view = cx.new(|cx| ProfitMonitorView::new(view_backend, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
-    }) {
-        backend.update(cx, |backend, _| {
-            backend.profit_monitor_window = Some(handle)
-        });
-        mark_open(&backend, cx);
-        if activate {
-            crate::window::windowing::activate_new_window(handle.into(), cx);
+    let scheduled = backend.update(cx, |backend, _| {
+        if let Some(request) = backend.profit_monitor_open_pending.as_mut() {
+            request.upgrade(activate);
+            return false;
         }
+        backend.profit_monitor_window = None;
+        backend.profit_monitor_open_pending = Some(ProfitMonitorOpenRequest::new(activate));
+        true
+    });
+    if !scheduled {
+        return;
     }
+
+    cx.spawn(async move |cx| {
+        let executor = cx.update(|cx| cx.background_executor().clone());
+        // A real timer yield lets the toolbar or startup transaction paint before `open_window`
+        // performs the new window's mandatory synchronous first draw. GPUI drains chained `defer`
+        // callbacks in the same application turn, so `defer` is not an equivalent boundary.
+        executor.timer(std::time::Duration::from_millis(1)).await;
+        cx.update(|cx| {
+            if backend.read(cx).quitting {
+                backend.update(cx, |backend, _| {
+                    backend.profit_monitor_open_pending = None;
+                });
+                return;
+            }
+            let Some(request) = backend.read(cx).profit_monitor_open_pending else {
+                return;
+            };
+            if let Some(handle) = backend.read(cx).profit_monitor_window {
+                let alive = if request.activate {
+                    handle
+                        .update(cx, |_, window, _| window.activate_window())
+                        .is_ok()
+                } else {
+                    handle.update(cx, |_, _, _| ()).is_ok()
+                };
+                if alive {
+                    backend.update(cx, |backend, _| {
+                        backend.profit_monitor_open_pending = None;
+                    });
+                    mark_open(&backend, cx);
+                    return;
+                }
+            }
+
+            // Saved geometry is restored as-is. The platform rescues a rectangle whose centre no
+            // longer belongs to a display; a second origin-based guard incorrectly moved valid
+            // negative-x windows and overwrote their saved position.
+            let saved = backend.read(cx).layout.profit_monitor_window;
+            let bounds = saved.map_or(
+                Bounds {
+                    origin: point(px(160.0), px(120.0)),
+                    size: size(px(720.0), px(520.0)),
+                },
+                |geometry| Bounds {
+                    origin: point(px(geometry.x as f32), px(geometry.y as f32)),
+                    size: size(px(geometry.w as f32), px(geometry.h as f32)),
+                },
+            );
+            let display_id = crate::window::windowing::saved_or_owner_display_id(
+                saved.map(|geometry| point(px(geometry.x as f32), px(geometry.y as f32))),
+                owner,
+                owner_display,
+                cx,
+            );
+            let options = crate::window::windowing::profit_monitor_window_options(
+                t!("profit_monitor.window_title").to_string(),
+                WindowBounds::Windowed(bounds),
+                display_id,
+                Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0))),
+            );
+            let view_backend = backend.clone();
+            let opened = cx.open_window(options, move |window, cx| {
+                crate::window::windowing::configure_shell_clear_color(window, cx);
+                crate::window::windowing::set_group_window_icon(window, 0);
+                let view = cx.new(|cx| ProfitMonitorView::new(view_backend, window, cx));
+                cx.new(|cx| {
+                    Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque)
+                })
+            });
+            backend.update(cx, |backend, _| {
+                backend.profit_monitor_open_pending = None;
+                backend.profit_monitor_window = opened.as_ref().ok().copied();
+            });
+            if let Ok(handle) = opened {
+                mark_open(&backend, cx);
+                if request.activate {
+                    crate::window::windowing::activate_new_window(handle.into(), cx);
+                }
+            }
+        });
+    })
+    .detach();
 }
 
 /// Record that the monitor is open so the next launch reopens it.

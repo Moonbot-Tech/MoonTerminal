@@ -123,18 +123,25 @@ impl CoreStatusView {
         cx.notify();
     }
 
-    /// Toggle one core in the multi-select filter, or toggle the All item.
+    /// Toggle one core in the retained Classic filter, or toggle its All item.
     ///
     /// `Some(id)` toggles one core. `None` clears a selection containing every non-empty scoped
-    /// core, otherwise replacing it with that full set. Stale ids do not stand in for current cores.
+    /// core, otherwise replacing it with that full set. Stale ids do not stand in for current
+    /// cores. Auto mode owns and pins the effective scope, so this method becomes a no-op.
     ///
     /// Args:
     ///     id: Core to toggle, or `None` for the All row.
     ///     cx: View context used to rebuild cached rows and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; the in-memory filter and cached rows are updated in place.
+    ///     Nothing; Classic updates the retained filter and cache, while Auto changes neither.
     pub(super) fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
         let all: HashSet<CoreId> = self
             .scope_cores(self.backend.read(cx))
             .into_iter()
@@ -152,24 +159,31 @@ impl CoreStatusView {
         cx.notify();
     }
 
-    /// Toggle every still-available core from one clicked exchange section.
+    /// Toggle every still-available core from one exchange section in the Classic filter.
     ///
     /// Empty means All before the click, so the first exchange selection becomes explicit. A
     /// fully selected exchange is removed without changing selections from other exchanges.
-    /// Rendered ids that left this panel's group are ignored.
+    /// Rendered ids that left this panel's group are ignored. Auto mode leaves the retained Classic
+    /// selection and cache unchanged.
     ///
     /// Args:
     ///     exchange_cores: Core ids captured from one rendered exchange section.
     ///     cx: View context used to rebuild cached rows and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; a changed selection rebuilds the cache once, while a stale-only batch is a
-    ///     no-op.
+    ///     Nothing; a Classic change rebuilds once, while stale-only and Auto-owned calls are
+    ///     no-ops.
     pub(super) fn toggle_exchange_cores(
         &mut self,
         exchange_cores: Vec<CoreId>,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
         let available = self
             .scope_cores(self.backend.read(cx))
             .into_iter()

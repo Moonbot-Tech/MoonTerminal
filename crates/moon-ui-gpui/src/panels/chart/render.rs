@@ -21,13 +21,28 @@ enum ActKind {
 
 /// Builds a Cancel Buy or Panic Sell button shared by per-pane and fullscreen overlays.
 ///
-/// Labels, variants, and click handling are identical; callers supply only the ID and optionally
-/// add `.full_width()`. Moonbot product terms remain intentionally untranslated.
+/// Labels, variants, and click handling are identical; callers supply the target plus its live
+/// workspace permission and may add `.full_width()`. Moonbot product terms remain untranslated.
+///
+/// Args:
+///     kind: Market action represented by the button.
+///     id: Stable GPUI element identifier.
+///     armed: Whether panic sell is currently armed for the target.
+///     backend: Live command and workspace authority.
+///     workspace_group: Owning chart group, or `None` for an unscoped diagnostic chart.
+///     allowed: Render-time permission used to disable stale Auto targets visibly.
+///     core: Core targeted by the command.
+///     market: Canonical market targeted by the command.
+///
+/// Returns:
+///     A button whose callback revalidates the workspace before dispatch.
 fn action_button(
     kind: ActKind,
     id: SharedString,
     armed: bool,
     backend: Entity<crate::Backend>,
+    workspace_group: Option<String>,
+    allowed: bool,
     core: moon_core::session::CoreId,
     market: String,
 ) -> MoonButton {
@@ -44,23 +59,29 @@ fn action_button(
         .size(MoonButtonSize::Micro)
         .variant(variant)
         .selected(selected)
-        .on_click(move |_, _w, app| match kind {
-            ActKind::CancelBuy => {
-                let b = backend.read(app);
-                if let Err(error) = b.session.cancel_market_buys(core, market.clone()) {
-                    log::warn!("cancel market buys failed: {error:#}");
+        .disabled(!allowed)
+        .on_click(move |_, _w, app| {
+            backend.update(app, |b, cx| {
+                if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                    return;
                 }
-            }
-            ActKind::PanicSell => {
-                backend.update(app, |b, cx| {
-                    b.toggle_panic_sell(core, market.clone());
-                    cx.notify();
-                });
-            }
+                match kind {
+                    ActKind::CancelBuy => {
+                        if let Err(error) = b.session.cancel_market_buys(core, market.clone()) {
+                            log::warn!("cancel market buys failed: {error:#}");
+                        }
+                    }
+                    ActKind::PanicSell => {
+                        b.toggle_panic_sell(core, market.clone());
+                        cx.notify();
+                    }
+                }
+            });
         })
 }
 
 impl Render for ChartPanel {
+    /// Render the live chart surface and its explicitly unscoped in-chart figure settings.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::CHART_RENDER);
         let became_visible = !self.scene_visible;
@@ -378,8 +399,11 @@ impl Render for ChartPanel {
         // anchors.
         let action_overlay = if single_pane {
             self.chart.pane_target(0).and_then(|(core, market)| {
-                let armed = self.backend.read(cx).is_panic_armed(core, &market);
+                let backend = self.backend.read(cx);
+                let armed = backend.is_panic_armed(core, &market);
+                let allowed = self.workspace_action_allowed(&backend, core);
                 let backend0 = self.backend.clone();
+                let workspace_group = self.workspace_group.clone();
                 let mk = |kind: ActKind| -> AnyElement {
                     let id = match kind {
                         ActKind::CancelBuy => "chart-cancelbuy-fs",
@@ -390,6 +414,8 @@ impl Render for ChartPanel {
                         SharedString::from(id),
                         armed,
                         backend0.clone(),
+                        workspace_group.clone(),
+                        allowed,
                         core,
                         market.clone(),
                     )
@@ -484,7 +510,13 @@ impl Render for ChartPanel {
         // a menu of text items cannot draw.
         let fig_settings = self.fig_settings.clone().and_then(|(target, at)| {
             let backend = self.backend.clone();
-            crate::figstyle::render(&backend, &target, at, cx)
+            crate::figstyle::render(
+                &backend,
+                &target,
+                crate::figstyle::WorkspaceAuthority::Unscoped,
+                at,
+                cx,
+            )
         });
 
         let show_empty_logo = axis_panes.is_empty();
@@ -683,11 +715,14 @@ impl Render for ChartPanel {
                         ActKind::CancelBuy => format!("chart-cancelbuy-{i}"),
                         ActKind::PanicSell => format!("chart-panic-{i}"),
                     };
+                    let allowed = self.workspace_action_allowed(&self.backend.read(cx), core);
                     let btn = action_button(
                         kind,
                         SharedString::from(id),
                         armed,
                         self.backend.clone(),
+                        self.workspace_group.clone(),
+                        allowed,
                         core,
                         market,
                     )

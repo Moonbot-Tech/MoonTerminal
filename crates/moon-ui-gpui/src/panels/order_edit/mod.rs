@@ -20,6 +20,9 @@ use crate::design::{self, moon};
 mod body;
 mod submit;
 
+#[cfg(test)]
+mod tests;
+
 use body::{dialog_body, dialog_footer};
 use submit::apply;
 
@@ -45,6 +48,9 @@ struct InitVals {
 /// its captured entity after the dialog closures are released.
 pub struct OrderEditState {
     backend: Entity<Backend>,
+    /// Originating group whose Auto workspace may continue to authorize this editor. `None` marks
+    /// global/chart authority that must preserve its existing behavior.
+    authority_group: Option<String>,
     core: CoreId,
     uid: u64,
     row: OrderRow,
@@ -101,11 +107,25 @@ fn side_label(r: &OrderRow, executed: bool) -> (&'static str, MoonTone) {
     }
 }
 
-/// Opens the unique order editor for `uid` from `core` in the current window. The initial draft is
-/// copied from the current store snapshot; a missing or already closed order logs a warning and no
-/// dialog is opened.
+/// Open the unique order editor for one live order in the current window.
+///
+/// The initial draft is copied from the current store snapshot; a missing or already closed order
+/// logs a warning and opens no dialog. Group-owned callers retain their group for dispatch-time
+/// Auto-scope validation, while global/chart callers pass no group and preserve prior authority.
+///
+/// Args:
+///     backend: Shared command and workspace authority.
+///     authority_group: Originating group, or `None` for a global/chart surface.
+///     core: Core containing the order at dialog-open time.
+///     uid: Stable order identity on `core`.
+///     window: Window that owns the unique dialog.
+///     cx: Application context used to snapshot the row and construct inputs.
+///
+/// Returns:
+///     Nothing; invalid order identity is logged and refused before dialog construction.
 pub(crate) fn open_order_edit(
     backend: Entity<Backend>,
+    authority_group: Option<String>,
     core: CoreId,
     uid: u64,
     window: &mut Window,
@@ -166,6 +186,7 @@ pub(crate) fn open_order_edit(
 
     let state = cx.new(|_| OrderEditState {
         backend,
+        authority_group,
         core,
         uid,
         row,

@@ -46,8 +46,7 @@ fn terminal_windowing_separates_detached_panel_and_chart_contracts() {
     // prose, which must not satisfy a check about actually calling it.
     assert!(
         chart_tabs_windows.contains("detached_chart_window_options(")
-            && code_only(&chart_detached_host)
-                .contains("hide_window_from_taskbar_soon(window.window_handle(), cx)")
+            && code_only(&chart_detached_host).contains("hide_window_from_taskbar_soon(window)")
             && !chart_tabs_windows.contains("owner: Option<AnyWindowHandle>")
             && !chart_tabs_windows.contains("detached_panel_window_options("),
         "detached chart windows must use the independent chart factory and must not carry owner in the chart lifecycle"
@@ -125,10 +124,13 @@ fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() 
         "fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {",
     ));
     let monitor_rearms = monitor_ctor
-        .matches("hide_window_from_taskbar_soon(window.window_handle(), cx)")
+        .matches("hide_window_from_taskbar_soon(window)")
         .count();
     assert!(
-        monitor_rearms >= 2 && monitor_ctor.contains("cx.observe_window_activation(window,"),
+        monitor_rearms >= 2
+            && monitor_ctor.contains("cx.observe_window_activation(window,")
+            && monitor_ctor.contains("this.taskbar_hide =")
+            && monitor_ctor.contains("this.taskbar_hide.cancel();"),
         "ProfitMonitorView::new must arm the taskbar-hide burst at open AND re-arm it from \
          cx.observe_window_activation — the open-time burst alone cannot survive the shell \
          republishing the taskbar item when the window is restored from minimized"
@@ -136,12 +138,82 @@ fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() 
 
     let host_ctor = code_only(braced_body(&chart_detached_host, "pub(super) fn new("));
     let host_rearms = host_ctor
-        .matches("hide_window_from_taskbar_soon(window.window_handle(), cx)")
+        .matches("hide_window_from_taskbar_soon(window)")
         .count();
+    let host_activation = host_ctor
+        .split("cx.observe_window_activation(window,")
+        .nth(1)
+        .and_then(|tail| tail.split(".detach();").next())
+        .expect("detached chart must retain a native activation observer");
+    let host_cancel = host_activation
+        .find("this.taskbar_hide.cancel();")
+        .expect("activation must cancel the previous taskbar burst");
+    let host_rearm = host_activation
+        .find("this.taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window)")
+        .expect("activation must arm one replacement taskbar burst");
     assert!(
-        host_rearms >= 2 && host_ctor.contains("cx.observe_window_activation(window,"),
+        host_rearms >= 2 && host_cancel < host_rearm,
         "DetachedChartHost::new must arm the taskbar-hide burst at open AND re-arm it from \
          cx.observe_window_activation for the same reason as the Profit Monitor"
+    );
+}
+
+/// `profit_monitor/window.rs::open_window` must yield through a real timer before native creation and hold
+/// one pending authority until the result is published; replacing the timer with `defer`, dropping
+/// the pending guard, or clearing any singleton from an old release makes this assertion red and
+/// restores the reported UI stall or duplicate/stale monitor lifecycle.
+#[test]
+fn profit_monitor_creation_and_release_are_deferred_and_identity_safe() {
+    let monitor = code_only(&read_module("analytics/profit_monitor"));
+    let monitor_window = code_only(&read_src("analytics/profit_monitor/window.rs"));
+    let windowing = code_only(&read_src("window/windowing.rs"));
+    let open = braced_body(&monitor_window, "fn open_window(");
+    let explicit_open = braced_body(&monitor_window, "pub(crate) fn open(");
+    let restore = braced_body(&monitor_window, "pub(crate) fn restore(");
+    let constructor = braced_body(
+        &monitor,
+        "fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {",
+    );
+    let taskbar_worker = braced_body(&windowing, "fn run_taskbar_hide_worker(");
+
+    assert!(
+        open.contains("backend.profit_monitor_open_pending.as_mut()")
+            && open.contains("request.upgrade(activate)")
+            && open.contains("Some(ProfitMonitorOpenRequest::new(activate))")
+            && open.contains("executor.timer(std::time::Duration::from_millis(1)).await")
+            && open.contains("if backend.read(cx).quitting")
+            && open.contains("cx.open_window(options")
+            && open.find("executor.timer(std::time::Duration::from_millis(1)).await")
+                < open.find("if backend.read(cx).quitting")
+            && open.find("if backend.read(cx).quitting") < open.find("cx.open_window(options")
+            && open
+                .matches("backend.profit_monitor_open_pending = None")
+                .count()
+                >= 2,
+        "Profit Monitor creation must remain single-flight, yield, and refuse native creation once shutdown begins"
+    );
+    assert!(
+        constructor.contains("handle.window_id() != this.window_id")
+            && constructor.contains("backend.profit_monitor_window = None")
+            && constructor.contains("this.taskbar_hide.cancel();"),
+        "an old native release must cancel its taskbar worker and clear only its exact singleton"
+    );
+    assert!(
+        explicit_open.contains("open_window(backend, owner, owner_display, true, cx)")
+            && restore.contains("open_window(backend, owner, None, false, cx)")
+            && open.contains("let alive = if activate")
+            && open.contains("let alive = if request.activate")
+            && open.contains("if request.activate")
+            && open.contains("activate_new_window(handle.into(), cx)"),
+        "startup restore must stay non-activating while an explicit open upgrades and activates the one pending request"
+    );
+    assert!(
+        taskbar_worker.contains("CoInitializeEx(None, COINIT_APARTMENTTHREADED)")
+            && taskbar_worker.contains("CoCreateInstance(&TaskbarList")
+            && taskbar_worker.contains("taskbar.DeleteTab(hwnd)")
+            && !taskbar_worker.contains("cx.update")
+            && !taskbar_worker.contains(".await"),
+        "taskbar retries must create, use, and drop COM inside their background apartment without returning to GPUI"
     );
 }
 
@@ -437,6 +509,8 @@ fn firetest_chart_smoke_stays_runtime_behavior_scenario() {
     );
 }
 
+/// `startup.rs:dispatch_live_persistence` must remain inside the process-wide persistence gate;
+/// moving it outside makes a FireTest run overwrite the developer's saved workspace.
 #[test]
 fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
     // FireTest drives the real app: it opens tool windows, switches the locale, changes the price
@@ -476,9 +550,7 @@ fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
     // is sliced out and every saver has to be found INSIDE it.
     let guarded = braced_body(&startup, "if b.persist_allowed {");
     for saver in [
-        "b.layout.save()",
-        "dock_persist::save_all",
-        "detached::save_all",
+        "dispatch_live_persistence(b, &mut coord_persistence.borrow_mut())",
         "chart_persist::save_all",
         "b.tab_badges.save()",
         "b.figures.borrow_mut().save()",
@@ -490,6 +562,10 @@ fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
              writes the developer's workspace during a --debug-script run"
         );
     }
+    assert!(
+        !guarded.contains("b.layout.save()") && !guarded.contains("window_state_persist::save_all"),
+        "the gated live GPUI loop may dispatch layout and Classic snapshots but must never write them synchronously"
+    );
     // And the notify that follows the block must stay OUTSIDE it — suppressing persistence must
     // not also suppress the backend wake the rest of the app depends on.
     assert!(

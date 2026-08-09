@@ -9,6 +9,7 @@
 //! under the platform data directory.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::rc::Rc;
 
 use gpui::*;
@@ -100,21 +101,28 @@ pub fn load_all() -> DockMap {
     }
 }
 
-/// Serialize all dock layouts as pretty JSON and atomically write `docks.json`.
+/// Serialize all dock layouts and atomically write an exact destination.
 ///
-/// Serialization and write failures are non-fatal and produce warnings only.
-pub fn save_all(map: &DockMap) {
+/// Args:
+///     map: Complete Classic group-to-dock-state map.
+///     path: Destination supplied by production or an isolated failure-path regression.
+///
+/// Returns:
+///     `true` only after serialization and the atomic write both succeed.
+pub(crate) fn save_all_to_path(map: &DockMap, path: &Path) -> bool {
     match serde_json::to_string_pretty(map) {
         Ok(s) => {
-            if let Err(e) = moon_core::config::write_file_atomic(
-                &paths::docks_path(),
-                s.as_bytes(),
-                "docks.json",
-            ) {
-                log::warn!("не записал docks.json: {e}");
+            if let Err(e) = moon_core::config::write_file_atomic(path, s.as_bytes(), "docks.json") {
+                log::warn!("could not write docks.json: {e}");
+                false
+            } else {
+                true
             }
         }
-        Err(e) => log::warn!("не сериализовал docks.json: {e}"),
+        Err(e) => {
+            log::warn!("could not serialize docks.json: {e}");
+            false
+        }
     }
 }
 

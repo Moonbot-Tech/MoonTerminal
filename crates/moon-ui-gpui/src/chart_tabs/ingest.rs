@@ -87,7 +87,12 @@ impl ChartTabs {
             fresh.len(),
             self.add.len()
         ));
-        let (epoch, theme, backend) = (self.epoch, self.theme.clone(), self.backend.clone());
+        let (epoch, theme, backend, workspace_group) = (
+            self.epoch,
+            self.theme.clone(),
+            self.backend.clone(),
+            self.group.clone(),
+        );
         for (n, core, bucket, market, ttl) in fresh {
             let in_detached = self
                 .detached
@@ -111,7 +116,14 @@ impl ChartTabs {
                 tab.update(cx, |p, pcx| p.add_coin(core, &market, ttl, pcx));
             } else {
                 let panel = cx.new(|_| {
-                    AddChartStack::new(backend.clone(), n, bucket.clone(), epoch, theme.clone())
+                    AddChartStack::new(
+                        backend.clone(),
+                        workspace_group.clone(),
+                        n,
+                        bucket.clone(),
+                        epoch,
+                        theme.clone(),
+                    )
                 });
                 // Restore this tab's saved per-tab display and comparison settings from charts.json.
                 let (

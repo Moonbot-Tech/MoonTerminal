@@ -15,18 +15,260 @@ fn kind_short(kind: ReportKind) -> String {
     }
 }
 
-impl ReportPanel {
-    /// Render the shared multi-select core combo.
+/// Lightweight retained host for the Report's composite scope dropdown.
+///
+/// `MoonDropdown` routes popup open/close invalidation through the entity that renders it. Keeping
+/// this control as a child prevents menu-only repaint work from rebuilding the Report table, while
+/// the weak owner reference avoids an entity cycle and preserves one authoritative filter state.
+pub(super) struct ReportScopeControl {
+    owner: WeakEntity<ReportPanel>,
+    menu_open: bool,
+}
+
+impl ReportScopeControl {
+    /// Construct the scope control and follow owner notifications that can change its summary.
     ///
-    /// An empty set means all cores; every partial selection shows the selected count. Clicking a
-    /// known exchange header batch-toggles its currently available database cores.
+    /// Args:
+    ///     owner: Report panel whose filter and schema state this child presents.
+    ///     cx: Child context used to observe owner changes without retaining it strongly.
+    ///
+    /// Returns:
+    ///     A closed retained control with a weak owner link.
+    pub(super) fn new(owner: Entity<ReportPanel>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&owner, |_this, _owner, cx| cx.notify()).detach();
+        Self {
+            owner: owner.downgrade(),
+            menu_open: false,
+        }
+    }
+
+    /// Update only the retained popup state.
+    ///
+    /// Args:
+    ///     open: Whether the dropdown popup is currently visible.
+    ///     cx: Child context used to repaint the trigger and popup branch.
+    ///
+    /// Returns:
+    ///     Nothing; the Report owner and its query invalidation state are untouched.
+    fn set_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.menu_open != open {
+            self.menu_open = open;
+            cx.notify();
+        }
+    }
+
+    /// Apply a direction selection only when it changes the live owner filter.
+    ///
+    /// Args:
+    ///     owner: Weak Report owner captured by a menu item.
+    ///     side: Newly selected trade direction.
+    ///     cx: Application context used to read and update the owner.
+    ///
+    /// Returns:
+    ///     Nothing; selecting the checked row causes no owner update or query invalidation.
+    fn select_side(owner: &WeakEntity<ReportPanel>, side: SideFilter, cx: &mut App) {
+        let Some(owner) = owner.upgrade() else {
+            return;
+        };
+        if owner.read(cx).side != side {
+            owner.update(cx, |panel, cx| panel.set_side(side, cx));
+        }
+    }
+
+    /// Apply a trade-kind selection only when it changes the live owner filter.
+    ///
+    /// Args:
+    ///     owner: Weak Report owner captured by a menu item.
+    ///     kind: Newly selected report kind.
+    ///     cx: Application context used to read and update the owner.
+    ///
+    /// Returns:
+    ///     Nothing; selecting the checked row causes no owner update or query invalidation.
+    fn select_kind(owner: &WeakEntity<ReportPanel>, kind: ReportKind, cx: &mut App) {
+        let Some(owner) = owner.upgrade() else {
+            return;
+        };
+        if owner.read(cx).kind != kind {
+            owner.update(cx, |panel, cx| panel.set_kind(kind, cx));
+        }
+    }
+
+    /// Toggle the deleted-only filter from its live owner value.
+    ///
+    /// Args:
+    ///     owner: Weak Report owner captured by the menu item.
+    ///     cx: Application context used to read and update the owner.
+    ///
+    /// Returns:
+    ///     Nothing; a live owner receives exactly one filter mutation.
+    fn toggle_deleted(owner: &WeakEntity<ReportPanel>, cx: &mut App) {
+        let Some(owner) = owner.upgrade() else {
+            return;
+        };
+        let deleted_only = !owner.read(cx).deleted_only;
+        owner.update(cx, |panel, cx| panel.set_deleted_only(deleted_only, cx));
+    }
+
+    /// Toggle the comment pane through the live owner.
+    ///
+    /// Args:
+    ///     owner: Weak Report owner captured by a menu item.
+    ///     cx: Application context used to update the owner.
+    ///
+    /// Returns:
+    ///     Nothing; this display-only selection does not request report data.
+    fn toggle_comment(owner: &WeakEntity<ReportPanel>, cx: &mut App) {
+        let Some(owner) = owner.upgrade() else {
+            return;
+        };
+        owner.update(cx, |panel, cx| panel.toggle_comment_pane(cx));
+    }
+}
+
+impl Render for ReportScopeControl {
+    /// Render the composite scope dropdown from the owner's current filter snapshot.
+    ///
+    /// Args:
+    ///     window: Owning window forwarded to MoonDropdown interactions.
+    ///     cx: Child render context that owns popup-only invalidation.
+    ///
+    /// Returns:
+    ///     The existing direction, kind, deleted-only, and comment menu semantics.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(owner) = self.owner.upgrade() else {
+            return div().into_any_element();
+        };
+        let panel = owner.read(cx);
+        let side = panel.side;
+        let kind = panel.kind;
+        let deleted_only = panel.deleted_only;
+        let show_comment = panel.show_comment;
+        let no_comment_column =
+            !panel.cols.is_empty() && !panel.cols.iter().any(|column| column == "comment");
+
+        let mut label = if matches!(side, SideFilter::All) && matches!(kind, ReportKind::All) {
+            t!("report.filter.all").to_string()
+        } else {
+            let mut label = crate::panels::side_label(side);
+            label.push('/');
+            label.push_str(&kind_short(kind));
+            label
+        };
+        if deleted_only {
+            label.push('/');
+            label.push_str(&t!("report.filter.deleted_short"));
+        }
+
+        let side_owner = self.owner.clone();
+        let mut items = crate::panels::radio_items(
+            [
+                (
+                    SideFilter::All,
+                    "rs-all".into(),
+                    t!("report.filter.all_sides").to_string().into(),
+                ),
+                (
+                    SideFilter::Long,
+                    "rs-long".into(),
+                    t!("report.side.long").to_string().into(),
+                ),
+                (
+                    SideFilter::Short,
+                    "rs-short".into(),
+                    t!("report.side.short").to_string().into(),
+                ),
+            ],
+            side,
+            crate::panels::RadioMark::Check,
+            move |app, side| Self::select_side(&side_owner, side, app),
+        );
+        items.push(MoonMenuItem::separator());
+        let kind_owner = self.owner.clone();
+        items.extend(crate::panels::radio_items(
+            [
+                (
+                    ReportKind::All,
+                    "rk-all".into(),
+                    t!("report.kind.all_kinds").to_string().into(),
+                ),
+                (
+                    ReportKind::Real,
+                    "rk-real".into(),
+                    t!("report.kind.real").to_string().into(),
+                ),
+                (
+                    ReportKind::Emu,
+                    "rk-emu".into(),
+                    t!("report.kind.emu").to_string().into(),
+                ),
+            ],
+            kind,
+            crate::panels::RadioMark::Check,
+            move |app, kind| Self::select_kind(&kind_owner, kind, app),
+        ));
+        items.push(MoonMenuItem::separator());
+        let deleted_owner = self.owner.clone();
+        items.push(
+            MoonMenuItem::with_key("rd-deleted", t!("report.filter.deleted").to_string())
+                .checked(deleted_only)
+                .on_click(move |_, _, app| Self::toggle_deleted(&deleted_owner, app)),
+        );
+        items.push(MoonMenuItem::separator());
+        let comment_owner = self.owner.clone();
+        items.push(
+            MoonMenuItem::with_key("rd-comment", t!("report.comment.show").to_string())
+                .checked(show_comment && !no_comment_column)
+                .disabled(no_comment_column)
+                .on_click(move |_, _, app| Self::toggle_comment(&comment_owner, app)),
+        );
+
+        let control = cx.entity();
+        div()
+            .id("rep-scope-tip")
+            .tooltip(crate::panels::common::text_tooltip(
+                t!("report.filter.scope_tip").to_string(),
+            ))
+            .child(
+                MoonDropdown::new("rep-scope")
+                    .label(label)
+                    .trigger_caret(true)
+                    .trigger_variant(MoonButtonVariant::Soft)
+                    .trigger_size(MoonButtonSize::Action)
+                    .fit_trigger_width(102.0, 170.0)
+                    .menu_width_scaled(210.0)
+                    .menu_size(MoonMenuSize::Compact)
+                    .close_on_select(false)
+                    .open(self.menu_open)
+                    .on_open_change(move |open, _, app| {
+                        control.update(app, |this, cx| this.set_menu_open(open, cx));
+                    })
+                    .items(items),
+            )
+            .into_any_element()
+    }
+}
+
+impl ReportPanel {
+    /// Render the shared core combo under the panel's current scope authority.
+    ///
+    /// Standalone and Classic group Reports expose the retained multi-selection. Group Auto mode
+    /// displays the pinned effective workspace scope and disables the selector without changing
+    /// retained state.
     ///
     /// Args:
     ///     cx: Panel context used to order database cores, read exchanges, and wire callbacks.
     ///
     /// Returns:
-    ///     The configured fixed-trigger dropdown.
+    ///     Interactive retained-scope selector or disabled Auto scope indicator.
     pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let workspace_scope = self.workspace_scope(self.backend.read(cx));
+        let workspace_owned = workspace_scope
+            .as_ref()
+            .is_some_and(EffectiveCoreScope::is_workspace_owned);
+        let effective_selection: HashSet<CoreId> = workspace_scope
+            .as_ref()
+            .map(|scope| scope.ids().iter().copied().collect())
+            .unwrap_or_default();
         let view = cx.entity();
         let exchange_view = view.clone();
         // Rank the raw DB result at render time; the query has no config and may include
@@ -38,11 +280,28 @@ impl ReportPanel {
                 backend.session.market_source().core_exchange_names(),
             )
         };
-        crate::controls::core_combo(
+        let pinned_label = workspace_scope
+            .as_ref()
+            .and_then(|scope| match scope.label() {
+                crate::workspace::EffectiveScopeLabel::Overview => {
+                    Some(t!("workspace.overview").to_string())
+                }
+                crate::workspace::EffectiveScopeLabel::Core(core) => cores
+                    .iter()
+                    .find(|(id, _)| *id == core)
+                    .map(|(_, name)| name.clone()),
+                crate::workspace::EffectiveScopeLabel::All
+                | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
+            });
+        let combo = crate::controls::core_combo(
             "rep-core",
             &cores,
             &exchange_names,
-            &self.sel_cores,
+            if workspace_owned {
+                &effective_selection
+            } else {
+                &self.sel_cores
+            },
             crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),
@@ -56,6 +315,12 @@ impl ReportPanel {
                 });
             },
         )
+        .disabled(workspace_owned);
+        if let Some(label) = pinned_label {
+            combo.label(label)
+        } else {
+            combo
+        }
     }
 
     /// Render the searchable, virtualized strategy selector grouped by core.
@@ -110,145 +375,6 @@ impl ReportPanel {
                             // A custom MoonCombobox trigger suppresses its built-in trailing icon.
                             .child(div().text_color(rgb(palette.text_muted)).child("▾"))
                     }),
-            )
-    }
-
-    /// Render the row-scope field: direction, trade kind, the deleted-only switch and the comment
-    /// pane, in ONE dropdown.
-    ///
-    /// The first three used to be two dropdowns and a bare checkbox. They are independent filters,
-    /// but they are always read together as "which rows am I looking at", so they share one field
-    /// split by separators — the way the Orders settings menu groups its own options. The last
-    /// section is not a filter at all: it shows or hides the comment pane. The trigger
-    /// summarises the state in short words (`Все/реал.`), adding the deleted segment only while
-    /// that off-by-default filter is on.
-    ///
-    /// Width is the old kind dropdown's 102 as a MINIMUM, not a fixed size: a fixed 102 fits ~12
-    /// mono characters, so the three-part deleted-only label would be ellipsised in every locale —
-    /// hiding the one filter that has no other indicator left in the toolbar. `fit_trigger_width`
-    /// keeps the field at 102 for the everyday two-part label and lets it grow for the rare one.
-    pub(super) fn scope_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        // With both lists on "all" the pair would read as the same word twice ("Все/все"); one word
-        // says exactly as much.
-        // Built by appending onto the first word: this runs on every render of the panel, so the
-        // segments are pushed in place instead of allocating a fresh String per join.
-        let mut label =
-            if matches!(self.side, SideFilter::All) && matches!(self.kind, ReportKind::All) {
-                t!("report.filter.all").to_string()
-            } else {
-                let mut label = crate::panels::side_label(self.side);
-                label.push('/');
-                label.push_str(&kind_short(self.kind));
-                label
-            };
-        if self.deleted_only {
-            label.push('/');
-            label.push_str(&t!("report.filter.deleted_short"));
-        }
-        // Each group labels its "all" row distinctly: two bare "Все" rows in one menu would read as
-        // the same option twice.
-        let side_view = cx.entity();
-        let mut items = crate::panels::radio_items(
-            [
-                (
-                    SideFilter::All,
-                    "rs-all".into(),
-                    t!("report.filter.all_sides").to_string().into(),
-                ),
-                (
-                    SideFilter::Long,
-                    "rs-long".into(),
-                    t!("report.side.long").to_string().into(),
-                ),
-                (
-                    SideFilter::Short,
-                    "rs-short".into(),
-                    t!("report.side.short").to_string().into(),
-                ),
-            ],
-            self.side,
-            crate::panels::RadioMark::Check,
-            move |app, side| {
-                side_view.update(app, |t, c| t.set_side(side, c));
-            },
-        );
-        items.push(MoonMenuItem::separator());
-        let kind_view = cx.entity();
-        items.extend(crate::panels::radio_items(
-            [
-                (
-                    ReportKind::All,
-                    "rk-all".into(),
-                    t!("report.kind.all_kinds").to_string().into(),
-                ),
-                (
-                    ReportKind::Real,
-                    "rk-real".into(),
-                    t!("report.kind.real").to_string().into(),
-                ),
-                (
-                    ReportKind::Emu,
-                    "rk-emu".into(),
-                    t!("report.kind.emu").to_string().into(),
-                ),
-            ],
-            self.kind,
-            crate::panels::RadioMark::Check,
-            move |app, k| {
-                kind_view.update(app, |t, c| t.set_kind(k, c));
-            },
-        ));
-        // Soft-deleted trades: off (the default) hides them, on shows ONLY them. The toggle reads
-        // the live flag instead of a render-time copy, so it cannot invert a value the user changed
-        // from elsewhere between this render and the click.
-        items.push(MoonMenuItem::separator());
-        let deleted_view = cx.entity();
-        items.push(
-            MoonMenuItem::with_key("rd-deleted", t!("report.filter.deleted").to_string())
-                .checked(self.deleted_only)
-                .on_click(move |_, _, app| {
-                    deleted_view.update(app, |t, c| t.set_deleted_only(!t.deleted_only, c));
-                }),
-        );
-        // The comment pane is a display choice, not a filter, so it sits in its own section and
-        // stays out of the trigger label — the pane itself is the visible state.
-        items.push(MoonMenuItem::separator());
-        let comment_view = cx.entity();
-        // Disabled once we KNOW the core's schema carries no comment column: the pane could never
-        // show anything there, and a check mark on a row that changes nothing reads as a bug. An
-        // empty schema means "not probed yet", not "no such column", so it leaves the row enabled.
-        let no_comment_column =
-            !self.cols.is_empty() && !self.cols.iter().any(|column| column == "comment");
-        items.push(
-            MoonMenuItem::with_key("rd-comment", t!("report.comment.show").to_string())
-                .checked(self.show_comment && !no_comment_column)
-                .disabled(no_comment_column)
-                .on_click(move |_, _, app| {
-                    comment_view.update(app, |t, c| t.toggle_comment_pane(c));
-                }),
-        );
-        // The tooltip carries what the row labels cannot: that the deleted switch is exclusive
-        // (off hides deleted trades, on shows ONLY them) rather than an "also show" checkbox.
-        div()
-            .id("rep-scope-tip")
-            .tooltip(crate::panels::common::text_tooltip(
-                t!("report.filter.scope_tip").to_string(),
-            ))
-            .child(
-                MoonDropdown::new("rep-scope")
-                    .label(label)
-                    .trigger_caret(true)
-                    .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::Action)
-                    .fit_trigger_width(102.0, 170.0)
-                    // Wide enough for the longest row in every locale — es
-                    // "Comentario de la operación" — or the menu ellipsises it.
-                    .menu_width_scaled(210.0)
-                    .menu_size(MoonMenuSize::Compact)
-                    // Four independent switches in one field: keep the menu open so setting two of
-                    // them does not cost two open/close cycles.
-                    .close_on_select(false)
-                    .items(items),
             )
     }
 
@@ -476,3 +602,6 @@ impl ReportPanel {
             )
     }
 }
+
+#[cfg(test)]
+mod tests;

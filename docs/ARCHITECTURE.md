@@ -1,6 +1,6 @@
 # MoonTerminal Architecture
 
-Дата актуализации: 2026-07-25.
+Дата актуализации: 2026-08-09.
 
 Этот документ описывает текущую публичную архитектуру терминала и намеренно не включает старые
 экспериментальные планы миграции.
@@ -160,6 +160,120 @@ config, поэтому последующий Save не откатывает в�
 - Смена режима — презентационная: она нейтрализована в `AppConfig::structural_sig`, реконнекта
   ядер не вызывает. Порядок `Vec<ServerConfig>` при этом остаётся в сигнатуре — из него строится
   `SessionManager::config_order`, решающий, куда вставить переподнятую сессию.
+
+## Рабочие пространства Classic и Auto
+
+Рабочее пространство выбирается отдельно для каждого группового окна. В `layout.toml` живут
+долговременные значения: `WorkspaceMode` в `workspace_mode_by_group`, выбранный core UID в
+`auto_workspace_core_by_group` и одна общая ширина Auto rail. Отсутствие UID означает Overview.
+Старый или повреждённый режим читается как `Classic`, поэтому он остаётся режимом по умолчанию.
+Протухший UID не удаляется и участвует в `WindowLayout::max_core_uid`, но до возвращения активного
+ядра этой группы разрешается как Overview.
+
+Runtime-состояние намеренно отделено от layout:
+
+- `WorkspaceFocus` хранит последнее живое Auto-окно, с которым взаимодействовал пользователь или
+  из которого открыл `Analytics`/`Strategies`. Это process-lifetime ownership singleton-инструментов,
+  а не настройка для следующего запуска; уход владельца в Classic, закрытие или перестройка окна
+  очищают невалидный focus.
+- `WorkspaceRevision` публикует изменения режима, выбранного ядра, singleton-владельца, состава
+  групповых окон и конфигурации. Кэшированные и асинхронные потребители наблюдают именно этот
+  revision, а не надеются на случайную перерисовку Shell.
+
+Classic сохраняет прежнюю семантику полностью. Локальные фильтры панелей и singleton-окон остаются
+их собственностью и не переписываются при входе в Auto. Карта
+`active_trade_core_by_group` тоже не меняется: выбранное в Auto живое ядро лишь временно становится
+`active_trade_core`, а Overview использует сохранённый Classic core или прежний fallback. Поэтому
+ручные команды всегда имеют одно ядро и Overview не превращает их в broadcast; header/chart
+producers в Auto не записывают временный выбор обратно в Classic.
+
+Для групповой панели effective scope вычисляется на чтении:
+
+- Classic — её сохранённые All/explicit core filters;
+- Auto Overview — все доступные ядра этой группы;
+- Auto core — ровно одно выбранное доступное ядро.
+
+Auto показывает соответствующий selector как pinned/disabled, но не копирует scope в локальное
+поле. Валидность сохранённых Classic-фильтров проверяется по полной конфигурации/живому составу, а
+не по временно узкому Auto scope. `Detects`, например, продолжает ingest и cursoring по всей группе
+и фильтрует только представление, чтобы переключение ядра не теряло и не переигрывало события.
+
+`Analytics` и `Strategies` используют effective scope последнего живого `WorkspaceFocus`; без него
+они возвращаются к своим сохранённым фильтрам. Выбор, детали и изменяющие команды `Strategies`
+ограничены видимым effective core, а group-owned `open_goto` повторно проверяет текущий Auto scope
+и отказывает, не меняя rail selection. Исключения намеренные: standalone `Report`, открытый из Analytics,
+сохраняет свой явный `ReportScope`; global `Assets`, Profit Monitor и Screener остаются
+application-wide aggregate surfaces. Групповой status bar и общие счётчики rail тоже не сужаются
+выбранным ядром.
+
+Смена scope может произойти между кликом, ответом фонового запроса, native picker/dialog и отправкой
+команды. Поэтому асинхронный результат обязан нести identity текущего scope/revision и приниматься
+только при совпадении: Report query сравнивает собственные sequence и filter, Analytics
+инвалидирует прежние query identities, а Report export после выбора пути сравнивает generation
+группового workspace и effective core IDs. Отложенные, изменяющие и destructive пути
+(`Strategies`, tuner Save/Copy, order edit, Assets Market Sell, wallet transfer, Report export,
+Report delete/restore, Analytics purge) повторно проверяют effective core непосредственно перед
+записью или отправкой;
+длинный purge делает ту же проверку
+между ожиданиями и каждой следующей командой. Отказ не переносит действие на новое ядро: stale
+Market Sell не отправляет команду, показывает warning и закрывает confirmation; stale wallet
+transfer очищает pending dialog без команды; stale Report export пишет cancellation в лог и не
+создаёт файл; purge остаётся в видимом failed state.
+
+Многоцелевые действия не сужаются молча до оставшихся видимыми ядер. `Strategies` сохраняет точный
+план Start/Stop, Apply или Delete, а Analytics Tuner Save/Copy — generation и полный ordered target
+set. Если хотя бы одна цель, payload или scope изменились до dispatch, отменяется весь batch до
+первой команды; сохранённые Classic drafts и staging при этом не очищаются.
+
+В каждой группе остаётся один `DockArea`. Classic сохраняет `docks.json` и `detached.json` как одну
+логическую транзакцию через `window-state.pending.json`: startup replay'ит незавершённый snapshot
+до создания окон, а повторяющиеся `(group, panel)` detached-spec схлопываются до respawn.
+При входе в Auto Shell запоминает полный runtime-layout Classic по стабильным именам и применяет
+общую Auto-топологию из `auto_dock.json` к локальным `Rc<dyn PanelView>` этого окна. Топология хранит
+только дерево split, стороны, размеры и порядок вкладок: group IDs, panel payload, active tab, zoom
+и сами `Rc` между окнами не передаются. Нормализованное сравнение и revision authority Backend
+синхронизируют изменения между всеми живыми Auto-окнами без циклической перепубликации. Active tab
+остаётся локальным состоянием окна.
+
+При отсутствии `auto_dock.json` первая общая topology строится как вертикальный operations preset:
+гибкий верхний tab stack содержит активный «Отчёт», закреплённые слева «Чарты» и «Лог» среди
+остальных верхних вкладок; единственный нижний блок «Ордера» получает высоту ещё четырёх строк
+таблицы. После первого пользовательского изменения эта схема заменяется сохранённой общей topology;
+Classic layout в этом процессе не участвует.
+
+В Auto разрешены reorder, split и resize. `ChartTabs` закреплён первым, визуально отделён от
+операционных вкладок и не может быть сдвинут или обойдён drop-операцией. Detach и close обычных
+панелей, а также detach графиков запрещены отдельно от структурного редактирования: Auto сохраняет
+полный набор рабочих поверхностей, но разрешает их reorder, split и resize. Уже откреплённые в Classic обычные
+панели временно закрываются без изменения их specs/geometry, получают локальные временные экземпляры
+в Auto dock и открываются заново после возврата в Classic; существующие detached chart windows не
+трогаются. Возврат восстанавливает Classic active tab, zoom, split sizes и исходные panel instances,
+а Auto никогда не записывает их в `docks.json`.
+
+Auto rail и этот `DockArea` размещены в штатном `MoonResizablePanelGroup`: rail получает
+перетаскиваемую глобальную ширину, которую Backend сразу распространяет на остальные окна и хранит
+между запусками, а dock — явную полную cross-axis высоту. Секции rail строятся по бирже из live
+`core_exchange_names`; полное имя сервера доступно в широкой строке и tooltip. Готовое ядро
+обозначается увеличенным зелёным status dot без дублирующего текста, а проблемные состояния сохраняют
+видимую подпись в Full и полную диагностику в tooltip при Compact/Icon. Локальная подгонка rail под
+узкое окно не переписывает глобально сохранённую ширину. Terminal group остаётся authority для выбора
+своего core или активации другого group window, но не используется как визуальная группировка.
+
+Все три layout-класса — `layout.toml`, общая `auto_dock.json` и совместный Classic snapshot —
+сериализуются одним persistence worker. Live GPUI-контур только передаёт immutable snapshots и
+принимает acknowledgements: accepted enqueue снимает dirty, а новая мутация или failed ack
+выставляет его снова. Quit ставит
+финальный полный snapshot за уже выполняющейся записью, join'ит worker и использует синхронный
+fallback только для классов, которые worker не смог подтвердить.
+
+`ReportPanel` создаётся как лёгкая GPUI-сущность: SQLite connection/schema, список ядер, колонки и
+сохранённые display preferences загружаются на background executor и публикуются только в ещё живую
+панель. Отдельные revision-счётчики не дают позднему результату перезаписать значение, которое
+пользователь успел изменить и даже вернуть обратно. Записи sort, comment pane и visible columns
+открывают worker-owned connection вне GPUI, сериализуются общим lock и перед записью отбрасывают
+устаревший sequence своего независимого preference key; sort key/direction сохраняются одним
+SQLite statement. Natural-width cache ключуется не только scale, но и live locale плюс точной
+resolved font identity, поэтому смена языка или шрифта не оставляет старые ширины заголовков.
 
 ## Репликация отчётов: чекпойнт и карта живых строк
 

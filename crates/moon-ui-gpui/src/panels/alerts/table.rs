@@ -20,6 +20,8 @@ use crate::panels::{RadioMark, radio_items};
 struct RowCtx {
     view: Entity<AlertsPanel>,
     backend: Entity<Backend>,
+    /// Owning group used to revalidate delayed row actions against the current Auto workspace.
+    group: String,
     strategies: Rc<HashMap<CoreId, StrategyOptions>>,
     cols: Rc<Vec<AlCol>>,
     /// The figure whose settings panel is open; its row is marked, so the floating panel and the
@@ -34,17 +36,24 @@ struct RowCtx {
 }
 
 impl RowCtx {
-    /// Writes to the backend and refreshes the panel — the protocol every acting cell follows.
+    /// Revalidates a core-specific write, then updates the backend and refreshes the panel.
     ///
-    /// Both halves matter and are easy to half-write: the backend notification is what wakes the
-    /// chart and every other panel, and the panel's own refresh is what keeps the control that was
-    /// just clicked from lagging a tick behind the click.
-    fn commit(&self, app: &mut App, f: impl FnOnce(&mut Backend)) {
-        self.backend.update(app, |b, bcx| {
+    /// The workspace check happens before the callback so a row rendered for an old Auto selection
+    /// cannot mutate anything. After an authorized write, both halves matter: the backend
+    /// notification wakes the chart and other panels, while the panel refresh keeps the clicked
+    /// control from lagging a tick behind.
+    fn commit_core(&self, app: &mut App, core: CoreId, f: impl FnOnce(&mut Backend)) {
+        let allowed = self.backend.update(app, |b, bcx| {
+            if !b.workspace_action_allows_core(Some(&self.group), core) {
+                return false;
+            }
             f(b);
             bcx.notify();
+            true
         });
-        self.view.update(app, |this, cx| this.refresh(cx));
+        if allowed {
+            self.view.update(app, |this, cx| this.refresh(cx));
+        }
     }
 }
 
@@ -61,6 +70,7 @@ impl AlertsPanel {
         let ctx = RowCtx {
             view: cx.entity(),
             backend: self.backend.clone(),
+            group: self.group.clone(),
             strategies: self.alert_strategies.clone(),
             cols: cols.clone(),
             open_settings: self.settings_for.clone(),
@@ -234,7 +244,7 @@ fn alert_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
                 .size(MoonCheckboxSize::Compact)
                 .on_change(move |on: &bool, _w, app| {
                     let (on, market) = (*on, market.clone());
-                    ctx.commit(app, move |b| {
+                    ctx.commit_core(app, core, move |b| {
                         b.set_figure_alert(core, &market, id, on);
                     });
                 }),
@@ -247,8 +257,16 @@ fn alert_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
 /// Raising is deliberate and is what this panel has always done — see the note on
 /// `Backend::open_on_main`, which names the chart double-click and the Alerts coin click as the two
 /// sources allowed to pull Main forward. Every other panel opens without stealing focus.
+///
+/// Args:
+///     row: Figure row containing the captured core and market.
+///     ctx: Render snapshot containing the owning group and Backend handle.
+///
+/// Returns:
+///     A clickable cell whose retained callback raises Main only while its core remains visible.
 fn coin_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
     let backend = ctx.backend.clone();
+    let group = ctx.group.clone();
     let core = row.core;
     let market = row.market.clone();
     div()
@@ -264,8 +282,9 @@ fn coin_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         .on_click(move |_, _w, app| {
             let market = market.clone();
             backend.update(app, |b, bcx| {
-                b.open_on_main((core, market), true);
-                bcx.notify();
+                if b.open_on_main_if_authorized(Some(&group), (core, market), true) {
+                    bcx.notify();
+                }
             });
         })
         .into_any_element()
@@ -290,7 +309,9 @@ fn strategy_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         RadioMark::Check,
         move |app, sid| {
             let market = market.clone();
-            ctx.commit(app, move |b| b.set_figure_strategy(core, &market, id, sid));
+            ctx.commit_core(app, core, move |b| {
+                b.set_figure_strategy(core, &market, id, sid)
+            });
         },
     );
     MoonDropdown::new(SharedString::from(format!("al-strat-{core}-{id}")))
@@ -347,7 +368,7 @@ fn actions_cell(row: &FigRow, ctx: &RowCtx, app: &mut App) -> AnyElement {
                 .tooltip(delete_tip)
                 .on_click(move |_, _w, app| {
                     let market = delete_market.clone();
-                    delete_ctx.commit(app, move |b| b.remove_figure(core, &market, id));
+                    delete_ctx.commit_core(app, core, move |b| b.remove_figure(core, &market, id));
                 })
                 .render(),
         )
@@ -358,7 +379,9 @@ fn actions_cell(row: &FigRow, ctx: &RowCtx, app: &mut App) -> AnyElement {
 ///
 /// The content is built ONLY while open — `MoonPopover` takes it eagerly, and this runs for every
 /// visible row on every repaint. Opening and closing both go through the panel's own
-/// `settings_for`, so exactly one row can be open and the table can mark it.
+/// `settings_for`, so exactly one row can be open and the table can mark it. Opening revalidates
+/// the row's current Auto visibility, and the shared figure-style callbacks receive this group's
+/// authority so an already-open popover cannot write after the workspace moves.
 fn settings_popover(
     target: crate::figstyle::FigStyleTarget,
     open: bool,
@@ -376,6 +399,8 @@ fn settings_popover(
     .render();
     let toggle_view = ctx.view.clone();
     let toggle_target = target.clone();
+    let toggle_backend = ctx.backend.clone();
+    let toggle_group = ctx.group.clone();
     let mut popover = MoonPopover::new(SharedString::from(format!(
         "al-set-pop-{}-{}",
         target.core, target.id
@@ -388,8 +413,12 @@ fn settings_popover(
     .close_on_content_click(false)
     .open(open)
     .on_open_change(move |is_open, _window, app| {
+        let allowed = !is_open
+            || toggle_backend
+                .read(app)
+                .workspace_action_allows_core(Some(&toggle_group), toggle_target.core);
         toggle_view.update(app, |this, cx| {
-            this.settings_for = is_open.then(|| toggle_target.clone());
+            this.settings_for = (is_open && allowed).then(|| toggle_target.clone());
             cx.notify();
         });
     })
@@ -397,7 +426,13 @@ fn settings_popover(
     if open {
         let backend = ctx.backend.clone();
         let content = ctx.view.update(app, |_this, cx| {
-            crate::figstyle::rows(&backend, &crate::figstyle::Target::Figure(target), None, cx)
+            crate::figstyle::rows(
+                &backend,
+                &crate::figstyle::Target::Figure(target),
+                crate::figstyle::WorkspaceAuthority::Group(ctx.group.clone()),
+                None,
+                cx,
+            )
         });
         if let Some(content) = content {
             popover = popover.content(content);
@@ -435,3 +470,6 @@ fn fmt_time(ms: i64, zone: chrono_tz::Tz) -> String {
         full
     }
 }
+
+#[cfg(test)]
+mod tests;

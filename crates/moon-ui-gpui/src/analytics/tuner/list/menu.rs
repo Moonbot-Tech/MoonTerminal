@@ -90,6 +90,14 @@ const MENU_W: f32 = 340.0;
 
 impl AnalyticsView {
     /// Classify a row using the live backend state.
+    ///
+    /// Args:
+    ///     key: Strategy row key in `strategyid@core_uid` form.
+    ///     alive: Strategy liveness marker from the row aggregate.
+    ///     cx: Application context used to read live core and workspace state.
+    ///
+    /// Returns:
+    ///     An allowed exact target only when its core is live and still workspace-visible.
     pub(in crate::analytics) fn strategy_purge_gate(
         &self,
         key: &str,
@@ -97,7 +105,7 @@ impl AnalyticsView {
         cx: &gpui::App,
     ) -> PurgeGate {
         let backend = self.backend.read(cx);
-        purge_gate(
+        let gate = purge_gate(
             key,
             alive,
             |core_uid| {
@@ -119,7 +127,18 @@ impl AnalyticsView {
                         && core.strategies.iter().any(|strategy| strategy.id == sid)
                 })
             },
-        )
+        );
+        match gate {
+            PurgeGate::Allowed { core_uid, .. }
+                if self
+                    .workspace_scope
+                    .as_ref()
+                    .is_some_and(|scope| !scope.core_ids.contains(&core_uid)) =>
+            {
+                PurgeGate::Offline
+            }
+            gate => gate,
+        }
     }
 
     /// Open the strategy row's context menu at `pos`.

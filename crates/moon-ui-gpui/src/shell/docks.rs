@@ -57,7 +57,14 @@ impl Shell {
         }
     }
 
+    /// Restore every detached panel that queued a repin for this Classic group window.
+    ///
+    /// Auto suspends ordinary detached windows without consuming their specs, so a request already
+    /// queued at the mode boundary waits until Classic owns the dock again.
     pub(super) fn drain_repin_requests(&mut self, cx: &mut Context<Self>) {
+        if self.applied_workspace_mode == moon_core::config::WorkspaceMode::AutoTrading {
+            return;
+        }
         let group = self.group.clone();
         let repins: Vec<String> = self.backend.update(cx, |b, _| {
             let mut mine = Vec::new();
@@ -74,39 +81,40 @@ impl Shell {
         if repins.is_empty() {
             return;
         }
-        let backend = self.backend.clone();
-        let dock = self.dock.clone();
+        let shell = cx.entity().downgrade();
         let handle = self.window_handle;
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
                 for panel_name in repins {
-                    // Restore from a detached window to the remembered location, including splits.
-                    restore_panel_to_home_tabs(
-                        &dock,
-                        &backend,
-                        &group,
-                        &panel_name,
-                        true,
-                        window,
-                        app,
-                    );
-                    backend.update(app, |b, _| {
-                        b.detached
-                            .retain(|s| !(s.group == group && s.panel == panel_name));
-                        b.detached_dirty = true;
+                    let _ = shell.update(app, |this, cx| {
+                        this.restore_panel_in_workspace(&panel_name, true, true, window, cx);
                     });
                 }
             });
         });
     }
 
+    /// Defer detaching one named panel while Classic owns the dock.
+    ///
+    /// Auto mode rejects the request before and after deferral so a queued action cannot create a
+    /// window or mutate Classic detached persistence after a mode transition.
     pub(super) fn defer_detach_panel(&mut self, panel_name: String, cx: &mut Context<Self>) {
+        if !crate::workspace::should_persist_normal_dock(
+            self.backend.read(cx).workspace_mode(&self.group),
+        ) {
+            return;
+        }
         let backend = self.backend.clone();
         let dock = self.dock.clone();
         let group = self.group.clone();
         let handle = self.window_handle;
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
+                if !crate::workspace::should_persist_normal_dock(
+                    backend.read(app).workspace_mode(&group),
+                ) {
+                    return;
+                }
                 // Assets detaches like any other panel: open a per-group window, remove its tab,
                 // and repin it when that window closes. Its separate all-cores window opens from
                 // the panel toolbar button rather than a double-click.
@@ -202,6 +210,7 @@ impl Shell {
         });
     }
 
+    /// Defer restoring a closed Classic dock panel to its normal home strip.
     pub(super) fn defer_restore_closed_panel(
         &mut self,
         panel_name: String,
@@ -210,32 +219,64 @@ impl Shell {
         if !detached::supports_panel(&panel_name) {
             return;
         }
-        let backend = self.backend.clone();
-        let dock = self.dock.clone();
-        let group = self.group.clone();
+        let shell = cx.entity().downgrade();
         let handle = self.window_handle;
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
-                // Closing a docked panel resets its placement: remove it from any split and restore
-                // it as a regular tab in the home strip. Clear the split slot to prevent a split
-                // restoration.
-                let key = format!("{group}:{panel_name}");
-                backend.update(app, |b, _| {
-                    if b.layout.dock_split_slot.remove(&key).is_some() {
-                        b.layout_dirty = true;
-                    }
+                let _ = shell.update(app, |this, cx| {
+                    // Closing a docked Classic panel resets its placement to the normal home strip.
+                    let key = format!("{}:{panel_name}", this.group);
+                    this.backend.update(cx, |backend, _| {
+                        if backend.layout.dock_split_slot.remove(&key).is_some() {
+                            backend.layout_dirty = true;
+                        }
+                    });
+                    this.restore_panel_in_workspace(&panel_name, false, false, window, cx);
                 });
-                restore_panel_to_home_tabs(
-                    &dock,
-                    &backend,
-                    &group,
-                    &panel_name,
-                    false,
-                    window,
-                    app,
-                );
             });
         });
+    }
+
+    /// Restore one panel into the currently visible Classic topology.
+    ///
+    /// Args:
+    ///     panel_name: Stable dock persistence name to rebuild and insert.
+    ///     prefer_split: Whether remembered split placement takes priority over the home strip.
+    ///     clear_detached: Whether the successful restore consumes a detached-window spec.
+    ///     window: Owning group window required by DockArea mutation APIs.
+    ///     cx: Shell context used to update dock and persistence state.
+    ///
+    /// Returns:
+    ///     Nothing; a missing panel factory leaves state unchanged.
+    fn restore_panel_in_workspace(
+        &mut self,
+        panel_name: &str,
+        prefer_split: bool,
+        clear_detached: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !restore_panel_to_home_tabs(
+            &self.dock,
+            &self.backend,
+            &self.group,
+            panel_name,
+            prefer_split,
+            window,
+            cx,
+        ) {
+            return;
+        }
+
+        if clear_detached {
+            let group = self.group.clone();
+            self.backend.update(cx, |backend, _| {
+                backend
+                    .detached
+                    .retain(|spec| !(spec.group == group && spec.panel == panel_name));
+                backend.detached_dirty = true;
+            });
+        }
     }
 
     pub(super) fn persist_group_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -367,6 +408,19 @@ fn tree_outline(node: &PanelState) -> String {
     }
 }
 
+/// Build and restore one panel to its remembered normal-dock location.
+///
+/// Args:
+///     dock: Live group DockArea currently showing the normal topology.
+///     backend: Shared panel factories and placement persistence.
+///     group: Owning group name.
+///     panel_name: Stable panel persistence name.
+///     prefer_split: Whether a remembered split slot takes priority over home tabs.
+///     window: Owning group window required by DockArea mutation APIs.
+///     app: Application context used to build and insert the panel.
+///
+/// Returns:
+///     `true` after a panel was built and inserted, or `false` when no factory matched.
 fn restore_panel_to_home_tabs(
     dock: &Entity<DockArea>,
     backend: &Entity<Backend>,
@@ -375,14 +429,14 @@ fn restore_panel_to_home_tabs(
     prefer_split: bool,
     window: &mut Window,
     app: &mut App,
-) {
+) -> bool {
     let key = format!("{group}:{panel_name}");
     dock_log(&format!(
         "[dock] restore {key}: begin (prefer_split={prefer_split})"
     ));
     let Some(panel) = detached::build_panel(panel_name, group, backend, window, app) else {
         dock_log(&format!("[dock] restore {key}: build_panel returned none"));
-        return;
+        return false;
     };
     // Restoration priority:
     //   1) for `prefer_split`, restore the split slot beside a surviving sibling;
@@ -509,6 +563,7 @@ fn restore_panel_to_home_tabs(
         let after = dock.update(app, |area, cx| tree_outline(&area.dump(cx).center));
         dock_log(&format!("[dock] restore {key}: done tree={after}"));
     }
+    true
 }
 
 /// Remembered dock placement used when restoring a panel.

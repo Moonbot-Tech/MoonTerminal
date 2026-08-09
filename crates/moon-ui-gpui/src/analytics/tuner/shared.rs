@@ -39,9 +39,24 @@ pub(super) struct SaveTarget {
     pub(super) name: String,
 }
 
+/// Immutable authority carried from Save/Copy preparation through final command dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SaveAuthority {
+    /// Dialog/draft sequence captured before any asynchronous preview or live-core read.
+    pub(super) dialog_seq: u64,
+    /// Workspace generation for Auto, or `None` for intentionally unscoped Classic behavior.
+    pub(super) workspace_generation: Option<u64>,
+    /// Complete concrete Auto scope captured with the producer, normalized for comparison.
+    pub(super) workspace_cores: Option<Vec<u64>>,
+    /// Ordered strategy identities; order is significant for per-target edit payloads.
+    pub(super) targets: Vec<(i64, Option<u64>)>,
+}
+
 /// A prepared save: target(s) + the list of changes. Single selection = 1 target;
 /// Ctrl- or Shift-built multi-selection = N targets (the same changes for each). Copy = always 1.
 pub(super) struct SaveDialog {
+    /// Producer identity that must still match before any target is dispatched.
+    pub(super) authority: SaveAuthority,
     pub(super) targets: Vec<SaveTarget>,
     pub(super) changes: Vec<(String, String)>,
     /// Current parameter values of the FIRST (anchor) target, indexed like `changes`

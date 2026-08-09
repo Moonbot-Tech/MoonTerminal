@@ -231,9 +231,18 @@ impl MainChartStack {
         let backend = self.backend.clone();
         let epoch = self.epoch;
         let theme = self.theme.clone();
+        let workspace_group = self.group.clone();
         let market = market.to_string();
-        let panel =
-            cx.new(|cx| ChartPanel::new_main(backend, Some((core, market)), epoch, theme, cx));
+        let panel = cx.new(|cx| {
+            ChartPanel::new_main(
+                backend,
+                Some(workspace_group),
+                Some((core, market)),
+                epoch,
+                theme,
+                cx,
+            )
+        });
         cx.observe(&panel, |this, _, cx| {
             let mut dirty = this.prune_empty(cx);
             if dirty {
@@ -371,6 +380,48 @@ impl MainChartStack {
         self.sync_visibility(cx);
         self.sync_backend_open_markets(cx);
         // In comparison mode, a new chart immediately receives eligibility and the shared Y range.
+        self.sync_compare(cx);
+        self.arm_idle_timer(cx);
+        cx.notify();
+    }
+
+    /// Focus an existing Main chart or replace the active slot for an Auto rail selection.
+    ///
+    /// Unlike [`Self::open_or_focus`], a missing target never appends beside the current chart.
+    /// Replacing the active entry keeps the stack count and position stable while the shared
+    /// teardown releases the old chart's panes, market interest, and comparison lock.
+    ///
+    /// Args:
+    ///     core: Selected Auto workspace core.
+    ///     market: Canonical target-core market chosen by the parent controller.
+    ///     cx: Stack context used to focus or replace the active chart and publish state.
+    ///
+    /// Returns:
+    ///     Nothing; the chosen target becomes the fullscreen active Main entry.
+    pub(super) fn replace_or_focus(
+        &mut self,
+        core: CoreId,
+        market: String,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (core, market.clone());
+        if self.index_of(&key).is_some() {
+            self.select_market(&key, true, cx);
+            self.arm_idle_timer(cx);
+            return;
+        }
+        let Some(active) = self.active.filter(|index| *index < self.charts.len()) else {
+            self.open_or_focus(core, market, cx);
+            return;
+        };
+        self.remove_chart_at(active, cx);
+        let panel = self.create_panel(core, &market, cx);
+        self.charts
+            .insert(active, ChartStackEntry::new(core, market, panel));
+        self.active = Some(active);
+        self.show_stack = false;
+        self.sync_visibility(cx);
+        self.sync_backend_open_markets(cx);
         self.sync_compare(cx);
         self.arm_idle_timer(cx);
         cx.notify();
@@ -574,7 +625,10 @@ impl MainChartStack {
             .into_iter()
             .any(|h| h.is_active(cx).unwrap_or(false));
         if chart_focused {
-            self.backend.update(cx, |b, _| b.note_main_input(&group));
+            self.backend.update(cx, |b, bcx| {
+                b.note_main_input(&group);
+                b.focus_auto_workspace(&group, bcx);
+            });
             return false;
         }
         let ttl = Duration::from_secs(secs as u64);

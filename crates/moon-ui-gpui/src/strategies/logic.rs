@@ -12,6 +12,76 @@ use super::filter::PreparedFilter;
 use super::rules::{Rules, Values};
 use super::tree::ops::path_segments;
 use super::{Key, StrategiesView};
+use crate::Backend;
+
+/// Return whether one core belongs to the singleton's effective Strategies scope.
+///
+/// Args:
+///     workspace: Concrete Auto ids, or `None` for Classic all-core behavior.
+///     core: Core to test.
+///
+/// Returns:
+///     `true` in Classic or when Auto currently exposes the core.
+pub(super) fn strategy_core_is_visible(workspace: Option<&[CoreId]>, core: CoreId) -> bool {
+    workspace.is_none_or(|cores| cores.contains(&core))
+}
+
+/// Filter retained strategy keys to the effective singleton scope without mutating the source.
+///
+/// Args:
+///     keys: Retained primary or multi-selection keys.
+///     workspace: Concrete Auto ids, or `None` for Classic.
+///
+/// Returns:
+///     Only keys whose cores are currently visible.
+pub(super) fn visible_strategy_keys(
+    keys: impl IntoIterator<Item = Key>,
+    workspace: Option<&[CoreId]>,
+) -> Vec<Key> {
+    keys.into_iter()
+        .filter(|(core, _)| strategy_core_is_visible(workspace, *core))
+        .collect()
+}
+
+/// Resolve the retained primary selection through the effective singleton scope.
+pub(super) fn selected_key(st: &StrategiesView) -> Option<Key> {
+    st.selected
+        .filter(|(core, _)| strategy_core_is_visible(st.workspace_cores.as_deref(), *core))
+}
+
+/// Return connected strategy-tree roots constrained to the singleton workspace when present.
+pub(super) fn visible_strategy_cores(
+    st: &StrategiesView,
+    backend: &Backend,
+) -> crate::core_order::OrderedCores {
+    crate::core_order::CoreOrder::new(&backend.config)
+        .from_sessions(backend.session.sessions(), |session| {
+            strategy_core_is_visible(st.workspace_cores.as_deref(), session.id)
+        })
+}
+
+/// Return the retained folder only while its core is visible in the effective singleton scope.
+pub(super) fn selected_folder(st: &StrategiesView) -> Option<(CoreId, String)> {
+    st.selected_folder
+        .clone()
+        .filter(|(core, _)| strategy_core_is_visible(st.workspace_cores.as_deref(), *core))
+}
+
+/// Count staged checkbox changes that the current workspace may display and apply.
+pub(super) fn staged_count(st: &StrategiesView) -> usize {
+    st.staged
+        .keys()
+        .filter(|(core, _)| strategy_core_is_visible(st.workspace_cores.as_deref(), *core))
+        .count()
+}
+
+/// Count field drafts that the current workspace may display and apply.
+pub(super) fn field_edit_count(st: &StrategiesView) -> usize {
+    st.field_edits
+        .keys()
+        .filter(|(core, _, _)| strategy_core_is_visible(st.workspace_cores.as_deref(), *core))
+        .count()
+}
 
 /// Find a strategy row in the core store.
 pub(super) fn row(store: &CoreStore, core: CoreId, id: u64) -> Option<&StrategyRow> {
@@ -28,17 +98,18 @@ pub(super) fn selected_row<'a>(
     if let Some((_, r)) = st.version_override() {
         return Some(r);
     }
-    let (core, id) = st.selected?;
+    let (core, id) = selected_key(st)?;
     row(store, core, id)
 }
 
 /// Return multi-selected keys, or the primary selection when the set is empty.
 pub(super) fn selected_keys(st: &StrategiesView) -> Vec<Key> {
-    if st.sel.is_empty() {
+    let retained: Vec<Key> = if st.sel.is_empty() {
         st.selected.into_iter().collect()
     } else {
         st.sel.iter().copied().collect()
-    }
+    };
+    visible_strategy_keys(retained, st.workspace_cores.as_deref())
 }
 
 pub(super) fn multi_row_pairs<'a>(
@@ -118,7 +189,7 @@ pub(super) fn selected_values(st: &StrategiesView, store: &CoreStore) -> Values 
         for (name, val) in &row.fields {
             v.insert(name.to_lowercase(), val.clone());
         }
-        if let Some((core, id)) = st.selected {
+        if let Some((core, id)) = selected_key(st) {
             for ((c, sid, name), value) in &st.field_edits {
                 if *c == core && *sid == id {
                     v.insert(name.to_lowercase(), value.clone());
@@ -153,7 +224,7 @@ pub(super) fn selected_sections<'a>(
     st: &'a StrategiesView,
     store: &'a CoreStore,
 ) -> Option<&'a [SchemaSection]> {
-    let (core, _) = st.selected?;
+    let (core, _) = selected_key(st)?;
     let cd = store.core(core)?;
     let row = selected_row(st, store)?;
     let schema = cd.schema.as_ref()?;

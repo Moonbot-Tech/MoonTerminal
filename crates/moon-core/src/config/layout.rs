@@ -4,10 +4,110 @@
 //! fields remain readable. A corrupt or missing file yields the default.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
 
 use super::paths;
+
+/// Narrowest persisted Auto-workspace rail width in logical pixels.
+pub const AUTO_WORKSPACE_RAIL_WIDTH_MIN: f32 = 52.0;
+/// Widest persisted Auto-workspace rail width in logical pixels.
+pub const AUTO_WORKSPACE_RAIL_WIDTH_MAX: f32 = 560.0;
+/// First-run Auto-workspace rail width in logical pixels.
+pub const AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT: f32 = 340.0;
+
+/// Persisted terminal workspace preset.
+///
+/// The serialized codes are an external layout contract. Unknown or wrong-typed values fall back
+/// to [`Self::Classic`] so a newer or hand-edited preference cannot make the complete layout
+/// document unreadable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WorkspaceMode {
+    /// The existing chart-first, freely editable terminal workspace.
+    #[default]
+    Classic,
+    /// The shared modular workspace with coordinated rail-owned core navigation.
+    AutoTrading,
+}
+
+impl WorkspaceMode {
+    /// Return the stable code written to `layout.toml`.
+    ///
+    /// Returns:
+    ///     The English machine-readable code for this preset.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::AutoTrading => "auto-trading",
+        }
+    }
+
+    /// Resolve a persisted code without rejecting the surrounding layout.
+    ///
+    /// Args:
+    ///     code: Value read from the hand-editable layout document.
+    ///
+    /// Returns:
+    ///     The matching preset, or [`Self::Classic`] for an unknown code.
+    pub fn from_code(code: &str) -> Self {
+        match code.trim() {
+            "auto-trading" => Self::AutoTrading,
+            _ => Self::Classic,
+        }
+    }
+}
+
+impl Serialize for WorkspaceMode {
+    /// Serialize through [`Self::code`] so one stable-code authority serves every caller.
+    ///
+    /// Args:
+    ///     serializer: Serde output receiving the machine-readable workspace code.
+    ///
+    /// Returns:
+    ///     Serializer-specific success value.
+    ///
+    /// Errors:
+    ///     Propagates serializer failures while writing the stable string.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkspaceMode {
+    /// Deserialize a workspace code leniently so it cannot invalidate `layout.toml`.
+    ///
+    /// Args:
+    ///     deserializer: Serde input positioned at one workspace-mode value.
+    ///
+    /// Returns:
+    ///     The saved preset, defaulting to Classic for every unsupported shape.
+    ///
+    /// Errors:
+    ///     Propagates only input errors that prevent Serde from visiting the value.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// A supported text code or an ignored malformed value.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StoredMode {
+            /// Stable workspace code.
+            Text(String),
+            /// Any future or malformed non-text shape.
+            Other(serde::de::IgnoredAny),
+        }
+
+        Ok(match StoredMode::deserialize(deserializer)? {
+            StoredMode::Text(code) => Self::from_code(&code),
+            StoredMode::Other(_) => Self::Classic,
+        })
+    }
+}
 
 /// "Strategies" window panels: widths (tree/versions/sections) + versions collapsed state.
 /// Values are clamped by the window when applied.
@@ -147,6 +247,24 @@ pub struct WindowLayout {
     /// the value. Stale entries remain references for the durable UID high-water mark.
     #[serde(default)]
     pub active_trade_core_by_group: HashMap<String, u64>,
+    /// Workspace preset selected independently for each group window.
+    ///
+    /// Absent groups are Classic. The complete map is read leniently because this hand-editable
+    /// preference must never discard unrelated geometry or panel state.
+    #[serde(default, deserialize_with = "de_lenient_map")]
+    pub workspace_mode_by_group: HashMap<String, WorkspaceMode>,
+    /// Auto-workspace core selection by group; an absent entry means Overview.
+    ///
+    /// Stale UIDs remain durable high-water references but are resolved as Overview until that
+    /// configured live core returns to the group.
+    #[serde(default, deserialize_with = "de_lenient_map")]
+    pub auto_workspace_core_by_group: HashMap<String, u64>,
+    /// One application-wide Auto rail width shared by every group window.
+    ///
+    /// The stored logical-pixel value is leniently decoded and clamped so malformed or stale
+    /// preferences cannot reject the surrounding layout or produce an unusable rail.
+    #[serde(default, deserialize_with = "de_auto_workspace_rail_width")]
+    pub auto_workspace_rail_width: Option<f32>,
     /// Legacy egui detached-tab records; the live detached-window list uses `detached.json`.
     #[serde(default)]
     pub detached: Vec<DetachedLayout>,
@@ -741,6 +859,74 @@ where
     })
 }
 
+/// Read a hand-editable map without allowing one malformed preference to reject the layout.
+///
+/// Args:
+///     d: Serde deserializer positioned at the complete map value.
+///
+/// Returns:
+///     The decoded map, or an empty map when its shape or any entry is unusable.
+///
+/// Errors:
+///     Propagates only deserializer failures that cannot be consumed as ignored input.
+fn de_lenient_map<'de, D, K, V>(d: D) -> Result<HashMap<K, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    K: Deserialize<'de> + Eq + Hash,
+    V: Deserialize<'de>,
+{
+    Ok(de_lenient(d)?.unwrap_or_default())
+}
+
+/// Clamp a persisted or runtime Auto rail width to the globally usable range.
+///
+/// Args:
+///     width: Logical-pixel width from persistence or a resize event.
+///
+/// Returns:
+///     A finite width within the supported range, or the first-run default for non-finite input.
+pub fn clamp_auto_workspace_rail_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(AUTO_WORKSPACE_RAIL_WIDTH_MIN, AUTO_WORKSPACE_RAIL_WIDTH_MAX)
+    } else {
+        AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT
+    }
+}
+
+/// Decode the hand-editable Auto rail width without rejecting the complete layout document.
+///
+/// Args:
+///     d: Serde deserializer positioned at the present rail-width value.
+///
+/// Returns:
+///     A clamped numeric value, accepting quoted numbers and defaulting every malformed shape.
+///
+/// Errors:
+///     Propagates only deserializer failures that cannot be consumed as ignored input.
+fn de_auto_workspace_rail_width<'de, D>(d: D) -> Result<Option<f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// Every shape a hand-edited rail width may use.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Width {
+        /// A bare TOML number.
+        Number(f32),
+        /// A quoted number copied from another settings surface.
+        Text(String),
+        /// Any unsupported shape accepted only to salvage the complete document.
+        Other(serde::de::IgnoredAny),
+    }
+
+    let width = match Option::<Width>::deserialize(d)? {
+        Some(Width::Number(width)) => Some(width),
+        Some(Width::Text(width)) => width.trim().parse().ok(),
+        Some(Width::Other(_)) | None => None,
+    };
+    Ok(width.map(clamp_auto_workspace_rail_width))
+}
+
 /// Read the optional clock zone without conflating a malformed present key with an absent one.
 ///
 /// Args:
@@ -807,11 +993,21 @@ impl WindowLayout {
         super::toml_io::load_or_default(&paths::layout_path(), "layout.toml", |_| {})
     }
 
+    /// Return the effective global Auto rail width for legacy and current layouts.
+    ///
+    /// Returns:
+    ///     Persisted clamped logical-pixel width, or the first-run default when no preference has
+    ///     been written yet.
+    pub fn auto_workspace_rail_width(&self) -> f32 {
+        self.auto_workspace_rail_width
+            .unwrap_or(AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT)
+    }
+
     /// Highest core uid this layout still references.
     ///
-    /// Feeds the durable UID high-water mark: the header ticker, recent coin history, and active
-    /// trade-core selections are stored by UID, so reissuing one would silently bind saved UI state
-    /// to a new core.
+    /// Feeds the durable UID high-water mark: the header ticker, recent coin history, active
+    /// trade-core selections, and Auto workspace selections are stored by UID, so reissuing one
+    /// would silently bind saved UI state to a new core.
     ///
     /// Returns:
     ///     The largest stable core UID referenced by layout state, if any.
@@ -821,6 +1017,7 @@ impl WindowLayout {
             .map(|ticker| ticker.core_uid)
             .into_iter()
             .chain(self.active_trade_core_by_group.values().copied())
+            .chain(self.auto_workspace_core_by_group.values().copied())
             .chain(
                 self.recent_coins
                     .iter()
@@ -867,10 +1064,18 @@ impl WindowLayout {
         true
     }
 
-    /// Writes layout.toml (non-fatal: errors are only logged).
-    pub fn save(&self) {
-        if let Err(e) = super::toml_io::save(&paths::layout_path(), self, "layout.toml") {
-            log::warn!("{e:#}");
+    /// Write `layout.toml` without treating persistence failure as fatal.
+    ///
+    /// Returns:
+    ///     `true` only after the atomic write succeeds, allowing callers to retain dirty state and
+    ///     retry a transient failure.
+    pub fn save(&self) -> bool {
+        match super::toml_io::save(&paths::layout_path(), self, "layout.toml") {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("{error:#}");
+                false
+            }
         }
     }
 }

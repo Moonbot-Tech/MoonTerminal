@@ -40,6 +40,7 @@ use rust_i18n::t;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design::moon;
 use crate::panels::RenderGate;
+use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use crate::{Backend, design};
 
 /// MoonProto ordinal for the `Alerts` strategy kind, the only kind assignable here.
@@ -63,7 +64,8 @@ pub struct AlertsPanel {
     group: String,
     /// Filters, sort and visible columns — everything persisted about the view.
     view: AlertsViewState,
-    /// Multi-select core filter; an empty set means every core in the group.
+    /// Retained Classic multi-select core filter; an empty set means every group core. Auto mode
+    /// pins its effective workspace scope without using or mutating this selection.
     sel_cores: HashSet<CoreId>,
     /// Built rows, already filtered and sorted. `Rc` because the table's row callback outlives the
     /// borrow that built them.
@@ -175,6 +177,9 @@ impl AlertsPanel {
             }
         })
         .detach();
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| this.refresh(cx))
+            .detach();
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |_this, _revision, cx| cx.notify())
             .detach();
@@ -247,12 +252,8 @@ impl AlertsPanel {
     fn data_sig(&self, b: &Backend) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         b.figures.borrow().rev().hash(&mut h);
-        for s in b
-            .session
-            .sessions()
-            .iter()
-            .filter(|s| s.group == self.group)
-        {
+        let scope = self.effective_scope(b);
+        for s in b.session.sessions().iter().filter(|s| scope.contains(s.id)) {
             s.id.hash(&mut h);
             s.name.hash(&mut h);
             if let Some(core) = b.session.store().core(s.id) {
@@ -271,12 +272,12 @@ impl AlertsPanel {
     /// Rebuilds the row set from the store, applying both filters, the coin query and the sort.
     fn rebuild(&mut self, b: &Backend) {
         // Limit the panel to cores in its own group, then to the core filter.
+        let scope = self.effective_scope(b);
         let names: HashMap<CoreId, String> = b
             .session
             .sessions()
             .iter()
-            .filter(|s| s.group == self.group)
-            .filter(|s| self.sel_cores.is_empty() || self.sel_cores.contains(&s.id))
+            .filter(|s| scope.contains(s.id))
             .map(|s| (s.id, s.name.clone()))
             .collect();
         // Each group core's `Alerts` strategies, for the per-row assignment dropdown and for the
@@ -521,8 +522,7 @@ impl AlertsPanel {
         };
         let state = dock.read(app).dump(app);
         backend.update(app, |b, _| {
-            b.dock_states.insert(group, state);
-            b.dock_dirty = true;
+            b.store_classic_dock_state(group, state);
         });
     }
 
@@ -531,9 +531,41 @@ impl AlertsPanel {
         CoreOrder::new(&b.config).from_sessions(b.session.sessions(), |s| s.group == self.group)
     }
 
-    /// Toggles the selected-core filter. `None` is the All row: a complete selection collapses back
-    /// to the empty-means-all form, anything else selects every group core.
+    /// Resolve the effective core scope used by row collection and action controls.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing workspace authority and live group membership.
+    ///
+    /// Returns:
+    ///     Effective core scope without changing the retained Classic selection.
+    fn effective_scope(&self, b: &Backend) -> EffectiveCoreScope {
+        let retained: Vec<CoreId> = self.sel_cores.iter().copied().collect();
+        let retained = if retained.is_empty() {
+            RetainedCoreScope::All
+        } else {
+            RetainedCoreScope::Explicit(&retained)
+        };
+        b.effective_workspace_scope(&self.group, retained)
+    }
+
+    /// Toggle the retained Classic core filter, or do nothing while Auto owns the selector.
+    ///
+    /// `None` is the All row: a complete selection collapses back to the empty-means-all form;
+    /// anything else selects every group core.
+    ///
+    /// Args:
+    ///     id: Core to toggle, or `None` for the All row.
+    ///     cx: Panel context used to refresh rows after a Classic selection change.
+    ///
+    /// Returns:
+    ///     Nothing; Auto leaves the retained Classic selection and rows unchanged.
     fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
         let all: HashSet<CoreId> = self
             .backend
             .read(cx)
@@ -554,8 +586,21 @@ impl AlertsPanel {
         self.refresh(cx);
     }
 
-    /// Toggles every still-available core of one clicked exchange section.
+    /// Toggle one exchange section in the retained Classic filter, or do nothing in Auto mode.
+    ///
+    /// Args:
+    ///     exchange_cores: Core ids captured from one rendered exchange section.
+    ///     cx: Panel context used to refresh rows after a Classic selection change.
+    ///
+    /// Returns:
+    ///     Nothing; unavailable ids and Auto-owned selectors are no-ops.
     fn toggle_exchange_cores(&mut self, exchange_cores: Vec<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
         let available = self
             .group_cores(self.backend.read(cx))
             .into_iter()

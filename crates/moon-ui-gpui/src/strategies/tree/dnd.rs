@@ -7,6 +7,9 @@ use super::ops;
 use super::ui::{FolderDrag, StratDrag};
 use moon_core::feed::NewStrategySpec;
 
+#[cfg(test)]
+mod tests;
+
 impl StrategiesView {
     // ── Clipboard: copy and paste ────────────────────────────────────────────
 
@@ -23,7 +26,19 @@ impl StrategiesView {
         cx.notify();
     }
 
+    /// Copy one folder only while its captured core remains workspace-visible.
+    ///
+    /// Args:
+    ///     core: Source core captured by the tree action.
+    ///     path: Canonical source folder segments.
+    ///     cx: View context used to read strategies and update clipboards.
+    ///
+    /// Returns:
+    ///     Nothing; a stale Auto target leaves the retained clipboard untouched.
     pub(super) fn copy_folder(&mut self, core: CoreId, path: Vec<String>, cx: &mut Context<Self>) {
+        if !action_cores_visible(self.workspace_cores.as_deref(), [core]) {
+            return;
+        }
         let clip = {
             let store = self.backend.read(cx).session.store();
             let Some(cd) = store.core(core) else { return };
@@ -42,7 +57,19 @@ impl StrategiesView {
         self.clipboard = Some(clip);
     }
 
+    /// Paste into a target only while its captured core remains workspace-visible.
+    ///
+    /// Args:
+    ///     core: Destination core resolved from the effective tree selection.
+    ///     target: Canonical destination folder path, or empty for the core root.
+    ///     cx: View context used to read the clipboard and dispatch creation.
+    ///
+    /// Returns:
+    ///     Nothing; a stale Auto target preserves clipboard and hidden retained selection state.
     pub(super) fn paste_into(&mut self, core: CoreId, target: String, cx: &mut Context<Self>) {
+        if !action_cores_visible(self.workspace_cores.as_deref(), [core]) {
+            return;
+        }
         // Prefer the internal clipboard; when empty, parse the system clipboard's `clip_to_text`
         // format so strategies or folders shared as text can be pasted.
         let clip = self.clipboard.clone().or_else(|| {
@@ -95,7 +122,9 @@ impl StrategiesView {
         // target core so the result remains visible.
         self.filter.only_active = false;
         self.expanded_cores.insert(core);
-        self.pending_select = first_name.map(|n| (core, n));
+        if let Some(name) = first_name {
+            self.queue_pending_name(core, name, cx);
+        }
         cx.notify();
     }
 
@@ -110,6 +139,9 @@ impl StrategiesView {
         drag: &StratDrag,
         cx: &mut Context<Self>,
     ) {
+        if !action_cores_visible(self.workspace_cores.as_deref(), [drag.core, target_core]) {
+            return;
+        }
         let ids = drag.ids.clone();
         if ids.is_empty() {
             return;
@@ -183,6 +215,9 @@ impl StrategiesView {
         drag: &FolderDrag,
         cx: &mut Context<Self>,
     ) {
+        if !action_cores_visible(self.workspace_cores.as_deref(), [drag.core, target_core]) {
+            return;
+        }
         let path = drag.path.clone();
         if drag.core == target_core {
             let moves = {
@@ -243,6 +278,23 @@ impl StrategiesView {
             .map(|(_, i)| *i)
             .collect()
     }
+}
+
+/// Validate every source and target core immediately before a clipboard or drag action.
+///
+/// Args:
+///     workspace: Concrete Auto ids, or `None` for Classic.
+///     cores: Source and target cores used by the pending action.
+///
+/// Returns:
+///     `true` only when every action core remains visible at dispatch time.
+fn action_cores_visible(
+    workspace: Option<&[CoreId]>,
+    cores: impl IntoIterator<Item = CoreId>,
+) -> bool {
+    cores
+        .into_iter()
+        .all(|core| strategy_core_is_visible(workspace, core))
 }
 
 /// Converts a paste/create plan into core command specifications.

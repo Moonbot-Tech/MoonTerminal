@@ -90,7 +90,305 @@ fn migrate_ctx_visible(backend: &Entity<Backend>, ctx_id: &str, cx: &mut App) {
     });
 }
 
+/// Initial Report metadata loaded away from the GPUI application thread.
+struct ReportInitialMetadata {
+    cores: Vec<(u64, String)>,
+    visible: HashSet<String>,
+    columns: Vec<String>,
+    sort_key: String,
+    sort_desc: bool,
+    dock_comment: bool,
+    detached_comment: bool,
+}
+
+impl ReportInitialMetadata {
+    /// Open the retained metadata connection and read initial preferences on a background worker.
+    ///
+    /// Returns:
+    ///     Loaded values, with the same safe defaults used when the Report database is unavailable.
+    fn load() -> Self {
+        let connection = db::open_reader().ok();
+        let cores = connection
+            .as_ref()
+            .and_then(|connection| db::distinct_cores(connection).ok())
+            .unwrap_or_default();
+        let visible = connection
+            .as_ref()
+            .and_then(db::load_visible)
+            .map(|saved| saved.into_iter().collect())
+            .unwrap_or_else(|| {
+                DEFAULT_VISIBLE
+                    .iter()
+                    .map(|column| column.to_string())
+                    .collect()
+            });
+        let columns = connection
+            .as_ref()
+            .and_then(|connection| db::display_columns(connection).ok())
+            .unwrap_or_default();
+        let (sort_key, sort_desc) = connection
+            .as_ref()
+            .and_then(db::load_sort)
+            .unwrap_or_else(|| ("buydate".to_string(), true));
+        let dock_comment = connection
+            .as_ref()
+            .and_then(|connection| db::load_comment_pane(connection, false))
+            .unwrap_or(true);
+        let detached_comment = connection
+            .as_ref()
+            .and_then(|connection| db::load_comment_pane(connection, true))
+            .unwrap_or(true);
+        Self {
+            cores,
+            visible,
+            columns,
+            sort_key,
+            sort_desc,
+            dock_comment,
+            detached_comment,
+        }
+    }
+}
+
+/// Per-panel user-edit generations for asynchronously loaded Report preferences.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct ReportPreferenceRevisions {
+    /// Visible-column edits performed after initial metadata loading began.
+    pub(super) visible: u64,
+    /// Sort edits performed after initial metadata loading began.
+    pub(super) sort: u64,
+    /// Comment-pane edits performed after initial or host-specific loading began.
+    pub(super) comment: u64,
+}
+
+/// One complete independently persisted Report preference authority.
+pub(super) enum ReportPreferenceWrite {
+    /// Full ordered visible-column set.
+    Visible(Vec<String>),
+    /// Atomic sort key and direction pair.
+    Sort { key: String, desc: bool },
+    /// Comment-pane visibility for one docked or detached host class.
+    Comment { detached: bool, visible: bool },
+}
+
+static REPORT_PREFERENCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static REPORT_VISIBLE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static REPORT_SORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static REPORT_DOCK_COMMENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static REPORT_WINDOW_COMMENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static REPORT_PREFERENCE_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Return the process-wide last-write marker for one independent preference authority.
+///
+/// Args:
+///     write: Preference command whose storage key class selects the marker.
+///
+/// Returns:
+///     Shared sequence marker for visible columns, sort, or one comment host class.
+fn preference_sequence(write: &ReportPreferenceWrite) -> &'static AtomicU64 {
+    match write {
+        ReportPreferenceWrite::Visible(_) => &REPORT_VISIBLE_SEQUENCE,
+        ReportPreferenceWrite::Sort { .. } => &REPORT_SORT_SEQUENCE,
+        ReportPreferenceWrite::Comment {
+            detached: false, ..
+        } => &REPORT_DOCK_COMMENT_SEQUENCE,
+        ReportPreferenceWrite::Comment { detached: true, .. } => &REPORT_WINDOW_COMMENT_SEQUENCE,
+    }
+}
+
+/// Persist one complete Report preference authority on a serialized background path.
+///
+/// A newer request marks the older one stale before either can acquire the shared write lock. If
+/// an older request already owns the lock, the newer request necessarily writes after it. This
+/// preserves last-write-wins ordering across every live Report panel without blocking GPUI.
+///
+/// Args:
+///     cx: Application context used only to clone the background executor.
+///     write: Complete visible-column, sort-pair, or host-specific comment preference.
+///
+/// Returns:
+///     Nothing; database unavailability keeps the same best-effort preference semantics.
+pub(super) fn schedule_report_preference(cx: &App, write: ReportPreferenceWrite) {
+    let request = REPORT_PREFERENCE_SEQUENCE
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    let latest = preference_sequence(&write);
+    latest.store(request, Ordering::Release);
+    cx.background_executor()
+        .spawn(async move {
+            let _guard = REPORT_PREFERENCE_WRITE_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if latest.load(Ordering::Acquire) != request {
+                return;
+            }
+            let Ok(connection) = db::open_reader() else {
+                return;
+            };
+            match write {
+                ReportPreferenceWrite::Visible(columns) => {
+                    let columns = columns.iter().map(String::as_str).collect::<Vec<_>>();
+                    db::save_visible(&connection, &columns);
+                }
+                ReportPreferenceWrite::Sort { key, desc } => {
+                    db::save_sort(&connection, &key, desc);
+                }
+                ReportPreferenceWrite::Comment { detached, visible } => {
+                    db::save_comment_pane(&connection, detached, visible);
+                }
+            }
+        })
+        .detach();
+}
+
+/// Decide which asynchronously loaded preferences are still untouched by the user.
+///
+/// Args:
+///     current: Current per-panel user-edit generations.
+///     expected: Generations captured before the metadata read began.
+///     allow_app_visible: Whether a context-specific column set does not already outrank app meta.
+///
+/// Returns:
+///     Independent apply decisions for visible columns, sort, and comment visibility.
+fn metadata_apply_plan(
+    current: ReportPreferenceRevisions,
+    expected: ReportPreferenceRevisions,
+    allow_app_visible: bool,
+) -> (bool, bool, bool) {
+    (
+        allow_app_visible && current.visible == expected.visible,
+        current.sort == expected.sort,
+        current.comment == expected.comment,
+    )
+}
+
 impl ReportPanel {
+    /// Refresh the comment-pane preference after this panel changes host context.
+    ///
+    /// Args:
+    ///     detached: Host context whose preference should be loaded.
+    ///     expected: Current value; a user edit before completion must win.
+    ///     expected_revision: User-edit generation captured before the background read.
+    ///     cx: Panel context used to run the blocking read on the background executor.
+    ///
+    /// Returns:
+    ///     Nothing; stale results and unavailable databases leave the current value unchanged.
+    fn reload_comment_preference(
+        &mut self,
+        detached: bool,
+        expected: bool,
+        expected_revision: u64,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let preference = executor
+                .spawn(async move {
+                    db::open_reader()
+                        .ok()
+                        .and_then(|connection| db::load_comment_pane(&connection, detached))
+                })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if this.detached != detached
+                        || this.show_comment != expected
+                        || this.preference_revisions.comment != expected_revision
+                    {
+                        return;
+                    }
+                    if let Some(show_comment) = preference {
+                        this.show_comment = show_comment;
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Load retained Report metadata without blocking panel construction or workspace switching.
+    ///
+    /// Args:
+    ///     expected_revisions: User-edit generations captured before the background read.
+    ///     allow_app_visible: Whether no per-context column set outranks the database seed.
+    ///     cx: Panel context used to run the blocking read on the background executor.
+    ///
+    /// Returns:
+    ///     Nothing; a released panel silently drops the completed metadata.
+    fn load_initial_metadata(
+        &mut self,
+        expected_revisions: ReportPreferenceRevisions,
+        allow_app_visible: bool,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let metadata = executor
+                .spawn(async move { ReportInitialMetadata::load() })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    let ReportInitialMetadata {
+                        cores,
+                        visible,
+                        columns,
+                        sort_key,
+                        sort_desc,
+                        dock_comment,
+                        detached_comment,
+                    } = metadata;
+                    let (apply_visible, apply_sort, apply_comment) = metadata_apply_plan(
+                        this.preference_revisions,
+                        expected_revisions,
+                        allow_app_visible,
+                    );
+                    if apply_visible {
+                        this.visible = visible;
+                    }
+                    if apply_sort {
+                        this.sort_key = sort_key;
+                        this.sort_desc = sort_desc;
+                        let sort_key = this.sort_key.clone();
+                        let sort_desc = this.sort_desc;
+                        this.table_state.update(cx, |state, _| {
+                            state.set_sort(sort_key, !sort_desc);
+                        });
+                    }
+                    if apply_comment {
+                        this.show_comment = if this.detached {
+                            detached_comment
+                        } else {
+                            dock_comment
+                        };
+                    }
+                    let publish_cores = this.last_metadata_at.is_none();
+                    if publish_cores {
+                        this.cores = cores;
+                    }
+                    if this.cols.is_empty() {
+                        this.cols = Rc::new(columns);
+                        let columns = this.cols.clone();
+                        this.table_state.update(cx, |state, cx| {
+                            if !state.column_widths.is_empty() {
+                                complete_widths(&mut state.column_widths, &columns);
+                                cx.notify();
+                            }
+                        });
+                    }
+                    this.comment_metadata_loaded = true;
+                    this.natural_widths.clear();
+                    if publish_cores {
+                        this.queue_strategy_select_sync(true, cx);
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     /// Create a regular docked or detachable Report panel with its default filters.
     ///
     /// Args:
@@ -147,14 +445,9 @@ impl ReportPanel {
         let seeded_valuation_mode = backend.read(cx).valuation_mode();
         let display_zone =
             crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
-        // Keep this connection for panel metadata. Startup core/schema probes
-        // are deliberately lossy because the fallible background batch below
-        // owns user-visible read errors.
-        let conn = db::open_reader().ok();
-        let cores = conn
-            .as_ref()
-            .and_then(|c| db::distinct_cores(c).ok())
-            .unwrap_or_default();
+        // The retained connection, schema, and preferences are loaded after construction so a
+        // workspace transition never waits for SQLite open/schema work on the GPUI thread.
+        let cores = Vec::new();
         // Strategy discovery can scan a large covering index, so the first background batch owns
         // it. A scoped window still seeds its selected label immediately.
         let mut strategies: Vec<ReportStrategy> = Vec::new();
@@ -172,22 +465,22 @@ impl ReportPanel {
                     .unwrap_or(0),
             );
         // Restore visible column names from `app_meta`, or use the defaults when never saved.
-        let visible: HashSet<String> = conn
-            .as_ref()
-            .and_then(db::load_visible)
-            .map(|saved| saved.into_iter().collect())
-            .unwrap_or_else(|| DEFAULT_VISIBLE.iter().map(|c| c.to_string()).collect());
-        // Probe the initial database schema so the first render and column menu are complete.
-        let init_cols = conn
-            .as_ref()
-            .and_then(|c| db::display_columns(c).ok())
-            .unwrap_or_default();
-        let (sort_key, sort_desc) = conn
-            .as_ref()
-            .and_then(db::load_sort)
-            .unwrap_or_else(|| ("buydate".to_string(), true));
+        let default_visible: HashSet<String> = DEFAULT_VISIBLE
+            .iter()
+            .map(|column| column.to_string())
+            .collect();
+        let init_cols = Vec::new();
+        let (sort_key, sort_desc) = ("buydate".to_string(), true);
         let widths_id = crate::persistence::table_persist::ctx_id("report-table-v2", false);
         migrate_ctx_visible(&backend, &widths_id, cx);
+        let context_visible =
+            crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
+                .filter(|columns| !columns.is_empty());
+        let allow_app_visible = context_visible.is_none();
+        let visible = context_visible
+            .map(|columns| columns.into_iter().collect())
+            .unwrap_or(default_visible);
+        let expected_revisions = ReportPreferenceRevisions::default();
         let mut saved_widths =
             crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         complete_widths(&mut saved_widths, &init_cols);
@@ -266,6 +559,8 @@ impl ReportPanel {
                 .multiple(true)
                 .searchable(true)
         });
+        let scope_owner = cx.entity();
+        let scope_control = cx.new(|cx| ReportScopeControl::new(scope_owner.clone(), cx));
         cx.subscribe(
             &strategy_select,
             |panel, _, event: &MoonComboboxEvent<ReportStrategyDelegate>, cx| {
@@ -360,6 +655,19 @@ impl ReportPanel {
         })
         .detach();
 
+        let workspace_revision = backend.read(cx).workspace_revision();
+        cx.observe(&workspace_revision, |this, _revision, cx| {
+            if this.standalone {
+                return;
+            }
+            // Never label already-published rows from another core with the new pinned selector.
+            this.data = LoadState::default();
+            this.selection.clear();
+            this.last_strategy_scope = None;
+            this.request_requery(cx);
+        })
+        .detach();
+
         // Zone identity changes are rare and have their own revision so report commits do not
         // repaint every civil-time consumer. Manual bounds remain absolute instants; only their
         // picker text is rewritten. Presets requery because their civil-day boundaries move.
@@ -387,10 +695,7 @@ impl ReportPanel {
 
         // Never touched by the user means on: the pane is what makes a long comment readable.
         // Seeded for the docked host; `mark_table_detached` re-reads the detached one.
-        let show_comment = conn
-            .as_ref()
-            .and_then(|c| db::load_comment_pane(c, false))
-            .unwrap_or(true);
+        let show_comment = true;
         let mut this = Self {
             backend,
             display_zone,
@@ -402,7 +707,6 @@ impl ReportPanel {
             last_gen,
             last_status_rev,
             last_valuation_mode: seeded_valuation_mode,
-            conn,
             cores,
             strategies,
             available_strategy_keys,
@@ -441,6 +745,9 @@ impl ReportPanel {
                 .unwrap_or(ReportKind::Real),
             deleted_only: false,
             show_comment,
+            comment_metadata_loaded: false,
+            preference_revisions: expected_revisions,
+            scope_control,
             closed_only: scope.is_some(),
             selection: ReportSelection::default(),
             needs_query: true,
@@ -459,9 +766,7 @@ impl ReportPanel {
             dock: None,
             focus: cx.focus_handle(),
         };
-        // A per-context shared-storage column set overrides the one loaded from `app_meta`. Without
-        // one for this mode, the `app_meta` set remains as a migration seed.
-        this.apply_ctx_columns(cx);
+        this.load_initial_metadata(expected_revisions, allow_app_visible, cx);
         this
     }
 
@@ -716,11 +1021,14 @@ impl ReportPanel {
             c.notify();
         });
         self.apply_ctx_columns(cx);
-        self.show_comment = self
-            .conn
-            .as_ref()
-            .and_then(|c| db::load_comment_pane(c, true))
-            .unwrap_or(true);
+        if self.comment_metadata_loaded {
+            self.reload_comment_preference(
+                true,
+                self.show_comment,
+                self.preference_revisions.comment,
+                cx,
+            );
+        }
         cx.notify();
     }
 
@@ -811,10 +1119,14 @@ impl ReportPanel {
     ///
     /// `app_meta` records an empty set, but [`Self::save_ctx_columns`] deliberately leaves any older
     /// per-context descriptor unchanged in that case.
-    pub(super) fn persist_visible(&self, cx: &mut App) {
-        if let Some(conn) = &self.conn {
-            db::save_visible(conn, &self.visible_cols());
-        }
+    pub(super) fn persist_visible(&mut self, cx: &mut App) {
+        self.preference_revisions.visible = self.preference_revisions.visible.wrapping_add(1);
+        let visible = self
+            .visible_cols()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        schedule_report_preference(cx, ReportPreferenceWrite::Visible(visible));
         self.save_ctx_columns(cx);
     }
 }

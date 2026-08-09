@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use super::{
     GENERATION_QUERY_INTERVAL, GenerationRefreshGate, GenerationRefreshPlan, MAX_REPORT_ROWS,
-    strategy_catalog_scope, strategy_metadata_request,
+    report_query_result_is_current, strategy_catalog_scope, strategy_metadata_request,
 };
 
 /// `query.rs:GenerationRefreshGate::observe` must retain one pending generation until the timer
@@ -222,4 +222,25 @@ fn report_query_window_contains_five_hundred_rows() {
             .orders,
         505
     );
+}
+
+/// `query.rs:schedule_requery` must reject a completed read whose effective workspace core changed
+/// without relying only on sequence timing. Removing filter equality publishes core 7 rows under
+/// the pinned core 9 selector when the old task wins the race.
+#[test]
+fn scope_change_rejects_pending_old_scope_result() {
+    let requested = ReportFilter {
+        core_uids: vec![7],
+        ..ReportFilter::default()
+    };
+    let current = ReportFilter {
+        core_uids: vec![9],
+        ..ReportFilter::default()
+    };
+
+    assert!(report_query_result_is_current(4, 4, &requested, &requested));
+    assert!(!report_query_result_is_current(4, 4, &requested, &current));
+    assert!(!report_query_result_is_current(
+        4, 5, &requested, &requested
+    ));
 }

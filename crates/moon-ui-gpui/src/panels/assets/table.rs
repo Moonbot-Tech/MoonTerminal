@@ -16,8 +16,20 @@ use rust_i18n::t;
 /// Open the shared coin context menu from an Assets row's ticker right-click.
 ///
 /// Balance rows carry no strategy or order data, so the menu contains navigation and core
-/// blacklist actions. Its selected-core set is the entire panel scope: the group's cores for a
-/// group panel, or every core for the global window.
+/// blacklist actions. Its selected-core set comes from `query_cores()`: retained Classic scope,
+/// effective Auto scope for a group panel, or every core for the global window.
+///
+/// Args:
+///     core: Core that owns the clicked balance row.
+///     market: Resolved market used by navigation entries.
+///     coin: Core-native token spelling used by blacklist entries.
+///     view: Owning group or global Assets view.
+///     pos: Window-coordinate popup position.
+///     window: Window that owns the context menu.
+///     app: Application context used to resolve current scope and open the menu.
+///
+/// Returns:
+///     Nothing; an applicable menu is opened at `pos`.
 fn open_asset_coin_menu(
     core: CoreId,
     market: String,
@@ -28,20 +40,22 @@ fn open_asset_coin_menu(
     app: &mut App,
 ) {
     app.stop_propagation();
-    let (backend, scope) = {
+    let (backend, workspace_group) = {
         let panel = view.read(app);
-        (panel.backend.clone(), panel.scope.clone())
+        let workspace_group = match &panel.scope {
+            AssetsScope::Group(group) => Some(group.clone()),
+            AssetsScope::All => None,
+        };
+        (panel.backend.clone(), workspace_group)
     };
     let (selected_cores, core_name) = {
         let b = backend.read(app);
         let sessions = b.session.sessions();
-        let selected: Vec<CoreId> = sessions
-            .iter()
-            .filter(|s| match &scope {
-                AssetsScope::Group(g) => &s.group == g,
-                AssetsScope::All => true,
-            })
-            .map(|s| s.id)
+        let selected: Vec<CoreId> = view
+            .read(app)
+            .query_cores(b)
+            .into_iter()
+            .map(|(core, _)| core)
             .collect();
         let name = sessions
             .iter()
@@ -59,6 +73,7 @@ fn open_asset_coin_menu(
         strat_id: None,
         strat_name: None,
         order_uid: None,
+        workspace_group,
         side: None,
         short: false,
         origin: CoinMenuOrigin::OrderTable,
@@ -132,17 +147,37 @@ impl AssetsView {
             .child(self.columns_menu(cx))
     }
 
-    /// Render the shared exchange-grouped core multi-selector with its localized summary label.
+    /// Render the shared exchange-grouped core selector under the current scope authority.
     ///
-    /// Clicking a known exchange header batch-toggles its currently available scoped cores.
+    /// Global and Classic group views expose the retained multi-selection. Group Auto pins the
+    /// effective workspace label and disables the selector without changing Classic state.
     ///
     /// Args:
     ///     cores: Scoped cores in canonical display order.
     ///     cx: View context used to read exchanges and wire selection callbacks.
     ///
     /// Returns:
-    ///     The configured fixed-trigger dropdown.
+    ///     Interactive retained-scope selector or disabled Auto scope indicator.
     pub(super) fn core_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
+        let scope = self.effective_scope(self.backend.read(cx));
+        let workspace_owned = scope
+            .as_ref()
+            .is_some_and(EffectiveCoreScope::is_workspace_owned);
+        let effective_selection: HashSet<CoreId> = scope
+            .as_ref()
+            .map(|scope| scope.ids().iter().copied().collect())
+            .unwrap_or_default();
+        let pinned_label = scope.as_ref().and_then(|scope| match scope.label() {
+            crate::workspace::EffectiveScopeLabel::Overview => {
+                Some(t!("workspace.overview").to_string())
+            }
+            crate::workspace::EffectiveScopeLabel::Core(core) => cores
+                .iter()
+                .find(|(id, _)| *id == core)
+                .map(|(_, name)| name.clone()),
+            crate::workspace::EffectiveScopeLabel::All
+            | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
+        });
         let view = cx.entity();
         let exchange_view = view.clone();
         let exchange_names = self
@@ -151,11 +186,15 @@ impl AssetsView {
             .session
             .market_source()
             .core_exchange_names();
-        crate::controls::core_combo(
+        let combo = crate::controls::core_combo(
             "assets-core",
             cores,
             &exchange_names,
-            &self.sel_cores,
+            if workspace_owned {
+                &effective_selection
+            } else {
+                &self.sel_cores
+            },
             crate::controls::CoreAllRowMode::ImplicitOrComplete,
             t!("assets.all_cores").to_string(),
             |n| t!("assets.cores_n", n = n).to_string(),
@@ -169,6 +208,12 @@ impl AssetsView {
                 });
             },
         )
+        .disabled(workspace_owned);
+        if let Some(label) = pinned_label {
+            combo.label(label)
+        } else {
+            combo
+        }
     }
 
     /// The panel footer: one row carrying two semantically distinct summaries.
@@ -259,7 +304,7 @@ impl AssetsView {
             .child(design::vline(cx, 12.0, p.border))
             .child(super::balances::summary_group(
                 &self.cached_aggs,
-                &self.sel_cores,
+                &HashSet::new(),
                 cx,
             ))
     }
@@ -283,7 +328,7 @@ impl AssetsView {
         let p = MoonPalette::active(cx);
         // Keep the selected core while it remains in scope; otherwise fall back to the first core.
         let selected = self
-            .selected_core
+            .effective_wallet_core(self.backend.read(cx))
             .filter(|c| aggs.iter().any(|a| a.id == *c))
             .or_else(|| aggs.first().map(|a| a.id));
 
@@ -374,6 +419,13 @@ impl AssetsView {
                 // shown as current here cannot be one the footer total counts as stale.
                 .child(super::balances::figure(Some(agg), p, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    if let AssetsScope::Group(_) = &this.scope
+                        && this
+                            .effective_scope(this.backend.read(cx))
+                            .is_some_and(|scope| scope.is_workspace_owned())
+                    {
+                        return;
+                    }
                     if this.selected_core != Some(cid) {
                         this.selected_core = Some(cid);
                         if let Err(error) =
@@ -525,7 +577,8 @@ fn assets_row(
     let cells: Vec<MoonDataCell> = visible
         .iter()
         .map(|col| match col {
-            // Clicking Core filters to exactly that core; clicking it again resets the filter to All.
+            // Classic clicks toggle the retained one-core filter; Auto clicks select the workspace
+            // core and repeating the active core is a no-op.
             AssetCol::Core => MoonDataCell::element(core_cell(e, view, p)),
             // Clicking the ticker opens its market on Main using the row's core, as in Orders and
             // Report.
@@ -586,10 +639,11 @@ fn pnl_cell(e: &AssetEntry) -> MoonDataCell {
     MoonDataCell::text(text).tone(tone).weight(500.0)
 }
 
-/// Render a muted core-name cell that filters the panel to exactly that core when clicked.
+/// Render a muted core-name cell that targets the row's core when clicked.
 ///
-/// Clicking the sole selected core resets the filter to All. The coin context menu belongs to the
-/// ticker cell rather than this one.
+/// Classic toggles the retained one-core filter back to All on a repeated click. Auto ignores the
+/// shortcut because only the Shell rail selects a workspace core. The coin context menu belongs to
+/// the ticker cell rather than this one.
 fn core_cell(
     e: &AssetEntry,
     view: &Entity<AssetsView>,
@@ -670,9 +724,15 @@ fn coin_cell(
                 return; // A balance-only row has no market to open.
             }
             view.update(app, |this, cx| {
+                let workspace_group = match &this.scope {
+                    AssetsScope::Group(group) => Some(group.as_str()),
+                    AssetsScope::All => None,
+                };
                 this.backend.update(cx, |b, bcx| {
-                    b.open_on_main((core, market.clone()), false);
-                    bcx.notify();
+                    if b.open_on_main_if_authorized(workspace_group, (core, market.clone()), false)
+                    {
+                        bcx.notify();
+                    }
                 });
             });
         })
@@ -766,10 +826,42 @@ fn actions_cell(
     MoonDataCell::element(el)
 }
 
+/// Decide whether a confirmation captured for one core still has dispatch authority.
+///
+/// Args:
+///     scope: Persistent host authority; the global Assets window is deliberately unrestricted.
+///     effective_core_ids: Group panel's current Classic or Auto scope at dispatch time.
+///     core: Core captured when the confirmation dialog opened.
+///
+/// Returns:
+///     `true` for global Assets or while the captured core remains in the live group scope.
+fn market_sell_core_is_authorized(
+    scope: &AssetsScope,
+    effective_core_ids: Option<&[CoreId]>,
+    core: CoreId,
+) -> bool {
+    matches!(scope, AssetsScope::All)
+        || effective_core_ids.is_some_and(|cores| cores.contains(&core))
+}
+
 /// Open the Market Sell confirmation dialog directly from the button click's mutable app context.
 ///
 /// Only the Yes button submits the irreversible action: `market_sell_position` closes a position,
-/// while `market_sell_token` sells a spot balance.
+/// while `market_sell_token` sells a spot balance. A group-owned dialog revalidates its captured
+/// core against the current effective workspace scope immediately before either command.
+///
+/// Args:
+///     view: Assets entity retaining host scope and Backend authority.
+///     core: Core captured from the rendered row.
+///     market: Resolved market submitted on confirmation.
+///     is_position: Whether to close a position instead of selling a spot balance.
+///     size: Spot quantity used only when `is_position` is false.
+///     coin: Display token interpolated into the confirmation question.
+///     window: Window that owns the unique dialog and refusal notification.
+///     app: Application context used to build the dialog.
+///
+/// Returns:
+///     Nothing; stale group authority closes with a visible warning and sends no command.
 #[allow(clippy::too_many_arguments)]
 fn open_market_sell_confirm(
     view: Entity<AssetsView>,
@@ -838,8 +930,16 @@ fn open_market_sell_confirm(
                                 .variant(MoonButtonVariant::Danger)
                                 .label(format!("  {}  ", t!("dialogs.yes")))
                                 .on_click(move |_, window, cx| {
-                                    confirm_view.update(cx, |this, cx| {
+                                    let authorized = confirm_view.update(cx, |this, cx| {
                                         let b = this.backend.read(cx);
+                                        let effective_scope = this.effective_scope(b);
+                                        if !market_sell_core_is_authorized(
+                                            &this.scope,
+                                            effective_scope.as_ref().map(|scope| scope.ids()),
+                                            core,
+                                        ) {
+                                            return false;
+                                        }
                                         // Close a position at market, or sell the remaining spot token.
                                         let res = if is_position {
                                             b.session.market_sell_position(core, market_c.clone())
@@ -856,7 +956,16 @@ fn open_market_sell_confirm(
                                             );
                                         }
                                         cx.notify();
+                                        true
                                     });
+                                    if !authorized {
+                                        window.push_notification(
+                                            MoonNotification::warning(
+                                                t!("assets.market_sell_scope_changed").to_string(),
+                                            ),
+                                            cx,
+                                        );
+                                    }
                                     window.close_dialog(cx);
                                 })
                                 .render(),
@@ -867,5 +976,4 @@ fn open_market_sell_confirm(
 }
 
 #[cfg(test)]
-/// Column-layout decisions the Assets table must keep.
 mod tests;

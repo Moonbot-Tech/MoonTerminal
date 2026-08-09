@@ -176,6 +176,7 @@ impl AnalyticsView {
         }
         // Writing (Copy / Save) — ONLY into a selected strategy.
         if self.sel_strategy.is_some() {
+            let workspace_target_visible = !self.selected_targets().is_empty();
             // Copy is single-target only — hidden in multi-select (many addressees, no
             // per-target preview); bulk Save is the multi path.
             if !self.is_multi() {
@@ -184,6 +185,7 @@ impl AnalyticsView {
                         .variant(MoonButtonVariant::Soft)
                         .size(MoonButtonSize::Micro)
                         .label(t!("analytics.tuner.copy_btn").to_string())
+                        .disabled(!workspace_target_visible)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             // One "copy" for all axes: axis changes → a NEW strategy.
                             match kind {
@@ -215,6 +217,7 @@ impl AnalyticsView {
                     })
                     .size(MoonButtonSize::Micro)
                     .label(t!("analytics.tuner.save_btn").to_string())
+                    .disabled(!workspace_target_visible)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         match kind {
                             TunerKind::Filter => this.open_save_dialog(cx),

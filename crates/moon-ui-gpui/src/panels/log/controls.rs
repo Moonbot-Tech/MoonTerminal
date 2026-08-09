@@ -21,11 +21,13 @@ impl LogPanel {
         sources: &[LogSourceItem],
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let (effective_source, _, workspace_owned) =
+            self.effective_selection(self.backend.read(cx));
         let cur = sources
             .iter()
-            .find(|s| s.source == self.source)
+            .find(|s| s.source == effective_source)
             .map(|s| s.display.clone())
-            .unwrap_or_else(|| match &self.source {
+            .unwrap_or_else(|| match &effective_source {
                 LogSource::Core(core) => format!("#{core}"),
                 LogSource::Exchange(exchange) => crate::controls::exchange_display_name(exchange),
                 LogSource::Aggregate | LogSource::Local => t!("log.source.local").to_string(),
@@ -53,7 +55,7 @@ impl LogPanel {
             .enumerate()
         {
             let source = item.source.clone();
-            let selected = source == self.source;
+            let selected = source == effective_source;
             let item_view = view.clone();
             items.push(
                 MoonMenuItem::with_key(format!("ls-pseudo-{index}"), item.display.clone())
@@ -72,8 +74,7 @@ impl LogPanel {
                 .map(crate::controls::exchange_display_name)
                 .unwrap_or_else(|| unknown_exchange.clone());
             if let Some(exchange) = exchange {
-                let selected =
-                    matches!(&self.source, LogSource::Exchange(current) if current == exchange);
+                let selected = matches!(&effective_source, LogSource::Exchange(current) if current == exchange);
                 let source = exchange.to_string();
                 let item_view = view.clone();
                 items.push(
@@ -93,7 +94,7 @@ impl LogPanel {
                 items.push(MoonMenuItem::label(exchange_label));
             }
             for (core, name) in members {
-                let selected = self.source == LogSource::Core(core);
+                let selected = effective_source == LogSource::Core(core);
                 let item_view = view.clone();
                 items.push(
                     MoonMenuItem::with_key(format!("ls-core-{core}"), name)
@@ -108,6 +109,7 @@ impl LogPanel {
         }
         MoonDropdown::new("log-source")
             .label(cur)
+            .disabled(workspace_owned)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
@@ -122,16 +124,24 @@ impl LogPanel {
     }
 
     /// Builds the Live-and-history file dropdown used for non-aggregate sources.
+    ///
+    /// Args:
+    ///     files: Available named log files for the effective source.
+    ///     cx: Panel context used to resolve workspace ownership and wire callbacks.
+    ///
+    /// Returns:
+    ///     File dropdown pinned to Live while Auto owns the panel.
     pub(super) fn file_combo(&self, files: &[String], cx: &Context<Self>) -> impl IntoElement {
+        let (_, effective_file, workspace_owned) = self.effective_selection(self.backend.read(cx));
         let live = t!("log.live").to_string();
-        let cur = match &self.file {
+        let cur = match &effective_file {
             LogFile::Live => live.clone(),
             LogFile::Named(n) => n.clone(),
         };
         let view = cx.entity();
         let mut items = vec![
             MoonMenuItem::with_key("lf-live", live.clone())
-                .selected(matches!(self.file, LogFile::Live))
+                .selected(matches!(effective_file, LogFile::Live))
                 .on_click({
                     let view = view.clone();
                     move |_, _, app| {
@@ -140,7 +150,7 @@ impl LogPanel {
                 }),
         ];
         for f in files {
-            let selected = matches!(&self.file, LogFile::Named(name) if name == f);
+            let selected = matches!(&effective_file, LogFile::Named(name) if name == f);
             let view = view.clone();
             let file = f.clone();
             items.push(
@@ -154,6 +164,7 @@ impl LogPanel {
         }
         MoonDropdown::new("log-file")
             .label(cur)
+            .disabled(workspace_owned)
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)

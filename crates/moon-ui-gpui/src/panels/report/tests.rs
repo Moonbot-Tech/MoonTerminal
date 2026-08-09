@@ -18,3 +18,17 @@ fn yesterday_uses_the_previous_existing_day_across_a_dateline_skip() {
         (Some(1_325_152_800), Some(1_325_239_199))
     );
 }
+
+/// Group Report keeps its Core shortcut passive in Auto and scopes delayed coin navigation.
+///
+/// Mutation: restore the Auto writer in `actions.rs` or use unconditional Main navigation in
+/// `columns.rs`. A retained transaction row could then select or reveal its previous core.
+#[test]
+fn report_navigation_cannot_override_current_auto_scope() {
+    let actions = include_str!("actions.rs");
+    let columns = include_str!("columns.rs");
+
+    assert!(!actions.contains("select_auto_workspace_core"));
+    assert!(columns.contains("(!panel.standalone).then(|| panel.group.clone())"));
+    assert!(columns.contains("b.open_on_main_if_authorized("));
+}

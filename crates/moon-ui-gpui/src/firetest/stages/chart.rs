@@ -1,8 +1,8 @@
 //! Stage `open_chart`: put a real live chart on screen for every later stage to measure.
 //!
-//! The chart is opened through the same `open_request` path the UI uses, on the first core whose
-//! server, group and window are all actually active — not by constructing a chart directly. A run
-//! that opened a synthetic chart would measure an empty own-pass and pass for the wrong reason.
+//! The chart is opened through the same atomic `open_on_main` path the UI uses, on the first core
+//! whose server, group and window are all actually active — not by constructing a chart directly.
+//! A run that opened a synthetic chart would measure an empty own-pass and pass for the wrong reason.
 
 use gpui::Context;
 
@@ -49,22 +49,15 @@ impl Runtime {
         backend: &mut Backend,
         cx: &mut Context<Backend>,
     ) -> bool {
-        if backend.open_request.is_some() || backend.group_windows.is_empty() {
+        if backend.open_main_request.is_pending() || backend.group_windows.is_empty() {
             return false;
         }
 
         let target_market = self.config.market.trim();
         let candidate = backend.config.servers.iter().find_map(|server| {
-            let session_exists = backend
-                .session
-                .sessions()
-                .iter()
-                .any(|session| session.id == server.id && session.group == server.group);
-            (server.active
-                && server.show_window
-                && backend.config.group(&server.group).active
-                && backend.group_windows.contains_key(&server.group)
-                && session_exists)
+            backend
+                .workspace_core_availability(&server.group, server.id)
+                .is_available()
                 .then(|| (server.id, server.group.clone(), server.name.clone()))
         });
         let Some((core, group, name)) = candidate else {
@@ -72,9 +65,7 @@ impl Runtime {
         };
 
         let market = target_market.to_string();
-        backend.open_request = Some((core, market.clone()));
-        backend.open_request_rev = backend.open_request_rev.wrapping_add(1);
-        backend.open_request_activate = false;
+        backend.open_on_main((core, market.clone()), false);
         backend.follow = true;
         self.opened_group = Some(group.clone());
         firetest_info(&format!(
