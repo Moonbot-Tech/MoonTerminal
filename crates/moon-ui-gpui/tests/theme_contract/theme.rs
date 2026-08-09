@@ -193,6 +193,11 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "chart_tabs/candle_popup.rs",
             r#".id(SharedString::from(format!("{id}-popup")))"#,
         ),
+        (
+            "analytics/profit_monitor/settings.rs",
+            "analytics/profit_monitor/settings.rs",
+            r#".id("profit-monitor-settings-popup")"#,
+        ),
         // The Alerts row gear. Its content is `figstyle::rows` BARE — the same rows the chart's
         // own settings panel wraps in `figstyle::shell`, which is what paints a surface there and
         // must not be handed to a popover that already paints one. The anchor is the content

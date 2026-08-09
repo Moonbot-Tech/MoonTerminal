@@ -10,28 +10,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::RenderImage;
-use image::{Frame, ImageBuffer, Rgba};
 use include_dir::{Dir, include_dir};
 
 /// Embedded group-icon set containing all PNG files under `assets/icons`, approximately 64 KB.
 static EMBEDDED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/icons");
 
-/// Locates `assets/icons` under the current working directory, then beside the executable.
-/// Returns the relative path when neither directory exists.
+/// Locate the `assets/icons` override directory through the shared asset resolver.
 fn icons_dir() -> PathBuf {
-    let rel = PathBuf::from("assets/icons");
-    if rel.is_dir() {
-        return rel;
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("assets/icons");
-            if p.is_dir() {
-                return p;
-            }
-        }
-    }
-    rel
+    super::asset_dir("icons")
 }
 
 /// Parses the numeric stem of an exact lowercase `{id}.png` filename for either icon source.
@@ -48,14 +34,7 @@ fn load_render_image(id: u32) -> Option<Arc<RenderImage>> {
         Ok(b) => b,
         Err(_) => EMBEDDED.get_file(&file)?.contents().to_vec(),
     };
-    let mut img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    // Convert RGBA to the BGRA channel order expected by GPUI's RenderImage.
-    for px in img.pixels_mut() {
-        px.0.swap(0, 2);
-    }
-    let (w, h) = img.dimensions();
-    let buf = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(w, h, img.into_raw())?;
-    Some(Arc::new(RenderImage::new(vec![Frame::new(buf)])))
+    super::render_image_from_png(&bytes)
 }
 
 /// Per-settings-window group-icon catalog and lazy cache keyed by numeric ID.

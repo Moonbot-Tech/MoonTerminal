@@ -89,8 +89,7 @@ fn terminal_secondary_tool_windows_use_tool_window_options() {
 fn profit_monitor_is_independent_but_carries_no_taskbar_button() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let windowing = fs::read_to_string(root.join("window").join("windowing.rs")).unwrap();
-    let monitor =
-        fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
+    let monitor = read_module("analytics/profit_monitor");
     let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
     let factory = code_only(braced_body(&windowing, "fn profit_monitor_window_options("));
 
@@ -112,8 +111,7 @@ fn profit_monitor_is_independent_but_carries_no_taskbar_button() {
 #[test]
 fn profit_monitor_and_detached_chart_windows_rearm_taskbar_hide_on_activation() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let monitor =
-        fs::read_to_string(root.join("analytics").join("profit_monitor").join("mod.rs")).unwrap();
+    let monitor = read_module("analytics/profit_monitor");
     let chart_detached_host =
         fs::read_to_string(root.join("chart_tabs").join("detached_host").join("mod.rs")).unwrap();
 
@@ -194,11 +192,10 @@ fn decorative_animation_goes_through_the_pulse_timer() {
     // The ban alone is satisfiable by deleting the decoration, and — worse — by keeping the
     // opacity while dropping the timer that advances it, which reads as "done" and leaves a
     // decoration frozen at whichever value the last unrelated repaint caught. So bind both halves
-    // at both surviving call sites: whoever computes a phase must also arm a timer.
+    // at every surviving call site: whoever draws a pulse must also arm a timer.
     // The chart stack is deliberately NOT paired here: its arrival flash moved into the chart's own
     // GPU pass, which is cheaper still. It gets its own binding below.
     {
-        let (owner, drawer) = ("panels/news/mod.rs", "panels/news/render.rs");
         // Comment-stripped, like the ban above: prose naming the call must not satisfy a rule
         // about making it.
         let code = |rel: &str| {
@@ -208,17 +205,28 @@ fn decorative_animation_goes_through_the_pulse_timer() {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let drawing = code(drawer);
-        assert!(
-            drawing.contains("pulse::phase("),
-            "{drawer} draws a pulse, so its opacity must come from `crate::pulse::phase`"
-        );
-        let arming = code(owner);
-        assert!(
-            arming.contains("pulse::arm("),
-            "{owner} owns a pulse, so it must arm the repaint timer that advances it — an opacity \
-             with no timer freezes at whatever the last unrelated repaint left behind"
-        );
+        // News draws its tint from the shared helper; the Profit Monitor draws the same tint on a
+        // table row. Both spell the drawing half `pulse::…tint(`, and both must arm the timer.
+        for (owner, drawer, arm) in [
+            ("panels/news/mod.rs", "panels/news/render.rs", "pulse::arm("),
+            (
+                "analytics/profit_monitor/mod.rs",
+                "analytics/profit_monitor/table.rs",
+                "pulse::arm_with(",
+            ),
+        ] {
+            let drawing = code(drawer);
+            assert!(
+                drawing.contains("pulse::phase(") || drawing.contains("tint("),
+                "{drawer} draws a pulse, so its opacity must come from `crate::pulse`"
+            );
+            let arming = code(owner);
+            assert!(
+                arming.contains(arm),
+                "{owner} owns a pulse, so it must arm the repaint timer that advances it — an \
+                 opacity with no timer freezes at whatever the last unrelated repaint left behind"
+            );
+        }
 
         // The chart's arrival flash: same two halves, different mechanism. It is drawn by the own
         // pass and paced there, and the load-bearing half is EXPIRY — leave `arrival_pulse` set and

@@ -10,10 +10,11 @@ use moon_core::db::{ProfitUnit, QuoteCurrency};
 use moon_core::util::fmt::DeltaSign;
 
 use super::rows::{GroupMode, LiveContext, RowLabels, grouped_rows};
+use super::table::{format_profit, profit_column_width};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
-    duration_until_period_refresh, format_profit, monitor_zone, next_sort,
-    retain_last_known_exchange_names, sort_rows,
+    duration_until_period_refresh, monitor_zone, next_sort, retain_last_known_exchange_names,
+    sort_rows,
 };
 
 /// Return deterministic fallback labels for pure grouping tests.
@@ -43,6 +44,8 @@ fn summary() -> ProfitMonitorSummary {
                 wins: 2,
                 positive_spent: 300.0,
                 positive_orders: 2,
+                last_profit: Some(4.0),
+                last_close: 1_700_000_100,
             },
             ProfitMonitorCore {
                 core_uid: 2,
@@ -52,6 +55,8 @@ fn summary() -> ProfitMonitorSummary {
                 wins: 0,
                 positive_spent: 100.0,
                 positive_orders: 1,
+                last_profit: Some(-2.0),
+                last_close: 1_700_000_200,
             },
         ],
     }
@@ -71,6 +76,8 @@ fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
         wins: 2,
         positive_spent: 75.0,
         positive_orders: 1,
+        last_profit: Some(30.0),
+        last_close: 1_700_000_050,
     });
     let live = LiveContext {
         exchange_names: HashMap::new(),
@@ -108,6 +115,8 @@ fn exchange_spot_label_preserves_raw_grouping_and_sorting() {
         wins: 3,
         positive_spent: 70.0,
         positive_orders: 2,
+        last_profit: Some(0.0),
+        last_close: 1_700_000_010,
     });
     let live = LiveContext {
         exchange_names: HashMap::from([
@@ -221,6 +230,7 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: false,
             status_label: false,
             trades: false,
+            last_trade: false,
             win_rate: false,
             average_order: false,
         },
@@ -235,6 +245,7 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: false,
             status_label: false,
             trades: true,
+            last_trade: false,
             win_rate: false,
             average_order: false,
         }
@@ -246,10 +257,13 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: false,
             trades: true,
+            last_trade: false,
             win_rate: false,
             average_order: false,
         }
     );
+    assert!(!MonitorLayout::for_width(499.0, 1.0).last_trade);
+    assert!(MonitorLayout::for_width(500.0, 1.0).last_trade);
     assert!(!MonitorLayout::for_width(619.0, 1.0).win_rate);
     assert!(MonitorLayout::for_width(620.0, 1.0).win_rate);
     assert!(!MonitorLayout::for_width(699.0, 1.0).status_label);
@@ -261,6 +275,7 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: true,
             trades: true,
+            last_trade: true,
             win_rate: true,
             average_order: false,
         }
@@ -272,6 +287,7 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: true,
             trades: true,
+            last_trade: true,
             win_rate: true,
             average_order: true,
         }
@@ -283,6 +299,7 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: false,
             status_label: false,
             trades: true,
+            last_trade: false,
             win_rate: false,
             average_order: false,
         }
@@ -294,12 +311,15 @@ fn responsive_layout_degrades_at_the_documented_boundaries() {
             clock_seconds: true,
             status_label: false,
             trades: true,
+            last_trade: false,
             win_rate: false,
             average_order: false,
         }
     );
     assert!(!MonitorLayout::for_width(487.4, 1.25).trades);
     assert!(MonitorLayout::for_width(487.5, 1.25).trades);
+    assert!(!MonitorLayout::for_width(624.9, 1.25).last_trade);
+    assert!(MonitorLayout::for_width(625.0, 1.25).last_trade);
     assert!(!MonitorLayout::for_width(774.9, 1.25).win_rate);
     assert!(MonitorLayout::for_width(775.0, 1.25).win_rate);
     assert!(!MonitorLayout::for_width(874.9, 1.25).status_label);
@@ -324,6 +344,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
             positive_spent: 60.0,
             positive_orders: 2,
             primary_core: 1,
+            ..super::rows::MonitorRow::default()
         },
         super::rows::MonitorRow {
             name: "Beta".to_string(),
@@ -334,6 +355,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
             positive_spent: 10.0,
             positive_orders: 1,
             primary_core: 2,
+            ..super::rows::MonitorRow::default()
         },
         super::rows::MonitorRow {
             name: "Gamma".to_string(),
@@ -344,6 +366,7 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
             positive_spent: 120.0,
             positive_orders: 3,
             primary_core: 3,
+            ..super::rows::MonitorRow::default()
         },
     ];
     let names_for = |column| {
@@ -490,11 +513,191 @@ fn clock_refresh_uses_minute_local_midnight_or_no_timer_by_period() {
 #[test]
 fn formatted_profit_keeps_unit_and_rounded_sign_coupled() {
     assert_eq!(
-        format_profit(-0.001, Some(ProfitUnit::Quote(QuoteCurrency::usdt()))),
+        format_profit(-0.001, None, Some(ProfitUnit::Quote(QuoteCurrency::usdt()))),
         ("+0 USDT".to_string(), DeltaSign::Zero)
     );
     assert_eq!(
-        format_profit(12.5, Some(ProfitUnit::Percent)),
+        format_profit(12.5, None, Some(ProfitUnit::Percent)),
         ("+12.5%".to_string(), DeltaSign::Positive)
+    );
+}
+
+/// `profit_monitor/mod.rs:format_profit` must place the newest trade INSIDE the unit and round it
+/// with the same currency decimals as the total.
+///
+/// Breakage: appending the bracket after the ticker reads as a second currency; formatting the
+/// suffix with its own decimals makes a cell claim precision the total does not show; letting the
+/// suffix decide the colour paints a profitable period red after one losing trade.
+#[test]
+fn last_trade_suffix_shares_the_total_unit_and_rounding() {
+    let usdt = Some(ProfitUnit::Quote(QuoteCurrency::usdt()));
+    assert_eq!(
+        format_profit(-57.114, Some(-0.6), usdt),
+        ("-57.11(-0.6) USDT".to_string(), DeltaSign::Negative)
+    );
+    assert_eq!(
+        format_profit(12.0, Some(-0.004), usdt),
+        ("+12(+0) USDT".to_string(), DeltaSign::Positive),
+        "a suffix that rounds away must not print a minus the number no longer shows"
+    );
+    assert_eq!(
+        format_profit(41.0, Some(-3.0), usdt).1,
+        DeltaSign::Positive,
+        "the colour follows the total, not the last trade"
+    );
+    assert_eq!(
+        format_profit(3.5, Some(1.25), Some(ProfitUnit::Percent)),
+        ("+3.5(+1.25)%".to_string(), DeltaSign::Positive)
+    );
+    assert_eq!(
+        format_profit(-57.114, None, usdt).0,
+        "-57.11 USDT",
+        "a core with no trade in the period must show no empty bracket"
+    );
+}
+
+/// `profit_monitor/mod.rs:profit_column_width` must claim the suffix allowance only while the
+/// suffix is drawn, and `MonitorLayout` must keep a name column at its minimum in the first tier
+/// that allows one.
+///
+/// Breakage: widening the column unconditionally steals space from Name at every width; enabling
+/// the suffix below its own tier truncates a money value instead of dropping it.
+#[test]
+fn last_trade_column_never_starves_the_name_column() {
+    assert_eq!(profit_column_width(false), super::PROFIT_COLUMN_WIDTH);
+    assert_eq!(
+        profit_column_width(true),
+        super::PROFIT_COLUMN_WIDTH + super::PROFIT_LAST_TRADE_EXTRA
+    );
+    // Narrowest width that turns the suffix on, spending it on every column that tier shows.
+    let used = profit_column_width(true)
+        + super::TRADES_COLUMN_WIDTH
+        + 2.0 * super::TABLE_HORIZONTAL_PADDING
+        + 2.0 * super::TABLE_COLUMN_GAP;
+    assert!(
+        super::LAST_TRADE_WIDTH - used >= super::MIN_NAME_COLUMN_WIDTH,
+        "the suffix tier must still leave Name its minimum: {} left",
+        super::LAST_TRADE_WIDTH - used
+    );
+}
+
+/// `profit_monitor/rows.rs:MonitorRow::push` must merge cores onto the NEWEST trade, not the last
+/// core the grouping happened to visit.
+///
+/// Breakage: taking whichever core is merged last makes the displayed last trade jump between two
+/// refreshes of identical data, because the group map iterates in hash order.
+#[test]
+fn merged_rows_carry_the_newest_trade_of_their_cores() {
+    let summary = summary();
+    let live = LiveContext {
+        exchange_names: HashMap::from([
+            (1, "Binance Futures".to_string()),
+            (2, "Binance Futures".to_string()),
+        ]),
+        ..LiveContext::default()
+    };
+    let rows = grouped_rows(&summary, &live, GroupMode::Exchange, labels());
+
+    assert_eq!(rows.len(), 1, "both cores report the same exchange");
+    assert_eq!(rows[0].last_profit, Some(-2.0));
+    assert_eq!(rows[0].last_close, 1_700_000_200);
+    assert_eq!(
+        rows[0].last_core, 2,
+        "the highlight must follow the core that actually traded"
+    );
+    assert_eq!(
+        rows[0].exchange.as_deref(),
+        Some("Binance Futures"),
+        "the logo lookup needs the raw reported identity, not the Spot/Futures display form"
+    );
+}
+
+/// `profit_monitor/mod.rs:arrivals` must highlight a core that traded, and nothing else.
+///
+/// Breakage: baselining with an empty map instead of `None` flashes every row on the first snapshot
+/// after a period change; keeping strict close-date comparison alone misses a second trade inside
+/// the same Unix second and a core's first trade of the period; comparing counts downward flashes
+/// when retention trims the window; keeping departed cores grows the memory for the process life.
+#[test]
+fn only_a_core_that_traded_counts_as_an_arrival() {
+    let mut cores = summary().cores;
+
+    let (seen, arrived) = super::arrivals(None, &cores);
+    assert!(arrived.is_empty(), "the baseline snapshot must not flash");
+    assert_eq!(
+        seen,
+        HashMap::from([(1, (1_700_000_100, 3)), (2, (1_700_000_200, 1))])
+    );
+
+    let (again, arrived) = super::arrivals(Some(&seen), &cores);
+    assert!(arrived.is_empty(), "an unchanged snapshot must not flash");
+    assert_eq!(again, seen);
+
+    // Same second, one more trade: the close date cannot move, so only the count can say so.
+    cores[1].trades += 1;
+    let (_, arrived) = super::arrivals(Some(&seen), &cores);
+    assert_eq!(arrived, vec![2], "a same-second trade must still flash");
+    cores[1].trades -= 1;
+
+    // Retention trimming the period lowers the count; that is not a trade.
+    cores[0].trades -= 1;
+    let (_, arrived) = super::arrivals(Some(&seen), &cores);
+    assert!(arrived.is_empty(), "a shrinking period must not flash");
+    cores[0].trades += 1;
+
+    cores[0].last_close = 1_700_000_300;
+    cores.remove(1);
+    let (after, arrived) = super::arrivals(Some(&seen), &cores);
+    assert_eq!(arrived, vec![1]);
+    assert_eq!(
+        after,
+        HashMap::from([(1, (1_700_000_300, 3))]),
+        "a core that left the period must leave the arrival memory with it"
+    );
+
+    // A core that comes back after leaving the period is its first trade of the hour, not a row
+    // quietly reappearing — the arrival a user is most likely waiting for.
+    let (_, arrived) = super::arrivals(Some(&after), &summary().cores);
+    assert_eq!(arrived, vec![2]);
+}
+
+/// `profit_monitor/settings.rs:MonitorPrefs::restore` must treat an unset key as its default and a
+/// saved `false` as a deliberate choice.
+///
+/// Breakage: reading the keys as bare booleans makes "never opened the popup" indistinguishable
+/// from "turned everything off", so a later default change silently overrides the user.
+#[test]
+fn display_preferences_separate_unset_from_disabled() {
+    let mut layout = moon_core::config::layout::WindowLayout::default();
+    assert_eq!(
+        super::MonitorPrefs::restore(&layout),
+        super::MonitorPrefs::default()
+    );
+    assert!(super::MonitorPrefs::default().last_trade);
+
+    layout.profit_monitor_last_trade = Some(false);
+    let restored = super::MonitorPrefs::restore(&layout);
+    assert!(!restored.last_trade);
+    assert!(
+        restored.exchange_icons && restored.flash,
+        "one disabled preference must not drag the others down"
+    );
+}
+
+/// `profit_monitor/mod.rs:arrivals` must not treat an EMPTY previous snapshot as a baseline.
+///
+/// Breakage: storing `Some({})` and diffing against it makes the first populated read — report
+/// replication catching up after the window opens — light every row in the table at once, the exact
+/// failure the rebaseline rule exists to prevent.
+#[test]
+fn an_empty_previous_snapshot_is_not_a_baseline() {
+    let empty: HashMap<u64, (i64, i64)> = HashMap::new();
+
+    // What the view does: an empty baseline is filtered away before the diff.
+    let baseline = Some(&empty).filter(|seen| !seen.is_empty());
+    let (_, arrived) = super::arrivals(baseline, &summary().cores);
+    assert!(
+        arrived.is_empty(),
+        "a table filling up for the first time must not read as a table full of arrivals"
     );
 }

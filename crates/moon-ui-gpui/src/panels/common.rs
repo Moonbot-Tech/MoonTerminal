@@ -1,14 +1,19 @@
-//! Shared panel UI helpers: adaptive number formatting, mutually exclusive dropdown items, a data
-//! table host, the settings-popup group frame, repaint gating, and the detached-window toolbar
-//! action. Panel-specific behavior stays in its owning module.
+//! Shared UI helpers: adaptive number formatting, mutually exclusive dropdown items, a data table
+//! host, the settings-popup frame with its gear trigger and close button, repaint gating, and the
+//! detached-window toolbar action. Panel-specific behavior stays in its owning module.
+//!
+//! "Panel" is where these grew, not where they are limited to: the settings-popup pieces are used
+//! by the chart tab strip and the Profit Monitor too, because a popup should look the same wherever
+//! it opens.
 
 use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonCheckboxSize, MoonGroupBox, MoonMenuItem, MoonPalette, MoonTooltipView,
+    DockArea, MoonBackgroundPolicy, MoonButton, MoonButtonIconSlot, MoonButtonSize,
+    MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonGroupBox, MoonMenuItem, MoonPalette,
+    MoonTooltipView,
 };
 
 use crate::Backend;
@@ -197,6 +202,41 @@ pub(crate) fn popup_close_button(
         .size(MoonButtonSize::Micro)
         .variant(MoonButtonVariant::Ghost)
         .on_click(on_click)
+        .render()
+}
+
+/// Builds the ⚙ that OPENS a settings popup, as the popover's own trigger.
+///
+/// An icon, never a "⚙" label: any label at all costs MoonUI's square icon-only geometry, so a
+/// labelled gear comes out a different size from the stroke-icon buttons beside it, and the glyph
+/// carries its own rendering instead of taking the button's colour. Lit while its popup is up,
+/// because every other popup trigger in the terminal says whether it is open.
+///
+/// It carries no click handler on purpose: the popover owns the press, and a second handler here
+/// would fight it and toggle the popup twice.
+///
+/// Args:
+///     id: Stable element identity.
+///     tooltip: Localized description of what the popup holds.
+///     open: Whether that popup is currently showing.
+///
+/// Returns:
+///     The trigger, ready to hand to a `MoonPopover`.
+pub(crate) fn popup_gear_trigger(
+    id: impl Into<ElementId>,
+    tooltip: impl Into<SharedString>,
+    open: bool,
+) -> impl IntoElement {
+    MoonButton::new(id)
+        .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
+        .tooltip(tooltip)
+        .size(MoonButtonSize::Micro)
+        .variant(if open {
+            MoonButtonVariant::Blue
+        } else {
+            MoonButtonVariant::Ghost
+        })
+        .selected(open)
         .render()
 }
 

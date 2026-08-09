@@ -193,6 +193,25 @@ pub struct WindowLayout {
     /// hand-edited widget preference must never discard the complete window layout.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_sort: Option<(String, bool)>,
+    /// Whether the Profit Monitor window was open when the terminal last exited.
+    ///
+    /// The monitor is a desktop window with no taskbar button of its own, so a restart that
+    /// silently drops it leaves no trace that it was ever there. Startup reopens it from this flag.
+    #[serde(default, deserialize_with = "de_lenient_bool")]
+    pub profit_monitor_open: bool,
+    /// Profit Monitor: whether a row shows its exchange logo before the name.
+    ///
+    /// `None` means the feature's own default. All three monitor display preferences are read
+    /// leniently for the same reason as the sort tuple: a hand-edited widget preference must never
+    /// discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_exchange_icons: Option<bool>,
+    /// Profit Monitor: whether the profit cell appends the latest closed trade in parentheses.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_last_trade: Option<bool>,
+    /// Profit Monitor: whether a row lights up and fades when its core closes a new trade.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_flash: Option<bool>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

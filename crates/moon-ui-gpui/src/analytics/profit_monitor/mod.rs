@@ -1,11 +1,19 @@
 //! Independent, automatically refreshed desktop Profit Monitor window.
 
 mod rows;
+mod settings;
+mod table;
+mod window;
+
+// The window's own lifecycle lives in `window.rs`; the toolbar and startup reach it through here,
+// so the module path callers use does not change when the file it lives in does.
+pub(crate) use window::{open, restore};
 
 #[cfg(test)]
 mod tests;
 
 use std::cmp::Ordering as SortOrdering;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,14 +22,15 @@ use chrono::{DateTime, Datelike, Utc};
 use chrono_tz::Tz;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_core::db::analytics::{PreviousPeriodBasis, ProfitMonitorSummary, Query};
+use moon_core::db::analytics::{
+    PreviousPeriodBasis, ProfitMonitorCore, ProfitMonitorSummary, Query,
+};
 use moon_core::db::valuation::ValuationMode;
-use moon_core::db::{FailKind, ProfitMetric, ProfitUnit, ReadFail, SideFilter};
-use moon_core::util::fmt::DeltaSign;
+use moon_core::db::{FailKind, ProfitMetric, ReadFail, SideFilter};
+use moon_core::session::CoreId;
 use moon_ui::{
-    MoonAlert, MoonBackgroundPolicy, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize,
-    MoonPalette, MoonScrollbarVisibility, MoonSegmentItem, MoonSegmentedControl, MoonVirtualList,
-    MoonVirtualListScrollHandle, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuSize, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, MoonVirtualListScrollHandle, MoonWindowFrame, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -31,6 +40,8 @@ use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, grouped_rows};
+use settings::MonitorPrefs;
+use table::{centered_alert, centered_message, split_body};
 
 const HEADER_HEIGHT: f32 = 32.0;
 const CONTEXT_REFRESH_MS: u128 = 5_000;
@@ -38,12 +49,27 @@ const SECOND_MS: u128 = 1_000;
 const MINUTE_MS: u128 = 60_000;
 const MIN_NAME_COLUMN_WIDTH: f32 = 128.0;
 const PROFIT_COLUMN_WIDTH: f32 = 154.0;
+/// Extra profit-column width claimed by the `total(last)` form.
+///
+/// The suffix is a second signed amount plus its brackets, so the cell needs the room BEFORE it is
+/// drawn — an ellipsis in a money column reads as a different number. Sized for the WIDEST quote,
+/// not the common one: `QuoteCurrency::display_decimals` returns 8 for BTC-like quotes, so
+/// `(-0.00000123)` is 13 monospace characters and a 60-unit allowance would truncate it.
+const PROFIT_LAST_TRADE_EXTRA: f32 = 90.0;
+/// Design-reference logo edge drawn before a row's name.
+const EXCHANGE_LOGO_SIZE: f32 = 13.0;
+/// Gap between that logo and the name it belongs to.
+///
+/// Named because THREE places have to agree on it: the row that draws the logo, the empty gutter a
+/// logo-less row keeps, and the heading's own left padding.
+const NAME_LOGO_GAP: f32 = 5.0;
 const TRADES_COLUMN_WIDTH: f32 = 72.0;
 const WIN_RATE_COLUMN_WIDTH: f32 = 76.0;
 const AVERAGE_ORDER_COLUMN_WIDTH: f32 = 116.0;
 const TABLE_HORIZONTAL_PADDING: f32 = 10.0;
 const TABLE_COLUMN_GAP: f32 = 8.0;
 const TRADES_WIDTH: f32 = 390.0;
+const LAST_TRADE_WIDTH: f32 = 500.0;
 const STACKED_CONTROLS_WIDTH: f32 = 460.0;
 const WIN_RATE_WIDTH: f32 = 620.0;
 const STATUS_LABEL_WIDTH: f32 = 700.0;
@@ -217,6 +243,11 @@ struct MonitorLayout {
     status_label: bool,
     /// Whether trade counts remain visible.
     trades: bool,
+    /// Whether the profit cell has room for its `total(last)` suffix.
+    ///
+    /// This is a question about SPACE only; whether the user wants the suffix at all is
+    /// [`MonitorPrefs::last_trade`], and the cell needs both.
+    last_trade: bool,
     /// Whether win rate remains visible.
     win_rate: bool,
     /// Whether average order remains visible.
@@ -232,14 +263,17 @@ impl MonitorLayout {
     ///
     /// Returns:
     ///     Name and Profit are always present; Trades appears at the scaled 390-design-pixel
-    ///     boundary. Controls stack and the clock drops seconds below scaled 460. Win rate appears
-    ///     at scaled 620, the status label at scaled 700, and Average order at scaled 760.
+    ///     boundary. Controls stack and the clock drops seconds below scaled 460. The last-trade
+    ///     suffix appears at scaled 500 — the first width where the wider profit column still
+    ///     leaves the name its 128-unit minimum. Win rate appears at scaled 620, the status label
+    ///     at scaled 700, and Average order at scaled 760.
     fn for_width(width: f32, ui_scale: f32) -> Self {
         Self {
             inline_controls: width >= STACKED_CONTROLS_WIDTH * ui_scale,
             clock_seconds: width >= STACKED_CONTROLS_WIDTH * ui_scale,
             status_label: width >= STATUS_LABEL_WIDTH * ui_scale,
             trades: width >= TRADES_WIDTH * ui_scale,
+            last_trade: width >= LAST_TRADE_WIDTH * ui_scale,
             win_rate: width >= WIN_RATE_WIDTH * ui_scale,
             average_order: width >= AVERAGE_ORDER_WIDTH * ui_scale,
         }
@@ -626,10 +660,27 @@ pub(crate) struct ProfitMonitorView {
     zone: Tz,
     group: GroupMode,
     sort: Option<MonitorSort>,
+    prefs: MonitorPrefs,
+    settings_open: bool,
     valuation: ValuationMode,
     live: LiveContext,
     data: ProfitLoadState<ProfitMonitorSummary>,
     refresh_error: Option<ReadFail>,
+    /// Newest close date and trade count already on screen, per report core.
+    ///
+    /// This is the arrival detector's whole memory. `None` means "no baseline": the next snapshot
+    /// only records, because a query change replaces every value at once and that is not fourteen
+    /// new trades. Once a baseline exists, a core APPEARING is an arrival too — that is a core's
+    /// first trade of the hour, the one a user is most likely watching for.
+    ///
+    /// The count is carried beside the date because close dates have one-second resolution: a
+    /// second trade inside the same second moves the count and nothing else.
+    seen_trades: Option<HashMap<CoreId, (i64, i64)>>,
+    /// When each core's latest arrival was observed.
+    ///
+    /// The shared [`crate::pulse::Arrivals`] owns the stamps, their expiry and the "a timer is
+    /// running" flag — the same machine the News feed uses, so the two highlights cannot drift.
+    flash: crate::pulse::Arrivals<CoreId>,
     scroll: MoonVirtualListScrollHandle,
     focus: FocusHandle,
 }
@@ -672,6 +723,33 @@ impl ProfitMonitorView {
         })
         .detach();
 
+        // Closing the monitor by hand is a decision the next launch has to know about; quitting is
+        // not. `quitting` separates them, exactly as the detached-panel windows do — during
+        // shutdown the layout has already been flushed, so a release-time write here would replace
+        // "the monitor was open" with "the monitor was closed" on every ordinary exit.
+        let window_id = window.window_handle().window_id();
+        cx.on_release(move |this, app| {
+            this.backend.update(app, |backend, _| {
+                // Everything here is guarded by the window id. A view released AFTER its
+                // replacement registered — close and reopen inside one effect flush — would
+                // otherwise clear the flag while a live monitor is on screen, and the next launch
+                // would not reopen it.
+                if backend
+                    .profit_monitor_window
+                    .is_none_or(|handle| handle.window_id() != window_id)
+                {
+                    return;
+                }
+                backend.profit_monitor_window = None;
+                if backend.quitting || !backend.layout.profit_monitor_open {
+                    return;
+                }
+                backend.layout.profit_monitor_open = false;
+                backend.layout_dirty = true;
+            });
+        })
+        .detach();
+
         let clock = cx.new(|cx| MonitorClockView::new(backend.clone(), cx));
         let content_owner = cx.entity().downgrade();
         let content = cx.new(|_| ProfitMonitorBodyView {
@@ -709,6 +787,7 @@ impl ProfitMonitorView {
             .profit_monitor_sort
             .as_ref()
             .and_then(|(id, descending)| MonitorSort::from_layout(id, *descending));
+        let prefs = MonitorPrefs::restore(&backend.read(cx).layout);
         let valuation = backend.read(cx).valuation_mode();
         let live = capture_live_context(backend.read(cx));
 
@@ -735,13 +814,24 @@ impl ProfitMonitorView {
             zone,
             group,
             sort,
+            prefs,
+            settings_open: false,
             valuation,
             live,
             data: ProfitLoadState::default(),
             refresh_error: None,
+            seen_trades: None,
+            flash: crate::pulse::Arrivals::default(),
             scroll: MoonVirtualListScrollHandle::new(),
             focus: cx.focus_handle(),
         };
+        // Decode the logos before the first table frame needs them, off the render path — and only
+        // when they will actually be drawn: someone who turned the icons off should not pay for
+        // seven SVG rasters and the textures they retain for the rest of the session.
+        if prefs.exchange_icons {
+            cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
+                .detach();
+        }
         this.reload(false, cx);
         this.start_clock_refresh(cx);
         this.start_context_refresh(cx);
@@ -836,6 +926,12 @@ impl ProfitMonitorView {
                         return;
                     }
                     this.busy_retries.reset();
+                    // A period boundary MOVES the query window — Today becomes another day,
+                    // Yesterday shifts back one. Every core's newest trade is replaced by a
+                    // different one, so the memory has to be dropped here even though the reload
+                    // keeps the visible rows: diffing across the boundary is comparing two
+                    // different questions.
+                    this.rebaseline_arrivals();
                     this.reload(true, cx);
                     this.start_clock_refresh(cx);
                 });
@@ -878,6 +974,9 @@ impl ProfitMonitorView {
     ///     after_report: Whether an existing visible snapshot may remain until replacement.
     ///     cx: View context used to spawn and publish the read.
     fn reload(&mut self, after_report: bool, cx: &mut Context<Self>) {
+        if !after_report {
+            self.rebaseline_arrivals();
+        }
         if self.db_active {
             if !after_report {
                 self.seq = self.seq.wrapping_add(1);
@@ -915,6 +1014,7 @@ impl ProfitMonitorView {
                         let error = result.as_ref().err().cloned();
                         if !after_report || error.is_none() {
                             this.data.apply(result);
+                            this.observe_arrivals(cx);
                             this.invalidate_content(cx);
                         }
                         if error.is_none() {
@@ -1000,6 +1100,67 @@ impl ProfitMonitorView {
         }
     }
 
+    /// Record which cores closed a trade since the previous snapshot and start their highlight.
+    ///
+    /// The signal is the report's own newest close date per core, so a row lights up for the same
+    /// reason its `(last)` value changes: one authoritative timestamp, not a trade count that a
+    /// retention sweep or a period edge could also move.
+    ///
+    /// Args:
+    ///     cx: View context used to arm the repaint chain.
+    fn observe_arrivals(&mut self, cx: &mut Context<Self>) {
+        let ProfitLoadState::Ready { data, .. } = &self.data else {
+            // Split currencies, a failed read, or a report that is not ready yet all leave the
+            // memory describing a snapshot nobody can see any more. Re-baselining here is what
+            // stops an outage from ending in a table-wide flash.
+            self.rebaseline_arrivals();
+            return;
+        };
+        // An EMPTY previous snapshot is not a baseline to diff against. A table going from nothing
+        // to forty rows is report replication catching up, not forty cores trading in one instant,
+        // and treating it as arrivals lights the whole window at once. Nothing is lost: when the
+        // table is empty, the row APPEARING is already the signal — the highlight exists to point
+        // at a change inside a table that is already populated.
+        let baseline = self.seen_trades.as_ref().filter(|seen| !seen.is_empty());
+        let (seen, arrived) = arrivals(baseline, &data.cores);
+        self.seen_trades = Some(seen);
+        if !self.prefs.flash || arrived.is_empty() {
+            return;
+        }
+        self.flash.mark(arrived);
+        crate::pulse::arm_with(
+            self,
+            cx,
+            |this| this.flash.armed(),
+            |this| this.flash.live(),
+            Self::on_flash_tick,
+        );
+    }
+
+    /// Forget the arrival baseline, so the next snapshot only records.
+    ///
+    /// Every caller is a case where the QUESTION changed rather than the answer: a new period, a
+    /// new valuation or zone, a local-midnight rollover, or a read with no comparable rows at all.
+    fn rebaseline_arrivals(&mut self) {
+        self.seen_trades = None;
+        self.flash.clear();
+    }
+
+    /// Per-tick work of the shared pulse chain: drop finished stamps and dirty the cached table.
+    ///
+    /// The body is a cached SIBLING view. `cx.notify()` inside the pulse marks this view and its
+    /// ancestors, which leaves that child clean and lets GPUI reuse the still-tinted subtree — so
+    /// the tint has to be invalidated here or the fade never moves. Pruning first is deliberate:
+    /// the tick that drops the last live stamp is the one that must erase the tint, and
+    /// [`crate::pulse::Arrivals::live`] then ends the chain on the following tick.
+    ///
+    /// Args:
+    ///     cx: View context used to invalidate the cached body.
+    fn on_flash_tick(&mut self, cx: &mut Context<Self>) {
+        self.flash.prune();
+        self.invalidate_content(cx);
+    }
+
     /// Select and persist one period, then replace the database snapshot immediately.
     ///
     /// Args:
@@ -1063,7 +1224,7 @@ impl ProfitMonitorView {
     ///
     /// Returns:
     ///     One inline selector row or a narrow two-row control surface.
-    fn controls(&self, width: f32, palette: MoonPalette, cx: &Context<Self>) -> AnyElement {
+    fn controls(&self, width: f32, palette: MoonPalette, cx: &mut Context<Self>) -> AnyElement {
         let layout = MonitorLayout::for_width(width, design::ui_value(cx, 1.0));
         let selected_group = self.group;
         let view = cx.entity();
@@ -1084,6 +1245,7 @@ impl ProfitMonitorView {
             })
             .render();
         let period = period_dropdown(self.period, cx.entity());
+        let settings = self.settings_popover(settings_trigger(self.settings_open), palette, cx);
         let status_clock = h_flex()
             .flex_none()
             .gap(design::ui_px(cx, 10.0))
@@ -1094,7 +1256,8 @@ impl ProfitMonitorView {
                 palette,
                 cx,
             ))
-            .child(self.clock.clone());
+            .child(self.clock.clone())
+            .child(settings);
         let content = if layout.inline_controls {
             h_flex()
                 .justify_between()
@@ -1175,11 +1338,13 @@ impl ProfitMonitorView {
                     },
                 );
                 sort_rows(&mut rows, self.sort);
-                table(
+                table::table(
                     rows,
                     *unit,
                     width,
                     self.sort,
+                    self.prefs,
+                    &self.flash,
                     &self.scroll,
                     palette,
                     view,
@@ -1231,6 +1396,44 @@ impl Render for ProfitMonitorView {
                     .hit_overlay(),
             )
     }
+}
+
+/// Diff one snapshot against the trades already on screen.
+///
+/// A core counts as having traded when its newest close date MOVED or its trade count GREW. The
+/// count is not redundant: close dates carry whole seconds, so a second trade inside one second
+/// moves nothing else. Growth only — retention trimming a period lowers the count, and that is not
+/// a trade.
+///
+/// Args:
+///     seen: Previous `(newest close date, trade count)` per core, or `None` for no baseline.
+///     cores: Per-core aggregates from the snapshot just applied.
+///
+/// Returns:
+///     The replacement memory, and the cores that traded since the previous snapshot. With no
+///     baseline nothing arrives — that is the first snapshot after a query change, where every
+///     value is new at once. With a baseline, a core APPEARING is an arrival: it is that core's
+///     first trade of the period, which is exactly what the highlight is for. A core absent from
+///     `cores` is dropped, keeping the memory bounded by the report's own core count.
+fn arrivals(
+    seen: Option<&HashMap<CoreId, (i64, i64)>>,
+    cores: &[ProfitMonitorCore],
+) -> (HashMap<CoreId, (i64, i64)>, Vec<CoreId>) {
+    let mut next = HashMap::with_capacity(cores.len());
+    let mut arrived = Vec::new();
+    for core in cores {
+        if let Some(seen) = seen {
+            let traded = match seen.get(&core.core_uid) {
+                Some((close, trades)) => core.last_close > *close || core.trades > *trades,
+                None => true,
+            };
+            if traded {
+                arrived.push(core.core_uid);
+            }
+        }
+        next.insert(core.core_uid, (core.last_close, core.trades));
+    }
+    (next, arrived)
 }
 
 /// Return the current logical width for any window-bounds state.
@@ -1361,6 +1564,21 @@ fn period_dropdown(selected: MonitorPeriod, view: Entity<ProfitMonitorView>) -> 
         .items(items)
 }
 
+/// Render the ⚙ button that opens the monitor's display settings.
+///
+/// Args:
+///     open: Whether the settings popup is currently showing.
+///
+/// Returns:
+///     The settings popover's trigger, from the shared gear helper.
+fn settings_trigger(open: bool) -> impl IntoElement {
+    crate::panels::popup_gear_trigger(
+        "profit-monitor-settings",
+        t!("profit_monitor.settings.title").to_string(),
+        open,
+    )
+}
+
 /// Render the custom title bar shared with other tool visuals.
 ///
 /// Args:
@@ -1443,551 +1661,4 @@ fn auto_status(
         )
         .when(show_label, |status| status.child(label))
         .into_any_element()
-}
-
-/// Render a centered neutral message.
-///
-/// Args:
-///     message: User-facing text.
-///     palette: Active MoonUI palette.
-///     cx: Render context.
-///
-/// Returns:
-///     Full-height centered placeholder.
-fn centered_message(message: String, palette: MoonPalette, cx: &App) -> AnyElement {
-    div()
-        .flex_1()
-        .w_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(moon(palette.text_muted))
-        .text_size(design::t_body(cx))
-        .child(message)
-        .into_any_element()
-}
-
-/// Render a centered classified read failure.
-///
-/// Args:
-///     title: Localized heading.
-///     detail: Classified database detail.
-///     cx: Render context.
-///
-/// Returns:
-///     Centered MoonAlert.
-fn centered_alert(title: String, detail: String, cx: &App) -> AnyElement {
-    div()
-        .flex_1()
-        .w_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .px(design::ui_px(cx, 20.0))
-        .child(MoonAlert::error("profit-monitor-error", detail).title(title))
-        .into_any_element()
-}
-
-/// Render exact split quote totals without a false combined scalar.
-///
-/// Args:
-///     totals: Per-quote safe totals.
-///     show_trades: Whether the current width retains the aggregate trade count.
-///     palette: Active MoonUI palette.
-///     cx: Render context.
-///
-/// Returns:
-///     Explanation and quote chips, with the aggregate trade count when space permits.
-fn split_body(
-    totals: &moon_core::db::QuoteBreakdown,
-    show_trades: bool,
-    palette: MoonPalette,
-    cx: &App,
-) -> AnyElement {
-    let mut chips = h_flex()
-        .flex_wrap()
-        .justify_center()
-        .gap(design::ui_px(cx, 6.0));
-    for total in &totals.totals {
-        let (amount, sign) = total.signed_display();
-        chips = chips.child(
-            div()
-                .px(design::ui_px(cx, 9.0))
-                .py(design::ui_px(cx, 5.0))
-                .rounded(design::ui_px(cx, 5.0))
-                .bg(moon(palette.table_head))
-                .text_color(moon(sign.pick(
-                    design::positive_color(palette),
-                    design::danger_color(palette),
-                    palette.text,
-                )))
-                .child(amount),
-        );
-    }
-    v_flex()
-        .flex_1()
-        .w_full()
-        .items_center()
-        .justify_center()
-        .gap(design::ui_px(cx, 12.0))
-        .px(design::ui_px(cx, 20.0))
-        .text_align(TextAlign::Center)
-        .child(
-            div()
-                .text_color(moon(palette.text))
-                .child(t!("profit_monitor.split_title").to_string()),
-        )
-        .child(
-            div()
-                .max_w(design::ui_px(cx, 560.0))
-                .text_color(moon(palette.text_muted))
-                .child(t!("profit_monitor.split_detail").to_string()),
-        )
-        .child(chips)
-        .when(show_trades, |body| {
-            body.child(
-                div()
-                    .text_color(moon(palette.text_soft))
-                    .child(t!("profit_monitor.trades_total", n = totals.orders).to_string()),
-            )
-        })
-        .into_any_element()
-}
-
-/// Render the responsive monitor table and exact total footer.
-///
-/// Args:
-///     rows: Already grouped and sorted display rows.
-///     unit: Comparable exact unit, or `None` for an empty result.
-///     width: Current window width.
-///     sort: Explicit user-selected ordering, if any.
-///     scroll: Retained vertical-list position.
-///     palette: Active MoonUI palette.
-///     view: Owning monitor entity receiving sortable-header actions.
-///     cx: Application context used for rendering.
-///
-/// Returns:
-///     Fixed header/footer with a vertically scrolling row body.
-fn table(
-    rows: Vec<MonitorRow>,
-    unit: Option<ProfitUnit>,
-    width: f32,
-    sort: Option<MonitorSort>,
-    scroll: &MoonVirtualListScrollHandle,
-    palette: MoonPalette,
-    view: Entity<ProfitMonitorView>,
-    cx: &App,
-) -> AnyElement {
-    let layout = MonitorLayout::for_width(width, design::ui_value(cx, 1.0));
-    let show_trades = layout.trades;
-    let show_win = layout.win_rate;
-    let show_average = layout.average_order;
-    let total = rows.iter().fold(MonitorRow::default(), |mut total, row| {
-        total.profit += row.profit;
-        total.trades += row.trades;
-        total.wins += row.wins;
-        total.positive_spent += row.positive_spent;
-        total.positive_orders += row.positive_orders;
-        total
-    });
-    let header = table_header(layout, sort, view, palette, cx);
-    let rows = Arc::new(rows);
-    let row_count = rows.len();
-    let list_rows = rows.clone();
-    let row_height = design::fit_h_value(cx, 34.0, 13.0, 8.0);
-    let body = MoonVirtualList::new(
-        "profit-monitor-rows",
-        row_count,
-        row_height,
-        move |index, _window, app| {
-            let Some(row) = list_rows.get(index) else {
-                return div().into_any_element();
-            };
-            let (profit, profit_sign) = format_profit(row.profit, unit);
-            table_row(
-                row.name.clone(),
-                profit,
-                profit_sign,
-                format_trade_count(row.trades),
-                Some(format_win_rate(row.win_rate())),
-                Some(format_amount(row.average_order(), unit)),
-                show_trades,
-                show_win,
-                show_average,
-                palette,
-                app,
-            )
-            .when(index % 2 == 1, |element| {
-                element.bg(moon_alpha(palette.table_head, 0.45))
-            })
-            .into_any_element()
-        },
-    )
-    .track_scroll(scroll)
-    .scrollbar_visibility(MoonScrollbarVisibility::Always)
-    .surface(false)
-    .border(false)
-    .radius(0.0);
-    let (total_profit, total_profit_sign) = format_profit(total.profit, unit);
-    let footer = table_row(
-        t!("profit_monitor.total").to_string(),
-        total_profit,
-        total_profit_sign,
-        format_trade_count(total.trades),
-        Some(format_win_rate(total.win_rate())),
-        Some(format_amount(total.average_order(), unit)),
-        show_trades,
-        show_win,
-        show_average,
-        palette,
-        cx,
-    )
-    .h(design::fit_h_px(cx, 42.0, 14.0, 10.0))
-    .bg(moon(palette.table_head))
-    .text_size(design::t_title(cx))
-    .font_weight(FontWeight::SEMIBOLD)
-    .border_t(px(2.0))
-    .border_color(moon_alpha(palette.amber, 0.7));
-
-    v_flex()
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .child(header)
-        .child(div().flex_1().min_h_0().w_full().child(body))
-        .child(footer)
-        .into_any_element()
-}
-
-/// Render the fixed clickable header whose geometry mirrors the data rows.
-///
-/// Args:
-///     layout: Responsive presentation including visible-column selection.
-///     sort: Current explicit ordering.
-///     view: Monitor entity receiving heading clicks.
-///     palette: Active MoonUI palette.
-///     cx: Render context used for scaled geometry.
-///
-/// Returns:
-///     Fixed-height sortable table header.
-fn table_header(
-    layout: MonitorLayout,
-    sort: Option<MonitorSort>,
-    view: Entity<ProfitMonitorView>,
-    palette: MoonPalette,
-    cx: &App,
-) -> Div {
-    let sortable = |id: &'static str,
-                    title: String,
-                    column: MonitorSortColumn,
-                    width: Option<f32>,
-                    right: bool| {
-        let active = sort.is_some_and(|active| active.column == column);
-        let tooltip = title.clone();
-        let target = view.clone();
-        let mut cell = div()
-            .id(id)
-            .min_w_0()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_ellipsis()
-            .cursor_pointer()
-            .hover(|style| style.text_color(moon(palette.amber)))
-            .text_color(moon(if active {
-                palette.amber
-            } else {
-                palette.text_soft
-            }))
-            .tooltip(crate::panels::common::text_tooltip(tooltip))
-            .child(format!("{title}{}", sort_arrow(sort, column)))
-            .on_click(move |_, _, app| {
-                target.update(app, |this, cx| this.toggle_sort(column, cx));
-            });
-        if right {
-            cell = cell.text_align(TextAlign::Right);
-        }
-        match width {
-            Some(width) => cell.w(design::ui_px(cx, width)).flex_none(),
-            None => cell
-                .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
-                .flex_1(),
-        }
-    };
-
-    h_flex()
-        .w_full()
-        .h(design::fit_h_px(cx, 34.0, 13.0, 8.0))
-        .px(design::ui_px(cx, TABLE_HORIZONTAL_PADDING))
-        .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
-        .bg(moon(palette.table_head))
-        .border_b(px(1.0))
-        .border_color(moon_alpha(palette.border, 0.7))
-        .child(sortable(
-            "profit-monitor-heading-name",
-            t!("profit_monitor.column.name").to_string(),
-            MonitorSortColumn::Name,
-            None,
-            false,
-        ))
-        .child(sortable(
-            "profit-monitor-heading-profit",
-            t!("profit_monitor.column.profit").to_string(),
-            MonitorSortColumn::Profit,
-            Some(PROFIT_COLUMN_WIDTH),
-            true,
-        ))
-        .when(layout.trades, |header| {
-            header.child(sortable(
-                "profit-monitor-heading-trades",
-                t!("profit_monitor.column.trades").to_string(),
-                MonitorSortColumn::Trades,
-                Some(TRADES_COLUMN_WIDTH),
-                true,
-            ))
-        })
-        .when(layout.win_rate, |header| {
-            header.child(sortable(
-                "profit-monitor-heading-win-rate",
-                t!("profit_monitor.column.win_rate").to_string(),
-                MonitorSortColumn::WinRate,
-                Some(WIN_RATE_COLUMN_WIDTH),
-                true,
-            ))
-        })
-        .when(layout.average_order, |header| {
-            header.child(sortable(
-                "profit-monitor-heading-average-order",
-                t!("profit_monitor.column.average_order").to_string(),
-                MonitorSortColumn::AverageOrder,
-                Some(AVERAGE_ORDER_COLUMN_WIDTH),
-                true,
-            ))
-        })
-}
-
-/// Render one responsive table line.
-///
-/// Args:
-///     name: Leading label.
-///     profit: Profit text.
-///     profit_sign: Sign represented by the already-rounded profit text.
-///     trades: Trade-count text.
-///     win_rate: Optional win-rate text.
-///     average_order: Optional average-order text.
-///     show_trades: Whether the current width retains trade count.
-///     show_win: Whether the current width retains win rate.
-///     show_average: Whether the current width retains average order.
-///     palette: Active MoonUI palette.
-///     cx: Render context.
-///
-/// Returns:
-///     One fixed-height table row.
-#[allow(clippy::too_many_arguments)]
-fn table_row(
-    name: String,
-    profit: String,
-    profit_sign: DeltaSign,
-    trades: String,
-    win_rate: Option<String>,
-    average_order: Option<String>,
-    show_trades: bool,
-    show_win: bool,
-    show_average: bool,
-    palette: MoonPalette,
-    cx: &App,
-) -> Div {
-    let name_tooltip = name.clone();
-    let profit_color = profit_sign.pick(
-        design::positive_color(palette),
-        design::danger_color(palette),
-        palette.text,
-    );
-    h_flex()
-        .w_full()
-        .h(design::fit_h_px(cx, 34.0, 13.0, 8.0))
-        .px(design::ui_px(cx, TABLE_HORIZONTAL_PADDING))
-        .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
-        .border_b(px(1.0))
-        .border_color(moon_alpha(palette.border, 0.7))
-        .child(
-            div()
-                .id(SharedString::from(format!(
-                    "profit-monitor-name:{name_tooltip}"
-                )))
-                .flex_1()
-                .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
-                .overflow_hidden()
-                .text_ellipsis()
-                .whitespace_nowrap()
-                .tooltip(crate::panels::common::text_tooltip(name_tooltip))
-                .child(name),
-        )
-        .child(numeric_cell(profit, PROFIT_COLUMN_WIDTH, cx).text_color(moon(profit_color)))
-        .when(show_trades, |element| {
-            element.child(numeric_cell(trades, TRADES_COLUMN_WIDTH, cx))
-        })
-        .when(show_win, |element| {
-            element.child(numeric_cell(
-                win_rate.unwrap_or_default(),
-                WIN_RATE_COLUMN_WIDTH,
-                cx,
-            ))
-        })
-        .when(show_average, |element| {
-            element.child(numeric_cell(
-                average_order.unwrap_or_default(),
-                AVERAGE_ORDER_COLUMN_WIDTH,
-                cx,
-            ))
-        })
-}
-
-/// Render one fixed-width numeric cell without allowing a value to create a second row.
-///
-/// Args:
-///     text: Complete formatted value.
-///     width: Design-reference column width.
-///     cx: Application context used for UI scaling.
-///
-/// Returns:
-///     Right-aligned, single-line, safely truncated cell.
-fn numeric_cell(text: String, width: f32, cx: &App) -> Div {
-    div()
-        .w(design::ui_px(cx, width))
-        .flex_none()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_ellipsis()
-        .text_align(TextAlign::Right)
-        .child(text)
-}
-
-/// Format profit with its exact comparable unit.
-///
-/// Args:
-///     value: Projected profit.
-///     unit: Exact quote or percent unit.
-///
-/// Returns:
-///     Signed compact text carrying its unit and the sign represented after display rounding.
-fn format_profit(value: f64, unit: Option<ProfitUnit>) -> (String, DeltaSign) {
-    let decimals = match unit {
-        Some(ProfitUnit::Quote(currency)) => currency.display_decimals(),
-        Some(ProfitUnit::Percent) | None => 2,
-    };
-    let (amount, sign) = moon_core::util::fmt::signed_amount(value, decimals);
-    let text = match unit {
-        Some(ProfitUnit::Quote(currency)) => format!("{amount} {}", currency.ticker()),
-        Some(ProfitUnit::Percent) => format!("{amount}%"),
-        None => amount,
-    };
-    (text, sign)
-}
-
-/// Format a monitor trade count with the terminal's shared thousands grouping.
-///
-/// Args:
-///     value: Closed-trade count.
-///
-/// Returns:
-///     ASCII digits separated into space-grouped thousands.
-fn format_trade_count(value: i64) -> String {
-    moon_core::util::fmt::group_thousands(&value.to_string())
-}
-
-/// Format win rate with the terminal's shared half-away-from-zero percentage rounding.
-///
-/// Args:
-///     value: Win percentage in `0..=100`.
-///
-/// Returns:
-///     Percentage with one decimal place.
-fn format_win_rate(value: f64) -> String {
-    moon_core::util::fmt::pct(value, 1)
-        .map(|(text, _)| text)
-        .unwrap_or_else(|| "0.0%".to_string())
-}
-
-/// Format average order spend in the query's comparable quote unit.
-///
-/// Args:
-///     value: Average positive spend.
-///     unit: Exact query unit.
-///
-/// Returns:
-///     Compact unsigned order size with a quote ticker when known.
-fn format_amount(value: f64, unit: Option<ProfitUnit>) -> String {
-    match unit {
-        Some(ProfitUnit::Quote(currency)) => format!(
-            "{} {}",
-            moon_core::util::fmt::compact(value, currency.display_decimals()),
-            currency.ticker()
-        ),
-        Some(ProfitUnit::Percent) | None => moon_core::util::fmt::compact(value, 2),
-    }
-}
-
-/// Open or focus the independent singleton Profit Monitor window.
-///
-/// This toolbar action is one route back to the taskbar-hidden monitor; Alt+Tab is the other.
-/// `activate_window` restores an iconic window before foregrounding it, so it reopens a monitor
-/// that the user minimized.
-///
-/// Args:
-///     backend: Shared terminal state retaining the singleton handle.
-///     owner: Launching Main window, used only to choose the initial display.
-///     owner_display: Display captured by the toolbar click.
-///     cx: Application context used to create or activate the window.
-///
-/// Returns:
-///     Nothing; the singleton window is focused or created as a side effect.
-pub(crate) fn open(
-    backend: Entity<Backend>,
-    owner: Option<AnyWindowHandle>,
-    owner_display: Option<DisplayId>,
-    cx: &mut App,
-) {
-    if let Some(handle) = backend.read(cx).profit_monitor_window {
-        if handle
-            .update(cx, |_, window, _| window.activate_window())
-            .is_ok()
-        {
-            return;
-        }
-    }
-    let saved = backend.read(cx).layout.profit_monitor_window;
-    let bounds = saved.map_or(
-        Bounds {
-            origin: point(px(160.0), px(120.0)),
-            size: size(px(720.0), px(520.0)),
-        },
-        |geometry| Bounds {
-            origin: point(px(geometry.x as f32), px(geometry.y as f32)),
-            size: size(px(geometry.w as f32), px(geometry.h as f32)),
-        },
-    );
-    let display_id = crate::window::windowing::saved_or_owner_display_id(
-        saved.map(|geometry| point(px(geometry.x as f32), px(geometry.y as f32))),
-        owner,
-        owner_display,
-        cx,
-    );
-    let options = crate::window::windowing::profit_monitor_window_options(
-        t!("profit_monitor.window_title").to_string(),
-        WindowBounds::Windowed(bounds),
-        display_id,
-        Some(size(design::ui_px(cx, MIN_WINDOW_WIDTH), px(320.0))),
-    );
-    let view_backend = backend.clone();
-    if let Ok(handle) = cx.open_window(options, move |window, cx| {
-        crate::window::windowing::configure_shell_clear_color(window, cx);
-        crate::window::windowing::set_group_window_icon(window, 0);
-        let view = cx.new(|cx| ProfitMonitorView::new(view_backend, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
-    }) {
-        backend.update(cx, |backend, _| {
-            backend.profit_monitor_window = Some(handle)
-        });
-        crate::window::windowing::activate_new_window(handle.into(), cx);
-    }
 }

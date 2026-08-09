@@ -178,19 +178,11 @@ impl Render for DetachedChartHost {
                             .child(common::layout_popup_host(
                                 self,
                                 "detached-chart-layout",
-                                // Icon, not a "⚙" label, for the same reason as the dock strip's
-                                // gear: only a button with no label takes MoonUI's square path.
-                                MoonButton::new("detached-layout-settings")
-                                    .leading_icon(MoonButtonIconSlot::new("icons/settings.svg"))
-                                    .tooltip(t!("chart.layout.tip").to_string())
-                                    .size(MoonButtonSize::Micro)
-                                    .variant(if popup_open {
-                                        MoonButtonVariant::Blue
-                                    } else {
-                                        MoonButtonVariant::Ghost
-                                    })
-                                    .selected(popup_open)
-                                    .render(),
+                                crate::panels::popup_gear_trigger(
+                                    "detached-layout-settings",
+                                    t!("chart.layout.tip").to_string(),
+                                    popup_open,
+                                ),
                                 t!("chart.layout.apply_all_charts").to_string(),
                                 cx,
                             )),

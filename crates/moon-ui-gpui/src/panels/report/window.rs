@@ -218,6 +218,11 @@ pub fn open_scoped(
     let group = report_group_for_core(&backend, scope.strategy.core_uid, cx);
     let saved = backend.read(cx).layout.report_window;
     let saved_origin = saved.map(|geometry| point(px(geometry.x as f32), px(geometry.y as f32)));
+    // Report is the only tool window that judges its saved origin, and it does so to CLAMP the
+    // rectangle into the visible area below, not to rescue an unreachable one — the platform
+    // already handles that (`moon-gpui-windows`'s `retrieve_window_placement` substitutes
+    // `display.default_bounds()` for bounds whose centre is on no monitor). A sibling window that
+    // copies this check for the rescue alone is duplicating work the OS layer does better.
     let saved_origin_is_visible = saved_origin.is_some_and(|origin| {
         cx.displays()
             .into_iter()

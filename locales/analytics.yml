@@ -87,6 +87,26 @@ profit_monitor.trades_total:
   ru: "Всего сделок: %{n}"
   en: "Total trades: %{n}"
   es: "Operaciones totales: %{n}"
+profit_monitor.settings.title:
+  ru: "Настройки монитора"
+  en: "Monitor settings"
+  es: "Ajustes del monitor"
+profit_monitor.settings.display:
+  ru: "Отображение"
+  en: "Display"
+  es: "Visualización"
+profit_monitor.settings.exchange_icons:
+  ru: "Иконка биржи перед именем"
+  en: "Exchange logo before the name"
+  es: "Logo del exchange antes del nombre"
+profit_monitor.settings.last_trade:
+  ru: "Последняя сделка в скобках"
+  en: "Latest trade in parentheses"
+  es: "Última operación entre paréntesis"
+profit_monitor.settings.flash:
+  ru: "Подсветка новой сделки"
+  en: "Highlight a new trade"
+  es: "Resaltar una operación nueva"
 
 analytics.window_title:
   ru: "MoonTerminal — Аналитика"

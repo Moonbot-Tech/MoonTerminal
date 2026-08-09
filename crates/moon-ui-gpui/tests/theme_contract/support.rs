@@ -130,3 +130,51 @@ pub fn code_only(body: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// Read one module FOLDER as a single text.
+///
+/// A module that outgrows its file becomes a directory, and every rule these tests state is about
+/// the module, not about which file inside it happens to hold the code. Reading one file would let
+/// a rule stop being enforced simply because someone moved a function next door — and a `contains`
+/// assertion that finds nothing because the code left is indistinguishable from one that passes.
+///
+/// Every `.rs` file DIRECTLY in the folder is included, discovered rather than listed, so a file
+/// added beside the others cannot quietly fall outside the checks. It does not recurse: a module
+/// deep enough to nest sub-folders needs its own call, and a silent miss there would be the failure
+/// this exists to prevent. Order is sorted for determinism — `braced_body` takes the FIRST match, so
+/// a needle appearing in two files must resolve the same way on every run.
+///
+/// The module's own `tests.rs` is excluded. These are rules about what the code DOES, and several
+/// are negative ("this module must not call X") — a unit test that names the banned call to explain
+/// why it is banned would trip them.
+///
+/// Args:
+///     rel: Folder path under `src`, such as `analytics/profit_monitor`.
+///
+/// Returns:
+///     Every non-test Rust source in the folder, concatenated.
+pub fn read_module(rel: &str) -> String {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel);
+    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
+        // A skipped entry would make every assertion over this module a vacuous pass, so an
+        // unreadable one is a failure, not a shrug.
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|err| panic!("failed to list {}: {err}", dir.display()))
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| path.file_name().is_some_and(|name| name != "tests.rs"))
+        .collect();
+    files.sort();
+    files
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+                .replace("\r\n", "\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
