@@ -394,6 +394,10 @@ impl SettingsView {
                     )),
             )
             .child(hint(&t!("general.log_retention_hint")))
+            // Launch and servers.enc passwords. Last on the tab: it is the only block that can lock
+            // the user out of their own cores, so it should not be the first thing a hand lands on.
+            .child(super::separator(p, cx))
+            .child(self.security_section(cx))
     }
 }
 

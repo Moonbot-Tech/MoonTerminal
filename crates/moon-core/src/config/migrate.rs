@@ -17,8 +17,10 @@ mod tests;
 ///
 /// The legacy format has no durable counter, so construction still names `uid_floor`; see
 /// [`super::uid_counter::UidCounter`] for the invariant and best-effort boundary.
+/// Reads through `decrypt_standalone`: `config.enc` is a file being retired, so its key material
+/// must NOT become this process's material for `servers.enc`.
 pub fn from_legacy_enc(uid_floor: Option<u64>) -> anyhow::Result<AppConfig> {
-    let plain = crypto::decrypt(&std::fs::read(paths::legacy_enc_path())?)?;
+    let plain = crypto::decrypt_standalone(&std::fs::read(paths::legacy_enc_path())?)?;
     config_from_legacy_enc(&plain, uid_floor)
 }
 

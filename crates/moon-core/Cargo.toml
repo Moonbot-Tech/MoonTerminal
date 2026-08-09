@@ -38,11 +38,17 @@ dirs = "6"
 # CPU/RAM metrics (metrics.rs).
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
-# Encrypted configuration: AES-256-GCM, with the key in the OS keyring (config/crypto.rs).
+# Encrypted configuration: AES-256-GCM, with the file key wrapped by one slot per machine
+# (OS keyring) plus an optional password slot (config/crypto/).
 # keyring v3 has no default platform features: without an explicit Linux backend, Linux
 # uses mock storage in process memory, and servers.enc cannot be read even by the next
 # application run.
 aes-gcm = "0.10"
+
+# Password-derived key slot for servers.enc (config/crypto/kdf.rs). Argon2id is memory-hard,
+# which is the property that matters here: the file travels, so an attacker holding a copy gets
+# unlimited offline attempts against whatever the user typed.
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 getrandom = "0.2"
 base64 = "0.22"

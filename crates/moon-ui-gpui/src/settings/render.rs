@@ -114,7 +114,7 @@ impl Render for SettingsView {
                     .small()
                     .width(110.0)
                     .label(t!("settings.save").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| this.save(cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
                     .render(),
             )
             .child(status_el)

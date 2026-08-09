@@ -89,7 +89,7 @@ fn profit_monitor_is_independent_but_carries_no_taskbar_button() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let windowing = fs::read_to_string(root.join("window").join("windowing.rs")).unwrap();
     let monitor = read_module("analytics/profit_monitor");
-    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let startup = read_startup();
     let factory = code_only(braced_body(&windowing, "fn profit_monitor_window_options("));
 
     assert!(factory.contains("options.relationship = WindowRelationship::default()"));
@@ -523,7 +523,7 @@ fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
     // save and panels that write straight through all bypass the dirty-flag mechanism. What it
     // does pin is that both debounced flushes are gated as a WHOLE: a guard per `*_dirty` branch
     // is one that a newly persisted thing can be added without.
-    let startup = read_src("startup.rs");
+    let startup = read_startup();
     let main_rs = read_src("main.rs");
 
     assert!(

@@ -982,7 +982,7 @@ fn analytics_metric_menu_fits_its_localized_labels() {
 fn analytics_reopen_state_is_process_lifetime_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let main = fs::read_to_string(root.join("main.rs")).unwrap();
-    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let startup = read_startup();
     let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
     let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
     let tuner = fs::read_to_string(root.join("analytics").join("tuner").join("mod.rs")).unwrap();
@@ -1920,7 +1920,7 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
     let settings_source = read_src("analytics/profit_monitor/settings.rs");
     let code = code_only(&source);
     let settings = code_only(&settings_source);
-    let startup = code_only(&read_src("startup.rs"));
+    let startup = code_only(&read_startup());
     let construction = code_only(braced_body(
         &source,
         "fn new(backend: Entity<Backend>, window:",

@@ -2,4 +2,5 @@
 
 pub(crate) mod detached;
 pub(crate) mod group_window;
+pub(crate) mod login;
 pub(crate) mod windowing;

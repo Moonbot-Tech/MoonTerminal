@@ -266,6 +266,38 @@ pub(crate) fn detached_chart_window_options(
     options
 }
 
+/// Build options for the startup login window.
+///
+/// Deliberately a standalone application window rather than a tool window: it can be the FIRST and
+/// only window of the session, opened before any group window exists, so an owned floating window
+/// would have nothing to be owned by and no taskbar entry to be found under while the user goes
+/// looking for the password prompt.
+///
+/// # Arguments
+///
+/// * `title` - Native window title.
+/// * `window_bounds` - Initial geometry.
+/// * `min_size` - Smallest size that still fits the prompt.
+///
+/// # Returns
+///
+/// Standalone window options carrying the application icon and taskbar identity.
+pub(crate) fn login_window_options(
+    title: impl Into<SharedString>,
+    window_bounds: WindowBounds,
+    min_size: Option<Size<Pixels>>,
+) -> WindowOptions {
+    app_window_options(
+        title,
+        window_bounds,
+        None,
+        min_size,
+        APP_ID.to_string(),
+        app_icon(0),
+        true,
+    )
+}
+
 pub(crate) fn debug_window_options(
     title: impl Into<SharedString>,
     window_bounds: WindowBounds,

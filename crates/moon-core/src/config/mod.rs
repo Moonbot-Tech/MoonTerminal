@@ -77,6 +77,33 @@ use std::path::Path;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
 
+/// Interface preferences readable WITHOUT any key, for a window shown before the config is open.
+///
+/// The login window has to be painted before `servers.enc` can be decrypted, and everything it
+/// needs is in plaintext `settings.toml` anyway. Exposing these four values keeps that window from
+/// either flashing default colours or reaching into the config internals.
+#[derive(Clone, Copy, Debug)]
+pub struct PresentationPrefs {
+    pub ui_theme_mode: UiThemeMode,
+    pub ui_font_delta: f32,
+    pub ui_scale: f32,
+    pub language: Language,
+}
+
+/// Read interface preferences from `settings.toml`, falling back to defaults.
+///
+/// Uses the same repair helpers as a full load, so a hand-edited `nan` cannot reach layout through
+/// this shorter path.
+pub fn presentation_prefs() -> PresentationPrefs {
+    let (settings, _) = store::read_settings();
+    PresentationPrefs {
+        ui_theme_mode: settings.ui_theme_mode,
+        ui_font_delta: schema::repair_ui_font_delta(settings.ui_font_delta),
+        ui_scale: schema::repair_ui_scale(settings.ui_scale),
+        language: settings.language,
+    }
+}
+
 /// Atomically writes a user config/layout file through a temporary sibling plus rename.
 /// Used for both TOML and persisted UI JSON.
 pub fn write_file_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
@@ -329,7 +356,12 @@ impl AppConfig {
             // FAIL CLOSED: `save` itself rejects `settings_unreadable` (see `save_impl`). This
             // explicit log makes the reason visible instead of presenting a mysterious write
             // failure.
-            if merged.dirty || backup::pair_write_pending() {
+            // `needs_rewrite` is the third reason to save: reading the file changed its key
+            // slots without changing any setting — an upgrade from the pre-slot format, or this
+            // machine recording its own slot. Nothing else would ask for that write, and until it
+            // happens the work is repeated on every launch.
+            if merged.dirty || backup::pair_write_pending() || crypto::access_state().needs_rewrite
+            {
                 if cfg.settings_unreadable {
                     log::error!(
                         "settings.toml не прочитался — запись конфига отключена на весь сеанс, \
@@ -590,6 +622,10 @@ impl AppConfig {
             self.report_valuation_mode,
             self.next_uid.get(),
         );
+        // Refuse an unwritable servers.enc BEFORE the pair write starts. Failing inside the block
+        // below would leave the "replacement in progress" marker behind with settings.toml never
+        // written, turning a refusal into a permanently half-replaced pair.
+        store::ensure_servers_writable()?;
         // Hold one pair lock across both atomic replacements so a background snapshot cannot mix
         // servers from one config generation with settings metadata from another.
         backup::with_config_pair(|| -> anyhow::Result<()> {

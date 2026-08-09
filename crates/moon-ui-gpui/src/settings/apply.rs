@@ -163,7 +163,12 @@ impl SettingsView {
     /// Validate and save the draft, then apply it without closing the Settings window.
     ///
     /// A failed save changes neither the active config nor the draft.
-    pub(super) fn save(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Passwords FIRST. Applying them only changes key material in memory; the config write
+        // below is what puts the resulting key slots on disk. Running it afterwards would leave
+        // the passwords for a write that already happened, and quitting there would lose them with
+        // no error anywhere. Whether they actually reached disk is reported after that write.
+        let security_pending = self.apply_security(window, cx);
         // Compare the saved candidate with this snapshot to select live updates and required
         // rebuilds.
         let before = self.backend.read(cx).config.clone();
@@ -182,6 +187,7 @@ impl SettingsView {
             }
             res
         });
+        let saved = res.is_ok();
         match res {
             Ok(()) => {
                 let after = self.backend.read(cx).config.clone();
@@ -190,6 +196,11 @@ impl SettingsView {
                 self.apply_settings(&before, cx);
             }
             Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),
+        }
+        // The key slots ride along in `servers.enc`, so they reached disk exactly when this write
+        // did — and a password that did not is worth saying out loud.
+        if security_pending {
+            self.report_security_saved(saved, cx);
         }
         cx.notify();
     }

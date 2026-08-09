@@ -6,7 +6,8 @@
 //!   and settings:
 //!     - macOS: `~/Library/Application Support/com.moonbot.moonterminal/`
 //!     - Linux: `~/.config/com.moonbot.moonterminal/`
-//!   The `servers.enc` encryption key is stored in the OS keyring (see `crypto.rs`).
+//!   `servers.enc` is encrypted with its own file key, wrapped by one slot per machine (each
+//!   machine's key lives in its OS keyring) plus an optional password slot; see `crypto/`.
 //!
 //! All paths are based on `data_dir()`; on Windows, `data_dir() == exe_dir()`.
 //!
@@ -465,8 +466,9 @@ pub fn legacy_toml_path() -> PathBuf {
 /// directory. On Windows, `data_dir() == exe_dir()`, so this is a no-op. A file is copied only
 /// when it exists beside the executable and is absent from its destination.
 ///
-/// The encryption key lives in the OS keyring, so copied `servers.enc` remains readable and
-/// decryptable without additional steps.
+/// This machine's wrapping key lives in its OS keyring and does not move with the file, so the
+/// copy stays readable here — the migration is between directories on ONE machine. Carrying the
+/// file to a different machine is the case the password slot exists for; see `config::crypto`.
 pub fn migrate_bundle_data() {
     let src_dir = exe_dir();
     let dst_dir = data_dir();

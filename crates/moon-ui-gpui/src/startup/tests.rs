@@ -212,12 +212,19 @@ fn a_health_change_alone_still_reaches_a_revision() {
 /// Read the startup source governed by the ordering contract.
 ///
 /// Returns:
-///     UTF-8 source text from the sibling `startup.rs`.
+///     UTF-8 source text of `startup.rs` and `startup/boot.rs` concatenated.
+///
+/// Both files are read because the ordering these tests pin now spans the two: `run` gathers the
+/// uid floor before the event loop, while everything that follows the configuration lives in
+/// `boot`. Concatenating in call order keeps the position comparisons below meaningful.
 fn startup_source() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("startup.rs");
-    std::fs::read_to_string(path).unwrap()
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let run = std::fs::read_to_string(root.join("startup.rs")).unwrap();
+    let boot = std::fs::read_to_string(root.join("startup").join("boot.rs")).unwrap();
+    format!(
+        "{run}
+{boot}"
+    )
 }
 
 /// Return the byte position of a required source anchor.

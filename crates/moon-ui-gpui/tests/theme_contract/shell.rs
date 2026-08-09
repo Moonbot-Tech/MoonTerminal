@@ -13,7 +13,7 @@ use super::support::*;
 fn active_trade_core_selection_is_layout_backed_and_sticky() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let main = fs::read_to_string(root.join("main.rs")).unwrap();
-    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let startup = read_startup();
     let backend = fs::read_to_string(root.join("backend").join("mod.rs")).unwrap();
     let chrome = fs::read_to_string(root.join("chrome").join("terminal_chrome.rs")).unwrap();
     let chart_tabs = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
