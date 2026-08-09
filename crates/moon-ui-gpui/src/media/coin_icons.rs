@@ -17,24 +17,9 @@ use include_dir::{Dir, include_dir};
 /// Embedded icon set containing all PNG files under `assets/coins`, approximately 412 KB.
 static EMBEDDED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/coins");
 
-/// Locate `assets/coins` under the current working directory, then beside the executable.
-///
-/// Returns:
-///     The first existing `assets/coins` directory, or the relative path when neither exists.
+/// Locate the `assets/coins` override directory through the shared asset resolver.
 fn coins_dir() -> PathBuf {
-    let rel = PathBuf::from("assets/coins");
-    if rel.is_dir() {
-        return rel;
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("assets/coins");
-            if p.is_dir() {
-                return p;
-            }
-        }
-    }
-    rel
+    super::asset_dir("coins")
 }
 
 /// Build a lowercase icon filename key and repeatedly remove a nonempty literal `1000` prefix.

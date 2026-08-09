@@ -958,6 +958,28 @@ pub(crate) fn run() -> anyhow::Result<()> {
             let backend = backend.clone();
             cx.defer(move |cx| crate::analytics::open(backend, None, None, cx));
         }
+
+        // Reopen the Profit Monitor when the last session left it open. It is an independent
+        // desktop window with NO taskbar button of its own, so a launch that silently drops it
+        // leaves the user nothing to notice — the window is simply gone until they remember the
+        // toolbar. Deferred so the group windows exist first: `restore` takes one of them as the
+        // display fallback, and it deliberately does not activate, which would steal the
+        // foreground from Main on every launch.
+        //
+        // Gated on `persist_allowed` for the same reason that flag exists: a FireTest run drives
+        // the real application, and resurrecting the developer's windows would put an unmeasured
+        // one in front of its own scene.
+        let restore_monitor = {
+            let backend = backend.read(cx);
+            backend.persist_allowed && backend.layout.profit_monitor_open
+        };
+        if restore_monitor {
+            let backend = backend.clone();
+            cx.defer(move |cx| {
+                let owner = cx.active_window();
+                crate::analytics::profit_monitor::restore(backend, owner, cx);
+            });
+        }
     });
     Ok(())
 }

@@ -35,6 +35,11 @@ bytemuck = { version = "1", features = ["derive"] }
 # Embedded coin icon set (assets/coins), so icons ship in the build without a
 # separate folder beside the executable; disk files take priority for adding icons without rebuilding.
 include_dir = "0.7"
+# Rasterizes the brand-coloured exchange logos (assets/exchanges/*.svg) into GPUI textures.
+# GPUI's own `svg()` element is an ALPHA MASK tinted by one `text_color`, so it cannot draw a
+# multi-colour brand tile at all. resvg is already in the tree as a gpui dependency, so this adds a
+# direct name rather than a new build.
+resvg = "0.45"
 
 # Canonical Moon UI source: standalone GPUI runtime + Moon components.
 # Local development overrides this Git source through untracked `.cargo/config.toml`.

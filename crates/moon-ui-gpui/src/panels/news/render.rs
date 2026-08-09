@@ -11,12 +11,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonIconSlot, MoonButtonSize,
-    MoonButtonVariant, MoonDisclosureDirection, MoonPalette, h_flex, rgba_from, v_flex,
+    MoonButtonVariant, MoonDisclosureDirection, MoonPalette, h_flex, v_flex,
 };
 use rust_i18n::t;
 use std::time::Instant;
 
-use super::{FLASH, FLASH_HOLD, FLASH_PEAK, NewsView, tag_color};
+use super::{NewsView, tag_color};
 use crate::design;
 use moon_core::config::{Language, NewsTagSettings};
 use moon_core::feed::NewsItem;
@@ -126,18 +126,7 @@ pub(super) fn news_card(
     // stamp, not from a GPUI animation: an animation repaints the WHOLE window at vblank for its
     // full 2 s. Reading the stamp also means a card scrolled into view late shows the tail it is
     // actually in, instead of restarting the fade from full.
-    let flash = arrived
-        .and_then(|at| crate::pulse::phase(at, FLASH))
-        .map(|delta| {
-            // Hold, then ease out (quadratic): the tail is what reads as "fading", while a linear
-            // ramp just switches off.
-            let t = ((delta - FLASH_HOLD) / (1.0 - FLASH_HOLD)).clamp(0.0, 1.0);
-            div()
-                .absolute()
-                .inset_0()
-                .bg(rgba_from(p.table_selected, FLASH_PEAK))
-                .opacity((1.0 - t) * (1.0 - t))
-        });
+    let flash = arrived.and_then(|at| crate::pulse::arrival_tint(p.table_selected, at));
 
     let rail = (!rail_colors.is_empty()).then(|| {
         div()

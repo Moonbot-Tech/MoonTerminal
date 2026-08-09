@@ -75,6 +75,23 @@ pub(super) struct MonitorRow {
     pub(super) positive_orders: i64,
     /// Core identity used only for canonical Core-mode ordering.
     pub(super) primary_core: CoreId,
+    /// Profit of the newest closed trade among this row's cores, when the period holds one.
+    pub(super) last_profit: Option<f64>,
+    /// Close date `last_profit` came from; zero when no dated trade exists.
+    pub(super) last_close: i64,
+    /// Core that supplied `last_profit`, used to break a tie deterministically when rows merge.
+    pub(super) last_core: CoreId,
+    /// Every core merged into this row, so the arrival highlight can follow any of them.
+    ///
+    /// Keying the highlight on `last_core` alone would miss a sibling core whose new trade carries
+    /// an OLDER close date than the row's newest — cores stamp close dates from their own clocks,
+    /// and a backfilled batch does the same thing.
+    pub(super) cores: Vec<CoreId>,
+    /// Raw exchange name reported for `primary_core`, used only to pick a logo.
+    ///
+    /// Kept unformatted: the Spot/Futures display policy belongs to the visible `name`, while the
+    /// logo lookup wants the identity the core actually reported.
+    pub(super) exchange: Option<String>,
 }
 
 impl MonitorRow {
@@ -88,6 +105,17 @@ impl MonitorRow {
         self.wins += source.wins;
         self.positive_spent += source.positive_spent;
         self.positive_orders += source.positive_orders;
+        self.cores.push(source.core_uid);
+        // A merged row's "last trade" is the newest one across its cores, not the last core merged.
+        // The database returns cores ordered by uid, so a tie resolves to the lowest uid and the
+        // displayed value cannot flip between two refreshes that carry identical data. The close
+        // date leads and the profit follows it: a trade whose projected profit is NULL still has a
+        // real timestamp, and hiding the bracket is the honest answer there.
+        if source.last_close > self.last_close {
+            self.last_profit = source.last_profit;
+            self.last_close = source.last_close;
+            self.last_core = source.core_uid;
+        }
     }
 
     /// Return the exact win percentage after grouping.
@@ -182,6 +210,7 @@ pub(super) fn grouped_rows(
                 name,
                 sort_name,
                 primary_core: core,
+                exchange: live.exchange_names.get(&core).cloned(),
                 ..MonitorRow::default()
             })
             .push(source);

@@ -9,10 +9,11 @@
 //! `.cached(size_full())`, and a cached view whose own subtree is clean is reused. Sibling panels
 //! are therefore safe. The owner is not — it re-renders in full, ~120 times per second.
 //!
-//! The only user left is the News arrival tint. The chart's border flash went further and moved
-//! into the chart's own GPU pass (`chartdx::render_state`), where it costs presents instead of view
-//! renders — measured over seven live arrivals, `chart_render` did not move at all. That is the
-//! better answer whenever the surface HAS an own pass; this module is for the ones that do not.
+//! Its users are the News arrival tint and the Profit Monitor's row highlight, which share both the
+//! timing and the tint itself from here. The chart's border flash went further and moved into the
+//! chart's own GPU pass (`chartdx::render_state`), where it costs presents instead of view renders
+//! — measured over seven live arrivals, `chart_render` did not move at all. That is the better
+//! answer whenever the surface HAS an own pass; this module is for the ones that do not.
 //!
 //! A pulse is decoration: it does not need vblank rate. Everything here drives it from a
 //! self-rearming [`PULSE_TICK`] timer instead, so the same flashes cost ~26 redraws. The phase
@@ -22,11 +23,67 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::Context;
+use gpui::prelude::FluentBuilder;
+use gpui::prelude::ParentElement;
+use gpui::{Context, Div, Styled, div};
 
 /// Repaint interval while a pulse is live. 10 Hz reads as smooth for a fade or a slow flash and
 /// costs six times less than the vblank rate the animation path used.
 pub const PULSE_TICK: Duration = Duration::from_millis(100);
+
+/// How long a just-arrived row or card carries its arrival tint, from full to fully gone.
+pub const FLASH: Duration = Duration::from_millis(2000);
+/// Share of [`FLASH`] the tint holds at full strength before it starts easing out. The item appears
+/// at the same moment and shifts its neighbours, so without a short hold the peak is never seen.
+const FLASH_HOLD: f32 = 0.12;
+/// Peak opacity of the tint. A tint, not a fill: the text sits ON this plate and has to stay
+/// readable, so the colour reads as "this just lit up" rather than covering it.
+const FLASH_PEAK: f32 = 0.24;
+
+/// Build the full-bleed arrival tint for an item that arrived at `at`.
+///
+/// Declared BEFORE the content it belongs to, so it paints underneath. `None` once the pulse is
+/// over — that absence is what erases the decoration; a layer at zero opacity would keep every
+/// arrival in the element tree forever.
+///
+/// Both surfaces that flash share this one definition: the News feed and the Profit Monitor are the
+/// same promise to the user ("this line is new"), and two copies of the timing drift apart.
+///
+/// Args:
+///     color: Packed theme colour the tint is drawn in, normally `palette.table_selected`.
+///     at: When the arrival was observed.
+///
+/// Returns:
+///     The tint layer, or `None` once [`FLASH`] has elapsed.
+pub fn arrival_tint(color: u32, at: Instant) -> Option<Div> {
+    let delta = phase(at, FLASH)?;
+    // Hold, then ease out quadratically: the tail is what reads as "fading", while a linear ramp
+    // just switches off.
+    let eased = ((delta - FLASH_HOLD) / (1.0 - FLASH_HOLD)).clamp(0.0, 1.0);
+    Some(
+        div()
+            .absolute()
+            .inset_0()
+            .bg(crate::design::moon_alpha(color, FLASH_PEAK))
+            .opacity((1.0 - eased) * (1.0 - eased)),
+    )
+}
+
+/// Attach [`arrival_tint`] to an element when the item has a live arrival stamp.
+///
+/// Args:
+///     element: Row or card the tint belongs to; it must already be `relative()`.
+///     color: Packed theme colour the tint is drawn in.
+///     at: Arrival stamp, if the item has one.
+///
+/// Returns:
+///     The element, tinted when the pulse is still running.
+pub fn with_arrival_tint(element: Div, color: u32, at: Option<Instant>) -> Div {
+    element.when_some(
+        at.and_then(|at| arrival_tint(color, at)),
+        |element, tint| element.child(tint),
+    )
+}
 
 /// Progress of a pulse that started at `at` and runs for `total`, normalised to `0.0..1.0`.
 ///
@@ -51,6 +108,29 @@ pub fn arm<T: 'static>(
     armed: fn(&mut T) -> &mut bool,
     live: fn(&T) -> bool,
 ) {
+    arm_with(this, cx, armed, live, |_this, _cx| {});
+}
+
+/// [`arm`] with per-tick work of the owner's own, run before the repaint.
+///
+/// A view whose pulse is drawn inside a `.cached(..)` CHILD needs this: marking only the owner
+/// leaves that child clean, so GPUI reuses the still-tinted cached subtree and the fade never
+/// moves. `on_tick` is where such an owner invalidates its child — and routing it through here
+/// rather than hand-rolling the chain is what keeps every pulse on one timer and one diag counter.
+///
+/// Args:
+///     this: Pulse owner.
+///     cx: Owner's view context.
+///     armed: Accessor for the owner's "a timer is already running" flag.
+///     live: Whether any pulse still has something to draw.
+///     on_tick: Owner work performed on each tick, before the repaint request.
+pub fn arm_with<T: 'static>(
+    this: &mut T,
+    cx: &mut Context<T>,
+    armed: fn(&mut T) -> &mut bool,
+    live: fn(&T) -> bool,
+    on_tick: fn(&mut T, &mut Context<T>),
+) {
     if *armed(this) || !live(this) {
         return;
     }
@@ -63,8 +143,9 @@ pub fn arm<T: 'static>(
                 .update(cx, |this, cx| {
                     crate::diag::bump(&crate::diag::PULSE_TICK);
                     *armed(this) = false;
+                    on_tick(this, cx);
                     cx.notify();
-                    arm(this, cx, armed, live);
+                    arm_with(this, cx, armed, live, on_tick);
                 })
                 .is_ok()
         });

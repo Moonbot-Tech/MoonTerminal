@@ -325,7 +325,7 @@ fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
     ));
     let controls = code_only(braced_body(&source, "fn controls("));
     let period_dropdown = code_only(braced_body(&source, "fn period_dropdown("));
-    let open = code_only(braced_body(&source, "pub(crate) fn open("));
+    let open = code_only(braced_body(&source, "fn open_window("));
     let set_period = code_only(braced_body(&source, "fn set_period("));
     let set_group = code_only(braced_body(&source, "fn set_group("));
     let toggle_sort = code_only(braced_body(&source, "fn toggle_sort("));
@@ -1876,5 +1876,117 @@ fn calendar_nav_wraps_between_its_control_groups() {
         body.contains("CalMode::ALL.get(ix)"),
         "the click index must be resolved against the SAME ordering source the cells were built \
          from, or clicking one mode silently selects another"
+    );
+}
+
+/// Every Profit Monitor feature added after its first release must be reachable from the ⚙ popup,
+/// persisted like the older choices, and drawn through the surfaces the rest of the terminal uses.
+///
+/// Breakage: a preference that never reaches `layout.toml` resets on every restart; a feature drawn
+/// unconditionally has no way back once someone dislikes it; painting the arrival tint with
+/// `with_animation` repaints the whole monitor at vblank for two seconds instead of the ten frames
+/// `crate::pulse` costs; drawing the logo through gpui's `svg()` collapses a two-colour brand tile
+/// into one flat silhouette; and losing the open-state write leaves an independent, taskbar-less
+/// window silently gone after a restart.
+#[test]
+fn profit_monitor_display_preferences_and_open_state_stay_wired() {
+    let source = read_src("analytics/profit_monitor/mod.rs");
+    let settings_source = read_src("analytics/profit_monitor/settings.rs");
+    let code = code_only(&source);
+    let settings = code_only(&settings_source);
+    let startup = code_only(&read_src("startup.rs"));
+    let construction = code_only(braced_body(
+        &source,
+        "fn new(backend: Entity<Backend>, window:",
+    ));
+    let open = code_only(braced_body(&source, "fn open_window("));
+    let mark_open = code_only(braced_body(&source, "fn mark_open("));
+    let write_pref = code_only(braced_body(&settings_source, "fn write_pref("));
+    let controls = code_only(braced_body(&source, "fn controls("));
+    let row = code_only(braced_body(&source, "fn table_row("));
+    let reload = code_only(braced_body(&source, "fn reload("));
+
+    assert!(
+        construction.contains("MonitorPrefs::restore(&backend.read(cx).layout)"),
+        "the monitor constructor must restore its display preferences from the saved layout"
+    );
+    for key in [
+        "profit_monitor_exchange_icons",
+        "profit_monitor_last_trade",
+        "profit_monitor_flash",
+    ] {
+        assert!(
+            settings.matches(key).count() == 2,
+            "{key} must be both restored and saved by its own row in the preference table"
+        );
+    }
+    assert!(
+        write_pref.contains("backend.layout_dirty = true")
+            && write_pref.contains("self.invalidate_content(cx)")
+            && write_pref.contains("store(&mut backend.layout, value)"),
+        "a preference edit must save its OWN key, mark the layout dirty, and invalidate the          cached table"
+    );
+    for key in [
+        "profit_monitor.settings.exchange_icons",
+        "profit_monitor.settings.last_trade",
+        "profit_monitor.settings.flash",
+    ] {
+        assert!(
+            settings.contains(key),
+            "{key} must have its own checkbox in the settings popup"
+        );
+    }
+    assert!(
+        settings.contains("MoonCheckbox::new(")
+            && settings.contains("MoonPopover::new(\"profit-monitor-settings-popover\")")
+            && controls.contains("self.settings_popover(settings_trigger(self.settings_open)"),
+        "the ⚙ popup must be a MoonPopover of MoonCheckboxes anchored in the control row"
+    );
+
+    assert!(
+        open.matches("mark_open(&backend, cx)").count() == 2
+            && mark_open.contains("backend.layout.profit_monitor_open = true")
+            && mark_open.contains("backend.layout_dirty = true"),
+        "both opening and refocusing the monitor must record that it is open"
+    );
+    assert!(
+        code.contains("backend.layout.profit_monitor_open = false")
+            && code.contains("if backend.quitting"),
+        "closing by hand must clear the flag while quitting must leave it alone"
+    );
+    assert!(
+        startup.contains("backend.layout.profit_monitor_open")
+            && startup.contains("backend.persist_allowed")
+            && startup.contains("crate::analytics::profit_monitor::restore("),
+        "startup must reopen a monitor the previous session left open, through the non-activating \
+         path and never during a diagnostic run"
+    );
+    assert!(
+        !startup.contains("profit_monitor::open("),
+        "restoring through `open` activates the window and steals startup focus from Main"
+    );
+
+    assert!(
+        row.contains("crate::pulse::with_arrival_tint(") && !code.contains("with_animation"),
+        "the arrival tint must be the shared pulse-driven one, not a vblank animation"
+    );
+    assert!(
+        reload.contains("self.rebaseline_arrivals()")
+            && code_only(braced_body(&source, "fn start_clock_refresh("))
+                .contains("this.rebaseline_arrivals()"),
+        "a query change — including a period boundary — replaces every value at once and must not \
+         read as a table full of arrivals"
+    );
+    assert!(
+        code.contains("use crate::media::exchange_logos::exchange_logo;")
+            && code.contains("exchange_logo(exchange)")
+            && !code.contains("svg()"),
+        "exchange logos must come from the shared rasterizer rather than gpui's monochrome svg()"
+    );
+    assert!(
+        code.contains(".entry(exchange)")
+            && code.contains(".or_insert_with(|| exchange_logo(exchange))"),
+        "logos must be resolved once per distinct exchange, not once per row: the render path pays \
+         a global-cache lock and a fresh key string for every one of them"
     );
 }

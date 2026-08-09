@@ -24,7 +24,7 @@ pub(crate) use render::badge as news_badge;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -40,6 +40,9 @@ use crate::Backend;
 use crate::controls::coin_search;
 use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
+// The arrival tint and its timing live in `crate::pulse`, shared with the Profit Monitor: both
+// surfaces make the user the same promise, and two copies of it drift apart.
+use crate::pulse::FLASH;
 use moon_core::config::NewsTagSettings;
 use moon_core::feed::NewsItem;
 // The tag filter is shared with the chart's news marks so hiding a topic clears it from both.
@@ -50,14 +53,6 @@ use moon_core::session::CoreId;
 /// generous cap across a multi-core group.
 const MAX_NEWS_DISPLAY: usize = 200;
 
-/// How long a just-arrived card carries its arrival tint, from full to fully gone.
-pub(super) const FLASH: Duration = Duration::from_millis(2000);
-/// Share of [`FLASH`] the tint holds at full strength before it starts easing out. The card appears
-/// at the same moment and pushes the feed down, so without a short hold the peak is never seen.
-pub(super) const FLASH_HOLD: f32 = 0.12;
-/// Peak opacity of the tint. A tint, not a fill: the text sits ON this plate and has to stay
-/// readable, so the colour reads as "this row just lit up" rather than covering it.
-pub(super) const FLASH_PEAK: f32 = 0.24;
 /// Most items that may flash from ONE feed update.
 ///
 /// A bigger jump is the core's news ring arriving at once (first connect, or ids rotating back in),
