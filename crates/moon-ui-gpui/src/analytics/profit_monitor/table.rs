@@ -387,7 +387,6 @@ fn table_header(
                     width: Option<f32>,
                     right: bool| {
         let active = sort.is_some_and(|active| active.column == column);
-        let tooltip = title.clone();
         let target = view.clone();
         let mut cell = div()
             .id(id)
@@ -402,7 +401,7 @@ fn table_header(
             } else {
                 palette.text_soft
             }))
-            .tooltip(crate::panels::common::text_tooltip(tooltip))
+            // No tooltip: the heading repeats the text it would carry.
             .child(format!("{title}{}", sort_arrow(sort, column)))
             .on_click(move |_, _, app| {
                 target.update(app, |this, cx| this.toggle_sort(column, cx));
@@ -557,7 +556,6 @@ fn table_row(
     palette: MoonPalette,
     cx: &App,
 ) -> Stateful<Div> {
-    let name_tooltip = name.clone();
     let profit_color = profit_sign.pick(
         design::positive_color(palette),
         design::danger_color(palette),
@@ -581,10 +579,8 @@ fn table_row(
         chrome.flash,
     )
     // The WHOLE row is the click target, not the name cell: the numbers belong to the same core,
-    // and a row where four of five cells silently do nothing reads as a broken control. The name
-    // tooltip rides the same element, so the row needs one identity rather than two.
+    // and a row where four of five cells silently do nothing reads as a broken control.
     .id(chrome.id)
-    .tooltip(crate::panels::common::text_tooltip(name_tooltip))
     .when_some(chrome.select, |row, select| {
         let RowSelect { cores, owner, .. } = select;
         row.cursor_pointer()
