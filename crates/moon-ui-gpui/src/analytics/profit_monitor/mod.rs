@@ -1246,10 +1246,9 @@ impl ProfitMonitorView {
         let groups = [GroupMode::Core, GroupMode::Exchange];
         let group_control = MoonSegmentedControl::new("profit-monitor-groups")
             .items(groups.map(|group| {
-                let title = group_title(group);
-                MoonSegmentItem::new("", title.clone())
+                // No tooltip: the segment already shows its own title in full.
+                MoonSegmentItem::new("", group_title(group))
                     .fit_width(cx, 58.0, 110.0)
-                    .tooltip(title)
                     .selected(group == selected_group)
             }))
             .on_click(move |index, _, _, app| {
