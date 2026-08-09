@@ -7,7 +7,7 @@ use super::support::*;
 /// worked.
 #[test]
 fn startup_detects_and_persists_an_untouched_profiles_system_zone() {
-    let startup = code_only(&read_src("startup.rs"));
+    let startup = code_only(&read_startup());
     let clock = code_only(&read_src("chrome/clock.rs"));
     let backend = code_only(&read_src("backend/mod.rs"));
     let reconcile = braced_body(
@@ -33,7 +33,7 @@ fn startup_detects_and_persists_an_untouched_profiles_system_zone() {
 /// the user-visible 2-3 second GPUI freeze instead of enqueueing an immutable worker snapshot.
 #[test]
 fn live_layout_classic_and_auto_persistence_only_dispatch_to_the_worker() {
-    let startup = code_only(&read_src("startup.rs"));
+    let startup = code_only(&read_startup());
     let coordinator = code_only(&read_src("persistence/coordinator.rs"));
     let dispatch = braced_body(
         &startup,
@@ -67,7 +67,7 @@ fn live_layout_classic_and_auto_persistence_only_dispatch_to_the_worker() {
 /// deleting either rule loses the latest layout or Classic authority after restart.
 #[test]
 fn failed_or_stale_background_persistence_keeps_dirty_state_for_retry() {
-    let startup = code_only(&read_src("startup.rs"));
+    let startup = code_only(&read_startup());
     let dispatch = braced_body(
         &startup,
         "fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut PersistenceCoordinator)",
@@ -118,7 +118,7 @@ fn failed_or_stale_background_persistence_keeps_dirty_state_for_retry() {
 /// write, while restoring any direct saver can race the worker's atomic temp paths on exit.
 #[test]
 fn quit_serializes_the_latest_full_snapshot_behind_live_work() {
-    let startup = code_only(&read_src("startup.rs"));
+    let startup = code_only(&read_startup());
     let coordinator = code_only(&read_src("persistence/coordinator.rs"));
     let quit = braced_body(&startup, "cx.on_app_quit(");
     let shutdown = braced_body(
@@ -206,20 +206,29 @@ fn live_classic_panel_names_outrank_stale_detached_records_in_auto() {
     );
 }
 
-/// Removing the `firetest_config.is_none()` guard would let a diagnostic FireTest run create and
-/// prune durable settings or strategy backups even though its other persistence paths are gated.
+/// Removing the FireTest guard would let a diagnostic run create and prune durable settings or
+/// strategy backups even though its other persistence paths are gated.
+///
+/// The two halves live in different files since the login window split startup: configuration is
+/// loaded in `unlock` (which passes the schema-migration backup permission) and the daily scheduler
+/// starts in `boot`. Both are checked, because either one alone lets a diagnostic run write.
 #[test]
 fn firetest_does_not_start_the_daily_backup_scheduler() {
-    let source = read_src("startup.rs");
-    let run = code_only(fn_body(
-        &source,
-        "pub(crate) fn run() -> anyhow::Result<()> {",
-    ));
+    let unlock = code_only(&read_src("startup/unlock.rs"));
     assert!(
-        run.contains("AppConfig::load(uid_floor, firetest_config.is_none())?;"),
-        "schema migration backups must receive the same FireTest exclusion"
+        unlock.contains("let backups_allowed = input.firetest.is_none();"),
+        "the schema-migration backup permission must be derived from the FireTest flag"
     );
-    let gate = run
+    assert_eq!(
+        unlock
+            .matches("AppConfig::load(uid_floor, backups_allowed)")
+            .count(),
+        unlock.matches("AppConfig::load(").count(),
+        "every configuration load must pass the FireTest-derived backup permission"
+    );
+
+    let boot = code_only(&read_src("startup/boot.rs"));
+    let gate = boot
         .split_once("if firetest_config.is_none() {")
         .expect("normal startup must explicitly exclude FireTest from persistent backup work")
         .1
@@ -232,10 +241,64 @@ fn firetest_does_not_start_the_daily_backup_scheduler() {
         "the daily backup scheduler must start only inside the FireTest exclusion"
     );
     assert_eq!(
-        run.matches("moon_core::backups::start_daily(&cfg);")
+        boot.matches("moon_core::backups::start_daily(&cfg);")
             .count(),
         1,
         "an unguarded second scheduler start would let FireTest create backups"
+    );
+}
+
+/// The launch password must never stop a FireTest run at a prompt nothing can answer, and the
+/// skip must be visible in the log rather than silent — it is a latch over a screen, not over the
+/// data, so skipping it changes no persistence behaviour but must still be auditable.
+#[test]
+fn firetest_skips_the_launch_password_gate_out_loud() {
+    let unlock = code_only(&read_src("startup/unlock.rs"));
+    let gate = braced_body(&unlock, "fn launch_gate(");
+    let firetest_branch = gate
+        .split_once("if input.firetest.is_some() {")
+        .expect("the launch gate must special-case a diagnostic run")
+        .1;
+    assert!(
+        firetest_branch.contains("log::warn!")
+            && firetest_branch.contains("boot::boot(cfg, input, cx);"),
+        "a diagnostic run must log the skipped launch password and boot anyway"
+    );
+}
+
+/// Each way of failing to open `servers.enc` must reach its own prompt, and a file that failed to
+/// open must never reach `boot`.
+///
+/// The two failures look alike in a `match` and mean opposite things: `NeedsPassword` is
+/// recoverable by typing, `NoKey` is not, and the window offers to set the file aside for exactly
+/// one of them. Collapsing them into a single arm — the natural "simplification" — either asks for
+/// a password nothing can accept or offers to discard a file the user could still have opened.
+#[test]
+fn every_unlock_failure_reaches_its_own_prompt() {
+    let unlock = code_only(&read_src("startup/unlock.rs"));
+
+    assert!(
+        unlock.contains("Some(AccessError::NeedsPassword) => ask_for_file_password(")
+            && unlock.contains("Some(AccessError::NoKey | AccessError::Damaged(_)) =>")
+            && unlock.contains("login::open(LoginStep::Locked,"),
+        "a recoverable file must prompt for its password and an unopenable one must say so"
+    );
+    assert!(
+        unlock.contains("moon_core::config::crypto::forget_sealed_file();"),
+        "starting over must clear the seal, or the empty config it starts from cannot be written"
+    );
+    assert!(
+        unlock.contains("_ => fail_to_start(error, cx),"),
+        "any other load failure must stop startup rather than fall through to a prompt"
+    );
+
+    // `boot` is reachable only from an opened configuration: once behind the launch gate, and once
+    // from the file-password callback after a successful reload. Any third call site would be a
+    // path that boots without one of the two gates.
+    assert_eq!(
+        unlock.matches("boot::boot(cfg, input, cx)").count(),
+        3,
+        "booting must stay confined to the gated paths in `launch_gate` and the unlock callback"
     );
 }
 
@@ -246,7 +309,7 @@ fn settings_save_does_not_create_a_backup() {
     let source = read_src("settings/apply.rs");
     let save = code_only(fn_body(
         &source,
-        "pub(super) fn save(&mut self, cx: &mut Context<Self>) {",
+        "pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {",
     ));
 
     for forbidden in ["backup_due", "backup_now", "snapshot", "save_with_snapshot"] {

@@ -7,14 +7,6 @@ security.title:
   ru: "Безопасность"
   en: "Security"
   es: "Seguridad"
-security.preview_notice:
-  ru: "Предпросмотр: пароли пока не сохраняются"
-  en: "Preview: passwords are not stored yet"
-  es: "Vista previa: las contraseñas aún no se guardan"
-security.login_preview:
-  ru: "Окно входа"
-  en: "Login window"
-  es: "Ventana de acceso"
 security.password:
   ru: "Пароль"
   en: "Password"
@@ -133,10 +125,14 @@ security.applied:
   ru: "Пароли сохранены"
   en: "Passwords saved"
   es: "Contraseñas guardadas"
-security.not_implemented:
-  ru: "Шифрование паролем ещё не подключено — пароль не сохранён"
-  en: "Password encryption is not wired up yet — nothing was stored"
-  es: "El cifrado por contraseña aún no está conectado: no se guardó nada"
+security.pending_write:
+  ru: "Пароли приняты — сохраняем…"
+  en: "Passwords accepted; saving…"
+  es: "Contraseñas aceptadas; guardando…"
+security.err.not_saved:
+  ru: "Пароль принят, но конфиг не сохранён — исправьте ошибку выше и сохраните снова"
+  en: "The password was accepted but the config was not saved; fix the error above and save again"
+  es: "La contraseña se aceptó pero la configuración no se guardó; corrija el error y guarde de nuevo"
 security.err.empty:
   ru: "Введите пароль"
   en: "Enter a password"
@@ -145,6 +141,18 @@ security.err.mismatch:
   ru: "Пароли не совпадают"
   en: "Passwords do not match"
   es: "Las contraseñas no coinciden"
+security.err.not_editable:
+  ru: "Конфиг не открыт в этом запуске — пароль сохранить некуда"
+  en: "The config was not opened this run, so there is nowhere to store a password"
+  es: "La configuración no se abrió en esta ejecución: no hay dónde guardar la contraseña"
+security.err.backend:
+  ru: "Хранилище ключей недоступно — пароль не сохранён"
+  en: "The key store is unavailable, so nothing was stored"
+  es: "El almacén de claves no está disponible: no se guardó nada"
+security.not_editable:
+  ru: "servers.enc не открыт в этом запуске — пароли недоступны"
+  en: "servers.enc was not opened this run, so passwords are unavailable"
+  es: "servers.enc no se abrió en esta ejecución: las contraseñas no están disponibles"
 security.err.weak:
   ru: "Пароль шифрования слишком слабый"
   en: "The encryption password is too weak"
@@ -195,27 +203,11 @@ login.err.empty:
   ru: "Введите пароль"
   en: "Enter a password"
   es: "Introduzca una contraseña"
+login.err.backend:
+  ru: "Не удалось проверить пароль — подробности в логе"
+  en: "The password could not be checked; see the log"
+  es: "No se pudo comprobar la contraseña; consulte el registro"
 login.err.wrong:
   ru: "Неверный пароль"
   en: "Wrong password"
   es: "Contraseña incorrecta"
-login.err.preview:
-  ru: "Предпросмотр: проверять пароль пока нечем"
-  en: "Preview: there is nothing to verify the password against yet"
-  es: "Vista previa: todavía no hay con qué verificar la contraseña"
-login.preview_notice:
-  ru: "Предпросмотр окна — состояния переключаются кнопками ниже"
-  en: "Window preview — switch states with the buttons below"
-  es: "Vista previa de la ventana: cambie de estado con los botones de abajo"
-login.step.file:
-  ru: "Пароль файла"
-  en: "File password"
-  es: "Contraseña del archivo"
-login.step.launch:
-  ru: "Пароль запуска"
-  en: "Launch password"
-  es: "Contraseña de inicio"
-login.step.locked:
-  ru: "Нет ключа"
-  en: "No key"
-  es: "Sin clave"

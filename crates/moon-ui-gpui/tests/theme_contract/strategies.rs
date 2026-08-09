@@ -105,7 +105,7 @@ fn a_revealed_strategy_is_expanded_and_scrolled_into_view() {
 #[test]
 fn report_commits_use_a_dedicated_revision_channel() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let startup = fs::read_to_string(root.join("startup.rs")).unwrap();
+    let startup = read_startup();
     let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
     let report = fs::read_to_string(root.join("panels").join("report").join("state.rs")).unwrap();
 

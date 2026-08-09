@@ -41,6 +41,21 @@ pub fn read_src(rel: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
+/// Read the whole of startup as one text: `startup.rs` plus `startup/boot.rs`.
+///
+/// Startup was split when the login window arrived — the window can only exist inside `App::run`,
+/// so everything that follows `AppConfig::load` had to become callable after a password prompt and
+/// moved to `boot`. The invariants these modules pin span both halves, and several of them compare
+/// POSITIONS, so the two files are concatenated in call order: `run` first, then `boot`.
+pub fn read_startup() -> String {
+    format!(
+        "{}
+{}",
+        read_src("startup.rs"),
+        read_src("startup/boot.rs")
+    )
+}
+
 /// The body of a top-level `fn`, from its signature to the closing brace in column 0.
 ///
 /// Deliberately excludes the doc comment above the signature: a rule about what a function CALLS

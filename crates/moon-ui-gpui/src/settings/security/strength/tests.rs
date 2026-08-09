@@ -168,7 +168,10 @@ fn a_cyrillic_passphrase_satisfies_the_two_class_rule() {
         verdict.bits
     );
     // Lower case alone is still one class, exactly as it is for Latin.
-    assert_eq!(estimate("моёоченьдлинноеслово").issue, Some(Issue::OneClass));
+    assert_eq!(
+        estimate("моёоченьдлинноеслово").issue,
+        Some(Issue::OneClass)
+    );
 }
 
 /// The exported floor and the verdict must agree. A future edit that raises `MIN_BITS` without

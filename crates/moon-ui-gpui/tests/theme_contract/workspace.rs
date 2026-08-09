@@ -320,7 +320,7 @@ fn main_open_requests_revalidate_live_group_before_signature_and_consume() {
 /// the Backend method owns removal, direct focus fallout, and one revision publication.
 #[test]
 fn primary_group_close_uses_one_production_workspace_transition() {
-    let startup = code_only(&read_src("startup.rs"));
+    let startup = code_only(&read_startup());
     let close = chain_between(
         &startup,
         "cx.on_window_closed(",

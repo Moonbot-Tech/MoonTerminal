@@ -1,31 +1,17 @@
 //! Boundary between the Settings security UI and the `servers.enc` key backend.
 //!
-//! **Every function here is a STUB.** The UI is being built before the crypto so the two can land
-//! independently while `moon-core` is being edited elsewhere; phase 2 replaces these bodies with
-//! calls into `moon_core::config::crypto` (key slots: one wrapped file key per machine, plus an
-//! optional password-derived slot) without changing this module's shape or its callers.
+//! Everything here forwards to `moon_core::config::crypto`, which owns the file key and its slots.
+//! The indirection earns its place by keeping the UI free of the backend's shapes: the panel deals
+//! in "set this password / remove that one", while the backend deals in wrapped keys and slots.
 //!
-//! What phase 2 has to provide, and why each item is here:
-//! - [`state`] — what the file currently carries, so the checkboxes can start in the right
-//!   position instead of always unchecked;
-//! - [`apply`] — the one write path, because setting a password re-wraps the file key rather than
-//!   re-encrypting the payload, and both passwords must land in the same `AppConfig::save`;
-//! - [`forget_other_machines`] — the recovery route when `servers.enc` has travelled and picked up
-//!   slots for machines the user no longer controls.
-//!
-//! [`PREVIEW`] is the single flag the temporary UI notice keys off. Deleting it in phase 2 makes
-//! the compiler point at every place the stub is still visible to the user.
+//! What lands on disk and when: setting a password only re-wraps the file key IN MEMORY. The
+//! config save that follows is what writes `servers.enc`, which is why `apply_security` runs
+//! before it rather than after.
 
-/// Whether this build's security section is a non-functional preview.
-///
-/// Phase 2 deletes this constant along with the notice it drives.
-pub(super) const PREVIEW: bool = true;
+use moon_core::config::crypto;
 
 /// Largest number of machine key slots one `servers.enc` may carry.
-///
-/// Mirrors the planned backend cap: slots exist so a file synchronized between machines opens
-/// silently on each of them, and an unbounded list would grow forever as machines are replaced.
-pub(super) const MAX_MACHINE_SLOTS: usize = 8;
+pub(super) const MAX_MACHINE_SLOTS: usize = crypto::MAX_MACHINE_SLOTS;
 
 /// What the current `servers.enc` says about access, as far as the UI needs to know.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,17 +22,21 @@ pub(super) struct VaultState {
     pub file_password_set: bool,
     /// Machine key slots currently in the file, including this machine's.
     pub machine_slots: usize,
+    /// The config file was opened this run, so the passwords can be edited at all.
+    ///
+    /// False in `MOON_CONFIG_PLAINTEXT` mode and after a failed decryption; the panel disables
+    /// itself rather than collecting a password nothing can store.
+    pub editable: bool,
 }
 
 /// Read the current access state of `servers.enc`.
-///
-/// STUB: reports a fresh single-machine file with no passwords, which is what a normal existing
-/// installation looks like today.
 pub(super) fn state() -> VaultState {
+    let access = crypto::access_state();
     VaultState {
-        launch_password_set: false,
-        file_password_set: false,
-        machine_slots: 1,
+        launch_password_set: crypto::launch_password_is_set(),
+        file_password_set: access.password_set,
+        machine_slots: access.machine_slots,
+        editable: access.opened,
     }
 }
 
@@ -63,39 +53,50 @@ pub(super) struct VaultChange {
 /// Why a requested change could not be applied.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum VaultError {
-    /// The backend is not implemented in this build.
-    NotImplemented,
+    /// The config file was never opened, so there is nothing to attach a password to.
+    NotEditable,
+    /// The key backend refused, e.g. the OS keyring is unavailable.
+    Backend,
+}
+
+impl VaultError {
+    /// Localization key describing this failure to the user.
+    pub(super) fn message_key(self) -> &'static str {
+        match self {
+            Self::NotEditable => "security.err.not_editable",
+            Self::Backend => "security.err.backend",
+        }
+    }
 }
 
 /// Apply a change to the stored access material.
 ///
-/// STUB: always refuses, so nothing in this build can leave the user believing a password was
-/// stored. Phase 2 derives the key on a worker thread — never inline — and writes `servers.enc`
-/// through the existing atomic config-pair path.
+/// Both passwords are applied together, and the FILE password is applied first: it is the one that
+/// can fail on a key-derivation or keyring problem, and a failure after the launch password had
+/// already been set would leave a half-applied pair.
+///
+/// Runs Argon2id when a file password is set — see the note in `crypto` about not doing that on a
+/// UI thread once the operation grows a progress indicator. It is accepted here because it happens
+/// on an explicit Save click, at most once per click.
 pub(super) fn apply(change: VaultChange) -> Result<(), VaultError> {
-    // Log the INTENT only. A password must never reach the log, which is written to disk and
-    // pasted into bug reports; `describe` deliberately cannot see the value.
-    log::info!(
-        "security: change requested (launch: {}, servers.enc: {}) — key backend not implemented",
-        describe(&change.launch_password),
-        describe(&change.file_password)
-    );
-    Err(VaultError::NotImplemented)
-}
-
-/// Render one requested change as a word, never as its value.
-fn describe(request: &Option<Option<String>>) -> &'static str {
-    match request {
-        None => "unchanged",
-        Some(None) => "clear",
-        Some(Some(_)) => "set",
+    if let Some(request) = change.file_password {
+        crypto::set_password(request.as_deref()).map_err(map_error)?;
     }
+    if let Some(request) = change.launch_password {
+        crypto::set_launch_password(request.as_deref()).map_err(map_error)?;
+    }
+    Ok(())
 }
 
 /// Drop every machine key slot except this machine's.
-///
-/// STUB: refuses for the same reason as [`apply`]. The real implementation keeps the local slot
-/// and the password slot, so the user cannot lock themselves out by clicking it.
 pub(super) fn forget_other_machines() -> Result<(), VaultError> {
-    Err(VaultError::NotImplemented)
+    crypto::forget_other_machines().map_err(map_error)
+}
+
+/// Translate a backend failure into the two cases the panel can explain.
+fn map_error(error: crypto::AccessError) -> VaultError {
+    match error {
+        crypto::AccessError::NoKey => VaultError::NotEditable,
+        _ => VaultError::Backend,
+    }
 }

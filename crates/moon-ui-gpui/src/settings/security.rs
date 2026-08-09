@@ -10,10 +10,10 @@
 //!   that file is useless on a machine whose OS keyring cannot open it — and so the file is
 //!   recoverable when the keyring is lost.
 //!
-//! State lives here rather than in `AppConfig` on purpose: this build's backend is a stub (see
-//! [`vault`]) and nothing is persisted yet, so putting draft fields into the shared config would
-//! create settings that look saved and are not. Phase 2 moves the checkbox positions into the
-//! vault state and routes the passwords through `apply`.
+//! Draft state lives here rather than in `AppConfig` because neither password is a setting: they
+//! are key material owned by `moon_core::config::crypto`, reached through [`vault`]. The checkbox
+//! positions come from the FILE — what it already carries — so reopening Settings shows the truth
+//! rather than whatever was typed last time.
 
 mod strength;
 mod vault;
@@ -51,6 +51,13 @@ impl PasswordPair {
             self.value.read(cx).value().to_string(),
             self.confirm.read(cx).value().to_string(),
         )
+    }
+
+    /// Empty both fields, dropping the typed password from the UI.
+    fn clear(&self, window: &mut Window, cx: &mut App) {
+        for field in [&self.value, &self.confirm] {
+            field.update(cx, |state, cx| state.set_value("", window, cx));
+        }
     }
 }
 
@@ -126,6 +133,12 @@ impl SecurityEd {
             launch_password: launch,
             file_password: file,
         }))
+    }
+
+    /// Empty every password field after the draft has been accepted.
+    fn clear_fields(&self, window: &mut Window, cx: &mut App) {
+        self.launch.clear(window, cx);
+        self.file.clear(window, cx);
     }
 }
 
@@ -258,6 +271,8 @@ impl SettingsView {
         MoonCheckbox::new(id)
             .checked(checked)
             .size(MoonCheckboxSize::Normal)
+            // Nothing to attach a password to until the config file is open.
+            .disabled(!self.security.vault.editable)
             .on_change(cx.listener(move |this, checked: &bool, _window, cx| {
                 set(&mut this.security, *checked);
                 cx.notify();
@@ -354,14 +369,16 @@ impl SettingsView {
     fn machines_row(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let used = self.security.vault.machine_slots;
-        let text = if vault::PREVIEW {
-            t!("security.machines_unknown", max = vault::MAX_MACHINE_SLOTS)
-        } else {
+        // With no file open the count is not zero, it is unknown; printing "0 of 8" would be a
+        // statement about the user's file that we did not read.
+        let text = if self.security.vault.editable {
             t!(
                 "security.machines",
                 used = used,
                 max = vault::MAX_MACHINE_SLOTS
             )
+        } else {
+            t!("security.machines_unknown", max = vault::MAX_MACHINE_SLOTS)
         };
         h_flex()
             .mt(design::ui_px(cx, 6.0))
@@ -377,9 +394,9 @@ impl SettingsView {
                     .outline()
                     .size(MoonButtonSize::Micro)
                     // One slot means only this machine, so there is nothing to forget.
-                    .disabled(used <= 1 || vault::PREVIEW)
+                    .disabled(used <= 1 || !self.security.vault.editable)
                     .label(format!("  {}  ", t!("security.forget_machines")))
-                    .on_click(cx.listener(|this, _, _window, cx| this.forget_machines(cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.forget_machines(window, cx)))
                     .render(),
             )
     }
@@ -398,21 +415,33 @@ impl SettingsView {
     }
 
     /// Handle the "forget other machines" button.
-    fn forget_machines(&mut self, cx: &mut Context<Self>) {
-        self.security.status = Some(match vault::forget_other_machines() {
-            Ok(()) => {
-                self.security.vault = vault::state();
-                SecurityStatus {
-                    key: "security.machines_forgotten",
-                    error: false,
-                    block: None,
-                }
-            }
-            Err(vault::VaultError::NotImplemented) => SecurityStatus {
-                key: "security.not_implemented",
+    ///
+    /// Saves immediately rather than waiting for the Save button. Revocation is a security action
+    /// the user expects to have taken effect when it reports success; leaving it in memory meant
+    /// closing Settings silently kept every revoked machine's access.
+    fn forget_machines(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = vault::forget_other_machines() {
+            self.security.status = Some(SecurityStatus {
+                key: error.message_key(),
                 error: true,
                 block: None,
+            });
+            cx.notify();
+            return;
+        }
+        self.security.vault = vault::state();
+        self.save(window, cx);
+        // `save` reports the configuration write in the footer; this line reports what the write
+        // meant here. A failed write leaves the revocation in memory only, and says so.
+        let saved = matches!(self.status, Some((super::StatusMsg::Key(_), false)));
+        self.security.status = Some(SecurityStatus {
+            key: if saved {
+                "security.machines_forgotten"
+            } else {
+                "security.err.not_saved"
             },
+            error: !saved,
+            block: None,
         });
         cx.notify();
     }
@@ -420,34 +449,73 @@ impl SettingsView {
     /// Apply the security draft after the configuration itself has been saved.
     ///
     /// Called from `save` rather than owning its own button so both passwords land in the same
-    /// user action as the rest of Settings. It runs AFTER the config write and reports into the
-    /// security block's own status line, so a security failure neither prevents the other settings
-    /// from being saved nor makes a successful save look failed.
-    pub(super) fn apply_security(&mut self, cx: &mut Context<Self>) {
+    /// user action as the rest of Settings. It runs BEFORE the config write, because that write is
+    /// what persists the resulting key slots, and reports into the security block's own status
+    /// line, so a security failure neither blocks the other settings nor makes a successful save
+    /// look failed.
+    /// Returns whether a change was accepted into key material and is now waiting for the config
+    /// write. The caller reports the outcome once that write has actually happened — see
+    /// [`Self::report_security_saved`].
+    pub(super) fn apply_security(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(request) = self.security.pending(cx) else {
-            return;
+            return false;
         };
-        self.security.status = Some(match request {
-            Err((block, key)) => SecurityStatus {
-                key,
-                error: true,
-                block: Some(block),
-            },
+        let (status, accepted) = match request {
+            Err((block, key)) => (
+                SecurityStatus {
+                    key,
+                    error: true,
+                    block: Some(block),
+                },
+                false,
+            ),
             Ok(change) => match vault::apply(change) {
                 Ok(()) => {
                     self.security.vault = vault::state();
-                    SecurityStatus {
-                        key: "security.applied",
-                        error: false,
-                        block: None,
-                    }
+                    // Empty the fields once they have been accepted. Leaving them filled makes
+                    // every later Save re-submit the same password, which re-derives the key and
+                    // replaces the slot for no reason — a visible pause and a new slot per click.
+                    self.security.clear_fields(window, cx);
+                    // No status yet: the passwords are in memory, not on disk.
+                    (
+                        SecurityStatus {
+                            key: "security.pending_write",
+                            error: false,
+                            block: None,
+                        },
+                        true,
+                    )
                 }
-                Err(vault::VaultError::NotImplemented) => SecurityStatus {
-                    key: "security.not_implemented",
-                    error: true,
-                    block: None,
-                },
+                Err(error) => (
+                    SecurityStatus {
+                        key: error.message_key(),
+                        error: true,
+                        block: None,
+                    },
+                    false,
+                ),
             },
+        };
+        self.security.status = Some(status);
+        cx.notify();
+        accepted
+    }
+
+    /// Report what happened to an accepted password change once the config write has finished.
+    ///
+    /// Split from [`Self::apply_security`] because the two facts are independent: the key material
+    /// accepted the password, and the file write either stored it or did not. Reporting "saved"
+    /// from the first alone put a green line over a password that a failed write left only in
+    /// memory — where it survives until the process exits and then is gone.
+    pub(super) fn report_security_saved(&mut self, saved: bool, cx: &mut Context<Self>) {
+        self.security.status = Some(SecurityStatus {
+            key: if saved {
+                "security.applied"
+            } else {
+                "security.err.not_saved"
+            },
+            error: !saved,
+            block: None,
         });
         cx.notify();
     }
@@ -459,28 +527,13 @@ impl SettingsView {
             .w_full()
             .gap(design::ui_px(cx, 4.0))
             .child(super::section(&t!("security.title"), p, cx))
-            // Temporary: this build has no key backend, so nothing here is stored. Delete together
-            // with `vault::PREVIEW` when the backend lands.
-            .when(vault::PREVIEW, |this| {
+            // Without an opened config file there is no key material to attach a password to.
+            // Say so instead of collecting one that cannot be stored.
+            .when(!self.security.vault.editable, |this| {
                 this.child(
-                    h_flex()
-                        .gap(design::ui_px(cx, 10.0))
-                        .items_center()
-                        .child(
-                            div()
-                                .text_color(rgba_from(p.amber, 1.0))
-                                .child(t!("security.preview_notice").to_string()),
-                        )
-                        .child(
-                            MoonButton::new("sec-login-preview")
-                                .outline()
-                                .size(MoonButtonSize::Micro)
-                                .label(format!("  {}  ", t!("security.login_preview")))
-                                .on_click(cx.listener(|_this, _, _window, cx| {
-                                    crate::window::login::open_preview(cx);
-                                }))
-                                .render(),
-                        ),
+                    div()
+                        .text_color(rgba_from(p.amber, 1.0))
+                        .child(t!("security.not_editable").to_string()),
                 )
             })
             .child(self.launch_group(cx))

@@ -97,17 +97,22 @@ fn auto_chart_target_commits_only_after_success_and_retries_new_catalog_revision
     assert_eq!(pending.applied_core, None);
 }
 
-/// Removing the `startup.rs` market-data notification or the `ChartTabs` observer must fail: a
-/// selected core whose catalog becomes ready later would remain stuck behind the previous chart.
+/// Removing the market-data notification in the coordination loop or the `ChartTabs` observer must
+/// fail: a selected core whose catalog becomes ready later would remain stuck behind the previous
+/// chart.
+///
+/// The loop moved to `startup/boot.rs` when the login window split startup in two, so the anchor
+/// is matched without its leading indentation — the code is one nesting level shallower there and
+/// nothing about this contract depends on how deeply it sits.
 #[test]
 fn market_data_revisions_wake_pending_auto_chart_retargets() {
     let main = include_str!("../main.rs");
-    let startup = include_str!("../startup.rs");
+    let startup = include_str!("../startup/boot.rs");
     let backend = include_str!("../backend/mod.rs");
     let chart_tabs = include_str!("mod.rs");
     assert!(main.contains("market_data_revision: Entity<MarketDataRevision>"));
     assert!(startup.contains(
-        "if drain.market_data {\n                            b.market_data_revision.update(cx, |_, cx| cx.notify());"
+        "if drain.market_data {\n                        b.market_data_revision.update(cx, |_, cx| cx.notify());"
     ));
     assert!(backend.contains("pub(crate) fn market_data_revision("));
     assert!(chart_tabs.contains(
