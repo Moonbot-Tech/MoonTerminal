@@ -107,6 +107,14 @@ profit_monitor.settings.flash:
   ru: "Подсветка новой сделки"
   en: "Highlight a new trade"
   es: "Resaltar una operación nueva"
+profit_monitor.settings.interaction:
+  ru: "Взаимодействие"
+  en: "Interaction"
+  es: "Interacción"
+profit_monitor.settings.core_filter:
+  ru: "Клик по строке фильтрует главное окно"
+  en: "Row click filters the main window"
+  es: "Clic en fila filtra la ventana principal"
 
 analytics.window_title:
   ru: "MoonTerminal — Аналитика"

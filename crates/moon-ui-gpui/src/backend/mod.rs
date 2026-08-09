@@ -1463,6 +1463,42 @@ impl Backend {
         self.market_data_revision.clone()
     }
 
+    /// Return the cores the Profit Monitor is currently broadcasting.
+    ///
+    /// Returns:
+    ///     Selected core ids; empty means every core, matching each panel's own retained filter.
+    pub(crate) fn core_filter(&self) -> &HashSet<CoreId> {
+        &self.core_filter
+    }
+
+    /// Return the wake channel every core-selector panel observes for the broadcast filter.
+    ///
+    /// Returns:
+    ///     Shared notification-only entity advanced by [`Self::set_core_filter`].
+    pub(crate) fn core_filter_revision(&self) -> gpui::Entity<crate::CoreFilterRevision> {
+        self.core_filter_revision.clone()
+    }
+
+    /// Publish a new cross-window core filter to every panel that owns a core selector.
+    ///
+    /// Equality-guarded: a click that resolves to the selection already on air must not wake five
+    /// panels into rebuilding rows that cannot have changed.
+    ///
+    /// Args:
+    ///     cores: Replacement selection; empty releases every panel back to all cores.
+    ///     cx: Backend context used to notify the dedicated revision entity.
+    ///
+    /// Returns:
+    ///     Nothing; observers see the new value only after the notification.
+    pub(crate) fn set_core_filter(&mut self, cores: HashSet<CoreId>, cx: &mut Context<Self>) {
+        if self.core_filter == cores {
+            return;
+        }
+        self.core_filter = cores;
+        self.core_filter_revision
+            .update(cx, |_revision, revision_cx| revision_cx.notify());
+    }
+
     /// Return the revision entity observed by every Auto Shell layout consumer.
     ///
     /// Returns:

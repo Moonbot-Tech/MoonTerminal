@@ -114,10 +114,59 @@ impl ReportPanel {
         {
             return;
         }
-        if self.sel_cores.len() == 1 && self.sel_cores.contains(&uid) {
-            self.sel_cores.clear();
-        } else {
-            self.sel_cores = HashSet::from([uid]);
+        self.sel_cores = crate::controls::next_core_filter(&self.sel_cores, &[uid], false);
+        self.reconcile_strategy_core(cx);
+        self.request_requery(cx);
+    }
+
+    /// Replace the retained filter with the one the Profit Monitor broadcast.
+    ///
+    /// A STANDALONE Report never adopts. That window is opened from Analytics already seeded with
+    /// an exact core and strategy, and `reconcile_strategy_core` would drop the pinned strategy
+    /// with no way back — the same reason every other revision observer here excludes it.
+    ///
+    /// For a group Report, `apply_core_broadcast` owns the release / ignore / intersect rule. The
+    /// retained set is written even under Auto, where it is dormant; only the requery is skipped.
+    ///
+    /// Args:
+    ///     cx: Panel context used to request the replacement query.
+    ///
+    /// Returns:
+    ///     Nothing; standalone, a broadcast about other groups, and an unchanged selection all
+    ///     requery nothing.
+    pub(super) fn adopt_broadcast_core_filter(&mut self, cx: &mut Context<Self>) {
+        let broadcast = self.backend.read(cx).core_filter().clone();
+        // Nothing published and nothing retained: leave before resolving any core list.
+        if broadcast.is_empty() && self.sel_cores.is_empty() {
+            return;
+        }
+        // An absent workspace scope IS the standalone window, the same authority every other
+        // revision observer here reads. Resolved before the write: `is_workspace_owned` depends on
+        // the group's mode, not on the retained set.
+        let Some(scope) = self.workspace_scope(self.backend.read(cx)) else {
+            return;
+        };
+        // Both universes, because neither alone is complete: `self.cores` comes from the report
+        // database and is still EMPTY until the first metadata batch lands — a Report created while
+        // a filter is on air would otherwise never join it — while the live group holds cores that
+        // have traded nothing yet and so appear in no report row.
+        let available: Vec<CoreId> = self
+            .cores
+            .iter()
+            .map(|(core, _)| *core)
+            .chain(
+                self.backend
+                    .read(cx)
+                    .group_cores(&self.group)
+                    .into_iter()
+                    .map(|(core, _)| core),
+            )
+            .collect();
+        if !crate::controls::apply_core_broadcast(&mut self.sel_cores, &broadcast, available) {
+            return;
+        }
+        if scope.is_workspace_owned() {
+            return;
         }
         self.reconcile_strategy_core(cx);
         self.request_requery(cx);

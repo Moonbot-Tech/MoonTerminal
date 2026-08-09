@@ -668,6 +668,12 @@ impl ReportPanel {
         })
         .detach();
 
+        let core_filter_revision = backend.read(cx).core_filter_revision();
+        cx.observe(&core_filter_revision, |this, _revision, cx| {
+            this.adopt_broadcast_core_filter(cx)
+        })
+        .detach();
+
         // Zone identity changes are rare and have their own revision so report commits do not
         // repaint every civil-time consumer. Manual bounds remain absolute instants; only their
         // picker text is rewritten. Presets requery because their civil-day boundaries move.
@@ -766,6 +772,12 @@ impl ReportPanel {
             dock: None,
             focus: cx.focus_handle(),
         };
+        // A group Report created while a filter is on air joins it, before its first query rather
+        // than after. A scoped one is the Analytics-owned standalone window in the making — its
+        // core and strategy are already chosen, and `mark_standalone` has not run yet to say so.
+        if scope.is_none() {
+            this.adopt_broadcast_core_filter(cx);
+        }
         this.load_initial_metadata(expected_revisions, allow_app_visible, cx);
         this
     }

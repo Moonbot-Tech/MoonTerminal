@@ -154,6 +154,11 @@ impl OrdersPanel {
             cx.notify();
         })
         .detach();
+        let core_filter_revision = backend.read(cx).core_filter_revision();
+        cx.observe(&core_filter_revision, |this, _revision, cx| {
+            this.adopt_broadcast_core_filter(cx)
+        })
+        .detach();
         // Column reordering and resizing mutate `table_state` and emit `notify`. Observe those
         // changes and dump the dock to `docks.json` only when `column_order` changes. The dump reads
         // this panel, so defer it until after the current borrow, as in `mutate`.
@@ -195,6 +200,9 @@ impl OrdersPanel {
             focus: cx.focus_handle(),
         };
         this.apply_ctx_columns(cx);
+        // A panel created while a filter is on air joins it: a tab detached, re-docked or restored
+        // from a saved layout must not be the one surface still showing every core.
+        this.adopt_broadcast_core_filter(cx);
         let backend_for_initial_cache = this.backend.clone();
         this.rebuild_cache(backend_for_initial_cache.read(cx));
         this
@@ -373,10 +381,46 @@ impl OrdersPanel {
         {
             return;
         }
-        if self.sel_cores.len() == 1 && self.sel_cores.contains(&id) {
-            self.sel_cores.clear();
-        } else {
-            self.sel_cores = HashSet::from([id]);
+        self.sel_cores = crate::controls::next_core_filter(&self.sel_cores, &[id], false);
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
+    }
+
+    /// Replace the retained Classic filter with the one the Profit Monitor broadcast.
+    ///
+    /// `apply_core_broadcast` owns the three-way rule — release, ignore, or take the intersection —
+    /// so every adopting panel answers a cross-group broadcast the same way. The retained filter is
+    /// written even while Auto owns the scope: it is dormant there, and leaving it stale would make
+    /// the panel contradict the monitor the moment the user switches back to Classic. Only the
+    /// rebuild is skipped, because Auto's effective scope cannot have changed.
+    ///
+    /// Args:
+    ///     cx: Panel context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; a broadcast about other groups and an unchanged selection both rebuild nothing.
+    fn adopt_broadcast_core_filter(&mut self, cx: &mut Context<Self>) {
+        let broadcast = self.backend.read(cx).core_filter().clone();
+        // Nothing published and nothing retained is the whole life of a terminal where the feature
+        // is never used, and every panel construction passes through here: leave before paying for
+        // the group's core list.
+        if broadcast.is_empty() && self.sel_cores.is_empty() {
+            return;
+        }
+        let available: Vec<CoreId> = self
+            .group_cores(self.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        if !crate::controls::apply_core_broadcast(&mut self.sel_cores, &broadcast, available) {
+            return;
+        }
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
         }
         let backend = self.backend.clone();
         self.rebuild_cache(backend.read(cx));

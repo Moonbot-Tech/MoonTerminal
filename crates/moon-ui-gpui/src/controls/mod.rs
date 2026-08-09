@@ -9,8 +9,9 @@
 //! - [`coin_menu`] provides the shared coin context menu;
 //! - [`coin_search`] provides coin search and the shared `COIN - Server` dropdown for chart tabs,
 //!   the header ticker, and the Report coin filter;
+//! - [`core_broadcast`] resolves the cross-window core filter the Profit Monitor publishes;
 //! - [`core_combo`] provides exchange grouping plus the shared multi-select core picker for Orders,
-//!   Report, Assets, Analytics, and Core Status;
+//!   Report, Assets, Alerts, Analytics, and Core Status;
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
 //! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
@@ -21,6 +22,7 @@
 
 mod coin_menu;
 pub(crate) mod coin_search;
+mod core_broadcast;
 mod core_combo;
 pub(crate) mod date_range;
 mod exchange_label;
@@ -32,6 +34,7 @@ mod strips;
 pub(crate) mod toolbar;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
+pub(crate) use core_broadcast::{apply_core_broadcast, next_core_filter};
 pub(crate) use core_combo::{
     CoreAllRowMode, core_combo, core_menu_sections, toggle_all_core_selection,
     toggle_exchange_cores,

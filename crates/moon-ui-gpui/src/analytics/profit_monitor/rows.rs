@@ -1,6 +1,7 @@
 //! Pure row grouping for the desktop Profit Monitor.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
 use moon_core::session::CoreId;
@@ -87,6 +88,13 @@ pub(super) struct MonitorRow {
     /// an OLDER close date than the row's newest — cores stamp close dates from their own clocks,
     /// and a backfilled batch does the same thing.
     pub(super) cores: Vec<CoreId>,
+    /// Cores this row stands for when it is clicked as a core filter, shared rather than copied.
+    ///
+    /// Not the same list as [`Self::cores`], which is only what TRADED in the period. An Exchange
+    /// row labelled "Binance" has to filter the terminal to every configured Binance core, or a
+    /// core that happened to close nothing this hour would silently vanish from Orders too. The
+    /// `Rc` is what lets the table hand this to a click handler per row without copying it.
+    pub(super) filter_cores: Rc<[CoreId]>,
     /// Raw exchange name reported for `primary_core`, used only to pick a logo.
     ///
     /// Kept unformatted: the Spot/Futures display policy belongs to the visible `name`, while the
@@ -153,6 +161,71 @@ pub(super) struct RowLabels<'a> {
     pub(super) spot: &'a str,
 }
 
+/// Bucket every configured core by the exchange it reports, keyed as the row grouping keys it.
+///
+/// One pass, so resolving each row's click payload is a lookup rather than a scan of every core:
+/// two hundred cores across eight exchange rows would otherwise be sixteen hundred comparisons on
+/// each rebuild. The key is `to_lowercase()`, matching [`grouped_rows`] exactly — two spellings of
+/// one exchange render as one row and must therefore filter as one row.
+///
+/// Args:
+///     live: Current configured core order and reported exchange names.
+///
+/// Returns:
+///     Configured cores per lowercased exchange name, each in configured order.
+fn cores_by_exchange(live: &LiveContext) -> HashMap<String, Vec<CoreId>> {
+    let mut buckets: HashMap<String, Vec<CoreId>> = HashMap::new();
+    for core in &live.core_order {
+        if let Some(exchange) = live.exchange_names.get(core) {
+            buckets
+                .entry(exchange.to_lowercase())
+                .or_default()
+                .push(*core);
+        }
+    }
+    buckets
+}
+
+/// Resolve which cores one finished row stands for as a core filter.
+///
+/// A Core row is exactly its own core. An Exchange row is every CONFIGURED core reporting that
+/// exchange, not only the ones that traded inside the period: the label names the exchange, and a
+/// filter that quietly dropped the quiet cores would hide their open orders everywhere else.
+/// Configured order is preserved so the payload is deterministic across refreshes.
+///
+/// Args:
+///     row: Finished row, already carrying the cores that traded.
+///     buckets: Configured cores per lowercased exchange name.
+///     mode: Selected grouping axis.
+///
+/// Returns:
+///     The row's click payload, never empty for a row that has at least one traded core.
+fn filter_cores(
+    row: &MonitorRow,
+    buckets: &HashMap<String, Vec<CoreId>>,
+    mode: GroupMode,
+) -> Rc<[CoreId]> {
+    // The "unknown exchange" row groups cores whose exchange nobody reported; a configured core
+    // that reported nothing is not evidence it belongs there, so that row stays literal too.
+    let bucket = (mode == GroupMode::Exchange)
+        .then_some(row.exchange.as_deref())
+        .flatten()
+        .and_then(|exchange| buckets.get(&exchange.to_lowercase()));
+    let Some(bucket) = bucket else {
+        return Rc::from(row.cores.as_slice());
+    };
+    let mut cores = bucket.clone();
+    // A core that traded but is no longer configured still belongs to the row the user can see.
+    let configured: HashSet<CoreId> = bucket.iter().copied().collect();
+    cores.extend(
+        row.cores
+            .iter()
+            .copied()
+            .filter(|core| !configured.contains(core)),
+    );
+    Rc::from(cores.as_slice())
+}
+
 /// Group per-core report aggregates into visible Core or Exchange rows.
 ///
 /// Args:
@@ -217,6 +290,14 @@ pub(super) fn grouped_rows(
     }
 
     let mut rows = grouped.into_values().collect::<Vec<_>>();
+    let buckets = if mode == GroupMode::Exchange {
+        cores_by_exchange(live)
+    } else {
+        HashMap::new()
+    };
+    for row in &mut rows {
+        row.filter_cores = filter_cores(row, &buckets, mode);
+    }
     if mode == GroupMode::Core {
         let rank = live
             .core_order

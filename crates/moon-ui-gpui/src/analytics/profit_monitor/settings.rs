@@ -9,10 +9,13 @@
 //! takes the default below, which is what lets a default change later without silently overriding
 //! someone who deliberately turned the feature off.
 
+use std::collections::HashSet;
+
 use gpui::*;
 use moon_core::config::layout::WindowLayout;
 use moon_ui::{
-    MoonCheckbox, MoonCheckboxSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
+    MoonCheckbox, MoonCheckboxSize, MoonGroupBox, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -22,8 +25,8 @@ use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup
 
 /// Popup CONTENT width in design units, before the group frame's own inset.
 ///
-/// Sized for the longest localized checkbox label rather than for the control: the three labels are
-/// full sentences in ES, and a narrower popup wraps them into two lines each.
+/// Sized for the longest localized checkbox label rather than for the control: the labels are full
+/// sentences in ES, and a narrower popup wraps them into two lines each.
 const CONTENT_WIDTH: f32 = 268.0;
 
 /// Display preferences of the Profit Monitor window.
@@ -38,18 +41,22 @@ pub(super) struct MonitorPrefs {
     pub(super) last_trade: bool,
     /// Whether a row lights up and fades when its core closes a new trade.
     pub(super) flash: bool,
+    /// Whether clicking a row's core cell filters every main-window panel to that core.
+    pub(super) core_filter: bool,
 }
 
 impl Default for MonitorPrefs {
     /// Return the defaults applied to a profile that has never opened this popup.
     ///
-    /// All three are ON: they are the reason the window was extended, and a feature nobody can see
-    /// until they find a settings popup is a feature nobody finds.
+    /// All of them are ON: they are the reason the window was extended, and a feature nobody can
+    /// see until they find a settings popup is a feature nobody finds. The core filter is
+    /// reversible by the same click that applied it, so an unexpected first one costs one gesture.
     fn default() -> Self {
         Self {
             exchange_icons: true,
             last_trade: true,
             flash: true,
+            core_filter: true,
         }
     }
 }
@@ -81,6 +88,17 @@ impl MonitorPrefs {
 struct PrefRow {
     /// Element-identity suffix, unique within the popup.
     id: &'static str,
+    /// Locale key of the group caption this row belongs under.
+    ///
+    /// Rows are shown in table order within their group, so a new preference joins an existing
+    /// group simply by naming it.
+    group: &'static str,
+    /// Whether switching this preference OFF must also release the broadcast core filter.
+    ///
+    /// A per-row fact rather than a read of the whole preferences: without it, editing any
+    /// unrelated checkbox while the filter feature is off would republish the empty set, and only
+    /// the equality guard in `set_core_filter` would keep that from waking five panels.
+    releases_cores: bool,
     /// Locale key of the visible label.
     label: &'static str,
     /// Read the current value out of the preferences.
@@ -97,10 +115,18 @@ struct PrefRow {
     store: fn(&mut WindowLayout, bool),
 }
 
-/// Every display preference, in the order the popup shows them.
-const PREF_ROWS: [PrefRow; 3] = [
+/// Caption of the group holding everything that only changes what this window draws.
+const DISPLAY_GROUP: &str = "profit_monitor.settings.display";
+
+/// Caption of the group holding what a click in this window does to the rest of the terminal.
+const INTERACTION_GROUP: &str = "profit_monitor.settings.interaction";
+
+/// Every preference, in the order the popup shows them.
+const PREF_ROWS: [PrefRow; 4] = [
     PrefRow {
         id: "exchange-icons",
+        releases_cores: false,
+        group: DISPLAY_GROUP,
         label: "profit_monitor.settings.exchange_icons",
         read: |prefs| prefs.exchange_icons,
         set: |prefs, value| prefs.exchange_icons = value,
@@ -109,6 +135,8 @@ const PREF_ROWS: [PrefRow; 3] = [
     },
     PrefRow {
         id: "last-trade",
+        releases_cores: false,
+        group: DISPLAY_GROUP,
         label: "profit_monitor.settings.last_trade",
         read: |prefs| prefs.last_trade,
         set: |prefs, value| prefs.last_trade = value,
@@ -117,11 +145,23 @@ const PREF_ROWS: [PrefRow; 3] = [
     },
     PrefRow {
         id: "flash",
+        releases_cores: false,
+        group: DISPLAY_GROUP,
         label: "profit_monitor.settings.flash",
         read: |prefs| prefs.flash,
         set: |prefs, value| prefs.flash = value,
         saved: |layout| layout.profit_monitor_flash,
         store: |layout, value| layout.profit_monitor_flash = Some(value),
+    },
+    PrefRow {
+        id: "core-filter",
+        releases_cores: true,
+        group: INTERACTION_GROUP,
+        label: "profit_monitor.settings.core_filter",
+        read: |prefs| prefs.core_filter,
+        set: |prefs, value| prefs.core_filter = value,
+        saved: |layout| layout.profit_monitor_core_filter,
+        store: |layout, value| layout.profit_monitor_core_filter = Some(value),
     },
 ];
 
@@ -146,9 +186,16 @@ impl ProfitMonitorView {
             self.flash.clear();
         }
         let store = row.store;
-        self.backend.update(cx, |backend, _| {
+        // Turning the core filter off has to RELEASE what it filtered. The gesture that set it is
+        // gone with the setting, so a panel left narrowed would carry a filter whose cause is no
+        // longer visible anywhere. Scoped to the row that owns the filter, and to switching it OFF.
+        let release_cores = row.releases_cores && !value;
+        self.backend.update(cx, |backend, backend_cx| {
             store(&mut backend.layout, value);
             backend.layout_dirty = true;
+            if release_cores {
+                backend.set_core_filter(HashSet::new(), backend_cx);
+            }
         });
         self.invalidate_content(cx);
         cx.notify();
@@ -220,35 +267,13 @@ impl ProfitMonitorView {
 ///     cx: Application context supplying scaled geometry.
 ///
 /// Returns:
-///     Title row and the display-preference group.
+///     Title row, the display group, and the interaction group.
 fn settings_content(
     prefs: MonitorPrefs,
     view: Entity<ProfitMonitorView>,
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    let mut group = popup_group(
-        "profit-monitor-display",
-        t!("profit_monitor.settings.display"),
-    );
-    for (index, row) in PREF_ROWS.iter().enumerate() {
-        let target = view.clone();
-        group = group.child(
-            MoonCheckbox::new(SharedString::from(format!(
-                "profit-monitor-pref-{}",
-                row.id
-            )))
-            .label(t!(row.label).to_string())
-            .checked((row.read)(&prefs))
-            .size(MoonCheckboxSize::Compact)
-            .on_change(move |checked: &bool, _window, app| {
-                let checked = *checked;
-                target.update(app, |this, cx| {
-                    this.write_pref(&PREF_ROWS[index], checked, cx)
-                });
-            }),
-        );
-    }
     // Chrome belongs to MoonPopover; a second surface here would double the popup's background.
     v_flex()
         .id("profit-monitor-settings-popup")
@@ -270,6 +295,61 @@ fn settings_content(
                     }
                 })),
         )
-        .child(group)
+        .child(pref_group(
+            "profit-monitor-display",
+            DISPLAY_GROUP,
+            prefs,
+            &view,
+        ))
+        .child(pref_group(
+            "profit-monitor-interaction",
+            INTERACTION_GROUP,
+            prefs,
+            &view,
+        ))
         .into_any_element()
+}
+
+/// Build one caption's group box from the rows of [`PREF_ROWS`] that name it.
+///
+/// The membership stays a property of the table — a new preference joins a group by naming it —
+/// while the group itself keeps a literal id, like every other settings popup in the terminal.
+///
+/// Args:
+///     id: Stable element identity of the group box.
+///     caption: Locale key shared by the rows that belong here, and the group's own title.
+///     prefs: Values the checkboxes display.
+///     view: Monitor entity receiving the edits.
+///
+/// Returns:
+///     The group box with one compact checkbox per matching row, in table order.
+fn pref_group(
+    id: &'static str,
+    caption: &'static str,
+    prefs: MonitorPrefs,
+    view: &Entity<ProfitMonitorView>,
+) -> MoonGroupBox {
+    popup_group(id, t!(caption).to_string()).children(
+        PREF_ROWS
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.group == caption)
+            .map(|(index, row)| {
+                let target = view.clone();
+                MoonCheckbox::new(SharedString::from(format!(
+                    "profit-monitor-pref-{}",
+                    row.id
+                )))
+                .label(t!(row.label).to_string())
+                .checked((row.read)(&prefs))
+                .size(MoonCheckboxSize::Compact)
+                .on_change(move |checked: &bool, _window, app| {
+                    let checked = *checked;
+                    target.update(app, |this, cx| {
+                        this.write_pref(&PREF_ROWS[index], checked, cx)
+                    });
+                })
+                .into_any_element()
+            }),
+    )
 }

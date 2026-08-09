@@ -319,9 +319,9 @@ pub struct WindowLayout {
     pub profit_monitor_open: bool,
     /// Profit Monitor: whether a row shows its exchange logo before the name.
     ///
-    /// `None` means the feature's own default. All three monitor display preferences are read
-    /// leniently for the same reason as the sort tuple: a hand-edited widget preference must never
-    /// discard the complete window layout.
+    /// `None` means the feature's own default. Every monitor preference is read leniently for the
+    /// same reason as the sort tuple: a hand-edited widget preference must never discard the
+    /// complete window layout.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_exchange_icons: Option<bool>,
     /// Profit Monitor: whether the profit cell appends the latest closed trade in parentheses.
@@ -330,6 +330,12 @@ pub struct WindowLayout {
     /// Profit Monitor: whether a row lights up and fades when its core closes a new trade.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_flash: Option<bool>,
+    /// Profit Monitor: whether clicking a row's core cell filters every main-window panel.
+    ///
+    /// Only the preference is persisted. The selection itself is process-lifetime state, exactly
+    /// like the per-panel core filters it drives — a restart comes back showing every core.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_core_filter: Option<bool>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

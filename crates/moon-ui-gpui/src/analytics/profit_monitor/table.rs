@@ -6,7 +6,8 @@
 //! The rule for the boundary is simple: nothing here reads or writes `ProfitMonitorView` state —
 //! every function takes what it needs and returns an element.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -151,6 +152,7 @@ pub(super) fn split_body(
 ///     sort: Explicit user-selected ordering, if any.
 ///     prefs: Display preferences chosen in the ⚙ popup.
 ///     flash: Live arrival stamps, keyed by the core that closed the trade.
+///     selection: Cores currently broadcast to the main window; empty means no filter.
 ///     scroll: Retained vertical-list position.
 ///     palette: Active MoonUI palette.
 ///     view: Owning monitor entity receiving sortable-header actions.
@@ -166,6 +168,7 @@ pub(super) fn table(
     sort: Option<MonitorSort>,
     prefs: MonitorPrefs,
     flash: &crate::pulse::Arrivals<CoreId>,
+    selection: &HashSet<CoreId>,
     scroll: &MoonVirtualListScrollHandle,
     palette: MoonPalette,
     view: Entity<ProfitMonitorView>,
@@ -207,6 +210,30 @@ pub(super) fn table(
         .iter()
         .map(|row| row.cores.iter().filter_map(|core| flash.get(core)).max())
         .collect();
+    // Resolved HERE, once per render, for the same reason the logos are: the item builder below
+    // runs for every visible row on every frame, and it can be driven at 10 Hz by the arrival
+    // highlight. Each entry then costs the builder two refcount bumps. The whole pass is skipped
+    // while the feature is off.
+    //
+    // A merged Exchange row counts as selected only when the filter holds ALL of its cores: it is
+    // one click target, so a half-selected row would offer a state its own click cannot produce.
+    //
+    // Weak, and cloned per row rather than the entity itself: `Entity::clone` takes the process
+    // entity map's lock.
+    let owner = view.downgrade();
+    let selects: Vec<RowSelect> = if prefs.core_filter {
+        rows.iter()
+            .map(|row| RowSelect {
+                selected: !selection.is_empty()
+                    && !row.filter_cores.is_empty()
+                    && row.filter_cores.iter().all(|core| selection.contains(core)),
+                cores: row.filter_cores.clone(),
+                owner: owner.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let logos: Vec<Option<Arc<RenderImage>>> = if prefs.exchange_icons {
         let mut resolved: HashMap<&str, Option<Arc<RenderImage>>> = HashMap::new();
         rows.iter()
@@ -226,7 +253,7 @@ pub(super) fn table(
         profit_width,
         prefs.exchange_icons,
         sort,
-        view,
+        view.clone(),
         palette,
         cx,
     );
@@ -244,6 +271,8 @@ pub(super) fn table(
             };
             let (profit, profit_sign) =
                 format_profit(row.profit, row.last_profit.filter(|_| show_last), unit);
+            let select = selects.get(index).cloned();
+            let is_selected = select.as_ref().is_some_and(|select| select.selected);
             table_row(
                 row.name.clone(),
                 profit,
@@ -255,15 +284,25 @@ pub(super) fn table(
                 show_win,
                 show_average,
                 RowChrome {
+                    id: ("profit-monitor-row", row.primary_core).into(),
                     logo: logos.get(index).cloned().flatten(),
                     logo_gutter: prefs.exchange_icons,
                     flash: flashes.get(index).copied().flatten(),
                     profit_width,
+                    select,
                 },
                 palette,
                 app,
             )
-            .when(index % 2 == 1, |element| {
+            // Selection outranks the zebra stripe: it is the answer to "which cores is the main
+            // window showing", and a stripe drawn over it would make every other selected row look
+            // unselected. It is drawn in BLUE rather than in `table_selected`, which the arrival
+            // tint already owns here — one colour for both would swallow the new-trade flash on
+            // exactly the rows the user is watching. Same pairing the tuner's coin list uses.
+            .when(is_selected, |element| {
+                element.bg(moon_alpha(palette.blue, 0.18))
+            })
+            .when(!is_selected && index % 2 == 1, |element| {
                 element.bg(moon_alpha(palette.table_head, 0.45))
             })
             .into_any_element()
@@ -287,12 +326,17 @@ pub(super) fn table(
         show_win,
         show_average,
         RowChrome {
-            // The total is not one exchange and never one core's arrival: no logo, no highlight —
-            // but it keeps the gutter, or its label stops lining up with the names above it.
+            // Its own prefix rather than a core id, which a real core could otherwise collide with.
+            id: "profit-monitor-row-total".into(),
+            // The total is not one exchange and never one core's arrival: no logo, no highlight,
+            // and no click target — "filter the main window to every core at once" is what
+            // clearing the filter already means. It keeps the gutter, or its label stops lining up
+            // with the names above it.
             logo: None,
             logo_gutter: prefs.exchange_icons,
             flash: None,
             profit_width,
+            select: None,
         },
         palette,
         cx,
@@ -438,6 +482,17 @@ fn table_header(
 /// Bundled rather than passed as three more positional flags: every one of them is optional and
 /// two of them are only ever set for data rows, so a struct is what keeps the Total call honest.
 struct RowChrome {
+    /// Stable element identity of the row.
+    ///
+    /// Derived from the row's core, never from its rendered text: the name changes with grouping
+    /// mode, locale and a core being renamed, and two cores may carry the SAME display name — an
+    /// id built from it collides between rows and moves under a click target. Built as a
+    /// `(&'static str, u64)` pair, which costs no allocation in the item builder.
+    ///
+    /// An Exchange row is seeded by the lowest-uid core that traded in the period, so its identity
+    /// can still move when that core goes quiet. That costs a dropped hover, never a dropped click:
+    /// the handler is rebuilt with the row.
+    id: ElementId,
     /// Exchange logo drawn before the name, when enabled and the brand is known.
     logo: Option<Arc<RenderImage>>,
     /// Whether to reserve the logo's width even without one.
@@ -450,6 +505,23 @@ struct RowChrome {
     flash: Option<Instant>,
     /// Profit-column width selected by the current last-trade decision.
     profit_width: f32,
+    /// What clicking this row does, or `None` when the preference is off.
+    select: Option<RowSelect>,
+}
+
+/// One row's participation in the terminal-wide core filter.
+///
+/// Present only while the preference is on, which is what makes the row inert — no pointer
+/// cursor, no handler — for someone who turned the feature off, rather than merely silent.
+/// Cloning is two refcount bumps, which is what lets the item builder take one per visible row.
+#[derive(Clone)]
+struct RowSelect {
+    /// Cores the row stands for, shared rather than copied per frame.
+    cores: Rc<[CoreId]>,
+    /// Whether the filter currently holds all of them.
+    selected: bool,
+    /// Monitor receiving the click; weak, because a click can outlive a closing window.
+    owner: WeakEntity<ProfitMonitorView>,
 }
 
 /// Render one responsive table line.
@@ -484,7 +556,7 @@ fn table_row(
     chrome: RowChrome,
     palette: MoonPalette,
     cx: &App,
-) -> Div {
+) -> Stateful<Div> {
     let name_tooltip = name.clone();
     let profit_color = profit_sign.pick(
         design::positive_color(palette),
@@ -507,19 +579,31 @@ fn table_row(
             .border_color(moon_alpha(palette.border, 0.7)),
         palette.table_selected,
         chrome.flash,
-    );
+    )
+    // The WHOLE row is the click target, not the name cell: the numbers belong to the same core,
+    // and a row where four of five cells silently do nothing reads as a broken control. The name
+    // tooltip rides the same element, so the row needs one identity rather than two.
+    .id(chrome.id)
+    .tooltip(crate::panels::common::text_tooltip(name_tooltip))
+    .when_some(chrome.select, |row, select| {
+        let RowSelect { cores, owner, .. } = select;
+        row.cursor_pointer()
+            .on_click(move |event: &ClickEvent, _window, app| {
+                // secondary() = Ctrl on Windows/Linux, ⌘ on macOS — the same multi-select modifier
+                // the tuner's coin list and the strategies tree use.
+                let additive = event.modifiers().secondary();
+                // The window may already be gone; a click on a closing view is not an error.
+                let _ = owner.update(app, |this, cx| this.filter_to_cores(&cores, additive, cx));
+            })
+    });
     row.child(
         h_flex()
-            .id(SharedString::from(format!(
-                "profit-monitor-name:{name_tooltip}"
-            )))
             .flex_1()
             .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
             .gap(design::ui_px(cx, NAME_LOGO_GAP))
             .overflow_hidden()
             .text_ellipsis()
             .whitespace_nowrap()
-            .tooltip(crate::panels::common::text_tooltip(name_tooltip))
             .when_some(chrome.logo.clone(), |element, logo| {
                 element.child(
                     img(logo)

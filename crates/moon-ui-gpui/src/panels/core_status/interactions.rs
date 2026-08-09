@@ -159,6 +159,42 @@ impl CoreStatusView {
         cx.notify();
     }
 
+    /// Replace the retained Classic filter with the one the Profit Monitor broadcast.
+    ///
+    /// `apply_core_broadcast` owns the release / ignore / intersect rule shared by every adopting
+    /// panel. The retained set is written even under Auto, where it is dormant, so a later switch
+    /// back to Classic shows the terminal's current core focus rather than a filter from before;
+    /// only the rebuild is skipped there.
+    ///
+    /// Args:
+    ///     cx: View context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; a broadcast about other scopes and an unchanged selection both rebuild nothing.
+    pub(super) fn adopt_broadcast_core_filter(&mut self, cx: &mut Context<Self>) {
+        let broadcast = self.backend.read(cx).core_filter().clone();
+        // Nothing published and nothing retained: leave before paying for the scope's core list.
+        if broadcast.is_empty() && self.sel_cores.is_empty() {
+            return;
+        }
+        let available: Vec<CoreId> = self
+            .scope_cores(self.backend.read(cx))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        if !crate::controls::apply_core_broadcast(&mut self.sel_cores, &broadcast, available) {
+            return;
+        }
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
+        self.rebuild_cache(cx);
+        cx.notify();
+    }
+
     /// Toggle every still-available core from one exchange section in the Classic filter.
     ///
     /// Empty means All before the click, so the first exchange selection becomes explicit. A
