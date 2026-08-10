@@ -147,7 +147,9 @@ The Linux encrypted config uses Secret Service in the user GUI/DBus session. Det
 | `make check` | type check |
 | `make fmt` | `cargo fmt` |
 | `make clean` | clean `target` |
-| `make update-moon-ui` | refresh the local ignored `Cargo.lock` for rolling Git dependencies |
+| `make update-moon-ui` | move the MoonUI pin in the committed `Cargo.lock` |
+| `make update-moonproto` | move the MoonProto pin (its own deliberate commit) |
+| `make update-all` | move EVERYTHING including the pinned forks — lifts the version freeze |
 
 The Makefile selects the MSVC target on Windows and the native target on macOS/Linux.
 

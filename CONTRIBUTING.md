@@ -97,12 +97,57 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   the instant it lands, with CI reporting only afterwards. Branch from fresh `main`, open a PR,
   squash-merge — history stays linear.
 - **CI runs neither `fmt` nor `clippy`.** Run `make fmt` yourself before pushing.
-- Two CI gates, both on every PR and both meant to be green before you merge: the Windows
-  `.exe` job (~15 min) and `Tests (x86_64-msvc)`, which runs `cargo test --workspace`. They
-  run in parallel. The macOS job is diagnostic (`continue-on-error`) — read its log, but it
-  does not block. "Gate" is a convention here, not enforcement: with no branch protection
-  nothing stops a red merge except you reading the checks.
+- Three CI gates, all on every PR and all meant to be green before you merge: the Windows
+  `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo test --workspace`, and
+  `Dependency audit (cargo-deny)`. They run in parallel. The macOS job is diagnostic
+  (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
+  enforcement: with no branch protection nothing stops a red merge except you reading the checks.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
+
+## Dependencies and the lockfile
+
+`Cargo.lock` is committed, and it is the freeze: a third-party version can change only in a
+deliberate commit, so a compromised or merely surprising upstream release cannot enter a build
+unnoticed.
+
+- **Touch a `Cargo.toml` → commit the lock in the same commit.** Forget it and every COMPILING CI
+  job fails at its first step (`cargo fetch --locked`) before anything builds. The audit job has no
+  such step and stays green — it reads the lock as data.
+- **MoonUI stays rolling and needs nothing from you.** CI refreshes its three crates on every run;
+  locally that is `make update-moon-ui`. If a new MoonUI master needs different third-party
+  versions, CI goes red on purpose — refresh and commit the lock, reviewing the non-MoonUI lines.
+- **MoonProto moves only by hand**: `make update-moonproto`, as its own commit. Nothing automatic
+  ever touches it.
+- **`make update-all`** moves everything including the pinned forks. That defeats the freeze; use
+  it deliberately and read the whole diff.
+- **A lock conflict on a rebase — do not hand-merge it.** Take the other side whole and let cargo
+  add back only what your branch needs:
+
+  ```
+  git checkout origin/main -- Cargo.lock
+  cargo check          # minimal update: adds your new dependency, moves nothing else
+  git add Cargo.lock
+  ```
+
+  Do not reach for `cargo generate-lockfile` here — it re-resolves the whole graph and can move
+  MoonProto and unrelated crates inside what should be a trivial conflict fix. The repo also ships
+  no merge driver for this file on purpose: a `merge=ours` driver silently drops a coworker's newly
+  added dependency.
+
+  **Never do this while a sibling MoonUI override is active.** With `.cargo/config.toml` patching
+  MoonUI to a local checkout, any cargo command rewrites the lock with local `path` entries, and
+  `git add` would stage exactly that — a lock that breaks every other machine and all of CI. Remove
+  the override and restore the lock first. `lockfile_contract.rs` skips itself while an override is
+  present, so it will not catch this locally; CI, which never has one, will.
+- Conflicts are rarer than they sound: the lock changes only when a manifest changes or a human
+  refreshes a Moonbot dep. CI's per-run MoonUI refresh is never committed.
+- New git dependency? Its URL must be approved in TWO places, in the same commit: `allow-git` in
+  `deny.toml`, and the allow-list in `crates/moon-core/tests/lockfile_contract.rs`. Both are
+  deliberate — one fails the audit gate, the other fails the test gate, and approving a new source
+  of code should cost a conscious edit. Miss either and the red check names the file.
+- An advisory you have to live with for now goes in `deny.toml`'s `ignore` list with its RUSTSEC
+  id, the date, and one sentence of reason. Nothing enforces that convention; it works only if you
+  keep it, and an entry with no reason becomes permanent by accident.
 
 ## Build and checks
 

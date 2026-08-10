@@ -1,0 +1,44 @@
+# cargo-deny — the supply-chain gate over the committed lockfile.
+#
+# Why cargo-deny rather than cargo-audit, and not both: it reads the same RustSec advisory
+# database, and adds the one check that serves this repository's actual goal directly —
+# `sources`, an allow-list of git hosts, so a dependency arriving from a repository nobody
+# approved fails the build instead of being noticed later. cargo-audit's unique feature is
+# `cargo audit fix`, which bumps versions automatically: precisely the behaviour the committed
+# lockfile exists to prevent. Running both would mean two configurations and two places to write
+# the same exception.
+#
+# Scope, stated rather than implied: this reads `Cargo.lock`, which is the frozen third-party
+# set. CI refreshes the three MoonUI crates per run, and a companion step fails the run if that
+# refresh moves anything else — so what is audited here is what is compiled.
+
+[advisories]
+# A yanked release is either broken or withdrawn for cause; a frozen lockfile is exactly how one
+# survives unnoticed, so it is an error here rather than a warning.
+yanked = "deny"
+# Unmaintained crates are reported for the workspace's own dependency tree. `all` would also
+# report deep transitive crates nobody here can act on, which trains people to ignore the job.
+unmaintained = "workspace"
+# Each entry needs an advisory id, a date, and a sentence on why it is tolerated. An ignore with
+# no reason becomes permanent by accident.
+ignore = []
+
+[bans]
+# A large GPUI/wgpu graph legitimately carries duplicate versions; this is information, not a gate.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Every git dependency this workspace is allowed to have. Two are Moonbot-owned; the rest are
+# pinned upstream forks that GPUI requires. Adding a URL here is the deliberate act of approving a
+# new source of code, and it belongs in the same commit as the dependency itself.
+allow-git = [
+    "https://github.com/Moonbot-Tech/MoonUI",
+    "https://github.com/Moonbot-Tech/MoonProtoBeta",
+    "https://github.com/zed-industries/wgpu",
+    "https://github.com/zed-industries/async-process",
+    "https://github.com/zed-industries/font-kit",
+    "https://github.com/zed-industries/xim-rs",
+    "https://github.com/smol-rs/async-task",
+]

@@ -6,7 +6,9 @@
 #   make check          quick type check
 #   make fmt            cargo fmt
 #   make clean          clean target
-#   make update-moon-ui update the local Cargo.lock to the dependency HEAD revisions
+#   make update-moon-ui refresh the MoonUI pin in the committed Cargo.lock
+#   make update-moonproto refresh the MoonProto pin (deliberate; its own commit)
+#   make update-all    move EVERY dependency, forks included — defeats the freeze
 #
 # Windows: the target is ALWAYS MSVC (x86_64-pc-windows-msvc), not GNU, as required by GPUI/DirectX/
 # chartdx. Run `make` from the "x64 Native Tools Command Prompt for VS 2022" (where vcvars is
@@ -41,10 +43,11 @@ else
   SIGN = @true
 endif
 
-.PHONY: run build release check fmt clean update-moon-ui update-forks codesign-setup help
+.PHONY: run build release check fmt clean update-moon-ui update-moonproto update-all update-forks codesign-setup help
 
 help:
-	@echo "make run | build | release | check | fmt | clean | codesign-setup | update-moon-ui"
+	@echo "make run | build | release | check | fmt | clean | codesign-setup"
+	@echo "deps: update-moon-ui (MoonUI pin) | update-moonproto (deliberate) | update-all (moves EVERYTHING)"
 	@echo "bin: $(BIN)"
 
 # macOS: create the self-signed code-signing certificate once (otherwise it will be created
@@ -57,6 +60,9 @@ codesign-setup:
 run: build
 	$(BIN)
 
+# `--locked` is deliberately absent from the build targets below: a sibling MoonUI checkout
+# patched in through .cargo/config.toml legitimately rewrites the lock, and a locked build would
+# refuse it. The lock is tracked, so an unintended re-resolution shows up in `git status` instead.
 build:
 	$(CARGO) build $(PKG) $(TARGET)
 	$(SIGN) "$(BIN)"
@@ -74,11 +80,23 @@ fmt:
 clean:
 	$(CARGO) clean
 
-# Cargo.lock is local and is not committed. A fresh checkout resolves the current MoonUI master.
-# In an existing working copy, this target updates the local lockfile to the dependency HEAD revisions.
+# Cargo.lock is COMMITTED, and third-party versions move only in a deliberate commit. This target
+# moves the three MoonUI crates and nothing else — the same refresh CI performs on every run.
 update-moon-ui:
-	$(CARGO) update
-	@echo ">> Локальный Cargo.lock обновлён. Теперь: make build"
+	$(CARGO) update -p moon-gpui -p moon-gpui-platform -p moon-ui
+	@echo ">> Cargo.lock обновлён (MoonUI). Это отслеживаемый файл: закоммитьте осознанно или git checkout -- Cargo.lock"
 
-# Backward-compatible alias for old local scripts.
-update-forks: update-moon-ui
+# MoonProto moves ONLY here, never automatically and never in CI. Commit the result on its own.
+update-moonproto:
+	$(CARGO) update -p moonproto
+	@echo ">> Cargo.lock обновлён (MoonProto). Закоммитьте отдельным коммитом"
+
+# Moves EVERY dependency including the pinned third-party forks — i.e. defeats the freeze this
+# repository relies on. Deliberate, occasional, and reviewed like any other dependency change.
+update-all:
+	$(CARGO) update
+	@echo ">> Обновлено ВСЁ, включая сторонние пины. Прочитайте diff Cargo.lock целиком"
+
+# Backward-compatible alias for old local scripts. It has always meant "move everything", and it
+# still does — which now also means it lifts the version freeze. Prefer naming `update-all`.
+update-forks: update-all

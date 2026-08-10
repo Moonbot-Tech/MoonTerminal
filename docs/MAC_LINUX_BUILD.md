@@ -14,15 +14,15 @@ gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moon
 moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 ```
 
-Dev-ветка намеренно использует rolling `branch = "master"` и ignored `Cargo.lock`: свежая сборка
-берёт актуальный MoonUI master. Это ускоряет совместную разработку терминала и компонентов. Для
+`Cargo.lock` коммитится: сторонние версии сдвигаются только осознанным коммитом. MoonUI при этом
+остаётся rolling — CI обновляет его пин на каждом прогоне, локально это `make update-moon-ui`. Для
 диагностики проверяй build stamp в логе:
 
 ```text
 build: moonterminal=<git-sha>[+dirty] moonui=<git-sha|local:git-sha>[+dirty]
 ```
 
-Строгий pinned build нужен только для release/stabilization, не для текущей dev-ветки.
+Сборка воспроизводима по сторонним зависимостям в любой момент; свежесть MoonUI — отдельный шаг.
 
 Локальная разработка через соседний checkout `MoonUI` делается только через ignored
 `.cargo/config.toml`:

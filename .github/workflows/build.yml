@@ -1,19 +1,35 @@
 name: build
 
-# Three jobs, two of which gate a merge:
+# Four jobs, three of which gate a merge:
 #   Windows .exe — the real release binary, uploaded as an artifact.
 #   Tests        — `cargo test --workspace`. Blocking: a red suite is a red PR.
+#   Audit        — cargo-deny over the committed lockfile. Blocking.
 #   macOS probe  — diagnostic only (`continue-on-error`). Compiles the chartdx Metal
 #                  backend on a native runner, which Windows cannot do at all: no
 #                  macOS SDK and no Apple linker. Read its log; it never blocks.
 #
-# The Rust toolchain is PINNED, not `@stable`. This repo does not commit Cargo.lock and
-# its own deps are branch refs, so CI already resolves more freely than any developer's
-# machine; taking the compiler from the same moving target as well means a green PR can
-# turn red overnight with no change to it. That is not theoretical: rustc 1.97.1 fails to
-# compile zune-jpeg 0.5.15 (a transitive dep via image/tiff), which went unnoticed only
-# because Swatinem/rust-cache kept restoring a pre-built copy — every job broke the moment
-# that cache key missed.
+# THE LOCKFILE CONTRACT, which the three compiling jobs implement in the same three steps.
+# `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. Each job
+# then, in this order and no other:
+#   1. verifies the committed lock still agrees with the manifests (`cargo fetch --locked`),
+#      BEFORE anything can rewrite it — afterwards `--locked` would only prove the lock agrees
+#      with itself;
+#   2. refreshes the three Moonbot-owned MoonUI crates, and only those, so MoonUI keeps rolling
+#      against its master with no human action. `moonproto` is deliberately never named here: it
+#      moves only when a human runs `cargo update -p moonproto` and commits the result;
+#   3. asserts that step 2 moved MoonUI and nothing else. Selective `cargo update` is conservative
+#      rather than surgical — cargo may change a selected package's transitive requirements — so
+#      without this a new MoonUI master could pull an uncommitted, unaudited crates.io version into
+#      the binary this run ships. That case is meant to be a red PR resolved by a deliberate lock
+#      commit, not a silent upgrade.
+# The audit job scans the COMMITTED lock, which after step 3 is the same third-party set the other
+# jobs compile.
+#
+# The Rust toolchain is PINNED, not `@stable`, for the same reason the lock now is: taking the
+# compiler from a moving target means a green PR can turn red overnight with no change to it. That
+# is not theoretical: rustc 1.97.1 fails to compile zune-jpeg 0.5.15 (a transitive dep via
+# image/tiff), which went unnoticed only because Swatinem/rust-cache kept restoring a pre-built
+# copy — every job broke the moment that cache key missed.
 #
 # Keep this equal to what developers run locally (`rustc --version`), and raise it as a
 # deliberate commit that can be reverted on its own when a new compiler breaks a dep.
@@ -23,11 +39,22 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # A freeze makes exactly one thing worse: an advisory can be published against a pinned version
+  # long after the last PR, and nothing would notice. This weekly run exists for the audit job
+  # alone — the three compiling jobs skip it, so it costs a couple of runner-minutes and writes
+  # no cache. Side effect worth knowing when you read a commit's checks: each cron run attaches
+  # three `Skipped` entries to main's HEAD, so a commit whose gates really did pass can later
+  # display them as skipped.
+  schedule:
+    - cron: "0 6 * * 1"
 
 # Cancel superseded runs for the same ref (e.g. new pushes to an open PR).
 # Each tag ("v*") has a unique ref, so release builds are never cancelled.
+# The event name is part of the group on purpose: the weekly audit-only run happens on
+# `refs/heads/main`, so without it the cron and an ordinary push to main would share a group and
+# `cancel-in-progress` would have them kill each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -43,6 +70,8 @@ jobs:
   windows:
     name: Windows .exe (x86_64-msvc)
     runs-on: windows-latest
+    # The weekly cron is for the audit job only; compiling on a schedule buys nothing.
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0
@@ -51,6 +80,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The lockfile contract — see the header. Placed after the cache restore because
+      # Swatinem/rust-cache keys partly on lockfile content, and it must key on the COMMITTED one.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
+      - name: Assert the refresh moved MoonUI and nothing else
+        shell: bash
+        run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Build release binary
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@v7
@@ -62,6 +100,7 @@ jobs:
   tests:
     name: Tests (x86_64-msvc)
     runs-on: windows-latest
+    if: github.event_name != 'schedule'
     # A gate, not a probe: no `continue-on-error`, so a red suite is a red PR.
     #
     # Its own job rather than a step in the .exe job, because that one builds
@@ -79,12 +118,21 @@ jobs:
       # `--no-fail-fast`: without it the first red binary hides the other four,
       # costing a push-and-wait cycle per breakage. Default features only — that
       # is the set that ships; `debug-tools` is opt-in and gated separately.
+      # The lockfile contract — see the header.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
+      - name: Assert the refresh moved MoonUI and nothing else
+        shell: bash
+        run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Run test suite
         run: cargo test --workspace --no-fail-fast --target x86_64-pc-windows-msvc
 
   macos-probe:
     name: macOS probe (aarch64-darwin) — diagnostic
     runs-on: macos-14
+    if: github.event_name != 'schedule'
     # Probe: Metal backend compilation errors are expected. Do not fail the entire pipeline —
     # read the job log to get a concrete list of what needs fixing.
     continue-on-error: true
@@ -96,5 +144,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The lockfile contract — see the header. This job never blocks, so a failure here is a
+      # diagnostic like the rest of it; the two gating jobs run the same three steps.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
+      - name: Assert the refresh moved MoonUI and nothing else
+        shell: bash
+        run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Probe-compile chartdx Metal backend
         run: cargo build -p moon-ui-gpui --target aarch64-apple-darwin
+
+  audit:
+    name: Dependency audit (cargo-deny)
+    runs-on: ubuntu-latest
+    # A gate, not a probe: an advisory against a frozen version, or a git source nobody approved,
+    # is exactly what the freeze exists to surface.
+    #
+    # Deliberately NOT cached. `Swatinem/rust-cache` would make this a fourth writer competing for
+    # the repository's 10 GB Actions quota — which has been full once — and evict the live gate
+    # caches by least-recent-use. The action ships a prebuilt binary and compiles nothing, so
+    # there is nothing here worth caching anyway.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # `licenses` is deliberately not run: this gate exists for supply-chain safety, and a
+          # licence allow-list over a 920-package graph is a separate project that would redden
+          # this job for reasons that have nothing to do with a compromised release.
+          command: check advisories bans sources
