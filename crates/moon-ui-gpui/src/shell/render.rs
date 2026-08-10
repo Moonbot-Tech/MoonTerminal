@@ -119,6 +119,12 @@ impl Render for Shell {
             .core_settings_open
             .then(|| self.core_settings_popup_content(p, cx));
 
+        // Same rule for the quiet-mode popup: build its body only while it is up, since
+        // `MoonPopover` takes content eagerly and this runs on every header repaint.
+        let quiet_settings_content = self
+            .quiet_settings_open
+            .then(|| self.quiet_settings_content(p, cx));
+
         // Read the persisted header-ticker selection or its cached default without mutating Backend.
         let ticker_sel = self.backend.read(cx).header_ticker();
         let (ticker_overlay, ticker_dismiss) = self.ticker_popup_layers(chrome_width, p, cx);
@@ -163,6 +169,8 @@ impl Render for Shell {
                 self.header_core_selector_open,
                 self.core_settings_open,
                 core_settings_content,
+                self.quiet_settings_open,
+                quiet_settings_content,
                 chrome_width,
                 p,
                 cx,

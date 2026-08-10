@@ -42,6 +42,10 @@ impl Backend {
             // None means SoundKind=NONE and remains silent, so find_map continues to the next event.
             // Only an alert firing without a strategy sound receives the default. Traverse newest to
             // oldest and select one sound per core per pass to limit bursts.
+            // Whether quiet mode is what took this batch's sound away, as opposed to the batch
+            // simply holding nothing that asked for one. Only the first can be explained by a
+            // setting, so the diagnostic must tell them apart rather than read the global flag.
+            let mut muted_by_quiet = false;
             let sound = data
                 .detects
                 .iter()
@@ -50,6 +54,14 @@ impl Backend {
                 .find_map(|d| {
                     // Accept only alert firings or ordinary detects with SoundAlert enabled.
                     if !d.is_alert && !d.sound_alert {
+                        return None;
+                    }
+                    // Quiet mode: skip the events it silences rather than returning early, so a
+                    // muted detect cannot consume the pass that a bypassed one (an AddToChart
+                    // number the operator wants to be woken by) was entitled to. The cursors below
+                    // still advance to `cur_max`, so waking up does not spill the night's backlog.
+                    if !self.quiet_allows_detect(d.is_alert, d.add_to_chart) {
+                        muted_by_quiet = true;
                         return None;
                     }
                     match &d.sound_name {
@@ -68,8 +80,15 @@ impl Backend {
                 ));
                 crate::media::sound::play(&name);
             } else {
+                // Quiet mode is named explicitly: without it, a silenced night reads as "no
+                // detect asked for a sound", which is a different bug entirely.
+                let reason = if muted_by_quiet {
+                    "quiet mode, no bypass matched"
+                } else {
+                    "среди них нет is_alert/SoundAlert"
+                };
                 moon_core::detect_diag::line(&format!(
-                    "[sound] core={} silent: {} new detects, среди них нет is_alert/SoundAlert",
+                    "[sound] core={} silent: {} new detects, {reason}",
                     moon_core::feed::core_label(core),
                     cur_max.saturating_sub(last)
                 ));

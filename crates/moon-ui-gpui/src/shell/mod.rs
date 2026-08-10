@@ -11,6 +11,8 @@
 //! - [`metrics`] owns toolbar trading-metric popups and commits TP/SL/leverage edits;
 //! - [`docks`] detaches, restores, and repins ordinary panels and persists OS-window geometry;
 //! - [`status_bar`] renders connection, license, and diagnostic status;
+//! - [`quiet`] owns the header quiet-mode ("sleep") popup state and its editors, with
+//!   [`quiet_popup`] rendering the content;
 //! - [`ticker`] owns the header ticker-source picker.
 //! - [`workspace`] owns independent mode layouts, the all-core rail, and chart reveal.
 
@@ -21,6 +23,8 @@ mod docks;
 mod header;
 mod init;
 mod metrics;
+mod quiet;
+pub(crate) mod quiet_popup;
 mod render;
 mod status_bar;
 mod ticker;
@@ -177,6 +181,14 @@ pub(crate) struct Shell {
     /// Whether the core-settings coin blacklist uses its fixed-height multiline editor instead of
     /// the collapsed single-line field.
     core_settings_bl_expanded: bool,
+    /// Whether the header quiet-mode ("sleep") settings popover is open.
+    quiet_settings_open: bool,
+    /// `HH:MM` editor for the quiet-mode schedule start; seeded on open, committed on edit.
+    quiet_from_input: Entity<MoonInputState>,
+    /// `HH:MM` editor for the quiet-mode schedule end.
+    quiet_to_input: Entity<MoonInputState>,
+    /// `AddToChart` bypass-number editor (`3, 5`) for quiet mode.
+    quiet_charts_input: Entity<MoonInputState>,
     /// Whether the header price-ticker source picker is open.
     ticker_popup_open: bool,
     /// Whether the pointer has entered the ticker popup, enabling dismissal when it later leaves.

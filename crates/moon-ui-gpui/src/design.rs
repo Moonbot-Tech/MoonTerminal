@@ -400,6 +400,13 @@ pub fn mono_body_text_width(cx: &App, text: &str, weight: f32) -> f32 {
     ui_text_width(cx, text, base_text(cx), weight, true)
 }
 
+/// Width of mono text drawn at the terminal's caption size — the [`t_caption`] partner of
+/// [`mono_body_text_width`], and it exists for the same reason: `t_caption(cx)` is already scaled,
+/// so passing it to [`ui_text_width`] would scale it twice.
+pub fn mono_caption_text_width(cx: &App, text: &str, weight: f32) -> f32 {
+    ui_text_width(cx, text, base_text(cx) - 2.0, weight, true)
+}
+
 /// Cache key for one glyph advance under an exact resolved font and requested weight.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct MonoGlyphKey {

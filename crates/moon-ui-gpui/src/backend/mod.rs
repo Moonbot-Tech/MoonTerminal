@@ -5,6 +5,7 @@
 pub(crate) mod core_warn;
 mod detect_sound;
 mod figures;
+mod quiet;
 pub(crate) mod server_chart;
 #[cfg(test)]
 mod tests;
@@ -2330,7 +2331,14 @@ impl Backend {
         let result = self.warn.tick(&samples, now_ms);
         // Play each newly-opened axis's alert sound once (independent of chart visibility). The axis
         // is necessarily enabled — a disabled axis opens nothing.
+        //
+        // Quiet mode silences the SOUND only, and only for the axes it is not told to let through:
+        // the episode above is already recorded, so the warning list, the badges and the charts
+        // still show every night the operator slept through.
         for axis in &result.opened {
+            if !self.quiet_allows_warn(*axis) {
+                continue;
+            }
             if let Some(name) = self.warn_sound(*axis) {
                 crate::media::sound::play(&name);
             }

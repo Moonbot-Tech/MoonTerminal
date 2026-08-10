@@ -274,6 +274,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         last_detect_seq: std::collections::HashMap::new(),
         last_detect_rev: std::collections::HashMap::new(),
         default_alert_sound: "ding1".to_string(),
+        // Seeded right after construction from the persisted schedule, once the clock zone is
+        // settled; see `refresh_quiet_state` below.
+        quiet_sleeping: false,
+        quiet_last_min: 0,
         config_dirty: false,
         quitting: false,
     });
@@ -281,6 +285,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // Settle the header clock fields once before any window reads them: detect an untouched
     // profile's OS zone, migrate an old nonzero offset, or refresh a saved zone's offset mirror.
     crate::chrome::clock::reconcile_clock_zone(&backend, cx);
+    // Quiet mode reads the wall clock in that zone, so it is seeded only after the zone is settled:
+    // a terminal started at 3 a.m. inside a sleep window must come up already silent, before the
+    // first detect arrives.
+    backend.update(cx, |b, _| b.refresh_quiet_state());
 
     // Register panel factories used to restore dock layouts (PanelRegistry is global).
     dock_persist::register_panels(cx, backend.clone(), epoch);
@@ -526,6 +534,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     b.sync_open_markets_if_due();
                     b.sync_group_manual_settings();
                     b.snap = b.metrics.sample(Instant::now());
+                    // Before the warning engine: a schedule boundary crossed on this very tick must
+                    // already be in force for the alerts this tick opens.
+                    b.tick_quiet(cx);
                     b.tick_core_warnings(moon_chart::paint::now_unix_ms() as i64);
                     crate::firetest::tick_backend(b, cx);
 
