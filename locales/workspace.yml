@@ -17,10 +17,12 @@ workspace.summary:
   ru: "Ядер: %{configured} · готово: %{ready} · проблем: %{problem}"
   en: "Cores: %{configured} · ready: %{ready} · problems: %{problem}"
   es: "Núcleos: %{configured} · listos: %{ready} · problemas: %{problem}"
+# The rail's first row is a MODE, not a core: it aggregates every core at once, while every row
+# below it selects exactly one. The label says "full" so the two readings cannot be confused.
 workspace.overview:
-  ru: "Обзор"
-  en: "Overview"
-  es: "Resumen"
+  ru: "Полная сводка"
+  en: "Full summary"
+  es: "Resumen completo"
 workspace.overview_tip:
   ru: "Все доступные ядра группы %{group}"
   en: "All available cores in group %{group}"

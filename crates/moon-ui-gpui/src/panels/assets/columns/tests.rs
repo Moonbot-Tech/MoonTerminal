@@ -1,7 +1,7 @@
 // Explicit imports, NOT `use super::*`: the parent re-exports `gpui::*`, which carries its own
 // `test` and shadows the built-in attribute — `#[test]` then expands recursively.
 use crate::panels::assets::collect::AssetEntry;
-use crate::panels::assets::columns::{AssetCol, pnl_display};
+use crate::panels::assets::columns::{AssetCol, order_rows, pnl_display};
 use moon_core::feed::AssetRow;
 
 /// One asset row carrying only what the PnL column reads.
@@ -34,16 +34,19 @@ fn entry(coin: &str, pnl: f64, live: bool) -> AssetEntry {
     }
 }
 
-/// The PnL column must not rank rows by a number it refuses to print.
+/// The PnL column must not rank rows by a number it refuses to print, under EITHER sort arrow.
 ///
 /// `AssetRow::pnl_usdt` doubles as the server's accumulated profit whenever the feed could not
 /// derive a live figure (`pnl_live == false`), and the cell shows a dash for exactly those rows.
-/// The plausible edit is a comparator that reads `row.pnl_usdt` directly again: it compiles, sorts,
-/// and silently orders dash rows among the real ones by an invisible value.
+/// The plausible edit this guards against is applying direction by reversing the WHOLE comparison
+/// (i.e. dropping `order_rows`'s pin and going back to `compare(...).reverse()`): the dash row's
+/// "sorts last" rule would then reverse right along with everything else and land it FIRST under
+/// the descending arrow — dash rows floating to the top of a PnL-descending table.
 #[test]
 fn the_pnl_sort_pushes_rows_without_a_live_figure_last() {
     // The dash row carries the most NEGATIVE number, so a comparator reading the raw field would
-    // lead with it ascending and trail with it descending — the opposite of both assertions below.
+    // lead with it ascending and trail with it descending — never keep it pinned last both ways
+    // like the assertions below require.
     let rows = [
         entry("AAA", -5.0, true),
         entry("BBB", -900.0, false),
@@ -52,14 +55,56 @@ fn the_pnl_sort_pushes_rows_without_a_live_figure_last() {
     assert_eq!(pnl_display(&rows[1]), None);
 
     let mut ascending = rows.clone();
-    ascending.sort_by(|a, b| AssetCol::Pnl.compare(a, b));
+    ascending.sort_by(|a, b| order_rows(AssetCol::Pnl, true, a, b));
     let order: Vec<&str> = ascending.iter().map(|e| e.row.coin.as_str()).collect();
-    assert_eq!(order, vec!["AAA", "CCC", "BBB"]);
+    assert_eq!(
+        order,
+        vec!["AAA", "CCC", "BBB"],
+        "ascending: dash row must sort last"
+    );
 
     let mut descending = rows.clone();
-    descending.sort_by(|a, b| AssetCol::Pnl.compare(a, b).reverse());
+    descending.sort_by(|a, b| order_rows(AssetCol::Pnl, false, a, b));
     let order: Vec<&str> = descending.iter().map(|e| e.row.coin.as_str()).collect();
-    assert_eq!(order, vec!["BBB", "CCC", "AAA"]);
+    assert_eq!(
+        order,
+        vec!["CCC", "AAA", "BBB"],
+        "descending: dash row must STILL sort last"
+    );
+}
+
+/// The PnL pin is deliberately scoped to PnL alone: a non-finite `display_value` in the Value
+/// column must NOT be pinned last by [`order_rows`] the way a PnL dash row is — it keeps the
+/// direction-DEPENDENT ordering `compare` + reverse always gave it.
+///
+/// Mutation: broadening `AssetCol::missing_value` to also treat a non-finite Value as "nothing to
+/// show" (an easy over-generalization once PnL's pin exists) would pin the broken-price row last
+/// under BOTH arrows instead of flipping which end it lands on.
+#[test]
+fn value_non_finite_rows_keep_direction_dependent_ordering_not_pnls_pin() {
+    let mut priced = entry("AAA", 0.0, true);
+    priced.display_value = 10.0;
+    let mut broken = entry("BBB", 0.0, true);
+    broken.display_value = f64::NAN;
+    let rows = [priced, broken];
+
+    let mut ascending = rows.clone();
+    ascending.sort_by(|a, b| order_rows(AssetCol::Value, true, a, b));
+    let order: Vec<&str> = ascending.iter().map(|e| e.row.coin.as_str()).collect();
+    assert_eq!(
+        order,
+        vec!["AAA", "BBB"],
+        "ascending: broken price sorts last"
+    );
+
+    let mut descending = rows.clone();
+    descending.sort_by(|a, b| order_rows(AssetCol::Value, false, a, b));
+    let order: Vec<&str> = descending.iter().map(|e| e.row.coin.as_str()).collect();
+    assert_eq!(
+        order,
+        vec!["BBB", "AAA"],
+        "descending: broken price sorts FIRST, unlike a pinned PnL dash row"
+    );
 }
 
 /// A non-finite PnL is not a displayable figure either, whatever the feed's flag says.

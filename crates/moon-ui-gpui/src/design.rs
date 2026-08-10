@@ -199,14 +199,22 @@ pub fn moon_alpha(hex: u32, alpha: f32) -> Hsla {
 ///
 /// The light theme uses its darker text token for legibility; the dark theme uses its base green.
 pub fn positive_color(p: MoonPalette) -> u32 {
-    if p.is_light() { p.green_text } else { p.green }
+    if p.is_light() {
+        p.green_text
+    } else {
+        p.green
+    }
 }
 
 /// Return the theme-correct danger colour.
 ///
 /// The light theme uses its darker text token for legibility; the dark theme uses its base red.
 pub fn danger_color(p: MoonPalette) -> u32 {
-    if p.is_light() { p.red_text } else { p.red }
+    if p.is_light() {
+        p.red_text
+    } else {
+        p.red
+    }
 }
 
 /// Convert GPUI's `0xRRGGBB` representation to palette/config `[u8; 3]` RGB bytes.
@@ -349,6 +357,23 @@ pub fn t_caption(cx: &App) -> Pixels {
 ///     default +2 delta makes it approximately 13px.
 pub fn t_body(cx: &App) -> Pixels {
     text_px(cx, base_text(cx))
+}
+
+/// Return the one-step-up body size for a row that must read above its neighbours in place.
+///
+/// Sits between [`t_body`] and [`t_title`] for the case where a row is emphasized INSIDE a list of
+/// fixed-height rows: `t_title` is three steps up, and at the top of the Font slider its line box
+/// outgrows a row height that does not track the font, so the text clips. One step clears the
+/// neighbours while still fitting.
+///
+/// Args:
+///     cx: Application context used to read active theme tokens.
+///
+/// Returns:
+///     Approximately 12px at the default theme base with zero Font-slider delta. The application's
+///     default +2 delta makes it approximately 14px.
+pub fn t_body_lg(cx: &App) -> Pixels {
+    text_px(cx, base_text(cx) + 1.0)
 }
 
 /// Return the title size for raw GPUI headings and large accents.

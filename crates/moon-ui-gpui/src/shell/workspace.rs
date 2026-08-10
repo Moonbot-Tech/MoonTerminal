@@ -428,8 +428,19 @@ impl Shell {
     ///     cx: Shell context used to read Backend and update the resize entity.
     ///
     /// Returns:
-    ///     Nothing; an equal live width and an as-yet-unmeasured first render are both no-ops.
+    ///     Nothing; an equal live width, an in-flight drag, and an as-yet-unmeasured first render
+    ///     are all no-ops.
     pub(super) fn sync_auto_rail_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A drag owns the width until the user lets go. This runs from the Backend observer, which
+        // fires on every 10 Hz coordination tick, while `on_resize` writes the new width only on
+        // mouse-up — so mid-drag the stored preference is still the OLD width and reconciling to it
+        // would yank the rail back. Worse, `resize_panel_silently` clears the in-flight drag as it
+        // applies, so the pointer would be left dragging nothing and mouse-up would never persist
+        // the width. The reconcile is not skipped, only deferred: mouse-up publishes a revision
+        // that brings this straight back with the width the user actually chose.
+        if self.workspace_resize_state.read(cx).is_resizing() {
+            return;
+        }
         let preferred = self.backend.read(cx).auto_workspace_rail_width();
         self.applied_auto_rail_width = preferred;
         let scale = design::ui_value(cx, 1.0).max(0.01);
@@ -758,9 +769,15 @@ impl Shell {
             .h_full()
             .w_full()
             .min_h_0()
+            // The rail reads as its own recessed surface rather than a strip of the window, the way
+            // a desktop navigation pane does. `gutter` is the recessed side-strip token and is the
+            // one that steps AWAY from the chrome and toolbar above (both `shell_high`) in the same
+            // direction in either theme, so the separation survives a runtime theme switch. The
+            // divider uses the stronger `border_hover` token, matching the existing chrome-boundary
+            // convention without turning the rail into a framed card.
             .border_r_1()
-            .border_color(rgb(p.border))
-            .bg(rgb(p.shell_high))
+            .border_color(rgb(p.border_hover))
+            .bg(rgb(p.gutter))
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -847,6 +864,16 @@ fn render_rail_item(
             let click_backend = backend.clone();
             let click_group = current_group.clone();
             rail_row_base("workspace-overview", selected, true, 9.0, 7.0, p, cx)
+                // This row is a MODE, not a core: it aggregates every core at once, while every
+                // row below it selects exactly one. Weight, a step up in size and a rule beneath
+                // separate it from the list it sits on top of, without giving it a surface of its
+                // own — the rail already reads as one recessed pane. ONE step up, not `t_title`:
+                // the virtual list's row height is fixed and does not track the Font slider, so a
+                // three-step jump clips its own text at the top of that slider's range.
+                .text_size(design::t_body_lg(cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .border_b_1()
+                .border_color(rgb(p.border_soft))
                 .child(design::status_dot_sized(p.accent, 7.0, cx))
                 .child(div().min_w_0().truncate().child(visible))
                 .tooltip(move |_window, cx| {

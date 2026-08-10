@@ -515,17 +515,58 @@ fn docked_news_is_taken_before_auto_and_the_same_retained_identity_restores_clas
     assert!(take < apply_auto && apply_auto < retain && retain < restore && restore < clear);
 }
 
+/// Strip `//` line comments before a source-slicing assertion runs, so prose that merely NAMES a
+/// call under discussion (e.g. an explanatory comment quoting `resize_panel_silently`) can't
+/// satisfy an assertion whose actual code was deleted or swapped.
+fn code_only(body: &str) -> String {
+    body.lines()
+        .map(|line| match line.find("//") {
+            Some(at) => &line[..at],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Replacing `resize_panel_silently` in `shell/workspace.rs:sync_auto_rail_width` with the emitting
 /// resize API must fail: a narrow window would publish its fitted width as a new global preference
 /// and shrink every other Auto workspace.
 #[test]
 fn window_local_rail_fitting_does_not_emit_a_preference_resize() {
     let source = include_str!("../workspace.rs");
-    let body = source
-        .split("pub(super) fn sync_auto_rail_width")
-        .nth(1)
-        .and_then(|tail| tail.split("pub(super) fn apply_workspace_mode").next())
-        .expect("Auto rail synchronization must retain a bounded implementation");
+    let body = code_only(
+        source
+            .split("pub(super) fn sync_auto_rail_width")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(super) fn apply_workspace_mode").next())
+            .expect("Auto rail synchronization must retain a bounded implementation"),
+    );
     assert!(body.contains("resize_panel_silently"));
     assert!(!body.contains("state.resize_panel("));
+}
+
+/// Deleting the `is_resizing()` early return in `shell/workspace.rs:sync_auto_rail_width`, or
+/// moving it below the stored-width read, must fail: mid-drag reconciliation would again yank the
+/// rail back to the stale preference and kill the in-flight drag via `resize_panel_silently`,
+/// leaving the pointer dragging nothing and mouse-up never persisting the width.
+#[test]
+fn auto_rail_sync_defers_to_an_in_flight_drag_before_reading_the_stored_width() {
+    let source = include_str!("../workspace.rs");
+    let body = code_only(
+        source
+            .split("pub(super) fn sync_auto_rail_width")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(super) fn apply_workspace_mode").next())
+            .expect("Auto rail synchronization must retain a bounded implementation"),
+    );
+    let guard = body
+        .find("self.workspace_resize_state.read(cx).is_resizing()")
+        .expect("mid-drag width reconciliation must be guarded before it runs");
+    let stored_width_read = body
+        .find("self.backend.read(cx).auto_workspace_rail_width()")
+        .expect("the stored rail-width preference must still be read once the guard clears");
+    assert!(
+        guard < stored_width_read,
+        "the in-flight-drag guard must precede the stored-width read, not follow it"
+    );
 }

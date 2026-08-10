@@ -91,10 +91,30 @@ impl AssetCol {
             return MoonDataTableColumn::new(self.key(), String::new(), self.width()).no_grow();
         }
         let col = MoonDataTableColumn::new(self.key(), self.title(), self.width()).sortable(true);
-        if self.numeric() { col.right() } else { col }
+        if self.numeric() {
+            col.right()
+        } else {
+            col
+        }
     }
 
-    /// Order two rows by this column's own quantity.
+    /// Whether this column's cell shows a dash for the row instead of a number to order by.
+    ///
+    /// PnL only, deliberately. A spot balance has no unrealized PnL, so its dash means "not
+    /// applicable" and belongs below comparable positions under either arrow. Value also prints a
+    /// dash for a broken price, while Qty prints its non-finite number outright; those columns keep
+    /// their previous direction-dependent `cmp_f64` ordering instead of inheriting PnL's domain rule.
+    ///
+    /// Args:
+    ///     e: Asset row whose cell is being classified.
+    ///
+    /// Returns:
+    ///     `true` only when this is the PnL column and the row has no displayable live PnL.
+    fn missing_value(self, e: &AssetEntry) -> bool {
+        matches!(self, AssetCol::Pnl) && pnl_display(e).is_none()
+    }
+
+    /// Compare two rows by this column's displayed value, before applying sort direction.
     ///
     /// Numeric columns compare the SAME number their cell prints (`display_value` for Value, so the
     /// sorted order matches the column and the footer's Σ), never the raw `value` behind it. A
@@ -102,6 +122,17 @@ impl AssetCol {
     /// `partial_cmp` would otherwise leave as `Equal` and scatter broken rows through the table.
     /// Ties break by core and coin so equal values (a table full of dashes, for example) keep a
     /// stable order across rebuilds instead of shuffling every second.
+    ///
+    /// [`order_rows`] intercepts a PnL row with nothing to display before comparing it with an
+    /// ordinary row, so the missing-value rule survives the descending reverse. A direct caller can
+    /// still compare such rows here and receives the historical ascending-last ordering.
+    ///
+    /// Args:
+    ///     a: Left row.
+    ///     b: Right row.
+    ///
+    /// Returns:
+    ///     Ascending comparison with stable core-and-coin tie-breaking.
     pub(super) fn compare(self, a: &AssetEntry, b: &AssetEntry) -> std::cmp::Ordering {
         let primary = match self {
             AssetCol::Core => a.core_name.cmp(&b.core_name),
@@ -110,8 +141,6 @@ impl AssetCol {
             AssetCol::Coin => cmp_coin(a, b),
             AssetCol::Qty => cmp_f64(row_qty(a), row_qty(b)),
             AssetCol::Value => cmp_f64(a.display_value, b.display_value),
-            // Rows whose cell shows a dash carry no comparable number, so they sort last in
-            // ascending order — the same rule `cmp_f64` applies to a non-finite value.
             AssetCol::Pnl => match (pnl_display(a), pnl_display(b)) {
                 (Some(x), Some(y)) => cmp_f64(x, y),
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -140,6 +169,49 @@ impl AssetCol {
 /// PnL, and must not order rows whose cell shows a dash either.
 pub(super) fn pnl_display(e: &AssetEntry) -> Option<f64> {
     (e.row.pnl_live && e.row.pnl_usdt.is_finite()).then_some(e.row.pnl_usdt)
+}
+
+/// Order two rows for the header sort, pinning this column's designated missing rows last.
+///
+/// The pin is applied here rather than inside [`AssetCol::compare`] because direction is applied by
+/// reversing the comparison: a "sorts last" rule expressed as an `Ordering` reverses along with
+/// everything else and lands those rows FIRST under the descending arrow, which is what the user
+/// sees as empty PnL cells at the top. Outside the reverse it holds under both arrows.
+///
+/// Two pinned rows keep a direction-INDEPENDENT tiebreak, so the block of dashes at the bottom does
+/// not reshuffle when the arrow flips. Two ordinary rows keep the existing behaviour exactly: the
+/// whole ordering, primary key and core/coin tiebreak alike, reverses under `!ascending`.
+///
+/// Args:
+///     col: Active sort column.
+///     ascending: Whether ordinary comparisons retain ascending direction.
+///     a: Left row.
+///     b: Right row.
+///
+/// Returns:
+///     Comparison that keeps designated missing rows last under either direction.
+pub(super) fn order_rows(
+    col: AssetCol,
+    ascending: bool,
+    a: &AssetEntry,
+    b: &AssetEntry,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (col.missing_value(a), col.missing_value(b)) {
+        (false, true) => Ordering::Less,
+        (true, false) => Ordering::Greater,
+        // Both pinned: `compare` remains unreversed, so its equal PnL primary falls through to the
+        // same core-then-coin tiebreak under either arrow.
+        (true, true) => col.compare(a, b),
+        (false, false) => {
+            let ordering = col.compare(a, b);
+            if ascending {
+                ordering
+            } else {
+                ordering.reverse()
+            }
+        }
+    }
 }
 
 /// Compare two coin tickers case-insensitively, falling back to the raw bytes for a stable order.
@@ -310,14 +382,7 @@ impl AssetsView {
         let Some((col, ascending)) = self.sort else {
             return;
         };
-        rows.sort_by(|a, b| {
-            let ordering = col.compare(a, b);
-            if ascending {
-                ordering
-            } else {
-                ordering.reverse()
-            }
-        });
+        rows.sort_by(|a, b| order_rows(col, ascending, a, b));
     }
 
     /// Build the field-selector menu: one checkbox item per column plus All.
