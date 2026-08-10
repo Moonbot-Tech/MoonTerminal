@@ -6,6 +6,8 @@
 //! is independent of the number of strategies; row names are lowered only while search is active.
 
 use moon_core::feed::StrategyRow;
+use moon_core::session::CoreId;
+use std::collections::HashMap;
 
 /// Editable strategy-filter state retained by the Strategies window.
 pub struct StrategyFilter {
@@ -15,6 +17,8 @@ pub struct StrategyFilter {
     pub kind: Option<u8>,
     /// Direction filter: `None` for both, `Some(true)` for short, and `Some(false)` for long.
     pub dir: Option<bool>,
+    /// Reported exchange name, or `None` for every exchange.
+    pub exchange: Option<String>,
     /// Show only rows whose `checked` checkbox state is true; enabled by default.
     pub only_active: bool,
 }
@@ -25,6 +29,7 @@ impl Default for StrategyFilter {
             search: String::new(),
             kind: None,
             dir: None,
+            exchange: None,
             only_active: true,
         }
     }
@@ -37,6 +42,7 @@ impl StrategyFilter {
         PreparedFilter {
             kind: self.kind,
             dir: self.dir,
+            exchange: self.exchange.clone(),
             only_active: self.only_active,
             query: (!query.is_empty()).then(|| query.to_lowercase()),
         }
@@ -54,6 +60,7 @@ impl StrategyFilter {
 pub struct PreparedFilter {
     kind: Option<u8>,
     dir: Option<bool>,
+    exchange: Option<String>,
     only_active: bool,
     /// Trimmed and lowercased search text, or `None` when the search is empty.
     query: Option<String>,
@@ -76,6 +83,13 @@ impl PreparedFilter {
     pub fn counts(&self, row: &StrategyRow) -> bool {
         self.kind.is_none_or(|k| row.kind_ordinal == k)
             && self.dir.is_none_or(|s| row.is_short == s)
+    }
+
+    /// Return whether the core belongs to the selected exchange.
+    pub fn matches_exchange(&self, core: CoreId, exchange_names: &HashMap<CoreId, String>) -> bool {
+        self.exchange
+            .as_ref()
+            .is_none_or(|wanted| exchange_names.get(&core).is_some_and(|name| name == wanted))
     }
 
     /// Return row visibility after applying name, kind, direction, and checked-state filters.

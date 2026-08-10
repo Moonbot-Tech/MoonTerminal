@@ -6,7 +6,7 @@
 
 use moon_core::feed::StrategyRow;
 
-use super::{FolderCounts, visible_strategy_keys};
+use super::{visible_strategy_keys, FolderCounts};
 use crate::strategies::filter::{PreparedFilter, StrategyFilter};
 use crate::strategies::tree::ops::path_segments;
 
@@ -110,6 +110,7 @@ fn filter(search: &str, kind: Option<u8>, dir: Option<bool>, only_active: bool) 
         search: search.to_string(),
         kind,
         dir,
+        exchange: None,
         only_active,
     }
     .prepare()

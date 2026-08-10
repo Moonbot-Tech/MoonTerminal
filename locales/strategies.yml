@@ -18,6 +18,10 @@ strat.all_dirs:
   ru: "все"
   en: "all"
   es: "todos"
+strat.all_exchanges:
+  ru: "все биржи"
+  en: "all exchanges"
+  es: "todas las bolsas"
 strat.clear:
   ru: "Очистить"
   en: "Clear"

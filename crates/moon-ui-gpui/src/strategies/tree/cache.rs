@@ -18,11 +18,12 @@
 //! sampled across the call site.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use gpui::SharedString;
-use moon_core::session::CoreStore;
+use moon_core::session::{CoreId, CoreStore};
 
 use super::super::StrategiesView;
 use super::moon::NodeData;
@@ -106,12 +107,14 @@ pub(crate) fn data_sig(
     view: &StrategiesView,
     store: &CoreStore,
     cores: &crate::core_order::OrderedCores,
+    exchange_names: &HashMap<CoreId, String>,
 ) -> TreeSig {
     let mut h = DefaultHasher::new();
 
     for (core_id, core_name) in cores.iter() {
         core_id.hash(&mut h);
         core_name.hash(&mut h);
+        exchange_names.get(core_id).hash(&mut h);
         let Some(cd) = store.core(*core_id) else {
             0u64.hash(&mut h);
             continue;
@@ -125,6 +128,7 @@ pub(crate) fn data_sig(
     view.filter.search.hash(&mut h);
     view.filter.kind.hash(&mut h);
     view.filter.dir.hash(&mut h);
+    view.filter.exchange.hash(&mut h);
     view.filter.only_active.hash(&mut h);
 
     unordered(view.expanded_cores.iter()).hash(&mut h);

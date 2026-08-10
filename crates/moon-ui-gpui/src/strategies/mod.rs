@@ -178,9 +178,12 @@ impl Render for StrategiesView {
         let goto = direct.or(queued);
 
         // Root nodes are connected cores in canonical order.
-        let cores = {
+        let (cores, exchange_names) = {
             let b = self.backend.read(cx);
-            visible_strategy_cores(self, b)
+            (
+                visible_strategy_cores(self, b),
+                b.session.market_source().core_exchange_names(),
+            )
         };
 
         // Build the owned MoonTree adapter without leaking a store borrow, then synchronize state.
@@ -191,7 +194,7 @@ impl Render for StrategiesView {
         let tree_timer = crate::diag::timer();
         let sig = {
             let store = self.backend.read(cx).session.store();
-            tree::cache::data_sig(self, store, &cores)
+            tree::cache::data_sig(self, store, &cores, &exchange_names)
         };
         let cached = self.tree_cache.as_ref().and_then(|c| c.get(sig));
         let node_data = match cached {
@@ -214,7 +217,7 @@ impl Render for StrategiesView {
                 }
                 let build = {
                     let store = self.backend.read(cx).session.store();
-                    tree::moon::build(self, store, &cores)
+                    tree::moon::build(self, store, &cores, &exchange_names)
                 };
                 crate::diag::bump_by(&crate::diag::STRAT_TREE_NODES, build.node_data.len() as u64);
                 let searching = build.searching;
@@ -265,7 +268,7 @@ impl Render for StrategiesView {
         let (tree, sections, params_model) = {
             let store = self.backend.read(cx).session.store();
             let t = crate::diag::timer();
-            let tree = self.tree_panel(store, &cores, node_data, cx);
+            let tree = self.tree_panel(store, &cores, &exchange_names, node_data, cx);
             crate::diag::record_us(&crate::diag::STRAT_TREEPANE_US, t);
             // Both panels read the same dependency values; build them once. The computed halves are
             // timed apart from the element trees because only they could be cached the way the tree

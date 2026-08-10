@@ -28,6 +28,7 @@ fn filter(search: &str, kind: Option<u8>, dir: Option<bool>, only_active: bool) 
         search: search.to_string(),
         kind,
         dir,
+        exchange: None,
         only_active,
     }
 }

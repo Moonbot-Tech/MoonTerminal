@@ -20,6 +20,7 @@ impl StrategiesView {
         &self,
         store: &CoreStore,
         cores: &crate::core_order::OrderedCores,
+        exchange_names: &std::collections::HashMap<CoreId, String>,
         node_data: std::rc::Rc<std::collections::HashMap<SharedString, moon::NodeData>>,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -43,6 +44,12 @@ impl StrategiesView {
             Some(true) => "SHORT".to_string(),
             Some(false) => "LONG".to_string(),
         };
+        let exchange_text = self
+            .filter
+            .exchange
+            .as_deref()
+            .map(crate::controls::exchange_display_name)
+            .unwrap_or_else(|| t!("strat.all_exchanges").to_string());
 
         let collapsed = self.expanded_cores.is_empty() && self.expanded_folders.is_empty();
         let cores_owned: Arc<Vec<(CoreId, String)>> = Arc::new(cores.to_vec());
@@ -85,6 +92,7 @@ impl StrategiesView {
                                 self.create_dropdown(cc, ct, cx)
                             }),
                     )
+                    .child(self.combo_exchange(exchange_text, cores, exchange_names, cx))
                     .child(
                         h_flex()
                             .w_full()
@@ -140,6 +148,65 @@ impl StrategiesView {
             // Bottom action bar.
             .child(div().w_full().h(px(1.0)).bg(border))
             .child(self.action_bar(cores_owned, store, cx))
+            .into_any_element()
+    }
+
+    /// Render the exchange filter using the same exchange grouping as the core selectors.
+    fn combo_exchange(
+        &self,
+        current: String,
+        cores: &crate::core_order::OrderedCores,
+        exchange_names: &std::collections::HashMap<CoreId, String>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let view = cx.entity();
+        let selected = self.filter.exchange.clone();
+        let mut items =
+            vec![
+                MoonMenuItem::with_key("exchange-all", t!("strat.all_exchanges").to_string())
+                    .selected(selected.is_none())
+                    .on_click({
+                        let view = view.clone();
+                        move |_, _, app| {
+                            view.update(app, |this, c| {
+                                if this.filter.exchange.is_some() {
+                                    this.filter.exchange = None;
+                                    c.notify();
+                                }
+                            });
+                        }
+                    }),
+            ];
+        let sections = crate::controls::core_menu_sections(cores, exchange_names);
+        for (exchange, _) in sections {
+            let Some(exchange) = exchange else { continue };
+            let raw = exchange.to_string();
+            let label = crate::controls::exchange_display_name(exchange);
+            let view = view.clone();
+            items.push(
+                MoonMenuItem::with_key(format!("exchange-{exchange}"), label)
+                    .selected(selected.as_deref() == Some(exchange))
+                    .on_click(move |_, _, app| {
+                        let raw = raw.clone();
+                        view.update(app, |this, c| {
+                            if this.filter.exchange.as_deref() != Some(raw.as_str()) {
+                                this.filter.exchange = Some(raw);
+                                c.notify();
+                            }
+                        });
+                    }),
+            );
+        }
+        MoonDropdown::new("strat-exchange-filter")
+            .label(current)
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            .trigger_width_scaled(180.0)
+            .fit_menu_width(180.0, 320.0)
+            .menu_size(MoonMenuSize::Compact)
+            .menu_max_height_ui(260.0)
+            .items(items)
             .into_any_element()
     }
 

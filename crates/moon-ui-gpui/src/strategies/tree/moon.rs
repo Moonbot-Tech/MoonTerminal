@@ -11,16 +11,16 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
-    MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta,
-    h_flex,
+    h_flex, MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonDisclosure, MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem,
+    MoonTreeRowMeta,
 };
 
 use super::super::filter::PreparedFilter;
 use super::super::logic::{
-    FolderCounts, build_node, ensure_folder, strategy_core_is_visible, toggle,
+    build_node, ensure_folder, strategy_core_is_visible, toggle, FolderCounts,
 };
-use super::super::{Key, StrategiesView, moon_alpha};
+use super::super::{moon_alpha, Key, StrategiesView};
 use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
 use crate::design;
 use moon_core::feed::StrategyRow;
@@ -111,6 +111,7 @@ pub(crate) fn build(
     view: &StrategiesView,
     store: &CoreStore,
     cores: &crate::core_order::OrderedCores,
+    exchange_names: &HashMap<CoreId, String>,
 ) -> MoonTreeBuild {
     let filter = view.filter.prepare();
     let searching = filter.searching();
@@ -121,6 +122,9 @@ pub(crate) fn build(
 
     for (core_id, core_name) in cores.iter() {
         let core = *core_id;
+        if !filter.matches_exchange(core, exchange_names) {
+            continue;
+        }
         let Some(cd) = store.core(core) else { continue };
         // Openness is decided before the strategies are walked: nothing below a collapsed core can
         // be rendered and MoonTree never descends into one, so such a core needs only the two
