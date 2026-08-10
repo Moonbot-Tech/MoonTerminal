@@ -17,13 +17,13 @@ use moon_ui::{
     MoonSelectorPill, MoonSelectorSegment, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex,
 };
 
-use moon_core::feed::{ClientSettingsEdit, StrategyRow, StrategySchemaModel};
+use moon_core::feed::{StrategyRow, StrategySchemaModel};
 use moon_core::session::CoreId;
 
 use crate::{Backend, design};
 
 /// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
-const MANUAL_KIND: u8 = 12;
+pub(crate) const MANUAL_KIND: u8 = 12;
 
 /// Pill height shared with the header's core selector; label width is capped separately.
 const PILL_H: f32 = 26.0;
@@ -97,7 +97,7 @@ pub fn manual_strategy_controls(
                 // Selecting a strategy also enables the mode, matching the Moonbot menu.
                 .on_click(move |_, _, cx| {
                     backend.update(cx, |b, bcx| {
-                        send_manual(b, core, true, sid);
+                        b.set_manual_strategy_with_sync(core, true, sid);
                         bcx.notify();
                     });
                 }),
@@ -125,7 +125,7 @@ pub fn manual_strategy_controls(
                             return;
                         }
                         // Disabling preserves the id so the next toggle restores the same strategy.
-                        send_manual(b, core, v, cur_id);
+                        b.set_manual_strategy_with_sync(core, v, cur_id);
                         bcx.notify();
                     });
                 }),
@@ -192,30 +192,10 @@ pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -
     });
     match sid {
         Some(sid) => {
-            send_manual(b, core, true, sid);
+            b.set_manual_strategy_with_sync(core, true, sid);
             true
         }
         None => false,
-    }
-}
-
-/// Store the process-lifetime local override and send a manual-strategy edit to the core.
-///
-/// The override remains authoritative until replaced or process exit; neither a core echo nor a
-/// command failure reconciles it. Send failures are logged.
-///
-/// Args:
-///     b: Backend whose local state and session are updated.
-///     core: Target core.
-///     on: Whether manual-strategy mode should be enabled.
-///     id: Selected strategy id, retained even when the mode is disabled.
-fn send_manual(b: &mut Backend, core: CoreId, on: bool, id: u64) {
-    b.set_manual_strat_local(core, on, id);
-    if let Err(e) = b
-        .session
-        .edit_client_settings(core, ClientSettingsEdit::ManualStrategy { on, id })
-    {
-        log::warn!("manual strategy edit failed: {e:#}");
     }
 }
 

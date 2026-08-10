@@ -505,37 +505,48 @@ pub fn toolbar(
     } else {
         t!("toolbar.pause").to_string()
     };
+    let manual = super::manual_strategy_controls(group, backend, p, cx);
     let backend_live = backend.clone();
     // §5 SESSION — Live is fenced off from the trading parameters to its left: it governs whether
     // the chart follows the market, not anything about an order.
-    row = row.child(design::chrome_divider(cx, p)).child(
-        section().child(
-            MoonButton::new("live")
-                .width(design::font_w(cx, LIVE_W))
-                .variant(MoonButtonVariant::Soft)
-                .size(MoonButtonSize::ToolbarCompact)
-                // Keep the localized interaction hint reachable without adding another row label.
-                .tooltip(t!("toolbar.live_tip").to_string())
-                .segment(
-                    MoonButtonSegment::new("●")
-                        .color(live_tone)
-                        .font_size(9.0)
-                        .weight(700.0),
-                )
-                .segment(
-                    MoonButtonSegment::new(live_label)
-                        .color(live_tone)
-                        .weight(500.0),
-                )
-                .on_click(move |_, _, cx| {
-                    backend_live.update(cx, |b, bcx| {
-                        b.follow = !b.follow;
-                        bcx.notify();
-                    });
-                })
-                .render(),
-        ),
-    );
+    row = row
+        .children(manual.map(|ms| {
+            h_flex()
+                .min_w_0()
+                .gap(design::ui_px(cx, design::CHROME_GAP))
+                .items_center()
+                .child(design::chrome_divider(cx, p))
+                .child(ms)
+        }))
+        .child(design::chrome_divider(cx, p))
+        .child(
+            section().child(
+                MoonButton::new("live")
+                    .width(design::font_w(cx, LIVE_W))
+                    .variant(MoonButtonVariant::Soft)
+                    .size(MoonButtonSize::ToolbarCompact)
+                    // Keep the localized interaction hint reachable without adding another row label.
+                    .tooltip(t!("toolbar.live_tip").to_string())
+                    .segment(
+                        MoonButtonSegment::new("●")
+                            .color(live_tone)
+                            .font_size(9.0)
+                            .weight(700.0),
+                    )
+                    .segment(
+                        MoonButtonSegment::new(live_label)
+                            .color(live_tone)
+                            .weight(500.0),
+                    )
+                    .on_click(move |_, _, cx| {
+                        backend_live.update(cx, |b, bcx| {
+                            b.follow = !b.follow;
+                            bcx.notify();
+                        });
+                    })
+                    .render(),
+            ),
+        );
     // Trailing edge: operational launchers stay together, while monitoring and configuration
     // windows form a second section so the two categories are visually scannable.
     row.child(div().flex_1())

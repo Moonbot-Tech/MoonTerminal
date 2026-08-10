@@ -210,6 +210,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         sell_edit_req: None,
         group_exit_sync: HashMap::new(),
         manual_strat_local: HashMap::new(),
+        sync_manual_strategy_targets: Vec::new(),
+        sync_manual_select_pending: Vec::new(),
         panic_armed: HashSet::new(),
         backend_dirty_since_notify: false,
         last_backend_notify: None,
@@ -533,6 +535,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     b.refresh_header_ticker_default(false);
                     b.sync_open_markets_if_due();
                     b.sync_group_manual_settings();
+                    b.tick_pending_manual_strategy_select();
                     b.snap = b.metrics.sample(Instant::now());
                     // Before the warning engine: a schedule boundary crossed on this very tick must
                     // already be in force for the alerts this tick opens.

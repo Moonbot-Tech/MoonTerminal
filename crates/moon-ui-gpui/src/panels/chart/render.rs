@@ -45,6 +45,8 @@ fn action_button(
     allowed: bool,
     core: moon_core::session::CoreId,
     market: String,
+    sync_on: bool,
+    sync_targets: Vec<(moon_core::session::CoreId, String)>,
 ) -> MoonButton {
     let (label, variant, selected) = match kind {
         ActKind::CancelBuy => ("Cancel Buy", MoonButtonVariant::Soft, false),
@@ -62,17 +64,42 @@ fn action_button(
         .disabled(!allowed)
         .on_click(move |_, _w, app| {
             backend.update(app, |b, cx| {
-                if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
-                    return;
-                }
+                let targets = if sync_on {
+                    b.sync_market_action_targets(core, &market, &sync_targets)
+                } else {
+                    vec![(core, market.clone())]
+                };
+                let targets: Vec<_> = targets
+                    .into_iter()
+                    .filter(|(target_core, _)| {
+                        b.workspace_action_allows_core(workspace_group.as_deref(), *target_core)
+                    })
+                    .collect();
                 match kind {
                     ActKind::CancelBuy => {
-                        if let Err(error) = b.session.cancel_market_buys(core, market.clone()) {
-                            log::warn!("cancel market buys failed: {error:#}");
+                        let mut sent = 0usize;
+                        for (target_core, target_market) in targets {
+                            sent += b.cancel_buy_orders(target_core, &target_market);
+                        }
+                        if sync_on {
+                            log::info!(
+                                "sync cancel buy: origin={} market={market} requests={sent}",
+                                moon_core::feed::core_label(core)
+                            );
                         }
                     }
                     ActKind::PanicSell => {
-                        b.toggle_panic_sell(core, market.clone());
+                        let mut sent = 0usize;
+                        for (target_core, target_market) in targets {
+                            b.toggle_panic_sell(target_core, target_market);
+                            sent += 1;
+                        }
+                        if sync_on {
+                            log::info!(
+                                "sync panic sell: origin={} market={market} requests={sent}",
+                                moon_core::feed::core_label(core)
+                            );
+                        }
                         cx.notify();
                     }
                 }
@@ -211,6 +238,7 @@ impl Render for ChartPanel {
         // clicking another chart requests that the stack move it left and make it the price leader.
         let compare_anchor = self.is_compare_anchor;
         let compare_broom_on = self.compare_broom_on;
+        let sync_manual_on = self.sync_manual_orders_on;
         let lock_btns: Vec<(usize, f32, f32)> = if self.compare_eligible {
             axis_panes
                 .iter()
@@ -222,6 +250,19 @@ impl Render for ChartPanel {
         // Show the broom only on the anchor beside its selected lock; it toggles book-only mode for
         // the anchor's neighbors.
         let broom_btns: Vec<(usize, f32, f32)> = if self.compare_eligible && compare_anchor {
+            axis_panes
+                .iter()
+                .map(|(idx, rect, _)| (*idx, rect.x / ppp + axis_off, rect.y / ppp))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Synchronized manual orders are a stack-level explicit mode, exposed only on the comparison
+        // anchor after the stack has supplied eligible peer candidates.
+        let sync_btns: Vec<(usize, f32, f32)> = if self.compare_eligible
+            && compare_anchor
+            && !self.sync_manual_order_targets.is_empty()
+        {
             axis_panes
                 .iter()
                 .map(|(idx, rect, _)| (*idx, rect.x / ppp + axis_off, rect.y / ppp))
@@ -418,6 +459,8 @@ impl Render for ChartPanel {
                         allowed,
                         core,
                         market.clone(),
+                        sync_manual_on,
+                        self.sync_manual_order_targets.clone(),
                     )
                     .render()
                     .into_any_element()
@@ -709,6 +752,24 @@ impl Render for ChartPanel {
                     })
                     .render()
             }))
+            .children(sync_btns.into_iter().map(|(idx, left, top)| {
+                // SYNC arms one-click manual order placement across the current comparison stack.
+                let entity = cx.entity();
+                MoonButton::new(SharedString::from(format!("chart-sync-manual-{idx}")))
+                    .label("SYNC")
+                    .size(MoonButtonSize::Micro)
+                    .variant(if sync_manual_on {
+                        MoonButtonVariant::Blue
+                    } else {
+                        MoonButtonVariant::Ghost
+                    })
+                    .selected(sync_manual_on)
+                    .bounds(MoonRect::new(left + 57.0, top + 3.0, 38.0, 15.0))
+                    .on_click(move |_, _w, app| {
+                        entity.update(app, |this, cx| this.request_sync_manual_orders(cx));
+                    })
+                    .render()
+            }))
             .children(action_btns.into_iter().enumerate().map(
                 |(i, (kind, x, y, w, h, core, market, armed))| {
                     let id = match kind {
@@ -725,6 +786,8 @@ impl Render for ChartPanel {
                         allowed,
                         core,
                         market,
+                        sync_manual_on,
+                        self.sync_manual_order_targets.clone(),
                     )
                     .full_width()
                     .render();

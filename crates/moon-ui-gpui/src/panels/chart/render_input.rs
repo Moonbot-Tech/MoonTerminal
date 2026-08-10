@@ -6,8 +6,13 @@
 use std::time::{Duration, Instant};
 
 use gpui::*;
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonNotification, MoonPalette,
+    MoonWindowExt as _, h_flex, v_flex,
+};
 
 use crate::chartdx::input;
+use crate::design::{self, moon};
 
 /// Smallest gap between two drag-driven `cx.notify()` calls.
 ///
@@ -22,6 +27,190 @@ const DRAG_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
 use super::ChartPanel;
 use super::trade::TradeMouseButton;
+
+fn sync_manual_repair_rows(plan: &crate::backend::SyncManualStrategyRepairPlan) -> Vec<String> {
+    plan.targets
+        .iter()
+        .take(8)
+        .map(|target| {
+            let manual = if target.missing_manuals.is_empty() {
+                "Manual already exists".to_string()
+            } else {
+                format!("copy Manual {}", target.missing_manuals.join(", "))
+            };
+            let hook = if target.missing_hooks.is_empty() {
+                "Hook OK".to_string()
+            } else {
+                format!("copy Hook {}", target.missing_hooks.join(", "))
+            };
+            let select = if target.selectable_manual {
+                "; select existing Manual"
+            } else {
+                ""
+            };
+            format!(
+                "{} [{}]: {manual}; {hook}{select}",
+                target.core_name,
+                moon_core::feed::core_label(target.core)
+            )
+        })
+        .collect()
+}
+
+fn open_sync_manual_repair_dialog(
+    this: &mut ChartPanel,
+    window: &mut Window,
+    cx: &mut Context<ChartPanel>,
+) -> bool {
+    let Some(plan) = this.take_sync_manual_repair_plan() else {
+        return false;
+    };
+    let backend = this.backend.clone();
+    let current_plan = plan.clone();
+    let all_plan = plan.clone();
+    let rows = sync_manual_repair_rows(&plan);
+    let hidden_count = plan.targets.len().saturating_sub(rows.len());
+    let selected_manual = plan.selected_manual.clone();
+    let selected_hook = plan
+        .selected_hook
+        .clone()
+        .unwrap_or_else(|| "not detected".to_string());
+    let all_count = plan.all_manuals.len();
+
+    window.open_unique_moon_dialog(
+        "chart-sync-manual-repair",
+        cx,
+        move |dialog, _window, cx| {
+            let p = MoonPalette::active(cx);
+            let rows = rows.clone();
+            let selected_manual = selected_manual.clone();
+            let selected_hook = selected_hook.clone();
+            dialog
+                .w(px(520.0))
+                .close_button(true)
+                .overlay(true)
+                .overlay_closable(true)
+                .bg(moon(p.shell_high))
+                .border_color(moon(p.border))
+                .rounded(design::r_container(cx))
+                .text_color(moon(p.text))
+                .header(
+                    div()
+                        .w_full()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(moon(p.border))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("SYNC: copy missing Manual strategies"),
+                )
+                .on_cancel(|_, _, _| true)
+                .content(move |content, _window, cx| {
+                    let p = MoonPalette::active(cx);
+                    let mut body =
+                        v_flex()
+                            .gap(design::ui_px(cx, 8.0))
+                            .font_family(design::mono())
+                            .text_size(design::t_body(cx))
+                            .child(div().text_color(moon(p.text_muted)).child(
+                                "Some synced cores cannot use the selected Manual strategy.",
+                            ))
+                            .child(div().child(format!("Manual: {selected_manual}")))
+                            .child(div().child(format!("Hook dependency: {selected_hook}")));
+                    for row in &rows {
+                        body = body.child(div().text_color(moon(p.text_muted)).child(row.clone()));
+                    }
+                    if hidden_count > 0 {
+                        body = body.child(
+                            div()
+                                .text_color(moon(p.text_muted))
+                                .child(format!("... and {hidden_count} more cores")),
+                        );
+                    }
+                    body = body.child(div().text_color(moon(p.accent)).child(
+                        "Hooks are copied once by exact StrategyName and are not duplicated.",
+                    ));
+                    content.child(body)
+                })
+                .footer(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .justify_end()
+                        .child(
+                            MoonButton::new("chart-sync-manual-repair-cancel")
+                                .outline()
+                                .size(MoonButtonSize::Action)
+                                .label("Cancel")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                })
+                                .render(),
+                        )
+                        .child({
+                            let backend = backend.clone();
+                            let plan = current_plan.clone();
+                            MoonButton::new("chart-sync-manual-repair-current")
+                                .size(MoonButtonSize::Action)
+                                .variant(MoonButtonVariant::Blue)
+                                .label("Copy current")
+                                .on_click(move |_, window, cx| {
+                                    let result = backend.update(cx, |b, _| {
+                                        b.apply_sync_manual_strategy_repair(
+                                            plan.origin,
+                                            &plan.market,
+                                            &plan.candidates,
+                                            false,
+                                        )
+                                    });
+                                    window.push_notification(
+                                        MoonNotification::success(format!(
+                                            "Copied: hooks {}, manuals {}, selected {}",
+                                            result.copied_hooks,
+                                            result.copied_manuals,
+                                            result.selected_existing
+                                        )),
+                                        cx,
+                                    );
+                                    window.close_dialog(cx);
+                                })
+                                .render()
+                        })
+                        .child({
+                            let backend = backend.clone();
+                            let plan = all_plan.clone();
+                            MoonButton::new("chart-sync-manual-repair-all")
+                                .size(MoonButtonSize::Action)
+                                .variant(MoonButtonVariant::Soft)
+                                .label(format!("Copy all Manual ({all_count})"))
+                                .on_click(move |_, window, cx| {
+                                    let result = backend.update(cx, |b, _| {
+                                        b.apply_sync_manual_strategy_repair(
+                                            plan.origin,
+                                            &plan.market,
+                                            &plan.candidates,
+                                            true,
+                                        )
+                                    });
+                                    window.push_notification(
+                                        MoonNotification::success(format!(
+                                            "Copied: hooks {}, manuals {}, selected {}",
+                                            result.copied_hooks,
+                                            result.copied_manuals,
+                                            result.selected_existing
+                                        )),
+                                        cx,
+                                    );
+                                    window.close_dialog(cx);
+                                })
+                                .render()
+                        })
+                        .text_color(moon(p.text))
+                        .into_any_element(),
+                )
+        },
+    );
+    true
+}
 
 /// Routes a wheel event to chart zoom/pan or the surrounding stack scroll.
 pub(super) fn scroll_wheel(
@@ -137,6 +326,11 @@ pub(super) fn mouse_down_left(
     if within
         && this.try_place_order_click(TradeMouseButton::Left, e.modifiers, e.click_count, pos, cx)
     {
+        open_sync_manual_repair_dialog(this, window, cx);
+        cx.stop_propagation();
+        return;
+    }
+    if within && open_sync_manual_repair_dialog(this, window, cx) {
         cx.stop_propagation();
         return;
     }
@@ -271,12 +465,19 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
-    if within
-        && this.try_place_order_click(TradeMouseButton::Right, e.modifiers, e.click_count, pos, cx)
-    {
-        this.suppress_rmb_up = true;
-        cx.stop_propagation();
-        return;
+    if within {
+        if this.try_place_order_click(TradeMouseButton::Right, e.modifiers, e.click_count, pos, cx)
+        {
+            open_sync_manual_repair_dialog(this, window, cx);
+            this.suppress_rmb_up = true;
+            cx.stop_propagation();
+            return;
+        }
+        if open_sync_manual_repair_dialog(this, window, cx) {
+            this.suppress_rmb_up = true;
+            cx.stop_propagation();
+            return;
+        }
     }
     // With separate zones, right clicks in the control area are only for trading/order menus.
     // Suppress normal chart right-button pan/zoom there; main_stack.rs owns fullscreen toggling.
@@ -335,7 +536,7 @@ pub(super) fn mouse_up_right(
 pub(super) fn mouse_down_middle(
     this: &mut ChartPanel,
     e: &MouseDownEvent,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
     let Some((pos, within)) = this.chart_local(e.position) else {
@@ -349,21 +550,26 @@ pub(super) fn mouse_down_middle(
         None
     };
     this.sync_native_cursor();
-    if within
-        && this.try_place_order_click(
+    if within {
+        if this.try_place_order_click(
             TradeMouseButton::Middle,
             e.modifiers,
             e.click_count,
             pos,
             cx,
-        )
-    {
-        cx.stop_propagation();
-        return;
+        ) {
+            open_sync_manual_repair_dialog(this, window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if open_sync_manual_repair_dialog(this, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
     }
     // Shift+middle-click on the graph synchronizes the time X scale across charts in THIS window,
     // matching Moonbot. A trading gesture bound to Shift+middle-click takes priority above.
-    if within && e.modifiers.shift && this.sync_x_scale_window(_window, cx) {
+    if within && e.modifiers.shift && this.sync_x_scale_window(window, cx) {
         cx.stop_propagation();
     }
 }

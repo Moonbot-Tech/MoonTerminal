@@ -33,6 +33,7 @@ use moon_ui::{MoonBackgroundPolicy, Panel, PanelEvent};
 use rust_i18n::t;
 
 use crate::Backend;
+use crate::backend::SyncManualStrategyRepairPlan;
 use crate::chartdx::ChartEngine;
 use crate::chartdx::input;
 use moon_chart::container::ContainerKind;
@@ -172,6 +173,15 @@ pub struct ChartPanel {
     compare_broom_pending: bool,
     /// Tab-level broom state supplied by the stack to highlight the anchor's broom button.
     compare_broom_on: bool,
+    /// Whether stack-level synchronized manual orders are enabled for this comparison set.
+    sync_manual_orders_on: bool,
+    /// Pending sync-manual toggle request consumed by the owning stack observer.
+    sync_manual_orders_pending: bool,
+    /// Stack candidates for synchronized manual order placement.
+    sync_manual_order_targets: Vec<(CoreId, String)>,
+    /// Pending repair proposal when synchronized manual order placement finds missing Manual/Hook
+    /// strategies on peer cores.
+    sync_manual_repair_plan: Option<SyncManualStrategyRepairPlan>,
     /// Ghost-cursor handles for comparison peers. With the lock active, the stack gives each panel
     /// weak handles to the other engines; mouse movement sends them the cursor price without a GPUI
     /// notification because each peer schedules its own present. Empty means comparison is inactive.
@@ -416,6 +426,10 @@ impl ChartPanel {
             orderbook_only: false,
             compare_broom_pending: false,
             compare_broom_on: false,
+            sync_manual_orders_on: false,
+            sync_manual_orders_pending: false,
+            sync_manual_order_targets: Vec::new(),
+            sync_manual_repair_plan: None,
             ghost_peers: Vec::new(),
             view_dirty: true,
             last_adaptive_notify_at: None,
@@ -565,6 +579,10 @@ impl ChartPanel {
             orderbook_only: false,
             compare_broom_pending: false,
             compare_broom_on: false,
+            sync_manual_orders_on: false,
+            sync_manual_orders_pending: false,
+            sync_manual_order_targets: Vec::new(),
+            sync_manual_repair_plan: None,
             ghost_peers: Vec::new(),
             view_dirty: true,
             last_adaptive_notify_at: None,
@@ -793,6 +811,36 @@ impl ChartPanel {
     /// Takes and clears the pending broom-button request.
     pub fn take_compare_broom_request(&mut self) -> bool {
         std::mem::take(&mut self.compare_broom_pending)
+    }
+
+    /// Records a synchronized-manual-order toggle request for the owning stack.
+    fn request_sync_manual_orders(&mut self, cx: &mut Context<Self>) {
+        self.sync_manual_orders_pending = true;
+        cx.notify();
+    }
+
+    /// Takes and clears the pending synchronized-manual-order toggle request.
+    pub fn take_sync_manual_orders_request(&mut self) -> bool {
+        std::mem::take(&mut self.sync_manual_orders_pending)
+    }
+
+    /// Applies stack-owned synchronized manual-order state to this panel.
+    pub fn set_sync_manual_orders(
+        &mut self,
+        on: bool,
+        targets: Vec<(CoreId, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sync_manual_orders_on != on || self.sync_manual_order_targets != targets {
+            self.sync_manual_orders_on = on;
+            self.sync_manual_order_targets = targets;
+            cx.notify();
+        }
+    }
+
+    /// Takes and clears a pending synchronized-manual repair proposal.
+    pub fn take_sync_manual_repair_plan(&mut self) -> Option<SyncManualStrategyRepairPlan> {
+        self.sync_manual_repair_plan.take()
     }
 
     /// Enables book-only broom mode: rendering hides the plot and price axis and expands the book.

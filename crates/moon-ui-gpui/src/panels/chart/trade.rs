@@ -209,50 +209,78 @@ impl ChartPanel {
         };
 
         let workspace_group = self.workspace_group.clone();
-        let placed = self.backend.update(cx, |b, _| {
+        let sync_candidates = self.sync_manual_order_targets.clone();
+        let sync_on = self.sync_manual_orders_on;
+        self.sync_manual_repair_plan = None;
+        let (placed, repair_plan) = self.backend.update(cx, |b, _| {
             if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
-                return false;
+                return (false, None);
             }
-            let Some(terms) = b.manual_order_terms(core, None) else {
+            let targets = if sync_on {
+                b.sync_manual_order_targets(core, &market, &sync_candidates)
+            } else {
+                vec![(core, market.clone())]
+            };
+            let targets: Vec<_> = targets
+                .into_iter()
+                .filter(|(target_core, _)| {
+                    b.workspace_action_allows_core(workspace_group.as_deref(), *target_core)
+                })
+                .collect();
+            if targets.is_empty() {
                 log::warn!(
-                    "manual chart order blocked: core={} market={market} has no complete local terms or valid base/USD rate",
+                    "manual chart order blocked: sync produced no eligible targets for core={} market={market}",
                     moon_core::feed::core_label(core)
                 );
-                return false;
-            };
-            let Some(usd) = terms.size_usd else {
-                return false;
-            };
-            match b
-                .session
-                .place_order(
-                    core,
-                    market.clone(),
+                let repair = sync_on
+                    .then(|| b.sync_manual_strategy_repair_plan(core, &market, &sync_candidates))
+                    .flatten();
+                return (false, repair);
+            }
+            let mut ok_count = 0usize;
+            for (target_core, target_market) in targets {
+                let Some(terms) = b.manual_order_terms(target_core, None) else {
+                    log::warn!(
+                        "manual chart order blocked: core={} market={target_market} has no complete local terms or valid base/USD rate",
+                        moon_core::feed::core_label(target_core)
+                    );
+                    continue;
+                };
+                let Some(usd) = terms.size_usd else {
+                    continue;
+                };
+                match b.session.place_order(
+                    target_core,
+                    target_market.clone(),
                     short,
                     price,
                     terms.size_base,
                     None,
                     terms.exit,
-                )
-            {
-                Ok(()) => {
-                    log::info!(
-                        "manual chart order: core={} market={market} side={} price={price:.8} size={} usd={usd}",
-                        moon_core::feed::core_label(core),
-                        if short { "short" } else { "long" },
-                        terms.size_base
-                    );
-                    true
-                }
-                Err(err) => {
-                    log::warn!(
-                        "manual chart order failed: core={} market={market} price={price:.8}: {err:#}",
-                        moon_core::feed::core_label(core)
-                    );
-                    false
+                ) {
+                    Ok(()) => {
+                        ok_count += 1;
+                        log::info!(
+                            "manual chart order: core={} market={target_market} side={} price={price:.8} size={} usd={usd} sync={sync_on}",
+                            moon_core::feed::core_label(target_core),
+                            if short { "short" } else { "long" },
+                            terms.size_base
+                        );
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "manual chart order failed: core={} market={target_market} price={price:.8}: {err:#}",
+                            moon_core::feed::core_label(target_core)
+                        );
+                    }
                 }
             }
+            let repair = sync_on
+                .then(|| b.sync_manual_strategy_repair_plan(core, &market, &sync_candidates))
+                .flatten();
+            (ok_count > 0, repair)
         });
+        self.sync_manual_repair_plan = repair_plan;
         // Per-window/tab auto-pin keeps a chart that accepted an order from expiring through TTL
         // or inactivity.
         if placed

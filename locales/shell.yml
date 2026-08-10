@@ -425,6 +425,22 @@ chart.candles.price_lines:
   ru: "Линии цены (last/mark)"
   en: "Price lines (last/mark)"
   es: "Líneas de precio (last/mark)"
+chart.candles.last_price_line:
+  ru: "Линия Price"
+  en: "Price line"
+  es: "Línea Price"
+chart.candles.mark_price_line:
+  ru: "Линия MarkPrice"
+  en: "MarkPrice line"
+  es: "Línea MarkPrice"
+chart.candles.order_traces:
+  ru: "Трейсы ордеров"
+  en: "Order traces"
+  es: "Trazas de órdenes"
+chart.candles.moonshot_corridor:
+  ru: "Коридор MoonShot/MoonHook"
+  en: "MoonShot/MoonHook corridor"
+  es: "Corredor MoonShot/MoonHook"
 chart.candles.mode_filled:
   ru: "Заливка"
   en: "Filled"

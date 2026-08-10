@@ -262,6 +262,12 @@ struct Backend {
     /// Optimistic local manual-strategy selection as `(enabled, id)`, keeping the header toggle and
     /// picker responsive until the core echoes its settings.
     manual_strat_local: HashMap<CoreId, (bool, u64)>,
+    /// Runtime-only chart SYNC scope for propagating manual-strategy picker changes by exact
+    /// StrategyName across the cores displayed together in one horizontal comparison stack.
+    sync_manual_strategy_targets: Vec<(CoreId, String)>,
+    /// Manual strategies copied by SYNC repair receive fresh core-owned IDs asynchronously. These
+    /// `(core, StrategyName)` selections are applied once the new row appears in a later snapshot.
+    sync_manual_select_pending: Vec<(CoreId, String)>,
     /// Locally armed Panic Sell state by `(core, market)`, providing immediate button highlighting
     /// and on/off state without waiting for a core echo.
     panic_armed: HashSet<(CoreId, String)>,

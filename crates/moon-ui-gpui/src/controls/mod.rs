@@ -42,6 +42,7 @@ pub(crate) use core_combo::{
 pub(crate) use exchange_label::{exchange_display_name, exchange_display_name_with_spot};
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;
+pub(crate) use manual_strat::MANUAL_KIND;
 pub(crate) use manual_strat::select_manual_strategy;
 pub use metric::{MetricTarget, TradeMetric, metric_popup_content};
 pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};

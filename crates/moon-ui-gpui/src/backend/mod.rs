@@ -7,6 +7,7 @@ mod detect_sound;
 mod figures;
 mod quiet;
 pub(crate) mod server_chart;
+mod sync_manual;
 #[cfg(test)]
 mod tests;
 
@@ -27,6 +28,8 @@ use moon_core::db::valuation::ValuationMode;
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::session::CoreId;
 use moon_ui::{DockAreaState, DockTopologyByName};
+
+pub(crate) use sync_manual::SyncManualStrategyRepairPlan;
 
 /// Milliseconds of history kept on each side of a warning start for its persisted graphs (±30 s, a
 /// 60 s window — enough context for analysis without bloating the per-core slices).
@@ -712,6 +715,17 @@ impl Backend {
     /// Store a process-lifetime local manual-strategy override for immediate feedback.
     pub(crate) fn set_manual_strat_local(&mut self, core: CoreId, on: bool, id: u64) {
         self.manual_strat_local.insert(core, (on, id));
+    }
+
+    /// Store and send a manual-strategy selection for one core.
+    pub(crate) fn set_manual_strategy(&mut self, core: CoreId, on: bool, id: u64) {
+        self.set_manual_strat_local(core, on, id);
+        if let Err(e) = self
+            .session
+            .edit_client_settings(core, ClientSettingsEdit::ManualStrategy { on, id })
+        {
+            log::warn!("manual strategy edit failed: {e:#}");
+        }
     }
 
     /// Return the core's effective manual-strategy state as `(enabled, id)`.

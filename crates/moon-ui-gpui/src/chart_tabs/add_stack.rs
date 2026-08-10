@@ -82,6 +82,12 @@ pub(crate) struct AddChartStack {
     compare_y: Option<(f32, f32)>,
     /// Broom mode: anchor neighbors show only the order book, hiding chart and price axis.
     compare_orderbook_only: bool,
+    /// Runtime-only explicit mode: one manual-order click is replicated across eligible comparison
+    /// peers. It resets on restart and is disabled automatically when comparison is unavailable.
+    sync_manual_orders_on: bool,
+    /// Last SYNC scope published to Backend for toolbar/manual-strategy propagation. Only this same
+    /// stack may clear it, preventing inactive stacks from wiping an active comparison context.
+    sync_manual_strategy_targets_published: Vec<(CoreId, String)>,
     /// Whether to retain an empty slot after a chart leaves. Automatic AddToChart tabs reuse the
     /// slot in COMPRESS mode for the next detection. CUSTOM tabs set this false: closing a chart
     /// removes its slot immediately and redistributes neighboring charts according to the layout.
@@ -147,6 +153,8 @@ impl AddChartStack {
             compare_anchor: None,
             compare_y: None,
             compare_orderbook_only: false,
+            sync_manual_orders_on: false,
+            sync_manual_strategy_targets_published: Vec::new(),
             hold_vacated: true,
             last_count_change: Instant::now(),
             compact_timer_armed: false,
@@ -265,6 +273,59 @@ impl AddChartStack {
             self.layout_orientation,
             cx,
         );
+        self.sync_manual_orders(cx);
+    }
+
+    /// Synchronize the runtime-only multi-core manual-order mode.
+    ///
+    /// The mode is available only while comparison has an anchor in a horizontal stack. Every panel
+    /// receives the current stack candidates, but the click path performs the final safety filtering
+    /// against exact market, chart bundle, connectivity, and selected manual strategy.
+    fn sync_manual_orders(&mut self, cx: &mut Context<Self>) {
+        let mut clicked = false;
+        for e in &self.charts {
+            if e.panel
+                .update(cx, |p, _| p.take_sync_manual_orders_request())
+            {
+                clicked = true;
+            }
+        }
+        let horizontal = self
+            .layout_orientation
+            .unwrap_or(StackOrientation::Vertical)
+            .is_horizontal();
+        let available = horizontal && self.compare_anchor.is_some() && self.charts.len() > 1;
+        if clicked && available {
+            self.sync_manual_orders_on = !self.sync_manual_orders_on;
+        }
+        if !available {
+            self.sync_manual_orders_on = false;
+        }
+        let targets: Vec<(CoreId, String)> = if available {
+            self.charts
+                .iter()
+                .filter(|e| !e.vacated)
+                .map(|e| (e.core, e.market.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if self.sync_manual_orders_on {
+            self.sync_manual_strategy_targets_published = targets.clone();
+            self.backend.update(cx, |b, _| {
+                b.set_sync_manual_strategy_targets(targets.clone());
+            });
+        } else if !self.sync_manual_strategy_targets_published.is_empty() {
+            let published = std::mem::take(&mut self.sync_manual_strategy_targets_published);
+            self.backend.update(cx, |b, _| {
+                b.clear_sync_manual_strategy_targets_if(&published);
+            });
+        }
+        for e in &self.charts {
+            e.panel.update(cx, |p, pcx| {
+                p.set_sync_manual_orders(self.sync_manual_orders_on, targets.clone(), pcx)
+            });
+        }
     }
 
     pub(super) fn add_coin(
