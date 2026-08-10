@@ -42,6 +42,7 @@ impl MarketPlan {
 pub(in crate::feed) struct MarketRoleState {
     desired: Option<MarketPlan>,
     applied: Option<MarketPlan>,
+    pending_history: Vec<String>,
 }
 
 impl MarketRoleState {
@@ -83,72 +84,143 @@ impl MarketRoleState {
     /// MoonProto accepts subscription intent before Ready and owns its restoration across internal
     /// reconnects and runtime restarts.
     pub(super) fn apply_if_needed(&mut self, client: &MoonClient, server_id: u64) {
-        if !self.needs_apply() {
+        let Some(desired) = self.desired.clone() else {
             return;
-        }
-        let desired = self
-            .desired
-            .as_ref()
-            .expect("needs_apply requires a desired market plan");
-        let applied = self.applied.as_ref();
+        };
+        let applied = self.applied.clone();
+        let needs_apply = self.needs_apply();
 
-        if applied.is_none_or(|current| current.provider != desired.provider) {
-            apply_market_role(client, server_id, desired.provider);
+        if desired.provider {
+            self.pending_history
+                .retain(|market| desired.markets.iter().any(|wanted| wanted == market));
+        } else {
+            self.pending_history.clear();
+        }
+        if !needs_apply && self.pending_history.is_empty() {
+            return;
         }
 
         let diag_on = std::env::var_os("MOON_MARKET_DIAG").is_some()
             || std::env::var_os("MOON_RENDER_DIAG").is_some();
-        let applied_orderbooks = applied
-            .map(|current| current.orderbook_markets.as_slice())
-            .unwrap_or_default();
-        for market in &desired.orderbook_markets {
-            if !applied_orderbooks.iter().any(|current| current == market) {
-                match client.streams().subscribe_orderbook(market.clone()) {
-                    Ok(()) => {
-                        if diag_on {
-                            log::info!(
-                                "[market_diag] core {} subscribe_orderbook({market})",
+
+        let newly_wanted_markets: Vec<String> = desired
+            .markets
+            .iter()
+            .filter(|market| {
+                applied.as_ref().is_none_or(|current| {
+                    !current.markets.iter().any(|existing| existing == *market)
+                })
+            })
+            .cloned()
+            .collect();
+        for market in newly_wanted_markets {
+            self.queue_pending_history(market);
+        }
+
+        if needs_apply {
+            let provider_changed = applied
+                .as_ref()
+                .is_none_or(|current| current.provider != desired.provider);
+            let markets_changed = applied
+                .as_ref()
+                .is_none_or(|current| current.markets.as_slice() != desired.markets.as_slice());
+            if provider_changed || (desired.provider && markets_changed) {
+                apply_market_role(client, server_id, &desired);
+            }
+
+            let applied_orderbooks = applied
+                .as_ref()
+                .map(|current| current.orderbook_markets.as_slice())
+                .unwrap_or_default();
+            for market in &desired.orderbook_markets {
+                if !applied_orderbooks.iter().any(|current| current == market) {
+                    match client.streams().subscribe_orderbook(market.clone()) {
+                        Ok(()) => {
+                            if diag_on {
+                                log::info!(
+                                    "[market_diag] core {} subscribe_orderbook({market})",
+                                    crate::feed::core_label(server_id)
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "core {} subscribe_orderbook({market}) failed: {error}",
                                 crate::feed::core_label(server_id)
-                            );
+                            )
                         }
                     }
-                    Err(error) => {
-                        log::warn!(
-                            "core {} subscribe_orderbook({market}) failed: {error}",
+                }
+            }
+            for market in applied_orderbooks {
+                if !desired
+                    .orderbook_markets
+                    .iter()
+                    .any(|current| current == market)
+                {
+                    match client.streams().unsubscribe_orderbook(market.clone()) {
+                        Ok(()) => {
+                            if diag_on {
+                                log::info!(
+                                    "[market_diag] core {} unsubscribe_orderbook({market})",
+                                    crate::feed::core_label(server_id)
+                                );
+                            }
+                        }
+                        Err(error) => log::warn!(
+                            "core {} unsubscribe_orderbook({market}) failed: {error}",
                             crate::feed::core_label(server_id)
-                        )
+                        ),
                     }
                 }
             }
+            self.applied = Some(desired.clone());
         }
-        for market in applied_orderbooks {
-            if !desired
-                .orderbook_markets
-                .iter()
-                .any(|current| current == market)
-            {
-                match client.streams().unsubscribe_orderbook(market.clone()) {
-                    Ok(()) => {
-                        if diag_on {
-                            log::info!(
-                                "[market_diag] core {} unsubscribe_orderbook({market})",
-                                crate::feed::core_label(server_id)
-                            );
-                        }
-                    }
-                    Err(error) => log::warn!(
-                        "core {} unsubscribe_orderbook({market}) failed: {error}",
-                        crate::feed::core_label(server_id)
-                    ),
-                }
-            }
+
+        if desired.provider {
+            self.retry_pending_history(client, server_id, diag_on);
         }
-        self.applied = Some(desired.clone());
     }
 
     /// Returns whether the current MoonClient has unapplied desired state.
     fn needs_apply(&self) -> bool {
         self.desired.is_some() && self.desired != self.applied
+    }
+
+    fn queue_pending_history(&mut self, market: String) {
+        if !self
+            .pending_history
+            .iter()
+            .any(|pending| pending == &market)
+        {
+            self.pending_history.push(market);
+        }
+    }
+
+    fn retry_pending_history(&mut self, client: &MoonClient, server_id: u64, diag_on: bool) {
+        let mut still_pending = Vec::new();
+        for market in self.pending_history.drain(..) {
+            match client.history().request_chart(market.clone()) {
+                Ok(_) => {
+                    if diag_on {
+                        log::info!(
+                            "[market_diag] core {} request_chart_history({market})",
+                            crate::feed::core_label(server_id)
+                        );
+                    }
+                }
+                Err(error) => {
+                    if diag_on {
+                        log::info!(
+                            "[market_diag] core {} request_chart_history({market}) deferred: {error}",
+                            crate::feed::core_label(server_id)
+                        );
+                    }
+                    still_pending.push(market);
+                }
+            }
+        }
+        self.pending_history = still_pending;
     }
 }
 
@@ -156,15 +228,24 @@ impl MarketRoleState {
 ///
 /// MoonProto defers a pre-Ready command and retains the explicit provider or account-only intent
 /// across reconnects, so an unchanged role is not resent on lifecycle events.
-fn apply_market_role(client: &MoonClient, server_id: u64, provider: bool) {
-    if provider {
-        let _ = client
-            .streams()
-            .subscribe_all_trades(TradesStreamMode::TradesOnly);
-        log::info!(
-            "core {} -> market provider (all-trades)",
-            crate::feed::core_label(server_id)
-        );
+fn apply_market_role(client: &MoonClient, server_id: u64, desired: &MarketPlan) {
+    if desired.provider {
+        if desired.markets.is_empty() {
+            let _ = client.streams().unsubscribe_all_trades();
+            log::info!(
+                "core {} -> market provider (trades scope: no open markets)",
+                crate::feed::core_label(server_id)
+            );
+        } else {
+            let _ = client
+                .streams()
+                .subscribe_trades_for(TradesStreamMode::TradesOnly, desired.markets.clone());
+            log::info!(
+                "core {} -> market provider (trades scope: {} markets)",
+                crate::feed::core_label(server_id),
+                desired.markets.len()
+            );
+        }
     } else {
         let _ = client.streams().unsubscribe_all_trades();
         log::info!(

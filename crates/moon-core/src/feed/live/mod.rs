@@ -710,36 +710,22 @@ pub(super) fn run(
                         crate::feed::core_label(server.id)
                     );
                 }
-                // The demand-driven chart archive. `received` counts the rows the core sent;
-                // `retained` counts what the ring holds after archive and live tail are merged —
-                // NOT how much of the archive survived. MoonProto trims the merged set from the
-                // FRONT, so a ring already full of live rows can report a large `retained` while
-                // every archive row was discarded. Both numbers are logged because their ratio is
-                // the only hint available from here; neither one alone means success.
                 Event::MarketHistory(moonproto::state::MarketHistoryEvent::Ready {
                     ticket,
                     summary,
                 }) => {
-                    log::info!(
-                        "core {} chart archive {} merged: sent trades {} minis {} prices {} liq {}; \
-                         rings now hold {} / {} / {} / {}",
+                    log::debug!(
+                        "core {} market history ready: {} futures_trades {}/{} mini_candles {}/{} last_prices {}/{} liquidations {}/{}",
                         crate::feed::core_label(server.id),
                         ticket.market,
-                        summary.received.futures_trades,
-                        summary.received.mini_candles,
-                        summary.received.last_prices,
-                        summary.received.liquidations,
                         summary.retained.futures_trades,
+                        summary.received.futures_trades,
                         summary.retained.mini_candles,
+                        summary.received.mini_candles,
                         summary.retained.last_prices,
+                        summary.received.last_prices,
                         summary.retained.liquidations,
-                    );
-                    // `Ready` is an apply barrier, so this is the first moment the merged rings can
-                    // be measured. Off unless MOON_ARCHIVE_PROBE is set.
-                    archive_probe::probe(
-                        &client,
-                        &ticket.market,
-                        crate::feed::core_label(server.id),
+                        summary.received.liquidations
                     );
                 }
                 Event::MarketHistory(moonproto::state::MarketHistoryEvent::Failed {
@@ -747,7 +733,7 @@ pub(super) fn run(
                     error,
                 }) => {
                     log::warn!(
-                        "core {} chart archive {} failed: {error}",
+                        "core {} market history {} failed: {error}",
                         crate::feed::core_label(server.id),
                         ticket.market
                     );
