@@ -163,12 +163,11 @@ config, поэтому последующий Save не откатывает в�
 
 ## Рабочие пространства Classic и Auto
 
-Рабочее пространство выбирается отдельно для каждого группового окна. В `layout.toml` живут
-долговременные значения: `WorkspaceMode` в `workspace_mode_by_group`, выбранный core UID в
-`auto_workspace_core_by_group` и одна общая ширина Auto rail. Отсутствие UID означает Overview.
-Старый или повреждённый режим читается как `Classic`, поэтому он остаётся режимом по умолчанию.
-Протухший UID не удаляется и участвует в `WindowLayout::max_core_uid`, но до возвращения активного
-ядра этой группы разрешается как Overview.
+Workspace mode is selected independently for each group window. `layout.toml` owns the durable
+per-group `workspace_mode_by_group`, `auto_workspace_core_by_group`, and
+`auto_workspace_tab_by_group` maps, plus one application-wide Auto rail width. An absent core UID
+means Overview. A legacy or malformed mode resolves to `Classic`; a stale UID remains part of
+`WindowLayout::max_core_uid` but resolves to Overview until a live core returns to that group.
 
 Runtime-состояние намеренно отделено от layout:
 
@@ -225,39 +224,58 @@ transfer очищает pending dialog без команды; stale Report expor
 set. Если хотя бы одна цель, payload или scope изменились до dispatch, отменяется весь batch до
 первой команды; сохранённые Classic drafts и staging при этом не очищаются.
 
-В каждой группе остаётся один `DockArea`. Classic сохраняет `docks.json` и `detached.json` как одну
-логическую транзакцию через `window-state.pending.json`: startup replay'ит незавершённый snapshot
-до создания окон, а повторяющиеся `(group, panel)` detached-spec схлопываются до respawn.
-При входе в Auto Shell запоминает полный runtime-layout Classic по стабильным именам и применяет
-общую Auto-топологию из `auto_dock.json` к локальным `Rc<dyn PanelView>` этого окна. Топология хранит
-только дерево split, стороны, размеры и порядок вкладок: group IDs, panel payload, active tab, zoom
-и сами `Rc` между окнами не передаются. Нормализованное сравнение и revision authority Backend
-синхронизируют изменения между всеми живыми Auto-окнами без циклической перепубликации. Active tab
-остаётся локальным состоянием окна.
+Each group keeps one `DockArea`, but Classic and Auto have separate authorities. Classic persists
+`docks.json` and `detached.json` as one transaction through `window-state.pending.json`; startup
+replays an incomplete snapshot before creating windows and deduplicates repeated `(group, panel)`
+detached specs. On Auto entry, Shell retains the local Classic `DockNamedLayout`: name-based
+topology plus active-tab, zoom, and split-size metadata. It does not store opaque panel `Rc`
+identities; ordinary exact identities survive in the live `DockArea` while the name-only layout is
+transformed. Auto applies the shared topology from `auto_dock.json` to those live instances. The
+shared file contains only split structure, sides, sizes, and tab order: it never transfers group
+IDs, panel payload, active tabs, zoom, or `Rc`s between windows.
 
-При отсутствии `auto_dock.json` первая общая topology строится как вертикальный operations preset:
-гибкий верхний tab stack содержит активный «Отчёт», закреплённые слева «Чарты» и «Лог» среди
-остальных верхних вкладок; единственный нижний блок «Ордера» получает высоту ещё четырёх строк
-таблицы. После первого пользовательского изменения эта схема заменяется сохранённой общей topology;
-Classic layout в этом процессе не участвует.
+Auto entry selection is a third, deliberately narrow authority. `auto_workspace_tab_by_group` in
+`layout.toml` remembers the last activated eligible top surface per group: `ChartTabs`, `Report`,
+`Assets`, `CoreStatus`, `Log`, `Alerts`, or `Detects`. `Orders` is the separate lower surface and
+`News` is Classic-only. Missing, unknown, or stale `News` values resolve to `Report` without being
+rewritten merely because fallback was needed. Real Auto activations, including a programmatic
+`ChartTabs` reveal, update this preference; Classic activity remains in its retained
+`DockNamedLayout` and `docks.json`. During mode or shared-topology application, Shell holds its
+suppression guard until a deferred callback runs after queued Dock events, so programmatic
+`PanelActivated` and `LayoutChanged` delivery cannot overwrite either Auto preference or topology.
 
-В Auto разрешены reorder, split и resize. `ChartTabs` закреплён первым, визуально отделён от
-операционных вкладок и не может быть сдвинут или обойдён drop-операцией. Detach и close обычных
-панелей, а также detach графиков запрещены отдельно от структурного редактирования: Auto сохраняет
-полный набор рабочих поверхностей, но разрешает их reorder, split и resize. Уже откреплённые в Classic обычные
-панели временно закрываются без изменения их specs/geometry, получают локальные временные экземпляры
-в Auto dock и открываются заново после возврата в Classic; существующие detached chart windows не
-трогаются. Возврат восстанавливает Classic active tab, zoom, split sizes и исходные panel instances,
-а Auto никогда не записывает их в `docks.json`.
+Without `auto_dock.json`, the first shared topology is a vertical operations preset: the flexible
+upper tab stack contains pinned-leading `ChartTabs`, `Report`, `Log`, and the other eligible
+operational surfaces, while the single lower `Orders` surface receives four extra table rows of
+height. Auto entry activates the saved eligible per-group tab after installing the topology, with
+`Report` as the deterministic fallback. The first user reorder, split, or resize replaces the
+preset with the shared topology; the Classic layout never participates in that update.
 
-Auto rail и этот `DockArea` размещены в штатном `MoonResizablePanelGroup`: rail получает
-перетаскиваемую глобальную ширину, которую Backend сразу распространяет на остальные окна и хранит
-между запусками, а dock — явную полную cross-axis высоту. Секции rail строятся по бирже из live
-`core_exchange_names`; полное имя сервера доступно в широкой строке и tooltip. Готовое ядро
-обозначается увеличенным зелёным status dot без дублирующего текста, а проблемные состояния сохраняют
-видимую подпись в Full и полную диагностику в tooltip при Compact/Icon. Локальная подгонка rail под
-узкое окно не переписывает глобально сохранённую ширину. Terminal group остаётся authority для выбора
-своего core или активации другого group window, но не используется как визуальная группировка.
+Auto permits reorder, split, and resize. `ChartTabs` is pinned first, visually separated from the
+operational tabs, and cannot be moved or bypassed by a drop. Ordinary panel close/detach and chart
+detach remain disabled independently of structural editing. Auto contains every operational
+surface except `News`. Before applying even a stale topology that names `News`, Shell extracts every
+docked `News` occurrence and holds the first exact identity in `Shell::classic_only_panels`;
+therefore the name is absent from Auto and cannot be resurrected by the shared topology. Returning
+to Classic supplies that retained identity while applying the saved name-only `DockNamedLayout`,
+restoring its selection, zoom, split placement, and local view state. Classic detached panel specs
+and geometry are preserved while Auto is active, but detached `News` is specifically excluded from
+temporary Auto-only panel construction, so no dock clone appears. Existing detached chart windows
+remain open. Auto never writes any of this Classic state to `docks.json`.
+
+The Auto rail and `DockArea` use the standard `MoonResizablePanelGroup`. Backend publishes and
+persists one draggable global rail width, while each window applies its own fit clamp without
+rewriting that preference. The virtualized rail is a tree: Overview is the root, exchanges are
+section headings, and canonically ordered cores are indented leaves with branch connectors and
+status dots. Logos appear only on known exchange headings; unknown exchanges keep their text label
+without a placeholder, and core rows never inherit a logo. Entering Auto starts process-wide
+single-flight logo prewarm on the background executor. Each Shell publishes its own UI-thread ready
+edge and repaint; before that edge the rail performs no loading resolution, and afterward it
+resolves each distinct exchange once while flattening the list, outside the virtual row closure.
+Full and Compact retain truncating labels, while Icon uses a known exchange logo or an unknown-brand
+short label and a reduced core-leaf spacing budget. Tooltips preserve complete exchange, core, and
+status meaning at every density. The terminal group remains the authority for selecting its core or
+activating another group window, not a visual grouping key.
 
 Все три layout-класса — `layout.toml`, общая `auto_dock.json` и совместный Classic snapshot —
 сериализуются одним persistence worker. Live GPUI-контур только передаёт immutable snapshots и
@@ -266,14 +284,21 @@ Auto rail и этот `DockArea` размещены в штатном `MoonResiz
 финальный полный snapshot за уже выполняющейся записью, join'ит worker и использует синхронный
 fallback только для классов, которые worker не смог подтвердить.
 
-`ReportPanel` создаётся как лёгкая GPUI-сущность: SQLite connection/schema, список ядер, колонки и
-сохранённые display preferences загружаются на background executor и публикуются только в ещё живую
-панель. Отдельные revision-счётчики не дают позднему результату перезаписать значение, которое
-пользователь успел изменить и даже вернуть обратно. Записи sort, comment pane и visible columns
-открывают worker-owned connection вне GPUI, сериализуются общим lock и перед записью отбрасывают
-устаревший sequence своего независимого preference key; sort key/direction сохраняются одним
-SQLite statement. Natural-width cache ключуется не только scale, но и live locale плюс точной
-resolved font identity, поэтому смена языка или шрифта не оставляет старые ширины заголовков.
+`ReportPanel` is a lightweight GPUI entity: its SQLite connection/schema, core list, columns, and
+saved display preferences load on the background executor and publish only into a still-live panel.
+Independent revision counters prevent a late result from replacing a value the user changed and
+then changed back. Sort, comment-pane, and visible-column writes open a worker-owned connection
+outside GPUI, serialize through the shared lock, and reject stale per-preference sequences before
+writing; sort key and direction use one SQLite statement. Natural-width cache identity includes
+scale, live locale, and the exact resolved font, so language or font changes cannot reuse stale
+header widths.
+
+For a group-owned `AutoCore` Report only, `core_name` is contextually unavailable because every row
+already belongs to the selected core. This is a display lens, not a persistence mutation: the raw
+visible set, `app_meta`/`layout.toml`, sort state, and widths remain untouched. The grid, Columns
+menu and its All action, selection copy, and visible-columns export all use the same effective lens;
+the explicit all-columns export still uses the full runtime schema. Auto Overview, Classic, and
+standalone Report expose `core_name` according to the unchanged saved preference.
 
 ## Репликация отчётов: чекпойнт и карта живых строк
 

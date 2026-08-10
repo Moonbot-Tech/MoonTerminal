@@ -259,6 +259,13 @@ pub struct WindowLayout {
     /// configured live core returns to the group.
     #[serde(default, deserialize_with = "de_lenient_map")]
     pub auto_workspace_core_by_group: HashMap<String, u64>,
+    /// Last eligible top-level Auto workspace tab selected independently for each group.
+    ///
+    /// Classic activity remains in `docks.json`. Values are validated by the Shell when read and
+    /// written, while lenient map decoding keeps an unknown or wrong-typed hand edit from
+    /// discarding unrelated window geometry.
+    #[serde(default, deserialize_with = "de_lenient_map")]
+    pub auto_workspace_tab_by_group: HashMap<String, String>,
     /// One application-wide Auto rail width shared by every group window.
     ///
     /// The stored logical-pixel value is leniently decoded and clamped so malformed or stale

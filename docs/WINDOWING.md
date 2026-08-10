@@ -31,11 +31,11 @@ decorations, owner, taskbar policy или min size, и снова получит
 Auto — полноценное рабочее пространство внутри уже существующего группового окна, а не новый тип
 OS-window. У каждой активной группы остаётся свой `Shell`, свой единственный `DockArea` и свои
 локальные panel instances.
-Левая `MoonVirtualList` rail при этом показывает все настроенные ядра приложения: секции идут в
-алфавитном порядке бирж из live market metadata, неизвестная биржа остаётся отдельной первой
-секцией, а участники сохраняют порядок канонического `core_order::CoreOrder`. Имя ядра не
-используется для угадывания биржи. Неактивные и недоступные строки не исчезают, а показывают
-состояние и не принимают клик.
+The left `MoonVirtualList` rail shows every configured application core as an exchange tree.
+Exchange headings follow alphabetical live market metadata order, with unknown exchange first;
+their core leaves retain canonical `core_order::CoreOrder`. Known brand logos appear on exchange
+headings only, never on core rows. Core names do not infer exchange identity. Disabled or
+unavailable rows remain visible with status and reject clicks.
 
 Ядро selectable, когда активны оно и его группа, существует live session и окно группы находится в
 состоянии `Opening` или `Live`. Per-core `show_window` здесь не участвует: headless core доступен
@@ -44,23 +44,42 @@ OS-window. У каждой активной группы остаётся сво
 singleton focus и активирует уже существующее group window; panels между окнами не reparent'ятся и
 новое параллельное окно не создаётся.
 
-Rail имеет Overview только для текущей группы, но её header-сводка считает configured/ready/problem
-по всему приложению. Общая стартовая ширина `340 px` хранится в `layout.toml`, ограничивается
-диапазоном `52..560 px` и после drag-resize сразу распространяется на все открытые Auto-окна.
-Разделитель между rail и единственным `DockArea` использует `MoonResizablePanelGroup`;
-Full/Compact/Icon presentation следует за фактической шириной. На compact имена обрезаются, на icon
-остаётся короткая метка, а полное имя и status доступны в tooltip. Ready обозначается увеличенным
-зелёным dot без повторяющей подписи; ошибки и недоступность имеют видимую подпись в Full и tooltip в
-Compact/Icon. При сужении окна rail локально уступает место dock, не перезаписывая общую сохранённую
-ширину; при обратном расширении предпочтение восстанавливается.
+The rail has Overview only for its current group, while the header summary counts
+configured/ready/problem across the application. Its `340 px` initial width is stored in
+`layout.toml`, clamped to `52..560 px`, and broadcast after drag-resize to every open Auto window.
+`MoonResizablePanelGroup` separates the rail from the single `DockArea`; Full, Compact, and Icon
+follow actual width. Full and Compact keep truncating exchange/core labels. Icon uses the exchange
+logo when known, a short text fallback when unknown, and a reduced connector/gap budget that leaves
+core-label space at the minimum width. Tooltips retain the complete semantic label and status.
+Ready is an enlarged green dot without duplicate text; errors and unavailable states keep visible
+text in Full and diagnostic tooltips in Compact/Icon. A narrow window locally yields space to the
+dock without overwriting the global preference, which returns when the window expands.
 
-Auto dock использует одну общую topology-only схему из `auto_dock.json`. Она хранит split tree,
-стороны, размеры и порядок вкладок по стабильным именам, но не переносит между окнами panel payload,
-group IDs, active tab, zoom или `Rc`. Каждый Shell применяет схему к собственным живым панелям;
-изменение в одном Auto-окне через Backend revision синхронно доходит до остальных и не создаёт
-feedback loop. `ChartTabs` всегда стоит первым, визуально отделён, закреплён от drag и защищён от
-вставки вкладок перед ним. Остальные панели можно reorder'ить, делить и resize'ить. Detach обычной
-панели или chart tab в Auto запрещён до создания окна и до изменения persistence.
+Exchange-logo loading is never performed by the virtual row closure. Auto entry joins a
+process-wide single-flight prewarm on the background executor. Each Shell publishes its own ready
+edge on the UI executor and repaints; before that edge headings render without resolving logos,
+then each distinct exchange is resolved once while the flattened item list is built. Unknown
+brands keep their label and receive no fabricated logo.
+
+Auto uses one shared topology-only `auto_dock.json`: stable panel names encode split tree, sides,
+sizes, and tab order, but panel payload, group IDs, active tabs, zoom, and `Rc` identities never
+cross windows. Each Shell applies the topology to its own live panels; Backend revisions propagate
+user topology edits to other Auto windows without feedback. `ChartTabs` remains first, visually
+separate, drag-pinned, and protected against insertion before it. Other operational panels may be
+reordered, split, and resized. Detaching an ordinary panel or chart tab is rejected before window
+creation or persistence changes.
+
+Classic keeps a separate local `DockNamedLayout` containing stable-name topology plus active-tab,
+zoom, and split-size metadata. It does not hold opaque panel `Rc` identities; ordinary exact
+identities remain in the live `DockArea` while the name-only layout changes. Auto's entry tab is
+instead the per-group `auto_workspace_tab_by_group` preference in `layout.toml`. Eligible names are
+`ChartTabs`, `Report`, `Assets`, `CoreStatus`, `Log`, `Alerts` (the Figures tab), and `Detects`;
+the lower `Orders` surface and Classic-only `News` are ineligible. Missing or stale values,
+including `News`, fall back to `Report` without rewriting the stored value merely because fallback
+was used. A real user activation, drag activation, or programmatic `ChartTabs` reveal updates the
+preference. Programmatic mode/topology application keeps its guard active through deferred
+Dock-event delivery, preventing its `PanelActivated` and `LayoutChanged` events from becoming
+either a tab preference or a shared-topology edit.
 
 Отсутствующий `auto_dock.json` означает первый запуск и разрешает сохранить стартовый preset.
 Нечитаемый или невалидный файл — отдельное recovery-состояние: безопасный preset показывается
@@ -78,25 +97,29 @@ acknowledgement выставляет его снова, поэтому врем�
 единственный синхронный fallback именно на границе завершения. Повторяющиеся detached-spec с
 одинаковым `(group, panel)` схлопываются до создания native windows.
 
-Если `auto_dock.json` ещё не существует, первый Auto workspace получает вертикальный operations
-preset: гибкий верхний tab stack с активным «Отчётом», закреплёнными слева «Чартами» и «Логом» среди
-остальных верхних вкладок; единственный нижний блок «Ордера» получает высоту ещё четырёх строк
-таблицы. После первого пользовательского reorder/split/resize эта схема заменяется общей
-сохранённой topology и применяется ко всем Auto-окнам; Classic topology при этом не читается и не
-меняется.
+If `auto_dock.json` does not exist, the first Auto workspace receives a vertical operations preset:
+the flexible upper tab stack contains pinned-leading `ChartTabs`, `Report`, `Log`, and the other
+eligible operational tabs, while the single lower `Orders` surface receives four extra table rows
+of height. The saved eligible group tab is activated after the preset is installed, or `Report`
+when no valid preference exists. The first user reorder/split/resize replaces the preset with the
+shared topology for every Auto window; Classic topology is neither read nor changed.
 
-При входе в Auto полный named-layout Classic остаётся локальным runtime-состоянием Shell. Обычные
-панели, уже откреплённые в Classic, временно закрываются без удаления их specs/geometry и получают
-Auto-only экземпляры в главном dock; общий `respawn_all` пропускает Auto-группы. Закрытие ранее
-откреплённой owned-панели сначала снимает точный live handle, затем уведомляет Shell, чтобы Auto мог
-вернуть вкладку без смены режима. После возврата в Classic временные экземпляры удаляются, точный
-layout с active/zoom/sizes восстанавливается, а detached windows открываются снова по прежним specs:
-перед каждым native create выполняется настоящий timer yield, после которого повторно проверяются
-режим, ownership и shutdown. В Auto у dock-панелей нет close-кнопок: полный
-набор поверхностей сохраняется, при этом reorder/split/resize остаются доступными. Уже существующие
-detached chart windows не закрываются, но новые из Auto создать нельзя. `docks.json` и
-`detached.json` остаются исключительно
-Classic authority и не переписываются Auto-событиями.
+On Auto entry, the full Classic named layout remains local Shell runtime state. Every docked `News`
+occurrence is removed before the shared topology is applied, so `News` stays absent even when an
+older valid `auto_dock.json` names it; Shell holds the first exact docked identity in
+`Shell::classic_only_panels`. Returning to Classic supplies that identity while applying the saved
+name-only `DockNamedLayout`, restoring active, zoom, sizes, placement, and local view state. Classic
+panels already detached are temporarily closed without deleting their specs/geometry and normally
+receive Auto-only dock instances, but detached `News` is excluded so Auto never creates a
+duplicate. Closing a previously detached owned panel first removes its exact live handle, then
+notifies Shell so Auto can restore the tab without a mode change. On Classic return, temporary
+instances are removed and detached windows respawn from their original specs after a real timer
+yield and renewed mode/ownership/shutdown checks.
+
+Auto dock panels have no close buttons; every operational surface except `News` remains available
+for reorder/split/resize. Existing detached chart windows remain open, but Auto cannot create new
+ones. `docks.json` and `detached.json` remain exclusively Classic authorities and Auto events never
+rewrite them.
 
 Существующий detached chart может оставаться на другом мониторе как контекст, но каждое его
 торговое действие и переход на Main повторно проверяет актуальный rail-scope группы. График старого
@@ -119,6 +142,12 @@ chart заменяется или фокусируется без накопле
 затем через match-key/quote fallback; если подходящего рынка нет, chart не меняется. Overview не
 выбирает произвольное ядро и не ретаргетит Main chart. Classic selection и Classic dock при этом не
 меняются.
+
+A group-owned Report applies one contextual column lens to that effective scope. Only `AutoCore`
+makes `core_name` unavailable; Auto Overview, Classic, and standalone Report continue to honor the
+saved preference. The lens never mutates saved visibility, sort, or width state, and the table,
+Columns menu, selection copy, and visible-columns export all use it consistently. The explicit
+all-columns export remains the full runtime schema.
 
 Логическое владение singleton scope следует за реальным взаимодействием: native activation
 group window или detached panel обновляет `WorkspaceFocus`. Для detached chart каждое native

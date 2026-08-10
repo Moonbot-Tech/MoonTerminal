@@ -90,6 +90,41 @@ fn auto_overview_and_core_override_without_mutating_local_filter() {
     assert_eq!(retained, vec![33, 11]);
 }
 
+/// `workspace.rs:EffectiveCoreScope::is_auto_core` must inspect the explicit scope kind. Replacing
+/// it with `ids().len() == 1` hides Report's core column in one-core Classic and Auto Overview.
+#[test]
+fn auto_core_identity_is_not_inferred_from_single_id_cardinality() {
+    let group = [11];
+    let classic = resolve_group_scope(
+        WorkspaceMode::Classic,
+        Some(11),
+        &group,
+        RetainedCoreScope::All,
+    );
+    let overview = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        None,
+        &group,
+        RetainedCoreScope::All,
+    );
+    let selected = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        Some(11),
+        &group,
+        RetainedCoreScope::All,
+    );
+
+    assert!(!classic.is_auto_core(), "one-core Classic keeps core_name");
+    assert!(
+        !overview.is_auto_core(),
+        "one-core Overview keeps core_name"
+    );
+    assert!(
+        selected.is_auto_core(),
+        "selected Auto core hides core_name"
+    );
+}
+
 /// Protects singleton tools from inheriting an arbitrary persisted Auto group.
 ///
 /// Plausible breakage: scanning the mode map instead of requiring the last live focus makes

@@ -98,7 +98,7 @@ fn auto_and_classic_persist_to_separate_layout_authorities() {
 
 /// Catches relocking the Auto dock, allowing detach/close, or moving Charts back among the
 /// operational tabs in `shell/workspace.rs`; Auto must stay modular inside the main window while
-/// keeping every panel present and Charts visibly pinned at the strict leading edge.
+/// keeping every operational surface except Classic-only News and pinning Charts first.
 #[test]
 fn auto_dock_is_modular_attached_and_charts_first() {
     let workspace = code_only(&read_src("shell/workspace.rs"));
@@ -116,20 +116,25 @@ fn auto_dock_is_modular_attached_and_charts_first() {
     );
     assert!(
         mode.contains("dock.set_detach_allowed(true, dock_cx)")
-            && mode.contains("dock.set_close_allowed(true, dock_cx)"),
-        "Classic must restore its independent detach and close controls"
+            && mode.contains("dock.set_close_allowed(true, dock_cx)")
+            && mode.contains("dock.take_panel_by_name(\"News\", window, dock_cx)")
+            && mode.contains("self.classic_only_panels.clone()"),
+        "Auto must suspend docked News while Classic restores that exact retained identity"
     );
 
-    let order = chain_between(
-        &workspace,
-        "const AUTO_PANEL_ORDER",
-        "const AUTO_DOCK_MIN_WIDTH",
-        "Auto panel order",
-    );
+    let order = workspace
+        .split("const AUTO_PANEL_ORDER")
+        .nth(1)
+        .and_then(|tail| tail.split("];\n").next())
+        .expect("Auto panel order must remain a bounded static slice");
     assert!(
         order.find("\"ChartTabs\"").expect("Charts must be present")
             < order.find("\"Report\"").expect("Report must be present"),
         "Charts must be the strict first Auto tab before operational panels"
+    );
+    assert!(
+        !order.contains("\"News\"") && order.contains("\"Detects\""),
+        "every operational Auto surface except Classic-only News must remain available"
     );
     let preset = code_only(braced_body(
         &workspace,
@@ -144,8 +149,9 @@ fn auto_dock_is_modular_attached_and_charts_first() {
         "first-run Auto must keep Log in the flexible upper tabs and reserve four more rows for Orders"
     );
     assert!(
-        mode.contains("dock.activate_panel_by_name(\"Report\", window, dock_cx)"),
-        "the deterministic first-run operations layout must reveal Report rather than Charts"
+        mode.contains("resolved_auto_workspace_tab(backend.auto_workspace_tab(&self.group))")
+            && mode.contains("dock.activate_panel_by_name(&active_panel, window, dock_cx)"),
+        "Auto must reveal the saved eligible tab or its deterministic Report fallback"
     );
 }
 
@@ -421,8 +427,53 @@ fn auto_body_keeps_a_visible_dock_resizable_rail_and_exchange_sections() {
     assert!(
         rail.contains("core_exchange_names()")
             && rail.contains("exchange_names.get(&server.id).cloned()")
-            && rail.contains("RailItem::Exchange(section.exchange)"),
+            && rail.contains("RailItem::Exchange {")
+            && rail.contains("exchange: section.exchange"),
         "the rail must section canonical rows by reported exchange identity"
+    );
+}
+
+/// Catches resolving logos before the background ready edge or drawing them on core leaves;
+/// either change puts blocking SVG work back on the first UI frame or repeats brand marks on every
+/// core instead of using one exchange branch marker.
+#[test]
+fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let prewarm = code_only(braced_body(&workspace, "fn start_exchange_logo_prewarm("));
+    assert!(
+        prewarm.contains("cx.background_spawn(async { crate::media::exchange_logos::prewarm() })")
+            && prewarm.contains("this.exchange_logos_ready = true")
+            && prewarm.contains("cx.notify();"),
+        "blocking logo prewarm must publish one Shell-owned UI ready edge"
+    );
+
+    let rail = code_only(braced_body(&workspace, "fn workspace_rail("));
+    let ready = rail
+        .find("if self.exchange_logos_ready")
+        .expect("logo resolution must be gated by the ready edge");
+    let resolve = rail
+        .find("crate::media::exchange_logos::exchange_logo(exchange)")
+        .expect("ready rail build must resolve each exchange through the shared cache");
+    let virtual_list = rail
+        .find("MoonVirtualList::new(")
+        .expect("the rail must remain virtualized");
+    assert!(ready < resolve && resolve < virtual_list);
+
+    let render = code_only(braced_body(&workspace, "fn render_rail_item("));
+    let exchange = render
+        .find("RailItem::Exchange { exchange, logo }")
+        .expect("exchange headings must own the resolved logo");
+    let image = render[exchange..]
+        .find("img(logo)")
+        .map(|offset| exchange + offset)
+        .expect("exchange headings must render known brand logos");
+    let core = render
+        .find("RailItem::Core {")
+        .expect("core leaves must remain explicit");
+    assert!(exchange < image && image < core);
+    assert!(
+        !render[core..].contains("img(") && workspace.matches("exchange_logo(").count() == 1,
+        "core rows and the virtual row closure must never resolve or render exchange logos"
     );
 }
 

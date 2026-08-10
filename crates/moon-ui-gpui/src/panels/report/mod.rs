@@ -412,6 +412,19 @@ impl ReportPanel {
         Some(b.effective_workspace_scope(&self.group, retained))
     }
 
+    /// Return whether this host's display lens suppresses the redundant core-name column.
+    ///
+    /// Args:
+    ///     b: Backend snapshot containing the current group workspace scope.
+    ///
+    /// Returns:
+    ///     `true` only for a group-owned `AutoCore` Report. Standalone, Classic, and Auto Overview
+    ///     keep the raw saved `core_name` preference available.
+    pub(super) fn hide_core_name_column(&self, b: &Backend) -> bool {
+        self.workspace_scope(b)
+            .is_some_and(|scope| scope.is_auto_core())
+    }
+
     /// Return deterministic core IDs used by rows, totals, exports, menus, and metadata queries.
     ///
     /// Args:

@@ -236,6 +236,15 @@ impl EffectiveCoreScope {
         )
     }
 
+    /// Return whether Auto owns a single selected core rather than Overview.
+    ///
+    /// Returns:
+    ///     `true` only for the explicit `AutoCore` scope kind. The number of resolved IDs is not
+    ///     used because Classic and Auto Overview can each legitimately contain one core.
+    pub(crate) fn is_auto_core(&self) -> bool {
+        self.kind == EffectiveScopeKind::AutoCore
+    }
+
     /// Return localization-neutral label semantics for the selector.
     ///
     /// Returns:

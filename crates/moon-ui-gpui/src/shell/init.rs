@@ -258,6 +258,19 @@ impl Shell {
                         }
                         this.defer_restore_closed_panel(panel_name.to_string(), cx);
                     }
+                    DockEvent::PanelActivated { panel_name } => {
+                        if let Some(panel_name) = super::workspace::auto_workspace_tab_to_persist(
+                            auto,
+                            this.applying_auto_topology,
+                            panel_name,
+                        ) {
+                            let group = this.group.clone();
+                            this.backend.update(cx, |backend, _| {
+                                backend.set_auto_workspace_tab(&group, panel_name);
+                            });
+                        }
+                        return;
+                    }
                     DockEvent::TabContextMenu {
                         panel_name,
                         position,
@@ -277,7 +290,10 @@ impl Shell {
                     DockEvent::LayoutChanged => {}
                 }
                 if auto {
-                    if this.applying_auto_topology {
+                    if !super::workspace::auto_workspace_topology_is_persistable(
+                        auto,
+                        this.applying_auto_topology,
+                    ) {
                         return;
                     }
                     let topology = dock.read(cx).topology_by_name(cx);
@@ -572,8 +588,12 @@ impl Shell {
             group,
             dock,
             classic_dock_layout: None,
+            classic_only_panels: Vec::new(),
             auto_only_panels: Vec::new(),
+            exchange_logo_prewarm_started: false,
+            exchange_logos_ready: false,
             applying_auto_topology: false,
+            auto_topology_guard_generation: 0,
             workspace_resize_state,
             applied_auto_rail_width: initial_auto_rail_width,
             applied_workspace_mode: moon_core::config::WorkspaceMode::Classic,

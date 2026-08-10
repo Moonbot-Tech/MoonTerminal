@@ -358,14 +358,11 @@ impl Render for ReportPanel {
                     .child(self.columns_menu(cx)),
             );
 
-        // Table columns follow the user's persisted visibility set in every host.
-        let vis: Vec<usize> = self
-            .cols
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| self.visible.contains(c.as_str()))
-            .map(|(i, _)| i)
-            .collect();
+        // Apply the host's display lens without changing the user's persisted visibility set.
+        let hide_core_name = self.hide_core_name_column(self.backend.read(cx));
+        let vis = columns::effective_visible_columns(&self.cols, &self.visible, hide_core_name)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
         // Resolve `LoadState` before inspecting schema or visibility. A failed
         // or not-ready read can coexist with an empty cached schema and must show
         // its database note, not the user-preference message for hidden columns.

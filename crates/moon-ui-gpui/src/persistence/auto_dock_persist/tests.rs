@@ -102,8 +102,9 @@ fn saved_auto_dock_json_contains_only_name_topology() {
 
 /// Protects a damaged Auto file from programmatic topology events during fallback installation.
 ///
-/// Plausible breakage: routing `apply_topology_by_name` through the ordinary user setter would
-/// unlock persistence and replace the damaged file before the user changes any dock geometry.
+/// Plausible breakage: bypassing
+/// `shell/workspace.rs:auto_workspace_topology_is_persistable` during `apply_topology_by_name`
+/// would unlock persistence and replace the damaged file before the user changes dock geometry.
 #[test]
 fn programmatic_auto_reconciliation_keeps_invalid_persistence_locked() {
     let persistence = include_str!("../auto_dock_persist.rs");
@@ -127,7 +128,8 @@ fn programmatic_auto_reconciliation_keeps_invalid_persistence_locked() {
         "programmatic repair may dirty only startup states that allow automatic persistence"
     );
     assert!(
-        shell_init.contains("if this.applying_auto_topology {")
+        shell_init.contains("auto_workspace_topology_is_persistable(")
+            && shell_init.contains("this.applying_auto_topology")
             && shell_workspace
                 .matches("backend.reconcile_auto_dock_topology(")
                 .count()
