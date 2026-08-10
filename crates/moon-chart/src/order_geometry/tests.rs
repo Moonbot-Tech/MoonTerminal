@@ -121,6 +121,46 @@ fn moonshot_zone_keeps_moonbot_fixed_opacity() {
 }
 
 #[test]
+fn moonshot_zone_respects_visibility_toggle() {
+    let mut row = test_order_with_buy_trace();
+    row.is_moon_shot = true;
+    row.corridor_price_down = 59_000.0;
+    row.corridor_price_up = 61_000.0;
+
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[row]));
+
+    let mut style = OrdersStyle::default();
+    style.moonshot_corridor = false;
+
+    let mut zones = Vec::new();
+    let mut hlines = Vec::new();
+    let mut segs = Vec::new();
+    let mut markers = Vec::new();
+    build_order_geometry(
+        &store,
+        "BTCUSDT",
+        &style,
+        None,
+        None,
+        0.0,
+        3_000.0,
+        0.0,
+        10_000.0,
+        10_000.0,
+        &mut zones,
+        &mut hlines,
+        &mut segs,
+        &mut markers,
+    );
+
+    assert!(
+        zones.is_empty(),
+        "MoonShot corridor zone must follow the chart visibility toggle"
+    );
+}
+
+#[test]
 fn server_trace_is_separate_from_active_order_line() {
     let mut store = OrderLineStore::default();
     assert!(store.update(&[test_order_with_buy_trace()]));

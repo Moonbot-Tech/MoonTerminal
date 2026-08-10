@@ -108,7 +108,7 @@ pub fn build_order_geometry(
                     zones.push(ZoneInstance::full_width(a.min(b), a.max(b), color));
                 }
             };
-            if ord.is_moon_shot {
+            if style.moonshot_corridor && ord.is_moon_shot {
                 push_zone(
                     ord.corridor_price_down,
                     ord.corridor_price_up,
