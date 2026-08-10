@@ -255,7 +255,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -266,7 +266,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1649,7 +1649,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1881,7 +1881,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2781,7 +2781,7 @@ dependencies = [
  "hyper",
  "libc",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -3747,7 +3747,7 @@ dependencies = [
 [[package]]
 name = "moon-collections"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "indexmap",
  "moon-gpui-util",
@@ -3789,7 +3789,7 @@ dependencies = [
 [[package]]
 name = "moon-derive-refineable"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3799,7 +3799,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3881,7 +3881,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-linux"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3932,7 +3932,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-macos"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3979,7 +3979,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-macros"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3990,7 +3990,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-platform"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "console_error_panic_hook",
  "moon-gpui",
@@ -4003,7 +4003,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-shared-string"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "schemars",
  "serde",
@@ -4013,7 +4013,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-util"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "anyhow",
  "log",
@@ -4023,7 +4023,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-web"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4047,7 +4047,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-wgpu"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4076,7 +4076,7 @@ dependencies = [
 [[package]]
 name = "moon-gpui-windows"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4104,7 +4104,7 @@ dependencies = [
 [[package]]
 name = "moon-http-client"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4124,7 +4124,7 @@ dependencies = [
 [[package]]
 name = "moon-media"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -4139,7 +4139,7 @@ dependencies = [
 [[package]]
 name = "moon-perf"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "moon-collections",
  "serde",
@@ -4149,7 +4149,7 @@ dependencies = [
 [[package]]
 name = "moon-refineable"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "moon-derive-refineable",
 ]
@@ -4157,7 +4157,7 @@ dependencies = [
 [[package]]
 name = "moon-scheduler"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "async-task",
  "backtrace",
@@ -4172,7 +4172,7 @@ dependencies = [
 [[package]]
 name = "moon-sum-tree"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "heapless",
  "log",
@@ -4183,7 +4183,7 @@ dependencies = [
 [[package]]
 name = "moon-ui"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "moon-ui-components",
  "moon-ui-components-assets",
@@ -4192,7 +4192,7 @@ dependencies = [
 [[package]]
 name = "moon-ui-components"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4242,7 +4242,7 @@ dependencies = [
 [[package]]
 name = "moon-ui-components-assets"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "anyhow",
  "log",
@@ -4256,7 +4256,7 @@ dependencies = [
 [[package]]
 name = "moon-ui-components-macros"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4304,7 +4304,7 @@ dependencies = [
 [[package]]
 name = "moon-util-macros"
 version = "0.0.0"
-source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#7261995e00c9e7f94323076bc9263f2dea4692c4"
+source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#93693ec36199c6c6d92f49960704bc17dc4f5e71"
 dependencies = [
  "moon-perf",
  "quote",
@@ -5559,7 +5559,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -5597,9 +5597,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6152,7 +6152,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6737,7 +6737,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6795,7 +6795,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7138,7 +7138,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7588,7 +7588,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8487,7 +8487,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
