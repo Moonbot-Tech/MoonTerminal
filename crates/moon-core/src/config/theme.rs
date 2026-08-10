@@ -10,6 +10,32 @@ use serde::{Deserialize, Serialize};
 use super::paths;
 use crate::palette;
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeVolumeStyle {
+    ThinBars,
+    WideBars,
+    SmoothArea,
+}
+
+impl Default for TradeVolumeStyle {
+    fn default() -> Self {
+        Self::WideBars
+    }
+}
+
+impl TradeVolumeStyle {
+    pub const ALL: [Self; 3] = [Self::ThinBars, Self::WideBars, Self::SmoothArea];
+
+    pub fn shader_value(self) -> f32 {
+        match self {
+            Self::ThinBars => 0.0,
+            Self::WideBars => 1.0,
+            Self::SmoothArea => 2.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ChartTheme {
@@ -43,6 +69,22 @@ pub struct ChartTheme {
     pub candle_neutral: [u8; 3],
     /// Candle-body fill opacity, 0..1 (outlines/wicks are drawn more opaquely).
     pub candle_fill_alpha: f32,
+
+    // --- Trades and price lines ---
+    /// Trade cross size multiplier. 1.0 matches Moonbot's normal trade cross size.
+    pub trade_marker_scale: f32,
+    /// Bottom trade-volume rendering style.
+    pub trade_volume_style: TradeVolumeStyle,
+    /// Bottom trade-volume bars opacity, 0..1.
+    pub trade_volume_alpha: f32,
+    /// Bottom trade-volume bars height as a fraction of chart height, 0..1.
+    pub trade_volume_height: f32,
+    /// Price line color (sRGB).
+    pub price_line: [u8; 3],
+    /// MarkPrice line color (sRGB).
+    pub mark_price_line: [u8; 3],
+    /// Shared price/mark line thickness in physical pixels.
+    pub price_line_width: f32,
 
     // --- Order book ---
     /// Order-book background BETWEEN the best bid/ask (spread gap), sRGB.
@@ -109,6 +151,13 @@ impl Default for ChartTheme {
             candle_down: [255, 142, 90],
             candle_neutral: [128, 128, 128],
             candle_fill_alpha: 0.85,
+            trade_marker_scale: 1.0,
+            trade_volume_style: TradeVolumeStyle::WideBars,
+            trade_volume_alpha: 0.42,
+            trade_volume_height: 0.22,
+            price_line: [209, 153, 92],
+            mark_price_line: [107, 184, 255],
+            price_line_width: 1.7,
             book_bg: [30, 30, 30],
             // The two halves of the order book are lightly tinted by side; the spread gap
             // between the best bid/ask remains the neutral book_bg.
@@ -153,6 +202,13 @@ impl ChartTheme {
         self.candle_down = [255, 0, 0];
         self.candle_neutral = [150, 150, 150];
         self.candle_fill_alpha = 0.85;
+        self.trade_marker_scale = 1.0;
+        self.trade_volume_style = TradeVolumeStyle::WideBars;
+        self.trade_volume_alpha = 0.42;
+        self.trade_volume_height = 0.22;
+        self.price_line = [209, 153, 92];
+        self.mark_price_line = [107, 184, 255];
+        self.price_line_width = 1.7;
         self.book_bg = [255, 255, 255];
         self.book_bg_ask = [255, 244, 242];
         self.book_bg_bid = [243, 250, 242];

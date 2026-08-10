@@ -300,6 +300,10 @@ fn cfg_defaults_sane() {
     assert_eq!(cfg.mode, CANDLE_MODE_OUTLINE_IN_ZONE);
     assert!(cfg.trade_candles > 0);
     assert!(cfg.price_lines);
+    assert!(cfg.show_last_price_line());
+    assert!(cfg.show_mark_price_line());
+    assert!(cfg.order_traces);
+    assert!(cfg.moonshot_corridor);
     // Clamp an unknown or removed timeframe to 5 minutes, including legacy 15-minute configs.
     let bad = CandleViewCfg { tf_min: 15, ..cfg };
     assert_eq!(bad.tf_ms(), TF5);

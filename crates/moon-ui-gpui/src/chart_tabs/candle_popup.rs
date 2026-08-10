@@ -253,16 +253,56 @@ fn render_candle_popup<T: CandlePopupHost>(
             },
         )
     };
-    // "Price lines" toggles the orange LastPrice and blue MarkPrice MoonProto lines.
-    let price_lines_cb = {
+    // Price-line toggles split LastPrice and MarkPrice while preserving the legacy `price_lines`
+    // master flag for old layouts: if both are off, the master is off too.
+    let last_price_line_cb = {
         let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-price-lines")))
-            .label(t!("chart.candles.price_lines").to_string())
-            .checked(cfg.price_lines)
+        MoonCheckbox::new(SharedString::from(format!("{id}-last-price-line")))
+            .label(t!("chart.candles.last_price_line").to_string())
+            .checked(cfg.show_last_price_line())
             .size(MoonCheckboxSize::Compact)
             .on_change(move |ch: &bool, _w, app| {
                 let v = *ch;
-                write_cfg(&entity, app, |c| c.price_lines = v);
+                write_cfg(&entity, app, |c| {
+                    c.last_price_line = v;
+                    c.price_lines = c.last_price_line || c.mark_price_line;
+                });
+            })
+    };
+    let mark_price_line_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-mark-price-line")))
+            .label(t!("chart.candles.mark_price_line").to_string())
+            .checked(cfg.show_mark_price_line())
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| {
+                    c.mark_price_line = v;
+                    c.price_lines = c.last_price_line || c.mark_price_line;
+                });
+            })
+    };
+    let order_traces_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-order-traces")))
+            .label(t!("chart.candles.order_traces").to_string())
+            .checked(cfg.order_traces)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| c.order_traces = v);
+            })
+    };
+    let moonshot_corridor_cb = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-moonshot-corridor")))
+            .label(t!("chart.candles.moonshot_corridor").to_string())
+            .checked(cfg.moonshot_corridor)
+            .size(MoonCheckboxSize::Compact)
+            .on_change(move |ch: &bool, _w, app| {
+                let v = *ch;
+                write_cfg(&entity, app, |c| c.moonshot_corridor = v);
             })
     };
     let wicks_cb = {
@@ -355,7 +395,10 @@ fn render_candle_popup<T: CandlePopupHost>(
                     .child(hint_block("chart.candles.zone_hint", p, cx))
                     .child(hide_row)
                     .child(hint_block("chart.candles.hide_hint", p, cx))
-                    .child(price_lines_cb)
+                    .child(last_price_line_cb)
+                    .child(mark_price_line_cb)
+                    .child(order_traces_cb)
+                    .child(moonshot_corridor_cb)
                     .child(wicks_cb)
                     .child(neutral_cb)
                     .child(colors_hint),

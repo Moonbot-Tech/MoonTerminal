@@ -69,7 +69,7 @@ pub use schema::UiThemeMode;
 pub use secrets::Secret;
 pub use servers::{ChartBucket, CoreSortMode, FeedFlags, ServerConfig};
 pub use tab_badges::TabBadgeSettings;
-pub use theme::{ChartTheme, ChartThemeSet};
+pub use theme::{ChartTheme, ChartThemeSet, TradeVolumeStyle};
 // Keep the counter private to `config` so external code cannot construct or replace it.
 use uid_counter::UidCounter;
 

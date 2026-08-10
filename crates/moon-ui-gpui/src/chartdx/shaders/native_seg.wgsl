@@ -10,7 +10,7 @@ struct ChartView {
     volume_buy_inv: f32,
     volume_sell_inv: f32,
     volume_alpha: f32,
-    _pad2: f32,
+    volume_height_frac: f32,
 };
 
 struct GpuSeg {

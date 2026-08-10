@@ -45,6 +45,7 @@ impl RenderState {
                 orderbook_enabled,
                 price_axis_pos,
                 time_axis_visible,
+                volume_stats,
             ) = {
                 let pr = &self.panes[idx];
                 (
@@ -57,6 +58,7 @@ impl RenderState {
                     pr.orderbook_enabled,
                     pr.price_axis_pos,
                     pr.time_axis_visible,
+                    pr.layers.volume_stats(),
                 )
             };
             if !active {
@@ -293,6 +295,36 @@ impl RenderState {
             let time_to_px = (view.time_to_px / sf).max(moon_chart::view::MIN_PX_PER_MS);
             let window_ms = plot_w as f64 / time_to_px as f64;
             let left_unix = epoch_ms + view.view_time0 as f64;
+
+            let volume_max = volume_stats.max();
+            let volume_mid = volume_max * 0.5;
+            let volume_alpha = view.volume_alpha.clamp(0.0, 1.0);
+            if volume_max > 1e-6 && volume_alpha > 0.01 {
+                let volume_h = plot_h * view.volume_height_frac.clamp(0.02, 0.45);
+                let axis_x = (plot_right - 64.0).max(plot_left + 86.0);
+                let size = (self.label_font_px() - 2.0).clamp(7.0, 16.0);
+                let max_y = plot_bottom - volume_h;
+                if max_y >= plot_top + size {
+                    let text = format!("max {}", fmt_amount(volume_max));
+                    self.draw_sized_text(ctx, &text, size, axis_x - 10.0, max_y, 1.0, 0.5, ink)?;
+                }
+                if volume_mid > 1e-6 {
+                    let mid_y = plot_bottom - volume_h * 0.5;
+                    if mid_y >= plot_top + size && mid_y <= plot_bottom - size * 0.25 {
+                        let text = format!("avg {}", fmt_amount(volume_mid));
+                        self.draw_sized_text(
+                            ctx,
+                            &text,
+                            size,
+                            axis_x - 10.0,
+                            mid_y,
+                            1.0,
+                            0.5,
+                            ink,
+                        )?;
+                    }
+                }
+            }
 
             // Order-line and cursor labels align their right edges to the order book's left edge,
             // or to the separate zone on the right. With the book enabled, the plot ends at the

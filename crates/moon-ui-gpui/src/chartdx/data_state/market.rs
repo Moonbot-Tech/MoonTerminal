@@ -526,9 +526,11 @@ impl ChartDataState {
                     pixels_changed = true;
                 }
                 if history.price_lines_changed || history.combo_reset {
-                    // When Price Lines is disabled, omit last and mark lines. Changing the toggle
+                    // LastPrice and MarkPrice can be toggled independently. Changing either
                     // forces a history reset through candle_cfg_changed and reaches this branch.
-                    if candle_cfg.price_lines {
+                    let show_last = candle_cfg.show_last_price_line();
+                    let show_mark = candle_cfg.show_mark_price_line();
+                    if show_last || show_mark {
                         fill_price_upload(
                             &pr.history_buffers.last_points,
                             pane.view.epoch_ms,
@@ -541,10 +543,27 @@ impl ChartDataState {
                         );
                         crate::diag::bump_by(
                             &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
-                            (pr.last_line_upload.len() + pr.mark_line_upload.len()) as u64,
+                            (if show_last {
+                                pr.last_line_upload.len()
+                            } else {
+                                0
+                            } + if show_mark {
+                                pr.mark_line_upload.len()
+                            } else {
+                                0
+                            }) as u64,
                         );
-                        pr.layers
-                            .set_price_lines(&pr.last_line_upload, &pr.mark_line_upload);
+                        let last = if show_last {
+                            pr.last_line_upload.as_slice()
+                        } else {
+                            &pr.last_line_upload[..0]
+                        };
+                        let mark = if show_mark {
+                            pr.mark_line_upload.as_slice()
+                        } else {
+                            &pr.mark_line_upload[..0]
+                        };
+                        pr.layers.set_price_lines(last, mark);
                     } else {
                         pr.last_line_upload.clear();
                         pr.mark_line_upload.clear();
@@ -670,10 +689,23 @@ impl ChartDataState {
             // `pr.view != next_view` permanently true, so every active pane set `pixels_changed`
             // unconditionally and the base texture was rebuilt on every sync forever. Measured at
             // idle on one chart: 25 full base rebuilds a second with nothing on screen moving.
-            let mut next_view = view::view_gpu(&pane.view, area_win, res, self.last_ppp);
+            let mut next_view = view::view_gpu(
+                &pane.view,
+                area_win,
+                res,
+                self.last_ppp * self.theme.trade_marker_scale.clamp(0.5, 3.0),
+            );
             next_view.pad = view_time0
                 + (chart_area.w + glass_w)
                     / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
+            next_view.price_line = rgb4(self.theme.price_line);
+            next_view.price_line[3] = 0.82;
+            next_view.mark_price_line = rgb4(self.theme.mark_price_line);
+            next_view.mark_price_line[3] = 0.78;
+            next_view.price_line_width = self.theme.price_line_width.clamp(0.5, 6.0);
+            next_view.volume_alpha = self.theme.trade_volume_alpha.clamp(0.0, 1.0);
+            next_view.volume_height_frac = self.theme.trade_volume_height.clamp(0.02, 0.45);
+            next_view.volume_style = self.theme.trade_volume_style.shader_value();
             if pr.view != next_view {
                 pr.view = next_view;
                 pr.gpu_prepare_dirty = true;

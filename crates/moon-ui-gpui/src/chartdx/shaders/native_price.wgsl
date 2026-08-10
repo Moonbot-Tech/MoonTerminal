@@ -10,7 +10,12 @@ struct ChartView {
     volume_buy_inv: f32,
     volume_sell_inv: f32,
     volume_alpha: f32,
-    _pad2: f32,
+    volume_height_frac: f32,
+    price_line: vec4<f32>,
+    mark_price_line: vec4<f32>,
+    price_line_width: f32,
+    volume_style: f32,
+    _pad3: vec2<f32>,
 };
 
 struct PricePoint {
@@ -42,7 +47,7 @@ fn price_line_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) i
     var dir = b - a;
     let len = max(length(dir), 1e-4);
     dir = dir / len;
-    let nrm = vec2<f32>(-dir.y, dir.x) * 0.85;
+    let nrm = vec2<f32>(-dir.y, dir.x) * max(cv.price_line_width, 0.5) * 0.5;
     let along = array<f32, 6>(0.0, 1.0, 1.0, 0.0, 1.0, 0.0);
     let side = array<f32, 6>(-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
     let px = mix(a, b, along[vid]) + nrm * side[vid];
@@ -53,10 +58,10 @@ fn price_line_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) i
 
 @fragment
 fn price_last_fragment(_in: PriceLineOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.82, 0.60, 0.36, 0.82);
+    return cv.price_line;
 }
 
 @fragment
 fn price_mark_fragment(_in: PriceLineOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.42, 0.72, 1.00, 0.78);
+    return cv.mark_price_line;
 }

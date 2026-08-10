@@ -119,10 +119,14 @@ impl Render for ChartPanel {
             // Select chart-theme and line-style sets from the active light/dark theme. The light
             // set is complete in theme.toml `[light]`, with no runtime palette overrides, so its
             // colors are editable in the same way as the dark set.
-            let orders = eff.orders.get(palette.is_light()).clone();
             let theme = eff.theme.get(palette.is_light()).clone();
             // Candles use the panel's per-tab override or the global layout default.
             let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
+            let mut orders = eff.orders.get(palette.is_light()).clone();
+            orders.moonshot_corridor = candle_view.moonshot_corridor;
+            if !candle_view.order_traces {
+                orders.trace_alpha = 0.0;
+            }
             (theme, orders, b.follow, prospective, candle_view)
         };
         // Scale is PER TAB: use self.scale, updated through set_scale by the active-tab toolbar or

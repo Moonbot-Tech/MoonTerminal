@@ -15,9 +15,8 @@ impl WgpuLayers {
         book_style: &BookStyle,
     ) {
         let mut view = *view;
-        view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
-        view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
+        view.volume_buy_inv = 1.0 / self.volume_stats.buy_max.max(1e-6);
+        view.volume_sell_inv = 1.0 / self.volume_stats.sell_max.max(1e-6);
         let mut binds_dirty = false;
         binds_dirty |= self.bg_uniform.write(
             device,
@@ -215,9 +214,8 @@ impl WgpuLayers {
         readout_rects: &[ReadoutRect],
     ) {
         let mut view = *view;
-        view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
-        view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
+        view.volume_buy_inv = 1.0 / self.volume_stats.buy_max.max(1e-6);
+        view.volume_sell_inv = 1.0 / self.volume_stats.sell_max.max(1e-6);
         let mut binds_dirty = false;
         binds_dirty |= self.bg_uniform.write(
             device,

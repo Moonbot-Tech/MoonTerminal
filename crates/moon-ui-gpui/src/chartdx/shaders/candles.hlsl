@@ -17,7 +17,7 @@ cbuffer ChartView : register(b0) {
     float  cv_volume_buy_inv;
     float  cv_volume_sell_inv;
     float  cv_volume_alpha;
-    float  cv_pad2;
+    float  cv_volume_height_frac;
 };
 
 cbuffer CandleStyle : register(b1) {

@@ -10,7 +10,8 @@ struct ChartView {
     volume_buy_inv: f32,
     volume_sell_inv: f32,
     volume_alpha: f32,
-    _pad2: f32,
+    volume_height_frac: f32,
+    volume_style: f32,
 };
 
 struct Cross {
@@ -83,12 +84,15 @@ fn crosses_fragment(in: CrossOut) -> @location(0) vec4<f32> {
     }
     let buy = vec3<f32>(0.18431, 0.65882, 0.36078);
     let sell = vec3<f32>(1.0, 0.55686, 0.35294);
-    return vec4<f32>(select(buy, sell, in.side != 0u), 1.0);
+    let liq = vec3<f32>(1.0, 1.0, 0.0);
+    let rgb = select(select(liq, sell, in.side == 1u), buy, in.side == 0u);
+    return vec4<f32>(rgb, 1.0);
 }
 
 struct VolumeOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) @interpolate(flat) side: u32,
+    @location(1) local: vec2<f32>,
 };
 
 @vertex
@@ -96,21 +100,32 @@ fn volume_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: 
     let c = crosses[iid];
     var out: VolumeOut;
     let sx = cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px;
-    if sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0 {
+    if sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0 || c.side >= 2u {
         out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         out.side = 0u;
+        out.local = vec2<f32>(0.0, 0.0);
         return out;
     }
     let inv = select(cv.volume_buy_inv, cv.volume_sell_inv, c.side != 0u);
     let norm = clamp(c.qty * inv, 0.0, 1.0);
-    let band_h = min(cv.bounds.w * 0.18, 72.0);
+    let style = clamp(cv.volume_style, 0.0, 2.0);
+    let band_h = cv.bounds.w * clamp(cv.volume_height_frac, 0.02, 0.45);
     let h = max(1.0, sqrt(norm) * band_h);
     let base = cv.bounds.y + cv.bounds.w - 1.0;
-    let bar_w = clamp(cv.time_to_px * 0.35, 1.0, 3.0);
+    let bar_w = select(
+        clamp(cv.time_to_px * 0.35, 1.0, 3.0),
+        select(
+            clamp(cv.time_to_px * 1.05, 2.0, 10.0),
+            clamp(cv.time_to_px * 24.0, 24.0, 84.0),
+            style >= 1.5,
+        ),
+        style >= 0.5,
+    );
     let corner = CORNERS_01[vid];
     let px = vec2<f32>(round(sx) - bar_w * 0.5, base - h) + corner * vec2<f32>(bar_w, h);
     out.pos = to_clip(px, cv.resolution);
     out.side = c.side;
+    out.local = corner;
     return out;
 }
 
@@ -118,5 +133,9 @@ fn volume_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: 
 fn volume_fragment(in: VolumeOut) -> @location(0) vec4<f32> {
     let buy = vec3<f32>(0.18431, 0.65882, 0.36078);
     let sell = vec3<f32>(1.0, 0.55686, 0.35294);
-    return vec4<f32>(select(buy, sell, in.side != 0u), clamp(cv.volume_alpha, 0.0, 1.0));
+    var alpha = clamp(cv.volume_alpha, 0.0, 1.0);
+    if cv.volume_style >= 1.5 {
+        alpha = max(alpha, 0.74);
+    }
+    return vec4<f32>(select(buy, sell, in.side != 0u), alpha);
 }

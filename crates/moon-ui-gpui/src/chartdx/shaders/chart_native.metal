@@ -13,7 +13,12 @@ struct ChartView {
     float volume_buy_inv;
     float volume_sell_inv;
     float volume_alpha;
-    float _pad2;
+    float volume_height_frac;
+    float4 price_line;
+    float4 mark_price_line;
+    float price_line_width;
+    float volume_style;
+    float2 _pad3;
 };
 
 struct BackgroundParams {
@@ -383,31 +388,47 @@ fragment float4 crosses_fragment(CrossOut in [[stage_in]]) {
     if (((mask >> (uint)col) & 1u) == 0u) discard_fragment();
     float3 buy = float3(0.18431, 0.65882, 0.36078);
     float3 sell = float3(1.0, 0.55686, 0.35294);
-    return float4(in.side == 0 ? buy : sell, 1.0);
+    float3 liq = float3(1.0, 1.0, 0.0);
+    float3 rgb = in.side == 0 ? buy : (in.side == 1 ? sell : liq);
+    return float4(rgb, 1.0);
 }
 
-struct VolumeOut { float4 position [[position]]; uint side [[flat]]; };
+struct VolumeOut { float4 position [[position]]; uint side [[flat]]; float2 local; };
 
 vertex VolumeOut volume_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                constant ChartView& cv [[buffer(0)]],
                                const device Cross* crosses [[buffer(1)]]) {
     Cross c = crosses[iid];
     float sx = cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px;
-    if (sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0) {
-        return { float4(2.0, 2.0, 0.0, 1.0), 0 };
+    if (sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0 ||
+        c.side >= 2) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0, float2(0.0) };
     }
     float inv = c.side == 0 ? cv.volume_buy_inv : cv.volume_sell_inv;
-    float h = max(1.0, sqrt(saturate(c.qty * inv)) * min(cv.bounds.w * 0.18, 72.0));
+    float norm = saturate(c.qty * inv);
+    float style = clamp(cv.volume_style, 0.0, 2.0);
+    float band_h = cv.bounds.w * clamp(cv.volume_height_frac, 0.02, 0.45);
+    float h = max(1.0, sqrt(norm) * band_h);
     float base = cv.bounds.y + cv.bounds.w - 1.0;
-    float bar_w = clamp(cv.time_to_px * 0.35, 1.0, 3.0);
-    float2 px = float2(round(sx) - bar_w * 0.5, base - h) + CORNERS_01[vid] * float2(bar_w, h);
-    return { to_clip(px, cv.resolution), c.side };
+    float bar_w = select(
+        clamp(cv.time_to_px * 0.35, 1.0, 3.0),
+        select(clamp(cv.time_to_px * 1.05, 2.0, 10.0),
+               clamp(cv.time_to_px * 24.0, 24.0, 84.0),
+               style >= 1.5),
+        style >= 0.5);
+    float2 local = CORNERS_01[vid];
+    float2 px = float2(round(sx) - bar_w * 0.5, base - h) + local * float2(bar_w, h);
+    return { to_clip(px, cv.resolution), c.side, local };
 }
 
 fragment float4 volume_fragment(VolumeOut in [[stage_in]], constant ChartView& cv [[buffer(0)]]) {
     float3 buy = float3(0.18431, 0.65882, 0.36078);
     float3 sell = float3(1.0, 0.55686, 0.35294);
-    return float4(in.side == 0 ? buy : sell, saturate(cv.volume_alpha));
+    float alpha = saturate(cv.volume_alpha);
+    if (cv.volume_style >= 1.5) {
+        alpha = max(alpha, 0.74);
+    }
+    return float4(in.side == 0 ? buy : sell, alpha);
 }
 
 struct PriceOut { float4 position [[position]]; };
@@ -425,15 +446,22 @@ vertex PriceOut price_line_vertex(uint vid [[vertex_id]], uint iid [[instance_id
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;
-    float2 nrm = float2(-dir.y, dir.x) * 0.85;
+    float2 nrm = float2(-dir.y, dir.x) * max(cv.price_line_width, 0.5) * 0.5;
     float along = (vid == 1 || vid == 2 || vid == 4) ? 1.0 : 0.0;
     float side = (vid == 2 || vid == 4 || vid == 5) ? 1.0 : -1.0;
     float2 px = mix(a, b, along) + nrm * side;
     return { to_clip(px, cv.resolution) };
 }
 
-fragment float4 price_last_fragment() { return float4(0.82, 0.60, 0.36, 0.82); }
-fragment float4 price_mark_fragment() { return float4(0.42, 0.72, 1.00, 0.78); }
+fragment float4 price_last_fragment(PriceOut in [[stage_in]], constant ChartView& cv [[buffer(0)]]) {
+    (void)in;
+    return cv.price_line;
+}
+
+fragment float4 price_mark_fragment(PriceOut in [[stage_in]], constant ChartView& cv [[buffer(0)]]) {
+    (void)in;
+    return cv.mark_price_line;
+}
 
 struct BookOut { float4 position [[position]]; float kind [[flat]]; };
 

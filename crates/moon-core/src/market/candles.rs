@@ -55,8 +55,16 @@ pub struct CandleViewCfg {
     /// Whether to use a neutral candle color in the trade zone to avoid competing with
     /// the cross colors.
     pub neutral_in_zone: bool,
-    /// Whether to draw last/mark price lines: orange LastPrice and blue MarkPrice.
+    /// Legacy master switch for price lines. Kept for older `layout.toml`/`charts.json` files.
     pub price_lines: bool,
+    /// Whether to draw the orange LastPrice line.
+    pub last_price_line: bool,
+    /// Whether to draw the blue MarkPrice line.
+    pub mark_price_line: bool,
+    /// Whether to draw server-provided order trace geometry.
+    pub order_traces: bool,
+    /// Whether to draw the MoonShot/MoonHook corridor zone.
+    pub moonshot_corridor: bool,
 }
 
 impl Default for CandleViewCfg {
@@ -71,11 +79,25 @@ impl Default for CandleViewCfg {
             wicks_in_zone: true,
             neutral_in_zone: false,
             price_lines: true,
+            last_price_line: true,
+            mark_price_line: true,
+            order_traces: true,
+            moonshot_corridor: true,
         }
     }
 }
 
 impl CandleViewCfg {
+    /// Effective LastPrice visibility, preserving old configs where `price_lines=false`.
+    pub fn show_last_price_line(&self) -> bool {
+        self.price_lines && self.last_price_line
+    }
+
+    /// Effective MarkPrice visibility, preserving old configs where `price_lines=false`.
+    pub fn show_mark_price_line(&self) -> bool {
+        self.price_lines && self.mark_price_line
+    }
+
     /// Returns the timeframe in milliseconds, clamped to the supported set.
     ///
     /// Legacy 30-second code 0 maps to 1 minute because sub-minute settings were removed.

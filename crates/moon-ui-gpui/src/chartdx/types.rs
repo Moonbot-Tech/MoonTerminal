@@ -196,6 +196,103 @@ pub fn cross_volume_max<'a>(crosses: impl IntoIterator<Item = &'a ChartCross>) -
     (buy, sell)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolumeStats {
+    pub buy_max: f32,
+    pub sell_max: f32,
+    pub buy_sum: f32,
+    pub sell_sum: f32,
+    pub buy_count: u32,
+    pub sell_count: u32,
+}
+
+impl Default for VolumeStats {
+    fn default() -> Self {
+        Self {
+            buy_max: 1e-6,
+            sell_max: 1e-6,
+            buy_sum: 0.0,
+            sell_sum: 0.0,
+            buy_count: 0,
+            sell_count: 0,
+        }
+    }
+}
+
+impl VolumeStats {
+    pub fn scale(self) -> (f32, f32) {
+        (self.buy_max, self.sell_max)
+    }
+
+    pub fn max(self) -> f32 {
+        self.buy_max.max(self.sell_max)
+    }
+}
+
+#[allow(dead_code)]
+pub fn cross_volume_stats<'a>(crosses: impl IntoIterator<Item = &'a ChartCross>) -> VolumeStats {
+    let mut stats = VolumeStats::default();
+    for c in crosses {
+        update_one_volume_stat(&mut stats, c);
+    }
+    stats
+}
+
+fn update_one_volume_stat(stats: &mut VolumeStats, c: &ChartCross) {
+    if c.qty <= 0.0 {
+        return;
+    }
+    match c.side {
+        0 => {
+            stats.buy_max = stats.buy_max.max(c.qty);
+            stats.buy_sum += c.qty;
+            stats.buy_count = stats.buy_count.saturating_add(1);
+        }
+        1 => {
+            stats.sell_max = stats.sell_max.max(c.qty);
+            stats.sell_sum += c.qty;
+            stats.sell_count = stats.sell_count.saturating_add(1);
+        }
+        _ => {}
+    }
+}
+
+#[allow(dead_code)]
+pub fn update_cross_volume_stats(stats: &mut VolumeStats, data: &[ChartCross]) -> bool {
+    let before = *stats;
+    for c in data {
+        update_one_volume_stat(stats, c);
+    }
+    before != *stats
+}
+
+#[allow(dead_code)]
+pub fn subtract_cross_volume_stats(
+    stats: &mut VolumeStats,
+    crosses: &[ChartCross],
+    ranges: &[(usize, usize); 2],
+) {
+    for &(start, count) in ranges {
+        let end = start.saturating_add(count).min(crosses.len());
+        for c in &crosses[start.min(end)..end] {
+            if c.qty <= 0.0 {
+                continue;
+            }
+            match c.side {
+                0 => {
+                    stats.buy_sum = (stats.buy_sum - c.qty).max(0.0);
+                    stats.buy_count = stats.buy_count.saturating_sub(1);
+                }
+                1 => {
+                    stats.sell_sum = (stats.sell_sum - c.qty).max(0.0);
+                    stats.sell_count = stats.sell_count.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub fn update_cross_volume_max(max: &mut (f32, f32), data: &[ChartCross]) -> bool {
     let before = *max;
@@ -318,7 +415,12 @@ pub struct ChartViewGpu {
     pub volume_buy_inv: f32,
     pub volume_sell_inv: f32,
     pub volume_alpha: f32,
-    pub _pad2: f32,
+    pub volume_height_frac: f32,
+    pub price_line: [f32; 4],
+    pub mark_price_line: [f32; 4],
+    pub price_line_width: f32,
+    pub volume_style: f32,
+    pub _pad3: [f32; 2],
 }
 
 /// Quad blit/background uniform.

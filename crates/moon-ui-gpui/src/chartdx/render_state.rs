@@ -447,6 +447,42 @@ impl RenderState {
             }
 
             let plot_bottom = plot_top + plot_h;
+            let volume_stats = pr.layers.volume_stats();
+            let volume_alpha = pr.view.volume_alpha.clamp(0.0, 1.0);
+            if volume_stats.max() > 1e-6 && volume_alpha > 0.01 {
+                let volume_h = plot_h * pr.view.volume_height_frac.clamp(0.02, 0.45);
+                let axis_x = (plot_right - 58.0).max(plot_left + 80.0);
+                let scale_top = plot_bottom - volume_h;
+                let axis_color = [
+                    ((self.axis_label >> 16) & 0xff) as f32 / 255.0,
+                    ((self.axis_label >> 8) & 0xff) as f32 / 255.0,
+                    (self.axis_label & 0xff) as f32 / 255.0,
+                    0.80,
+                ];
+                let tick_bg = [axis_color[0], axis_color[1], axis_color[2], 0.72];
+                let transparent = [0.0, 0.0, 0.0, 0.0];
+                let line_w = (1.0 * sf).max(1.0);
+                pr.readout_rects.push(ReadoutRect {
+                    dst: [
+                        axis_x * sf,
+                        scale_top * sf,
+                        line_w,
+                        (volume_h.max(1.0)) * sf,
+                    ],
+                    bg: tick_bg,
+                    border: transparent,
+                    m: [0.0, 1.0, 1.0, 0.0],
+                });
+                for frac in [1.0_f32, 0.5] {
+                    let y = plot_bottom - volume_h * frac;
+                    pr.readout_rects.push(ReadoutRect {
+                        dst: [(axis_x - 8.0) * sf, y * sf, 16.0 * sf, line_w],
+                        bg: tick_bg,
+                        border: transparent,
+                        m: [0.0, 1.0, 1.0, 0.0],
+                    });
+                }
+            }
 
             let Some(cursor) = cursor.filter(|c| c.pane == idx) else {
                 continue;

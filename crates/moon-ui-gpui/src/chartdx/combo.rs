@@ -19,8 +19,9 @@ use super::gpu::{
     device_changed, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
 };
 use super::types::{
-    DEFAULT_VOLUME_ALPHA, append_cross_ring, cross_volume_max, evicted_cross_ranges,
-    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
+    VolumeStats, append_cross_ring, cross_volume_stats, evicted_cross_ranges, ranges_have_entries,
+    ranges_touch_volume_max, reset_cross_ring, subtract_cross_volume_stats,
+    update_cross_volume_stats,
 };
 
 const MIN_COMBO_CAPACITY: u32 = 1;
@@ -72,6 +73,9 @@ struct ComboTex {
     last_price_to_px: f32,
     last_view_price0: f32,
     last_marker_half: f32,
+    last_volume_alpha: f32,
+    last_volume_height_frac: f32,
+    last_volume_style: f32,
     valid: bool,
 }
 
@@ -103,11 +107,10 @@ pub struct ComboLayer {
     /// Device generation incremented after each recreation. The orchestrator compares it with its
     /// last value and reuploads all history because appending the live edge cannot refill a new ring.
     device_gen: u64,
-    volume_buy_max: f32,
-    volume_sell_max: f32,
+    volume_stats: VolumeStats,
     volume_scale_dirty: bool,
     volume_data_generation: u64,
-    volume_window_cache: Option<(VolumeScaleKey, (f32, f32))>,
+    volume_window_cache: Option<(VolumeScaleKey, VolumeStats)>,
 }
 
 impl ComboLayer {
@@ -129,8 +132,7 @@ impl ComboLayer {
             price_line_capacity: MIN_COMBO_CAPACITY,
             device_generation_seen: 0,
             device_gen: 0,
-            volume_buy_max: 1e-6,
-            volume_sell_max: 1e-6,
+            volume_stats: VolumeStats::default(),
             volume_scale_dirty: false,
             volume_data_generation: 0,
             volume_window_cache: None,
@@ -145,6 +147,10 @@ impl ComboLayer {
 
     pub fn has_data(&self) -> bool {
         self.count > 0
+    }
+
+    pub fn volume_stats(&self) -> VolumeStats {
+        self.volume_stats
     }
 
     pub fn set_capacity(&mut self, cross_capacity: usize, price_line_capacity: usize) {
@@ -275,7 +281,10 @@ impl ComboLayer {
         let transform_changed = tex_ref.last_time_to_px != view.time_to_px
             || tex_ref.last_price_to_px != view.price_to_px
             || tex_ref.last_view_price0 != view.view_price0
-            || tex_ref.last_marker_half != view.marker_half;
+            || tex_ref.last_marker_half != view.marker_half
+            || tex_ref.last_volume_alpha != view.volume_alpha
+            || tex_ref.last_volume_height_frac != view.volume_height_frac
+            || tex_ref.last_volume_style != view.volume_style;
         let u_left_px = (view.view_time0 - tex_ref.bake_t0) * ttp;
         let mut need_full =
             transform_changed || !tex_ref.valid || u_left_px < 0.0 || u_left_px > margin_px;
@@ -284,15 +293,14 @@ impl ComboLayer {
         } else {
             tex_ref.bake_t0
         };
-        let (buy_max, sell_max) = self.volume_scale_for_bake_window(bake_t0, tex_w as f32, ttp);
+        let window_stats = self.volume_stats_for_bake_window(bake_t0, tex_w as f32, ttp);
         let pipe = self.pipe.as_ref().unwrap();
         let tex = self.tex.as_mut().unwrap();
         if transform_changed {
             tex.valid = false;
         }
-        if (buy_max, sell_max) != (self.volume_buy_max, self.volume_sell_max) {
-            self.volume_buy_max = buy_max;
-            self.volume_sell_max = sell_max;
+        if window_stats.scale() != self.volume_stats.scale() {
+            self.volume_stats = window_stats;
             tex.valid = false;
             need_full = true;
         }
@@ -310,10 +318,15 @@ impl ComboLayer {
             marker_half: view.marker_half,
             // crosses.hlsl: combo-pass first-instance offset into the resident ring buffer.
             pad: 0.0,
-            volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
-            volume_sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
-            volume_alpha: DEFAULT_VOLUME_ALPHA,
-            _pad2: 0.0,
+            volume_buy_inv: 1.0 / self.volume_stats.buy_max.max(1e-6),
+            volume_sell_inv: 1.0 / self.volume_stats.sell_max.max(1e-6),
+            volume_alpha: view.volume_alpha,
+            volume_height_frac: view.volume_height_frac,
+            price_line: view.price_line,
+            mark_price_line: view.mark_price_line,
+            price_line_width: view.price_line_width,
+            volume_style: view.volume_style,
+            _pad3: [0.0; 2],
         };
         update_dynamic(context, &pipe.view_cb, &[bake_view]);
         let tex_vp = D3D11_VIEWPORT {
@@ -350,6 +363,9 @@ impl ComboLayer {
                 tex.last_price_to_px = view.price_to_px;
                 tex.last_view_price0 = view.view_price0;
                 tex.last_marker_half = view.marker_half;
+                tex.last_volume_alpha = view.volume_alpha;
+                tex.last_volume_height_frac = view.volume_height_frac;
+                tex.last_volume_style = view.volume_style;
                 tex.valid = true;
             } else if self.head != tex.last_baked_head {
                 // Incrementally draw only new ring ticks in [last_head, head), including wraparound.
@@ -525,7 +541,7 @@ impl ComboLayer {
             } else {
                 &data
             };
-            let before_scale = (self.volume_buy_max, self.volume_sell_max);
+            let before_scale = self.volume_stats.scale();
             let old_head = self.resident_head;
             let old_count = self.resident_count;
             let full_reset = data.len() >= cap as usize;
@@ -534,6 +550,8 @@ impl ComboLayer {
             let evicted_any = ranges_have_entries(&evicted_ranges);
             let evicted_scale_max =
                 ranges_touch_volume_max(&self.resident_crosses, &evicted_ranges, before_scale);
+            let mut next_stats = self.volume_stats;
+            subtract_cross_volume_stats(&mut next_stats, &self.resident_crosses, &evicted_ranges);
             let n = data.len() as u32;
             ring_write_no_overwrite(context, &tick_buffer, self.head, cap, data);
             self.head = (self.head + n) % cap;
@@ -552,9 +570,9 @@ impl ComboLayer {
             if full_reset || evicted_scale_max {
                 self.recalc_volume_scale();
             } else {
-                self.update_volume_scale(data);
+                self.update_volume_scale(&mut next_stats, data);
             }
-            if before_scale != (self.volume_buy_max, self.volume_sell_max) {
+            if before_scale != self.volume_stats.scale() {
                 self.volume_scale_dirty = true;
             }
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
@@ -568,26 +586,23 @@ impl ComboLayer {
     }
 
     fn recalc_volume_scale(&mut self) {
-        let (buy, sell) = cross_volume_max(self.resident_crosses.iter().take(self.resident_count));
-        self.volume_buy_max = buy;
-        self.volume_sell_max = sell;
+        self.volume_stats =
+            cross_volume_stats(self.resident_crosses.iter().take(self.resident_count));
     }
 
-    fn update_volume_scale(&mut self, data: &[ChartCross]) {
-        let mut max = (self.volume_buy_max, self.volume_sell_max);
-        update_cross_volume_max(&mut max, data);
-        self.volume_buy_max = max.0;
-        self.volume_sell_max = max.1;
+    fn update_volume_scale(&mut self, stats: &mut VolumeStats, data: &[ChartCross]) {
+        update_cross_volume_stats(stats, data);
+        self.volume_stats = *stats;
     }
 
-    fn volume_scale_for_bake_window(
+    fn volume_stats_for_bake_window(
         &mut self,
         bake_t0: f32,
         tex_w: f32,
         time_to_px: f32,
-    ) -> (f32, f32) {
+    ) -> VolumeStats {
         if !(time_to_px > 1e-9) || self.resident_count == 0 {
-            return (1e-6, 1e-6);
+            return VolumeStats::default();
         }
         let key = VolumeScaleKey {
             data_generation: self.volume_data_generation,
@@ -612,8 +627,7 @@ impl ComboLayer {
         } else {
             0
         };
-        let mut buy = 1e-6f32;
-        let mut sell = 1e-6f32;
+        let mut stats = VolumeStats::default();
         for i in 0..count {
             let idx = (start + i) % capacity;
             let Some(c) = self.resident_crosses.get(idx) else {
@@ -622,13 +636,9 @@ impl ComboLayer {
             if c.time_rel < time_left || c.time_rel > time_right || c.qty <= 0.0 {
                 continue;
             }
-            match c.side {
-                0 => buy = buy.max(c.qty),
-                1 => sell = sell.max(c.qty),
-                _ => {} // Sides >= 2 are liquidations without volume bars, so exclude them from scale.
-            }
+            update_cross_volume_stats(&mut stats, std::slice::from_ref(c));
         }
-        let out = (buy, sell);
+        let out = stats;
         self.volume_window_cache = Some((key, out));
         out
     }
@@ -725,6 +735,9 @@ impl ComboLayer {
             last_price_to_px: f32::NAN,
             last_view_price0: f32::NAN,
             last_marker_half: f32::NAN,
+            last_volume_alpha: f32::NAN,
+            last_volume_height_frac: f32::NAN,
+            last_volume_style: f32::NAN,
             valid: false,
         }
     }

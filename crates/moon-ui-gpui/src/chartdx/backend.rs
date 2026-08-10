@@ -7,7 +7,7 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, ReadoutRect,
+    GridParams, ReadoutRect, VolumeStats,
 };
 
 #[cfg(target_os = "macos")]
@@ -88,6 +88,23 @@ impl PlatformLayers {
         }
         #[allow(unreachable_code)]
         0
+    }
+
+    pub fn volume_stats(&self) -> VolumeStats {
+        #[cfg(windows)]
+        {
+            return self.combo.volume_stats();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            return self.wgpu.volume_stats();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return self.metal.volume_stats();
+        }
+        #[allow(unreachable_code)]
+        VolumeStats::default()
     }
 
     pub fn set_combo_capacity(&mut self, cross_capacity: usize, price_line_capacity: usize) {

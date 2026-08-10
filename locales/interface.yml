@@ -86,6 +86,50 @@ iface.candle_fill_alpha:
   ru: "Непрозрачность тела свечи"
   en: "Candle body opacity"
   es: "Opacidad del cuerpo de vela"
+iface.sec_trade_lines:
+  ru: "Трейды и линии цены"
+  en: "Trades and price lines"
+  es: "Trades y líneas de precio"
+iface.trade_marker_scale:
+  ru: "Размер трейдов"
+  en: "Trade marker size"
+  es: "Tamaño de marcadores de trades"
+iface.trade_volume_style:
+  ru: "Стиль нижних объёмов"
+  en: "Bottom volume style"
+  es: "Estilo del volumen inferior"
+iface.trade_volume_style.thin:
+  ru: "Тонкие столбики"
+  en: "Thin bars"
+  es: "Barras finas"
+iface.trade_volume_style.wide:
+  ru: "Широкие столбики"
+  en: "Wide bars"
+  es: "Barras anchas"
+iface.trade_volume_style.smooth:
+  ru: "MoonBot-like"
+  en: "MoonBot-like"
+  es: "MoonBot-like"
+iface.trade_volume_alpha:
+  ru: "Непрозрачность нижних объёмов"
+  en: "Bottom volume opacity"
+  es: "Opacidad del volumen inferior"
+iface.trade_volume_height:
+  ru: "Высота нижних объёмов"
+  en: "Bottom volume height"
+  es: "Altura del volumen inferior"
+iface.price_line:
+  ru: "Цвет линии Price"
+  en: "Price line color"
+  es: "Color de línea Price"
+iface.mark_price_line:
+  ru: "Цвет линии MarkPrice"
+  en: "MarkPrice line color"
+  es: "Color de línea MarkPrice"
+iface.price_line_width:
+  ru: "Толщина линий Price/MarkPrice"
+  en: "Price/MarkPrice line thickness"
+  es: "Grosor de líneas Price/MarkPrice"
 iface.sec_book:
   ru: "Стакан"
   en: "Order book"

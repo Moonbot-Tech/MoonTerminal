@@ -165,6 +165,9 @@ impl WgpuLayers {
                 last_price_to_px: 0.0,
                 last_view_price0: 0.0,
                 last_marker_half: 0.0,
+                last_volume_alpha: 0.0,
+                last_volume_height_frac: 0.0,
+                last_volume_style: 0.0,
                 valid: false,
             });
         }
@@ -198,6 +201,9 @@ impl WgpuLayers {
                 || tex.last_price_to_px != view.price_to_px
                 || tex.last_view_price0 != view.view_price0
                 || tex.last_marker_half != view.marker_half
+                || tex.last_volume_alpha != view.volume_alpha
+                || tex.last_volume_height_frac != view.volume_height_frac
+                || tex.last_volume_style != view.volume_style
             {
                 tex.valid = false;
             }
@@ -223,10 +229,15 @@ impl WgpuLayers {
             view_price0: view.view_price0,
             marker_half: view.marker_half,
             pad: 0.0,
-            volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
-            volume_sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
-            volume_alpha: DEFAULT_VOLUME_ALPHA,
-            _pad2: 0.0,
+            volume_buy_inv: 1.0 / self.volume_stats.buy_max.max(1e-6),
+            volume_sell_inv: 1.0 / self.volume_stats.sell_max.max(1e-6),
+            volume_alpha: view.volume_alpha,
+            volume_height_frac: view.volume_height_frac,
+            price_line: view.price_line,
+            mark_price_line: view.mark_price_line,
+            price_line_width: view.price_line_width,
+            volume_style: view.volume_style,
+            _pad3: [0.0; 2],
         };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -266,6 +277,9 @@ impl WgpuLayers {
             tex.last_price_to_px = view.price_to_px;
             tex.last_view_price0 = view.view_price0;
             tex.last_marker_half = view.marker_half;
+            tex.last_volume_alpha = view.volume_alpha;
+            tex.last_volume_height_frac = view.volume_height_frac;
+            tex.last_volume_style = view.volume_style;
             tex.valid = true;
             self.combo_dirty_ranges.clear();
             crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);

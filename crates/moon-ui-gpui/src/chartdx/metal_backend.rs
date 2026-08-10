@@ -18,9 +18,10 @@ use std::ffi::c_void;
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu,
-    append_cross_ring, cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
-    ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
+    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, VolumeStats, ZoneGpu, append_cross_ring,
+    cross_volume_stats, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
+    ranges_touch_volume_max, reset_cross_ring, seg_of, subtract_cross_volume_stats,
+    update_cross_volume_stats, zone_of,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");
@@ -182,6 +183,9 @@ struct ComboTexture {
     last_price_to_px: f32,
     last_view_price0: f32,
     last_marker_half: f32,
+    last_volume_alpha: f32,
+    last_volume_height_frac: f32,
+    last_volume_style: f32,
     valid: bool,
 }
 
@@ -299,8 +303,7 @@ pub struct MetalLayers {
     hlines: Vec<HLineGpu>,
     segs: Vec<SegGpu>,
     markers: Vec<MarkerGpu>,
-    volume_buy_max: f32,
-    volume_sell_max: f32,
+    volume_stats: VolumeStats,
     bg_uniform: BufferSlot,
     grid_uniform: BufferSlot,
     cursor_uniform: BufferSlot,
@@ -349,8 +352,7 @@ impl MetalLayers {
             hlines: Vec::new(),
             segs: Vec::new(),
             markers: Vec::new(),
-            volume_buy_max: 1e-6,
-            volume_sell_max: 1e-6,
+            volume_stats: VolumeStats::default(),
             bg_uniform: BufferSlot::default(),
             grid_uniform: BufferSlot::default(),
             cursor_uniform: BufferSlot::default(),
@@ -435,6 +437,10 @@ impl MetalLayers {
         self.combo_dirty_ranges.clear();
     }
 
+    pub fn volume_stats(&self) -> VolumeStats {
+        self.volume_stats
+    }
+
     pub fn reset_combo(&mut self, data: Vec<ChartCross>) {
         reset_cross_ring(
             &mut self.crosses,
@@ -459,7 +465,7 @@ impl MetalLayers {
         if data.is_empty() {
             return;
         }
-        let before_scale = (self.volume_buy_max, self.volume_sell_max);
+        let before_scale = self.volume_stats.scale();
         let old_head = self.cross_head;
         let old_count = self.cross_count;
         let full_reset = data.len() >= self.combo_capacity;
@@ -467,6 +473,8 @@ impl MetalLayers {
             evicted_cross_ranges(old_head, old_count, self.combo_capacity, data.len());
         let evicted_scale_max =
             ranges_touch_volume_max(&self.crosses, &evicted_ranges, before_scale);
+        let mut next_stats = self.volume_stats;
+        subtract_cross_volume_stats(&mut next_stats, &self.crosses, &evicted_ranges);
         append_cross_ring(
             &mut self.crosses,
             &mut self.cross_head,
@@ -481,7 +489,7 @@ impl MetalLayers {
         if full_reset || evicted_scale_max {
             self.recalc_volume_scale();
         } else {
-            self.update_volume_scale(data);
+            self.update_volume_scale(&mut next_stats, data);
         }
         self.combo_buffers_dirty = true;
         // Always FULL-bake the combo texture when crosses change. Incremental partial baking through
@@ -705,6 +713,9 @@ impl MetalLayers {
                 last_price_to_px: 0.0,
                 last_view_price0: 0.0,
                 last_marker_half: 0.0,
+                last_volume_alpha: 0.0,
+                last_volume_height_frac: 0.0,
+                last_volume_style: 0.0,
                 valid: false,
             });
         }
@@ -737,6 +748,9 @@ impl MetalLayers {
                 || tex.last_price_to_px != view.price_to_px
                 || tex.last_view_price0 != view.view_price0
                 || tex.last_marker_half != view.marker_half
+                || tex.last_volume_alpha != view.volume_alpha
+                || tex.last_volume_height_frac != view.volume_height_frac
+                || tex.last_volume_style != view.volume_style
             {
                 tex.valid = false;
             }
@@ -762,10 +776,15 @@ impl MetalLayers {
             view_price0: view.view_price0,
             marker_half: view.marker_half,
             pad: 0.0,
-            volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
-            volume_sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
-            volume_alpha: DEFAULT_VOLUME_ALPHA,
-            _pad2: 0.0,
+            volume_buy_inv: 1.0 / self.volume_stats.buy_max.max(1e-6),
+            volume_sell_inv: 1.0 / self.volume_stats.sell_max.max(1e-6),
+            volume_alpha: view.volume_alpha,
+            volume_height_frac: view.volume_height_frac,
+            price_line: view.price_line,
+            mark_price_line: view.mark_price_line,
+            price_line_width: view.price_line_width,
+            volume_style: view.volume_style,
+            _pad3: [0.0; 2],
         };
 
         let pass = metal::RenderPassDescriptor::new();
@@ -801,6 +820,9 @@ impl MetalLayers {
             tex.last_price_to_px = view.price_to_px;
             tex.last_view_price0 = view.view_price0;
             tex.last_marker_half = view.marker_half;
+            tex.last_volume_alpha = view.volume_alpha;
+            tex.last_volume_height_frac = view.volume_height_frac;
+            tex.last_volume_style = view.volume_style;
             tex.valid = true;
             self.combo_dirty_ranges.clear();
             crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
@@ -1053,9 +1075,8 @@ impl MetalLayers {
         book_style: &BookStyle,
     ) {
         let mut view = *view;
-        view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
-        view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
+        view.volume_buy_inv = 1.0 / self.volume_stats.buy_max.max(1e-6);
+        view.volume_sell_inv = 1.0 / self.volume_stats.sell_max.max(1e-6);
         self.bg_uniform
             .write(device, "moon_chart_bg_uniform", &[*background_params]);
         self.grid_uniform
@@ -1153,9 +1174,8 @@ impl MetalLayers {
         readout_rects: &[ReadoutRect],
     ) {
         let mut view = *view;
-        view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
-        view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
+        view.volume_buy_inv = 1.0 / self.volume_stats.buy_max.max(1e-6);
+        view.volume_sell_inv = 1.0 / self.volume_stats.sell_max.max(1e-6);
         self.bg_uniform
             .write(device, "moon_chart_bg_uniform", &[*background_params]);
         self.grid_uniform
@@ -1171,16 +1191,12 @@ impl MetalLayers {
     }
 
     fn recalc_volume_scale(&mut self) {
-        let (buy, sell) = cross_volume_max(self.crosses.iter().take(self.cross_count));
-        self.volume_buy_max = buy;
-        self.volume_sell_max = sell;
+        self.volume_stats = cross_volume_stats(self.crosses.iter().take(self.cross_count));
     }
 
-    fn update_volume_scale(&mut self, data: &[ChartCross]) {
-        let mut max = (self.volume_buy_max, self.volume_sell_max);
-        update_cross_volume_max(&mut max, data);
-        self.volume_buy_max = max.0;
-        self.volume_sell_max = max.1;
+    fn update_volume_scale(&mut self, stats: &mut VolumeStats, data: &[ChartCross]) {
+        update_cross_volume_stats(stats, data);
+        self.volume_stats = *stats;
     }
 }
 

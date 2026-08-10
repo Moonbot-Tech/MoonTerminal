@@ -40,6 +40,11 @@ pub fn view_gpu(
         volume_buy_inv: 0.0,
         volume_sell_inv: 0.0,
         volume_alpha: DEFAULT_VOLUME_ALPHA,
-        _pad2: 0.0,
+        volume_height_frac: 0.18,
+        price_line: [0.82, 0.60, 0.36, 0.82],
+        mark_price_line: [0.42, 0.72, 1.00, 0.78],
+        price_line_width: 1.7,
+        volume_style: 1.0,
+        _pad3: [0.0; 2],
     }
 }

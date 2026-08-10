@@ -142,6 +142,8 @@ pub struct OrdersStyle {
     pub liq: LineStyle,
     /// Path (trail) — line movement through the repricing history (optional).
     pub path: PathStyle,
+    /// Whether to draw MoonShot/MoonHook corridor fill zones.
+    pub moonshot_corridor: bool,
     /// Opacity of the server-provided order trace (`CO_OrderLine.Thikness2` in Moonbot).
     pub trace_alpha: f32,
 
@@ -190,6 +192,7 @@ impl Default for OrdersStyle {
             pending_cond,
             liq,
             path,
+            moonshot_corridor: true,
             trace_alpha: 1.0,
             active_alpha: 1.0,
             closed_alpha: 0.35,
@@ -229,6 +232,7 @@ impl OrdersStyle {
             pending_cond,
             liq,
             path,
+            moonshot_corridor: true,
             trace_alpha: 1.0,
             active_alpha: 1.0,
             closed_alpha: 0.35,

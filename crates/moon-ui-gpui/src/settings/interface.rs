@@ -4,12 +4,24 @@
 //! update the draft for live preview; Save writes `theme.toml`. [`Iface`] owns editor controls.
 
 use gpui::*;
-use moon_ui::{MoonColorPickerState, MoonPalette, MoonSliderState, v_flex};
+use moon_ui::{
+    IndexPath, MoonButtonSize, MoonColorPickerState, MoonMenuSize, MoonPalette, MoonSelect,
+    MoonSelectEvent, MoonSelectItem, MoonSelectState, MoonSliderState, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::{SettingsView, color_row, section, separator, slider_row};
-use crate::Backend;
-use moon_core::config::{ChartTheme, UiThemeMode};
+use crate::{Backend, design};
+use moon_core::config::{ChartTheme, TradeVolumeStyle, UiThemeMode};
+
+const VOLUME_STYLE_LABELS: [(&str, TradeVolumeStyle); 3] = [
+    ("iface.trade_volume_style.thin", TradeVolumeStyle::ThinBars),
+    ("iface.trade_volume_style.wide", TradeVolumeStyle::WideBars),
+    (
+        "iface.trade_volume_style.smooth",
+        TradeVolumeStyle::SmoothArea,
+    ),
+];
 
 /// Theme editor state with one retained control entity per field.
 pub(super) struct Iface {
@@ -24,6 +36,13 @@ pub(super) struct Iface {
     candle_down: Entity<MoonColorPickerState>,
     candle_neutral: Entity<MoonColorPickerState>,
     candle_fill_alpha: Entity<MoonSliderState>,
+    trade_marker_scale: Entity<MoonSliderState>,
+    trade_volume_style: Entity<MoonSelectState<TradeVolumeStyle>>,
+    trade_volume_alpha: Entity<MoonSliderState>,
+    trade_volume_height: Entity<MoonSliderState>,
+    price_line: Entity<MoonColorPickerState>,
+    mark_price_line: Entity<MoonColorPickerState>,
+    price_line_width: Entity<MoonSliderState>,
     book_bg: Entity<MoonColorPickerState>,
     book_bg_ask: Entity<MoonColorPickerState>,
     book_bg_bid: Entity<MoonColorPickerState>,
@@ -83,6 +102,76 @@ fn num_field(
             false
         }
     })
+}
+
+fn volume_style_field(
+    backend: &Entity<Backend>,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+    is_light: bool,
+) -> Entity<MoonSelectState<TradeVolumeStyle>> {
+    let cur = {
+        let b = backend.read(cx);
+        b.preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .theme
+            .get(is_light)
+            .trade_volume_style
+    };
+    let items = VOLUME_STYLE_LABELS
+        .iter()
+        .map(|(key, style)| MoonSelectItem::new(*style, t!(*key).to_string()))
+        .collect::<Vec<_>>();
+    let idx = VOLUME_STYLE_LABELS
+        .iter()
+        .position(|(_, style)| *style == cur)
+        .unwrap_or(1);
+    let state = cx.new(|cx| MoonSelectState::new(items, Some(IndexPath::new(idx)), window, cx));
+    cx.subscribe(
+        &state,
+        move |this, _e, ev: &MoonSelectEvent<TradeVolumeStyle>, cx| {
+            if let MoonSelectEvent::Confirm(Some(style)) = ev {
+                let style = *style;
+                let changed = this.backend.update(cx, |b, bcx| {
+                    let mut changed = false;
+                    if let Some(p) = b.preview.as_mut() {
+                        let theme = p.theme.get_mut(is_light);
+                        if theme.trade_volume_style != style {
+                            theme.trade_volume_style = style;
+                            bcx.notify();
+                            changed = true;
+                        }
+                    }
+                    changed
+                });
+                if changed {
+                    cx.notify();
+                }
+            }
+        },
+    )
+    .detach();
+    state
+}
+
+fn select_row<T: Clone + PartialEq + 'static>(
+    label: &str,
+    state: &Entity<MoonSelectState<T>>,
+    cx: &Context<SettingsView>,
+) -> impl IntoElement {
+    h_flex()
+        .gap(px(10.0))
+        .items_center()
+        .child(div().w(px(145.0)).child(label.to_string()))
+        .child(
+            div().w(px(220.0)).child(
+                MoonSelect::new(state)
+                    .trigger_size(MoonButtonSize::Action)
+                    .menu_width(design::font_w(cx, 220.0))
+                    .menu_size(MoonMenuSize::Compact),
+            ),
+        )
 }
 
 /// Build the theme editor from the current draft, called by `SettingsView::new`.
@@ -178,6 +267,63 @@ pub(super) fn build(
             0.0,
             1.0,
             0.01,
+        ),
+        trade_marker_scale: num_field(
+            backend,
+            cx,
+            is_light,
+            |t| t.trade_marker_scale,
+            |t, v| t.trade_marker_scale = v,
+            0.5,
+            3.0,
+            0.05,
+        ),
+        trade_volume_style: volume_style_field(backend, window, cx, is_light),
+        trade_volume_alpha: num_field(
+            backend,
+            cx,
+            is_light,
+            |t| t.trade_volume_alpha,
+            |t, v| t.trade_volume_alpha = v,
+            0.0,
+            1.0,
+            0.01,
+        ),
+        trade_volume_height: num_field(
+            backend,
+            cx,
+            is_light,
+            |t| t.trade_volume_height,
+            |t, v| t.trade_volume_height = v,
+            0.02,
+            0.45,
+            0.01,
+        ),
+        price_line: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.price_line,
+            |t, v| t.price_line = v,
+        ),
+        mark_price_line: color_field(
+            backend,
+            window,
+            cx,
+            is_light,
+            |t| t.mark_price_line,
+            |t, v| t.mark_price_line = v,
+        ),
+        price_line_width: num_field(
+            backend,
+            cx,
+            is_light,
+            |t| t.price_line_width,
+            |t, v| t.price_line_width = v,
+            0.5,
+            6.0,
+            0.1,
         ),
         book_bg: color_field(
             backend,
@@ -288,6 +434,41 @@ impl SettingsView {
             .child(slider_row(
                 &t!("iface.candle_fill_alpha"),
                 &i.candle_fill_alpha,
+                cx,
+            ))
+            .child(separator(p, cx))
+            // Trade crosses and price-line appearance.
+            .child(section(&t!("iface.sec_trade_lines"), p, cx))
+            .child(slider_row(
+                &t!("iface.trade_marker_scale"),
+                &i.trade_marker_scale,
+                cx,
+            ))
+            .child(select_row(
+                &t!("iface.trade_volume_style"),
+                &i.trade_volume_style,
+                cx,
+            ))
+            .child(slider_row(
+                &t!("iface.trade_volume_alpha"),
+                &i.trade_volume_alpha,
+                cx,
+            ))
+            .child(slider_row(
+                &t!("iface.trade_volume_height"),
+                &i.trade_volume_height,
+                cx,
+            ))
+            .child(color_row(&t!("iface.price_line"), &i.price_line, p, cx))
+            .child(color_row(
+                &t!("iface.mark_price_line"),
+                &i.mark_price_line,
+                p,
+                cx,
+            ))
+            .child(slider_row(
+                &t!("iface.price_line_width"),
+                &i.price_line_width,
                 cx,
             ))
             .child(separator(p, cx))

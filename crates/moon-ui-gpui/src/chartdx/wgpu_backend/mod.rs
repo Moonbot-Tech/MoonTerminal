@@ -10,10 +10,10 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu,
-    append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of,
+    GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, VolumeStats, ZoneGpu, append_cross_ring,
+    cross_append_ranges, cross_volume_stats, evicted_cross_ranges, hl_of, mk_of,
     ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
-    update_cross_volume_max, zone_of,
+    subtract_cross_volume_stats, update_cross_volume_stats, zone_of,
 };
 
 const BACKGROUND_SHADER: &str = include_str!("shaders/native_background.wgsl");
@@ -162,6 +162,9 @@ struct ComboTexture {
     last_price_to_px: f32,
     last_view_price0: f32,
     last_marker_half: f32,
+    last_volume_alpha: f32,
+    last_volume_height_frac: f32,
+    last_volume_style: f32,
     valid: bool,
 }
 
@@ -358,8 +361,7 @@ pub struct WgpuLayers {
     hlines: Vec<HLineGpu>,
     segs: Vec<SegGpu>,
     markers: Vec<MarkerGpu>,
-    volume_buy_max: f32,
-    volume_sell_max: f32,
+    volume_stats: VolumeStats,
     bg_uniform: BufferSlot,
     grid_uniform: BufferSlot,
     cursor_uniform: BufferSlot,

@@ -27,8 +27,7 @@ impl WgpuLayers {
             hlines: Vec::new(),
             segs: Vec::new(),
             markers: Vec::new(),
-            volume_buy_max: 1e-6,
-            volume_sell_max: 1e-6,
+            volume_stats: VolumeStats::default(),
             bg_uniform: BufferSlot::default(),
             grid_uniform: BufferSlot::default(),
             cursor_uniform: BufferSlot::default(),
@@ -112,6 +111,10 @@ impl WgpuLayers {
         self.combo_dirty_ranges.clear();
     }
 
+    pub fn volume_stats(&self) -> VolumeStats {
+        self.volume_stats
+    }
+
     pub fn reset_combo(&mut self, data: Vec<ChartCross>) {
         reset_cross_ring(
             &mut self.crosses,
@@ -136,7 +139,7 @@ impl WgpuLayers {
         if data.is_empty() {
             return;
         }
-        let before_scale = (self.volume_buy_max, self.volume_sell_max);
+        let before_scale = self.volume_stats.scale();
         let old_head = self.cross_head;
         let old_count = self.cross_count;
         let full_reset = data.len() >= self.combo_capacity;
@@ -145,6 +148,8 @@ impl WgpuLayers {
         let evicted_any = ranges_have_entries(&evicted_ranges);
         let evicted_scale_max =
             ranges_touch_volume_max(&self.crosses, &evicted_ranges, before_scale);
+        let mut next_stats = self.volume_stats;
+        subtract_cross_volume_stats(&mut next_stats, &self.crosses, &evicted_ranges);
         append_cross_ring(
             &mut self.crosses,
             &mut self.cross_head,
@@ -159,11 +164,10 @@ impl WgpuLayers {
         if full_reset || evicted_scale_max {
             self.recalc_volume_scale();
         } else {
-            self.update_volume_scale(data);
+            self.update_volume_scale(&mut next_stats, data);
         }
         self.combo_buffers_dirty = true;
-        if full_reset || evicted_any || before_scale != (self.volume_buy_max, self.volume_sell_max)
-        {
+        if full_reset || evicted_any || before_scale != self.volume_stats.scale() {
             if let Some(tex) = self.combo_texture.as_mut() {
                 tex.valid = false;
             }
@@ -240,16 +244,12 @@ impl WgpuLayers {
     }
 
     fn recalc_volume_scale(&mut self) {
-        let (buy, sell) = cross_volume_max(self.crosses.iter().take(self.cross_count));
-        self.volume_buy_max = buy;
-        self.volume_sell_max = sell;
+        self.volume_stats = cross_volume_stats(self.crosses.iter().take(self.cross_count));
     }
 
-    fn update_volume_scale(&mut self, data: &[ChartCross]) {
-        let mut max = (self.volume_buy_max, self.volume_sell_max);
-        update_cross_volume_max(&mut max, data);
-        self.volume_buy_max = max.0;
-        self.volume_sell_max = max.1;
+    fn update_volume_scale(&mut self, stats: &mut VolumeStats, data: &[ChartCross]) {
+        update_cross_volume_stats(stats, data);
+        self.volume_stats = *stats;
     }
 }
 
