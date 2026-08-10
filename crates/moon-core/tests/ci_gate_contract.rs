@@ -32,6 +32,46 @@ use std::path::PathBuf;
 /// assertion below, leaving the real gate unchecked while the suite still reported green.
 const TEST_JOB: &str = "tests";
 
+/// Every job that compiles the workspace and therefore runs the lockfile contract's three steps
+/// (verify -> refresh MoonUI -> assert nothing else moved). `audit` is deliberately excluded: it
+/// runs cargo-deny over the already-committed lock and never touches it.
+const COMPILING_JOBS: [&str; 3] = ["windows", TEST_JOB, "macos-probe"];
+
+/// The two compiling jobs that BLOCK a merge — the Windows `.exe` release gate and the `tests`
+/// gate — and so must neither be silently skipped nor downgraded to a probe. `macos-probe` is
+/// deliberately excluded here even though it shares the same `if:` condition: it already carries
+/// `continue-on-error: true` and never blocks, so there is no gate left for a quiet skip to hide
+/// behind, and it needs no guard of its own.
+const GATING_JOBS: [&str; 2] = ["windows", TEST_JOB];
+
+/// The only job-level `if:` a `GATING_JOBS` member may carry, normalized the same way
+/// [`normalize_if_condition`] normalizes what it reads from `build.yml`. The weekly `schedule:`
+/// trigger (`build.yml`'s `on:` header) exists for the `audit` job alone, so the two gates skip
+/// it and nothing else.
+const EXPECTED_SCHEDULE_EXCLUSION: &str = "github.event_name != 'schedule'";
+
+/// Normalize a job-level `if:` line for comparison against [`EXPECTED_SCHEDULE_EXCLUSION`]:
+/// strip the `if:` prefix, unwrap the optional `${{ ... }}` expression form (GitHub accepts a
+/// bare condition and an explicitly-wrapped one equally), collapse internal whitespace, and fold
+/// `'schedule'`/`"schedule"` to one quote style. A semantics-preserving YAML reformat (requoting,
+/// re-wrapping, incidental spacing) must not redden the guard that checks this — only an actual
+/// widening of the condition may.
+fn normalize_if_condition(line: &str) -> String {
+    let after_if = line.trim().strip_prefix("if:").unwrap_or_else(|| line.trim()).trim();
+    let unwrapped = after_if
+        .strip_prefix("${{")
+        .and_then(|s| s.strip_suffix("}}"))
+        .map(str::trim)
+        .unwrap_or(after_if);
+    unwrapped.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'")
+}
+
+/// The third blocking gate CONTRIBUTING.md promises, alongside `TEST_JOB` and the Windows `.exe`
+/// job: cargo-deny over the committed lock. Runs on its own weekly `schedule:` trigger too, so an
+/// advisory published against a pinned version doesn't sit unnoticed between PRs — the three
+/// `COMPILING_JOBS` skip that trigger instead.
+const AUDIT_JOB: &str = "audit";
+
 fn workflow_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -171,38 +211,54 @@ fn ci_runs_the_whole_workspace_test_suite() {
     }
 }
 
-/// Breakage guarded: demoting the gate in `.github/workflows/build.yml` — `continue-on-error:
-/// true` added to the `tests` job to unblock an unrelated PR (matching what `macos-probe`
-/// legitimately carries), or a job-level `if:` that quietly skips it. The check would still be
-/// reported, and still look like a check, while a red suite merged green.
+/// Breakage guarded: demoting a gate in `.github/workflows/build.yml` — `continue-on-error:
+/// true` added to `windows` or `tests` to unblock an unrelated PR (matching what `macos-probe`
+/// legitimately carries), or a job-level `if:` that quietly skips one of them on a trigger that
+/// matters (`push`, `pull_request`, `workflow_dispatch`) — e.g. narrowing the Windows `.exe`
+/// gate's condition to `github.event_name == 'push'` would silently skip the release-binary gate
+/// on every PR with nothing reddening. The check would still be reported, and still look like a
+/// check, while a red PR merged green.
+///
+/// The ONE narrowing either job accepts: [`EXPECTED_SCHEDULE_EXCLUSION`], compared after
+/// [`normalize_if_condition`] — added because the weekly audit-only cron (`build.yml`'s `on:`
+/// header) has no reason to also recompile the whole workspace. Anything else that happens to
+/// exclude `schedule` too — but excludes something else alongside it — must still redden; only
+/// that exact condition, in any equally-valid YAML spelling, is whitelisted.
 #[test]
-fn the_test_job_is_a_gate_not_a_probe() {
+fn the_gating_jobs_stay_gates_not_probes() {
     let text = workflow_text();
-    let body = job_body(&text, TEST_JOB)
-        .unwrap_or_else(|| panic!("build.yml must keep a `{TEST_JOB}:` job"));
+    for job in GATING_JOBS {
+        let body =
+            job_body(&text, job).unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
 
-    // `continue-on-error: false` is equivalent to omitting the key, so judge the value, not the
-    // key's presence.
-    for line in &body {
-        let Some(value) = line.trim().strip_prefix("continue-on-error:") else {
-            continue;
-        };
-        assert_eq!(
-            value.trim(),
-            "false",
-            "job `{TEST_JOB}` runs the suite, so a failure must block: `{}`",
-            line.trim()
-        );
+        // `continue-on-error: false` is equivalent to omitting the key, so judge the value, not
+        // the key's presence.
+        for line in &body {
+            let Some(value) = line.trim().strip_prefix("continue-on-error:") else {
+                continue;
+            };
+            assert_eq!(
+                value.trim(),
+                "false",
+                "job `{job}` blocks a merge, so a failure must fail the check: `{}`",
+                line.trim()
+            );
+        }
+
+        // A job-level key sits at four spaces; a step-level `if:` is nested deeper and is not
+        // this test's business.
+        let skipped = body.iter().find(|line| line.starts_with("    if:"));
+        if let Some(line) = skipped {
+            assert_eq!(
+                normalize_if_condition(line),
+                EXPECTED_SCHEDULE_EXCLUSION,
+                "job `{job}` must run on every trigger that matters (push, pull_request, \
+                 workflow_dispatch) — the only accepted narrowing skips the audit-only weekly \
+                 schedule, nothing broader: `{}`",
+                line.trim()
+            );
+        }
     }
-
-    // A job-level key sits at four spaces; a step-level `if:` is nested deeper and is not this
-    // test's business.
-    let skipped = body.iter().find(|line| line.starts_with("    if:"));
-    assert!(
-        skipped.is_none(),
-        "job `{TEST_JOB}` must run unconditionally: `{}`",
-        skipped.map(|l| l.trim()).unwrap_or_default()
-    );
 }
 
 /// Breakage guarded: dropping `pull_request` from `.github/workflows/build.yml`'s `on:`
@@ -224,4 +280,168 @@ fn the_workflow_still_runs_on_pull_requests() {
         triggers.lines().any(|line| line.trim() == "pull_request:"),
         "build.yml must stay triggered by pull_request, or nothing is checked before merge:\n{triggers}"
     );
+}
+
+/// Breakage guarded: `.github/workflows/build.yml`'s `audit` job — the third of the three
+/// blocking gates CONTRIBUTING.md now promises — gets deleted, demoted with `continue-on-error:
+/// true` (matching what `macos-probe` legitimately carries), or narrowed to drop the `sources`
+/// (or `advisories`) check from cargo-deny's `command:`. Any of the three lets a supply-chain
+/// regression — an advisory published against a pinned version, or a git source nobody approved
+/// — merge silently while the job still looks green, or simply stops existing.
+#[test]
+fn the_audit_job_is_a_gate_that_actually_runs_cargo_deny() {
+    let text = workflow_text();
+    let body = job_body(&text, AUDIT_JOB).unwrap_or_else(|| {
+        panic!("build.yml must keep an `{AUDIT_JOB}:` job — CONTRIBUTING.md promises three blocking gates")
+    });
+
+    // `continue-on-error: false` is equivalent to omitting the key, so judge the value, not the
+    // key's presence — same convention as `the_gating_jobs_stay_gates_not_probes`.
+    for line in &body {
+        let Some(value) = line.trim().strip_prefix("continue-on-error:") else {
+            continue;
+        };
+        assert_eq!(
+            value.trim(),
+            "false",
+            "job `{AUDIT_JOB}` runs the supply-chain gate, so a failure must block: `{}`",
+            line.trim()
+        );
+    }
+
+    // A job-level key sits at four spaces, same as `the_gating_jobs_stay_gates_not_probes`.
+    // Unlike `GATING_JOBS`, `audit` legitimately has no `if:` at all — the weekly `schedule:`
+    // trigger exists FOR this job, so it must run on every trigger, not skip any of them.
+    let skipped = body.iter().find(|line| line.starts_with("    if:"));
+    assert!(
+        skipped.is_none(),
+        "job `{AUDIT_JOB}` must run unconditionally — the weekly schedule trigger exists for it: `{}`",
+        skipped.map(|l| l.trim()).unwrap_or_default()
+    );
+
+    let command_line = body
+        .iter()
+        .find(|line| line.trim().starts_with("command:"))
+        .unwrap_or_else(|| panic!("job `{AUDIT_JOB}` must invoke cargo-deny's `command:` input"));
+    let command = command_line
+        .trim()
+        .strip_prefix("command:")
+        .expect("matched by the find() above")
+        .trim();
+
+    for check in ["advisories", "sources"] {
+        assert!(
+            command.split_whitespace().any(|token| token == check),
+            "job `{AUDIT_JOB}` must run cargo-deny's `{check}` check — dropping it lets exactly \
+             the regression this gate exists for merge unnoticed: `{command}`"
+        );
+    }
+}
+
+/// Breakage guarded: a well-meaning reorder in `.github/workflows/build.yml`'s lockfile contract
+/// (verify -> refresh MoonUI -> assert nothing else moved), in any compiling job. `cargo fetch
+/// --locked` only proves the committed lock agrees with the manifests when it runs BEFORE
+/// anything can rewrite the lock; run after `cargo update`, it only proves the lock agrees with
+/// itself. `assert-only-moonui-moved.sh` only has a refreshed lock to inspect once `cargo
+/// update` has actually run — moved ahead of it, or deleted outright, a MoonUI refresh that
+/// drags an unaudited third-party version along goes unnoticed while the job stays green.
+#[test]
+fn the_lockfile_contracts_three_steps_run_in_order_in_every_compiling_job() {
+    let text = workflow_text();
+    for job in COMPILING_JOBS {
+        let body = job_body(&text, job)
+            .unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
+
+        let fetch_idx = body
+            .iter()
+            .position(|line| line.trim_start().starts_with("run:") && line.contains("cargo fetch --locked"))
+            .unwrap_or_else(|| {
+                panic!("job `{job}` must verify the committed lockfile with `cargo fetch --locked`")
+            });
+        let update_idx = body
+            .iter()
+            .position(|line| line.trim_start().starts_with("run:") && line.contains("cargo update"))
+            .unwrap_or_else(|| panic!("job `{job}` must refresh MoonUI with a `cargo update` step"));
+        let assert_idx = body
+            .iter()
+            .position(|line| {
+                line.trim_start().starts_with("run:") && line.contains("assert-only-moonui-moved.sh")
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "job `{job}` must run `.github/scripts/assert-only-moonui-moved.sh` — without \
+                     it, a MoonUI refresh that drags an unaudited third-party version along goes \
+                     unnoticed"
+                )
+            });
+
+        assert!(
+            fetch_idx < update_idx,
+            "job `{job}` must run `cargo fetch --locked` BEFORE `cargo update` — afterwards \
+             `--locked` only proves the lock agrees with itself, not with the manifests"
+        );
+        assert!(
+            update_idx < assert_idx,
+            "job `{job}` must run `assert-only-moonui-moved.sh` AFTER `cargo update` — it \
+             inspects the refresh's result, so run any earlier it has nothing yet to compare"
+        );
+    }
+}
+
+/// The three, and only three, crates the CI refresh is allowed to name — matching
+/// `build.yml`'s own header ("refreshes the three Moonbot-owned MoonUI crates, and only those").
+const MOONUI_REFRESH_CRATES: [&str; 3] = ["moon-gpui", "moon-gpui-platform", "moon-ui"];
+
+/// The `-p <name>` package arguments a `cargo update ...` command line names, in the order they
+/// appear. Anchored on the token immediately following each `-p`, so an unrelated flag elsewhere
+/// on the line cannot be mistaken for a package name.
+fn dash_p_packages(command: &str) -> Vec<&str> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    tokens
+        .windows(2)
+        .filter(|pair| pair[0] == "-p")
+        .map(|pair| pair[1])
+        .collect()
+}
+
+/// Breakage guarded: a compiling job's MoonUI refresh drifts from EXACTLY `moon-gpui`,
+/// `moon-gpui-platform` and `moon-ui` — a bare `cargo update` (moving every third-party version
+/// the committed lock exists to freeze), a `-p moonproto` grown onto it (letting MoonProto move
+/// on every CI run instead of by a deliberate, reviewed `cargo update -p moonproto` commit), or
+/// one of the three swapped for something else entirely (e.g. `-p serde`, which would leave
+/// MoonUI itself never refreshed while still looking like the documented step ran).
+#[test]
+fn the_moonui_refresh_stays_scoped_and_never_touches_moonproto() {
+    let text = workflow_text();
+    let mut expected = MOONUI_REFRESH_CRATES.to_vec();
+    expected.sort_unstable();
+
+    for job in COMPILING_JOBS {
+        let body = job_body(&text, job)
+            .unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
+
+        let update_lines: Vec<&str> = body
+            .iter()
+            .filter(|line| line.trim_start().starts_with("run:") && line.contains("cargo update"))
+            .copied()
+            .collect();
+
+        assert!(
+            !update_lines.is_empty(),
+            "job `{job}` must refresh MoonUI with a `cargo update` step"
+        );
+
+        for line in update_lines {
+            let mut named = dash_p_packages(line);
+            named.sort_unstable();
+            assert_eq!(
+                named, expected,
+                "job `{job}` must refresh exactly the three MoonUI crates \
+                 (moon-gpui, moon-gpui-platform, moon-ui) and nothing else — a bare `cargo \
+                 update`, a dropped crate, an added one, or `-p moonproto` all defeat the \
+                 lockfile freeze: `{}`",
+                line.trim()
+            );
+        }
+    }
 }

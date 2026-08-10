@@ -147,7 +147,9 @@ cargo build -p moon-ui-gpui --bin moonterminal
 | `make check` | проверка типов |
 | `make fmt` | `cargo fmt` |
 | `make clean` | очистить `target` |
-| `make update-moon-ui` | обновить локальный игнорируемый `Cargo.lock` для «плавающих» Git-зависимостей |
+| `make update-moon-ui` | сдвинуть пин MoonUI в коммитимом `Cargo.lock` |
+| `make update-moonproto` | сдвинуть пин MoonProto (отдельным осознанным коммитом) |
+| `make update-all` | сдвинуть ВСЁ, включая сторонние пины — снимает заморозку версий |
 
 Makefile выбирает MSVC-таргет на Windows и нативный таргет на macOS/Linux.
 

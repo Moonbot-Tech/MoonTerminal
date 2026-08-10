@@ -3,18 +3,22 @@
 # other developers have actually pushed — the repo itself AND the Moonbot-owned
 # Cargo git dependencies (MoonUI, MoonProtoBeta, ...).
 #
-# Why the dependencies need a step of their own: they are git deps pinned by a
-# git-ignored, LOCAL-ONLY Cargo.lock. Cargo never re-resolves a branch dep once
-# locked, so this checkout can sit on a months-old MoonUI while CI — which has
-# no Cargo.lock — compiles the current one, and the two silently disagree.
+# Why the dependencies need a step of their own: Cargo.lock is COMMITTED and
+# freezes every third-party version, while cargo never re-resolves a branch dep
+# once locked. CI refreshes MoonUI on every run, so this checkout sits on the
+# committed MoonUI pin and lags CI by design — this step tells you by how much.
 #
 # Safety rules, in order of importance:
 #   * NEVER touch a dirty tree or a non-main branch — report only.
 #   * NEVER fail the session: every path exits 0, all network work is bounded.
-#   * ONLY Moonbot-owned sources are refreshed. Third-party forks (zed, smol-rs)
-#     stay pinned on purpose — auto-bumping those is how builds break.
+#   * ONLY MoonUI is ever refreshed automatically. MoonProto moves solely by a
+#     deliberate human `cargo update -p moonproto` + commit, and third-party
+#     forks (zed, smol-rs) stay pinned on purpose — auto-bumping those is how
+#     builds break.
 #
-# Set MOON_SYNC_DEPS=0 to report dependency drift without running cargo update.
+# REPORT-ONLY by default, because Cargo.lock is tracked: an automatic rewrite
+# would hand you a dirty tree you did not create, one commit away from riding
+# along in an unrelated PR. Set MOON_SYNC_DEPS=1 to let it run cargo update.
 #
 # Two Windows traps this script exists to sidestep, both found by testing:
 #   * python print() emits CRLF here, so a naive compare against a git hash
@@ -216,6 +220,10 @@ for url, (name, branch, rev) in seen.items():
             add "${short}: проверить не удалось (сеть/доступ) — пин ${rev:0:8}"
         elif [ "$head" = "$rev" ]; then
             add "${short}: свежий (${rev:0:8})"
+        elif [ "$pkg" = "moonproto" ]; then
+            # Deliberately outside the automatic path: MoonProto is frozen until a human moves it
+            # and commits the tracked lock. CI never bumps it either.
+            add "${short}: ОТСТАЁТ — пин ${rev:0:8}, сейчас ${head:0:8}; двигается только вручную: cargo update -p moonproto + коммит"
         else
             cargo_args+=("-p" "$pkg")
             manual_command="${manual_command} -p ${pkg}"
@@ -245,10 +253,10 @@ for url, (name, branch, rev) in seen.items():
 
         if [ -n "$update_blocker" ]; then
             add "-> автоматически НЕ обновлено (${update_blocker}); после синхронизации main: ${manual_command}"
-        elif [ "${MOON_SYNC_DEPS:-1}" = "0" ] || ! command -v cargo >/dev/null 2>&1; then
+        elif [ "${MOON_SYNC_DEPS:-0}" != "1" ] || ! command -v cargo >/dev/null 2>&1; then
             add "-> обновить вручную: ${manual_command}"
         elif run_with_timeout 180 cargo update "${cargo_args[@]}" >/dev/null 2>&1; then
-            add "-> обновлено: ${stale_names}(Cargo.lock переписан — следующая сборка будет длиннее)"
+            add "-> обновлено: ${stale_names}(Cargo.lock ОТСЛЕЖИВАЕТСЯ и теперь изменён: закоммитьте осознанно или git checkout -- Cargo.lock)"
         else
             add "-> cargo update НЕ прошёл, обновите вручную: ${manual_command}"
         fi

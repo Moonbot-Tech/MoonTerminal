@@ -1,7 +1,6 @@
 /target
 /tmp/
 /.cargo/
-/Cargo.lock
 # Local configs containing keys — NEVER commit them.
 # Rules are anchored to the root (leading "/"), so EACH location must be listed
 # separately: on Windows, the data directory is next to the exe, while running the build from the
@@ -15,8 +14,8 @@
 /cfg/
 /data/
 /backups/
-# Cargo.lock is local and ignored: the terminal uses the current Git dependencies
-# from the public Cargo.toml, while local development can override MoonUI via .cargo/config.toml.
+# Cargo.lock IS committed: third-party versions move only in a deliberate commit. `.cargo/` stays
+# ignored, and a MoonUI override living there rewrites the tracked lock — revert it before you commit.
 /legasy
 *.log
 /docAi

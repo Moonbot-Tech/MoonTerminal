@@ -1,8 +1,11 @@
 version: 2
 updates:
   # Keep the GitHub Actions used by the workflows up to date.
-  # Scoped to github-actions only: Cargo.lock is intentionally not committed,
-  # so there is no lockfile for a cargo ecosystem entry to update.
+  # Scoped to github-actions only, deliberately. Cargo.lock is committed now, so a `cargo`
+  # ecosystem entry would work — but it would open a stream of automatic version-bump PRs,
+  # which is the opposite of a freeze whose whole point is that third-party versions move
+  # when a human decides to move them. Vulnerabilities are covered by the cargo-deny gate
+  # in build.yml instead.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
