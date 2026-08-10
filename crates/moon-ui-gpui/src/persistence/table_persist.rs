@@ -1,4 +1,4 @@
-//! Generic `MoonDataTable` column-layout persistence in `layout.toml`.
+//! Table persistence helpers for `layout.toml`.
 //!
 //! After choosing a stable persistence ID, a table restores widths when it creates state:
 //! `state.column_widths = table_persist::saved(backend, &id);`
@@ -9,19 +9,26 @@
 //!
 //! Widths live in `layout.table_column_widths`. Mutations set `layout_dirty`, and the shared
 //! debounced/quit save path writes the layout. Visible-column sets use the parallel [`visible`]
-//! and [`set_visible`] helpers. Supporting another table requires no table-specific code here.
+//! and [`set_visible`] helpers. Supporting another table's columns requires no table-specific code
+//! here.
+//!
+//! The module also owns the SIBLING per-context preferences of those tables — [`report_filters`]
+//! and [`set_report_filters`] — because they are keyed by the same [`ctx_id`] and written under the
+//! same compare-then-mark-dirty contract. Keeping every writer of that contract in one file is the
+//! point; a panel that reaches into `layout` directly is the drift this prevents.
 
 use std::collections::HashMap;
 
 use gpui::{AnyElement, App, Entity, IntoElement, SharedString};
+use moon_core::config::ReportFilterPrefs;
 use moon_ui::{MoonButton, MoonButtonSize, MoonDataTableState};
 
 use crate::Backend;
 
-/// Returns a context-qualified storage ID for table widths and visible fields.
+/// Returns a context-qualified storage ID for a table and its sibling preferences.
 ///
 /// A docked tab uses `base:dock`; a detached or separately opened window uses `base:win`.
-/// Separate keys let a narrow tab and a wide window retain different widths and column sets.
+/// Separate keys let a narrow tab and a wide window retain different layouts and related choices.
 pub fn ctx_id(base: &str, detached: bool) -> String {
     format!("{base}:{}", if detached { "win" } else { "dock" })
 }
@@ -100,6 +107,32 @@ pub fn set_visible(backend: &Entity<Backend>, id: &str, keys: Vec<String>, cx: &
     backend.update(cx, |b, _| {
         if b.layout.table_visible_columns.get(id) != Some(&keys) {
             b.layout.table_visible_columns.insert(id.to_string(), keys);
+            b.layout_dirty = true;
+        }
+    });
+}
+
+/// Returns the stored Report toolbar filters for `id`, borrowed from the live layout.
+///
+/// `None` means nothing was ever stored for that host context, which leaves the panel's own
+/// defaults standing. Pass the same context-qualified id used for widths.
+pub fn report_filters<'a>(backend: &'a Backend, id: &str) -> Option<&'a ReportFilterPrefs> {
+    backend.layout.report_filters.get(id)
+}
+
+/// Stores the Report toolbar filters for `id` when they differ from what is already there.
+///
+/// The same compare-then-mark-dirty rule as [`set_visible`]: an unchanged set writes nothing and
+/// leaves `layout_dirty` alone, so a no-op toolbar click cannot schedule a layout flush.
+pub fn set_report_filters(
+    backend: &Entity<Backend>,
+    id: &str,
+    prefs: ReportFilterPrefs,
+    cx: &mut App,
+) {
+    backend.update(cx, |b, _| {
+        if b.layout.report_filters.get(id) != Some(&prefs) {
+            b.layout.report_filters.insert(id.to_string(), prefs);
             b.layout_dirty = true;
         }
     });

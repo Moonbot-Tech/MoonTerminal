@@ -58,8 +58,8 @@ pub use hotkeys::{
 };
 pub use lang::Language;
 pub use layout::{
-    clamp_auto_workspace_rail_width, DetachedLayout, GeomRect, GroupLayout, WindowLayout,
-    WorkspaceMode, AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
+    clamp_auto_workspace_rail_width, DetachedLayout, GeomRect, GroupLayout, ReportFilterPrefs,
+    WindowLayout, WorkspaceMode, AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
     AUTO_WORKSPACE_RAIL_WIDTH_MIN,
 };
 pub use news_tags::NewsTagSettings;

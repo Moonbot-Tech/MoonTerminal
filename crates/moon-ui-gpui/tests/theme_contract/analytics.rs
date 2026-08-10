@@ -2061,3 +2061,30 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
          a global-cache lock and a fresh key string for every one of them"
     );
 }
+
+/// Every one of the four Report toolbar filter mutators must route its change through
+/// `persist_filters`, or that member appears to work until the panel or window is reopened and
+/// the edit is silently gone.
+///
+/// `moon-ui-gpui` is a binary crate, so these click handlers live in GPUI closures no integration
+/// test can call — the wiring can only be pinned at the source level, the same technique as
+/// `tuner_field_checkboxes_persist_every_change`. The pure decode/assemble half of the same
+/// contract is covered by unit tests in `panels/report/tests.rs`, which this file cannot reach.
+///
+/// Mutation: deleting any one `self.persist_filters(` call below reddens its own assertion.
+#[test]
+fn every_report_filter_mutator_persists_its_change() {
+    let actions = code_only(&read_src("panels/report/actions.rs"));
+    for signature in [
+        "pub(super) fn set_side(&mut self, s: SideFilter, cx: &mut Context<Self>) {",
+        "pub(super) fn set_period(&mut self, p: Period, cx: &mut Context<Self>) {",
+        "pub(super) fn set_kind(&mut self, k: ReportKind, cx: &mut Context<Self>) {",
+        "pub(super) fn set_deleted_only(&mut self, on: bool, cx: &mut Context<Self>) {",
+    ] {
+        let body = code_only(braced_body(&actions, signature));
+        assert!(
+            body.contains("self.persist_filters("),
+            "{signature} changes a Report toolbar filter and must persist it"
+        );
+    }
+}

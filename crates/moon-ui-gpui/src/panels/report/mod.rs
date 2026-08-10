@@ -72,39 +72,111 @@ use moon_core::session::CoreId;
 pub use window::open_scoped;
 
 /// Moonbot-style report period presets with selected-zone civil-day boundaries.
+///
+/// Two families, deliberately named apart because a preset that only says "week" or "year" cannot
+/// be read: a CALENDAR preset starts at the period's own boundary (Monday, the 1st, January 1st),
+/// while a ROLLING one counts a fixed number of days back from today inclusive. The menu keeps the
+/// families in separate groups for the same reason.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Period {
     All,
     Today,
     Yesterday,
-    Week,
-    /// The calendar month from the 1st to today, unlike `Month`, which counts 30
-    /// days back regardless of where the month boundary falls.
+    /// The calendar week from Monday to today.
+    CurWeek,
+    /// The calendar month from the 1st to today.
     CurMonth,
-    Month,
-    Year,
+    /// The calendar year from January 1st to today.
+    CurYear,
+    /// The rolling seven days ending today.
+    Days7,
+    /// The rolling thirty days ending today.
+    Days30,
+    /// The rolling three hundred and sixty-five days ending today.
+    Days365,
 }
 
 impl Period {
-    pub(super) const ALL: [Self; 7] = [
-        Self::All,
-        Self::Today,
-        Self::Yesterday,
-        Self::Week,
-        Self::CurMonth,
-        Self::Month,
-        Self::Year,
+    /// The menu's four groups in display order, rendered with a separator between them.
+    ///
+    /// This is the single declaration of menu membership and grouping, so a variant added without
+    /// a home here remains unreachable from the menu rather than being silently appended.
+    pub(super) const GROUPS: [&'static [Self]; 4] = [
+        &[Self::Today, Self::Yesterday],
+        &[Self::CurWeek, Self::CurMonth, Self::CurYear],
+        &[Self::Days7, Self::Days30, Self::Days365],
+        &[Self::All],
     ];
 
+    /// Return the stable menu-item element id for this preset.
+    ///
+    /// Named rather than positional so reordering [`Self::GROUPS`] cannot silently re-point a menu
+    /// item at a different preset. Returned whole and `'static` because the menu is rebuilt on the
+    /// panel's render path, where formatting nine ids per frame would allocate for nothing.
+    ///
+    /// Returns:
+    ///     The element id, unique across the menu.
+    pub(super) fn menu_key(self) -> &'static str {
+        match self {
+            Self::All => "rp-all",
+            Self::Today => "rp-today",
+            Self::Yesterday => "rp-yesterday",
+            Self::CurWeek => "rp-cur-week",
+            Self::CurMonth => "rp-cur-month",
+            Self::CurYear => "rp-cur-year",
+            Self::Days7 => "rp-days-7",
+            Self::Days30 => "rp-days-30",
+            Self::Days365 => "rp-days-365",
+        }
+    }
+
+    /// Restore a preset from a persisted [`Self::menu_key`].
+    ///
+    /// Deliberately its OWN exhaustive match rather than a lookup over [`Self::GROUPS`]. Deriving
+    /// it from the menu would make writing and reading share one authority: dropping a variant
+    /// from `GROUPS`, or renaming every key coherently, would keep a round-trip green while every
+    /// value already on disk silently stopped restoring.
+    ///
+    /// Args:
+    ///     key: Stored menu key.
+    ///
+    /// Returns:
+    ///     The preset, or `None` for a key this build does not know — which leaves the panel's own
+    ///     default standing.
+    pub(super) fn from_menu_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "rp-all" => Self::All,
+            "rp-today" => Self::Today,
+            "rp-yesterday" => Self::Yesterday,
+            "rp-cur-week" => Self::CurWeek,
+            "rp-cur-month" => Self::CurMonth,
+            "rp-cur-year" => Self::CurYear,
+            "rp-days-7" => Self::Days7,
+            "rp-days-30" => Self::Days30,
+            "rp-days-365" => Self::Days365,
+            _ => return None,
+        })
+    }
+
+    /// Return this preset's localized menu label.
+    ///
+    /// The rolling presets deliberately keep the older `report.period.week`/`.month`/`.year` keys,
+    /// whose values now name a day count in all three languages: a bare "week" beside a calendar
+    /// "this week" is exactly the ambiguity the grouping exists to remove.
+    ///
+    /// Returns:
+    ///     The label in the active locale.
     pub(super) fn label(self) -> String {
         match self {
             Self::All => t!("report.filter.all"),
             Self::Today => t!("report.period.today"),
             Self::Yesterday => t!("report.period.yesterday"),
-            Self::Week => t!("report.period.week"),
+            Self::CurWeek => t!("report.period.cur_week"),
             Self::CurMonth => t!("report.period.cur_month"),
-            Self::Month => t!("report.period.month"),
-            Self::Year => t!("report.period.year"),
+            Self::CurYear => t!("report.period.cur_year"),
+            Self::Days7 => t!("report.period.week"),
+            Self::Days30 => t!("report.period.month"),
+            Self::Days365 => t!("report.period.year"),
         }
         .to_string()
     }
@@ -141,19 +213,26 @@ impl Period {
         let shifted_start = |days| {
             day.and_then(|start| moon_core::util::display_time::shift_day_start(start, days, zone))
         };
+        let calendar = |first: Option<chrono::NaiveDate>| (first.and_then(day_start).or(day), None);
         match self {
             Self::All => (None, None),
             Self::Today => (day, None),
             Self::Yesterday => (shifted_start(-1), day.map(|value| value - 1)),
-            Self::Week => (shifted_start(-6), None),
-            Self::CurMonth => {
-                let first = today.with_day(1).and_then(day_start).or(day);
-                (first, None)
-            }
-            // 30 days back including today (like Week = 7, Year = 365) is a rolling window,
-            // not the calendar month: that one is CurMonth.
-            Self::Month => (shifted_start(-29), None),
-            Self::Year => (shifted_start(-364), None),
+            // Calendar presets differ ONLY in which first date they step back to; the rest of the
+            // rule is shared. `day_start` survives a zone whose midnight does not exist that day,
+            // and `.or(day)` keeps a preset that cannot resolve its boundary bounded at today
+            // rather than silently unbounded.
+            Self::CurWeek => calendar(Some(moon_core::util::display_time::shift_date(
+                today,
+                -i64::from(today.weekday().num_days_from_monday()),
+            ))),
+            Self::CurMonth => calendar(today.with_day(1)),
+            Self::CurYear => calendar(today.with_month(1).and_then(|date| date.with_day(1))),
+            // Rolling windows count back from today INCLUSIVE, so the shift is one day short of the
+            // window: seven days is today plus the six before it.
+            Self::Days7 => (shifted_start(-6), None),
+            Self::Days30 => (shifted_start(-29), None),
+            Self::Days365 => (shifted_start(-364), None),
         }
     }
 }
@@ -181,6 +260,35 @@ impl ReportKind {
         }
     }
 
+    /// Return the stable id this kind persists as.
+    ///
+    /// Named rather than positional, and matched exhaustively so a new variant fails the build
+    /// until it has an id of its own. `id`/`from_id` is the repo's settled spelling for a
+    /// persisted-enum pair.
+    fn id(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Real => "real",
+            Self::Emu => "emu",
+        }
+    }
+
+    /// Restore a kind from a persisted [`Self::id`].
+    ///
+    /// Args:
+    ///     id: Stored id.
+    ///
+    /// Returns:
+    ///     The kind, or `None` for an id this build does not know.
+    fn from_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "all" => Self::All,
+            "real" => Self::Real,
+            "emu" => Self::Emu,
+            _ => return None,
+        })
+    }
+
     /// Restore the UI kind selector from the database emulator filter.
     ///
     /// Args:
@@ -195,6 +303,55 @@ impl ReportKind {
             Some(true) => Self::Emu,
         }
     }
+}
+
+/// Return the stable id a direction filter persists as.
+///
+/// A free function because [`SideFilter`] belongs to `moon-core`, where nothing else needs a UI
+/// persistence id. The match is exhaustive, so a new direction there fails this build until it has
+/// an id.
+///
+/// Args:
+///     side: Direction filter to encode.
+///
+/// Returns:
+///     The stored id.
+fn side_id(side: SideFilter) -> &'static str {
+    match side {
+        SideFilter::All => "all",
+        SideFilter::Long => "long",
+        SideFilter::Short => "short",
+    }
+}
+
+/// Restore a direction filter from a persisted [`side_id`].
+///
+/// Args:
+///     id: Stored id.
+///
+/// Returns:
+///     The direction, or `None` for an id this build does not know.
+fn side_from_id(id: &str) -> Option<SideFilter> {
+    Some(match id {
+        "all" => SideFilter::All,
+        "long" => SideFilter::Long,
+        "short" => SideFilter::Short,
+        _ => return None,
+    })
+}
+
+/// Return the storage key this host context's toolbar filters persist under.
+///
+/// Spelled once so the reader and the writer cannot drift onto different contexts. Keyed exactly
+/// like the panel's column layout, through the shared context-id helper.
+///
+/// Args:
+///     detached: Whether the host is a window rather than a docked tab.
+///
+/// Returns:
+///     `report-filters:win` or `report-filters:dock`.
+fn filters_ctx_id(detached: bool) -> String {
+    crate::persistence::table_persist::ctx_id("report-filters", detached)
 }
 
 /// Initial or replacement filter applied by Analytics to a standalone Report window.
@@ -331,16 +488,32 @@ pub struct ReportPanel {
     bounds_pending: bool,
     /// Guards programmatic picker rewrites from being mistaken for user filter edits.
     bound_write_in_progress: bool,
+    /// Direction filter, persisted per host in `layout.report_filters`.
+    ///
+    /// This and the three fields below are the scope control's FILTER members: they decide which
+    /// trades the panel reads, so they are stored where a quit cannot lose them and a report-replica
+    /// recovery cannot take them with it. Their neighbour `show_comment` is a display choice and
+    /// stays in `app_meta`; the split is deliberate.
     pub(super) side: SideFilter,
-    /// Period preset, defaulting to Today as in Moonbot.
+    /// Period preset, defaulting to Today as in Moonbot. Persisted beside [`Self::side`].
     ///
     /// Editing a non-empty manual date switches to All. Under other presets, the preset lower bound
     /// overrides From, while only Yesterday supplies an upper bound that overrides To.
     pub(super) period: Period,
-    /// All, real, or emulated order kind, defaulting to real as in Orders.
+    /// All, real, or emulated order kind, defaulting to real as in Orders. Persisted beside
+    /// [`Self::side`].
     pub(super) kind: ReportKind,
-    /// Show ONLY soft-deleted trades when set; hide them when clear (the default).
+    /// Show ONLY soft-deleted trades when set; hide them when clear (the default). Persisted beside
+    /// [`Self::side`].
     pub(super) deleted_only: bool,
+    /// Whether Analytics owns this panel's filters.
+    ///
+    /// A scoped standalone window is handed its side, kind and dates by Analytics and forces
+    /// `Period::All`; persisted values neither apply to it nor are written from it, or reopening a
+    /// strategy would show something other than that strategy. Set from the constructor's scope
+    /// argument and by `apply_scope`, never from `detached` or `standalone` — the first is a host
+    /// class, and the second is assigned after the host change has already read the store.
+    pub(super) scoped: bool,
     /// Whether the full-width comment pane is shown between the table and the totals. On by
     /// default and persisted in `app_meta` per host: a docked tab and a detached window keep
     /// separate answers, exactly as their column sets and widths do. A display choice, not a filter.
@@ -352,6 +525,11 @@ pub struct ReportPanel {
     /// Retained owner-scoped dropdown whose popup invalidations never rebuild the Report body.
     scope_control: Entity<ReportScopeControl>,
     /// Whether this Analytics-scoped panel excludes undated/non-positive close timestamps.
+    ///
+    /// Today it is written from the same fact as [`Self::scoped`] and always equals it. They are
+    /// kept apart because they answer different questions — this one is a QUERY predicate that a
+    /// future control could offer on an ordinary Report, while `scoped` is the ownership fact that
+    /// decides persistence. Route a new scope entry point through both.
     closed_only: bool,
     /// Controlled multi-selection keyed by stable report row identity.
     selection: ReportSelection,

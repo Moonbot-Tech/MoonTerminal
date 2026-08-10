@@ -477,8 +477,8 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
 fn report_data_cell(col: &str, val: &Value, p: MoonPalette, zone: Tz) -> MoonDataCell {
     let (text, color) = cell(col, val, p, zone);
     // Clip formatted content to the column's actual width. Alignment matches the column, while
-    // MoonDataTable also protects cell boundaries at the container level. Font styling comes
-    // from the cell style through MoonUI cascading.
+    // MoonDataTable also protects cell boundaries at the container level. Every other column's
+    // font styling comes from the cell style through MoonUI cascading.
     let right = is_numeric_report_column(col);
     let color = color.unwrap_or_else(|| MoonTone::Default.color(p));
     let inner = div()
@@ -488,8 +488,36 @@ fn report_data_cell(col: &str, val: &Value, p: MoonPalette, zone: Tz) -> MoonDat
         .overflow_hidden()
         .when(right, |d| d.justify_end())
         .text_color(rgb(color))
+        .font_weight(cell_weight(col))
         .child(text);
     MoonDataCell::element(inner)
+}
+
+/// Return the font weight a GENERIC Report data cell's text is drawn — and MEASURED — with.
+///
+/// The two profit columns carry the number the table exists to be read for, so they are weighted
+/// above the rest of the row. Their sibling `profitbtc`/`gainedbtc` share the same sign colouring
+/// but not the weight: weighting every numeric column would flatten the emphasis back out.
+///
+/// The coin column is deliberately not part of this rule. It renders through the specialized
+/// `coin_cell` element at `BOLD`; this predicate governs generic Report cells and the corresponding
+/// natural-width measurement change only.
+///
+/// `SEMIBOLD` specifically, not `MEDIUM` or `BOLD`: `design::MonoBodyFontSignature` encodes only the
+/// normal and semibold `FontId`s, and that signature keys the natural-width cache. A third weight's
+/// resolved font would sit outside the key, so a theme change altering only that weight's resolution
+/// would leave stale widths cached with nothing to invalidate them.
+///
+/// Args:
+///     col: Runtime report column name.
+///
+/// Returns:
+///     The weight for that column's body text.
+pub(super) fn cell_weight(col: &str) -> FontWeight {
+    match col {
+        db::VALUATION_PROFIT_COLUMN | db::PROFIT_PERCENT_COLUMN => FontWeight::SEMIBOLD,
+        _ => FontWeight::NORMAL,
+    }
 }
 
 /// Return whether a Report column uses right-aligned numeric presentation.

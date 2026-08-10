@@ -379,28 +379,48 @@ impl ReportPanel {
     }
 
     /// Render the report-period filter using Moonbot-compatible presets.
+    ///
+    /// The presets arrive already grouped by [`Period::GROUPS`] — day, calendar, rolling, then the
+    /// unbounded one — with a separator standing BETWEEN the groups and never after the last. The
+    /// grouping is what tells a reader that "this month" and "30 days" answer different questions.
+    ///
+    /// Args:
+    ///     cx: Panel context used to bind the selected period and fit localized labels.
+    ///
+    /// Returns:
+    ///     Grouped period dropdown with separators between preset families.
     pub(super) fn period_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let options: Vec<(Period, SharedString, SharedString)> = Period::ALL
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (*p, format!("rp-{i}").into(), p.label().into()))
-            .collect();
-        let items = crate::panels::radio_items(
-            options,
-            self.period,
-            crate::panels::RadioMark::Highlight,
-            move |app, p| {
-                view.update(app, |t, c| t.set_period(p, c));
-            },
-        );
+        let mut items: Vec<MoonMenuItem> = Vec::new();
+        for group in Period::GROUPS {
+            if !items.is_empty() {
+                items.push(MoonMenuItem::separator());
+            }
+            let view = view.clone();
+            let options: Vec<(Period, SharedString, SharedString)> = group
+                .iter()
+                .map(|p| (*p, p.menu_key().into(), p.label().into()))
+                .collect();
+            // Per group rather than once over a flat list: `radio_items` marks the current preset
+            // in whichever group holds it, so the selection is unaffected by the split.
+            items.extend(crate::panels::radio_items(
+                options,
+                self.period,
+                crate::panels::RadioMark::Highlight,
+                move |app, p| {
+                    view.update(app, |t, c| t.set_period(p, c));
+                },
+            ));
+        }
         MoonDropdown::new("rep-period")
             .label(self.period.label())
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(100.0)
-            .menu_width_scaled(130.0)
+            // Fitted rather than a literal width: the longest localized labels no longer fit the
+            // old figures, and MoonUI's font-aware fitting knows their advance at the live UI scale.
+            .fit_trigger_width(100.0, 150.0)
+            .fit_menu_width(130.0, 190.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     }

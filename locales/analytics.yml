@@ -651,22 +651,30 @@ analytics.period.yesterday:
   ru: "Вчера"
   en: "Yesterday"
   es: "Ayer"
+# The rolling presets are labelled by their day count, matching report.period.*. A bare week or year
+# label beside a current-month label reads as a calendar period and is not one. Analytics offers no
+# calendar week or year, so it carries no cur_week / cur_year counterpart. Labels only: the
+# persisted selection uses the stable `p-week` / `p-year` ids, so this needs no migration.
+# A rolling 7-day window ending today.
 analytics.period.week:
-  ru: "Неделя"
-  en: "Week"
-  es: "Semana"
+  ru: "7 дней"
+  en: "7 days"
+  es: "7 días"
+# Calendar month from the 1st.
 analytics.period.cur_month:
   ru: "Тек. месяц"
   en: "This month"
   es: "Mes actual"
+# A rolling 30-day window — NOT a calendar month.
 analytics.period.month:
   ru: "30 дней"
   en: "30 days"
   es: "30 días"
+# A rolling 365-day window — NOT a calendar year.
 analytics.period.year:
-  ru: "Год"
-  en: "Year"
-  es: "Año"
+  ru: "365 дней"
+  en: "365 days"
+  es: "365 días"
 analytics.period.all:
   ru: "Все"
   en: "All"

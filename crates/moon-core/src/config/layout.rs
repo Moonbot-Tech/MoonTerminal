@@ -228,6 +228,44 @@ pub struct DetachedLayout {
     pub h: u32,
 }
 
+/// One Report toolbar filter set, persisted per host context.
+///
+/// Holds the four members of the Report scope control that decide WHICH TRADES the panel reads —
+/// direction, order kind, the deleted-only switch and the period preset. Its sibling in that same
+/// control, the comment pane, is a display choice and stays in `app_meta` beside the other view
+/// preferences; the split is deliberate, so do not "unify" the two stores. These four belong here
+/// because a filter must survive a quit that a detached preference write would not: the whole
+/// layout rides the quit snapshot, and it outlives a report replica that integrity recovery
+/// retires.
+///
+/// Every field is optional and read leniently, so a wrongly-typed member drops only THAT field to
+/// `None` and leaves its neighbours, and the rest of the layout, intact. Unknown string ids remain
+/// stored here because this crate does not own their vocabulary; the Report decoder treats them as
+/// no instruction and keeps the panel's current value. One level up the salvage is coarser: an
+/// entry that is not a table at all takes the whole `report_filters` map down to empty with it, the
+/// same as every other leniently-read map here. Both outcomes cost only filter preferences.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportFilterPrefs {
+    /// Direction filter id.
+    ///
+    /// Opaque here: this crate stores it, and the Report panel's own encoder in `moon-ui-gpui`
+    /// owns the vocabulary. Listing the values in both places is how one copy goes quietly wrong.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub side: Option<String>,
+    /// Order-kind id, opaque here for the same reason as [`Self::side`].
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub kind: Option<String>,
+    /// Whether the panel showed only soft-deleted trades.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub deleted_only: Option<bool>,
+    /// Period preset id — the panel's menu key, opaque here for the same reason as [`Self::side`].
+    ///
+    /// Only an explicit menu pick is stored. Typing a manual date also displays "all", but that is
+    /// a consequence of the date rather than a chosen preset, so it never reaches this field.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub period: Option<String>,
+}
+
 /// Complete window layout.
 ///
 /// Every field is `Option` or carries `#[serde(default)]` on purpose, and prefers a type wider
@@ -513,6 +551,14 @@ pub struct WindowLayout {
     /// separate sets. No entry = table default (usually "all visible").
     #[serde(default)]
     pub table_visible_columns: HashMap<String, Vec<String>>,
+    /// Report toolbar filters per host context: `report-filters:dock` / `report-filters:win`.
+    ///
+    /// Keyed exactly like the column maps above, through `table_persist::ctx_id`, so a docked tab
+    /// and a detached window keep their own answers. No entry leaves the panel's own defaults
+    /// standing. The map is read leniently for the same reason as its neighbours: a hand edit of a
+    /// filter preference must never discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient_map")]
+    pub report_filters: HashMap<String, ReportFilterPrefs>,
     /// One-shot Report column migrations already applied to [`Self::table_visible_columns`].
     ///
     /// A saved visible-column set is an EXPLICIT list, so a column added later is simply absent

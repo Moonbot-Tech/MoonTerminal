@@ -23,6 +23,48 @@ fn upsert_strategy_choice(
     }
 }
 
+/// One host context's four toolbar filters, in the order they are decoded and assigned.
+pub(super) type ReportFilterSet = (SideFilter, ReportKind, bool, Period);
+
+/// Decode one stored filter set over the values a panel is currently showing.
+///
+/// Pure, and separate from the panel, so the DECISION — which stored field wins and which falls
+/// back — is testable without a GPUI window; `ReportPanel` is a binary-crate view that cannot be
+/// constructed headlessly, so a rule left inline here would only ever be checked by reading the
+/// source as text.
+///
+/// A field that is absent, or carries an id this build does not know, keeps the CURRENT value
+/// rather than resetting to a type default: "not stored" and "stored as something I cannot read"
+/// are both "no instruction", and a filter must not silently change what the user is looking at
+/// on the strength of a value nobody could read.
+///
+/// Args:
+///     stored: The persisted entry for this host context.
+///     current: What the panel is showing now, used for every field the entry cannot supply.
+///
+/// Returns:
+///     The set to apply.
+pub(super) fn applied_filters(
+    stored: &moon_core::config::ReportFilterPrefs,
+    current: ReportFilterSet,
+) -> ReportFilterSet {
+    let (side, kind, deleted_only, period) = current;
+    (
+        stored.side.as_deref().and_then(side_from_id).unwrap_or(side),
+        stored
+            .kind
+            .as_deref()
+            .and_then(ReportKind::from_id)
+            .unwrap_or(kind),
+        stored.deleted_only.unwrap_or(deleted_only),
+        stored
+            .period
+            .as_deref()
+            .and_then(Period::from_menu_key)
+            .unwrap_or(period),
+    )
+}
+
 /// Highest one-shot Report column migration this build knows how to apply.
 const REPORT_COLUMNS_MIGRATION: u32 = 1;
 
@@ -389,7 +431,7 @@ impl ReportPanel {
         .detach();
     }
 
-    /// Create a regular docked or detachable Report panel with its default filters.
+    /// Create a regular docked or detachable Report panel with its dock-host filters restored.
     ///
     /// Args:
     ///     backend: Shared application backend.
@@ -398,7 +440,8 @@ impl ReportPanel {
     ///     cx: Construction context.
     ///
     /// Returns:
-    ///     A panel with the default Report filters and its first query pending for active render.
+    ///     A panel with stored or default Report filters and its first query pending for active
+    ///     render.
     pub fn new(
         backend: Entity<Backend>,
         group: String,
@@ -408,7 +451,10 @@ impl ReportPanel {
         Self::new_with_scope(backend, group, None, window, cx)
     }
 
-    /// Create a Report panel, seeding an optional Analytics scope before its first query.
+    /// Create a Report panel, applying its durable or Analytics-owned scope before its first query.
+    ///
+    /// An Analytics scope wins whole and opts out of persistence; otherwise the dock-host toolbar
+    /// filters restore synchronously so the first result set cannot describe stale defaults.
     ///
     /// Args:
     ///     backend: Shared application backend.
@@ -418,7 +464,8 @@ impl ReportPanel {
     ///     cx: Construction context.
     ///
     /// Returns:
-    ///     A scoped or default Report panel with one query pending for its first active render.
+    ///     A scoped, restored, or default Report panel with one query pending for its first active
+    ///     render.
     pub(crate) fn new_with_scope(
         backend: Entity<Backend>,
         group: String,
@@ -750,6 +797,7 @@ impl ReportPanel {
                 .map(|scope| ReportKind::from_filter(scope.emulator))
                 .unwrap_or(ReportKind::Real),
             deleted_only: false,
+            scoped: scope.is_some(),
             show_comment,
             comment_metadata_loaded: false,
             preference_revisions: expected_revisions,
@@ -778,6 +826,10 @@ impl ReportPanel {
         if scope.is_none() {
             this.adopt_broadcast_core_filter(cx);
         }
+        // Before the first render, so the query that render issues is already the restored one.
+        // The panel is built docked here; a window re-reads under its own context in
+        // `mark_table_detached`.
+        this.restore_persisted_filters(cx);
         this.load_initial_metadata(expected_revisions, allow_app_visible, cx);
         this
     }
@@ -790,7 +842,8 @@ impl ReportPanel {
     ///     cx: Panel context used to update inputs and request one query.
     ///
     /// Returns:
-    ///     Nothing; row selection and unrelated coin filters are cleared.
+    ///     Nothing; row selection and unrelated coin filters are cleared, while Analytics
+    ///     ownership keeps durable host filters bypassed.
     pub(crate) fn apply_scope(
         &mut self,
         scope: ReportScope,
@@ -806,6 +859,7 @@ impl ReportPanel {
         self.kind = ReportKind::from_filter(scope.emulator);
         self.period = Period::All;
         self.deleted_only = false;
+        self.scoped = true;
         self.closed_only = true;
         self.selection.clear();
         self.coin_query.clear();
@@ -894,6 +948,9 @@ impl ReportPanel {
         if *slot != secs {
             *slot = secs;
             if secs.is_some() {
+                // Assigned, never persisted. This "all" is a consequence of the typed date, not a
+                // preset the user picked, and the dates themselves are not stored — persisting it
+                // would silently replace the last real menu choice with one nobody made.
                 self.period = Period::All;
             }
             // While the popup is open the user is still composing the bound; the query waits for
@@ -1015,13 +1072,54 @@ impl ReportPanel {
         self.table_state.clone()
     }
 
-    /// Switch a newly created detached panel to the `:win` column-storage context.
+    /// Apply this host context's stored toolbar filters over the current ones.
     ///
-    /// Reload widths and visible columns for detached mode so docked tabs and windows keep separate
-    /// layouts, and enable the detached-only manual date controls.
+    /// Synchronous: the layout is already in memory, so restoration needs no background read and
+    /// therefore cannot land after a query has already gone out under the defaults. In the
+    /// constructor that is what keeps the toolbar and the first result set describing the same
+    /// filter — the first query is issued from the panel's first active render, well after this.
     ///
-    /// The comment pane follows the same split: it is a view preference of this table, so a window
-    /// keeps its own answer instead of inheriting the docked tab's.
+    /// An Analytics-scoped panel is skipped whole: its filters belong to the strategy it was opened
+    /// for. A missing field, and a missing entry, leave the current value standing rather than
+    /// resetting it — so a panel that changes host context and finds nothing stored there keeps
+    /// what it was showing. That is deliberately UNLIKE its neighbours in the same key space: an
+    /// unwritten `:win` context resets widths and columns to their defaults, but resetting a
+    /// FILTER would silently change which trades a window shows the moment it is detached, so the
+    /// first detach inherits and only an edit made in the window writes a `:win` entry of its own.
+    ///
+    /// Args:
+    ///     cx: Any context able to read the backend.
+    ///
+    /// Returns:
+    ///     Whether any filter actually changed, so the caller can decide about a requery.
+    pub(super) fn restore_persisted_filters(&mut self, cx: &App) -> bool {
+        if self.scoped {
+            return false;
+        }
+        let Some(stored) = crate::persistence::table_persist::report_filters(
+            self.backend.read(cx),
+            &filters_ctx_id(self.detached),
+        ) else {
+            return false;
+        };
+        let current = (self.side, self.kind, self.deleted_only, self.period);
+        let applied = applied_filters(stored, current);
+        // One tuple compare rather than four clauses, so a fifth filter added to the tuple cannot
+        // be forgotten here and silently suppress the host-change requery.
+        let changed = applied != current;
+        (self.side, self.kind, self.deleted_only, self.period) = applied;
+        changed
+    }
+
+    /// Switch a newly created detached panel to its `:win` persistence context.
+    ///
+    /// Reload widths, visible columns, and the comment preference for detached mode, and enable the
+    /// detached-only manual date controls.
+    ///
+    /// Toolbar filters use the same separate key but a different missing-entry rule: the first
+    /// detach inherits the docked panel's current filters rather than resetting them. Once a
+    /// `:win` entry exists, it wins and may legitimately change which trades the window shows, so
+    /// applying a different stored set requests fresh rows.
     pub(crate) fn mark_table_detached(&mut self, cx: &mut Context<Self>) {
         self.detached = true;
         self.widths_id = crate::persistence::table_persist::ctx_id("report-table-v2", true);
@@ -1033,6 +1131,12 @@ impl ReportPanel {
             c.notify();
         });
         self.apply_ctx_columns(cx);
+        // Unlike the widths and the comment pane, these are FILTERS: adopting the window context's
+        // set changes which trades the panel shows, so the result must be re-read rather than
+        // relabelled.
+        if self.restore_persisted_filters(cx) {
+            self.request_requery(cx);
+        }
         if self.comment_metadata_loaded {
             self.reload_comment_preference(
                 true,
