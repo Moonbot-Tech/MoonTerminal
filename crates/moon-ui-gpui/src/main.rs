@@ -479,6 +479,14 @@ struct Backend {
     /// Default sound for an alert without a strategy, selected in the Alerts panel.
     /// Stored as a WAV filename stem; see `sound` and `detect_sound`.
     default_alert_sound: String,
+    /// Cached answer to "is quiet mode silencing sounds right now", recomputed once per
+    /// coordination tick and on every user action; see `backend::quiet`. The detect-sound path runs
+    /// inside the feed drain, so it must not do a time-zone conversion per wake.
+    quiet_sleeping: bool,
+    /// Minute of day (header-clock zone) observed at the previous quiet tick. It gates the 10 Hz
+    /// tick down to once a minute; the transitions themselves are compared against absolute
+    /// instants, so nothing depends on this value having seen every minute.
+    quiet_last_min: u16,
     /// Configuration changed in memory and awaiting a debounced save.
     /// Frequent edits such as mouse-wheel order-size changes write to disk once per coordination
     /// tick; the drain calls `config.save()` and clears this flag.

@@ -900,3 +900,64 @@ alerts.fig.ray:
   ru: "Луч"
   en: "Ray"
   es: "Rayo"
+
+# --- Quiet mode ("sleep") — header toggle beside the clock and its settings popup ---
+# The toggle's label is the SAME in both states on purpose: the header positions the ticker popup
+# by summing the widths beside it, so a label that changed on click would move that popup.
+quiet.toggle:
+  ru: "Сон"
+  en: "Sleep"
+  es: "Reposo"
+quiet.tip_on:
+  ru: "Сон включён: звуки детектов и тревог заглушены. Клик — разбудить."
+  en: "Sleep is on: detect and alert sounds are silenced. Click to wake up."
+  es: "Reposo activo: los sonidos de detecciones y alertas están silenciados. Clic para despertar."
+quiet.tip_off:
+  ru: "Работа: звуки включены. Клик — включить сон."
+  en: "Working: sounds are on. Click to sleep."
+  es: "En marcha: sonidos activos. Clic para dormir."
+quiet.gear_tip:
+  ru: "Настройки сна"
+  en: "Sleep settings"
+  es: "Ajustes de reposo"
+quiet.title:
+  ru: "Режим сна"
+  en: "Sleep mode"
+  es: "Modo reposo"
+quiet.schedule_group:
+  ru: "Расписание"
+  en: "Schedule"
+  es: "Horario"
+quiet.schedule:
+  ru: "Засыпать по времени"
+  en: "Sleep on a schedule"
+  es: "Dormir según horario"
+quiet.from:
+  ru: "С"
+  en: "From"
+  es: "De"
+quiet.to:
+  ru: "До"
+  en: "To"
+  es: "A"
+# What still makes a sound while the terminal sleeps.
+quiet.bypass_group:
+  ru: "Всё равно звучит"
+  en: "Still sounds"
+  es: "Sigue sonando"
+quiet.figure_alerts:
+  ru: "Алерты фигур"
+  en: "Figure alerts"
+  es: "Alertas de figuras"
+quiet.charts:
+  ru: "Номера AddToChart, через запятую"
+  en: "AddToChart numbers, comma-separated"
+  es: "Números de AddToChart, separados por comas"
+quiet.charts_hint:
+  ru: "3, 5"
+  en: "3, 5"
+  es: "3, 5"
+quiet.charts_tip:
+  ru: "Номера через запятую (например 3, 5). Детекты стратегий с полем AddToChart = этому номеру звучат даже во сне."
+  en: "Numbers separated by commas (for example 3, 5). Detects from strategies whose AddToChart equals one of them sound even while asleep."
+  es: "Números separados por comas (por ejemplo 3, 5). Las detecciones de estrategias cuyo AddToChart coincida suenan incluso en reposo."

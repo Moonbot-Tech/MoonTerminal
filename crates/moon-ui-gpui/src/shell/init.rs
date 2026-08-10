@@ -456,6 +456,23 @@ impl Shell {
                 .multi_line(true)
                 .submit_on_enter(true)
         });
+        // Quiet-mode schedule and bypass editors, committing the WHOLE popup (see `shell::quiet`).
+        // NOT on Change: every keystroke of an `HH:MM` field is a valid time of its own ("2" is
+        // 02:00), so a per-keystroke commit would make half-typed hours the live schedule and could
+        // silence real detects mid-edit. Enter and Blur cover the ordinary paths, and closing the
+        // popup commits once more — which is what catches a value typed and then dismissed with the
+        // ✕ or a click on a checkbox, neither of which blurs the field.
+        let quiet_from_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let quiet_to_input = cx.new(|cx| MoonInputState::new(window, cx));
+        let quiet_charts_input = cx.new(|cx| MoonInputState::new(window, cx));
+        for input in [&quiet_from_input, &quiet_to_input, &quiet_charts_input] {
+            cx.subscribe(input, |this, _inp, ev: &MoonInputEvent, cx| {
+                if matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. }) {
+                    this.commit_quiet_editors(cx);
+                }
+            })
+            .detach();
+        }
         let ticker_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC…"));
         // Ticker-search changes only repaint; layer rendering computes the filtered list.
         cx.subscribe(&ticker_input, |_this, _inp, ev: &MoonInputEvent, cx| {
@@ -635,6 +652,10 @@ impl Shell {
             core_settings_target: None,
             core_settings_cancel_confirm: false,
             core_settings_bl_expanded: false,
+            quiet_settings_open: false,
+            quiet_from_input,
+            quiet_to_input,
+            quiet_charts_input,
             ticker_popup_open: false,
             ticker_popup_hovered: false,
             ticker_input,

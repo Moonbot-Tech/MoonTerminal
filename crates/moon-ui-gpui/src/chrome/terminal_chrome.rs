@@ -34,12 +34,15 @@ use crate::{Backend, design};
 ///     core_selector_open: Whether the active-core selector is open.
 ///     core_settings_open: Whether the core-settings popover is open.
 ///     core_settings_content: Lazily built content for the open core-settings popover.
+///     quiet_settings_open: Whether the quiet-mode ("sleep") settings popover is open.
+///     quiet_settings_content: Lazily built content for the open quiet-mode popover.
 ///     chrome_width: Current window width used for responsive ticker visibility.
 ///     p: Active palette.
 ///     cx: Application context used to read state and build elements.
 ///
 /// Returns:
 ///     The complete terminal header element.
+#[allow(clippy::too_many_arguments)]
 pub fn header(
     group: &str,
     backend: Entity<Backend>,
@@ -48,6 +51,8 @@ pub fn header(
     core_selector_open: bool,
     core_settings_open: bool,
     core_settings_content: Option<AnyElement>,
+    quiet_settings_open: bool,
+    quiet_settings_content: Option<AnyElement>,
     chrome_width: f32,
     p: MoonPalette,
     cx: &App,
@@ -106,12 +111,24 @@ pub fn header(
                     p,
                     cx,
                 ))
-                .child(core_gear_button(
-                    shell.clone(),
-                    core_settings_open,
-                    core_settings_content,
-                    cx,
-                )),
+                .child({
+                    let shell = shell.clone();
+                    header_gear_popover(
+                        "core-gear",
+                        MoonPopoverPlacement::BottomStart,
+                        crate::shell::core_settings_popup::CONTENT_W,
+                        core_settings_open,
+                        core_settings_content,
+                        MoonButton::new("core-gear")
+                            .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
+                            .size(MoonButtonSize::Action)
+                            .variant(MoonButtonVariant::Panel)
+                            .render(),
+                        move |open, window, cx| {
+                            shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));
+                        },
+                    )
+                }),
         )
         .child(design::chrome_divider(cx, p))
         .child(balance_label(balance, p, cx))
@@ -153,12 +170,25 @@ pub fn header(
                             ticker_sel,
                             design::ticker_deltas_visible(cx, chrome_width),
                             &backend,
-                            shell,
+                            shell.clone(),
                             p,
                             cx,
                         ))
                         .child(design::chrome_divider(cx, p))
                 }))
+                // Quiet mode ("sleep"): the toggle plus its settings gear, between the rate and the
+                // clock. It renders at an explicit width (`chrome::quiet::header_quiet_width`) that
+                // the ticker popup's offset above reuses, so the two cannot drift; its trailing
+                // divider is part of the same cluster for the same reason.
+                .child(crate::chrome::quiet::header_quiet_cluster(
+                    &backend,
+                    shell,
+                    quiet_settings_open,
+                    quiet_settings_content,
+                    p,
+                    cx,
+                ))
+                .child(design::chrome_divider(cx, p))
                 // The selected zone's clock with a city code or system abbreviation; clicking opens
                 // the picker. Its MoonPopover is anchored to this trigger, so unlike the ticker it
                 // needs no offset arithmetic.
@@ -575,30 +605,40 @@ fn core_selector(
         .into_any_element()
 }
 
-/// Render the core-settings button and its anchored `MoonPopover`.
+/// Render one header gear button and its anchored settings `MoonPopover`.
 ///
-/// Shell controls the open state and seeds fields through `set_core_settings_open`; the popover
-/// handles outside-click dismissal. The icon-only button keeps square padding around the glyph.
-fn core_gear_button(
-    shell: Entity<Shell>,
+/// Shared by the core-settings gear and the quiet-mode gear: one place that pairs a header trigger
+/// with a content-width popover and its controlled open state. Shell owns that state through
+/// `on_open_change`, while the popover handles outside-click dismissal.
+///
+/// Args:
+///     id: Stable element identity; the popover derives its own id from it.
+///     placement: Which corner of the trigger the popup hangs from.
+///     content_width: Font-scaled content width the popup declares.
+///     open: Whether the popup is up.
+///     content: Lazily built content, present only while `open`.
+///     trigger: The button that opens it — the header core gear keeps its own Action-sized button,
+///         while the quiet-mode gear reuses the panels' shared `popup_gear_trigger`.
+///     on_open_change: Handler that records the requested open state on Shell.
+///
+/// Returns:
+///     The given trigger with its popover attached.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn header_gear_popover(
+    id: &'static str,
+    placement: MoonPopoverPlacement,
+    content_width: f32,
     open: bool,
     content: Option<AnyElement>,
-    _cx: &App,
+    trigger: impl IntoElement,
+    on_open_change: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    MoonPopover::new("core-gear-popover")
-        .placement(MoonPopoverPlacement::BottomStart)
-        .content_width_font(crate::shell::core_settings_popup::CONTENT_W)
+    MoonPopover::new(SharedString::from(format!("{id}-popover")))
+        .placement(placement)
+        .content_width_font(content_width)
         .open(open)
-        .on_open_change(move |open, window, cx| {
-            shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));
-        })
-        .trigger(
-            MoonButton::new("core-gear")
-                .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
-                .size(MoonButtonSize::Action)
-                .variant(MoonButtonVariant::Panel)
-                .render(),
-        )
+        .on_open_change(on_open_change)
+        .trigger(trigger)
         .content(content.unwrap_or_else(|| div().into_any_element()))
 }
 

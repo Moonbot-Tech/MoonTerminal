@@ -27,6 +27,7 @@ pub mod moonbot_import;
 pub mod news_tags;
 pub mod orders;
 pub mod paths;
+pub mod quiet;
 pub mod secrets;
 pub mod servers;
 pub mod storage;
@@ -63,6 +64,7 @@ pub use layout::{
 };
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};
+pub use quiet::{QuietCfg, QuietWarnBypass};
 pub use schema::UiThemeMode;
 pub use secrets::Secret;
 pub use servers::{ChartBucket, CoreSortMode, FeedFlags, ServerConfig};

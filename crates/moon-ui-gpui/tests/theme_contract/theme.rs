@@ -163,6 +163,13 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "panels/detects/popup.rs",
             r#".id("detects-view-popup")"#,
         ),
+        // The header's quiet-mode ("sleep") gear. Declared beside the toggle in `chrome/quiet.rs`,
+        // built on Shell because its time fields are retained `MoonInputState` entities.
+        (
+            "chrome/quiet.rs",
+            "shell/quiet_popup.rs",
+            r#".id("quiet-settings-popup")"#,
+        ),
         (
             "panels/news/mod.rs",
             "panels/news/mod.rs",
@@ -210,7 +217,15 @@ fn popover_contents_do_not_paint_a_second_surface() {
     ];
     // Every one of these is chrome `MoonPopover` already paints around the content. The `_`-suffixed
     // entries are the tailwind-style shorthands, which re-add the same padding by another spelling.
+    //
+    // `font_value` is banned for a different reason, and it is the one that actually shipped: the
+    // popover resolves `content_width_font` through `font_width` (a pure multiply), while
+    // `design::font_value` is the ADDITIVE `font()` used for text SIZES. A content root that sets
+    // its own width with it lands ~47px off the frame at the shipped +2 Font delta. A content root
+    // needs no width of its own at all — `w_full` — and the two callers that do state one use
+    // `font_w_px`, which is the same formula the popover uses.
     const BANNED: &[&str] = &[
+        "font_value(",
         ".bg(",
         ".border(",
         ".border_1(",
@@ -246,7 +261,12 @@ fn popover_contents_do_not_paint_a_second_surface() {
         let text = fs::read_to_string(&path).unwrap_or_else(|err| {
             panic!("failed to read {}: {err}", path.display());
         });
-        if !text.contains("MoonPopover::new") || !text.contains(".content_width") {
+        // Two spellings count as declaring one: a popover built inline, and a gear built through
+        // the header's shared `header_gear_popover`. Without the second, moving a popup onto the
+        // helper would quietly take it out of this registry — which is exactly what the helper
+        // makes easy to do.
+        let inline = text.contains("MoonPopover::new") && text.contains(".content_width");
+        if !inline && !text.contains("header_gear_popover(") {
             continue;
         }
         let rel = path

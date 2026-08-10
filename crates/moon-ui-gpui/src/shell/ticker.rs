@@ -112,9 +112,17 @@ impl Shell {
         // assumed — and measured through the clock's own model, so a change to what it draws
         // cannot leave this arithmetic behind. `vline` is a fixed `px(1.0)` and is deliberately
         // NOT font-scaled, so the divider term stays raw.
+        // Right to left: window padding, the window controls, the clock, then the quiet-mode
+        // cluster with a divider on each side of it, then the ticker's own divider. The quiet
+        // cluster renders at exactly `header_quiet_width`, so this term is its layout width rather
+        // than an estimate of it.
         let right = f32::from(design::ui_px(cx, design::HEADER_PAD_X))
             + controls_w
             + crate::chrome::clock::header_clock_width(&self.backend, cx)
+            + cluster_gap
+            + 1.0
+            + cluster_gap
+            + crate::chrome::quiet::header_quiet_width(cx)
             + cluster_gap
             + 1.0
             + cluster_gap;

@@ -558,6 +558,10 @@ pub struct WindowLayout {
     /// bools) so an existing `layout.toml` without this key still loads with engine defaults.
     #[serde(default)]
     pub warn_params: WarnParams,
+    /// Quiet mode ("sleep"): the schedule, the sound bypasses, and the persisted manual state of
+    /// the header toggle. Terminal-wide rather than per group — one operator, one pair of ears.
+    #[serde(default)]
+    pub quiet: crate::config::quiet::QuietCfg,
 }
 
 /// Per-axis enable switches for the core-warning engine, set from the Core Status gear popup.
