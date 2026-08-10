@@ -142,6 +142,33 @@ pub struct AssetsView {
     focus: FocusHandle,
 }
 
+impl crate::controls::CoreComboHost for AssetsView {
+    /// Select every core in the retained Classic or global filter.
+    ///
+    /// The ids are the ones the menu rendered. Group Auto owns the effective scope and leaves the
+    /// retained selection untouched.
+    ///
+    /// Args:
+    ///     selectable: Every core id available to this picker.
+    ///     cx: View context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; workspace-owned or inert actions leave the view unchanged.
+    fn select_all_cores(&mut self, selectable: Vec<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
+        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
+            let backend = self.backend.clone();
+            self.rebuild_cache(backend.read(cx));
+            cx.notify();
+        }
+    }
+}
+
 impl AssetsView {
     /// Build an Assets view for a core scope and the requested window surfaces.
     pub(super) fn new(
@@ -392,11 +419,10 @@ impl AssetsView {
         resolve_workspace_wallet_core(workspace_owned, workspace_core, self.selected_core)
     }
 
-    /// Toggles the multi-core filter. `None` represents All: a selection containing every scoped
-    /// core collapses to the equivalent empty-means-all state; otherwise it selects every scoped
-    /// core. Stale ids do not stand in for current cores. `Some(id)` toggles one core. The filter is
-    /// not persisted and reopens as All. Group Auto owns the effective scope, so this method leaves
-    /// the retained Classic selection unchanged.
+    /// Toggles the multi-core filter. `None` represents All and clears the explicit selection back
+    /// to the empty-means-all state. `Some(id)` toggles one core. The filter is not persisted and
+    /// reopens as All. Group Auto owns the effective scope, so this method leaves the retained
+    /// Classic selection unchanged.
     ///
     /// Args:
     ///     id: Core to toggle, or `None` for the All row.
@@ -411,18 +437,8 @@ impl AssetsView {
         {
             return;
         }
-        let all: HashSet<CoreId> = self
-            .scope_cores(self.backend.read(cx))
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
-        match id {
-            None => crate::controls::toggle_all_core_selection(&mut self.sel_cores, all),
-            Some(id) => {
-                if !self.sel_cores.remove(&id) {
-                    self.sel_cores.insert(id);
-                }
-            }
+        if !crate::controls::toggle_core_selection(&mut self.sel_cores, id) {
+            return;
         }
         let backend = self.backend.clone();
         self.rebuild_cache(backend.read(cx));

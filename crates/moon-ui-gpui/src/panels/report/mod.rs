@@ -566,6 +566,32 @@ pub struct ReportPanel {
     focus: FocusHandle,
 }
 
+impl crate::controls::CoreComboHost for ReportPanel {
+    /// Select every core in the retained Classic or standalone filter.
+    ///
+    /// The ids are the ones the menu rendered. Group Auto owns the effective scope and leaves the
+    /// retained selection untouched.
+    ///
+    /// Args:
+    ///     selectable: Every core id available to this picker.
+    ///     cx: Panel context used to reconcile strategy scope and request a requery.
+    ///
+    /// Returns:
+    ///     Nothing; workspace-owned or inert actions leave the panel unchanged.
+    fn select_all_cores(&mut self, selectable: Vec<u64>, cx: &mut Context<Self>) {
+        if self
+            .workspace_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_workspace_owned())
+        {
+            return;
+        }
+        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
+            self.reconcile_strategy_core(cx);
+            self.request_requery(cx);
+        }
+    }
+}
+
 impl ReportPanel {
     /// Resolve workspace scope for group-owned Report instances.
     ///

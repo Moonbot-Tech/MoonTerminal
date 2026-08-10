@@ -278,14 +278,16 @@ fn shared_core_selectors_batch_exchange_changes_once() {
         );
     }
 
-    let shared = read_src("controls/core_combo.rs");
+    let shared = code_only(&read_src("controls/core_combo.rs"));
     let shared_body = braced_body(&shared, "pub(crate) fn core_combo<");
     assert!(
-        shared_body.contains("MoonMenuItem::action_label(")
-            && shared_body.contains("if exchange.is_some()")
-            && shared_body.contains("let exchange_cores = section_core_ids(&members);")
-            && shared_body.contains("MoonMenuItem::label(exchange_label)"),
-        "known exchanges must submit every section member while the unknown section remains a label"
+        shared_body.contains(
+            "MoonMenuItem::action_label(format!(\"{id}-exchange-{section_index}\"), exchange_label)"
+        ) && shared_body.contains("on_section(exchange_cores.clone(), app);")
+            && !shared_body.contains("MoonMenuItem::label(exchange_label)"),
+        "every exchange section, including the unnamed one, must be a clickable batch row now — \
+         it has no reported exchange identity, but its members are still a batch worth toggling \
+         at once"
     );
 
     let handler_cases: [(&str, &str, &str, &[&str]); 4] = [

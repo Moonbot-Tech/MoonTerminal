@@ -10,10 +10,7 @@ use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
 use super::super::AnalyticsSessionState;
-use super::{
-    UndatedBanner, analytics_core_filter_ids, sole_core_name, toggle_analytics_core_selection,
-    undated_banner_state,
-};
+use super::{UndatedBanner, analytics_core_filter_ids, sole_core_name, undated_banner_state};
 
 /// Some undated trades, with money attached.
 ///
@@ -162,19 +159,18 @@ fn a_stale_selected_id_names_no_core() {
     );
 }
 
-/// The All row and clear button discard explicit checks before the next core click.
+/// `toolbar.rs:analytics_core_filter_ids` must keep a complete explicit selection as a bounded
+/// query filter, never broadening it to the unfiltered form reserved for the exclusive All state.
 ///
-/// Plausible selection edit this catches: changing the `None => selected.clear()` arm in
-/// `toolbar.rs:toggle_analytics_core_selection` to `None => {}` while treating All as a visual-only
-/// row. The prior core checks would survive, and the next click would remove one instead of
-/// selecting it alone.
+/// Plausible edit this catches: changing `analytics_core_filter_ids` to return `Vec::new()` for a
+/// complete explicit set. A newly reported core would then enter Analytics results despite never
+/// being checked.
 ///
-/// Plausible query edit this catches: changing
-/// `toolbar.rs:analytics_core_filter_ids` to return `Vec::new()` for a complete explicit set. A
-/// newly reported core would then enter Analytics results despite never being checked.
+/// The All-row toggle itself (`None => selected.clear()`) moved to the shared
+/// `core_quick.rs:toggle_core_selection`, covered in `controls::core_quick::tests`.
 #[test]
-fn all_is_exclusive_and_the_next_core_starts_a_fresh_selection() {
-    let mut selected = HashSet::from([1, 2]);
+fn a_complete_explicit_selection_stays_a_bounded_query_filter() {
+    let selected = HashSet::from([1, 2]);
     assert_eq!(
         analytics_core_filter_ids(&selected, None)
             .into_iter()
@@ -182,19 +178,9 @@ fn all_is_exclusive_and_the_next_core_starts_a_fresh_selection() {
         selected,
         "a complete explicit selection must remain a bounded query filter"
     );
-
-    assert!(toggle_analytics_core_selection(&mut selected, None));
-    assert!(selected.is_empty(), "All must discard every explicit check");
     assert!(
-        analytics_core_filter_ids(&selected, None).is_empty(),
+        analytics_core_filter_ids(&HashSet::new(), None).is_empty(),
         "only the exclusive All state may produce an unfiltered query"
-    );
-
-    assert!(toggle_analytics_core_selection(&mut selected, Some(2)));
-    assert_eq!(
-        selected,
-        HashSet::from([2]),
-        "the first core after All must be the only explicit check"
     );
 }
 

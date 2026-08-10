@@ -152,6 +152,32 @@ pub struct CoreStatusView {
     focus: FocusHandle,
 }
 
+impl crate::controls::CoreComboHost for CoreStatusView {
+    /// Select every core in the retained Classic filter.
+    ///
+    /// The ids are the ones the menu rendered. Auto owns the effective scope and leaves the
+    /// retained selection untouched.
+    ///
+    /// Args:
+    ///     selectable: Every core id available to this picker.
+    ///     cx: View context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; workspace-owned or inert actions leave the view unchanged.
+    fn select_all_cores(&mut self, selectable: Vec<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
+        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
+            self.rebuild_cache(cx);
+            cx.notify();
+        }
+    }
+}
+
 impl CoreStatusView {
     /// Construct a group-scoped Core Status panel and its table/tree state.
     ///
@@ -614,6 +640,7 @@ impl CoreStatusView {
             .session
             .market_source()
             .core_exchange_names();
+        let extras = crate::controls::core_combo_extras(!workspace_owned, &view);
         let combo = crate::controls::core_combo(
             "core-status-core",
             cores,
@@ -627,6 +654,7 @@ impl CoreStatusView {
             t!("core_status.all_cores").to_string(),
             |n| t!("core_status.cores_n", n = n).to_string(),
             170.0,
+            extras,
             move |id, app| {
                 view.update(app, |t, c| t.toggle_core(id, c));
             },

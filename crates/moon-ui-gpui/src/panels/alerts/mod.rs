@@ -103,6 +103,31 @@ pub struct AlertsPanel {
     focus: FocusHandle,
 }
 
+impl crate::controls::CoreComboHost for AlertsPanel {
+    /// Select every core in the retained Classic filter.
+    ///
+    /// The ids are the ones the menu rendered. Auto owns the effective scope and leaves the
+    /// retained selection untouched.
+    ///
+    /// Args:
+    ///     selectable: Every core id available to this picker.
+    ///     cx: Panel context used to refresh rows after a selection change.
+    ///
+    /// Returns:
+    ///     Nothing; workspace-owned or inert actions leave the panel unchanged.
+    fn select_all_cores(&mut self, selectable: Vec<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
+        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
+            self.refresh(cx);
+        }
+    }
+}
+
 impl AlertsPanel {
     /// Builds a panel with a fresh, default view.
     pub fn new(
@@ -558,8 +583,8 @@ impl AlertsPanel {
 
     /// Toggle the retained Classic core filter, or do nothing while Auto owns the selector.
     ///
-    /// `None` is the All row: a complete selection collapses back to the empty-means-all form;
-    /// anything else selects every group core.
+    /// `None` is the All row and clears the explicit selection back to the empty-means-all form.
+    /// `Some(id)` toggles one core independently.
     ///
     /// Args:
     ///     id: Core to toggle, or `None` for the All row.
@@ -574,22 +599,8 @@ impl AlertsPanel {
         {
             return;
         }
-        let all: HashSet<CoreId> = self
-            .backend
-            .read(cx)
-            .session
-            .sessions()
-            .iter()
-            .filter(|s| s.group == self.group)
-            .map(|s| s.id)
-            .collect();
-        match id {
-            None => crate::controls::toggle_all_core_selection(&mut self.sel_cores, all),
-            Some(id) => {
-                if !self.sel_cores.remove(&id) {
-                    self.sel_cores.insert(id);
-                }
-            }
+        if !crate::controls::toggle_core_selection(&mut self.sel_cores, id) {
+            return;
         }
         self.refresh(cx);
     }

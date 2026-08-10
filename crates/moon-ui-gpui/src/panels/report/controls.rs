@@ -293,6 +293,7 @@ impl ReportPanel {
                 crate::workspace::EffectiveScopeLabel::All
                 | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
             });
+        let extras = crate::controls::core_combo_extras(!workspace_owned, &view);
         let combo = crate::controls::core_combo(
             "rep-core",
             &cores,
@@ -306,6 +307,7 @@ impl ReportPanel {
             t!("report.all_cores").to_string(),
             |n| t!("report.cores_n", n = n).to_string(),
             180.0,
+            extras,
             move |uid, app| {
                 view.update(app, |t, c| t.toggle_core(uid, c));
             },

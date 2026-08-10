@@ -125,9 +125,9 @@ impl CoreStatusView {
 
     /// Toggle one core in the retained Classic filter, or toggle its All item.
     ///
-    /// `Some(id)` toggles one core. `None` clears a selection containing every non-empty scoped
-    /// core, otherwise replacing it with that full set. Stale ids do not stand in for current
-    /// cores. Auto mode owns and pins the effective scope, so this method becomes a no-op.
+    /// `Some(id)` toggles one core. `None` clears the explicit selection back to the
+    /// empty-means-all state. Auto mode owns and pins the effective scope, so this method becomes a
+    /// no-op.
     ///
     /// Args:
     ///     id: Core to toggle, or `None` for the All row.
@@ -142,18 +142,8 @@ impl CoreStatusView {
         {
             return;
         }
-        let all: HashSet<CoreId> = self
-            .scope_cores(self.backend.read(cx))
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect();
-        match id {
-            None => crate::controls::toggle_all_core_selection(&mut self.sel_cores, all),
-            Some(id) => {
-                if !self.sel_cores.remove(&id) {
-                    self.sel_cores.insert(id);
-                }
-            }
+        if !crate::controls::toggle_core_selection(&mut self.sel_cores, id) {
+            return;
         }
         self.rebuild_cache(cx);
         cx.notify();

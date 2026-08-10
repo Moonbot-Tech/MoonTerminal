@@ -83,6 +83,7 @@ impl AlertsPanel {
             crate::workspace::EffectiveScopeLabel::All
             | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
         };
+        let extras = crate::controls::core_combo_extras(!workspace_owned, &view);
         let combo = crate::controls::core_combo(
             "alerts-cores",
             &cores,
@@ -96,6 +97,7 @@ impl AlertsPanel {
             t!("alerts.all_cores").to_string(),
             |n| t!("alerts.cores_n", n = n).to_string(),
             170.0,
+            extras,
             move |id, app| {
                 view.update(app, |this, cx| this.toggle_core(id, cx));
             },

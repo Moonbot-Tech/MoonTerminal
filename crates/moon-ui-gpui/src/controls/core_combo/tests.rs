@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    CoreAllRowMode, core_menu_sections, core_selection_is_all, section_core_ids, selection_summary,
-    toggle_all_core_selection, toggle_exchange_cores,
+    CoreAllRowMode, core_menu_sections, core_selection_is_all, selection_summary,
+    toggle_exchange_cores,
 };
 
 /// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections,
@@ -45,16 +45,6 @@ fn menu_sections_are_unknown_first_alphabetical_and_member_stable() {
             (Some("Bybit"), vec![1, 4]),
         ]
     );
-}
-
-/// `core_combo.rs:section_core_ids` must forward every rendered exchange member to the batch
-/// callback in canonical order. Adding `.take(1)` makes a group-header click toggle only its first
-/// core while the remaining checkboxes stay unchanged.
-#[test]
-fn section_batch_includes_every_member_in_order() {
-    let members = [(7, "First"), (11, "Second"), (19, "Third")];
-
-    assert_eq!(section_core_ids(&members), vec![7, 11, 19]);
 }
 
 /// `core_combo.rs:selection_summary` must format a one-core partial selection as a count. Restoring
@@ -128,22 +118,6 @@ fn implicit_only_mode_keeps_a_complete_explicit_selection_out_of_all() {
         ),
         ("Cores: 1".to_string(), false)
     );
-}
-
-/// `core_combo.rs:toggle_all_core_selection` must compare available ids, not set cardinality.
-/// Replacing the membership check with `selected.len() == available.len()` clears a stale
-/// equal-sized selection and leaves the newly available cores absent from filtered results.
-#[test]
-fn all_toggle_replaces_stale_equal_cardinality_selection() {
-    let available = HashSet::from([1, 2]);
-    let mut selected = HashSet::from([98, 99]);
-
-    toggle_all_core_selection(&mut selected, available.clone());
-    assert_eq!(selected, available);
-
-    selected.insert(99);
-    toggle_all_core_selection(&mut selected, available);
-    assert!(selected.is_empty());
 }
 
 /// `core_combo.rs:toggle_exchange_cores` must remove an exchange only when every available member
