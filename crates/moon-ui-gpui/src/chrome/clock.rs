@@ -327,7 +327,10 @@ fn render_header_clock(
         .trigger(row)
         .content(
             MoonPopupMenu::new("header-clock-menu")
-                .header(t!("header.clock_pick").to_string())
+                // One compact row: the caption is a single line, and the pinned header is now
+                // held out of the scrolling region, so its height has to be declared for the row
+                // list's budget. MoonUI floors it at the menu's own row height regardless.
+                .header(20.0, t!("header.clock_pick").to_string())
                 .fit_width(200.0, 560.0)
                 .size(MoonMenuSize::Compact)
                 .mono(true)
