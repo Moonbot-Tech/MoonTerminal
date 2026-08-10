@@ -78,7 +78,7 @@ fn open_row_coin_menu(
 
 pub(super) fn orders_table(
     rows: Rc<Vec<OrderEntry>>,
-    columns: u32,
+    view_state: OrdersViewState,
     state: &Entity<MoonDataTableState>,
     highlight: Rc<HashSet<(CoreId, u64)>>,
     stop_overlay: Rc<std::collections::HashMap<(CoreId, u64, u8), bool>>,
@@ -99,10 +99,11 @@ pub(super) fn orders_table(
         OrdCol::ALL
             .iter()
             .copied()
-            .filter(|c| columns & c.bit() != 0)
+            .filter(|c| view_state.columns & c.bit() != 0)
             .collect(),
     );
     let row_cols = visible.clone();
+    let sort_view = view.clone();
 
     crate::panels::common::data_table_host(
         "orders-table-host",
@@ -124,6 +125,10 @@ pub(super) fn orders_table(
         .state(state)
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H)
+        .on_sort(move |key, ascending, _window, app| {
+            let key = key.to_string();
+            OrdersPanel::mutate(&sort_view, app, |v| v.set_table_sort(&key, !ascending));
+        })
         .on_select_row(move |_ix, _window, app| {
             state_reset.update(app, |s, c| {
                 s.selected_row = None;
@@ -168,7 +173,7 @@ pub(super) fn col_title(col: OrdCol) -> String {
 /// 40px column floor, so the declared value is not a strict minimum.
 fn column_def(col: OrdCol) -> MoonDataTableColumn {
     let title = col_title(col);
-    match col {
+    let column = match col {
         OrdCol::Core => MoonDataTableColumn::new("core", title, 90.0),
         OrdCol::Side => MoonDataTableColumn::new("side", title, 82.0),
         OrdCol::Token => numeric_column("token", title, 70.0),
@@ -187,7 +192,8 @@ fn column_def(col: OrdCol) -> MoonDataTableColumn {
         // A name is variable-length text, so left-align it like the Core column rather than the
         // right-aligned Strat kind column.
         OrdCol::StratName => MoonDataTableColumn::new("strat_name", title, 120.0),
-    }
+    };
+    column.sortable(col.sortable())
 }
 
 fn numeric_column(
@@ -363,7 +369,7 @@ pub(super) fn order_pnl(r: &OrderRow) -> Option<f64> {
 /// This uses the same formula as [`order_pnl`] with the take target in place of the current mark,
 /// which shows the expected profit from a split grid of sell orders. Return `None` without a
 /// position, entry price, or take-profit price.
-fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
+pub(super) fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
     let qty = position_qty(r)?;
     let entry = r.buy_price;
     let tp = r.sell_price;
@@ -419,7 +425,7 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
 ///
 /// Return `None` under the same conditions as [`order_pnl`]. `buy_price` is the entry for both
 /// directions.
-fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
+pub(super) fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
     position_qty(r)?; // Apply the same in-position gate as `order_pnl`.
     let entry = r.buy_price;
     let mark = r.price as f64;

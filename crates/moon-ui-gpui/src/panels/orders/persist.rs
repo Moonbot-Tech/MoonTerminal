@@ -17,6 +17,7 @@ impl OrdersPanel {
     ) -> Self {
         let mut this = Self::new(backend, group, window, cx);
         this.view = view_from_info(info);
+        this.apply_table_sort_state(cx);
         // A per-context visible-column set in shared storage overrides the legacy `docks.json` set.
         // Without one, the legacy set remains as a migration seed until the first column toggle
         // writes it to shared storage.
@@ -60,6 +61,16 @@ impl OrdersPanel {
             .map(|c| c.key().to_string())
             .collect();
         crate::persistence::table_persist::set_visible(&self.backend, &self.widths_id, keys, cx);
+    }
+
+    /// Mirror the persisted order sort into MoonDataTable state so the header arrow is restored.
+    pub(super) fn apply_table_sort_state(&self, cx: &mut App) {
+        let sort = self.view.table_sort.map(|col| col.key().into());
+        let ascending = !self.view.table_sort_desc;
+        self.table_state.update(cx, |s, _| {
+            s.sort_column = sort;
+            s.sort_ascending = ascending;
+        });
     }
 
     /// Mutate the copyable view state and, only when it changes, rebuild, repaint, and persist it.
@@ -130,6 +141,12 @@ fn view_from_info(info: &PanelInfo) -> OrdersViewState {
         }
         if let Some(m) = j.get("main_on_top").and_then(|x| x.as_u64()) {
             v.main_on_top = MainOnTop::from_u8(m as u8);
+        }
+        if let Some(key) = j.get("table_sort").and_then(|x| x.as_str()) {
+            v.table_sort = OrdCol::from_key(key).filter(|c| c.sortable());
+        }
+        if let Some(desc) = j.get("table_sort_desc").and_then(|x| x.as_bool()) {
+            v.table_sort_desc = desc;
         }
         // Convert visible-column keys to a mask. A missing or empty list, or one containing no valid
         // keys, retains the all-visible default instead of producing an empty table.

@@ -44,6 +44,8 @@ impl Panel for OrdersPanel {
                 "newest_first": self.view.newest_first,
                 "only_current": self.view.only_current_market,
                 "main_on_top": self.view.main_on_top.to_u8(),
+                "table_sort": self.view.table_sort.map(|c| c.key()),
+                "table_sort_desc": self.view.table_sort_desc,
                 // Store visible columns as stable keys rather than a mask so enum reordering is
                 // harmless. A missing field restores every column as visible.
                 "columns": self
@@ -140,7 +142,7 @@ impl Render for OrdersPanel {
         );
         let table = table::orders_table(
             entries,
-            view.columns,
+            view,
             &self.table_state,
             self.highlight.clone(),
             stop_overlay,

@@ -173,6 +173,26 @@ impl OrdCol {
     pub(super) fn from_key(key: &str) -> Option<OrdCol> {
         OrdCol::ALL.iter().copied().find(|c| c.key() == key)
     }
+
+    /// Return whether clicking this column header can sort the order table.
+    pub(super) fn sortable(self) -> bool {
+        matches!(
+            self,
+            OrdCol::Core
+                | OrdCol::Side
+                | OrdCol::Token
+                | OrdCol::Size
+                | OrdCol::Buy
+                | OrdCol::CurP
+                | OrdCol::TpPrice
+                | OrdCol::Fill
+                | OrdCol::Pnl
+                | OrdCol::PnlPct
+                | OrdCol::PnlTp
+                | OrdCol::Strat
+                | OrdCol::StratName
+        )
+    }
 }
 
 /// Default view mask with every column visible.
@@ -189,6 +209,10 @@ pub(crate) struct OrdersViewState {
     pub(super) main_on_top: MainOnTop,
     /// Visible-column bit mask, where each bit comes from [`OrdCol::bit`]. Persisted as keys.
     pub(super) columns: u32,
+    /// User-selected table column sort. When absent, the primary order-menu sort is used.
+    pub(super) table_sort: Option<OrdCol>,
+    /// Descending flag for [`Self::table_sort`].
+    pub(super) table_sort_desc: bool,
 }
 
 impl OrdersViewState {
@@ -205,6 +229,12 @@ impl OrdersViewState {
             .filter(|c| self.shows(*c))
             .collect()
     }
+
+    /// Set the click-sort column from MoonDataTable's stable column key.
+    pub(super) fn set_table_sort(&mut self, key: &str, desc: bool) {
+        self.table_sort = OrdCol::from_key(key).filter(|c| c.sortable());
+        self.table_sort_desc = desc;
+    }
 }
 
 impl Default for OrdersViewState {
@@ -219,6 +249,8 @@ impl Default for OrdersViewState {
             newest_first: true,
             main_on_top: MainOnTop::Highlighted,
             columns: ALL_COLUMNS_MASK,
+            table_sort: None,
+            table_sort_desc: false,
         }
     }
 }

@@ -1,6 +1,7 @@
 //! Row execution predicates, the sort comparator, and the table change-signature.
 
 use super::*;
+use std::cmp::Ordering;
 
 /// Return whether the entry has executed, using the authoritative worker status rather than a
 /// leg's `fill_pct`.
@@ -38,6 +39,11 @@ fn primary_key(p: PrimarySort, r: &OrderRow) -> u8 {
 ///
 /// [`OrdersPanel::rebuild_cache`] subsequently applies the stable Main lift over this order.
 pub(super) fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
+    if let Some(col) = view.table_sort {
+        sort_by_table_column(entries, col, view.table_sort_desc, view.newest_first);
+        return;
+    }
+
     // Profit-first sorting uses descending locally calculated PnL. Rows without a position sort
     // last, with UID as the newest/oldest tie-breaker just like the other modes.
     if view.primary == PrimarySort::ProfitFirst {
@@ -64,6 +70,70 @@ pub(super) fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
             if view.newest_first { c.reverse() } else { c }
         })
     });
+}
+
+fn sort_by_table_column(
+    entries: &mut [OrderEntry],
+    col: OrdCol,
+    desc: bool,
+    newest_first: bool,
+) {
+    entries.sort_by(|a, b| {
+        let ord = compare_col(col, a, b)
+            .then_with(|| a.core_name.cmp(&b.core_name))
+            .then_with(|| a.row.coin.cmp(&b.row.coin))
+            .then_with(|| {
+                let c = a.row.uid.cmp(&b.row.uid);
+                if newest_first { c.reverse() } else { c }
+            });
+        if desc { ord.reverse() } else { ord }
+    });
+}
+
+fn compare_col(col: OrdCol, a: &OrderEntry, b: &OrderEntry) -> Ordering {
+    match col {
+        OrdCol::Core => a.core_name.cmp(&b.core_name),
+        OrdCol::Side => side_label(&a.row).cmp(side_label(&b.row)),
+        OrdCol::Token => a
+            .row
+            .coin
+            .cmp(&b.row.coin)
+            .then_with(|| a.row.market_display.cmp(&b.row.market_display)),
+        OrdCol::Size => cmp_f64(a.row.size, b.row.size),
+        OrdCol::Buy => cmp_f64(a.row.buy_price, b.row.buy_price),
+        OrdCol::CurP => cmp_f64(a.row.price as f64, b.row.price as f64),
+        OrdCol::TpPrice => cmp_f64(a.row.sell_price, b.row.sell_price),
+        OrdCol::Fill => cmp_f64(a.row.fill_pct as f64, b.row.fill_pct as f64),
+        OrdCol::Pnl => cmp_opt(table::order_pnl(&a.row), table::order_pnl(&b.row)),
+        OrdCol::PnlPct => cmp_opt(table::order_pnl_pct(&a.row), table::order_pnl_pct(&b.row)),
+        OrdCol::PnlTp => cmp_opt(table::order_pnl_at_tp(&a.row), table::order_pnl_at_tp(&b.row)),
+        OrdCol::Strat => a.row.strat.cmp(&b.row.strat),
+        OrdCol::StratName => a.row.strat_name.cmp(&b.row.strat_name),
+        OrdCol::Sl | OrdCol::Ts | OrdCol::Vstop => Ordering::Equal,
+    }
+}
+
+fn cmp_f64(a: f64, b: f64) -> Ordering {
+    a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+}
+
+fn cmp_opt(a: Option<f64>, b: Option<f64>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => cmp_f64(a, b),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn side_label(row: &OrderRow) -> &'static str {
+    if row.is_short {
+        if executed(row) { "Short-B" } else { "Short-S" }
+    } else if executed(row) {
+        "SELL"
+    } else {
+        "BUY"
+    }
 }
 
 /// Return the effective scope's order-table signature from each core's table revision.
