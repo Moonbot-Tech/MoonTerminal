@@ -443,6 +443,9 @@ impl DetachedChartHost {
                     None => false,
                 }
             }
+            HotkeyAction::ChartScreenshot => self
+                .panel
+                .update(cx, |st, scx| st.capture_chart_screenshot(scx)),
             other => {
                 let target = self.window_target(cx);
                 let active_core = target.as_ref().map(|(c, _)| *c);

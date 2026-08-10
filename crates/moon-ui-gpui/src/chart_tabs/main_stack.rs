@@ -920,6 +920,13 @@ impl MainChartStack {
             .and_then(|entry| entry.panel.read(cx).active_target())
     }
 
+    pub(crate) fn screenshot_chart(&self) -> Option<Entity<ChartPanel>> {
+        self.active
+            .and_then(|ix| self.charts.get(ix))
+            .or_else(|| self.charts.iter().find(|entry| !entry.vacated))
+            .map(|entry| entry.panel.clone())
+    }
+
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     pub(crate) fn debug_data_handle(&self, cx: &App) -> Option<crate::chartdx::ChartDataHandle> {
         self.active

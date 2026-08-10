@@ -163,6 +163,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         desired_open_dirty: true,
         last_open_sync: Instant::now() - Duration::from_secs(10),
         main_chart_targets: HashMap::new(),
+        main_screenshot_charts: HashMap::new(),
         main_open_markets: HashMap::new(),
         config: cfg.clone(),
         preview: None,

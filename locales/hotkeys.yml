@@ -169,6 +169,14 @@ hotkeys.switch_figure_hint:
   ru: "Moonbot-дефолт: Ctrl+F."
   en: "Moonbot default: Ctrl+F."
   es: "Valor por defecto de Moonbot: Ctrl+F."
+hotkeys.chart_screenshot:
+  ru: "Скрин графика"
+  en: "Chart screenshot"
+  es: "Captura del gráfico"
+hotkeys.chart_screenshot_hint:
+  ru: "Скопировать текущий график со стаканом в буфер обмена. Moonbot-дефолт: Ctrl+F10."
+  en: "Copy the current chart with order book to the clipboard. Moonbot default: Ctrl+F10."
+  es: "Copiar el gráfico actual con libro de órdenes al portapapeles. Valor por defecto de Moonbot: Ctrl+F10."
 hotkeys.scale_plus:
   ru: "Scale +"
   en: "Scale +"

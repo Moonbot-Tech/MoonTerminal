@@ -874,6 +874,16 @@ impl ChartTabs {
         self.main.read(cx).active_target(cx)
     }
 
+    fn screenshot_chart(&self, cx: &App) -> Option<Entity<crate::panels::ChartPanel>> {
+        match &self.active {
+            Tab::Main => self.main.read(cx).screenshot_chart(),
+            Tab::Add(n, bucket) | Tab::Custom(n, bucket) => self
+                .add_stack(*n, bucket)
+                .and_then(|stack| stack.read(cx).screenshot_chart())
+                .or_else(|| self.main.read(cx).screenshot_chart()),
+        }
+    }
+
     /// Observe an ordinary AddToChart stack as a possible visible trading-target source.
     ///
     /// The observer is installed when either a live detect or startup restoration creates the
@@ -911,8 +921,10 @@ impl ChartTabs {
     ///     Nothing; this one-time construction path updates runtime target state only.
     fn initialize_main_chart_target(&self, cx: &mut Context<Self>) {
         let target = self.main_chart_target(cx);
+        let screenshot_chart = self.screenshot_chart(cx);
         self.backend.update(cx, |b, _| {
-            b.initialize_main_chart_target(&self.group, target)
+            b.initialize_main_chart_target(&self.group, target);
+            b.set_main_screenshot_chart(&self.group, screenshot_chart);
         });
     }
 
@@ -925,8 +937,11 @@ impl ChartTabs {
     ///     Nothing; Backend decides whether the target core genuinely changed.
     fn sync_main_chart_target(&self, cx: &mut Context<Self>) {
         let target = self.main_chart_target(cx);
-        self.backend
-            .update(cx, |b, _| b.set_main_chart_target(&self.group, target));
+        let screenshot_chart = self.screenshot_chart(cx);
+        self.backend.update(cx, |b, _| {
+            b.set_main_chart_target(&self.group, target);
+            b.set_main_screenshot_chart(&self.group, screenshot_chart);
+        });
     }
 
     /// Refresh the debug-only Main chart handle after Main itself changes.

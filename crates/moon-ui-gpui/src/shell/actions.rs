@@ -181,6 +181,40 @@ impl Shell {
                     None => false,
                 }
             }
+            HotkeyAction::ChartScreenshot => {
+                let group = self.group.clone();
+                let chart = self.backend.update(cx, |b, _| {
+                    b.hovered_chart
+                        .clone()
+                        .and_then(|w| w.upgrade())
+                        .or_else(|| b.main_screenshot_chart(&group))
+                });
+                match chart {
+                    Some(chart) => {
+                        let ok = chart.update(cx, |p, pcx| p.capture_chart_screenshot(pcx));
+                        if ok {
+                            use moon_ui::{MoonNotification, MoonWindowExt as _};
+                            let _ = self.window_handle.update(cx, |_, window, cx| {
+                                window.push_notification(
+                                    MoonNotification::success("Chart screenshot copied"),
+                                    cx,
+                                );
+                            });
+                        }
+                        ok
+                    }
+                    None => {
+                        use moon_ui::{MoonNotification, MoonWindowExt as _};
+                        let _ = self.window_handle.update(cx, |_, window, cx| {
+                            window.push_notification(
+                                MoonNotification::error("No active chart for screenshot"),
+                                cx,
+                            );
+                        });
+                        false
+                    }
+                }
+            }
             // Built-in Ctrl+Shift+F10 restores all windows to on-screen positions.
             HotkeyAction::ResetWindows => {
                 crate::window::windowing::reset_all_windows_onscreen(cx);

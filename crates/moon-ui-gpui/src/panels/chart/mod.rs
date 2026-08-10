@@ -181,6 +181,8 @@ pub struct ChartPanel {
     /// Last window scale factor recorded during rendering. The data-prepare path has no `Window`, so
     /// it reuses this value between infrequent DPI changes.
     last_ppp: f32,
+    /// Last screen-space rectangle occupied by this chart panel, used by the screenshot hotkey.
+    last_screenshot_target: Option<crate::chart_screenshot::ScreenshotTarget>,
     /// Whether a one-shot timer is armed for the nearest unpinned pane TTL deadline in a numbered
     /// AddToChart or Custom panel. Custom panes are normally pinned after population. Time-based
     /// expiry must not depend on backend data observations.
@@ -420,6 +422,7 @@ impl ChartPanel {
             view_dirty: true,
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
+            last_screenshot_target: None,
             ttl_timer_armed: false,
             auto_live_timer_armed: false,
             order_drag: None,
@@ -569,6 +572,7 @@ impl ChartPanel {
             view_dirty: true,
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
+            last_screenshot_target: None,
             ttl_timer_armed: false,
             auto_live_timer_armed: false,
             order_drag: None,
@@ -596,6 +600,21 @@ impl ChartPanel {
     /// Returns the number of open chart panes for the tab's count badge.
     pub fn pane_count(&self) -> usize {
         self.chart.pane_count()
+    }
+
+    pub(crate) fn capture_chart_screenshot(&mut self, _cx: &mut Context<Self>) -> bool {
+        let Some(target) = self.last_screenshot_target else {
+            log::warn!("chart screenshot: chart bounds are not ready yet");
+            return false;
+        };
+        std::thread::spawn(move || {
+            if let Err(error) = crate::chart_screenshot::copy_region_to_clipboard(target) {
+                log::warn!("chart screenshot failed: {error}");
+            } else {
+                log::info!("chart screenshot copied to clipboard");
+            }
+        });
+        true
     }
 
     /// Returns whether any pane is pinned. The stack sorts pinned charts first, and

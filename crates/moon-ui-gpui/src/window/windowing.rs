@@ -108,6 +108,32 @@ pub(crate) fn window_hwnd(_window: &Window) -> Option<isize> {
     None
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn window_number(window: &Window) -> Option<u32> {
+    use objc::{msg_send, runtime::Object, sel, sel_impl};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return None;
+    };
+    let view = handle.ns_view.as_ptr() as *mut Object;
+    if view.is_null() {
+        return None;
+    }
+    let ns_window: *mut Object = unsafe { msg_send![view, window] };
+    if ns_window.is_null() {
+        return None;
+    }
+    let number: isize = unsafe { msg_send![ns_window, windowNumber] };
+    (number > 0).then_some(number as u32)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn window_number(_window: &Window) -> Option<u32> {
+    None
+}
+
 fn app_window_options(
     title: impl Into<SharedString>,
     window_bounds: WindowBounds,

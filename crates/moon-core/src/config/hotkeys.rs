@@ -191,6 +191,8 @@ pub struct HotkeysConfig {
     pub scale_plus: String,
     #[serde(default = "default_scale_minus")]
     pub scale_minus: String,
+    #[serde(default = "default_chart_screenshot")]
+    pub chart_screenshot: String,
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
 
@@ -271,6 +273,7 @@ impl Default for HotkeysConfig {
             shift_sell_down: String::new(),
             scale_plus: default_scale_plus(),
             scale_minus: default_scale_minus(),
+            chart_screenshot: default_chart_screenshot(),
             switch_figure: default_switch_figure(),
             draw_hline: default_draw_hline(),
             draw_segment: default_draw_segment(),
@@ -385,6 +388,10 @@ fn default_scale_plus() -> String {
 
 fn default_scale_minus() -> String {
     "ctrl-w".into()
+}
+
+fn default_chart_screenshot() -> String {
+    "ctrl-f10".into()
 }
 
 fn default_switch_figure() -> String {

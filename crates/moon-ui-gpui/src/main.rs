@@ -18,6 +18,7 @@
 
 mod analytics;
 mod backend;
+mod chart_screenshot;
 mod chart_tabs;
 mod chartdx;
 mod chrome;
@@ -141,6 +142,9 @@ struct Backend {
     /// Main fullscreen chart target by group. Panels such as Orders use this for
     /// "current market"; AddToChart stacks are deliberately not part of that filter.
     main_chart_targets: HashMap<String, (CoreId, String)>,
+    /// Current screenshot chart by group. Ctrl+F10 prefers the hovered chart, then this active
+    /// chart handle, so the clipboard does not silently keep an old desktop screenshot.
+    main_screenshot_charts: HashMap<String, WeakEntity<crate::panels::ChartPanel>>,
     /// Markets open in each group's Main-tab stack: `group -> [(core, market)]`.
     /// The Orders view highlights one row for each pair the user opened on Main.
     main_open_markets: HashMap<String, Vec<(CoreId, String)>>,

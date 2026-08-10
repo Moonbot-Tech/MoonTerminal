@@ -14,12 +14,13 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use gpui::{Context, WindowId};
+use gpui::{Context, Entity, WeakEntity, WindowId};
 
 use crate::Backend;
 use crate::backend::core_warn::axis_has_series;
 use crate::chartdx::ChartDataHandle;
 use crate::core_order::{CoreOrder, OrderedCores};
+use crate::panels::ChartPanel;
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode, WorkspaceMode,
 };
@@ -1070,6 +1071,35 @@ impl Backend {
                 self.main_chart_targets.remove(group);
             }
         }
+    }
+
+    /// Store the chart panel captured by Ctrl+F10 when no chart is hovered.
+    pub(crate) fn set_main_screenshot_chart(
+        &mut self,
+        group: &str,
+        chart: Option<Entity<ChartPanel>>,
+    ) {
+        match chart {
+            Some(chart) => {
+                self.main_screenshot_charts
+                    .insert(group.to_string(), chart.downgrade());
+            }
+            None => {
+                self.main_screenshot_charts.remove(group);
+            }
+        }
+    }
+
+    /// Resolve the group's active screenshot chart, dropping expired handles.
+    pub(crate) fn main_screenshot_chart(&mut self, group: &str) -> Option<Entity<ChartPanel>> {
+        let chart = self
+            .main_screenshot_charts
+            .get(group)
+            .and_then(WeakEntity::upgrade);
+        if chart.is_none() {
+            self.main_screenshot_charts.remove(group);
+        }
+        chart
     }
 
     /// Return the group's current Main trading target while it still belongs to that live group.

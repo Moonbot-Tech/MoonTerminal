@@ -98,6 +98,8 @@ pub enum HotkeyAction {
     ScalePlus,
     /// Zoom the active chart's Y scale outward through the calling window.
     ScaleMinus,
+    /// Copy the hovered/current chart panel screenshot to the system image clipboard.
+    ChartScreenshot,
 }
 
 /// Return whether an event matches a configured GPUI keystroke string.
@@ -174,6 +176,9 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     }
     if p(&hk.scale_minus) {
         return Some(A::ScaleMinus);
+    }
+    if p(&hk.chart_screenshot) {
+        return Some(A::ChartScreenshot);
     }
 
     // Order-size and fixed-sell presets.
@@ -411,7 +416,8 @@ pub fn apply(
         | A::ResetWindows
         | A::CancelHoveredOrder
         | A::CloseAllCharts
-        | A::CloseActiveChart => false,
+        | A::CloseActiveChart
+        | A::ChartScreenshot => false,
     }
 }
 

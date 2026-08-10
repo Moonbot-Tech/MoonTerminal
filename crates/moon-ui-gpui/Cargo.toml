@@ -80,6 +80,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Excel (.xlsx) export from the Report panel's save menu (report/export.rs).
 rust_xlsxwriter = "0.96.0"
+raw-window-handle = "0.6"
 
 # Native Windows APIs for the DX11 renderer, window integration, audio, and crash handling.
 # Application-wide time-zone conversion is cross-platform through chrono-tz above; moon-chart
@@ -105,7 +106,6 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
-raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }

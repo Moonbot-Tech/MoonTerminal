@@ -228,6 +228,13 @@ impl SettingsView {
                     cx,
                 ),
                 self.hotkey_row(
+                    t!("hotkeys.chart_screenshot").to_string(),
+                    t!("hotkeys.chart_screenshot_hint").to_string(),
+                    HotkeySlot::ChartScreenshot,
+                    &hotkeys,
+                    cx,
+                ),
+                self.hotkey_row(
                     t!("hotkeys.scale_plus").to_string(),
                     t!("hotkeys.scale_plus_hint").to_string(),
                     HotkeySlot::ScalePlus,

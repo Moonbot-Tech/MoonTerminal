@@ -241,6 +241,36 @@ impl AddChartStack {
         self.compare_orderbook_only
     }
 
+    pub(crate) fn capture_chart_screenshot(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(anchor) = self.compare_anchor.as_ref()
+            && let Some(entry) = self.charts.iter().find(|entry| entry.is(anchor))
+        {
+            return entry
+                .panel
+                .update(cx, |panel, pcx| panel.capture_chart_screenshot(pcx));
+        }
+        self.charts
+            .iter()
+            .find(|entry| !entry.vacated && entry.panel.read(cx).pane_count() > 0)
+            .is_some_and(|entry| {
+                entry
+                    .panel
+                    .update(cx, |panel, pcx| panel.capture_chart_screenshot(pcx))
+            })
+    }
+
+    pub(crate) fn screenshot_chart(&self) -> Option<Entity<ChartPanel>> {
+        if let Some(anchor) = self.compare_anchor.as_ref()
+            && let Some(entry) = self.charts.iter().find(|entry| entry.is(anchor))
+        {
+            return Some(entry.panel.clone());
+        }
+        self.charts
+            .iter()
+            .find(|entry| !entry.vacated)
+            .map(|entry| entry.panel.clone())
+    }
+
     /// Restore comparison state from `charts.json` (anchor plus broom mode) and apply it.
     pub(crate) fn restore_compare(
         &mut self,

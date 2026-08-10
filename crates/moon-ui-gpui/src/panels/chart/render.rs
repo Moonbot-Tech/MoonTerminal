@@ -597,14 +597,47 @@ impl Render for ChartPanel {
             .child({
                 let is_main = self.num.is_none();
                 let backend = self.backend.clone();
+                let entity = cx.entity();
                 canvas(
                     move |bounds, _, _| bounds,
                     move |bounds, _, window, cx| {
                         let sf = window.scale_factor();
+                        let wb = window.window_bounds().get_bounds();
+                        entity.update(cx, |this, _| {
+                            if let Some((slot_bounds, _, _)) = this.chart.slot_geometry() {
+                                let screen_rect = crate::chart_screenshot::ScreenRect::new(
+                                    f32::from(wb.origin.x) + f32::from(slot_bounds.origin.x),
+                                    f32::from(wb.origin.y) + f32::from(slot_bounds.origin.y),
+                                    f32::from(slot_bounds.size.width),
+                                    f32::from(slot_bounds.size.height),
+                                );
+                                let window_crop = crate::chart_screenshot::ScreenRect::new(
+                                    f32::from(slot_bounds.origin.x),
+                                    f32::from(slot_bounds.origin.y),
+                                    f32::from(slot_bounds.size.width),
+                                    f32::from(slot_bounds.size.height),
+                                )
+                                .and_then(|rect| {
+                                    crate::window::windowing::window_number(window).map(
+                                        |window_number| crate::chart_screenshot::WindowCrop {
+                                            window_number,
+                                            rect,
+                                            scale_factor: sf,
+                                        },
+                                    )
+                                });
+                                this.last_screenshot_target = screen_rect.map(|screen_rect| {
+                                    crate::chart_screenshot::ScreenshotTarget::new(
+                                        screen_rect,
+                                        window_crop,
+                                    )
+                                });
+                            }
+                        });
                         let firetest_probe = crate::firetest::ChartProbe::new(
                             crate::window::windowing::window_hwnd(window),
-                            f32::from(window.window_bounds().get_bounds().origin.x),
-                            f32::from(window.window_bounds().get_bounds().origin.y),
+                            f32::from(wb.origin.x),
+                            f32::from(wb.origin.y),
                             f32::from(bounds.origin.x),
                             f32::from(bounds.origin.y),
                             f32::from(bounds.size.width),
