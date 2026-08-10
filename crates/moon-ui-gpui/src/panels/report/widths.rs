@@ -114,10 +114,14 @@ fn natural_widths(
             let column = cols.get(column_index)?;
             let header = columns::header_for(column);
             let mut width = measurer.text_width(&header, FontWeight::SEMIBOLD);
+            // Generic cells use the same predicate in the renderer, so the two emphasized profit
+            // columns cannot be measured light and then clip the wider glyphs they paint. Resolve it
+            // once per column because it does not depend on row values.
+            let weight = columns::cell_weight(column);
             for row in rows.iter().take(query::MAX_REPORT_ROWS) {
                 let value = row.get(column_index).unwrap_or(&Value::Null);
                 let text = columns::cell(column, value, p, zone).0;
-                width = width.max(measurer.text_width(&text, FontWeight::NORMAL));
+                width = width.max(measurer.text_width(&text, weight));
             }
             let (floor, ceiling) = width_bounds(column);
             Some((column.clone(), (width + 28.0).ceil().clamp(floor, ceiling)))

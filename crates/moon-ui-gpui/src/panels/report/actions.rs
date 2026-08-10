@@ -241,13 +241,79 @@ impl ReportPanel {
         self.persist_visible(cx);
         cx.notify();
     }
+
+    /// Store this host context's four toolbar filters.
+    ///
+    /// Replaces one complete map entry per mutation because the four values form one control. The
+    /// replacement still merges one value deliberately: unless this call represents an explicit
+    /// period-menu pick, it carries the already-stored period forward. An Analytics-scoped panel
+    /// writes nothing — see [`ReportPanel::scoped`].
+    ///
+    /// The period is the ONE member that is not read off the live panel. `self.period` also shows
+    /// the implicit "all" that typing a manual date produces, which is not a preset anybody chose
+    /// and must not replace the stored one — so every caller but the period menu passes `None` and
+    /// the stored value is carried through untouched.
+    ///
+    /// Args:
+    ///     picked_period: The preset the user just chose from the menu, or `None` to keep whatever
+    ///         is already stored.
+    ///     cx: Panel context used to reach the backend layout.
+    ///
+    /// Returns:
+    ///     Nothing; the marked layout is flushed by the shared debounced and quit save path.
+    fn persist_filters(&mut self, picked_period: Option<Period>, cx: &mut Context<Self>) {
+        if self.scoped {
+            return;
+        }
+        let id = filters_ctx_id(self.detached);
+        let period = picked_period
+            .map(|period| period.menu_key().to_string())
+            .or_else(|| {
+                crate::persistence::table_persist::report_filters(self.backend.read(cx), &id)
+                    .and_then(|stored| stored.period.clone())
+            });
+        let prefs = moon_core::config::ReportFilterPrefs {
+            side: Some(side_id(self.side).to_string()),
+            kind: Some(self.kind.id().to_string()),
+            deleted_only: Some(self.deleted_only),
+            period,
+        };
+        crate::persistence::table_persist::set_report_filters(&self.backend, &id, prefs, cx);
+    }
+
+    /// Select a direction filter, persist the changed set, and request fresh rows.
+    ///
+    /// Args:
+    ///     s: Direction selected from the toolbar menu.
+    ///     cx: Panel context used to persist and requery.
+    ///
+    /// Returns:
+    ///     Nothing; selecting the current direction is a no-op.
     pub(super) fn set_side(&mut self, s: SideFilter, cx: &mut Context<Self>) {
         if self.side != s {
             self.side = s;
+            self.persist_filters(None, cx);
             self.request_requery(cx);
         }
     }
+
+    /// Record an explicit period-menu pick and apply a changed preset to the query.
+    ///
+    /// Persistence precedes the value guard because an explicit pick may match the implicit
+    /// `Period::All` shown after a manual date while still replacing an older stored preset.
+    ///
+    /// Args:
+    ///     p: Period preset explicitly selected from the toolbar menu.
+    ///     cx: Panel context used to persist and requery.
+    ///
+    /// Returns:
+    ///     Nothing; an unchanged displayed period is stored without issuing another query.
     pub(super) fn set_period(&mut self, p: Period, cx: &mut Context<Self>) {
+        // Stored OUTSIDE the changed-value guard, because a menu pick that changes nothing on
+        // screen can still change what is stored: the visible preset may be the implicit "all" a
+        // typed date produced, in which case this click is the user replacing an older stored pick
+        // with one that merely happens to match what is already displayed.
+        self.persist_filters(Some(p), cx);
         if self.period != p {
             self.period = p;
             self.request_requery(cx);
@@ -264,9 +330,18 @@ impl ReportPanel {
         }
     }
 
+    /// Select an order-kind filter, persist the changed set, and request fresh rows.
+    ///
+    /// Args:
+    ///     k: Order kind selected from the toolbar menu.
+    ///     cx: Panel context used to persist and requery.
+    ///
+    /// Returns:
+    ///     Nothing; selecting the current kind is a no-op.
     pub(super) fn set_kind(&mut self, k: ReportKind, cx: &mut Context<Self>) {
         if self.kind != k {
             self.kind = k;
+            self.persist_filters(None, cx);
             self.request_requery(cx);
         }
     }
@@ -304,6 +379,7 @@ impl ReportPanel {
         if self.deleted_only != on {
             self.deleted_only = on;
             self.selection.clear();
+            self.persist_filters(None, cx);
             self.request_requery(cx);
         }
     }

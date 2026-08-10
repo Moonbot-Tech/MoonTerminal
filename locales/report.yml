@@ -251,25 +251,41 @@ report.period.yesterday:
   ru: "Вчера"
   en: "Yesterday"
   es: "Ayer"
+# Every preset here is named by its FAMILY: a calendar one says which period it is current within,
+# a rolling one is labelled by its day count. A bare week or year cannot be told apart from its
+# rolling counterpart once both are offered, which is why the rolling three are numeric. The same
+# wording is carried in analytics.period.* so the two windows do not disagree; Analytics offers no
+# calendar week or year, so it has no counterpart for cur_week / cur_year.
+# A rolling 7-day window ending today.
 report.period.week:
-  ru: "Неделя"
-  en: "Week"
-  es: "Semana"
-# Calendar month from the 1st. The wording matches Analytics
-# (analytics.period.cur_month / .month) so the two windows do not disagree.
+  ru: "7 дней"
+  en: "7 days"
+  es: "7 días"
+# Calendar week from Monday.
+report.period.cur_week:
+  ru: "Тек. неделя"
+  en: "This week"
+  es: "Semana actual"
+# Calendar month from the 1st.
 report.period.cur_month:
   ru: "Тек. месяц"
   en: "This month"
   es: "Mes actual"
+# Calendar year from January 1st.
+report.period.cur_year:
+  ru: "Тек. год"
+  en: "This year"
+  es: "Año actual"
 # A rolling 30-day window — NOT a calendar month, which is why it is labelled by number.
 report.period.month:
   ru: "30 дней"
   en: "30 days"
   es: "30 días"
+# A rolling 365-day window — NOT a calendar year.
 report.period.year:
-  ru: "Год"
-  en: "Year"
-  es: "Año"
+  ru: "365 дней"
+  en: "365 days"
+  es: "365 días"
 report.cores_n:
   ru: "Ядер: %{n}"
   en: "Cores: %{n}"
