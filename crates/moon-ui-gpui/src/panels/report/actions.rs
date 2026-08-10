@@ -30,10 +30,9 @@ fn report_export_scope_is_current(
 impl ReportPanel {
     /// Toggle a core in the retained Classic or standalone multi-selection.
     ///
-    /// `None` is the All toggle: it builds the current core set, then clears the selection when
-    /// every current core is selected. Otherwise it replaces the selection with the current set;
-    /// stale ids never stand in for current cores. Group Auto mode owns the effective scope and
-    /// leaves this retained selection unchanged.
+    /// `None` is the All toggle and clears the explicit selection back to the empty-means-all
+    /// state. `Some(uid)` toggles one core. Group Auto mode owns the effective scope and leaves this
+    /// retained selection unchanged.
     ///
     /// Args:
     ///     uid: Core to toggle, or `None` for the All row.
@@ -48,16 +47,8 @@ impl ReportPanel {
         {
             return;
         }
-        match uid {
-            None => {
-                let all: HashSet<u64> = self.cores.iter().map(|(u, _)| *u).collect();
-                crate::controls::toggle_all_core_selection(&mut self.sel_cores, all);
-            }
-            Some(uid) => {
-                if !self.sel_cores.remove(&uid) {
-                    self.sel_cores.insert(uid);
-                }
-            }
+        if !crate::controls::toggle_core_selection(&mut self.sel_cores, uid) {
+            return;
         }
         self.reconcile_strategy_core(cx);
         self.request_requery(cx);
@@ -206,7 +197,7 @@ impl ReportPanel {
     /// Returns:
     ///     Nothing; an implicit All selection remains implicit All. Removing the final exact key
     ///     returns to All, matching the shared core selector's empty-selection convention.
-    fn reconcile_strategy_core(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reconcile_strategy_core(&mut self, cx: &mut Context<Self>) {
         let became_empty = if let Some(strategies) = &mut self.selected_strategies {
             if !self.sel_cores.is_empty() {
                 strategies.retain(|strategy| self.sel_cores.contains(&strategy.core_uid));

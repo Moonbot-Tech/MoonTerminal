@@ -91,32 +91,6 @@ pub(super) fn sole_core_name<'a>(
     live.next().is_none().then_some(name.as_str())
 }
 
-/// Apply one Analytics core-menu click with an exclusive implicit All state.
-///
-/// Args:
-///     selected: Mutable explicit core selection; empty represents the All row.
-///     core: Clicked core id, or `None` for the All row and clear button.
-///
-/// Returns:
-///     Whether the explicit selection changed.
-pub(super) fn toggle_analytics_core_selection(
-    selected: &mut HashSet<u64>,
-    core: Option<u64>,
-) -> bool {
-    match core {
-        None if selected.is_empty() => false,
-        None => {
-            selected.clear();
-            true
-        }
-        Some(core) if !selected.remove(&core) => {
-            selected.insert(core);
-            true
-        }
-        Some(_) => true,
-    }
-}
-
 /// Convert the effective Analytics selection into database filter ids.
 ///
 /// Args:
@@ -474,6 +448,7 @@ impl AnalyticsView {
             t!("report.all_cores").to_string()
         };
         let toggle_view = view.clone();
+        let extras = crate::controls::core_combo_extras(!workspace_pinned, &view);
         crate::controls::core_combo(
             "an-core",
             &cores,
@@ -483,6 +458,7 @@ impl AnalyticsView {
             all_label,
             |n| t!("report.cores_n", n = n).to_string(),
             180.0,
+            extras,
             move |uid, app| {
                 toggle_view.update(app, |t, c| t.toggle_core(uid, c));
             },

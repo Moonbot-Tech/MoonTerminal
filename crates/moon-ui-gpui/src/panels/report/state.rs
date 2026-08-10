@@ -50,7 +50,11 @@ pub(super) fn applied_filters(
 ) -> ReportFilterSet {
     let (side, kind, deleted_only, period) = current;
     (
-        stored.side.as_deref().and_then(side_from_id).unwrap_or(side),
+        stored
+            .side
+            .as_deref()
+            .and_then(side_from_id)
+            .unwrap_or(side),
         stored
             .kind
             .as_deref()

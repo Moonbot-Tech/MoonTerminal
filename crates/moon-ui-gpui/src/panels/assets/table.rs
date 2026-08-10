@@ -186,6 +186,7 @@ impl AssetsView {
             .session
             .market_source()
             .core_exchange_names();
+        let extras = crate::controls::core_combo_extras(!workspace_owned, &view);
         let combo = crate::controls::core_combo(
             "assets-core",
             cores,
@@ -199,6 +200,7 @@ impl AssetsView {
             t!("assets.all_cores").to_string(),
             |n| t!("assets.cores_n", n = n).to_string(),
             170.0,
+            extras,
             move |id, app| {
                 view.update(app, |t, c| t.toggle_core(id, c));
             },

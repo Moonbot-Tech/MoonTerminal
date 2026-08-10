@@ -47,3 +47,17 @@ common.exchange_spot:
   ru: "Spot"
   en: "Spot"
   es: "Spot"
+# The shared core picker, used by Orders, Alerts, Assets, Core Status, Report and Analytics. Its
+# strings live here rather than in any one panel's file for the same reason the Analytics
+# placeholders do: six panels share the control, so no single namespace owns it.
+#
+# The Select all action above the exchange sections. It is an ACTION, not state: the row shows how
+# many cores would end up selected, never a checkbox. It differs from the All row on purpose — the
+# All row CLEARS the filter, while this one selects every core explicitly, which is what lets a user
+# then remove one core out of fifty. There is deliberately no "deselect all" and no "invert": both
+# can produce the empty set, which this codebase reads as ALL, so either row would sometimes do the
+# exact opposite of its label.
+common.core_pick.all:
+  ru: "Выбрать все"
+  en: "Select all"
+  es: "Seleccionar todos"

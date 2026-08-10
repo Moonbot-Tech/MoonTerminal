@@ -114,6 +114,33 @@ pub struct OrdersPanel {
     focus: FocusHandle,
 }
 
+impl crate::controls::CoreComboHost for OrdersPanel {
+    /// Select every core in the retained Classic filter.
+    ///
+    /// The ids are the ones the menu rendered. Auto owns the effective scope and leaves the
+    /// retained selection untouched.
+    ///
+    /// Args:
+    ///     selectable: Every core id available to this picker.
+    ///     cx: Panel context used to rebuild cached rows and request a repaint.
+    ///
+    /// Returns:
+    ///     Nothing; workspace-owned or inert actions leave the panel unchanged.
+    fn select_all_cores(&mut self, selectable: Vec<CoreId>, cx: &mut Context<Self>) {
+        if self
+            .effective_scope(self.backend.read(cx))
+            .is_workspace_owned()
+        {
+            return;
+        }
+        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
+            let backend = self.backend.clone();
+            self.rebuild_cache(backend.read(cx));
+            cx.notify();
+        }
+    }
+}
+
 impl OrdersPanel {
     /// Build a group-scoped Orders panel and subscribe it to data and workspace revisions.
     ///
@@ -286,10 +313,9 @@ impl OrdersPanel {
 
     /// Toggle the retained Classic selected-core filter.
     ///
-    /// `None` represents the All item: if every group core is selected, clear the set back to the
-    /// empty-means-all form; otherwise select every group core. Stale ids do not stand in for
-    /// current cores. `Some(id)` toggles one core. The selection is not persisted and resets to all.
-    /// Auto owns and pins the effective scope, so this method does nothing in that mode.
+    /// `None` represents the All item and clears the explicit selection back to the empty-means-all
+    /// form. `Some(id)` toggles one core. The selection is not persisted and resets to all. Auto
+    /// owns and pins the effective scope, so this method does nothing in that mode.
     ///
     /// Args:
     ///     id: Core to toggle, or `None` for the All row.
@@ -304,22 +330,8 @@ impl OrdersPanel {
         {
             return;
         }
-        let all: HashSet<CoreId> = self
-            .backend
-            .read(cx)
-            .session
-            .sessions()
-            .iter()
-            .filter(|s| s.group == self.group)
-            .map(|s| s.id)
-            .collect();
-        match id {
-            None => crate::controls::toggle_all_core_selection(&mut self.sel_cores, all),
-            Some(id) => {
-                if !self.sel_cores.remove(&id) {
-                    self.sel_cores.insert(id);
-                }
-            }
+        if !crate::controls::toggle_core_selection(&mut self.sel_cores, id) {
+            return;
         }
         let backend = self.backend.clone();
         self.rebuild_cache(backend.read(cx));

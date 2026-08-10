@@ -1,23 +1,35 @@
-//! Shared checkbox-based core multi-selector used by the Orders, Report, Assets, Core Status, and
-//! Analytics views.
+//! Shared checkbox-based core multi-selector used by the Orders, Report, Assets, Alerts, Core
+//! Status, and Analytics views.
 //!
 //! The trigger has fixed compact geometry so an open menu stays anchored while selections change.
 //! MoonUI fits the exchange-grouped menu and ellipsizes anomalously long labels inside its cap.
 //! `CoreId` aliases `u64`, so the builder uses `u64` for every caller. Each caller supplies its
 //! localized labels and defines the behavior of its own individual and exchange-batch callbacks.
-//! Known exchange rows are clickable in every multi-select consumer; the unknown section remains a
-//! non-interactive label because it has no reported exchange identity.
+//! Every exchange row is clickable, the unnamed section included: it has no reported exchange
+//! identity, but its members are still a batch worth toggling at once.
+//!
+//! Above its core rows the menu carries the All row and, unless the selector is pinned, the Select
+//! all row supplied through [`CoreComboExtras`]. The two are deliberately different: the All row
+//! CLEARS the selection — empty means all cores — while Select all produces the explicit full set a
+//! user can then remove one core from. Keeping both is what makes an all-but-one selection
+//! representable at all.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use gpui::App;
+use gpui::{App, Window};
 use rust_i18n::t;
 
+use super::core_quick::{
+    exchange_state_label, group_check_state, section_core_ids, select_all_preview,
+};
 use super::exchange_label::exchange_display_name;
 use crate::controls::CORE_COMBO_TRIGGER_W;
 use crate::core_order::OrderedCores;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
+
+#[cfg(test)]
+mod tests;
 
 /// One exchange section as its reported name and canonically ordered core rows.
 pub(crate) type CoreMenuSection<'a> = (Option<&'a str>, Vec<(u64, &'a str)>);
@@ -29,6 +41,31 @@ pub(crate) enum CoreAllRowMode {
     ImplicitOrComplete,
     /// Only the empty implicit selection checks and labels the All row.
     ImplicitOnly,
+}
+
+/// The picker's one interactive affordance beyond its rows: the Select all action.
+///
+/// A selector pinned by an Auto workspace is disabled, so it takes `None` rather than a row nobody
+/// can click. [`super::core_combo_extras`] is the only caller of this constructor, which is what
+/// keeps that policy in one place.
+pub(crate) struct CoreComboExtras {
+    /// Invoked with the selectable ids the menu rendered.
+    on_select_all: Rc<dyn Fn(Vec<u64>, &mut Window, &mut App)>,
+}
+
+impl CoreComboExtras {
+    /// Assemble the affordance.
+    ///
+    /// Args:
+    ///     on_select_all: Handler applying the Select all click.
+    ///
+    /// Returns:
+    ///     The affordance, ready to hand to [`core_combo`].
+    pub(crate) fn new(on_select_all: impl Fn(Vec<u64>, &mut Window, &mut App) + 'static) -> Self {
+        Self {
+            on_select_all: Rc::new(on_select_all),
+        }
+    }
 }
 
 /// Group canonically ordered cores by their reported exchange names.
@@ -63,23 +100,6 @@ pub(crate) fn core_menu_sections<'a>(
         )
     })
     .collect()
-}
-
-/// Toggle the All row against the membership of the currently available cores.
-///
-/// Args:
-///     selected: Mutable selected-core set using empty as the implicit All representation.
-///     available: Current core ids in the selector's scope.
-///
-/// Returns:
-///     Nothing; `selected` is cleared when it already contains every available core, or replaced
-///     with `available` otherwise.
-pub(crate) fn toggle_all_core_selection(selected: &mut HashSet<u64>, available: HashSet<u64>) {
-    if !available.is_empty() && available.iter().all(|core| selected.contains(core)) {
-        selected.clear();
-    } else {
-        *selected = available;
-    }
 }
 
 /// Toggle every currently available core from one exchange in an explicit selection.
@@ -119,9 +139,9 @@ pub(crate) fn toggle_exchange_cores(
 
 /// Whether a selection reads as "all cores": empty (implicit) or holding every available one.
 ///
-/// This is the legacy `ImplicitOrComplete` display rule shared by Orders, Report, Assets, and Core
-/// Status. Analytics deliberately uses `ImplicitOnly`, where a complete explicit selection remains
-/// visible as selected cores rather than being relabeled All.
+/// This is the `ImplicitOrComplete` display rule shared by Orders, Report, Assets, Alerts, and Core
+/// Status. Analytics uses `ImplicitOnly`, where a complete explicit selection remains visible as
+/// selected cores rather than being relabeled All.
 ///
 /// Args:
 ///     available: Current core ids in the consumer's scope.
@@ -188,40 +208,71 @@ fn selection_summary(
     (label, all_on)
 }
 
-/// Copy every core id from one rendered exchange section in member order.
+/// Append the Select all row above the core list.
+///
+/// The row carries the selection size it would produce as its trailing count, and is disabled only
+/// when the action is REFUSED — already the full explicit set, or nothing selectable at all. The
+/// gate is refusal rather than "changes nothing visible", because in the implicit-All state Select
+/// all changes the representation without changing the effective scope, and that representation is
+/// the whole point.
 ///
 /// Args:
-///     members: Canonically ordered core ids and display names from one exchange section.
+///     menu: The menu being built.
+///     id: Dropdown id, the prefix of the generated key.
+///     selected: Currently selected core ids.
+///     selectable: Every core this consumer can select.
+///     on_select_all: The consumer's handler.
 ///
 /// Returns:
-///     Every section member id in the same order.
-fn section_core_ids(members: &[(u64, &str)]) -> Vec<u64> {
-    members.iter().map(|(core, _)| *core).collect()
+///     The menu with the Select all row appended.
+fn select_all_row(
+    menu: MoonDropdown,
+    id: &'static str,
+    selected: &HashSet<u64>,
+    selectable: Vec<u64>,
+    on_select_all: &Rc<dyn Fn(Vec<u64>, &mut Window, &mut App)>,
+) -> MoonDropdown {
+    let preview = select_all_preview(selected, &selectable);
+    let on_select_all = on_select_all.clone();
+    let mut row = MoonMenuItem::action_label(
+        format!("{id}-select-all"),
+        t!("common.core_pick.all").to_string(),
+    )
+    .disabled(preview.is_none())
+    .on_click(move |_, window, app| {
+        on_select_all(selectable.clone(), window, app);
+    });
+    if let Some(result) = preview {
+        row = row.right_label(result.to_string());
+    }
+    menu.item(row)
 }
 
-/// Build a checkbox-based core multi-selector with clickable known-exchange rows.
+/// Build a checkbox-based core multi-selector with clickable exchange rows.
 ///
 /// The trigger shows `all_label` according to `all_row_mode`; every other selection shows
 /// `cores_n(N)` for the available selected cores, including one core. Fixed trigger geometry keeps
 /// the open menu anchored while selections change. MoonUI fits the menu and truncates labels
-/// against its own row geometry. The All item calls
-/// `on_toggle(None, app)`, while a core item calls `on_toggle(Some(id), app)`. Each known exchange
-/// row submits all of its member ids to `on_toggle_exchange`; the unknown section remains a label.
+/// against its own row geometry. The All item passes `None` to the toggle callback and means "clear
+/// the filter"; a core item passes its id. Each exchange row submits its member ids to the exchange
+/// callback.
 ///
 /// Args:
 ///     id: Dropdown id and prefix for generated item keys.
-///     cores: Ordered core ids and display names.
+///     cores: Ordered core ids and display names — everything this consumer can select.
 ///     exchange_names: Reported display exchange names keyed by core id.
 ///     selected: Currently selected core ids.
 ///     all_row_mode: Whether a complete explicit selection also represents the All row.
 ///     all_label: Localized label for the All item and every state that activates it.
 ///     cores_n: Localized formatter for every partial selection count.
 ///     min_menu_w: Caller-specific lower bound for the fitted menu width.
+///     extras: The Select all row, or `None` for a pinned selector that takes no input.
 ///     on_toggle: Callback receiving `None` for All or `Some(id)` for one core.
-///     on_toggle_exchange: Callback receiving every core id in the clicked exchange section.
+///     on_toggle_exchange: Callback receiving the core ids of the clicked exchange section.
 ///
 /// Returns:
 ///     The configured multi-select dropdown.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn core_combo<F, G>(
     id: &'static str,
     cores: &OrderedCores,
@@ -231,6 +282,7 @@ pub(crate) fn core_combo<F, G>(
     all_label: String,
     cores_n: impl Fn(usize) -> String,
     min_menu_w: f32,
+    extras: Option<CoreComboExtras>,
     on_toggle: F,
     on_toggle_exchange: G,
 ) -> MoonDropdown
@@ -254,34 +306,38 @@ where
         .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
         .item(
-            // The All item delegates clearing or selecting every core to the caller.
+            // The All item clears the filter in every consumer: empty means all cores.
             MoonMenuItem::with_key(format!("{id}-all"), all_label)
                 .checked(all_on)
                 .selected(all_on)
                 .on_click(move |_, _, app| toggle_all(None, app)),
         );
+    if let Some(extras) = extras {
+        let selectable: Vec<u64> = cores.iter().map(|(core, _)| *core).collect();
+        menu = select_all_row(menu, id, selected, selectable, &extras.on_select_all);
+    }
     if !sections.is_empty() {
         menu = menu.item(MoonMenuItem::separator());
     }
     for (section_index, (exchange, members)) in sections.into_iter().enumerate() {
+        if members.is_empty() {
+            continue;
+        }
         let exchange_label = exchange
             .map(exchange_display_name)
             .unwrap_or_else(|| unknown_exchange.clone());
-        if exchange.is_some() {
-            let exchange_cores = section_core_ids(&members);
-            let on_toggle_exchange = on_toggle_exchange.clone();
-            menu = menu.item(
-                MoonMenuItem::action_label(
-                    format!("{id}-exchange-{section_index}"),
-                    exchange_label,
-                )
+        let exchange_cores: Vec<u64> = section_core_ids(&members);
+        let trailing = exchange_state_label(group_check_state(&exchange_cores, selected));
+        let on_section = on_toggle_exchange.clone();
+        let mut row =
+            MoonMenuItem::action_label(format!("{id}-exchange-{section_index}"), exchange_label)
                 .on_click(move |_, _, app| {
-                    on_toggle_exchange(exchange_cores.clone(), app);
-                }),
-            );
-        } else {
-            menu = menu.item(MoonMenuItem::label(exchange_label));
+                    on_section(exchange_cores.clone(), app);
+                });
+        if let Some(trailing) = trailing {
+            row = row.right_label(trailing);
         }
+        menu = menu.item(row);
         for (core, name) in members {
             let on = selected.contains(&core);
             let on_toggle = on_toggle.clone();
@@ -295,6 +351,3 @@ where
     }
     menu
 }
-
-#[cfg(test)]
-mod tests;
