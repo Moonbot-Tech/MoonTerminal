@@ -554,10 +554,21 @@ impl ReportPanel {
             )
     }
 
-    /// Build a checkbox menu from the runtime DB schema, including new dynamic core fields.
+    /// Build a checkbox menu from the contextually available runtime DB schema.
+    ///
+    /// The AutoCore display lens omits `core_name` without changing its dormant saved preference;
+    /// every other host includes all dynamic runtime fields as before.
+    ///
+    /// Args:
+    ///     cx: Panel context used to resolve workspace scope and wire menu callbacks.
+    ///
+    /// Returns:
+    ///     Column selector whose rows and All state reflect only contextually available columns.
     pub(super) fn columns_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let all_on = self.all_columns_on();
+        let hide_core_name = self.hide_core_name_column(self.backend.read(cx));
+        let all_on =
+            columns::all_available_columns_visible(&self.cols, &self.visible, hide_core_name);
         let all_view = view.clone();
         let mut items: Vec<MoonMenuItem> = vec![
             // "All" enables every column; when all are already enabled, this action keeps only
@@ -570,17 +581,19 @@ impl ReportPanel {
                     all_view.update(app, |t, c| t.toggle_all_columns(c));
                 }),
         ];
-        items.extend(self.cols.iter().enumerate().map(|(i, c)| {
-            let on = self.visible.contains(c.as_str());
-            let name = c.clone();
-            let view = view.clone();
-            MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
-                .checked(on)
-                .on_click(move |_, _, app| {
-                    let name = name.clone();
-                    view.update(app, |t, c| t.toggle_column(name, c));
-                })
-        }));
+        items.extend(
+            columns::available_columns(&self.cols, hide_core_name).map(|(i, c)| {
+                let on = self.visible.contains(c.as_str());
+                let name = c.clone();
+                let view = view.clone();
+                MoonMenuItem::with_key(format!("col-{i}"), header_for(c))
+                    .checked(on)
+                    .on_click(move |_, _, app| {
+                        let name = name.clone();
+                        view.update(app, |t, c| t.toggle_column(name, c));
+                    })
+            }),
+        );
         // Use a glyph button instead of a list field, matching other column selectors. The
         // tooltip is localized; glyphs remain outside the locale dictionary per locales/README.
         div()

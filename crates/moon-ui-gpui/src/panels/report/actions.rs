@@ -221,15 +221,23 @@ impl ReportPanel {
         self.queue_strategy_select_sync(false, cx);
     }
 
-    /// Toggle all runtime columns on, or retain only the first when all are already visible.
+    /// Toggle all contextually available runtime columns.
     ///
-    /// Keeping one column prevents the table from becoming entirely empty.
+    /// Keeping one available column prevents the table from becoming entirely empty. Columns
+    /// hidden only by the current display lens retain their raw saved preference.
+    ///
+    /// Args:
+    ///     cx: Panel context used to resolve workspace scope, persist, and repaint.
+    ///
+    /// Returns:
+    ///     Nothing; an empty runtime schema leaves the saved set untouched.
     pub(super) fn toggle_all_columns(&mut self, cx: &mut Context<Self>) {
-        if self.all_columns_on() {
-            self.visible = self.cols.first().cloned().into_iter().collect();
-        } else {
-            self.visible = self.cols.iter().cloned().collect();
+        let hide_core_name = self.hide_core_name_column(self.backend.read(cx));
+        let visible = columns::toggled_all_columns(&self.cols, &self.visible, hide_core_name);
+        if visible == self.visible {
+            return;
         }
+        self.visible = visible;
         self.persist_visible(cx);
         cx.notify();
     }
@@ -528,9 +536,14 @@ impl ReportPanel {
         let Some(data) = self.data.data() else {
             return;
         };
-        let indices = selection::ordered_visible_indices(
+        let hide_core_name = self.hide_core_name_column(self.backend.read(cx));
+        let source_indices =
+            columns::effective_visible_columns(&self.cols, &self.visible, hide_core_name)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+        let indices = selection::ordered_source_indices(
             &self.cols,
-            &self.visible,
+            &source_indices,
             &self.table_state.read(cx),
         );
         if self.selection.len() == 0 || indices.is_empty() {
@@ -625,13 +638,28 @@ impl ReportPanel {
     ///
     /// * `name` - Runtime report column name to show or hide.
     /// * `cx` - Panel context used to persist and redraw the new state.
+    ///
+    /// # Returns
+    ///
+    /// Nothing; callbacks for a column unavailable in the current display context are ignored.
     pub(super) fn toggle_column(&mut self, name: String, cx: &mut Context<Self>) {
+        let hide_core_name = self.hide_core_name_column(self.backend.read(cx));
+        if !self
+            .cols
+            .iter()
+            .any(|column| column == &name && columns::column_is_available(column, hide_core_name))
+        {
+            return;
+        }
         if self.visible.contains(name.as_str()) {
             self.visible.remove(&name);
         } else {
             self.visible.insert(name);
         }
-        if self.visible.is_empty() {
+        if columns::effective_visible_columns(&self.cols, &self.visible, hide_core_name)
+            .next()
+            .is_none()
+        {
             self.selection.clear();
         }
         self.persist_visible(cx);
@@ -642,17 +670,17 @@ impl ReportPanel {
     ///
     /// Args:
     ///     all_cols: Whether to ignore the visible-column selection.
+    ///     cx: Application context used to resolve the current workspace display lens.
     ///
     /// Returns:
     ///     Runtime column names in source order.
-    fn export_columns(&self, all_cols: bool) -> Vec<String> {
+    fn export_columns(&self, all_cols: bool, cx: &App) -> Vec<String> {
         if all_cols {
             (*self.cols).clone()
         } else {
-            self.cols
-                .iter()
-                .filter(|column| self.visible.contains(column.as_str()))
-                .cloned()
+            let hide_core_name = self.hide_core_name_column(self.backend.read(cx));
+            columns::effective_visible_columns(&self.cols, &self.visible, hide_core_name)
+                .map(|(_, column)| column.clone())
                 .collect()
         }
     }
@@ -702,7 +730,7 @@ impl ReportPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.export_columns(all_cols).is_empty() {
+        if self.export_columns(all_cols, cx).is_empty() {
             log::warn!("report export has no columns (table empty?)");
             return;
         }
@@ -725,7 +753,7 @@ impl ReportPanel {
                         );
                         return None;
                     }
-                    let cols = this.export_columns(all_cols);
+                    let cols = this.export_columns(all_cols, cx);
                     if cols.is_empty() {
                         log::warn!("report export has no columns after destination selection");
                         return None;

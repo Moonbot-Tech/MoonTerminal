@@ -2,10 +2,10 @@
 
 use super::*;
 
-/// Protects both workspace maps as a restart-stable, backwards-compatible layout contract.
+/// Protects all workspace maps as a restart-stable, backwards-compatible layout contract.
 ///
-/// Plausible breakage: marking either map as skipped/default-only makes a saved Auto workspace
-/// silently return to Classic or Overview after restart. Literal TOML is independent of the
+/// Plausible breakage: marking a map as skipped/default-only makes a saved Auto workspace silently
+/// return to Classic, Overview, or Report after restart. Literal TOML is independent of the
 /// serializer and therefore catches a matching encoder/decoder mistake.
 #[test]
 fn legacy_and_current_toml_restore_workspace_state() {
@@ -20,12 +20,15 @@ fn legacy_and_current_toml_restore_workspace_state() {
         WorkspaceMode::Classic
     );
     assert_eq!(legacy.auto_workspace_core_by_group.get("desk"), None);
+    assert_eq!(legacy.auto_workspace_tab_by_group.get("desk"), None);
 
     let current = "analytics_period = \"p-cur-month\"\n\
                    [workspace_mode_by_group]\n\
                    desk = \"auto-trading\"\n\
                    [auto_workspace_core_by_group]\n\
-                   desk = 73\n";
+                   desk = 73\n\
+                   [auto_workspace_tab_by_group]\n\
+                   desk = \"Assets\"\n";
     let decoded: WindowLayout =
         toml::from_str(current).expect("current workspace layout must load");
     assert_eq!(
@@ -33,9 +36,17 @@ fn legacy_and_current_toml_restore_workspace_state() {
         Some(&WorkspaceMode::AutoTrading)
     );
     assert_eq!(decoded.auto_workspace_core_by_group.get("desk"), Some(&73));
+    assert_eq!(
+        decoded
+            .auto_workspace_tab_by_group
+            .get("desk")
+            .map(String::as_str),
+        Some("Assets")
+    );
 
     let encoded = toml::to_string(&decoded).expect("workspace layout must serialize");
     assert!(encoded.contains("desk = \"auto-trading\""));
+    assert!(encoded.contains("desk = \"Assets\""));
 }
 
 /// Protects the Auto selection as a durable UID high-water reference.
@@ -66,6 +77,8 @@ fn malformed_workspace_fields_do_not_discard_other_layout() {
         "workspace_mode_by_group = [\"auto-trading\"]",
         "auto_workspace_core_by_group = \"desk\"",
         "auto_workspace_core_by_group = [73]",
+        "auto_workspace_tab_by_group = \"Report\"",
+        "auto_workspace_tab_by_group = [\"Report\"]",
     ] {
         let doc = format!("analytics_period = \"p-cur-month\"\n{written}\n");
         let decoded: WindowLayout = toml::from_str(&doc)
@@ -73,6 +86,7 @@ fn malformed_workspace_fields_do_not_discard_other_layout() {
         assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
         assert!(decoded.workspace_mode_by_group.is_empty());
         assert!(decoded.auto_workspace_core_by_group.is_empty());
+        assert!(decoded.auto_workspace_tab_by_group.is_empty());
     }
 
     let unknown = "analytics_period = \"p-cur-month\"\n\

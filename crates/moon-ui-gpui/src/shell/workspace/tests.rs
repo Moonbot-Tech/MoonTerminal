@@ -1,14 +1,64 @@
 //! Regression tests for Auto-workspace Shell presentation policy.
 
-use crate::workspace::{WorkspaceCoreStatus, WorkspaceRailDensity};
+#[cfg(feature = "debug-tools")]
+use gpui::{AppContext as _, Context, EventEmitter};
 
-use moon_ui::DockTopologyNode;
+use crate::workspace::{WorkspaceCoreStatus, WorkspaceRailDensity, WorkspaceRosterRow};
 
+use moon_core::config::AUTO_WORKSPACE_RAIL_WIDTH_MIN;
+#[cfg(feature = "debug-tools")]
+use moon_ui::DockEvent;
+use moon_ui::{DockTopologyByName, DockTopologyNode};
+
+#[cfg(feature = "debug-tools")]
 use super::{
-    auto_only_detached_panel_names, default_auto_workspace_topology, fitted_auto_rail_width,
-    workspace_status_label_visible,
+    DeferredAutoTopologyGuard, auto_workspace_tab_to_persist,
+    auto_workspace_topology_is_persistable, defer_auto_topology_guard_release,
+};
+use super::{
+    RailItem, append_core_section_items, auto_only_detached_panel_names,
+    auto_workspace_activation_fallback, auto_workspace_tab_is_eligible, core_rail_metrics,
+    default_auto_workspace_topology, fitted_auto_rail_width, icon_workspace_summary,
+    resolved_auto_workspace_tab, workspace_status_label_visible,
 };
 use crate::window::detached::DetachedSpec;
+
+/// Minimal event source used to exercise GPUI's queued subscription delivery.
+#[cfg(feature = "debug-tools")]
+struct DockEventSource;
+
+#[cfg(feature = "debug-tools")]
+impl EventEmitter<DockEvent> for DockEventSource {}
+
+/// Minimal owner with the same deferred topology-guard contract as Shell.
+#[cfg(feature = "debug-tools")]
+struct AutoGuardHarness {
+    applying_topology: bool,
+    guard_generation: u64,
+    saved_tab: String,
+    topology_writes: usize,
+}
+
+#[cfg(feature = "debug-tools")]
+impl DeferredAutoTopologyGuard for AutoGuardHarness {
+    fn release_auto_topology_guard(&mut self, generation: u64) {
+        if self.guard_generation == generation {
+            self.applying_topology = false;
+        }
+    }
+}
+
+/// Build one rail row without coupling branch-shape expectations to roster derivation.
+fn rail_row(core: u64) -> WorkspaceRosterRow {
+    WorkspaceRosterRow {
+        core,
+        name: format!("Core {core}"),
+        group: "G1".to_string(),
+        status: WorkspaceCoreStatus::Ready,
+        selectable: true,
+        selected: false,
+    }
+}
 
 /// Catches making Ready rows render the same trailing label as failures in
 /// `shell/workspace.rs:workspace_status_label_visible`; long server names would be truncated by a
@@ -35,8 +85,9 @@ fn ready_rows_keep_name_width_while_failures_remain_explicit() {
     }
 }
 
-/// Replacing `shell/workspace.rs:fitted_auto_rail_width` with the raw preference must fail: a
-/// narrow group window would squeeze out the dock instead of locally fitting the shared rail.
+/// Replacing `shell/workspace.rs:fitted_auto_rail_width` with the raw preference or flooring its
+/// maximum at Compact must fail: a narrow group window would squeeze the dock or choose the wrong
+/// density instead of fitting the shared rail down to Icon.
 #[test]
 fn global_rail_preference_is_fitted_per_window_without_redefining_it() {
     let preferred = 500.0;
@@ -46,6 +97,27 @@ fn global_rail_preference_is_fitted_per_window_without_redefining_it() {
         280.0,
         "the local window may fit the rail while the caller retains the 500 px preference"
     );
+    let narrow_width = fitted_auto_rail_width(preferred, 520.0, 1.0);
+    assert_eq!(narrow_width, 100.0);
+    assert_eq!(520.0 - narrow_width, 420.0);
+    assert_eq!(
+        crate::workspace::workspace_rail_density(narrow_width),
+        WorkspaceRailDensity::Icon
+    );
+
+    let workspace = include_str!("../workspace.rs");
+    let body = workspace
+        .split("pub(super) fn workspace_body")
+        .nth(1)
+        .and_then(|tail| tail.split("fn workspace_rail").next())
+        .expect("workspace body must keep a bounded implementation");
+    let fitted = body
+        .find("let rail_width = fitted_auto_rail_width(")
+        .expect("body must derive its effective fitted rail width");
+    let density = body
+        .find("workspace_rail_density(rail_width)")
+        .expect("density must use the fitted effective width");
+    assert!(fitted < density);
 
     let init = include_str!("../init.rs");
     let bounds_observer = init
@@ -83,6 +155,7 @@ fn first_auto_workspace_keeps_log_in_the_flexible_upper_tabs() {
     assert_eq!(names.first().map(String::as_str), Some("ChartTabs"));
     assert!(names.iter().any(|name| name == "Report"));
     assert!(names.iter().any(|name| name == "Log"));
+    assert!(!names.iter().any(|name| name == "News"));
     assert!(!names.iter().any(|name| name == "Orders"));
     assert_eq!(
         items[1],
@@ -108,11 +181,11 @@ fn first_auto_workspace_adds_exactly_four_rows_to_orders() {
     );
 }
 
-/// Reordering the saved-topology lookup after the fallback or removing the default-only Report
+/// Reordering the saved-topology lookup after the fallback or restoring default-only tab
 /// activation in `Shell::apply_workspace_mode` must fail: a valid user layout would be reset, or a
-/// first-time Auto session would open on whichever tab happened to be active before the switch.
+/// returning Auto session would ignore its independent persisted tab preference.
 #[test]
-fn saved_auto_topology_wins_while_only_the_fallback_activates_report() {
+fn saved_auto_topology_and_tab_preference_are_applied_independently() {
     let source = include_str!("../workspace.rs");
     let auto_branch = source
         .split("WorkspaceMode::AutoTrading =>")
@@ -125,13 +198,272 @@ fn saved_auto_topology_wins_while_only_the_fallback_activates_report() {
     let fallback = auto_branch
         .find(".unwrap_or_else(default_auto_workspace_topology)")
         .expect("only a missing topology may use the first-run seed");
-    let default_guard = auto_branch
-        .find("if is_default_topology")
-        .expect("Report activation must remain limited to the fallback topology");
+    let preference = auto_branch
+        .find("backend.auto_workspace_tab(&self.group)")
+        .expect("the group Auto tab preference must be read independently");
+    let activation = auto_branch
+        .find("dock.activate_panel_by_name(&active_panel")
+        .expect("every Auto application must activate the resolved preference");
+    assert!(saved < fallback && fallback < preference && preference < activation);
+    assert!(!auto_branch.contains("is_default_topology"));
+}
+
+/// Accepting Orders or News in `auto_workspace_tab_is_eligible` must fail: Orders is the fixed
+/// lower surface and News belongs only to Classic, so either value would restore an unavailable
+/// or structurally unrelated Auto tab after restart.
+#[test]
+fn only_auto_top_strip_surfaces_are_persistable() {
+    for eligible in [
+        "ChartTabs",
+        "Report",
+        "Assets",
+        "CoreStatus",
+        "Log",
+        "Alerts",
+        "Detects",
+    ] {
+        assert!(auto_workspace_tab_is_eligible(eligible), "{eligible}");
+    }
+    for ineligible in ["Orders", "News", "Unknown", ""] {
+        assert!(!auto_workspace_tab_is_eligible(ineligible), "{ineligible}");
+    }
+}
+
+/// Returning a stale saved News or unknown name from `resolved_auto_workspace_tab` must fail:
+/// Auto would attempt to reveal a suspended or missing panel instead of its deterministic Report
+/// fallback, while a valid saved choice must remain intact.
+#[test]
+fn stale_auto_tab_values_fall_back_without_replacing_valid_choices() {
+    assert_eq!(resolved_auto_workspace_tab(Some("Assets")), "Assets");
+    assert_eq!(resolved_auto_workspace_tab(Some("News")), "Report");
+    assert_eq!(resolved_auto_workspace_tab(Some("future-panel")), "Report");
+    assert_eq!(resolved_auto_workspace_tab(None), "Report");
+}
+
+/// Removing the failed-activation branch from
+/// `shell/workspace.rs:auto_workspace_activation_fallback` must fail: a saved eligible panel that
+/// is absent from the actual topology would leave Auto on an arbitrary tab instead of Report.
+#[test]
+fn absent_saved_eligible_tab_falls_back_to_report_without_rewriting_it() {
+    let saved = resolved_auto_workspace_tab(Some("Assets"));
+    let topology = DockTopologyByName::tab_preset(["ChartTabs", "Report"]);
+    let activated = topology.panel_names().iter().any(|name| name == saved);
+
+    assert!(
+        !activated,
+        "the independent topology intentionally omits Assets"
+    );
+    assert_eq!(
+        auto_workspace_activation_fallback(activated),
+        Some("Report")
+    );
+    assert_eq!(
+        saved, "Assets",
+        "presence fallback must not rewrite the saved value"
+    );
+
+    let source = include_str!("../workspace.rs");
+    let auto_branch = source
+        .split("WorkspaceMode::AutoTrading =>")
+        .nth(1)
+        .and_then(|tail| tail.split("WorkspaceMode::Classic =>").next())
+        .expect("workspace mode application must retain a bounded Auto branch");
+    let guard = auto_branch
+        .find("begin_auto_topology_application()")
+        .expect("fallback must begin inside the topology guard");
+    let fallback = auto_branch
+        .find("auto_workspace_activation_fallback(activated)")
+        .expect("failed activation must resolve a presence fallback");
     let report = auto_branch
-        .find("dock.activate_panel_by_name(\"Report\"")
-        .expect("the first-run layout must activate Report");
-    assert!(saved < fallback && fallback < default_guard && default_guard < report);
+        .find("dock.activate_panel_by_name(fallback, window, dock_cx)")
+        .expect("presence fallback must immediately activate Report");
+    let release = auto_branch
+        .find("finish_auto_topology_application(guard_generation, cx)")
+        .expect("topology guard must be released only after fallback activation");
+    assert!(guard < fallback && fallback < report && report < release);
+    assert!(!auto_branch.contains("set_auto_workspace_tab"));
+}
+
+/// Restoring the ready/configured fraction in `shell/workspace.rs:icon_workspace_summary` must
+/// fail: a 200-core rail would exceed the accepted three-character Icon summary budget at 52 px.
+#[test]
+fn icon_summary_stays_bounded_for_two_hundred_cores() {
+    let summary = icon_workspace_summary(200);
+    assert_eq!(summary, "200");
+    assert!(summary.chars().count() <= 3);
+
+    let source = include_str!("../workspace.rs");
+    let rail = source
+        .split("fn workspace_rail")
+        .nth(1)
+        .expect("workspace rail must retain a bounded implementation");
+    assert!(
+        rail.contains("div().flex_1().min_w_0().truncate().child(summary_text)"),
+        "summary text must shrink and clip safely inside the 52 px rail"
+    );
+}
+
+/// Catches clearing the topology guard in `Shell::apply_workspace_mode` before GPUI delivers
+/// queued dock effects: fallback Report would overwrite an unknown saved tab and the generated
+/// layout event would be persisted as if the operator changed it.
+#[cfg(feature = "debug-tools")]
+#[gpui::test]
+fn deferred_guard_suppresses_programmatic_dock_events_until_delivery(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (source, harness) = cx.update(|cx| {
+        let source = cx.new(|_| DockEventSource);
+        let harness = cx.new({
+            let source = source.clone();
+            move |cx: &mut Context<AutoGuardHarness>| {
+                cx.subscribe(&source, |this, _, event: &DockEvent, _| match event {
+                    DockEvent::PanelActivated { panel_name } => {
+                        if let Some(panel_name) =
+                            auto_workspace_tab_to_persist(true, this.applying_topology, panel_name)
+                        {
+                            this.saved_tab = panel_name.to_string();
+                        }
+                    }
+                    DockEvent::LayoutChanged => {
+                        if auto_workspace_topology_is_persistable(true, this.applying_topology) {
+                            this.topology_writes += 1;
+                        }
+                    }
+                    _ => {}
+                })
+                .detach();
+                AutoGuardHarness {
+                    applying_topology: false,
+                    guard_generation: 0,
+                    saved_tab: "future-panel".to_string(),
+                    topology_writes: 0,
+                }
+            }
+        });
+        (source, harness)
+    });
+
+    cx.update(|cx| {
+        harness.update(cx, |state, cx| {
+            state.guard_generation = state.guard_generation.wrapping_add(1);
+            state.applying_topology = true;
+            let generation = state.guard_generation;
+            source.update(cx, |_, cx| {
+                cx.emit(DockEvent::PanelActivated {
+                    panel_name: "Report".into(),
+                });
+                cx.emit(DockEvent::LayoutChanged);
+            });
+            defer_auto_topology_guard_release(cx.entity().downgrade(), generation, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|cx| {
+        let state = harness.read(cx);
+        assert_eq!(
+            state.saved_tab, "future-panel",
+            "programmatic fallback must not rewrite a stale persisted value"
+        );
+        assert_eq!(
+            state.topology_writes, 0,
+            "programmatic layout effects must not enter topology persistence"
+        );
+        assert!(!state.applying_topology, "the deferred guard must release");
+    });
+
+    cx.update(|cx| {
+        source.update(cx, |_, cx| {
+            cx.emit(DockEvent::PanelActivated {
+                panel_name: "Assets".into(),
+            });
+            cx.emit(DockEvent::LayoutChanged);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let state = harness.read(cx);
+        assert_eq!(state.saved_tab, "Assets");
+        assert_eq!(state.topology_writes, 1);
+    });
+}
+
+/// Catches restoring the Full-row connector, dot, gaps, or padding in
+/// `shell/workspace.rs:core_rail_metrics` for Icon density: the 52 px minimum would leave no
+/// readable space for even the one-character core label.
+#[test]
+fn icon_core_geometry_reserves_a_deterministic_label_budget() {
+    let metrics = core_rail_metrics(WorkspaceRailDensity::Icon);
+    let occupied = 2.0 * metrics.horizontal_padding
+        + metrics.connector_width
+        + metrics.dot_size
+        + 2.0 * metrics.gap;
+    let label_budget = AUTO_WORKSPACE_RAIL_WIDTH_MIN - occupied;
+    assert!(
+        label_budget >= 16.0,
+        "Icon core chrome may occupy at most 36 px of the 52 px minimum, got {occupied}"
+    );
+}
+
+/// Catches dropping `RailItem::Core::is_last_in_section` or marking every leaf terminal in
+/// `shell/workspace.rs:append_core_section_items`: the branch stem would either continue through
+/// the section boundary or break between sibling cores.
+#[test]
+fn core_section_shape_marks_only_the_final_leaf_terminal() {
+    let mut items = Vec::new();
+    append_core_section_items(&mut items, vec![rail_row(10), rail_row(20), rail_row(30)]);
+    let actual = items
+        .into_iter()
+        .map(|item| match item {
+            RailItem::Core {
+                row,
+                is_last_in_section,
+            } => (row.core, is_last_in_section),
+            _ => panic!("core section helper must append only core leaves"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, vec![(10, false), (20, false), (30, true)]);
+
+    let mut singleton = Vec::new();
+    append_core_section_items(&mut singleton, vec![rail_row(40)]);
+    assert!(matches!(
+        singleton.as_slice(),
+        [RailItem::Core {
+            is_last_in_section: true,
+            ..
+        }]
+    ));
+}
+
+/// Routing `DockEvent::PanelActivated` through topology persistence or removing the transition
+/// guard must fail: a real eligible activation should dirty only the per-group layout preference,
+/// while Auto installation and its fallback activation must not overwrite the user's choice.
+#[test]
+fn auto_panel_activation_has_a_narrow_guarded_persistence_path() {
+    let init = include_str!("../init.rs");
+    let arm = init
+        .split("DockEvent::PanelActivated { panel_name } =>")
+        .nth(1)
+        .and_then(|tail| tail.split("DockEvent::TabContextMenu").next())
+        .expect("Dock activation must have an explicit event arm");
+    assert!(arm.contains("auto_workspace_tab_to_persist("));
+    assert!(arm.contains("this.applying_auto_topology"));
+    assert!(arm.contains("backend.set_auto_workspace_tab(&group, panel_name)"));
+    assert!(arm.contains("return;"));
+    assert!(!arm.contains("set_auto_dock_topology"));
+
+    let backend = include_str!("../../backend/mod.rs");
+    let setter = backend
+        .split("pub(crate) fn set_auto_workspace_tab")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(crate) fn workspace_core_availability")
+                .next()
+        })
+        .expect("Backend must retain a bounded Auto tab writer");
+    assert!(setter.contains("self.layout_dirty = true"));
+    assert!(!setter.contains("publish_workspace_revision"));
+    assert!(!setter.contains("publish_auto_workspace_layout_revision"));
 }
 
 /// Removing the Classic-name exclusion in `auto_only_detached_panel_names` must fail: independently
@@ -143,6 +475,7 @@ fn live_classic_panel_name_outranks_a_stale_detached_record() {
         DetachedSpec::new("G1".to_string(), "Orders".to_string()),
         DetachedSpec::new("G1".to_string(), "Log".to_string()),
         DetachedSpec::new("G1".to_string(), "Log".to_string()),
+        DetachedSpec::new("G1".to_string(), "News".to_string()),
         DetachedSpec::new("G2".to_string(), "Assets".to_string()),
     ];
 
@@ -151,6 +484,35 @@ fn live_classic_panel_name_outranks_a_stale_detached_record() {
         vec!["Log".to_string()],
         "only a unique detached name absent from the live Classic dock needs an Auto instance"
     );
+}
+
+/// Rebuilding docked News or omitting `classic_only_panels` from Classic restoration must fail:
+/// the user's News selection, zoom, and local view state survive only when the exact `Rc` taken
+/// before Auto topology application is supplied back to the saved named layout.
+#[test]
+fn docked_news_is_taken_before_auto_and_the_same_retained_identity_restores_classic() {
+    let source = include_str!("../workspace.rs");
+    let mode = source
+        .split("pub(super) fn apply_workspace_mode")
+        .nth(1)
+        .and_then(|tail| tail.split("fn sync_auto_dock_topology").next())
+        .expect("workspace mode application must remain bounded");
+    let take = mode
+        .find("dock.take_panel_by_name(\"News\"")
+        .expect("Auto entry must extract the exact docked News identity");
+    let apply_auto = mode
+        .find("dock.apply_topology_by_name(")
+        .expect("Auto topology must still be applied");
+    let retain = mode
+        .find("self.classic_only_panels = classic_news.into_iter().collect()")
+        .expect("the extracted identity must be retained by Shell");
+    let restore = mode
+        .find("self.classic_only_panels.clone()")
+        .expect("Classic named-layout restoration must receive the retained identity");
+    let clear = mode
+        .rfind("self.classic_only_panels.clear()")
+        .expect("retained identities must be released only after restoration");
+    assert!(take < apply_auto && apply_auto < retain && retain < restore && restore < clear);
 }
 
 /// Replacing `resize_panel_silently` in `shell/workspace.rs:sync_auto_rail_width` with the emitting

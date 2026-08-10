@@ -1204,6 +1204,42 @@ impl Backend {
             .unwrap_or_default()
     }
 
+    /// Return the raw persisted Auto top-tab preference for one group.
+    ///
+    /// Args:
+    ///     group: Group window whose Auto preference is requested.
+    ///
+    /// Returns:
+    ///     Saved stable panel name. The Shell validates eligibility and applies its safe fallback.
+    pub(crate) fn auto_workspace_tab(&self, group: &str) -> Option<&str> {
+        self.layout
+            .auto_workspace_tab_by_group
+            .get(group)
+            .map(String::as_str)
+    }
+
+    /// Persist a Shell-validated eligible Auto top-tab name for one group.
+    ///
+    /// This preference changes neither effective workspace scope nor another live Shell, so it
+    /// marks only `layout.toml` dirty and deliberately publishes no workspace revision.
+    ///
+    /// Args:
+    ///     group: Owning Auto workspace group.
+    ///     panel_name: Stable eligible panel name already validated by the Shell.
+    ///
+    /// Returns:
+    ///     `true` only when the saved preference changed.
+    pub(crate) fn set_auto_workspace_tab(&mut self, group: &str, panel_name: &str) -> bool {
+        if self.auto_workspace_tab(group) == Some(panel_name) {
+            return false;
+        }
+        self.layout
+            .auto_workspace_tab_by_group
+            .insert(group.to_string(), panel_name.to_string());
+        self.layout_dirty = true;
+        true
+    }
+
     /// Return the shared Auto-workspace availability facts for one configured core.
     ///
     /// Args:

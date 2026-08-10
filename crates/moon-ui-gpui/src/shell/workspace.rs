@@ -1,6 +1,7 @@
 //! Independent Classic/shared-Auto dock layouts, all-core navigation rail, and chart reveal.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -31,15 +32,89 @@ const AUTO_PANEL_ORDER: &[&str] = &[
     "CoreStatus",
     "Log",
     "Alerts",
-    "News",
     "Detects",
 ];
+
+/// Auto-only top tabs whose real activation may become the group's restart preference.
+const AUTO_WORKSPACE_TAB_NAMES: &[&str] = &[
+    "ChartTabs",
+    "Report",
+    "Assets",
+    "CoreStatus",
+    "Log",
+    "Alerts",
+    "Detects",
+];
+
+/// Return whether a stable panel name is eligible for Auto top-tab persistence.
+///
+/// Args:
+///     panel_name: Stable dock panel name emitted by MoonUI.
+///
+/// Returns:
+///     `true` for top operational surfaces; Orders and Classic-only News are excluded.
+pub(super) fn auto_workspace_tab_is_eligible(panel_name: &str) -> bool {
+    AUTO_WORKSPACE_TAB_NAMES.contains(&panel_name)
+}
+
+/// Resolve a saved Auto tab to an eligible stable name with a deterministic Report fallback.
+///
+/// Args:
+///     saved: Raw persisted name, including possible stale or hand-edited values.
+///
+/// Returns:
+///     The saved eligible name, or `Report` without rewriting the persisted source value.
+pub(super) fn resolved_auto_workspace_tab(saved: Option<&str>) -> &str {
+    saved
+        .filter(|name| auto_workspace_tab_is_eligible(name))
+        .unwrap_or("Report")
+}
+
+/// Return the deterministic fallback after a requested Auto panel was absent from the live dock.
+///
+/// Args:
+///     activated: Whether the requested saved or resolved panel was found and activated.
+///
+/// Returns:
+///     `Report` only after a failed activation; successful activation needs no second request.
+fn auto_workspace_activation_fallback(activated: bool) -> Option<&'static str> {
+    (!activated).then_some("Report")
+}
+
+/// Return an eligible activation only when it represents a user-visible Auto transition.
+///
+/// Args:
+///     auto: Whether Auto workspace mode currently owns the dock.
+///     applying_topology: Whether programmatic topology effects are still being delivered.
+///     panel_name: Stable panel name carried by the activation event.
+///
+/// Returns:
+///     The eligible name to persist, or `None` for Classic, programmatic, or ineligible events.
+pub(super) fn auto_workspace_tab_to_persist<'a>(
+    auto: bool,
+    applying_topology: bool,
+    panel_name: &'a str,
+) -> Option<&'a str> {
+    (auto && !applying_topology && auto_workspace_tab_is_eligible(panel_name)).then_some(panel_name)
+}
+
+/// Return whether a dock-layout event may update the shared Auto topology.
+///
+/// Args:
+///     auto: Whether Auto workspace mode currently owns the dock.
+///     applying_topology: Whether programmatic topology effects are still being delivered.
+///
+/// Returns:
+///     `true` only for a user-driven Auto layout mutation.
+pub(super) fn auto_workspace_topology_is_persistable(auto: bool, applying_topology: bool) -> bool {
+    auto && !applying_topology
+}
 
 /// Build the first-run Auto topology before a shared `auto_dock.json` exists.
 ///
 /// Returns:
 ///     A vertical operations layout with flexible upper tabs containing Report and Log, plus a
-///     taller fixed Orders surface below them. Charts stays first and Report remains active.
+///     taller fixed Orders surface below them. Charts stays first; activation is applied separately.
 fn default_auto_workspace_topology() -> DockTopologyByName {
     let primary_names = AUTO_PANEL_ORDER
         .iter()
@@ -90,7 +165,9 @@ fn auto_only_detached_panel_names(
     let mut accounted = classic_panel_names.iter().cloned().collect::<HashSet<_>>();
     detached
         .iter()
-        .filter(|spec| spec.group == group && accounted.insert(spec.panel.clone()))
+        .filter(|spec| {
+            spec.group == group && spec.panel != "News" && accounted.insert(spec.panel.clone())
+        })
         .map(|spec| spec.panel.clone())
         .collect()
 }
@@ -108,11 +185,20 @@ const AUTO_DOCK_MIN_WIDTH: f32 = 420.0;
 /// Returns:
 ///     The window-local logical width that preserves the minimum dock content area.
 fn fitted_auto_rail_width(preferred: f32, chrome_width: f32, scale: f32) -> f32 {
-    let max_width = (chrome_width / scale.max(0.01) - AUTO_DOCK_MIN_WIDTH).clamp(
-        crate::workspace::WORKSPACE_RAIL_COMPACT_MIN_WIDTH,
-        AUTO_WORKSPACE_RAIL_WIDTH_MAX,
-    );
+    let max_width = (chrome_width / scale.max(0.01) - AUTO_DOCK_MIN_WIDTH)
+        .clamp(AUTO_WORKSPACE_RAIL_WIDTH_MIN, AUTO_WORKSPACE_RAIL_WIDTH_MAX);
     preferred.clamp(AUTO_WORKSPACE_RAIL_WIDTH_MIN, max_width)
+}
+
+/// Format the bounded Icon-density summary while the full localized status remains in its tooltip.
+///
+/// Args:
+///     configured: Number of configured cores represented by the rail.
+///
+/// Returns:
+///     Decimal configured-core count without the wider ready/problem fractions.
+fn icon_workspace_summary(configured: usize) -> String {
+    configured.to_string()
 }
 
 /// One flattened virtual-list item in the all-core rail.
@@ -120,13 +206,160 @@ fn fitted_auto_rail_width(preferred: f32, chrome_width: f32, scale: f32) -> f32 
 enum RailItem {
     /// Current group aggregate scope.
     Overview { selected: bool },
-    /// Reported exchange section label; `None` keeps unidentified cores explicit.
-    Exchange(Option<String>),
-    /// Configured core row, including unavailable and disabled entries.
-    Core(WorkspaceRosterRow),
+    /// Reported exchange heading and its logo resolved before the virtual row closure.
+    Exchange {
+        exchange: Option<String>,
+        logo: Option<Arc<RenderImage>>,
+    },
+    /// Configured core row and whether its branch stem ends at this leaf.
+    Core {
+        row: WorkspaceRosterRow,
+        is_last_in_section: bool,
+    },
+}
+
+/// Density-specific horizontal budget for one indented core leaf.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CoreRailMetrics {
+    horizontal_padding: f32,
+    gap: f32,
+    connector_width: f32,
+    connector_elbow_width: f32,
+    dot_size: f32,
+}
+
+/// Return the horizontal geometry for a core leaf at one responsive rail density.
+///
+/// Args:
+///     density: Current Full, Compact, or Icon rail rung.
+///
+/// Returns:
+///     Padding, gap, connector, elbow, and status-dot sizes in logical pixels.
+fn core_rail_metrics(density: WorkspaceRailDensity) -> CoreRailMetrics {
+    match density {
+        WorkspaceRailDensity::Icon => CoreRailMetrics {
+            horizontal_padding: 4.0,
+            gap: 3.0,
+            connector_width: 8.0,
+            connector_elbow_width: 6.0,
+            dot_size: 6.0,
+        },
+        WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => CoreRailMetrics {
+            horizontal_padding: 9.0,
+            gap: 7.0,
+            connector_width: 13.0,
+            connector_elbow_width: 9.0,
+            dot_size: 7.0,
+        },
+    }
+}
+
+/// Append one exchange section while marking exactly its final core as the branch endpoint.
+///
+/// Args:
+///     items: Flattened rail destination.
+///     rows: Ordered configured cores belonging to one exchange heading.
+///
+/// Returns:
+///     Nothing; rows retain their order and only the last receives the terminal shape.
+fn append_core_section_items(items: &mut Vec<RailItem>, rows: Vec<WorkspaceRosterRow>) {
+    let last_index = rows.len().checked_sub(1);
+    items.extend(
+        rows.into_iter()
+            .enumerate()
+            .map(|(index, row)| RailItem::Core {
+                row,
+                is_last_in_section: Some(index) == last_index,
+            }),
+    );
+}
+
+/// State capable of releasing a generation-scoped Auto topology guard.
+trait DeferredAutoTopologyGuard {
+    /// Clear the guard only when no newer topology application superseded this callback.
+    ///
+    /// Args:
+    ///     generation: Generation captured when the deferred callback was scheduled.
+    fn release_auto_topology_guard(&mut self, generation: u64);
+}
+
+/// Defer a weak entity guard release until queued dock-event effects have been delivered.
+///
+/// Args:
+///     entity: Weak owner so a closed window is never retained by the callback.
+///     generation: Topology application generation to release.
+///     cx: Entity context used to enqueue the callback after current effects.
+///
+/// Returns:
+///     Nothing; a newer generation or dropped entity turns the callback into a no-op.
+fn defer_auto_topology_guard_release<T>(entity: WeakEntity<T>, generation: u64, cx: &mut Context<T>)
+where
+    T: DeferredAutoTopologyGuard + 'static,
+{
+    cx.defer(move |app| {
+        let _ = entity.update(app, |state, _| {
+            state.release_auto_topology_guard(generation);
+        });
+    });
+}
+
+impl DeferredAutoTopologyGuard for Shell {
+    fn release_auto_topology_guard(&mut self, generation: u64) {
+        if self.auto_topology_guard_generation == generation {
+            self.applying_auto_topology = false;
+        }
+    }
 }
 
 impl Shell {
+    /// Start the blocking exchange-logo cache prewarm off-thread exactly once for this Shell.
+    ///
+    /// Args:
+    ///     cx: Shell context used to spawn work and publish the ready edge on the UI executor.
+    ///
+    /// Returns:
+    ///     Nothing; completion updates only a live weak Shell and requests one repaint.
+    fn start_exchange_logo_prewarm(&mut self, cx: &mut Context<Self>) {
+        if self.exchange_logo_prewarm_started {
+            return;
+        }
+        self.exchange_logo_prewarm_started = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
+                .await;
+            let _ = cx.update(|cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.exchange_logos_ready = true;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Begin one programmatic Auto topology transition and return its guard generation.
+    ///
+    /// Returns:
+    ///     A generation token that only its deferred completion may release.
+    fn begin_auto_topology_application(&mut self) -> u64 {
+        self.auto_topology_guard_generation = self.auto_topology_guard_generation.wrapping_add(1);
+        self.applying_auto_topology = true;
+        self.auto_topology_guard_generation
+    }
+
+    /// Keep the current topology guard through queued Dock events, then release it weakly.
+    ///
+    /// Args:
+    ///     generation: Token returned by [`Self::begin_auto_topology_application`].
+    ///     cx: Shell context used to enqueue work after dock-event effects.
+    ///
+    /// Returns:
+    ///     Nothing; a newer generation or closed Shell makes the callback a no-op.
+    fn finish_auto_topology_application(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let shell = cx.entity().downgrade();
+        defer_auto_topology_guard_release(shell, generation, cx);
+    }
+
     /// Schedule one window-aware reconciliation of persisted mode and addressed chart requests.
     ///
     /// Args:
@@ -239,6 +472,7 @@ impl Shell {
         }
         match mode {
             WorkspaceMode::AutoTrading => {
+                self.start_exchange_logo_prewarm(cx);
                 let classic = self.dock.read(cx).named_layout(cx);
                 let classic_panel_names = classic.panel_names();
                 let detached_names = auto_only_detached_panel_names(
@@ -264,9 +498,13 @@ impl Shell {
                     .auto_dock_topology()
                     .cloned()
                     .unwrap_or_else(default_auto_workspace_topology);
-                let is_default_topology = topology == default_auto_workspace_topology();
-                self.applying_auto_topology = true;
-                self.dock.update(cx, |dock, dock_cx| {
+                let active_panel = {
+                    let backend = self.backend.read(cx);
+                    resolved_auto_workspace_tab(backend.auto_workspace_tab(&self.group)).to_string()
+                };
+                let guard_generation = self.begin_auto_topology_application();
+                let classic_news = self.dock.update(cx, |dock, dock_cx| {
+                    let classic_news = dock.take_panel_by_name("News", window, dock_cx);
                     dock.set_layout_editable(true, dock_cx);
                     dock.set_detach_allowed(false, dock_cx);
                     dock.set_close_allowed(false, dock_cx);
@@ -277,11 +515,12 @@ impl Shell {
                         dock_cx,
                     );
                     dock.set_pinned_leading_panels(vec!["ChartTabs".into()], dock_cx);
-                    if is_default_topology {
-                        dock.activate_panel_by_name("Report", window, dock_cx);
+                    let activated = dock.activate_panel_by_name(&active_panel, window, dock_cx);
+                    if let Some(fallback) = auto_workspace_activation_fallback(activated) {
+                        dock.activate_panel_by_name(fallback, window, dock_cx);
                     }
+                    classic_news
                 });
-                self.applying_auto_topology = false;
                 let actual = self.dock.read(cx).topology_by_name(cx);
                 self.backend.update(cx, |backend, backend_cx| {
                     backend.reconcile_auto_dock_topology(actual, backend_cx);
@@ -292,9 +531,11 @@ impl Shell {
                 });
                 crate::window::windowing::close_all(suspended, cx);
                 self.classic_dock_layout = Some(classic);
+                self.classic_only_panels = classic_news.into_iter().collect();
                 self.auto_only_panels = auto_only_panels;
                 self.header_core_selector_open = false;
                 self.applied_workspace_mode = WorkspaceMode::AutoTrading;
+                self.finish_auto_topology_application(guard_generation, cx);
             }
             WorkspaceMode::Classic => {
                 let classic = self.classic_dock_layout.take();
@@ -304,9 +545,15 @@ impl Shell {
                     dock.set_close_allowed(true, dock_cx);
                     dock.set_layout_editable(true, dock_cx);
                     if let Some(classic) = classic.as_ref() {
-                        dock.apply_named_layout(classic, Vec::new(), window, dock_cx);
+                        dock.apply_named_layout(
+                            classic,
+                            self.classic_only_panels.clone(),
+                            window,
+                            dock_cx,
+                        );
                     }
                 });
+                self.classic_only_panels.clear();
                 self.auto_only_panels.clear();
                 self.applied_workspace_mode = WorkspaceMode::Classic;
                 crate::window::detached::respawn_all(&self.backend, cx);
@@ -330,17 +577,17 @@ impl Shell {
         let Some(topology) = self.backend.read(cx).auto_dock_topology().cloned() else {
             return;
         };
-        self.applying_auto_topology = true;
+        let guard_generation = self.begin_auto_topology_application();
         self.dock.update(cx, |dock, dock_cx| {
             dock.apply_topology_by_name(&topology, self.auto_only_panels.clone(), window, dock_cx);
         });
-        self.applying_auto_topology = false;
         let repaired = self.dock.read(cx).topology_by_name(cx);
         if repaired != topology {
             self.backend.update(cx, |backend, backend_cx| {
                 backend.reconcile_auto_dock_topology(repaired, backend_cx);
             });
         }
+        self.finish_auto_topology_application(guard_generation, cx);
     }
 
     /// Render the current workspace body: unchanged Classic dock or Auto rail plus the same dock.
@@ -368,15 +615,8 @@ impl Shell {
             self.group
         )));
         let resize_state = self.workspace_resize_state.clone();
-        let rail_width = resize_state
-            .read(cx)
-            .sizes()
-            .first()
-            .map(|width| width.as_f32() / scale)
-            .unwrap_or(self.applied_auto_rail_width);
+        let rail_width = fitted_auto_rail_width(self.applied_auto_rail_width, chrome_width, scale);
         let density = crate::workspace::workspace_rail_density(rail_width);
-        let fitted_rail_width =
-            fitted_auto_rail_width(self.applied_auto_rail_width, chrome_width, scale);
         let max_rail_width =
             fitted_auto_rail_width(AUTO_WORKSPACE_RAIL_WIDTH_MAX, chrome_width, scale);
         let backend = self.backend.clone();
@@ -398,7 +638,7 @@ impl Shell {
             })
             .child(
                 moon_resizable_panel()
-                    .size(design::ui_px(cx, fitted_rail_width))
+                    .size(design::ui_px(cx, rail_width))
                     .size_range(
                         design::ui_px(cx, AUTO_WORKSPACE_RAIL_WIDTH_MIN)
                             ..design::ui_px(cx, max_rail_width),
@@ -457,8 +697,19 @@ impl Shell {
             selected: roster.overview_selected,
         }];
         for section in roster.sections {
-            items.push(RailItem::Exchange(section.exchange));
-            items.extend(section.rows.into_iter().map(RailItem::Core));
+            let logo = if self.exchange_logos_ready {
+                section
+                    .exchange
+                    .as_ref()
+                    .and_then(|exchange| crate::media::exchange_logos::exchange_logo(exchange))
+            } else {
+                None
+            };
+            items.push(RailItem::Exchange {
+                exchange: section.exchange,
+                logo,
+            });
+            append_core_section_items(&mut items, section.rows);
         }
         let item_count = items.len();
         let row_height = design::ui_value(cx, 30.0);
@@ -499,9 +750,7 @@ impl Shell {
         )
         .to_string();
         let summary_text = match density {
-            WorkspaceRailDensity::Icon => {
-                format!("{}/{}", roster.summary.ready, roster.summary.configured)
-            }
+            WorkspaceRailDensity::Icon => icon_workspace_summary(roster.summary.configured),
             WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => summary.clone(),
         };
         v_flex()
@@ -525,8 +774,11 @@ impl Shell {
                     .items_center()
                     .min_w_0()
                     .text_size(design::t_caption(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(p.text_soft))
-                    .child(summary_text)
+                    .border_b_1()
+                    .border_color(rgb(p.border_soft))
+                    .child(div().flex_1().min_w_0().truncate().child(summary_text))
                     .tooltip(move |_window, cx| {
                         cx.new(|_| MoonTooltipView::new(summary.clone())).into()
                     }),
@@ -594,7 +846,7 @@ fn render_rail_item(
             };
             let click_backend = backend.clone();
             let click_group = current_group.clone();
-            rail_row_base("workspace-overview", selected, true, p, cx)
+            rail_row_base("workspace-overview", selected, true, 9.0, 7.0, p, cx)
                 .child(design::status_dot_sized(p.accent, 7.0, cx))
                 .child(div().min_w_0().truncate().child(visible))
                 .tooltip(move |_window, cx| {
@@ -607,34 +859,57 @@ fn render_rail_item(
                 })
                 .into_any_element()
         }
-        RailItem::Exchange(exchange) => {
+        RailItem::Exchange { exchange, logo } => {
             let label = exchange
                 .as_deref()
                 .map(crate::controls::exchange_display_name)
                 .unwrap_or_else(|| t!("common.exchange_unknown").to_string());
+            let tooltip = label.clone();
             let row_id = SharedString::from(format!(
                 "workspace-exchange-{}",
                 exchange.as_deref().unwrap_or("unknown")
             ));
-            let label = match density {
-                WorkspaceRailDensity::Icon => label.chars().next().unwrap_or('?').to_string(),
-                WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => label,
+            let compact_label = match density {
+                WorkspaceRailDensity::Icon if logo.is_none() => {
+                    Some(label.chars().next().unwrap_or('?').to_string())
+                }
+                WorkspaceRailDensity::Icon => None,
+                WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => Some(label),
             };
-            div()
+            h_flex()
                 .id(row_id)
                 .size_full()
-                .flex()
                 .items_center()
-                .px(design::ui_px(cx, 9.0))
-                .pt(design::ui_px(cx, 4.0))
+                .gap(design::ui_px(cx, 6.0))
+                .px(design::ui_px(cx, 8.0))
                 .min_w_0()
                 .text_size(design::t_caption(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(p.text_muted))
-                .child(div().min_w_0().truncate().child(label))
+                .bg(design::moon_alpha(p.panel_high, 0.72))
+                .border_b_1()
+                .border_color(rgb(p.border_soft))
+                .when_some(logo, |row, logo| {
+                    row.child(
+                        img(logo)
+                            .flex_none()
+                            .w(design::ui_px(cx, 13.0))
+                            .h(design::ui_px(cx, 13.0))
+                            .rounded(design::ui_px(cx, 2.0)),
+                    )
+                })
+                .when_some(compact_label, |row, label| {
+                    row.child(div().min_w_0().truncate().child(label))
+                })
+                .tooltip(move |_window, cx| {
+                    cx.new(|_| MoonTooltipView::new(tooltip.clone())).into()
+                })
                 .into_any_element()
         }
-        RailItem::Core(row) => {
+        RailItem::Core {
+            row,
+            is_last_in_section,
+        } => {
             let status = workspace_status_text(row.status);
             let tooltip = t!(
                 "workspace.core_tip",
@@ -648,11 +923,37 @@ fn render_rail_item(
                 WorkspaceRailDensity::Icon => row.name.chars().next().unwrap_or('?').to_string(),
                 WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => row.name.clone(),
             };
+            let metrics = core_rail_metrics(density);
+            let vertical_stem = div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .w(px(1.0))
+                .bg(rgb(p.border_soft))
+                .when(is_last_in_section, |stem| stem.h(design::ui_px(cx, 14.5)))
+                .when(!is_last_in_section, |stem| stem.bottom_0());
             let mut content = h_flex()
                 .size_full()
                 .min_w_0()
-                .gap(design::ui_px(cx, 7.0))
-                .child(design::status_dot_sized(dot, 7.0, cx))
+                .gap(design::ui_px(cx, metrics.gap))
+                .child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .h_full()
+                        .w(design::ui_px(cx, metrics.connector_width))
+                        .child(vertical_stem)
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top(design::ui_px(cx, 14.5))
+                                .w(design::ui_px(cx, metrics.connector_elbow_width))
+                                .h(px(1.0))
+                                .bg(rgb(p.border_soft)),
+                        ),
+                )
+                .child(design::status_dot_sized(dot, metrics.dot_size, cx))
                 .child(div().flex_1().min_w_0().truncate().child(name));
             if workspace_status_label_visible(row.status, density) {
                 content = content.child(
@@ -666,11 +967,17 @@ fn render_rail_item(
             let action = crate::workspace::plan_workspace_navigation(&current_group, &row);
             let selectable = action.is_some();
             let row_id = format!("workspace-core-{}", row.core);
-            let mut root = rail_row_base(row_id, row.selected, selectable, p, cx)
-                .child(content)
-                .tooltip(move |_window, cx| {
-                    cx.new(|_| MoonTooltipView::new(tooltip.clone())).into()
-                });
+            let mut root = rail_row_base(
+                row_id,
+                row.selected,
+                selectable,
+                metrics.horizontal_padding,
+                metrics.gap,
+                p,
+                cx,
+            )
+            .child(content)
+            .tooltip(move |_window, cx| cx.new(|_| MoonTooltipView::new(tooltip.clone())).into());
             if let Some(action) = action {
                 root = root.on_click(move |_, _, cx| {
                     execute_workspace_navigation(&backend, action.clone(), cx);
@@ -687,6 +994,8 @@ fn render_rail_item(
 ///     id: Stable identity unique within the virtualized rail.
 ///     selected: Whether this row owns the current Auto scope.
 ///     selectable: Whether the row has a live owning group window and session.
+///     horizontal_padding: Density-specific left and right inset in logical pixels.
+///     gap: Density-specific gap between direct children in logical pixels.
 ///     p: Active Moon palette.
 ///     cx: Application context used for scaled padding.
 ///
@@ -696,6 +1005,8 @@ fn rail_row_base(
     id: impl Into<ElementId>,
     selected: bool,
     selectable: bool,
+    horizontal_padding: f32,
+    gap: f32,
     p: MoonPalette,
     cx: &App,
 ) -> Stateful<Div> {
@@ -705,8 +1016,8 @@ fn rail_row_base(
         .flex()
         .items_center()
         .min_w_0()
-        .gap(design::ui_px(cx, 7.0))
-        .px(design::ui_px(cx, 9.0))
+        .gap(design::ui_px(cx, gap))
+        .px(design::ui_px(cx, horizontal_padding))
         .text_size(design::t_body(cx))
         .text_color(rgb(if selectable { p.text } else { p.text_muted }))
         .when(selected, |row| row.bg(design::moon_alpha(p.accent, 0.18)))

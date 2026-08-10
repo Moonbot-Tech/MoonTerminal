@@ -177,7 +177,10 @@ fn invalid_auto_dock_waits_for_an_explicit_user_topology_change() {
         "a distinct user topology change must unlock and dirty the protected authority"
     );
     assert!(
-        shell_init.contains("if this.applying_auto_topology {")
+        shell_init.contains(
+            "auto_workspace_topology_is_persistable(\n                        auto,\n                        this.applying_auto_topology,"
+        )
+            && shell_workspace.contains("auto && !applying_topology")
             && shell_workspace
                 .matches("backend.reconcile_auto_dock_topology(")
                 .count()
@@ -196,7 +199,9 @@ fn live_classic_panel_names_outrank_stale_detached_records_in_auto() {
 
     assert!(
         names.contains("classic_panel_names.iter().cloned().collect::<HashSet<_>>()")
-            && names.contains("spec.group == group && accounted.insert(spec.panel.clone())"),
+            && names.contains("spec.group == group")
+            && names.contains("spec.panel != \"News\"")
+            && names.contains("accounted.insert(spec.panel.clone())"),
         "temporary Auto panels must exclude names already owned by the live Classic dock"
     );
     assert!(

@@ -50,10 +50,18 @@ pub(crate) struct Shell {
     dock: Entity<DockArea>,
     /// Full local Classic layout retained while Auto applies the shared name-only topology.
     classic_dock_layout: Option<DockNamedLayout>,
+    /// Exact docked Classic panel identities suspended because Auto intentionally excludes them.
+    classic_only_panels: Vec<Rc<dyn PanelView>>,
     /// Temporary local instances for panels whose Classic copies are suspended detached windows.
     auto_only_panels: Vec<Rc<dyn PanelView>>,
+    /// Whether this Shell has joined the process-wide single-flight exchange-logo prewarm.
+    exchange_logo_prewarm_started: bool,
+    /// UI-thread edge proving the blocking logo prewarm completed before render-time resolution.
+    exchange_logos_ready: bool,
     /// Suppress DockEvent persistence while Auto topology is installed programmatically.
     applying_auto_topology: bool,
+    /// Monotonic token preventing an older deferred guard release from exposing newer effects.
+    auto_topology_guard_generation: u64,
     /// One persistent resize state per Shell, synchronized through Backend's global rail width.
     workspace_resize_state: Entity<MoonResizableState>,
     /// Last global logical rail width applied to this Shell's resize state.

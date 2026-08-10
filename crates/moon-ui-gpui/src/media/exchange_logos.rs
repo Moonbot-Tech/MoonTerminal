@@ -32,22 +32,33 @@ const RASTER_PX: u32 = 48;
 /// the suffix into a second, unknown exchange.
 const MARKET_WORDS: [&str; 6] = ["spot", "futures", "perp", "swap", "usdm", "coinm"];
 
-/// Brand needles in match order, longest-first where one contains another.
+/// Explicit normalized exchange aliases and their file stems in `assets/exchanges`.
 ///
-/// The values are file stems in `assets/exchanges`. Order matters: `hyperliquid` must be tested
-/// before `hyper`, and `gateio` before `gate`, or the shorter needle claims the name first.
-const BRANDS: [(&str, &str); 11] = [
+/// Exact aliases prevent an unrelated exchange such as `GateHub` or `HyperTrade` from inheriting
+/// a shipped brand merely because its name contains a known fragment.
+const BRANDS: [(&str, &str); 22] = [
     ("hyperliquid", "hyperliquid"),
+    ("fhyperliquid", "hyperliquid"),
     ("hyper", "hyperliquid"),
+    ("fhyper", "hyperliquid"),
     ("binance", "binance"),
+    ("fbinance", "binance"),
     ("bybit", "bybit"),
+    ("fbybit", "bybit"),
     ("bitget", "bitget"),
+    ("fbitget", "bitget"),
     ("gateio", "gate"),
     ("gate", "gate"),
+    ("fgateio", "gate"),
+    ("fgate", "gate"),
     ("okex", "okx"),
     ("okx", "okx"),
+    ("fokex", "okx"),
+    ("fokx", "okx"),
     ("huobi", "htx"),
     ("htx", "htx"),
+    ("fhuobi", "htx"),
+    ("fhtx", "htx"),
 ];
 
 /// Resolve the override directory once.
@@ -61,8 +72,9 @@ fn logos_dir() -> &'static PathBuf {
 
 /// Resolve a core-reported exchange name to an embedded logo stem.
 ///
-/// The name is whatever the core published (`Binance Futures`, `FBybit`, `Gate.io`, `OKEx`), so
-/// matching is done on a stripped, lowercase form rather than on equality with a fixed list.
+/// The name is whatever the core published (`Binance Futures`, `FBybit`, `Gate.io`, `OKEx`). It is
+/// normalized, stripped of trailing market-kind suffixes, and then matched against explicit
+/// aliases so arbitrary containing strings cannot claim a known brand.
 ///
 /// Args:
 ///     exchange: Raw exchange name reported by a core.
@@ -75,12 +87,18 @@ pub(crate) fn logo_slug(exchange: &str) -> Option<&'static str> {
         .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_lowercase())
         .collect();
-    // Checked before replacing: `replace` allocates a fresh String whether or not it matches, and
-    // the common name contains none of these words. This runs per distinct exchange per table
-    // build, which the arrival highlight can drive at 10 Hz.
-    for word in MARKET_WORDS {
-        if key.contains(word) {
-            key = key.replace(word, "");
+    loop {
+        let mut stripped = false;
+        for suffix in MARKET_WORDS {
+            if let Some(base) = key.strip_suffix(suffix) {
+                let base_len = base.len();
+                key.truncate(base_len);
+                stripped = true;
+                break;
+            }
+        }
+        if !stripped {
+            break;
         }
     }
     if key.is_empty() {
@@ -88,7 +106,7 @@ pub(crate) fn logo_slug(exchange: &str) -> Option<&'static str> {
     }
     BRANDS
         .iter()
-        .find(|(needle, _)| key.contains(needle))
+        .find(|(alias, _)| key == *alias)
         .map(|(_, slug)| *slug)
 }
 
@@ -165,18 +183,33 @@ pub(crate) fn exchange_logo(exchange: &str) -> Option<Arc<RenderImage>> {
 /// Without it the first frame of a logo-drawing surface pays for the disk read and the raster
 /// inline — small, but squarely inside the frame loop. Deliberately a plain blocking function and
 /// not an `async fn` with no `await` in it: the obligation to keep it off the render thread belongs
-/// to the caller, and a future would disguise that. Idempotent — a second caller finds the cache
-/// already filled.
+/// to the caller, and a future would disguise that. A process-wide gate makes concurrent callers
+/// share one blocking flight; each waiting Shell can still publish its own ready edge afterward.
 pub(crate) fn prewarm() {
-    let mut done: Vec<&str> = Vec::with_capacity(BRANDS.len());
-    for (_, slug) in BRANDS {
-        // BRANDS has aliases, so several needles share one file; decode each file once.
-        if done.contains(&slug) {
-            continue;
+    static PREWARMED: OnceLock<()> = OnceLock::new();
+    prewarm_once(&PREWARMED, || {
+        let mut done: Vec<&str> = Vec::with_capacity(BRANDS.len());
+        for (_, slug) in BRANDS {
+            // BRANDS has aliases, so several aliases share one file; decode each file once.
+            if done.contains(&slug) {
+                continue;
+            }
+            done.push(slug);
+            let _ = exchange_logo(slug);
         }
-        done.push(slug);
-        let _ = exchange_logo(slug);
-    }
+    });
+}
+
+/// Run one blocking prewarm initializer at most once for a shared flight gate.
+///
+/// Args:
+///     gate: Process-shared completion and contention gate.
+///     warm: Blocking initializer invoked only by the winning caller.
+///
+/// Returns:
+///     Nothing; concurrent callers block until the winning initializer completes.
+fn prewarm_once(gate: &OnceLock<()>, warm: impl FnOnce()) {
+    gate.get_or_init(|| warm());
 }
 
 #[cfg(test)]

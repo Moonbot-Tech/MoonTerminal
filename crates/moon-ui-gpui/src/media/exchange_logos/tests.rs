@@ -1,10 +1,15 @@
-use super::{BRANDS, EMBEDDED, RASTER_PX, load, logo_slug};
+use std::sync::{
+    Arc, Barrier, OnceLock,
+    atomic::{AtomicUsize, Ordering},
+};
+
+use super::{BRANDS, EMBEDDED, RASTER_PX, load, logo_slug, prewarm_once};
 
 /// Core-reported names carry a market type, a leading futures letter, or an old brand spelling, and
 /// all three must land on the one shipped logo.
 ///
-/// Breakage: dropping the market-word strip splits `Binance Futures` off from `Binance`; reordering
-/// `BRANDS` so `hyper` precedes `hyperliquid` sends Hyperliquid to the wrong stem.
+/// Breakage: dropping the trailing market-word strip splits `Binance Futures` off from `Binance`;
+/// removing an explicit leading-F alias loses real futures exchange names.
 #[test]
 fn reported_exchange_names_resolve_to_one_brand() {
     for (name, slug) in [
@@ -12,16 +17,20 @@ fn reported_exchange_names_resolve_to_one_brand() {
         ("Binance Futures", "binance"),
         ("FBinance", "binance"),
         ("Binance COIN-M", "binance"),
+        ("FBinance USD-M Futures", "binance"),
         ("ByBit Spot", "bybit"),
+        ("FByBit", "bybit"),
         ("Gate.io", "gate"),
         ("FGate", "gate"),
         ("OKEx", "okx"),
         ("OKX Futures", "okx"),
+        ("FOKX", "okx"),
         ("Huobi", "htx"),
         ("HTX Spot", "htx"),
         ("Hyperliquid", "hyperliquid"),
         ("FHyper", "hyperliquid"),
         ("Bitget Futures", "bitget"),
+        ("FBitget", "bitget"),
     ] {
         assert_eq!(logo_slug(name), Some(slug), "{name} must resolve to {slug}");
     }
@@ -33,9 +42,54 @@ fn reported_exchange_names_resolve_to_one_brand() {
 /// bare market type claim a logo it has no right to.
 #[test]
 fn unknown_exchanges_get_no_logo() {
-    for name in ["", "   ", "Kraken", "Spot", "Futures", "MEXC"] {
+    for name in [
+        "",
+        "   ",
+        "Kraken",
+        "Spot",
+        "Futures",
+        "MEXC",
+        "GateHub",
+        "HyperTrade",
+        "BinanceClone",
+        "NotOKX",
+        "MyByBit",
+    ] {
         assert_eq!(logo_slug(name), None, "{name:?} must have no logo");
     }
+}
+
+/// Catches replacing `exchange_logos.rs:prewarm_once` with an ordinary cache check: concurrent
+/// Shell entries could all begin filesystem reads and SVG decode before any one task fills it.
+#[test]
+fn concurrent_logo_prewarm_runs_one_blocking_initializer() {
+    const CALLERS: usize = 8;
+    let gate = Arc::new(OnceLock::new());
+    let start = Arc::new(Barrier::new(CALLERS));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let workers = (0..CALLERS)
+        .map(|_| {
+            let gate = gate.clone();
+            let start = start.clone();
+            let calls = calls.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                prewarm_once(&gate, || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    std::thread::yield_now();
+                });
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for worker in workers {
+        worker.join().expect("prewarm worker must not panic");
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "all concurrent callers must share one blocking initializer"
+    );
 }
 
 /// Every brand the resolver can return must exist in the embedded set and rasterize.

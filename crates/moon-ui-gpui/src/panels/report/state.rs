@@ -1122,11 +1122,6 @@ impl ReportPanel {
             .collect()
     }
 
-    /// Return whether every runtime column is enabled in the Columns menu.
-    pub(super) fn all_columns_on(&self) -> bool {
-        !self.cols.is_empty() && self.cols.iter().all(|c| self.visible.contains(c.as_str()))
-    }
-
     /// Persist visible columns to `app_meta` and, when non-empty, the dock/window table descriptor.
     ///
     /// `app_meta` records an empty set, but [`Self::save_ctx_columns`] deliberately leaves any older

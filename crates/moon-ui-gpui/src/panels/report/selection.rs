@@ -248,7 +248,30 @@ pub(super) fn row_keys(
         .collect()
 }
 
-/// Resolve visible source indices through MoonDataTable's authoritative render ordering.
+/// Resolve prepared source indices through MoonDataTable's authoritative render ordering.
+///
+/// Args:
+///     cols: Runtime report schema in source order.
+///     source_indices: Contextually visible source indices in runtime-schema order.
+///     state: Retained MoonDataTable drag order and widths.
+///
+/// Returns:
+///     Visible source indices in the exact order used for table rendering.
+pub(super) fn ordered_source_indices(
+    cols: &[String],
+    source_indices: &[usize],
+    state: &MoonDataTableState,
+) -> Vec<usize> {
+    MoonDataTable::ordered_columns(
+        columns::report_columns(cols, source_indices, &std::collections::HashMap::new()),
+        state,
+    )
+    .iter()
+    .filter_map(|column| cols.iter().position(|name| name == column.key.as_ref()))
+    .collect()
+}
+
+/// Resolve a saved visible-name set through the prepared-index ordering helper in tests.
 ///
 /// Args:
 ///     cols: Runtime report schema in source order.
@@ -257,6 +280,7 @@ pub(super) fn row_keys(
 ///
 /// Returns:
 ///     Visible source indices in the exact order used for table rendering.
+#[cfg(test)]
 pub(super) fn ordered_visible_indices(
     cols: &[String],
     visible: &HashSet<String>,
@@ -268,13 +292,7 @@ pub(super) fn ordered_visible_indices(
         .filter(|(_, column)| visible.contains(column.as_str()))
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    MoonDataTable::ordered_columns(
-        columns::report_columns(cols, &source_indices, &std::collections::HashMap::new()),
-        state,
-    )
-    .iter()
-    .filter_map(|column| cols.iter().position(|name| name == column.key.as_ref()))
-    .collect()
+    ordered_source_indices(cols, &source_indices, state)
 }
 
 /// Build spreadsheet-friendly TSV for selected rows in current visual order.

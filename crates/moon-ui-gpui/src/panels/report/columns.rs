@@ -5,6 +5,109 @@ use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use rust_i18n::t;
 
+/// Report column that is redundant when a group-owned Auto workspace selects one core.
+const CORE_NAME_COLUMN: &str = "core_name";
+
+/// Return whether one runtime column is available in the current display context.
+///
+/// Args:
+///     column: Runtime Report column name.
+///     hide_core_name: Whether the group-owned AutoCore lens suppresses `core_name`.
+///
+/// Returns:
+///     `false` only for contextually hidden `core_name`; raw saved preferences are untouched.
+pub(super) fn column_is_available(column: &str, hide_core_name: bool) -> bool {
+    !(hide_core_name && column == CORE_NAME_COLUMN)
+}
+
+/// Iterate runtime columns available in the current display context.
+///
+/// Args:
+///     cols: Complete runtime Report schema.
+///     hide_core_name: Whether the group-owned AutoCore lens suppresses `core_name`.
+///
+/// Returns:
+///     Source index and column reference pairs in runtime-schema order.
+pub(super) fn available_columns(
+    cols: &[String],
+    hide_core_name: bool,
+) -> impl Iterator<Item = (usize, &String)> {
+    cols.iter()
+        .enumerate()
+        .filter(move |(_, column)| column_is_available(column, hide_core_name))
+}
+
+/// Iterate saved-visible runtime columns after applying the contextual display lens.
+///
+/// Args:
+///     cols: Complete runtime Report schema.
+///     visible: Raw user-saved visible-column names.
+///     hide_core_name: Whether the group-owned AutoCore lens suppresses `core_name`.
+///
+/// Returns:
+///     Effectively visible source index and column reference pairs in runtime-schema order.
+pub(super) fn effective_visible_columns<'a>(
+    cols: &'a [String],
+    visible: &'a HashSet<String>,
+    hide_core_name: bool,
+) -> impl Iterator<Item = (usize, &'a String)> + 'a {
+    available_columns(cols, hide_core_name).filter(|(_, column)| visible.contains(column.as_str()))
+}
+
+/// Return whether every contextually available runtime column is saved as visible.
+///
+/// Args:
+///     cols: Complete runtime Report schema.
+///     visible: Raw user-saved visible-column names.
+///     hide_core_name: Whether the group-owned AutoCore lens suppresses `core_name`.
+///
+/// Returns:
+///     `true` only when at least one column is available and all available columns are visible.
+pub(super) fn all_available_columns_visible(
+    cols: &[String],
+    visible: &HashSet<String>,
+    hide_core_name: bool,
+) -> bool {
+    let mut available = available_columns(cols, hide_core_name).map(|(_, column)| column);
+    available
+        .next()
+        .is_some_and(|first| visible.contains(first.as_str()))
+        && available.all(|column| visible.contains(column.as_str()))
+}
+
+/// Toggle all contextually available columns while preserving unavailable saved preferences.
+///
+/// Args:
+///     cols: Complete runtime Report schema.
+///     visible: Raw user-saved visible-column names.
+///     hide_core_name: Whether the group-owned AutoCore lens suppresses `core_name`.
+///
+/// Returns:
+///     Replacement saved set. Turning an all-on context off retains its first available column;
+///     unavailable columns such as dormant `core_name` are copied through unchanged.
+pub(super) fn toggled_all_columns(
+    cols: &[String],
+    visible: &HashSet<String>,
+    hide_core_name: bool,
+) -> HashSet<String> {
+    let all_on = all_available_columns_visible(cols, visible, hide_core_name);
+    let mut next = visible.clone();
+    if all_on {
+        let mut available = available_columns(cols, hide_core_name).map(|(_, column)| column);
+        let Some(first) = available.next() else {
+            return next;
+        };
+        next.remove(first.as_str());
+        for column in available {
+            next.remove(column.as_str());
+        }
+        next.insert(first.clone());
+    } else {
+        next.extend(available_columns(cols, hide_core_name).map(|(_, column)| column.clone()));
+    }
+    next
+}
+
 /// Build sortable table descriptors for visible indices in the cached schema.
 ///
 /// Args:
