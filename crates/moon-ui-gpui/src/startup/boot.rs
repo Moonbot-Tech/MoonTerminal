@@ -204,6 +204,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         close_all_charts_rev: 0,
         close_active_chart_group: None,
         close_active_chart_rev: 0,
+        last_chart_close: None,
         follow: true,
         order_size_rev: 0,
         order_size_edit_req: None,

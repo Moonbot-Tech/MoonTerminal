@@ -301,3 +301,39 @@ fn the_price_fit_is_told_what_the_window_holds_and_what_only_has_to_be_visible()
         "prepare no longer re-applies the future-pan ceiling"
     );
 }
+
+/// The platform pairs presses per WINDOW, from timing and cursor distance alone, and never asks
+/// which element was hit. So a press landing on a chart can carry `click_count == 2` while press
+/// one closed a DIFFERENT chart with its × — the stack reflow moves the next slot under the
+/// cursor, and the default `LeftDouble` buy gesture fires on a chart the user only meant to close.
+/// Every chart press must be counted through the panel's own `ClickSeries` first; a handler
+/// reading `e.click_count` for anything but that call brings the accidental order straight back.
+#[test]
+fn chart_presses_are_counted_per_panel_before_a_gesture_reads_them() {
+    let source = code_only(&read_src("panels/chart/render_input.rs"));
+    for signature in [
+        "pub(super) fn mouse_down_left(",
+        "pub(super) fn mouse_down_right(",
+        "pub(super) fn mouse_down_middle(",
+    ] {
+        let body = braced_body(&source, signature);
+        // Substring, not a formatted call: `rustfmt` splits this call across lines as its argument
+        // list grows, and a check that reads the arguments would pass or fail on line breaks.
+        assert!(
+            body.contains("press_count("),
+            "{signature}: presses must be counted by this panel before a gesture matches them"
+        );
+        // Placement must sit behind the `Option` `press_count` returns, so a press that belongs to
+        // a chart closing reaches no gesture at all — not even a single-press binding on the middle
+        // button or a modifier, which never looks at a count.
+        assert!(
+            body.contains("clicks.is_some_and("),
+            "{signature}: order placement must be gated on the counted press, not called outright"
+        );
+        let call = chain_between(body, "try_place_order_click(", ")", signature);
+        assert!(
+            !call.contains("e.click_count"),
+            "{signature}: order placement must read this panel's own count, not the window's"
+        );
+    }
+}

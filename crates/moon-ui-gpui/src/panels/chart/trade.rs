@@ -125,6 +125,11 @@ impl ChartPanel {
         }
     }
 
+    /// Place an order when the press matches a configured buy-set or short-set gesture.
+    ///
+    /// `click_count` must be the count from this panel's own [`super::ClickSeries`], never the
+    /// window's native one: the native count pairs presses by time and distance across the whole
+    /// window, so a press arriving here right after a chart closed elsewhere carries a two.
     pub(super) fn try_place_order_click(
         &mut self,
         button: TradeMouseButton,
@@ -133,12 +138,6 @@ impl ChartPanel {
         pos: (f32, f32),
         cx: &mut Context<Self>,
     ) -> bool {
-        // Suppress placement just after closing a chart. The OS can deliver the second click of a
-        // close-button double-click to the newly exposed fullscreen chart, which would otherwise
-        // create an accidental order while tabs are being closed quickly.
-        if moon_chart::paint::now_unix_ms() - self.last_pane_close_ms < super::ORDER_SUPPRESS_MS {
-            return false;
-        }
         // Resolve Long/Short from the configured buy-set and short-set gestures; unrelated gestures
         // are not order placement.
         let short = {

@@ -23,6 +23,53 @@ const DRAG_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(33);
 use super::ChartPanel;
 use super::trade::TradeMouseButton;
 
+/// Count one press against the series this panel itself saw, for the trading gestures to match.
+///
+/// Positions are taken in SCREEN pixels, not window ones: the close mark this consults is shared by
+/// every window in the process, and window-local coordinates would make an unrelated press in a
+/// detached chart window collide with it.
+///
+/// Args:
+///     this: Panel receiving the press.
+///     button: Mouse button pressed.
+///     native: Click count the window reported, which pairs presses across every chart in it.
+///     position: Press position in window coordinates.
+///     window: Window the press arrived in, for its screen origin.
+///
+/// Returns:
+///     The click count belonging to this panel (see [`super::ClickSeries`]), or `None` when the
+///     press is left over from closing a chart and must not trade at all.
+fn press_count(
+    this: &mut ChartPanel,
+    button: MouseButton,
+    native: usize,
+    position: Point<Pixels>,
+    window: &Window,
+    cx: &mut Context<ChartPanel>,
+) -> Option<usize> {
+    let now = moon_chart::paint::now_unix_ms();
+    // `bounds()`, not `window_bounds()`: the latter is the RESTORE rectangle, which for a maximized
+    // window names a position it is not at — and this position is compared against a mark every
+    // window in the process shares.
+    let origin = window.bounds().origin;
+    let pos = (
+        f32::from(origin.x + position.x),
+        f32::from(origin.y + position.y),
+    );
+    let count = this.click_series.observe(button, native, now, pos);
+    // A press still parked where a × was clicked belongs to that closing, however many charts the
+    // reflow has walked under it since, so no gesture may trade on it — not only the double ones,
+    // since a single-press binding placed on the middle button or a modifier would sail past a
+    // count check. The mark's POSITION follows the press: a hand stabbing one button drifts a few
+    // pixels per press, and an anchor left behind would let the chain walk out of range and trade.
+    // Its clock does not: refreshing that too would make one stubborn spot unreachable forever.
+    if super::click_series::press_is_close_residue(this.backend_close_mark(cx), now, pos) {
+        this.mark_close_residue(pos, cx);
+        return None;
+    }
+    Some(count)
+}
+
 /// Routes a wheel event to chart zoom/pan or the surrounding stack scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
@@ -91,6 +138,21 @@ pub(super) fn mouse_down_left(
     if cx.has_active_drag() {
         return;
     }
+    // Count the press against the series THIS panel saw before a trading gesture reads it as a
+    // double click; `e.click_count` pairs presses per window, blind to which chart received them.
+    // The `<= 1` gates below stay on the NATIVE count: their question is "is this the second press
+    // of a pair", which holds however the pair split between charts. The two that change live
+    // state — cancelling an entry, grabbing an order line — additionally require a press this
+    // panel is allowed to act on at all, because a press left over from a × is none of its
+    // business either, however the window happens to count it.
+    let clicks = press_count(
+        this,
+        MouseButton::Left,
+        e.click_count,
+        e.position,
+        window,
+        cx,
+    );
     let sf = window.scale_factor();
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
@@ -135,19 +197,21 @@ pub(super) fn mouse_down_left(
         this.fig_clear_selection_on_miss(pos, cx);
     }
     if within
-        && this.try_place_order_click(TradeMouseButton::Left, e.modifiers, e.click_count, pos, cx)
+        && clicks.is_some_and(|count| {
+            this.try_place_order_click(TradeMouseButton::Left, e.modifiers, count, pos, cx)
+        })
     {
         cx.stop_propagation();
         return;
     }
     // Clicking the start cross of an unfilled entry cancels it before drag handling, so dragging
     // never starts from that cross.
-    if within && e.click_count <= 1 && this.try_cancel_order_click(pos, cx) {
+    if within && clicks.is_some() && e.click_count <= 1 && this.try_cancel_order_click(pos, cx) {
         cx.notify();
         cx.stop_propagation();
         return;
     }
-    if within && e.click_count <= 1 && this.try_start_order_drag(pos, cx) {
+    if within && clicks.is_some() && e.click_count <= 1 && this.try_start_order_drag(pos, cx) {
         this.sync_native_cursor();
         cx.notify();
         cx.stop_propagation();
@@ -244,6 +308,15 @@ pub(super) fn mouse_down_right(
     window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
+    // See `mouse_down_left`: trading matches the presses this panel saw, not the window's.
+    let clicks = press_count(
+        this,
+        MouseButton::Right,
+        e.click_count,
+        e.position,
+        window,
+        cx,
+    );
     let sf = window.scale_factor();
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
@@ -272,7 +345,9 @@ pub(super) fn mouse_down_right(
         return;
     }
     if within
-        && this.try_place_order_click(TradeMouseButton::Right, e.modifiers, e.click_count, pos, cx)
+        && clicks.is_some_and(|count| {
+            this.try_place_order_click(TradeMouseButton::Right, e.modifiers, count, pos, cx)
+        })
     {
         this.suppress_rmb_up = true;
         cx.stop_propagation();
@@ -335,9 +410,18 @@ pub(super) fn mouse_up_right(
 pub(super) fn mouse_down_middle(
     this: &mut ChartPanel,
     e: &MouseDownEvent,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<ChartPanel>,
 ) {
+    // See `mouse_down_left`: trading matches the presses this panel saw, not the window's.
+    let clicks = press_count(
+        this,
+        MouseButton::Middle,
+        e.click_count,
+        e.position,
+        window,
+        cx,
+    );
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
     };
@@ -350,20 +434,16 @@ pub(super) fn mouse_down_middle(
     };
     this.sync_native_cursor();
     if within
-        && this.try_place_order_click(
-            TradeMouseButton::Middle,
-            e.modifiers,
-            e.click_count,
-            pos,
-            cx,
-        )
+        && clicks.is_some_and(|count| {
+            this.try_place_order_click(TradeMouseButton::Middle, e.modifiers, count, pos, cx)
+        })
     {
         cx.stop_propagation();
         return;
     }
     // Shift+middle-click on the graph synchronizes the time X scale across charts in THIS window,
     // matching Moonbot. A trading gesture bound to Shift+middle-click takes priority above.
-    if within && e.modifiers.shift && this.sync_x_scale_window(_window, cx) {
+    if within && e.modifiers.shift && this.sync_x_scale_window(window, cx) {
         cx.stop_propagation();
     }
 }
