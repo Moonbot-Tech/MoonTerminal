@@ -242,6 +242,15 @@ struct Backend {
     /// Active-chart close-request revision, incremented on Esc.
     /// The addressed group's `ChartTabs` closes its active Main chart when this grows.
     close_active_chart_rev: u64,
+    /// Time and SCREEN position of the last chart close a click caused, shared by every chart panel.
+    ///
+    /// Closing charts one after another walks a fresh chart under the cursor after each ×, and the
+    /// presses that keep arriving at that same pixel belong to the closing, not to the chart that
+    /// now sits there. A panel's own click counting (`panels/chart/click_series.rs`) rejects the
+    /// first of them, but the pair it makes with the next one is genuine as far as any single panel
+    /// can see — only a mark none of them owns identifies the whole chain. `None` until a click
+    /// closes a chart; closes with no press behind them (Escape, TTL, teardown) leave it alone.
+    last_chart_close: Option<(f64, (f32, f32))>,
     /// Toolbar live-follow state: `true` tracks the present; `false` pauses the view.
     follow: bool,
     /// Broad toolbar and order-controls revision used to trigger notification and redraw.

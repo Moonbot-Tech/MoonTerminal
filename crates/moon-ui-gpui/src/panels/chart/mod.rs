@@ -13,6 +13,7 @@
 //! order dragging in [`trade`]; rendering in [`render`]; and slot wheel, mouse, and hover handling in
 //! [`render_input`].
 
+mod click_series;
 mod figures;
 mod geom;
 mod news;
@@ -40,6 +41,7 @@ use moon_chart::paint::now_unix_ms;
 use moon_core::config::{ChartBucket, ChartTheme, OrdersStyleSet};
 use moon_core::session::CoreId;
 
+use click_series::ClickSeries;
 use trade::{OrderDrag, OrderHoverKey, PendingOrderDrag};
 
 #[cfg(windows)]
@@ -230,17 +232,12 @@ pub struct ChartPanel {
     /// Whether right-button down opened an order context menu, suppressing the matching button-up
     /// so the Main-stack parent cannot interpret it as a fullscreen toggle.
     suppress_rmb_up: bool,
-    /// Unix-millisecond time of the last pane close-button action. After a fullscreen chart closes,
-    /// another chart takes its place and the OS can deliver the second click of the double-click to
-    /// that new chart, accidentally placing an order. Placement clicks within `ORDER_SUPPRESS_MS`
-    /// are ignored; zero means no recent close.
-    last_pane_close_ms: f64,
+    /// Clicks this panel itself received, which is what mouse gestures are matched against. The
+    /// window's native count alone would let a press whose predecessor landed on another chart —
+    /// or on the × that closed one — act as a double click here.
+    click_series: ClickSeries,
     focus: FocusHandle,
 }
-
-/// Milliseconds to suppress order placement after closing a pane, covering a likely second click on
-/// the replacement fullscreen chart.
-const ORDER_SUPPRESS_MS: f64 = 500.0;
 
 impl ChartPanel {
     fn sync_orders_from_backend_notify(&mut self, cx: &mut Context<Self>) -> bool {
@@ -439,7 +436,7 @@ impl ChartPanel {
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,
-            last_pane_close_ms: 0.0,
+            click_series: ClickSeries::default(),
             focus: cx.focus_handle(),
         }
     }
@@ -588,7 +585,7 @@ impl ChartPanel {
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,
-            last_pane_close_ms: 0.0,
+            click_series: ClickSeries::default(),
             focus: cx.focus_handle(),
         }
     }
@@ -921,6 +918,13 @@ impl ChartPanel {
     /// Opens or refreshes a market in this numbered AddToChart or Custom panel with the supplied
     /// TTL. Custom callers normally pin their panes after population to disable expiry.
     pub fn add_coin(&mut self, core: CoreId, market: &str, ttl_ms: f64, cx: &mut Context<Self>) {
+        // A retained empty slot keeps its panel and takes the next detection here, so the presses
+        // that belonged to the previous coin must not chain into a double click that trades this
+        // one. Only on a market CHANGE: this is also the path that extends the TTL of the market
+        // already shown, and resetting there would swallow the user's own second click.
+        if !self.chart.uses_market(core, market) {
+            self.click_series.reset();
+        }
         self.release_market_refs_except(Some((core, market)), cx);
         self.chart.push_auto(core, market, ttl_ms, now_unix_ms());
         self.retain_market_ref(core, market, cx);
@@ -931,6 +935,42 @@ impl ChartPanel {
         cx.notify();
     }
 
+    /// Where and when a click last closed a chart anywhere in the process, for `render_input`.
+    pub(super) fn backend_close_mark(&self, cx: &App) -> Option<(f64, (f32, f32))> {
+        self.backend.read(cx).last_chart_close
+    }
+
+    /// Move the close mark onto a press that turned out to belong to that closing.
+    ///
+    /// Keeps a drifting stab sequence anchored where it actually is now rather than at the pixel
+    /// the first × sat at. The mark's TIME is deliberately left alone: refreshing it on every
+    /// rejected press would restart the window each time and make a spot the user keeps clicking
+    /// untradeable for as long as they keep trying.
+    pub(super) fn mark_close_residue(&mut self, pos: (f32, f32), cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, _| {
+            if let Some((at_ms, _)) = b.last_chart_close {
+                b.last_chart_close = Some((at_ms, pos));
+            }
+        });
+    }
+
+    /// Mark on the shared backend where a click just closed a chart, so no panel trades on the rest
+    /// of the presses that click belongs to.
+    ///
+    /// The mark is deliberately global: the chart those presses reach is never the one that closed
+    /// — the stack drops the closed panel and walks the next one under the cursor. It is placed at
+    /// the press that caused this close, so a close no press explains leaves nothing behind and
+    /// blocks nothing. Written without a notify; nothing renders from it.
+    fn note_chart_closed(&mut self, cx: &mut Context<Self>) {
+        let now = now_unix_ms();
+        let Some(pos) = self.click_series.fresh_press_pos(now) else {
+            return;
+        };
+        self.backend.update(cx, |b, _| {
+            b.last_chart_close = Some((now, pos));
+        });
+    }
+
     /// Closes a pane through its close button. When no remaining pane uses its market, release this
     /// panel's market ownership and order-book demand; backend refcounts decide whether the market
     /// remains desired by another panel.
@@ -938,9 +978,7 @@ impl ChartPanel {
         let Some((core, market)) = self.chart.remove_pane(idx) else {
             return;
         };
-        // The replacement chart becomes fullscreen; suppress the second close-button click so it
-        // cannot place an order on that chart.
-        self.last_pane_close_ms = moon_chart::paint::now_unix_ms();
+        self.note_chart_closed(cx);
         self.view_dirty = true;
         if !self.chart.uses_market(core, &market) {
             self.release_market_ref(core, &market, cx);
