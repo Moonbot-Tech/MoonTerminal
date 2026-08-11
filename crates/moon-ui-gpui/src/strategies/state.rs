@@ -2,14 +2,55 @@
 
 use super::*;
 
-/// Resolve the concrete core roots inherited from the current singleton Auto owner.
-fn singleton_strategy_cores(b: &Backend) -> Option<Vec<CoreId>> {
+/// Seed the tree's expanded cores from the Auto rail selection.
+///
+/// The window is opened from a rail that already says which server the user is working on, so
+/// opening it fully collapsed makes them re-find that server by hand every time.
+///
+/// The intersection with the visible scope keeps two validity levels distinct: `selected_core` is
+/// validated against live cores, while the tree is built from the effective workspace scope. The
+/// guard prevents any narrower scope from seeding a node that never renders.
+///
+/// A core whose strategies are all filtered out does not enter the tree at all; the seeded
+/// expansion is harmless there and takes effect as soon as the filter admits it.
+///
+/// Args:
+///     selected_core: Concrete Auto rail selection, or `None` for Classic and Auto Overview.
+///     workspace_cores: Cores the window may show, or `None` when it is not scope-bound.
+///
+/// Returns:
+///     The set of cores to open with; empty whenever there is nothing unambiguous to expand.
+fn initial_expanded_cores(
+    selected_core: Option<CoreId>,
+    workspace_cores: Option<&[CoreId]>,
+) -> HashSet<CoreId> {
+    let Some(core) = selected_core else {
+        return HashSet::new();
+    };
+    if workspace_cores.is_some_and(|cores| !cores.contains(&core)) {
+        return HashSet::new();
+    }
+    HashSet::from([core])
+}
+
+/// Resolve the singleton Auto owner's core roots and concrete rail selection together.
+///
+/// One resolve for both answers: each `singleton_workspace()` call re-ranks the group's cores and
+/// re-checks every core's availability, so asking twice doubles the cost of opening this window
+/// and of every rail move it observes.
+///
+/// Args:
+///     b: Backend supplying the singleton workspace and its effective scope.
+///
+/// Returns:
+///     The visible core roots and the selected core, or `None` outside a singleton Auto owner.
+fn singleton_strategy_scope(b: &Backend) -> Option<(Vec<CoreId>, Option<CoreId>)> {
     let workspace = b.singleton_workspace()?;
-    Some(
-        b.effective_workspace_scope(&workspace.group, crate::workspace::RetainedCoreScope::All)
-            .ids()
-            .to_vec(),
-    )
+    let cores = b
+        .effective_workspace_scope(&workspace.group, crate::workspace::RetainedCoreScope::All)
+        .ids()
+        .to_vec();
+    Some((cores, workspace.selected_core))
 }
 
 /// Fold strategy and schema revisions only for cores visible in the current singleton scope.
@@ -29,7 +70,18 @@ fn strategies_sig(b: &Backend, workspace_cores: Option<&[CoreId]>) -> u64 {
 }
 
 impl StrategiesView {
-    /// Creates the Strategies view and subscribes it to search, tree, backend, and window events.
+    /// Create the Strategies view and subscribe it to search, tree, backend, and window events.
+    ///
+    /// The initial Auto rail selection seeds the expanded core set when it belongs to the visible
+    /// workspace scope.
+    ///
+    /// Args:
+    ///     backend: Shared state supplying strategy data and workspace scope.
+    ///     window: Owning window used to construct inputs and observe geometry.
+    ///     cx: View context used to create retained entities and subscriptions.
+    ///
+    /// Returns:
+    ///     A fully initialized Strategies view.
     pub(super) fn new(
         backend: Entity<Backend>,
         window: &mut Window,
@@ -53,8 +105,11 @@ impl StrategiesView {
         })
         .detach();
 
-        let workspace_cores = singleton_strategy_cores(backend.read(cx));
+        let scope = singleton_strategy_scope(backend.read(cx));
+        let workspace_cores = scope.as_ref().map(|(cores, _)| cores.clone());
+        let selected_core = scope.and_then(|(_, selected)| selected);
         let initial_sig = strategies_sig(backend.read(cx), workspace_cores.as_deref());
+        let expanded_cores = initial_expanded_cores(selected_core, workspace_cores.as_deref());
 
         let tree_state = cx.new(|cx| MoonTreeState::new(cx));
         // MoonTree can mutate expansion from keyboard input, but `expanded_cores` and
@@ -95,11 +150,20 @@ impl StrategiesView {
 
         let workspace_revision = backend.read(cx).workspace_revision();
         cx.observe(&workspace_revision, |this, _revision, cx| {
-            let next = singleton_strategy_cores(this.backend.read(cx));
+            let scope = singleton_strategy_scope(this.backend.read(cx));
+            let next = scope.as_ref().map(|(cores, _)| cores.clone());
             if next == this.workspace_cores {
                 return;
             }
             this.workspace_cores = next;
+            // Re-seed additively on an actual rail move because the singleton window outlives the
+            // selection. Existing expansions remain intact; returning to a manually collapsed core
+            // re-opens it.
+            let selected_core = scope.and_then(|(_, selected)| selected);
+            this.expanded_cores.extend(initial_expanded_cores(
+                selected_core,
+                this.workspace_cores.as_deref(),
+            ));
             this.last_sig = strategies_sig(this.backend.read(cx), this.workspace_cores.as_deref());
             this.tree_cache = None;
             this.last_tree_shape = None;
@@ -191,7 +255,7 @@ impl StrategiesView {
             field_memos: HashMap::new(),
             field_colors: HashMap::new(),
             focused_field: None,
-            expanded_cores: HashSet::new(),
+            expanded_cores,
             expanded_folders: HashSet::new(),
             rules: Rules::load(),
             clipboard: None,
@@ -221,3 +285,6 @@ impl Focusable for StrategiesView {
         self.focus.clone()
     }
 }
+
+#[cfg(test)]
+mod tests;

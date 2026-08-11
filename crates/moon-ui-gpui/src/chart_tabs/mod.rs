@@ -65,6 +65,55 @@ fn auto_workspace_chart_core(backend: &Backend, group: &str) -> Option<CoreId> {
         .flatten()
 }
 
+/// Resolve the market universe one tab's coin field may search.
+///
+/// Auto binds the whole window to one core, so Main and custom tabs narrow to it instead of
+/// offering the group. The narrowing is expressed as a bucket rather than filtered further down
+/// because the bucket is also the suggestion cache key: a scope living outside it would keep
+/// serving the previous core's suggestions for the rest of that cache's lifetime.
+///
+/// Args:
+///     active: Tab currently owning the coin field.
+///     auto_core: Concrete Auto rail selection, or `None` for Classic and Auto Overview.
+///
+/// Returns:
+///     The bucket to search, or `None` for the whole group.
+fn coin_search_bucket(active: &Tab, auto_core: Option<CoreId>) -> Option<ChartBucket> {
+    match active {
+        Tab::Main | Tab::Custom(..) => auto_core.map(ChartBucket::Core),
+        Tab::Add(_, bucket) => Some(bucket.clone()),
+    }
+}
+
+/// Drop accumulated coin checkboxes that fall outside the current search scope, in place.
+///
+/// The dropdown accumulates a selection across separate searches, so a rail move would otherwise
+/// carry invisible markets of the previous core into "Open in new tab" — and into the footer count,
+/// which reads the raw selection length.
+///
+/// Prunes in place and reports whether it removed anything, because the caller sits on the
+/// feed-drain path: the steady state is "nothing to prune", and that state must allocate nothing.
+///
+/// Args:
+///     selected: Currently accumulated core and market pairs, pruned in place.
+///     scope_core: Concrete Auto core owning the search, or `None` when the group is in scope.
+///
+/// Returns:
+///     `true` when at least one pair was dropped; an unscoped search never drops any.
+fn prune_coin_selection_to_scope(
+    selected: &mut std::collections::HashSet<(CoreId, String)>,
+    scope_core: Option<CoreId>,
+) -> bool {
+    let Some(scope_core) = scope_core else {
+        return false;
+    };
+    if !selected.iter().any(|(core, _)| *core != scope_core) {
+        return false;
+    }
+    selected.retain(|(core, _)| *core == scope_core);
+    true
+}
+
 /// Retry identity for one unresolved Auto chart target.
 type AutoWorkspaceChartAttempt = (CoreId, Option<(CoreId, u64)>, Option<(CoreId, String)>);
 
@@ -675,6 +724,9 @@ impl ChartTabs {
 
     /// Retarget Main after a changed concrete Auto rail selection without opening another slot.
     ///
+    /// The same scope transition prunes accumulated coin-dropdown selections and closes the popup
+    /// when any selected market falls outside the new concrete core.
+    ///
     /// The current Main instrument is preserved only when the target core can actually serve it:
     /// exact market name, then catalog match key plus quote, then match key alone. Construction
     /// seeds the applied core only when the actual restored Main belongs to that core. Focus-only
@@ -690,6 +742,14 @@ impl ChartTabs {
     ///     Nothing; missing current or target markets leave the visible chart and tab unchanged.
     fn sync_auto_workspace_chart(&mut self, cx: &mut Context<Self>) {
         let next = auto_workspace_chart_core(self.backend.read(cx), &self.group);
+        // Prune the dropdown's accumulated checkboxes against the current scope, ahead of every
+        // early return below. Retargeting can legitimately decline to commit — an unchanged retry
+        // identity, an empty Main, an unresolvable market — while the rail has still moved, and a
+        // reset sequenced behind the commit would leave invisible foreign markets selected and
+        // counted in the popup footer.
+        if prune_coin_selection_to_scope(&mut self.coin_selected, next) {
+            self.coin_popup_open = false;
+        }
         let current_target = self.main.read(cx).active_target(cx);
         let market_revision = next.and_then(|core| {
             self.backend

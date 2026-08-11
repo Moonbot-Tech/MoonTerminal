@@ -2,10 +2,13 @@
 
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
 use super::{
-    AutoWorkspaceChartState, preferred_auto_workspace_market, windows::chart_detach_allowed,
+    AutoWorkspaceChartState, Tab, coin_search_bucket, preferred_auto_workspace_market,
+    prune_coin_selection_to_scope, windows::chart_detach_allowed,
 };
-use moon_core::config::WorkspaceMode;
+use moon_core::config::{ChartBucket, WorkspaceMode};
 use moon_core::market::MarketLabel;
+use moon_core::session::CoreId;
+use std::collections::HashSet;
 
 /// Build one catalog-backed market label for selection-policy tests.
 fn label(coin: &str, quote: &str) -> MarketLabel {
@@ -192,4 +195,46 @@ fn startup_drain_suppresses_activation_while_live_delivery_preserves_it() {
     assert!(source.contains("this.handle_open_request(false, cx);"));
     assert!(source.contains("this.handle_open_request(true, cx);"));
     assert!(source.contains("if activate && allow_window_activation"));
+}
+
+/// `chart_tabs/mod.rs::coin_search_bucket` scopes the coin search popup to the Auto rail's
+/// selected core while the active tab is Main or a custom tab.
+///
+/// Mutation: replacing `auto_core.map(ChartBucket::Core)` with `None` on the `Main | Custom` arm.
+/// The popup would then fall back to the unscoped bucket and offer markets from every core in the
+/// group's Auto workspace instead of only the one selected on the rail.
+#[test]
+fn coin_search_scopes_to_the_selected_auto_core_on_main_and_custom() {
+    assert_eq!(
+        coin_search_bucket(&Tab::Main, Some(41)),
+        Some(ChartBucket::Core(41))
+    );
+    assert_eq!(coin_search_bucket(&Tab::Main, None), None);
+    assert_eq!(
+        coin_search_bucket(&Tab::Custom(100_000, ChartBucket::Shared), Some(7)),
+        Some(ChartBucket::Core(7))
+    );
+}
+
+/// `chart_tabs/mod.rs::prune_coin_selection_to_scope` drops accumulated coin checkboxes that fall
+/// outside a newly selected Auto rail core.
+///
+/// Mutation: deleting the `selected.retain(...)` line while keeping the early `true`. A rail move
+/// would then leave invisible markets of the previous core in the accumulated selection, inflating
+/// the "Open in new tab" footer count with coins the popup no longer shows.
+#[test]
+fn prune_coin_selection_drops_markets_outside_the_new_scope() {
+    let mut selected: HashSet<(CoreId, String)> = HashSet::from([
+        (7, "BTCUSDT".to_string()),
+        (7, "ETHUSDT".to_string()),
+        (9, "SOLUSDT".to_string()),
+    ]);
+
+    let pruned = prune_coin_selection_to_scope(&mut selected, Some(7));
+
+    assert!(pruned, "a selection spanning more than the new scope must report a change");
+    assert_eq!(
+        selected,
+        HashSet::from([(7, "BTCUSDT".to_string()), (7, "ETHUSDT".to_string())])
+    );
 }
