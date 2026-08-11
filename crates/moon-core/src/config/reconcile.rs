@@ -3,6 +3,7 @@
 //! Metadata binds to a server through a stable `uid`. Older files without uids bind once by
 //! `name` and immediately receive a fresh uid; subsequent renames no longer lose their settings.
 
+use super::core_groups::{sanitize_core_groups, CoreGroup};
 use super::groups::GroupConfig;
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
@@ -21,6 +22,8 @@ use crate::market::MarketDataMode;
 pub struct Merged {
     pub servers: Vec<ServerConfig>,
     pub groups: Vec<GroupConfig>,
+    /// User-saved named sets of cores, already sanitized.
+    pub core_groups: Vec<CoreGroup>,
     /// Interface language from settings.toml, or the system default.
     pub language: Language,
     /// Market-data source from settings.toml, or the Dedup default.
@@ -75,7 +78,8 @@ pub struct Merged {
 ///
 /// Metadata binds by uid, with a one-time name fallback for files that carry no uid. The initial
 /// counter is raised above `uid_floor` before any missing uids are assigned, and a raised counter
-/// marks the result dirty so the high-water mark is persisted.
+/// marks the result dirty so the high-water mark is persisted. Saved core groups are sanitized
+/// without consulting the current server list, preserving temporarily absent members.
 pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Merged {
     let mut next_uid = next_free_uid(&sf, &meta, uid_floor);
     // A counter that had to be raised is written back, so the repair survives a later boot on
@@ -106,6 +110,10 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
             dirty = true;
         }
     }
+    // A repaired list is written back so a hand-edited file converges once instead of being
+    // re-repaired on every launch. Absent members are NOT a repair — see `core_groups`.
+    let mut core_groups = meta.core_groups.clone();
+    dirty |= sanitize_core_groups(&mut core_groups);
 
     let servers: Vec<ServerConfig> = sf
         .servers
@@ -155,6 +163,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     Merged {
         servers,
         groups,
+        core_groups,
         language,
         market_mode,
         charts_split_by_core,
@@ -178,11 +187,16 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     }
 }
 
-/// Converts runtime `AppConfig` to the two file formats for writing.
+/// Convert runtime configuration to the two file formats for writing.
+///
+/// Server connection keys go to `ServersFile`; server metadata, server-group settings, saved core
+/// groups, and presentation preferences go to `SettingsFile`. Saved core groups are copied as
+/// supplied because the caller owns sanitizing the runtime list before persistence.
 #[allow(clippy::too_many_arguments)]
 pub fn split(
     servers: &[ServerConfig],
     groups: &[GroupConfig],
+    core_groups: &[CoreGroup],
     language: Language,
     market_mode: MarketDataMode,
     charts_split_by_core: bool,
@@ -230,6 +244,7 @@ pub fn split(
         // Legacy field: since v13 it lives in hotkeys.toml and is not serialized in settings.toml.
         hotkeys: HotkeysConfig::default(),
         groups: groups.to_vec(),
+        core_groups: core_groups.to_vec(),
         core_sort,
         report_valuation_mode,
         next_uid,

@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::core_groups::CoreGroup;
 use super::groups::GroupConfig;
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
@@ -220,6 +221,16 @@ pub struct SettingsFile {
     pub hotkeys: HotkeysConfig,
     #[serde(default)]
     pub groups: Vec<GroupConfig>,
+    /// User-saved named sets of cores, applied from the shared core picker.
+    ///
+    /// Named `core_groups` rather than `groups`, which is already taken by the unrelated
+    /// server-group settings above; the two are different concepts and must not be conflated.
+    ///
+    /// No schema bump accompanies this field. The empty list is both the serde default and the
+    /// intended default, so an older file that omits it already reads correctly, and a bump would
+    /// force a `backups/` snapshot on every user's next launch for nothing.
+    #[serde(default)]
+    pub core_groups: Vec<CoreGroup>,
     /// How core lists are ordered app-wide; missing values default to `Name`.
     #[serde(default)]
     pub core_sort: CoreSortMode,

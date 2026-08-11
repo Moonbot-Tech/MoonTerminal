@@ -567,28 +567,21 @@ pub struct ReportPanel {
 }
 
 impl crate::controls::CoreComboHost for ReportPanel {
-    /// Select every core in the retained Classic or standalone filter.
-    ///
-    /// The ids are the ones the menu rendered. Group Auto owns the effective scope and leaves the
-    /// retained selection untouched.
-    ///
-    /// Args:
-    ///     selectable: Every core id available to this picker.
-    ///     cx: Panel context used to reconcile strategy scope and request a requery.
-    ///
-    /// Returns:
-    ///     Nothing; workspace-owned or inert actions leave the panel unchanged.
-    fn select_all_cores(&mut self, selectable: Vec<u64>, cx: &mut Context<Self>) {
-        if self
-            .workspace_scope(self.backend.read(cx))
+    /// Group Auto owns the effective scope and leaves the retained selection untouched.
+    fn core_selection_pinned(&self, cx: &App) -> bool {
+        self.workspace_scope(self.backend.read(cx))
             .is_some_and(|scope| scope.is_workspace_owned())
-        {
-            return;
-        }
-        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
-            self.reconcile_strategy_core(cx);
-            self.request_requery(cx);
-        }
+    }
+
+    /// Return the retained Classic or standalone core filter for shared picker edits.
+    fn core_selection_mut(&mut self) -> &mut HashSet<u64> {
+        &mut self.sel_cores
+    }
+
+    /// Re-scope the strategy filter to the new core set, then requery.
+    fn after_core_selection_change(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_strategy_core(cx);
+        self.request_requery(cx);
     }
 }
 

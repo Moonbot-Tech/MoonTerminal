@@ -532,24 +532,19 @@ pub struct AnalyticsView {
 }
 
 impl crate::controls::CoreComboHost for AnalyticsView {
-    /// Select every core in the Analytics core filter.
-    ///
-    /// The ids are the ones the menu rendered. Auto pins the selector to its workspace scope and
-    /// leaves the retained filter untouched.
-    ///
-    /// Args:
-    ///     selectable: Every core id available to this picker.
-    ///     cx: Analytics context used to refresh data after a selection change.
-    ///
-    /// Returns:
-    ///     Nothing; pinned or inert actions leave the view unchanged.
-    fn select_all_cores(&mut self, selectable: Vec<u64>, cx: &mut Context<Self>) {
-        if self.workspace_scope.is_some() {
-            return;
-        }
-        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
-            self.core_selection_changed(cx);
-        }
+    /// Auto pins the selector to its workspace scope and leaves the retained filter untouched.
+    fn core_selection_pinned(&self, _cx: &App) -> bool {
+        self.workspace_scope.is_some()
+    }
+
+    /// Return the retained Analytics core filter for shared picker edits.
+    fn core_selection_mut(&mut self) -> &mut HashSet<u64> {
+        &mut self.sel_cores
+    }
+
+    /// Requery every Analytics surface against the new core scope.
+    fn after_core_selection_change(&mut self, cx: &mut Context<Self>) {
+        self.core_selection_changed(cx);
     }
 }
 

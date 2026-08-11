@@ -448,7 +448,8 @@ impl AnalyticsView {
             t!("report.all_cores").to_string()
         };
         let toggle_view = view.clone();
-        let extras = crate::controls::core_combo_extras(!workspace_pinned, &view);
+        let extras =
+            crate::controls::core_combo_extras(!workspace_pinned, &view, &self.backend, cx);
         crate::controls::core_combo(
             "an-core",
             &cores,

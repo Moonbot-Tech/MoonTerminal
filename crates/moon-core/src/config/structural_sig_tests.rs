@@ -1,6 +1,6 @@
 //! Structural-signature tests for presentation-only and server-order changes.
 
-use super::{AppConfig, CoreSortMode, GroupConfig, ServerConfig};
+use super::{AppConfig, CoreGroup, CoreSortMode, GroupConfig, ServerConfig};
 
 /// Build an `AppConfig` with the selected order and servers.
 fn config(mode: CoreSortMode, servers: Vec<ServerConfig>) -> AppConfig {
@@ -66,4 +66,42 @@ fn group_manual_controls_are_not_structural() {
     after.groups[0].trade.order_size_sel = 5;
 
     assert_eq!(before.structural_sig(), after.structural_sig());
+}
+
+/// Named breakage (`AppConfig::structural_sig`): passing `&self.core_groups` instead of the
+/// neutralizing `&[]` into the `reconcile::split` call. A saved core group is a selection
+/// bookmark, not a structural detail -- renaming, adding or deleting one must never reconnect a
+/// core or rebuild a window.
+#[test]
+fn core_group_changes_are_not_structural() {
+    let mut before = config(CoreSortMode::Name, vec![server(1, "Alpha")]);
+    before.core_groups = vec![CoreGroup {
+        name: "Scalpers".to_string(),
+        cores: vec![1],
+    }];
+    let mut renamed = before.clone();
+    renamed.core_groups[0].name = "Renamed".to_string();
+    let mut deleted = before.clone();
+    deleted.core_groups.clear();
+    let mut added = before.clone();
+    added.core_groups.push(CoreGroup {
+        name: "Swing".to_string(),
+        cores: vec![1],
+    });
+
+    assert_eq!(
+        before.structural_sig(),
+        renamed.structural_sig(),
+        "renaming a core group must not reconnect anything"
+    );
+    assert_eq!(
+        before.structural_sig(),
+        deleted.structural_sig(),
+        "deleting a core group must not reconnect anything"
+    );
+    assert_eq!(
+        before.structural_sig(),
+        added.structural_sig(),
+        "adding a core group must not reconnect anything"
+    );
 }

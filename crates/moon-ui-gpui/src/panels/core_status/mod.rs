@@ -153,28 +153,21 @@ pub struct CoreStatusView {
 }
 
 impl crate::controls::CoreComboHost for CoreStatusView {
-    /// Select every core in the retained Classic filter.
-    ///
-    /// The ids are the ones the menu rendered. Auto owns the effective scope and leaves the
-    /// retained selection untouched.
-    ///
-    /// Args:
-    ///     selectable: Every core id available to this picker.
-    ///     cx: View context used to rebuild cached rows and request a repaint.
-    ///
-    /// Returns:
-    ///     Nothing; workspace-owned or inert actions leave the view unchanged.
-    fn select_all_cores(&mut self, selectable: Vec<CoreId>, cx: &mut Context<Self>) {
-        if self
-            .effective_scope(self.backend.read(cx))
+    /// Auto owns the effective scope and leaves the retained Classic selection untouched.
+    fn core_selection_pinned(&self, cx: &App) -> bool {
+        self.effective_scope(self.backend.read(cx))
             .is_workspace_owned()
-        {
-            return;
-        }
-        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
-            self.rebuild_cache(cx);
-            cx.notify();
-        }
+    }
+
+    /// Return the retained Classic core filter for shared picker edits.
+    fn core_selection_mut(&mut self) -> &mut HashSet<CoreId> {
+        &mut self.sel_cores
+    }
+
+    /// Rebuild the cached rows against the new filter and repaint.
+    fn after_core_selection_change(&mut self, cx: &mut Context<Self>) {
+        self.rebuild_cache(cx);
+        cx.notify();
     }
 }
 
@@ -640,7 +633,7 @@ impl CoreStatusView {
             .session
             .market_source()
             .core_exchange_names();
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view);
+        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
         let combo = crate::controls::core_combo(
             "core-status-core",
             cores,

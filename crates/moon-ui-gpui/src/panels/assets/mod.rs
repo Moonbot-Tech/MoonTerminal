@@ -143,29 +143,22 @@ pub struct AssetsView {
 }
 
 impl crate::controls::CoreComboHost for AssetsView {
-    /// Select every core in the retained Classic or global filter.
-    ///
-    /// The ids are the ones the menu rendered. Group Auto owns the effective scope and leaves the
-    /// retained selection untouched.
-    ///
-    /// Args:
-    ///     selectable: Every core id available to this picker.
-    ///     cx: View context used to rebuild cached rows and request a repaint.
-    ///
-    /// Returns:
-    ///     Nothing; workspace-owned or inert actions leave the view unchanged.
-    fn select_all_cores(&mut self, selectable: Vec<CoreId>, cx: &mut Context<Self>) {
-        if self
-            .effective_scope(self.backend.read(cx))
+    /// Group Auto owns the effective scope and leaves the retained selection untouched.
+    fn core_selection_pinned(&self, cx: &App) -> bool {
+        self.effective_scope(self.backend.read(cx))
             .is_some_and(|scope| scope.is_workspace_owned())
-        {
-            return;
-        }
-        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
-            let backend = self.backend.clone();
-            self.rebuild_cache(backend.read(cx));
-            cx.notify();
-        }
+    }
+
+    /// Return the retained Classic or global core filter for shared picker edits.
+    fn core_selection_mut(&mut self) -> &mut HashSet<CoreId> {
+        &mut self.sel_cores
+    }
+
+    /// Rebuild the cached rows against the new filter and repaint.
+    fn after_core_selection_change(&mut self, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
     }
 }
 

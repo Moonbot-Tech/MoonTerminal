@@ -51,13 +51,56 @@ common.exchange_spot:
 # strings live here rather than in any one panel's file for the same reason the Analytics
 # placeholders do: six panels share the control, so no single namespace owns it.
 #
-# The Select all action above the exchange sections. It is an ACTION, not state: the row shows how
-# many cores would end up selected, never a checkbox. It differs from the All row on purpose — the
-# All row CLEARS the filter, while this one selects every core explicitly, which is what lets a user
-# then remove one core out of fifty. There is deliberately no "deselect all" and no "invert": both
-# can produce the empty set, which this codebase reads as ALL, so either row would sometimes do the
-# exact opposite of its label.
-common.core_pick.all:
-  ru: "Выбрать все"
-  en: "Select all"
-  es: "Seleccionar todos"
+# Saved core groups: a named set of cores the user applies instead of re-picking them. A group row
+# ticks when the current selection IS that group, and its trailing count is what a CLICK produces —
+# the members the panel showing it can actually select. In the MENU that count is formatted by the
+# consumer's own `cores_n`, so it cannot read differently from the trigger right above it;
+# `group_cores_n` below serves the two modals, which have no trigger beside them.
+common.core_pick.groups_heading:
+  ru: "Группы ядер"
+  en: "Core groups"
+  es: "Grupos de núcleos"
+common.core_pick.group_cores_n:
+  ru: "%{n} ядер"
+  en: "%{n} cores"
+  es: "%{n} núcleos"
+# Members whose core is no longer configured. They are kept on purpose — a core can come back — so
+# this is a warning, not an error.
+common.core_pick.group_dead_n:
+  ru: "нет %{n}"
+  en: "%{n} missing"
+  es: "faltan %{n}"
+common.core_pick.save_as_group:
+  ru: "Сохранить выбор как группу…"
+  en: "Save selection as a group…"
+  es: "Guardar la selección como grupo…"
+common.core_pick.manage_groups:
+  ru: "Управление группами…"
+  en: "Manage groups…"
+  es: "Gestionar grupos…"
+common.core_pick.save_title:
+  ru: "Новая группа ядер"
+  en: "New core group"
+  es: "Nuevo grupo de núcleos"
+common.core_pick.manage_title:
+  ru: "Группы ядер"
+  en: "Core groups"
+  es: "Grupos de núcleos"
+# Refuses BOTH an empty name and a save blocked by the group ceiling: either way nothing was
+# created, and the dialog stays open. `dialogs.name_required` cannot be reused — it names a
+# strategy in all three languages.
+common.core_pick.group_name_required:
+  ru: "Введите название группы"
+  en: "Enter a group name"
+  es: "Introduzca un nombre de grupo"
+common.core_pick.group_name_ph:
+  ru: "Название группы"
+  en: "Group name"
+  es: "Nombre del grupo"
+# Two-step delete rather than a confirmation dialog: MoonUI paints one dialog at a time, so a
+# confirm modal opened from the management modal would replace the list being edited. The second
+# click reuses the shared `dialogs.delete_q`.
+common.core_pick.group_delete:
+  ru: "Удалить"
+  en: "Delete"
+  es: "Eliminar"

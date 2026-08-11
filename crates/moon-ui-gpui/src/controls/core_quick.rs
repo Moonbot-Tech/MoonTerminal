@@ -1,5 +1,4 @@
-//! Pure decisions behind the core picker: its rows, its Select all action and its per-exchange
-//! state.
+//! Pure decisions behind the core picker: its rows and its per-exchange state.
 //!
 //! Every function here is GPUI-free so the six consumers of [`super::core_combo`] share one
 //! definition instead of six near-copies, and so the rules can be tested without a window.
@@ -8,10 +7,11 @@
 //! why this module exists. With no filter set the selection is empty, so the first click on a core
 //! ISOLATES it rather than removing it, and there is no representable "all fifty explicitly
 //! selected" state to take one core out of — which is exactly what a user running fifty cores
-//! wants. [`select_all_cores`] materializes that state, and it is the only way to reach it.
+//! wants. Saving the implicit-All selection as a core group and applying it materializes that
+//! state; see [`super::core_groups::saved_group_cores`].
 //!
-//! There is deliberately no "deselect all" and no "invert": both can produce the empty set, which
-//! reads as ALL, so either row would sometimes do the precise opposite of its label. Clearing the
+//! There is deliberately no "deselect all" and no "invert" row: both can produce the empty set,
+//! which reads as ALL, so either would sometimes do the precise opposite of its label. Clearing the
 //! filter is the All row's job, through [`toggle_core_selection`]'s `None` arm, where the meaning
 //! is honest.
 
@@ -51,7 +51,8 @@ pub(crate) fn section_core_ids(members: &[(u64, &str)]) -> Vec<u64> {
 /// `None` is the All row and CLEARS the selection, handing the consumer back its whole scope
 /// rather than naming every core in it. `Some(core)` toggles that one core, which from the
 /// implicit-All state ISOLATES it. To form an all-but-one selection, the user first materializes
-/// the explicit full set with Select all and then removes one core.
+/// the explicit full set by saving the implicit-All selection as a core group and applying it,
+/// then removes one core.
 ///
 /// Args:
 ///     selected: Explicit selection, updated in place; empty means all cores.
@@ -73,65 +74,6 @@ pub(crate) fn toggle_core_selection(selected: &mut HashSet<u64>, core: Option<u6
             true
         }
     }
-}
-
-/// Resolve what Select all would make of the current selection.
-///
-/// The result is exactly the selectable set. Any retained id whose core has since disappeared is
-/// DROPPED here, unlike everywhere else in the picker: elsewhere a stale id is kept so a vanished
-/// core cannot silently broaden the query, but this action broadens to everything by definition, so
-/// keeping it would add nothing and would make the row's count claim more cores than exist.
-///
-/// Refused, reported as `None`, when the selection already is that set, and when there is nothing
-/// selectable — the latter because the result would be the empty set, which reads as ALL.
-///
-/// Args:
-///     selected: Current explicit selection; empty means all cores.
-///     selectable: Every core this consumer can select.
-///
-/// Returns:
-///     The replacement selection, or `None` when the action is inert or unrepresentable.
-fn select_all_outcome(selected: &HashSet<u64>, selectable: &[u64]) -> Option<HashSet<u64>> {
-    if selectable.is_empty() {
-        return None;
-    }
-    let next: HashSet<u64> = selectable.iter().copied().collect();
-    (next != *selected).then_some(next)
-}
-
-/// Replace the selection with the explicit full set.
-///
-/// Args:
-///     selected: Explicit selection, replaced in place when the action applies.
-///     selectable: Every core this consumer can select.
-///
-/// Returns:
-///     Whether the selection changed and the consumer must reload.
-pub(crate) fn select_all_cores(selected: &mut HashSet<u64>, selectable: &[u64]) -> bool {
-    match select_all_outcome(selected, selectable) {
-        Some(next) => {
-            *selected = next;
-            true
-        }
-        None => false,
-    }
-}
-
-/// How many cores Select all would leave selected, for its trailing count.
-///
-/// The number is the RESULT, not the delta. In the implicit-All state the action changes nothing
-/// semantically — every core already counts as selected — yet it is exactly the materialization the
-/// picker exists for, since only an explicit full set can have one core removed from it. A delta
-/// would read zero there and make the one load-bearing action look inert.
-///
-/// Args:
-///     selected: Current explicit selection; empty means all cores.
-///     selectable: Every core this consumer can select.
-///
-/// Returns:
-///     The resulting selection size, or `None` when the action is refused and its row is inert.
-pub(crate) fn select_all_preview(selected: &HashSet<u64>, selectable: &[u64]) -> Option<usize> {
-    select_all_outcome(selected, selectable).map(|next| next.len())
 }
 
 /// Summarize how much of one exchange section is EXPLICITLY selected.
