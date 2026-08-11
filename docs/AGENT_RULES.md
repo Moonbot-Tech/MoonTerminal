@@ -29,29 +29,42 @@ A SessionStart hook injects this file, and `CONTRIBUTING.md` beside it, into eve
 9. Read `git status` before every push; never `git add -f` — fix the over-broad ignore instead.
 10. Never commit `Cargo.lock` carrying local sibling `path` entries — it breaks every other
     machine and all of CI (→ `CONTRIBUTING.md` § Dependencies and the lockfile).
+11. Hand the finished work to **one or two separate agents with a clean context** for review —
+    they see none of your reasoning and get only the task and the diff. One is enough for a small,
+    single-file change; take two, on different angles, once the change spans several files or
+    touches behaviour users depend on. If your own configuration already schedules such a pass,
+    follow it; if it says nothing about one, this rule is what requires it. An agent reviewing its
+    own work re-reads its own intent instead of the code, and the only mistakes it can still find
+    are the ones it did not already make.
+12. If you close the task by fanning out cleanup or review agents of your own — the usual
+    reuse / simplification / efficiency / altitude split — one agent in that same fan-out is the
+    clean-context reviewer of rule 11, launched beside the others and never instead of them. Same
+    condition: if your configuration already schedules such a pass, follow it; if it says nothing,
+    this rule is what adds it. A swarm that only polishes what was written never asks whether
+    writing it was right.
 
 ## Code
 
-11. Comments and docstrings in English, every one you write or rewrite
+13. Comments and docstrings in English, every one you write or rewrite
     (→ `CONTRIBUTING.md` § Comments and strings).
-12. MoonUI first — never hand-roll a widget the stack already has
+14. MoonUI first — never hand-roll a widget the stack already has
     (→ `CONTRIBUTING.md` § UI).
-13. Never silence a warning to get green — `#[allow(...)]`, an `unwrap()` over the error, a
+15. Never silence a warning to get green — `#[allow(...)]`, an `unwrap()` over the error, a
     suppression comment. Fix the cause; if you genuinely must suppress, say why in the same line.
 
 ## Tests
 
-14. Never edit a test to make it pass — fix the code. A red test is information, and deleting the
+16. Never edit a test to make it pass — fix the code. A red test is information, and deleting the
     messenger costs you the message.
-15. A test must fail on a real regression — if you cannot name the edit that breaks it, drop it
+17. A test must fail on a real regression — if you cannot name the edit that breaks it, drop it
     (→ `CONTRIBUTING.md` § What makes a test worth keeping).
-16. Unit tests live in a sibling `tests.rs`, never in an inline `#[cfg(test)] mod tests { … }`
+18. Unit tests live in a sibling `tests.rs`, never in an inline `#[cfg(test)] mod tests { … }`
     block (→ `CONTRIBUTING.md` § Tests).
 
 ## Safety
 
-17. Never force-push and never reset a shared `main` — fix forward with a new commit or a revert.
-18. Never commit `servers.enc`, `cfg/`, `data/` or `backups/` — they hold keys and local state.
-19. A green compile is not a working change. Drive the affected flow in the built exe, or say
+19. Never force-push and never reset a shared `main` — fix forward with a new commit or a revert.
+20. Never commit `servers.enc`, `cfg/`, `data/` or `backups/` — they hold keys and local state.
+21. A green compile is not a working change. Drive the affected flow in the built exe, or say
     plainly that the behaviour is unverified. FireTest is the scripted way to do it
     (→ [`docs/FIRETEST.md`](FIRETEST.md)).
