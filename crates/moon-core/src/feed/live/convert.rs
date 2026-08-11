@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use moonproto::state::{Order, OrderTraceChartPoint, OrderTraceLine};
-use moonproto::{Event, MoonClient, OrderWorkerStatus};
+use moonproto::{Event, MoonClient};
 
 use crate::config::TakeProfitMode;
 use crate::feed::strategies::strat_kind_name;
@@ -418,6 +418,94 @@ fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
     })
 }
 
+/// Resolve the chart price of an order's stop-loss line from the wire field `sl_level`.
+///
+/// `sl_level` carries two different quantities depending on who wrote it last, and the wire does
+/// not say which. When the CORE applies the stop it stores the resolved trigger PRICE — its log
+/// reads `StopLoss applied (buyPrice 0.89100 stop -3.00% => 0.91856)`, and that 0.91856 is what
+/// arrives. When the stop is set by a COMMAND — the terminal enabling it, which sends
+/// `with_stop_loss_percent` — the field keeps the PERCENT, and the core is content to hold it
+/// (`OrderCommand op=3 … applied`, no recalculation) until something makes it apply the stop.
+///
+/// Drawing a percent as a price is what put a stop-loss 10.65 on a 0.00010458 chart: a line at
+/// `+10183491%` that also dragged the auto-Y range with it, flattening the whole pane
+/// (`10kSATS`, BB1, 2026-08-11 17:18). So the value is read against the entry before it is
+/// believed, and a percent is converted the way the core would, `entry * (1 ∓ p/100)`.
+///
+/// Args:
+///     entry: Order entry price; `0` or non-finite when the order has none yet.
+///     is_short: Whether the position is short, which flips the stop's side.
+///     fixed: The wire's `sl_fixed` flag — an absolute price the trader chose.
+///     level: The wire's `sl_level`, either a price or a percent.
+///
+/// Returns:
+///     Chart price for the stop line, or `None` when nothing usable can be derived.
+fn stop_loss_line_price(
+    entry: f64,
+    is_short: bool,
+    fixed: bool,
+    level: f64,
+    entry_filled: bool,
+) -> Option<f64> {
+    if !level.is_finite() || level <= 0.0 {
+        return None;
+    }
+    // A fixed level is an absolute price the trader chose, and may sit on either side on purpose.
+    // With no entry to compare against there is nothing to reason with either, so the reported value
+    // is drawn as-is rather than dropping the line of a stop that IS enabled.
+    if fixed || !entry.is_finite() || entry <= 0.0 {
+        return Some(level);
+    }
+    // Before the fill the field is ALWAYS a percent, with no guessing involved: the core resolves a
+    // stop into a price at the fill and not before. Every unfilled order carrying a stop in the
+    // 2026-08-11 diagnostic held its plain percentage there (10.65 against entries from 0.0049 to
+    // 0.22), so an unfilled order needs no plausibility test at all.
+    if !entry_filled {
+        return pct_level_price(entry, is_short, level);
+    }
+    // The side of the entry is what separates the two meanings, not the distance: a percentage stop
+    // protects the position, so its price is BELOW a long's entry and ABOVE a short's. A percent
+    // that lands on the protected side cannot be that price. The distance still matters at the far
+    // end, where a percent can fall on the correct side by coincidence — 10.65 under a $1000 entry
+    // reads as a price 99% away, which no stop is. A twentieth of the entry is the cut: it leaves
+    // room for a -90% catastrophe stop while excluding a two-digit percent on any market priced
+    // above a few hundred.
+    let price_side = if is_short {
+        level > entry && level <= entry * 20.0
+    } else {
+        level < entry && level >= entry / 20.0
+    };
+    if !price_side {
+        // The core quirk from the 2026-07-17 report: a SHORT's percentage stop can arrive already
+        // resolved but computed with the long formula, ending up just below the entry, on the
+        // profit side. Close to the entry it is that price, mirrored back; far below it is a
+        // percent.
+        if is_short && level >= entry / 2.0 && level < entry {
+            return Some(2.0 * entry - level);
+        }
+        return pct_level_price(entry, is_short, level);
+    }
+    Some(level)
+}
+
+/// Convert a percentage stop level into the price the core would resolve it to.
+///
+/// Args:
+///     entry: Order entry price, already validated as finite and positive.
+///     is_short: Whether the position is short, which puts the stop above the entry.
+///     level: Percentage distance, always positive on the wire.
+///
+/// Returns:
+///     Stop price, or `None` when the percentage leaves nothing above zero.
+fn pct_level_price(entry: f64, is_short: bool, level: f64) -> Option<f64> {
+    let price = if is_short {
+        entry * (1.0 + level / 100.0)
+    } else {
+        entry * (1.0 - level / 100.0)
+    };
+    (price.is_finite() && price > 0.0).then_some(price)
+}
+
 /// Project one retained MoonProto order into a UI row.
 ///
 /// This conversion has no report-database side effects; protocol-v4 reports are
@@ -507,13 +595,23 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     let mkt = snap.markets().price(&o.market_name);
     let last = mkt.as_ref().map(|p| p.p_last as f32).unwrap_or(0.0);
     // Entry price for the entry line and stop/take-profit level calculations.
-    // IMPORTANT (the "line above the actual buy" bug): AFTER execution, the core stores the
-    // BREAK-EVEN price (actual fill plus round-trip commission, about +0.1%) in BOTH `buy_price`
-    // and `buy_order.actual_price`, not the raw entry. The actual entry price of a filled order is
-    // the average POSITION price (`pos_price`, from the exchange, without markup). While the order
-    // is UNFILLED (fill=0), there is no position yet, so use the placed limit price (`buy_price`).
+    //
+    // IMPORTANT (the "line above the actual buy" bug): after execution the core stores the
+    // BREAK-EVEN price — the fill plus round-trip commission, some 0.03–0.1% off — in BOTH
+    // `buy_price` and `buy_order.actual_price`. The leg's `mean_price` is the raw average fill, and
+    // that is what the core itself measures from: a stop it resolved on a filled short came out at
+    // exactly -0.200000% of `mean_price` and at -0.240% of `buy_price` (order diagnostic, BB1
+    // 2026-08-11). Measuring from the break-even price is what made every stop and take-profit
+    // label read a few hundredths of a percent off what Moonbot shows for the same order.
+    //
+    // `mean_price` also tracks a WORKING order's cancel-replace, so it stays correct before the
+    // fill too — the fallbacks below only cover an order so fresh it has no fill data at all.
+    //
+    // This deliberately no longer consults the market's average POSITION price. That is a per-COIN
+    // number shared by every order on it, and it never arrives anyway: `pos_price` was zero in all
+    // 56060 diagnostic samples across 21 cores, since the balance record only carries it when the
+    // core sets its flag.
     let mkt_snapshot = snap.markets().get(&o.market_name).map(|h| h.snapshot());
-    let pos_price = mkt_snapshot.as_ref().map(|m| m.pos_price).unwrap_or(0.0);
     let contract_size = mkt_snapshot
         .as_ref()
         .map(|m| m.contract_size())
@@ -531,7 +629,7 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     //   the first fill.
     // The sell line is additionally gated by `sell_price > 0` below, so it cannot be drawn too
     // early: until the core sets a sell price, there is no exit line even when `in_position`.
-    let in_position = fill_pct > 0.0 || o.status == OrderWorkerStatus::SellSet;
+    let in_position = crate::feed::order_holds_position(o);
     // moonproto updates the top-level `o.buy_price`/`o.sell_price` ONLY when the worker status
     // changes or on a LOCAL move_order. Server-side cancel-replace (the core follows the market
     // with its limit order) changes only `*_order.actual_price`. Therefore, the line price for a
@@ -539,20 +637,9 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // placement price. In the 2026-07-17 report, a short buy stayed where the order book had long
     // since moved and was "fixed" only by dragging it, which locally rewrites buy_price.
     let live = |p: f64| (p.is_finite() && p > 0.0).then_some(p);
-    let entry = if fill_pct > 0.0 && pos_price > 0.0 {
-        pos_price
-    } else if fill_pct <= 0.0 && live(o.buy_order.actual_price).is_some() {
-        o.buy_order.actual_price
-    } else if o.buy_price.is_finite() && o.buy_price > 0.0 {
-        o.buy_price
-    } else if in_position && pos_price > 0.0 {
-        // Sell from an already-held asset (listing-sell/MoonHook): there was no bot entry, so
-        // `buy_price=0`. Use the average position price as the entry price, matching Moonbot's
-        // "Buy" value. Without this, neither the entry line (`g(true, buy_price)`) nor PnL rendered.
-        pos_price
-    } else {
-        o.buy_price
-    };
+    let entry = live(o.buy_order.mean_price)
+        .or_else(|| live(o.buy_order.actual_price))
+        .unwrap_or(o.buy_price);
     let valid_entry = entry.is_finite() && entry > 0.0;
 
     // Coin-margined (inverse) futures report quantity in CONTRACTS rather than the base coin
@@ -624,31 +711,19 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             None
         }
     };
-    // The LIVE order snapshot provides stop loss in `sl_level` as the RESOLVED trigger price, just
-    // like `take_profit` is an absolute price, NOT as a percentage. The `sl_fixed` flag in a live
-    // order snapshot does NOT mean "the level is a percentage". Core logs confirm that with
-    // `sl_fixed=false`, `sl_level` is approximately ent*(1-X%), which is a price. Draw the line
-    // directly at that price without percentage conversion. Trailing differs: its `ts_level` is a
-    // percentage distance; see `stop()` below.
-    //
-    // HOWEVER, for a SHORT with percentage SL (`sl_fixed=false`), the core can report a price
-    // calculated with the "long" formula ent*(1-X%): BELOW entry, on the profit side. In the
-    // 2026-07-17 report, a market short placed its stop on the take-profit line, while Moonbot drew
-    // the same stop ABOVE entry and its "StopLoss applied" log for shorts confirmed the higher
-    // trigger. Restore the side by mirroring around entry: ent*(1-p) -> ent*(1+p). Do not change a
-    // fixed (dragged/absolute) stop because it may intentionally be on either side as a profit lock.
     let stop_loss = o
         .stops
         .stop_loss_enabled()
-        .then(|| fin(o.stops.stop_loss_level()))
-        .flatten()
-        .map(|sl| {
-            if o.is_short && !o.stops.stop_loss_fixed() && valid_entry && sl < entry {
-                2.0 * entry - sl
-            } else {
-                sl
-            }
-        });
+        .then(|| {
+            stop_loss_line_price(
+                entry,
+                o.is_short,
+                o.stops.stop_loss_fixed(),
+                o.stops.stop_loss_level(),
+                crate::feed::order_entry_filled(o),
+            )
+        })
+        .flatten();
     let trailing = stop(
         o.stops.trailing_enabled(),
         o.stops.trailing_fixed(),
@@ -672,24 +747,49 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     });
     let pending = o.pending_buy_cond_price.is_some();
     // `filled`, which means a position is held and gates the sell line, stops, TP, liquidation,
-    // and PnL, equals `in_position` (defined above as fill_pct>0 or the SellSet phase). Without
-    // this, a sale from an already-held asset (fill_pct=0) showed neither lines nor PnL even though
-    // Moonbot displayed both.
+    // and PnL, equals `in_position` — one reading of `order_holds_position`, shared with the packet
+    // assembly so that "the core owns this order's stops" cannot mean one thing on screen and
+    // another inside a command. Without it, a sale from an already-held asset (no buy leg at all)
+    // showed neither lines nor PnL even though Moonbot displayed both.
     let filled = in_position;
     let create_time_ms = moon_time_to_unix_millis_f64(o.buy_order.create_time());
-    // Fallback indicator: SL/TS/VStop are enabled in the order's STRATEGY (by `strat_id`) when the
-    // per-order flag is not set. Field names are Moonbot Delphi names confirmed by strings in
-    // MoonBot.exe): `UseStopLoss`/`UseTrailing`/`UseBV_SV_Stop`.
-    // IMPORTANT: the strategy serializer (mirrored in Delphi and moonproto) DOES NOT send fields
-    // whose value equals the SCHEMA DEFAULT because the writer skips schema defaults. A missing
-    // snapshot field means "equals the schema default", NOT "disabled", so fall back to
-    // `StrategySchema.field(name).default_value`. The effective strategy is the order's own
-    // strategy or the core settings' manual strategy, which governs manual orders with strat_id=0.
-    // If that manual order has no strategy snapshot, fall back to ClientSettings stop defaults
-    // (SL: price_drop_level, TS: trailing_drop, VStop: vol_drop_level); nonzero means enabled.
+    // EFFECTIVE stop flags: the order's own flag from the wire, plus — only while the order has no
+    // position — the stop its strategy is going to give it.
+    //
+    // `stops` carries the core's own state for this order: moonproto applies section OSEC_STOPS
+    // straight into it, and that section sits in `ORDER_RECONCILE_MASK`, so the library keeps it
+    // repaired against the core's catalog rather than leaving it at whatever last arrived.
+    //
+    // The position is what divides the two readings. Moonbot materializes a stop INTO the order
+    // when the entry fills — the core logs `StopLoss applied (buyPrice … => …)` from
+    // `BOrderWorker.CheckBuyOrder`, taking the level from the strategy or, failing that, from the
+    // general settings (`StopLoss taken from general settings`). Before that the order holds no stop
+    // and the strategy's flag is the honest answer; after it, the order's own flag is, and switching
+    // a stop off is a state of the ORDER which the core keeps and reports. Inheriting past the fill
+    // is what redrew a hand-disabled SL as ON one frame after the strategy snapshot arrived, and
+    // again on every restart. The same rule gates the outgoing StopSettings in `feed::trade`, so a
+    // row and a packet cannot disagree about who owns this order's stops.
+    //
+    // An explicit terminal click still wins over an INHERITED stop: the wire cannot spell "the
+    // trader declined the stop his strategy is about to give this order", so without the override
+    // switching a working order's stop off would redraw as ON on the very next frame. The override
+    // expires as soon as the wire disagrees, so a stop the core arms anyway comes back on its own.
+    let stop_eff = |kind: crate::feed::OrderStopKind, wire: bool, strat_on: bool| -> bool {
+        crate::feed::trade::stop_override(server_id, o.uid, kind, wire)
+            .unwrap_or(
+                wire || crate::feed::stop_inherited_from_strategy(
+                    crate::feed::order_entry_filled(o),
+                    strat_on,
+                ),
+            )
+    };
     let eff_strat_id = crate::feed::strategies::effective_strat_id(snap, o.strat_id);
     let strat_snapshot = snap.strats().snapshot(eff_strat_id);
     let strat_schema = snap.strats().strategy_schema();
+    // The strategy serializer (mirrored in Delphi and moonproto) DOES NOT send fields whose value
+    // equals the SCHEMA DEFAULT, because the writer skips defaults. A missing snapshot field means
+    // "equals the schema default", NOT "disabled", so fall back to the schema's own default value.
+    // Field names are Moonbot Delphi names, confirmed against strings in MoonBot.exe.
     let strat_flag = |name: &str| -> bool {
         let Some(s) = strat_snapshot else {
             return false;
@@ -702,6 +802,10 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             .and_then(|f| f.default_value.as_ref())
             .is_some_and(|v| matches!(v, moonproto::FieldValue::Bool(true)))
     };
+    // The effective strategy is the order's own or the core settings' manual strategy, which governs
+    // manual orders with strat_id=0. A manual order with no strategy snapshot falls back to the
+    // ClientSettings stop defaults, whose "drop" percentages are NEGATIVE (price_drop_level=-1.1
+    // means SL 1.1%), so nonzero means enabled — not "> 0".
     let (sl_strat, ts_strat, vstop_strat) = if strat_snapshot.is_some() {
         (
             strat_flag("UseStopLoss"),
@@ -709,8 +813,6 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             strat_flag("UseBV_SV_Stop"),
         )
     } else if o.strat_id == 0 {
-        // "Drop" percentages in core settings are NEGATIVE (for example, price_drop_level=-1.1
-        // means SL 1.1%); enabled means nonzero, not "> 0".
         snap.settings()
             .client_settings
             .as_ref()
@@ -724,14 +826,6 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             .unwrap_or((false, false, false))
     } else {
         (false, false, false)
-    };
-    // EFFECTIVE stop flags (whether they will trigger, following the Moonbot model): an order may
-    // have NO per-order stop, in which case the STRATEGY stop applies and per-order wire fields are
-    // empty. An explicit terminal override from a table click takes precedence over both. The wire
-    // format cannot distinguish "disabled" from "unspecified", so without the override a strategy
-    // flag would mask our OFF action.
-    let stop_eff = |kind: crate::feed::OrderStopKind, wire: bool, strat: bool| -> bool {
-        crate::feed::trade::stop_override(server_id, o.uid, kind, wire).unwrap_or(wire || strat)
     };
     // The coin token, from the CATALOG. It is not a display convenience: it is what the coin
     // context menu writes into the core's and the strategy's blacklists, and the core matches
@@ -788,9 +882,6 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             o.stops.trailing_enabled(),
             ts_strat,
         ),
-        sl_strat,
-        ts_strat,
-        vstop_strat,
         vstop_on: stop_eff(crate::feed::OrderStopKind::VStop, o.vstop_on, vstop_strat),
         sl_fixed: o.stops.stop_loss_fixed(),
         ts_fixed: o.stops.trailing_fixed(),
@@ -922,7 +1013,81 @@ fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &
             r.filled,
             r.is_short
         ));
+        diag_order_prices(server_id, snap, r);
     }
+}
+
+/// Reports the candidate entry prices of one order, with the stop distance each of them implies.
+///
+/// "Why does the chart label say -5.80% where Moonbot says -6.0%?" is a question about the BASE the
+/// percentage is measured from, and the wire offers four of them: the market's average position
+/// price (shared by every order on that coin), the order's `buy_price` and its leg's `actual_price`
+/// (both carrying the core's break-even markup after a fill), and the leg's own `mean_price`. The
+/// terminal currently draws from the first; Moonbot's own log measures from the order's `buyPrice`
+/// (`StopLoss applied (buyPrice 1684.90 stop -3.50% => 1625.93)`).
+///
+/// Printing all four beside the resulting percentages settles which one this build should use
+/// instead of arguing from the field names. Written for the 2026-08-11 stop-label mismatch.
+///
+/// Args:
+///     server_id: Core the order belongs to, for the log prefix.
+///     snap: Live snapshot holding the raw order and its market.
+///     row: Projected row whose `stop_loss`/`take_profit` prices are being explained.
+fn diag_order_prices(server_id: u64, snap: &moonproto::MoonStateSnapshot, row: &OrderRow) {
+    // Only orders that actually carry a protective level have a base to argue about, and skipping
+    // the rest keeps a `MOON_ORDER_DIAG=1` run over twenty cores down to the lines worth reading.
+    if row.stop_loss.is_none() && row.take_profit.is_none() {
+        return;
+    }
+    let Some(o) = snap.orders().iter().find(|o| o.uid == row.uid) else {
+        return;
+    };
+    let pos_price = snap
+        .markets()
+        .get(&o.market_name)
+        .map(|h| h.snapshot().pos_price)
+        .unwrap_or(0.0);
+    let leg = &o.buy_order;
+    let pct = |level: Option<f64>, base: f64| stop_distance_pct(level, base, row.is_short);
+    crate::order_diag::line(&format!(
+        "core {} uid={} prices pos={pos_price} buy={} actual={} mean={} sell_mean={} fill={}% \
+         stop={:?} tp={:?} | stop%: pos={:?} buy={:?} actual={:?} mean={:?}",
+        crate::feed::core_label(server_id),
+        row.uid,
+        o.buy_price,
+        leg.actual_price,
+        leg.mean_price,
+        o.sell_order.mean_price,
+        row.fill_pct,
+        row.stop_loss,
+        row.take_profit,
+        pct(row.stop_loss, pos_price),
+        pct(row.stop_loss, o.buy_price),
+        pct(row.stop_loss, leg.actual_price),
+        pct(row.stop_loss, leg.mean_price),
+    ));
+}
+
+/// Signed distance from `base` to a stop level, in percent, with the order's side applied.
+///
+/// Mirrors the chart label's own `signed_pct` so the diagnostic prints the number the chart would
+/// print if it measured from that base: a long's stop below entry reads negative, and a short's
+/// stop above entry reads negative too.
+///
+/// Args:
+///     level: Stop price, when the order has one.
+///     base: Candidate entry price to measure from.
+///     is_short: Whether the position is short, which flips the sign.
+///
+/// Returns:
+///     Percentage distance, or `None` without a usable level or base.
+fn stop_distance_pct(level: Option<f64>, base: f64, is_short: bool) -> Option<f64> {
+    let level = level?;
+    if !base.is_finite() || base <= 0.0 {
+        return None;
+    }
+    let raw = (level - base) / base * 100.0;
+    Some(if is_short { -raw } else { raw })
 }
 
 pub(super) fn build_order_rows(
