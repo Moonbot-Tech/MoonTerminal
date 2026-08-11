@@ -1,7 +1,10 @@
 //! Independent, automatically refreshed desktop Profit Monitor window.
 
 mod broadcast;
+mod format;
+mod line;
 mod rows;
+mod sections;
 mod settings;
 mod table;
 mod window;
@@ -40,7 +43,8 @@ use super::refresh::{BusyRetryBudget, RefreshGate, RefreshPlan, report_result_is
 use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
-use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, grouped_rows};
+use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
+use sections::SectionLabels;
 use settings::MonitorPrefs;
 use table::{centered_alert, centered_message, split_body};
 
@@ -350,8 +354,16 @@ impl MonitorSortColumn {
             Self::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
             Self::Profit => left.profit.total_cmp(&right.profit),
             Self::Trades => left.trades.cmp(&right.trades),
-            Self::WinRate => left.win_rate().total_cmp(&right.win_rate()),
-            Self::AverageOrder => left.average_order().total_cmp(&right.average_order()),
+            // A row with no denominator sorts as zero rather than dropping out of the ordering:
+            // the column has to place every visible row somewhere, and the cell it draws is empty.
+            Self::WinRate => left
+                .win_rate()
+                .unwrap_or(0.0)
+                .total_cmp(&right.win_rate().unwrap_or(0.0)),
+            Self::AverageOrder => left
+                .average_order()
+                .unwrap_or(0.0)
+                .total_cmp(&right.average_order().unwrap_or(0.0)),
         }
     }
 }
@@ -1330,15 +1342,37 @@ impl ProfitMonitorView {
             ),
             ProfitLoadState::Ready { unit, data } => {
                 let core_label = t!("profit_monitor.core_fallback").to_string();
-                let mut rows = grouped_rows(
+                let rows = grouped_rows(
                     data,
                     &self.live,
                     self.group,
+                    self.prefs.idle_cores,
                     RowLabels { core: &core_label },
                 );
-                sort_rows(&mut rows, self.sort);
+                // Folded BEFORE the rows are split into groups, so the window's own total counts
+                // every core exactly once. A core saved into two groups appears in both sections
+                // on purpose; summing the sections instead would silently double its money here.
+                let total = fold_total(&rows);
+                let entries = if self.prefs.group_sections && self.group == GroupMode::Core {
+                    let ungrouped = t!("profit_monitor.group.ungrouped").to_string();
+                    // The footer's own word, not a second translation of it: a section total and
+                    // the window total are the same concept and must not drift per language.
+                    let total_word = t!("profit_monitor.total").to_string();
+                    sections::sectioned(
+                        rows,
+                        &self.live,
+                        self.sort,
+                        SectionLabels {
+                            ungrouped: &ungrouped,
+                            subtotal: &|name| format!("{total_word}: {name}"),
+                        },
+                    )
+                } else {
+                    sections::flat(rows, self.sort)
+                };
                 table::table(
-                    rows,
+                    entries,
+                    total,
                     *unit,
                     width,
                     self.sort,
@@ -1459,29 +1493,28 @@ fn window_width(window: &Window) -> f32 {
 /// Returns:
 ///     Context sufficient to regroup cached per-core aggregates.
 fn capture_live_context(backend: &Backend) -> LiveContext {
-    let venues = backend.session.core_venues().clone();
-    let (core_names, core_order) = capture_config_context(&backend.config);
-    LiveContext {
-        venues,
-        core_names,
-        core_order,
-    }
-}
-
-/// Read configured core names in the canonical order used by every terminal core list.
-///
-/// Args:
-///     config: Current application configuration.
-///
-/// Returns:
-///     Name lookup and canonical configured-core order for one render or identity sample.
-fn capture_config_context(
-    config: &moon_core::config::AppConfig,
-) -> (std::collections::HashMap<u64, String>, Vec<u64>) {
+    let config = &backend.config;
     let core_names = config
         .servers
         .iter()
         .map(|server| (server.id, server.name.clone()))
+        .collect();
+    // The session's own admission rule, from `session::lifecycle`: a core inside a server group
+    // that is switched off never connects, however active its own checkbox is. Reading the
+    // checkbox alone would give such a core a zero row in a window that can never fill it.
+    let active = config
+        .servers
+        .iter()
+        // `group_ref`, not `group`: the latter clones a whole `GroupConfig` per server, and this
+        // runs for every configured core on every five-second sample. An unlisted group defaults
+        // to active (`GroupConfig::new`), which is what `is_none_or` states here.
+        .filter(|server| {
+            server.active
+                && config
+                    .group_ref(&server.group)
+                    .is_none_or(|group| group.active)
+        })
+        .map(|server| server.id)
         .collect();
     let order = CoreOrder::new(config);
     let mut core_order = config
@@ -1490,7 +1523,13 @@ fn capture_config_context(
         .map(|server| server.id)
         .collect::<Vec<_>>();
     order.sort_by(&mut core_order, |core| *core);
-    (core_names, core_order)
+    LiveContext {
+        venues: backend.session.core_venues().clone(),
+        core_names,
+        core_order,
+        active,
+        core_groups: config.core_groups.clone(),
+    }
 }
 
 /// Combine the two monotonic generations that make projected report values stale.

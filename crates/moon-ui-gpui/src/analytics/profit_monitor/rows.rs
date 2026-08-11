@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use moon_core::config::CoreGroup;
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
 use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
@@ -57,6 +58,19 @@ pub(super) struct LiveContext {
     pub(super) core_names: HashMap<CoreId, String>,
     /// Configured cores in canonical display order.
     pub(super) core_order: Vec<CoreId>,
+    /// Cores the user marked active, whether or not they are currently connected.
+    ///
+    /// The authority is `ServerConfig::active`, the same flag the connection table edits — never
+    /// "a live session exists", which merely says a core is reachable right now. A core switched
+    /// off deliberately must not come back as a zero row, and one that is active but offline must.
+    pub(super) active: HashSet<CoreId>,
+    /// The user's saved core groups, as the shared picker stores them.
+    ///
+    /// Carried in the context, not read at render time, for one reason: the monitor regroups from
+    /// this struct, and a group edited in another window has to reach the table through the same
+    /// 5-second sample that a renamed core does — as a [`super::ContextChange::Regroup`], with no
+    /// SQLite read behind it.
+    pub(super) core_groups: Vec<CoreGroup>,
 }
 
 /// One displayed row after the selected grouping axis has merged per-core data.
@@ -129,26 +143,24 @@ impl MonitorRow {
 
     /// Return the exact win percentage after grouping.
     ///
+    /// `None` rather than zero when nothing closed: a ratio with no denominator is not a rate of
+    /// zero, and a row for a core that traded nothing must not claim it lost every trade. The one
+    /// definition, so the cell that draws it and the column that sorts by it cannot disagree.
+    ///
     /// Returns:
-    ///     Profitable trades divided by all trades, or zero for an empty row.
-    pub(super) fn win_rate(&self) -> f64 {
-        if self.trades == 0 {
-            0.0
-        } else {
-            self.wins as f64 * 100.0 / self.trades as f64
-        }
+    ///     Profitable trades divided by all trades, or `None` for a row with no closed trade.
+    pub(super) fn win_rate(&self) -> Option<f64> {
+        (self.trades > 0).then(|| self.wins as f64 * 100.0 / self.trades as f64)
     }
 
     /// Return the exact average positive order spend after grouping.
     ///
+    /// `None` on an empty denominator, exactly as [`Self::win_rate`].
+    ///
     /// Returns:
-    ///     Positive spend divided by its contributing count, or zero when none exists.
-    pub(super) fn average_order(&self) -> f64 {
-        if self.positive_orders == 0 {
-            0.0
-        } else {
-            self.positive_spent / self.positive_orders as f64
-        }
+    ///     Positive spend divided by its contributing count, or `None` when none exists.
+    pub(super) fn average_order(&self) -> Option<f64> {
+        (self.positive_orders > 0).then(|| self.positive_spent / self.positive_orders as f64)
     }
 }
 
@@ -188,10 +200,12 @@ fn cores_by_exchange(live: &LiveContext) -> HashMap<ExchangeId, Vec<CoreId>> {
 
 /// Resolve which cores one finished row stands for as a core filter.
 ///
-/// A Core row is exactly its own core. An Exchange row is every CONFIGURED core reporting that
-/// exchange, not only the ones that traded inside the period: the label names the exchange, and a
-/// filter that quietly dropped the quiet cores would hide their open orders everywhere else.
-/// Configured order is preserved so the payload is deterministic across refreshes.
+/// A Core row is exactly its own core — taken from `primary_core` rather than from the cores that
+/// TRADED, which are the same list for every row a report produced and an empty one for an idle
+/// row. An Exchange row is every CONFIGURED core reporting that exchange, not only the ones that
+/// traded inside the period: the label names the exchange, and a filter that quietly dropped the
+/// quiet cores would hide their open orders everywhere else. Configured order is preserved so the
+/// payload is deterministic across refreshes.
 ///
 /// Args:
 ///     row: Finished row, already carrying the cores that traded.
@@ -199,18 +213,18 @@ fn cores_by_exchange(live: &LiveContext) -> HashMap<ExchangeId, Vec<CoreId>> {
 ///     mode: Selected grouping axis.
 ///
 /// Returns:
-///     The row's click payload, never empty for a row that has at least one traded core.
+///     The row's click payload, never empty.
 fn filter_cores(
     row: &MonitorRow,
     buckets: &HashMap<ExchangeId, Vec<CoreId>>,
     mode: GroupMode,
 ) -> Rc<[CoreId]> {
+    if mode == GroupMode::Core {
+        return Rc::from([row.primary_core].as_slice());
+    }
     // The "unknown exchange" row groups cores no venue was reported for; a configured core that
     // reported nothing is not evidence it belongs there, so that row stays literal too.
-    let bucket = (mode == GroupMode::Exchange)
-        .then_some(row.venue.as_ref())
-        .flatten()
-        .and_then(|venue| buckets.get(&venue.id));
+    let bucket = row.venue.as_ref().and_then(|venue| buckets.get(&venue.id));
     let Some(bucket) = bucket else {
         return Rc::from(row.cores.as_slice());
     };
@@ -239,12 +253,119 @@ enum RowKey {
     Exchange(Option<ExchangeId>),
 }
 
+/// Fold a set of rows into the single row that states their combined values.
+///
+/// One definition for the table's `Total` footer and for a group's subtotal, so the two can never
+/// answer the same question differently. Every field is additive except the newest trade, which is
+/// the newest one AMONG the folded rows rather than a sum — the footer answers the same question
+/// its rows do rather than mixing values from different instants. The `(close, core)` pair breaks a
+/// tie deterministically: folding in list order would otherwise let the money change when the user
+/// clicks a different sort column.
+///
+/// `primary_core`, `venue` and the filter payload are deliberately left at their defaults: a fold
+/// is not one core and not one exchange, and the callers draw it without a logo or a click target.
+///
+/// Args:
+///     rows: Rows to combine; an empty slice folds to an all-zero row.
+///
+/// Returns:
+///     The combined row.
+pub(super) fn fold_total(rows: &[MonitorRow]) -> MonitorRow {
+    rows.iter().fold(MonitorRow::default(), |mut total, row| {
+        total.profit += row.profit;
+        total.trades += row.trades;
+        total.wins += row.wins;
+        total.positive_spent += row.positive_spent;
+        total.positive_orders += row.positive_orders;
+        if (row.last_close, row.last_core) > (total.last_close, total.last_core) {
+            total.last_profit = row.last_profit;
+            total.last_close = row.last_close;
+            total.last_core = row.last_core;
+        }
+        total
+    })
+}
+
+/// Build the zero rows of active cores the period holds no trade for.
+///
+/// Not a database question: the report simply has no row for a core that closed nothing, and the
+/// list of cores that SHOULD be visible anyway is configuration. Only `active` cores qualify — a
+/// core switched off in the connection table is not "quiet today", it is turned off, and a table
+/// that listed it would grow with every core the user ever configured.
+///
+/// Args:
+///     traded: Cores the snapshot already produced a row for.
+///     live: Current configuration context.
+///     labels: Localized fallback labels.
+///
+/// Returns:
+///     One all-zero row per active configured core with no row yet, in canonical order.
+fn idle_rows(
+    traded: &HashSet<CoreId>,
+    live: &LiveContext,
+    labels: &RowLabels<'_>,
+) -> Vec<MonitorRow> {
+    live.core_order
+        .iter()
+        .copied()
+        .filter(|core| live.active.contains(core) && !traded.contains(core))
+        .map(|core| MonitorRow {
+            name: core_row_name(core, live, None, labels),
+            primary_core: core,
+            venue: live
+                .venues
+                .get(&core)
+                .filter(|venue| venue.is_nameable())
+                .cloned(),
+            // `cores` stays EMPTY on purpose: it is what traded, and it is what the arrival
+            // highlight reads. A core with no trade in the period has nothing to light up for.
+            ..MonitorRow::default()
+        })
+        .collect()
+}
+
+/// Resolve the visible label of one core row.
+///
+/// The configured name wins over the one the core reported: renaming a core in the connection table
+/// is the user's own answer to "what is this", and a report row carrying its old name would take a
+/// week of retention to catch up. A configured name that is BLANK is not an answer at all, so it is
+/// discarded before the report name is considered — otherwise a core someone left unnamed would
+/// fall past its perfectly good reported name to the numeric fallback.
+///
+/// Args:
+///     core: The core's uid.
+///     live: Current configuration context.
+///     report: Name the report row carried, when it has one.
+///     labels: Localized fallback labels.
+///
+/// Returns:
+///     The configured name, the reported one, or the localized `Core <uid>` fallback.
+fn core_row_name(
+    core: CoreId,
+    live: &LiveContext,
+    report: Option<&str>,
+    labels: &RowLabels<'_>,
+) -> String {
+    live.core_names
+        .get(&core)
+        .map(String::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .or(report)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{} {core}", labels.core))
+}
+
 /// Group per-core report aggregates into visible Core or Exchange rows.
 ///
 /// Args:
 ///     summary: Per-core additive database payload.
 ///     live: Current labels and canonical core order.
 ///     mode: Selected grouping axis.
+///     include_idle: Whether active cores with no trade in the period get their zero row. Honoured
+///         in Core mode only — an exchange row exists because a trade named that venue, and a quiet
+///         core adds nothing to it but a name the row does not show.
 ///     labels: Localized fallback labels.
 ///
 /// Returns:
@@ -253,16 +374,12 @@ pub(super) fn grouped_rows(
     summary: &ProfitMonitorSummary,
     live: &LiveContext,
     mode: GroupMode,
+    include_idle: bool,
     labels: RowLabels<'_>,
 ) -> Vec<MonitorRow> {
     let mut grouped = HashMap::<RowKey, MonitorRow>::new();
     for source in &summary.cores {
         let core = source.core_uid;
-        let configured = live
-            .core_names
-            .get(&core)
-            .map(String::as_str)
-            .filter(|name| !name.trim().is_empty());
         let report = (!source.report_name.trim().is_empty()).then_some(source.report_name.as_str());
         // A venue nothing can name groups with the cores that reported none at all, exactly as the
         // core pickers do — one "not identified" row, never two.
@@ -278,12 +395,7 @@ pub(super) fn grouped_rows(
             .entry(key)
             .or_insert_with(|| MonitorRow {
                 name: match mode {
-                    GroupMode::Core => configured
-                        .or(report)
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty())
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("{} {core}", labels.core)),
+                    GroupMode::Core => core_row_name(core, live, report, &labels),
                     GroupMode::Exchange => venue_section_label(venue),
                 },
                 primary_core: core,
@@ -294,6 +406,10 @@ pub(super) fn grouped_rows(
     }
 
     let mut rows = grouped.into_values().collect::<Vec<_>>();
+    if include_idle && mode == GroupMode::Core {
+        let traded: HashSet<CoreId> = rows.iter().map(|row| row.primary_core).collect();
+        rows.extend(idle_rows(&traded, live, &labels));
+    }
     let buckets = if mode == GroupMode::Exchange {
         cores_by_exchange(live)
     } else {

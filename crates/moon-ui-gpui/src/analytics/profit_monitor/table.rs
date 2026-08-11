@@ -7,7 +7,6 @@
 //! every function takes what it needs and returns an element.
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -15,20 +14,23 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::ProfitUnit;
 use moon_core::session::CoreId;
-use moon_core::util::fmt::DeltaSign;
 use moon_ui::{
     MoonAlert, MoonPalette, MoonScrollbarVisibility, MoonVirtualList, MoonVirtualListScrollHandle,
     h_flex, v_flex,
 };
 use rust_i18n::t;
 
+use super::format::{
+    format_amount, format_profit, format_trade_count, format_win_rate, profit_column_width,
+};
+use super::line::{RowChrome, RowSelect, row_h_px, row_h_value, row_id, section_header, table_row};
 use super::rows::MonitorRow;
+use super::sections::MonitorEntry;
 use super::settings::MonitorPrefs;
 use super::{
     AVERAGE_ORDER_COLUMN_WIDTH, EXCHANGE_LOGO_SIZE, MIN_NAME_COLUMN_WIDTH, MonitorLayout,
-    MonitorSort, MonitorSortColumn, NAME_LOGO_GAP, PROFIT_COLUMN_WIDTH, PROFIT_LAST_TRADE_EXTRA,
-    ProfitMonitorView, TABLE_COLUMN_GAP, TABLE_HORIZONTAL_PADDING, TRADES_COLUMN_WIDTH,
-    WIN_RATE_COLUMN_WIDTH, sort_arrow,
+    MonitorSort, MonitorSortColumn, NAME_LOGO_GAP, ProfitMonitorView, TABLE_COLUMN_GAP,
+    TABLE_HORIZONTAL_PADDING, TRADES_COLUMN_WIDTH, WIN_RATE_COLUMN_WIDTH, sort_arrow,
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -147,7 +149,8 @@ pub(super) fn split_body(
 /// Render the responsive monitor table and exact total footer.
 ///
 /// Args:
-///     rows: Already grouped and sorted display rows.
+///     entries: Already sectioned, sorted display entries — captions, rows and subtotals.
+///     total: The window's own fold, counting every core exactly once.
 ///     unit: Comparable exact unit, or `None` for an empty result.
 ///     width: Current window width.
 ///     sort: Explicit user-selected ordering, if any.
@@ -163,7 +166,8 @@ pub(super) fn split_body(
 ///     Fixed header/footer with a vertically scrolling row body.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn table(
-    rows: Vec<MonitorRow>,
+    entries: Vec<MonitorEntry>,
+    total: MonitorRow,
     unit: Option<ProfitUnit>,
     width: f32,
     sort: Option<MonitorSort>,
@@ -183,33 +187,22 @@ pub(super) fn table(
     // column can hold it. Anything narrower would truncate a money value instead of dropping it.
     let show_last = prefs.last_trade && layout.last_trade;
     let profit_width = profit_column_width(show_last);
-    let total = rows.iter().fold(MonitorRow::default(), |mut total, row| {
-        total.profit += row.profit;
-        total.trades += row.trades;
-        total.wins += row.wins;
-        total.positive_spent += row.positive_spent;
-        total.positive_orders += row.positive_orders;
-        // The footer's "last trade" is the newest one on screen, so Total answers the same question
-        // its rows do rather than summing values from different instants. The core id breaks a tie:
-        // folding in list order would otherwise let the footer's money change when the user clicks
-        // a different sort column.
-        if (row.last_close, row.last_core) > (total.last_close, total.last_core) {
-            total.last_profit = row.last_profit;
-            total.last_close = row.last_close;
-            total.last_core = row.last_core;
-        }
-        total
-    });
     // Resolved once per render rather than inside the row builder — that closure runs for every
     // visible row on every frame, and a lookup there would take the logo cache's global lock at
     // frame rate — and once per distinct EXCHANGE rather than once per row: two hundred cores on
     // one exchange are two hundred identical answers, and the resolver allocates a string for each.
-    // One pass over the rows resolves both decorations. Doing either inside the virtual-list item
-    // builder would repeat it for every visible row on every frame — and the highlight can drive
-    // that at 10 Hz — while a merged Exchange row would pay one hash lookup per core it contains.
-    let flashes: Vec<Option<Instant>> = rows
+    // One pass over the entries resolves both decorations. Doing either inside the virtual-list
+    // item builder would repeat it for every visible row on every frame — and the highlight can
+    // drive that at 10 Hz — while a merged Exchange row would pay one hash lookup per core it
+    // contains. A caption or a subtotal carries neither.
+    let flashes: Vec<Option<Instant>> = entries
         .iter()
-        .map(|row| row.cores.iter().filter_map(|core| flash.get(core)).max())
+        .map(|entry| match entry {
+            MonitorEntry::Row { row, .. } => {
+                row.cores.iter().filter_map(|core| flash.get(core)).max()
+            }
+            MonitorEntry::Header(_) | MonitorEntry::Subtotal { .. } => None,
+        })
         .collect();
     // Resolved HERE, once per render, for the same reason the logos are: the item builder below
     // runs for every visible row on every frame, and it can be driven at 10 Hz by the arrival
@@ -221,15 +214,27 @@ pub(super) fn table(
     //
     // Weak, and cloned per row rather than the entity itself: `Entity::clone` takes the process
     // entity map's lock.
+    //
+    // A group caption is a click target too, standing for every configured member — the same
+    // promise an exchange row makes. A subtotal is not: it is a fold, and "filter to this fold"
+    // would mean whatever its section happens to hold right now.
     let owner = view.downgrade();
-    let selects: Vec<RowSelect> = if prefs.core_filter {
-        rows.iter()
-            .map(|row| RowSelect {
-                selected: !selection.is_empty()
-                    && !row.filter_cores.is_empty()
-                    && row.filter_cores.iter().all(|core| selection.contains(core)),
-                cores: row.filter_cores.clone(),
-                owner: owner.clone(),
+    let selects: Vec<Option<RowSelect>> = if prefs.core_filter {
+        entries
+            .iter()
+            .map(|entry| {
+                let cores = match entry {
+                    MonitorEntry::Row { row, .. } => row.filter_cores.clone(),
+                    MonitorEntry::Header(head) => head.cores.clone(),
+                    MonitorEntry::Subtotal { .. } => return None,
+                };
+                Some(RowSelect {
+                    selected: !selection.is_empty()
+                        && !cores.is_empty()
+                        && cores.iter().all(|core| selection.contains(core)),
+                    cores,
+                    owner: owner.clone(),
+                })
             })
             .collect()
     } else {
@@ -237,8 +242,12 @@ pub(super) fn table(
     };
     let logos: Vec<Option<Arc<RenderImage>>> = if prefs.exchange_icons {
         let mut resolved: HashMap<Brand, Option<Arc<RenderImage>>> = HashMap::new();
-        rows.iter()
-            .map(|row| {
+        entries
+            .iter()
+            .map(|entry| {
+                let MonitorEntry::Row { row, .. } = entry else {
+                    return None;
+                };
                 let brand = row.venue.as_ref()?.brand()?;
                 resolved
                     .entry(brand)
@@ -258,34 +267,69 @@ pub(super) fn table(
         palette,
         cx,
     );
-    let rows = Arc::new(rows);
-    let row_count = rows.len();
-    let list_rows = rows.clone();
-    let row_height = design::fit_h_value(cx, 34.0, 13.0, 8.0);
+    let entries = Arc::new(entries);
+    let row_count = entries.len();
+    let list_entries = entries.clone();
+    let row_height = row_h_value(cx);
     let body = MoonVirtualList::new(
         "profit-monitor-rows",
         row_count,
         row_height,
         move |index, _window, app| {
-            let Some(row) = list_rows.get(index) else {
+            let Some(entry) = list_entries.get(index) else {
                 return div().into_any_element();
             };
+            let select = selects.get(index).cloned().flatten();
+            let is_selected = select.as_ref().is_some_and(|select| select.selected);
+            let (row, name, stripe, id) = match entry {
+                MonitorEntry::Header(head) => {
+                    return section_header(
+                        head,
+                        prefs.exchange_icons,
+                        select.filter(|select| !select.cores.is_empty()),
+                        is_selected,
+                        palette,
+                        app,
+                    );
+                }
+                MonitorEntry::Row {
+                    row,
+                    stripe,
+                    occurrence,
+                } => (
+                    row,
+                    row.name.clone(),
+                    *stripe,
+                    row_id(*occurrence, index, row),
+                ),
+                MonitorEntry::Subtotal {
+                    label,
+                    row,
+                    section,
+                } => (
+                    row,
+                    label.clone(),
+                    false,
+                    ("profit-monitor-subtotal", *section as u64).into(),
+                ),
+            };
+            let subtotal = matches!(entry, MonitorEntry::Subtotal { .. });
             let (profit, profit_sign) =
                 format_profit(row.profit, row.last_profit.filter(|_| show_last), unit);
-            let select = selects.get(index).cloned();
-            let is_selected = select.as_ref().is_some_and(|select| select.selected);
             table_row(
-                row.name.clone(),
+                name,
                 profit,
                 profit_sign,
                 format_trade_count(row.trades),
-                Some(format_win_rate(row.win_rate())),
-                Some(format_amount(row.average_order(), unit)),
+                // Empty, not `0.0%` and not `0.00 USDT`, when the ratio has no denominator: the
+                // one definition lives on the row itself.
+                row.win_rate().map(format_win_rate),
+                row.average_order().map(|value| format_amount(value, unit)),
                 show_trades,
                 show_win,
                 show_average,
                 RowChrome {
-                    id: ("profit-monitor-row", row.primary_core).into(),
+                    id,
                     logo: logos.get(index).cloned().flatten(),
                     logo_gutter: prefs.exchange_icons,
                     flash: flashes.get(index).copied().flatten(),
@@ -295,6 +339,15 @@ pub(super) fn table(
                 palette,
                 app,
             )
+            // Weaker than the window's own Total — same background, no accent border and the body
+            // text size — because a section total must read as belonging to the rows above it, not
+            // as a second answer competing with the footer.
+            .when(subtotal, |element| {
+                element
+                    .bg(moon(palette.table_head))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(moon(palette.text))
+            })
             // Selection outranks the zebra stripe: it is the answer to "which cores is the main
             // window showing", and a stripe drawn over it would make every other selected row look
             // unselected. It is drawn in BLUE rather than in `table_selected`, which the arrival
@@ -303,7 +356,7 @@ pub(super) fn table(
             .when(is_selected, |element| {
                 element.bg(moon_alpha(palette.blue, 0.18))
             })
-            .when(!is_selected && index % 2 == 1, |element| {
+            .when(!is_selected && stripe, |element| {
                 element.bg(moon_alpha(palette.table_head, 0.45))
             })
             .into_any_element()
@@ -321,8 +374,10 @@ pub(super) fn table(
         total_profit,
         total_profit_sign,
         format_trade_count(total.trades),
-        Some(format_win_rate(total.win_rate())),
-        Some(format_amount(total.average_order(), unit)),
+        total.win_rate().map(format_win_rate),
+        total
+            .average_order()
+            .map(|value| format_amount(value, unit)),
         show_trades,
         show_win,
         show_average,
@@ -420,7 +475,7 @@ fn table_header(
 
     h_flex()
         .w_full()
-        .h(design::fit_h_px(cx, 34.0, 13.0, 8.0))
+        .h(row_h_px(cx))
         .px(design::ui_px(cx, TABLE_HORIZONTAL_PADDING))
         .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
         .bg(moon(palette.table_head))
@@ -475,291 +530,4 @@ fn table_header(
                 true,
             ))
         })
-}
-
-/// Per-row decoration that is not one of the row's own numbers.
-///
-/// Bundled rather than passed as three more positional flags: every one of them is optional and
-/// two of them are only ever set for data rows, so a struct is what keeps the Total call honest.
-struct RowChrome {
-    /// Stable element identity of the row.
-    ///
-    /// Derived from the row's core, never from its rendered text: the name changes with grouping
-    /// mode, locale and a core being renamed, and two cores may carry the SAME display name — an
-    /// id built from it collides between rows and moves under a click target. Built as a
-    /// `(&'static str, u64)` pair, which costs no allocation in the item builder.
-    ///
-    /// An Exchange row is seeded by the lowest-uid core that traded in the period, so its identity
-    /// can still move when that core goes quiet. That costs a dropped hover, never a dropped click:
-    /// the handler is rebuilt with the row.
-    id: ElementId,
-    /// Exchange logo drawn before the name, when enabled and the brand is known.
-    logo: Option<Arc<RenderImage>>,
-    /// Whether to reserve the logo's width even without one.
-    ///
-    /// With icons on, a row whose brand is unknown, the Total footer and the sortable heading all
-    /// have to start where the logo-bearing rows' text starts — otherwise the Name column no longer
-    /// lines up with its own header.
-    logo_gutter: bool,
-    /// Instant this row's core closed its newest trade, while the highlight is still live.
-    flash: Option<Instant>,
-    /// Profit-column width selected by the current last-trade decision.
-    profit_width: f32,
-    /// What clicking this row does, or `None` when the preference is off.
-    select: Option<RowSelect>,
-}
-
-/// One row's participation in the terminal-wide core filter.
-///
-/// Present only while the preference is on, which is what makes the row inert — no pointer
-/// cursor, no handler — for someone who turned the feature off, rather than merely silent.
-/// Cloning is two refcount bumps, which is what lets the item builder take one per visible row.
-#[derive(Clone)]
-struct RowSelect {
-    /// Cores the row stands for, shared rather than copied per frame.
-    cores: Rc<[CoreId]>,
-    /// Whether the filter currently holds all of them.
-    selected: bool,
-    /// Monitor receiving the click; weak, because a click can outlive a closing window.
-    owner: WeakEntity<ProfitMonitorView>,
-}
-
-/// Render one responsive table line.
-///
-/// Args:
-///     name: Leading label.
-///     profit: Profit text.
-///     profit_sign: Sign represented by the already-rounded profit text.
-///     trades: Trade-count text.
-///     win_rate: Optional win-rate text.
-///     average_order: Optional average-order text.
-///     show_trades: Whether the current width retains trade count.
-///     show_win: Whether the current width retains win rate.
-///     show_average: Whether the current width retains average order.
-///     chrome: Logo, arrival highlight, and profit-column width.
-///     palette: Active MoonUI palette.
-///     cx: Render context.
-///
-/// Returns:
-///     One fixed-height table row.
-#[allow(clippy::too_many_arguments)]
-fn table_row(
-    name: String,
-    profit: String,
-    profit_sign: DeltaSign,
-    trades: String,
-    win_rate: Option<String>,
-    average_order: Option<String>,
-    show_trades: bool,
-    show_win: bool,
-    show_average: bool,
-    chrome: RowChrome,
-    palette: MoonPalette,
-    cx: &App,
-) -> Stateful<Div> {
-    let profit_color = profit_sign.pick(
-        design::positive_color(palette),
-        design::danger_color(palette),
-        palette.text,
-    );
-    let logo_size = design::ui_px(cx, EXCHANGE_LOGO_SIZE);
-    // The arrival tint is the News feed's, from the one shared definition: a full-bleed layer
-    // declared BEFORE the cells so it sits under the text, and driven by the owner's own stamp
-    // rather than by a GPUI animation, which would repaint the whole window at vblank for its
-    // entire duration.
-    let row = crate::pulse::with_arrival_tint(
-        h_flex()
-            .w_full()
-            .relative()
-            .h(design::fit_h_px(cx, 34.0, 13.0, 8.0))
-            .px(design::ui_px(cx, TABLE_HORIZONTAL_PADDING))
-            .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
-            .border_b(px(1.0))
-            .border_color(moon_alpha(palette.border, 0.7)),
-        palette.table_selected,
-        chrome.flash,
-    )
-    // The WHOLE row is the click target, not the name cell: the numbers belong to the same core,
-    // and a row where four of five cells silently do nothing reads as a broken control.
-    .id(chrome.id)
-    .when_some(chrome.select, |row, select| {
-        let RowSelect { cores, owner, .. } = select;
-        row.cursor_pointer()
-            .on_click(move |event: &ClickEvent, _window, app| {
-                // secondary() = Ctrl on Windows/Linux, ⌘ on macOS — the same multi-select modifier
-                // the tuner's coin list and the strategies tree use.
-                let additive = event.modifiers().secondary();
-                // The window may already be gone; a click on a closing view is not an error.
-                let _ = owner.update(app, |this, cx| this.filter_to_cores(&cores, additive, cx));
-            })
-    });
-    row.child(
-        h_flex()
-            .flex_1()
-            .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
-            .gap(design::ui_px(cx, NAME_LOGO_GAP))
-            .overflow_hidden()
-            .text_ellipsis()
-            .whitespace_nowrap()
-            .when_some(chrome.logo.clone(), |element, logo| {
-                element.child(
-                    img(logo)
-                        .flex_none()
-                        .w(logo_size)
-                        .h(logo_size)
-                        .rounded(design::ui_px(cx, 2.0)),
-                )
-            })
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    // No logo but the gutter is on: pad instead of adding an empty box, so a row
-                    // whose brand is unknown still starts its name where its neighbours do without
-                    // a second element in the layout tree. Same form the heading uses.
-                    .when(chrome.logo.is_none() && chrome.logo_gutter, |text| {
-                        text.pl(design::ui_px(cx, EXCHANGE_LOGO_SIZE + NAME_LOGO_GAP))
-                    })
-                    .child(name),
-            ),
-    )
-    .child(numeric_cell(profit, chrome.profit_width, cx).text_color(moon(profit_color)))
-    .when(show_trades, |element| {
-        element.child(numeric_cell(trades, TRADES_COLUMN_WIDTH, cx))
-    })
-    .when(show_win, |element| {
-        element.child(numeric_cell(
-            win_rate.unwrap_or_default(),
-            WIN_RATE_COLUMN_WIDTH,
-            cx,
-        ))
-    })
-    .when(show_average, |element| {
-        element.child(numeric_cell(
-            average_order.unwrap_or_default(),
-            AVERAGE_ORDER_COLUMN_WIDTH,
-            cx,
-        ))
-    })
-}
-
-/// Render one fixed-width numeric cell without allowing a value to create a second row.
-///
-/// Args:
-///     text: Complete formatted value.
-///     width: Design-reference column width.
-///     cx: Application context used for UI scaling.
-///
-/// Returns:
-///     Right-aligned, single-line, safely truncated cell.
-fn numeric_cell(text: String, width: f32, cx: &App) -> Div {
-    div()
-        .w(design::ui_px(cx, width))
-        .flex_none()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_ellipsis()
-        .text_align(TextAlign::Right)
-        .child(text)
-}
-
-/// Return the profit column's design-reference width.
-///
-/// Args:
-///     show_last: Whether the cell carries its `total(last)` suffix.
-///
-/// Returns:
-///     Base width, plus the suffix allowance when the suffix is drawn.
-pub(super) fn profit_column_width(show_last: bool) -> f32 {
-    if show_last {
-        PROFIT_COLUMN_WIDTH + PROFIT_LAST_TRADE_EXTRA
-    } else {
-        PROFIT_COLUMN_WIDTH
-    }
-}
-
-/// Format profit with its exact comparable unit, optionally carrying the newest closed trade.
-///
-/// The suffix goes INSIDE the unit — `-57.11(-0.60) USDT`, not `-57.11 USDT (-0.60)` — so the two
-/// amounts read as one measurement in one currency, which is what they are. Both are rounded to
-/// the same unit decimals, so the bracket can never claim precision the total does not have.
-///
-/// The returned sign describes the TOTAL. The suffix is a different trade and may disagree; the
-/// cell is coloured by the number it is about.
-///
-/// Args:
-///     value: Projected profit.
-///     last: Profit of the newest closed trade, when the suffix is enabled and one exists.
-///     unit: Exact quote or percent unit.
-///
-/// Returns:
-///     Signed compact text carrying its unit and the sign represented after display rounding.
-pub(super) fn format_profit(
-    value: f64,
-    last: Option<f64>,
-    unit: Option<ProfitUnit>,
-) -> (String, DeltaSign) {
-    let decimals = match unit {
-        Some(ProfitUnit::Quote(currency)) => currency.display_decimals(),
-        Some(ProfitUnit::Percent) | None => 2,
-    };
-    let (amount, sign) = moon_core::util::fmt::signed_amount(value, decimals);
-    let amount = match last {
-        Some(last) => {
-            let (last, _) = moon_core::util::fmt::signed_amount(last, decimals);
-            format!("{amount}({last})")
-        }
-        None => amount,
-    };
-    let text = match unit {
-        Some(ProfitUnit::Quote(currency)) => format!("{amount} {}", currency.ticker()),
-        Some(ProfitUnit::Percent) => format!("{amount}%"),
-        None => amount,
-    };
-    (text, sign)
-}
-
-/// Format a monitor trade count with the terminal's shared thousands grouping.
-///
-/// Args:
-///     value: Closed-trade count.
-///
-/// Returns:
-///     ASCII digits separated into space-grouped thousands.
-fn format_trade_count(value: i64) -> String {
-    moon_core::util::fmt::group_thousands(&value.to_string())
-}
-
-/// Format win rate with the terminal's shared half-away-from-zero percentage rounding.
-///
-/// Args:
-///     value: Win percentage in `0..=100`.
-///
-/// Returns:
-///     Percentage with one decimal place.
-fn format_win_rate(value: f64) -> String {
-    moon_core::util::fmt::pct(value, 1)
-        .map(|(text, _)| text)
-        .unwrap_or_else(|| "0.0%".to_string())
-}
-
-/// Format average order spend in the query's comparable quote unit.
-///
-/// Args:
-///     value: Average positive spend.
-///     unit: Exact query unit.
-///
-/// Returns:
-///     Compact unsigned order size with a quote ticker when known.
-fn format_amount(value: f64, unit: Option<ProfitUnit>) -> String {
-    match unit {
-        Some(ProfitUnit::Quote(currency)) => format!(
-            "{} {}",
-            moon_core::util::fmt::compact(value, currency.display_decimals()),
-            currency.ticker()
-        ),
-        Some(ProfitUnit::Percent) | None => moon_core::util::fmt::compact(value, 2),
-    }
 }

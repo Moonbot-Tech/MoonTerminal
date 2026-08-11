@@ -283,7 +283,7 @@ fn decorative_animation_goes_through_the_pulse_timer() {
             ("panels/news/mod.rs", "panels/news/render.rs", "pulse::arm("),
             (
                 "analytics/profit_monitor/mod.rs",
-                "analytics/profit_monitor/table.rs",
+                "analytics/profit_monitor/line.rs",
                 "pulse::arm_with(",
             ),
         ] {

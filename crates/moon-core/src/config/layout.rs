@@ -381,6 +381,15 @@ pub struct WindowLayout {
     /// like the per-panel core filters it drives — a restart comes back showing every core.
     #[serde(default, deserialize_with = "de_lenient")]
     pub profit_monitor_core_filter: Option<bool>,
+    /// Profit Monitor: whether the by-core table splits into the user's saved core groups.
+    ///
+    /// Only the preference lives here; the groups themselves are application configuration
+    /// (`AppConfig.core_groups`), shared with every core picker.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_group_sections: Option<bool>,
+    /// Profit Monitor: whether active cores that closed no trade appear as zero rows.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub profit_monitor_idle_cores: Option<bool>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

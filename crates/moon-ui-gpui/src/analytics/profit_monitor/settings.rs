@@ -26,8 +26,9 @@ use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup
 /// Popup CONTENT width in design units, before the group frame's own inset.
 ///
 /// Sized for the longest localized checkbox label rather than for the control: the labels are full
-/// sentences in ES, and a narrower popup wraps them into two lines each.
-const CONTENT_WIDTH: f32 = 268.0;
+/// sentences in ES, and a narrower popup wraps them into two lines each. Raised with the grouping
+/// preference, whose RU and ES wordings are longer than every label that came before them.
+const CONTENT_WIDTH: f32 = 300.0;
 
 /// Display preferences of the Profit Monitor window.
 ///
@@ -41,6 +42,10 @@ pub(super) struct MonitorPrefs {
     pub(super) last_trade: bool,
     /// Whether a row lights up and fades when its core closes a new trade.
     pub(super) flash: bool,
+    /// Whether the by-core table splits into the saved core groups, with a subtotal each.
+    pub(super) group_sections: bool,
+    /// Whether an active core that closed no trade in the period still gets its zero row.
+    pub(super) idle_cores: bool,
     /// Whether clicking a row's core cell filters every main-window panel to that core.
     pub(super) core_filter: bool,
 }
@@ -48,14 +53,23 @@ pub(super) struct MonitorPrefs {
 impl Default for MonitorPrefs {
     /// Return the defaults applied to a profile that has never opened this popup.
     ///
-    /// All of them are ON: they are the reason the window was extended, and a feature nobody can
-    /// see until they find a settings popup is a feature nobody finds. The core filter is
-    /// reversible by the same click that applied it, so an unexpected first one costs one gesture.
+    /// Everything that changes how the EXISTING rows read is ON: those are the reason the window
+    /// was extended, and a feature nobody can see until they find a settings popup is a feature
+    /// nobody finds. The core filter is reversible by the same click that applied it, so an
+    /// unexpected first one costs one gesture. Grouping belongs there too: with no saved group it
+    /// changes nothing at all, and with one it splits rows that were already on screen.
+    ///
+    /// [`Self::idle_cores`] is the one exception, and it is OFF. It is the only preference that
+    /// ADDS rows rather than decorating the ones a query produced: a configuration with two hundred
+    /// active cores and ten trading ones would turn a ten-row table into a two-hundred-row one on
+    /// the first launch after an update, which is not a default anybody asked for.
     fn default() -> Self {
         Self {
             exchange_icons: true,
             last_trade: true,
             flash: true,
+            group_sections: true,
+            idle_cores: false,
             core_filter: true,
         }
     }
@@ -82,7 +96,7 @@ impl MonitorPrefs {
 
 /// One editable preference: its label, the field it lives in, and the key it is saved under.
 ///
-/// Every row is DATA, not a closure. Adding a fourth preference is one entry in [`PREF_ROWS`], and
+/// Every row is DATA, not a closure. Adding another preference is one entry in [`PREF_ROWS`], and
 /// the four mechanical parts — restore it, show it, set it, save it — cannot drift apart because
 /// none of them is written more than once.
 struct PrefRow {
@@ -122,7 +136,7 @@ const DISPLAY_GROUP: &str = "profit_monitor.settings.display";
 const INTERACTION_GROUP: &str = "profit_monitor.settings.interaction";
 
 /// Every preference, in the order the popup shows them.
-const PREF_ROWS: [PrefRow; 4] = [
+const PREF_ROWS: [PrefRow; 6] = [
     PrefRow {
         id: "exchange-icons",
         releases_cores: false,
@@ -152,6 +166,26 @@ const PREF_ROWS: [PrefRow; 4] = [
         set: |prefs, value| prefs.flash = value,
         saved: |layout| layout.profit_monitor_flash,
         store: |layout, value| layout.profit_monitor_flash = Some(value),
+    },
+    PrefRow {
+        id: "group-sections",
+        releases_cores: false,
+        group: DISPLAY_GROUP,
+        label: "profit_monitor.settings.group_sections",
+        read: |prefs| prefs.group_sections,
+        set: |prefs, value| prefs.group_sections = value,
+        saved: |layout| layout.profit_monitor_group_sections,
+        store: |layout, value| layout.profit_monitor_group_sections = Some(value),
+    },
+    PrefRow {
+        id: "idle-cores",
+        releases_cores: false,
+        group: DISPLAY_GROUP,
+        label: "profit_monitor.settings.idle_cores",
+        read: |prefs| prefs.idle_cores,
+        set: |prefs, value| prefs.idle_cores = value,
+        saved: |layout| layout.profit_monitor_idle_cores,
+        store: |layout, value| layout.profit_monitor_idle_cores = Some(value),
     },
     PrefRow {
         id: "core-filter",

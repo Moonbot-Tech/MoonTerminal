@@ -19,6 +19,10 @@ profit_monitor.group.exchange:
   ru: "По биржам"
   en: "By exchange"
   es: "Por exchange"
+profit_monitor.group.ungrouped:
+  ru: "Без группы"
+  en: "Ungrouped"
+  es: "Sin grupo"
 profit_monitor.period.hour:
   ru: "Час"
   en: "Hour"
@@ -103,6 +107,14 @@ profit_monitor.settings.flash:
   ru: "Подсветка новой сделки"
   en: "Highlight a new trade"
   es: "Resaltar una operación nueva"
+profit_monitor.settings.group_sections:
+  ru: "Группировать по сохранённой группе ядер"
+  en: "Group by saved core group"
+  es: "Agrupar por grupo de núcleos guardado"
+profit_monitor.settings.idle_cores:
+  ru: "Показывать ядра без сделок"
+  en: "Show cores with no trades"
+  es: "Mostrar núcleos sin operaciones"
 profit_monitor.settings.interaction:
   ru: "Взаимодействие"
   en: "Interaction"

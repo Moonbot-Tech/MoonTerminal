@@ -1,6 +1,6 @@
 //! Regression tests for Profit Monitor row grouping and refresh decisions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{NaiveDate, TimeZone, Utc};
@@ -11,8 +11,8 @@ use moon_core::feed::ExchangeId;
 use moon_core::util::fmt::DeltaSign;
 use moon_core::venue::CoreVenue;
 
-use super::rows::{GroupMode, LiveContext, RowLabels, grouped_rows};
-use super::table::{format_profit, profit_column_width};
+use super::format::{format_profit, profit_column_width};
+use super::rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
     duration_until_period_refresh, monitor_zone, next_sort, retain_last_known_venues, sort_rows,
@@ -97,8 +97,9 @@ fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
         venues: HashMap::new(),
         core_names: HashMap::from([(2, "Configured second".to_string())]),
         core_order: vec![2],
+        ..LiveContext::default()
     };
-    let core_rows = grouped_rows(&summary, &live, GroupMode::Core, labels());
+    let core_rows = grouped_rows(&summary, &live, GroupMode::Core, false, labels());
     assert_eq!(
         core_rows
             .iter()
@@ -106,7 +107,7 @@ fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
             .collect::<Vec<_>>(),
         vec![2, 1, 3]
     );
-    let exchange_rows = grouped_rows(&summary, &live, GroupMode::Exchange, labels());
+    let exchange_rows = grouped_rows(&summary, &live, GroupMode::Exchange, false, labels());
     assert_eq!(exchange_rows.len(), 1);
     // The shared wording, not a Profit-Monitor-only one: the same unidentified core reads
     // identically here and in every core picker that lists it.
@@ -150,7 +151,7 @@ fn exchange_rows_group_by_venue_identity_not_by_caption() {
         ..LiveContext::default()
     };
 
-    let mut rows = grouped_rows(&summary, &live, GroupMode::Exchange, labels());
+    let mut rows = grouped_rows(&summary, &live, GroupMode::Exchange, false, labels());
     assert_eq!(rows.len(), 2, "two captions of one venue are one row");
     sort_rows(&mut rows, Some(next_sort(None, MonitorSortColumn::Name)));
     assert_eq!(
@@ -606,7 +607,7 @@ fn merged_rows_carry_the_newest_trade_of_their_cores() {
         ]),
         ..LiveContext::default()
     };
-    let rows = grouped_rows(&summary, &live, GroupMode::Exchange, labels());
+    let rows = grouped_rows(&summary, &live, GroupMode::Exchange, false, labels());
 
     assert_eq!(rows.len(), 1, "both cores report the same exchange");
     assert_eq!(rows[0].last_profit, Some(-2.0));
@@ -692,6 +693,116 @@ fn display_preferences_separate_unset_from_disabled() {
         restored.exchange_icons && restored.flash,
         "one disabled preference must not drag the others down"
     );
+
+    // Grouping only ever splits rows that are already on screen, so it ships on. Zero rows for idle
+    // cores ADD lines a query did not produce, so that one ships off and stays a deliberate choice.
+    assert!(super::MonitorPrefs::default().group_sections);
+    assert!(!super::MonitorPrefs::default().idle_cores);
+    layout.profit_monitor_idle_cores = Some(true);
+    layout.profit_monitor_group_sections = Some(false);
+    let restored = super::MonitorPrefs::restore(&layout);
+    assert!(restored.idle_cores && !restored.group_sections);
+}
+
+/// `profit_monitor/rows.rs:grouped_rows` must give an ACTIVE core with no trade its zero row, in
+/// canonical order, and only on the by-core axis.
+///
+/// Breakage: reading a live session instead of the configured flag drops a core that is merely
+/// offline and resurrects one the user switched off; appending idle rows after the rank sort puts
+/// them all at the bottom instead of among their neighbours; extending Exchange mode invents a
+/// venue row for a core that reported no trade to name one.
+#[test]
+fn idle_rows_cover_active_cores_only_and_only_by_core() {
+    let live = LiveContext {
+        core_names: HashMap::from([(1, "First".to_string()), (9, "Quiet".to_string())]),
+        core_order: vec![9, 1, 2],
+        // Core 2 traded but is switched off; core 7 is active but was never configured here.
+        active: HashSet::from([1, 9]),
+        ..LiveContext::default()
+    };
+
+    let rows = grouped_rows(&summary(), &live, GroupMode::Core, true, labels());
+    assert_eq!(
+        rows.iter().map(|row| row.primary_core).collect::<Vec<_>>(),
+        vec![9, 1, 2],
+        "the idle core takes its canonical place, not a trailing block"
+    );
+    let idle = &rows[0];
+    assert_eq!(
+        (idle.profit, idle.trades, idle.wins, idle.last_close),
+        (0.0, 0, 0, 0)
+    );
+    assert!(
+        idle.last_profit.is_none() && idle.cores.is_empty(),
+        "a core that closed nothing has no last trade and nothing to flash"
+    );
+    assert_eq!(
+        idle.filter_cores.as_ref(),
+        [9],
+        "its row must still filter the terminal to itself"
+    );
+
+    let without = grouped_rows(&summary(), &live, GroupMode::Core, false, labels());
+    assert_eq!(without.len(), 2, "the preference alone adds the zero rows");
+    let exchange = grouped_rows(&summary(), &live, GroupMode::Exchange, true, labels());
+    assert_eq!(
+        exchange.len(),
+        1,
+        "an exchange row exists because a trade named that venue"
+    );
+}
+
+/// `profit_monitor/rows.rs:core_row_name` must treat a BLANK configured name as no answer and fall
+/// through to the name the report carried.
+///
+/// Breakage: testing emptiness only after `.or(report)` makes a core whose configured name is a
+/// space show `Core <uid>` while its perfectly good reported name sits unused.
+#[test]
+fn a_blank_configured_name_falls_through_to_the_report_name() {
+    let live = LiveContext {
+        core_names: HashMap::from([(1, "   ".to_string()), (2, String::new())]),
+        core_order: vec![1, 2],
+        ..LiveContext::default()
+    };
+    let rows = grouped_rows(&summary(), &live, GroupMode::Core, false, labels());
+
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["First core", "Second core"]
+    );
+}
+
+/// `profit_monitor/rows.rs:fold_total` must add every additive field while taking the newest trade
+/// rather than summing it, deterministically.
+///
+/// Breakage: summing `last_profit` invents money nobody made; folding in list order lets the value
+/// change when a sort click reorders identical data.
+#[test]
+fn one_fold_serves_the_total_and_every_subtotal() {
+    let live = LiveContext::default();
+    let rows = grouped_rows(&summary(), &live, GroupMode::Core, false, labels());
+    let total = fold_total(&rows);
+
+    assert_eq!((total.profit, total.trades, total.wins), (10.0, 4, 2));
+    assert_eq!(total.positive_spent, 400.0);
+    assert_eq!(total.average_order(), Some(400.0 / 3.0));
+    // No denominator, no ratio: an all-zero fold states nothing rather than a rate of zero.
+    assert_eq!(MonitorRow::default().win_rate(), None);
+    assert_eq!(MonitorRow::default().average_order(), None);
+    assert_eq!(
+        (total.last_profit, total.last_close, total.last_core),
+        (Some(-2.0), 1_700_000_200, 2),
+        "the newest closed trade, not a sum of the two"
+    );
+
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    let same = fold_total(&reversed);
+    assert_eq!(
+        (same.last_profit, same.last_close, same.last_core),
+        (total.last_profit, total.last_close, total.last_core)
+    );
+    assert_eq!(fold_total(&[]).trades, 0, "an empty fold is all zeroes");
 }
 
 /// `profit_monitor/mod.rs:arrivals` must not treat an EMPTY previous snapshot as a baseline.
