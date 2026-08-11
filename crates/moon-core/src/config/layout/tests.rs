@@ -611,6 +611,8 @@ fn profit_monitor_preferences_round_trip_without_endangering_layout() {
         profit_monitor_last_trade: Some(true),
         profit_monitor_flash: Some(false),
         profit_monitor_core_filter: Some(false),
+        profit_monitor_group_sections: Some(false),
+        profit_monitor_idle_cores: Some(true),
         ..WindowLayout::default()
     };
     let encoded = toml::to_string(&saved).expect("the layout must serialize");
@@ -638,11 +640,13 @@ fn profit_monitor_preferences_round_trip_without_endangering_layout() {
     assert_eq!(decoded.profit_monitor_last_trade, Some(true));
     assert_eq!(decoded.profit_monitor_flash, Some(false));
     assert_eq!(decoded.profit_monitor_core_filter, Some(false));
+    assert_eq!(decoded.profit_monitor_group_sections, Some(false));
+    assert_eq!(decoded.profit_monitor_idle_cores, Some(true));
 
     // The display flags are booleans, so `true` is a VALID value there and cannot double as garbage.
     for written in ["17", "\"maybe\"", "[1, 2]", "{ x = 240 }"] {
         let doc = format!(
-            "analytics_period = \"p-cur-month\"\nprofit_monitor_open = {written}\nprofit_monitor_exchange_icons = {written}\nprofit_monitor_last_trade = {written}\nprofit_monitor_flash = {written}\nprofit_monitor_core_filter = {written}\n"
+            "analytics_period = \"p-cur-month\"\nprofit_monitor_open = {written}\nprofit_monitor_exchange_icons = {written}\nprofit_monitor_last_trade = {written}\nprofit_monitor_flash = {written}\nprofit_monitor_core_filter = {written}\nprofit_monitor_group_sections = {written}\nprofit_monitor_idle_cores = {written}\n"
         );
         let decoded: WindowLayout = toml::from_str(&doc)
             .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
@@ -652,6 +656,8 @@ fn profit_monitor_preferences_round_trip_without_endangering_layout() {
         assert!(decoded.profit_monitor_last_trade.is_none());
         assert!(decoded.profit_monitor_flash.is_none());
         assert!(decoded.profit_monitor_core_filter.is_none());
+        assert!(decoded.profit_monitor_group_sections.is_none());
+        assert!(decoded.profit_monitor_idle_cores.is_none());
     }
 
     for written in ["true", "17", "[240, 160, 720]", "{ x = 240 }"] {

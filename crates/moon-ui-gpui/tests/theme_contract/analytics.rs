@@ -296,6 +296,13 @@ fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
             && split.contains("palette.text"),
         "split-currency profit chips must use the same theme-safe semantic tones"
     );
+    // Sliced at the footer's own statement, not searched across the whole function: a group
+    // subtotal drawn inside the item builder above shares two of these markers, and a whole-body
+    // search would keep passing after the footer itself lost them.
+    let footer_at = table
+        .find("let footer = table_row(")
+        .expect("the fixed total footer must be built in the table body");
+    let footer = &table[footer_at..];
     for marker in [
         ".h(design::fit_h_px(cx, 42.0, 14.0, 10.0))",
         ".bg(moon(palette.table_head))",
@@ -304,7 +311,7 @@ fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
         ".border_t(px(2.0))",
         ".border_color(moon_alpha(palette.amber, 0.7))",
     ] {
-        assert!(table.contains(marker), "the total row lost `{marker}`");
+        assert!(footer.contains(marker), "the total row lost `{marker}`");
     }
 }
 
@@ -1985,6 +1992,8 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor_exchange_icons",
         "profit_monitor_last_trade",
         "profit_monitor_flash",
+        "profit_monitor_group_sections",
+        "profit_monitor_idle_cores",
         "profit_monitor_core_filter",
     ] {
         assert!(
@@ -2002,6 +2011,8 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
         "profit_monitor.settings.exchange_icons",
         "profit_monitor.settings.last_trade",
         "profit_monitor.settings.flash",
+        "profit_monitor.settings.group_sections",
+        "profit_monitor.settings.idle_cores",
         "profit_monitor.settings.core_filter",
     ] {
         assert!(
