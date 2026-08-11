@@ -9,30 +9,43 @@ use rust_i18n::t;
 
 use super::common::CoinPopupHost;
 use super::{AddChartStack, CUSTOM_NUM_BASE, ChartTabs, Tab, coin_search};
+use crate::Backend;
 use crate::persistence::chart_persist::{StackLayoutMode, StackOrientation};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
 impl ChartTabs {
     /// The cores this tab's coin field searches. Add tabs search within their bucket; Main and
-    /// custom tabs search the whole group because a custom tab can collect coins from different
-    /// cores.
-    fn coin_bucket(&self) -> Option<ChartBucket> {
-        match &self.active {
-            Tab::Main | Tab::Custom(..) => None,
-            Tab::Add(_, b) => Some(b.clone()),
-        }
+    /// custom tabs search the whole group in Classic, because a custom tab can collect coins from
+    /// different cores, and narrow to the selected core under Auto.
+    ///
+    /// Args:
+    ///     b: Shared backend holding the persisted mode and validated Auto selection.
+    ///
+    /// Returns:
+    ///     The bucket handed to the shared coin-search widget, which is also its cache key.
+    fn coin_bucket(&self, b: &Backend) -> Option<ChartBucket> {
+        super::coin_search_bucket(
+            &self.active,
+            super::auto_workspace_chart_core(b, &self.group),
+        )
     }
 
-    /// What the dropdown shows: matches for the typed query, or suggestions for an empty field.
+    /// Return matches for the typed query or suggestions for an empty coin field.
     ///
     /// The empty-field branch reads only cached suggestions — the scan that fills that cache runs
-    /// when the popup opens, never here.
+    /// when the popup opens, never here. Both branches use the active tab's workspace-aware bucket.
+    ///
+    /// Args:
+    ///     cx: Application context used to read Backend and the suggestion cache.
+    ///
+    /// Returns:
+    ///     Query matches or cached suggestions within the active tab's search scope.
     pub(super) fn coin_results(&self, cx: &App) -> crate::controls::coin_search::CoinResults {
         use crate::controls::coin_search::{CoinResults, suggestions};
 
-        let bucket = self.coin_bucket();
         let b = self.backend.read(cx);
+        let bucket = self.coin_bucket(b);
         if !self.coin_query.trim().is_empty() {
             return CoinResults::Query(coin_search::search(
                 b,
@@ -54,12 +67,21 @@ impl ChartTabs {
     ///
     /// Both entry points route here — gaining focus, and clicking a field that already has it —
     /// so the expensive rebuild has exactly one home and cannot leak into a render pass.
+    ///
+    /// Args:
+    ///     cx: ChartTabs context used to read the field, refresh suggestions, and repaint.
+    ///
+    /// Returns:
+    ///     Nothing; the popup opens after the active scope's suggestion cache is refreshed.
     pub(super) fn open_coin_popup(&mut self, cx: &mut Context<Self>) {
         // Re-read the field before deciding what to show. Close paths clear the query MIRROR
         // without rewriting the input, so reopening on focus must resync both values or suggestions
         // can appear under text the user can still see in the field.
         self.coin_query = self.coin_input.read(cx).value().to_string();
-        let bucket = self.coin_bucket();
+        // Resolve through the same helper the render path uses: the bucket is the suggestion
+        // cache key, so a mismatch here would refresh one entry and read another, leaving the
+        // Top 24h section permanently empty.
+        let bucket = self.coin_bucket(self.backend.read(cx));
         let group = self.group.clone();
         self.backend
             .update(cx, |b, _| b.refresh_coin_suggest(&group, bucket.as_ref()));
@@ -109,9 +131,22 @@ impl ChartTabs {
         cx.notify();
     }
 
-    /// Create a custom tab from selected coins. Its charts start pinned in horizontal orientation,
-    /// focus moves to the new tab, and its tickers, name, and layout are persisted.
+    /// Create a custom tab from selected coins that remain within the active search scope.
+    ///
+    /// Its charts start pinned in horizontal orientation, focus moves to the new tab, and its
+    /// tickers, name, and layout are persisted.
+    ///
+    /// Args:
+    ///     cx: ChartTabs context used to prune the selection, build the tab, and persist it.
+    ///
+    /// Returns:
+    ///     Nothing; an empty in-scope selection leaves the tab set unchanged.
     pub(super) fn open_selected_in_new_tab(&mut self, cx: &mut Context<Self>) {
+        // Backstop the scope prune at the moment of use: the accumulated selection outlives any
+        // number of rail moves, and a tab must never be built from a core the search no longer
+        // covers.
+        let scope_core = super::auto_workspace_chart_core(self.backend.read(cx), &self.group);
+        super::prune_coin_selection_to_scope(&mut self.coin_selected, scope_core);
         if self.coin_selected.is_empty() {
             return;
         }
