@@ -327,7 +327,7 @@ fn render_header_clock(
         .trigger(row)
         .content(
             MoonPopupMenu::new("header-clock-menu")
-                .header(t!("header.clock_pick").to_string())
+                .header(28.0, t!("header.clock_pick").to_string())
                 .fit_width(200.0, 560.0)
                 .size(MoonMenuSize::Compact)
                 .mono(true)
