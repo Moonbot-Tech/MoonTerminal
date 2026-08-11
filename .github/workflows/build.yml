@@ -27,12 +27,19 @@ name: build
 #
 # The Rust toolchain is PINNED, not `@stable`, for the same reason the lock now is: taking the
 # compiler from a moving target means a green PR can turn red overnight with no change to it. That
-# is not theoretical: rustc 1.97.1 fails to compile zune-jpeg 0.5.15 (a transitive dep via
-# image/tiff), which went unnoticed only because Swatinem/rust-cache kept restoring a pre-built
-# copy — every job broke the moment that cache key missed.
+# is not theoretical: zune-jpeg 0.5.15 (a transitive dep via image/tiff) once failed to compile
+# with "macro expansion ends with an incomplete expression" across every job, and went unnoticed
+# only because Swatinem/rust-cache kept restoring a pre-built copy — the breakage surfaced the
+# moment that cache key missed. The cause was zune-core 0.5.2, now held back by the `=0.5.1`
+# requirement in crates/moon-ui-gpui/Cargo.toml; pinning the compiler in the same commit is what
+# left the compiler itself under suspicion.
 #
 # Keep this equal to what developers run locally (`rustc --version`), and raise it as a
-# deliberate commit that can be reverted on its own when a new compiler breaks a dep.
+# deliberate commit that can be reverted on its own when a new compiler breaks a dep. Dependabot
+# does not propose that raise: it is told to ignore this action in .github/dependabot.yml, because
+# the action is versioned by branches its author creates ahead of the Rust releases they name, so
+# its "latest" resolves to a toolchain rustup cannot download. Move all five sites together —
+# three here, two in release.yml, which never re-runs these gates.
 on:
   push:
     branches: [main]
@@ -74,7 +81,7 @@ jobs:
     if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
@@ -109,7 +116,7 @@ jobs:
     # instead of running beside it.
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
@@ -138,7 +145,7 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
