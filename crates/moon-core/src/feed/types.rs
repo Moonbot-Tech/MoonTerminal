@@ -161,18 +161,13 @@ pub struct OrderRow {
     /// Remaining exit-leg size in the base currency. The chart's sell-line label follows Moonbot
     /// by showing `QuantityRemaining`, not the original entry size.
     pub remaining_size: f64,
-    /// Whether SL/TS are enabled on the order's own per-order `StopSettings`. These flags are
-    /// toggled by a click.
+    /// Whether SL/TS will act: the order's own per-order `StopSettings` flag, or — only while the
+    /// order holds no position — the stop its strategy is about to give it at the fill. Once the
+    /// position exists the core owns these stops and the order's own flag is the whole answer, so
+    /// one switched off by hand stays off instead of being re-supplied by the strategy. These flags
+    /// are toggled by a click.
     pub sl_on: bool,
     pub ts_on: bool,
-    /// Whether SL, TS, and VStop are enabled in the order's strategy, resolved by `strat_id` from
-    /// the Delphi fields `UseStopLoss`, `UseTrailing`, and `UseBV_SV_Stop`. A field absent from the
-    /// snapshot uses its schema default because the serializer omits default values. These are
-    /// fallback column indicators: when a per-order flag is off but the strategy enables it, the
-    /// UI shows the stop as inherited because the strategy still protects the order.
-    pub sl_strat: bool,
-    pub ts_strat: bool,
-    pub vstop_strat: bool,
     pub vstop_on: bool,
     // --- Raw per-order stop parameters from the wire for the order editor. ---
     // Absolute line prices after resolving percentages are below in category C.

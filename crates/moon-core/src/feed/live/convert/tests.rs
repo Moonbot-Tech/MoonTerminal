@@ -53,6 +53,149 @@ fn kernel_health_preserves_absent_memory() {
     assert_eq!(sys.logical_cpu_count, None);
 }
 
+/// A percentage stop set from the terminal must not be drawn as an absolute price.
+///
+/// Live case, BB1 2026-08-11 17:18: a manual 10kSATS order filled at 0.00010458, the stop was
+/// switched on from the table, and the level came from the core settings (`price_drop=-10.65`), so
+/// `with_stop_loss_percent(10.65)` went out and the core kept the percent (`OrderCommand op=3
+/// applied`, no `StopLoss applied` recalculation). Read as a price, 10.65 put the line at
+/// `+10183491%` and took the auto-Y range with it.
+///
+/// Mutation: believe `sl_level` whenever `sl_fixed` is false. The line leaves the chart again and
+/// flattens every other price on the pane.
+///
+/// Returns:
+///     Nothing; the percent resolves to the price the core would compute.
+#[test]
+fn a_percentage_stop_level_is_not_drawn_as_a_price() {
+    let entry = 0.000_104_58;
+    let price = stop_loss_line_price(entry, false, false, 10.65, true).expect("percent resolves");
+    assert!(
+        (price - entry * (1.0 - 0.1065)).abs() < 1e-12,
+        "expected the core's own -10.65% price, got {price}"
+    );
+    // Same field, same flag, on a five-figure market: the percent is far BELOW a plausible price.
+    let btc = stop_loss_line_price(100_000.0, false, false, 10.65, true).expect("percent resolves");
+    assert!((btc - 100_000.0 * (1.0 - 0.1065)).abs() < 1e-6);
+    // And on the mid-priced markets in between, where the percent happens to sit near the entry:
+    // above a long's entry it cannot be that long's stop price.
+    let mid = stop_loss_line_price(2.0, false, false, 10.65, true).expect("percent resolves");
+    assert!((mid - 2.0 * (1.0 - 0.1065)).abs() < 1e-9, "got {mid}");
+    // A short takes the percent to the other side of the entry, on both price scales.
+    let short = stop_loss_line_price(entry, true, false, 10.65, true).expect("percent resolves");
+    assert!((short - entry * 1.1065).abs() < 1e-12);
+    let short_mid = stop_loss_line_price(100.0, true, false, 10.65, true).expect("percent resolves");
+    assert!((short_mid - 110.65).abs() < 1e-9, "got {short_mid}");
+}
+
+/// Before the fill the level is a percent whatever it looks like, with no plausibility test.
+///
+/// The core resolves a stop into a price at the fill and not before, which the 2026-08-11
+/// diagnostic showed across every unfilled order carrying one: the field held a plain 10.65 against
+/// entries from 0.0049 to 0.22. The heuristic below is only needed for orders that HAVE filled and
+/// then had a stop switched on from the terminal.
+///
+/// Mutation: run the plausibility band on unfilled orders too. A working order priced near the
+/// percent — a $10 coin with a 10.65% stop — draws its stop at 10.65 instead of 8.94.
+///
+/// Returns:
+///     Nothing; an unfilled order always reads its level as a percent.
+#[test]
+fn an_unfilled_order_reads_its_stop_level_as_a_percent() {
+    // A price that would pass every plausibility test: 9.0 sits just under a $10 entry.
+    let price = stop_loss_line_price(10.0, false, false, 9.0, false).expect("percent resolves");
+    assert!((price - 10.0 * (1.0 - 0.09)).abs() < 1e-9, "got {price}");
+    // Once the same order fills, that value IS a plausible price and is drawn as one.
+    assert_eq!(stop_loss_line_price(10.0, false, false, 9.0, true), Some(9.0));
+}
+
+/// A stop price the CORE resolved is drawn exactly where the core put it.
+///
+/// `BEAT: [4] StopLoss applied (buyPrice 0.89100 stop -3.00% => 0.91856)` — a short whose stop the
+/// core computed as a price. Values like this sit beside the entry and must survive untouched,
+/// including a stop deliberately far away (a -90% catastrophe stop is still a price).
+///
+/// Mutation: treat a resolved price as a percent. Every core-applied stop collapses to a fraction
+/// of the entry, silently moving lines that were correct.
+///
+/// Returns:
+///     Nothing; plausible prices pass through, fixed levels always do.
+#[test]
+fn a_core_resolved_stop_price_is_drawn_as_reported() {
+    assert_eq!(
+        stop_loss_line_price(0.891, true, false, 0.918_56, true),
+        Some(0.918_56)
+    );
+    // Measured live on BB1: a filled short at mean 139.76 with the core's own stop price 140.03952,
+    // which is exactly -0.2% and must survive untouched.
+    assert_eq!(
+        stop_loss_line_price(139.76, true, false, 140.039_52, true),
+        Some(140.039_52)
+    );
+    // Long, stop 90% below entry: distant but still on the protective side, and inside the band.
+    assert_eq!(stop_loss_line_price(2.0, false, false, 0.2, true), Some(0.2));
+    // A fixed level is an absolute price the trader chose, on either side.
+    assert_eq!(stop_loss_line_price(2.0, false, true, 55.0, true), Some(55.0));
+    // No entry to reason against: draw the enabled stop where the core reported it rather than
+    // dropping the line (a listing-sell before its position price arrives).
+    assert_eq!(
+        stop_loss_line_price(0.0, false, false, 0.918_56, true),
+        Some(0.918_56)
+    );
+    // No usable level at all.
+    assert_eq!(stop_loss_line_price(2.0, false, false, 0.0, true), None);
+}
+
+/// The diagnostic's percentage must read like the chart label, or it cannot settle which base the
+/// label should use.
+///
+/// The chart flips the sign for a short so that a protective stop always reads negative
+/// (`data_state::orders::signed_pct`); a diagnostic that skipped the flip would show a short's stop
+/// as +6% and look like the wrong base rather than the same one.
+///
+/// Mutation: drop the short flip or the base guard. The comparison prints a sign that does not
+/// match the label, or divides by a zero base on an order that has no entry yet.
+///
+/// Returns:
+///     Nothing; signs match the label and an unusable base yields nothing.
+#[test]
+fn the_price_diagnostic_measures_like_the_chart_label() {
+    // Long: stop 6% below the base reads -6%.
+    let long = stop_distance_pct(Some(94.0), 100.0, false).expect("long distance");
+    assert!((long + 6.0).abs() < 1e-9, "got {long}");
+    // Short: stop 6% above the base also reads -6%.
+    let short = stop_distance_pct(Some(106.0), 100.0, true).expect("short distance");
+    assert!((short + 6.0).abs() < 1e-9, "got {short}");
+    // The same stop measured from two bases is exactly the mismatch being chased.
+    let from_other = stop_distance_pct(Some(94.0), 99.8, false).expect("other base");
+    assert!((from_other + 5.81).abs() < 0.01, "got {from_other}");
+    assert_eq!(stop_distance_pct(Some(94.0), 0.0, false), None);
+    assert_eq!(stop_distance_pct(None, 100.0, false), None);
+}
+
+/// A short's percentage stop reported with the long formula is mirrored back above the entry.
+///
+/// The 2026-07-17 report: a market short drew its stop on the take-profit side while Moonbot showed
+/// it above the entry, and the core's own `StopLoss applied` line confirmed the higher trigger.
+///
+/// Mutation: drop the mirror. A short's stop returns to the profit side, where it reads as a
+/// protective level that would never trigger.
+///
+/// Returns:
+///     Nothing; a short's stop price stays above its entry.
+#[test]
+fn a_short_stop_reported_below_entry_is_mirrored() {
+    assert_eq!(
+        stop_loss_line_price(100.0, true, false, 97.0, true),
+        Some(103.0)
+    );
+    // Fixed levels are left alone: a dragged stop may sit anywhere on purpose.
+    assert_eq!(
+        stop_loss_line_price(100.0, true, true, 97.0, true),
+        Some(97.0)
+    );
+}
+
 /// A key the exchange reports NO expiration for answers successfully with `is_known() == false`,
 /// and the wire carries `Some(0)` days beside it. Letting that zero through would put every
 /// perpetual key one day from expiry and light a permanent warning on it.

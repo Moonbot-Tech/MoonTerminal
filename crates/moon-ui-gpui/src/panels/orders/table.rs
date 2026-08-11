@@ -452,19 +452,41 @@ fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
 
 /// Build a clickable SL, TS, or VStop flag showing whether that protection is effectively active.
 ///
-/// The feed layer derives each baked flag from Moonbot's model: a terminal override, otherwise the
-/// per-order flag or inherited strategy stop. The `on` argument may temporarily replace that value
-/// with a recent optimistic click. `ON` is green; `OFF` is red for SL because an unprotected
-/// position is risky, and muted for TS or VStop.
+/// Choose the label and tone of one stop cell.
 ///
-/// Clicking sends the inverse effective state through `set_order_stop`. When re-enabled, the feed
-/// layer restores the stop level from memory, strategy settings, or defaults.
+/// The cell answers one question — will this stop act? — so it takes the flag the feed already
+/// resolved: the order's own stop, or the one its strategy supplies while the order has no position
+/// yet. There is deliberately no third "no stop of its own" state: a working order inheriting its
+/// strategy's stop is protected, and drawing it as anything but ON would misread that.
+///
+/// `OFF` is red for a stop-loss because a position without one really is exposed, and muted for TS
+/// or VStop, which are not the last line of defence.
+///
+/// Args:
+///     kind: Stop protection this cell toggles.
+///     on: Effective stop state from the feed, possibly overlaid by a recent click.
+///
+/// Returns:
+///     Label to draw and the tone to draw it in.
+fn stop_look(kind: OrderStopKind, on: bool) -> (&'static str, MoonTone) {
+    match (on, kind) {
+        (true, _) => ("ON", MoonTone::Positive),
+        (false, OrderStopKind::StopLoss) => ("OFF", MoonTone::Danger),
+        (false, _) => ("OFF", MoonTone::Muted),
+    }
+}
+
+/// The feed layer bakes each flag straight from the order's own per-order stops as the core reports
+/// them. The `on` argument may temporarily replace that value with a recent optimistic click.
+///
+/// Clicking sends the inverse state through `set_order_stop`. When re-enabled, the feed layer
+/// restores the stop level from memory, strategy settings, or defaults.
 ///
 /// Args:
 ///     e: Order row supplying core and order identity.
 ///     view: Owning group panel and current workspace authority.
 ///     kind: Stop protection toggled by the cell.
-///     on: Current effective stop state.
+///     on: Current per-order stop state, possibly overlaid by a recent click.
 ///     p: Active palette used for the state tone.
 ///
 /// Returns:
@@ -479,13 +501,7 @@ fn flag_toggle_cell(
     let core = e.core;
     let uid = e.row.uid;
     let view = view.clone();
-    let (label, tone) = if on {
-        ("ON", MoonTone::Positive)
-    } else if kind == OrderStopKind::StopLoss {
-        ("OFF", MoonTone::Danger)
-    } else {
-        ("OFF", MoonTone::Muted)
-    };
+    let (label, tone) = stop_look(kind, on);
     let key = match kind {
         OrderStopKind::StopLoss => "sl",
         OrderStopKind::Trailing => "ts",

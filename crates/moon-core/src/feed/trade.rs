@@ -364,16 +364,24 @@ pub(super) fn set_order_stop(
             // (manual order), from a nonzero core-settings default. Settings `drop` percentages
             // are NEGATIVE (price_drop_level=-1.1 → SL 1.1%): nonzero means enabled, and level
             // resolution below takes the absolute value.
-            let strat_sl_on = if has_strat {
+            //
+            // It applies only while the order still AWAITS its stops: the core materializes them at
+            // the fill, and from then on the order's own flags are the state. Resolved here, at the
+            // single place it is read, so the rule stays out of every resolve call below — and a
+            // click on one group cannot revive the neighbour the trader switched off.
+            let entry_filled = crate::feed::order_entry_filled(o);
+            let inherited =
+                |strat_on| crate::feed::stop_inherited_from_strategy(entry_filled, strat_on);
+            let strat_sl_on = inherited(if has_strat {
                 super::strategies::strat_field_bool(&snap, strat_id, "UseStopLoss")
             } else {
                 o.strat_id == 0 && cs_sl != 0.0
-            };
-            let strat_ts_on = if has_strat {
+            });
+            let strat_ts_on = inherited(if has_strat {
                 super::strategies::strat_field_bool(&snap, strat_id, "UseTrailing")
             } else {
                 o.strat_id == 0 && cs_ts != 0.0
-            };
+            });
             let strat_sl_level = super::strategies::strat_field_double(&snap, strat_id, "StopLoss");
             let strat_ts_level =
                 super::strategies::strat_field_double(&snap, strat_id, "TrailingStop")
@@ -568,8 +576,16 @@ pub(super) fn set_order_stop(
 
 /// Resolves one stop group's effective `(enabled, fixed, level, spread)` parameters for a complete
 /// StopSettings. `forced=Some(x)` identifies the toggled group and its click target; `None`
-/// identifies the neighboring group, whose EFFECTIVE state is preserved (override → wire,
-/// effective strategy, or the ClientSettings fallback supplied for a manual order).
+/// identifies the neighboring group, whose state is preserved so that toggling SL does not wipe TS
+/// and vice versa.
+///
+/// `strat_on` is what the strategy would give an order that still awaits one, so callers clear it
+/// once the entry has filled ([`crate::feed::order_entry_filled`]): the core materializes the stop
+/// at the fill, and from then on the order's own flag is the state. Inheriting past that
+/// point is how a click on the NEIGHBOUR revived a stop-loss the trader had switched off — the
+/// packet carries the whole StopSettings, so a neighbour resolved as `wire_on || strat_on` re-armed
+/// SL in the core while the table, reading the wire, still showed it OFF.
+///
 /// Returns `None` when the group should be enabled but no level can be found.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_stop_group(

@@ -122,16 +122,23 @@ pub(super) fn update_order_stops_form(
             .as_ref()
             .map(|c| (f64::from(c.price_drop_level), f64::from(c.trailing_drop)))
             .unwrap_or((0.0, 0.0));
-        let strat_sl_on = if has_strat {
+        // Strategy inheritance ends where the position begins: from the fill on, the order's own
+        // stops are the state, so an untouched group in this form goes back as the core holds it —
+        // not re-armed from the strategy behind an unrelated take-profit edit. Resolved once, here,
+        // rather than carried down into every group resolution.
+        let entry_filled = crate::feed::order_entry_filled(o);
+        let inherited =
+            |strat_on| crate::feed::stop_inherited_from_strategy(entry_filled, strat_on);
+        let strat_sl_on = inherited(if has_strat {
             super::strategies::strat_field_bool(&snap, strat_id, "UseStopLoss")
         } else {
             o.strat_id == 0 && cs_sl != 0.0
-        };
-        let strat_ts_on = if has_strat {
+        });
+        let strat_ts_on = inherited(if has_strat {
             super::strategies::strat_field_bool(&snap, strat_id, "UseTrailing")
         } else {
             o.strat_id == 0 && cs_ts != 0.0
-        };
+        });
         let strat_sl_level = super::strategies::strat_field_double(&snap, strat_id, "StopLoss");
         let strat_ts_level = super::strategies::strat_field_double(&snap, strat_id, "TrailingStop")
             .or_else(|| super::strategies::strat_field_double(&snap, strat_id, "Trailing"));

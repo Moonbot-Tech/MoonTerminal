@@ -149,6 +149,70 @@ pub struct NewStrategySpec {
     pub insert_after: Option<(u64, u64)>,
 }
 
+/// Whether an order holds a position, which is also when the core owns its stops.
+///
+/// Moonbot materializes a stop INTO the order at the fill (`StopLoss applied` from
+/// `BOrderWorker.CheckBuyOrder`), taking the level from the strategy or the general settings. Up to
+/// that moment the order has no stop of its own and the strategy still decides; afterwards the
+/// order's own flags are the whole truth, and a stop switched off by hand must not be revived from
+/// the strategy — neither on screen nor inside a packet.
+///
+/// The two readings mirror `build_order_row`'s `in_position`, which is the same question asked for
+/// PnL and the chart lines: a partially filled entry already holds part of the position, and a sale
+/// of an already-held asset (listing-sell/MoonHook) has no buy leg at all but is in the Sell phase.
+///
+/// Args:
+///     order: Retained order from the live snapshot.
+///
+/// Returns:
+///     `true` once any part of the position is held.
+pub fn order_holds_position(order: &moonproto::state::Order) -> bool {
+    order_entry_filled(order) || order.status == moonproto::OrderWorkerStatus::SellSet
+}
+
+/// Whether any part of the order's ENTRY leg has filled — the event that hands its stops to the
+/// core.
+///
+/// Narrower than [`order_holds_position`] on purpose. The core applies a stop from
+/// `BOrderWorker.CheckBuyOrder`, so it is the entry fill, not the mere existence of a position, that
+/// moves ownership of the stops. A sale of an already-held asset (listing-sell/MoonHook) has no buy
+/// leg at all and reaches the Sell phase without one: it holds a position, yet nothing ever
+/// materialized a stop into it, so its strategy still decides.
+///
+/// Args:
+///     order: Retained order from the live snapshot.
+///
+/// Returns:
+///     `true` once the entry leg has any fill.
+pub fn order_entry_filled(order: &moonproto::state::Order) -> bool {
+    let leg = &order.buy_order;
+    leg.quantity > 0.0 && leg.quantity_remaining < leg.quantity
+}
+
+/// Whether one stop group is inherited from the order's strategy rather than held by the order.
+///
+/// An order whose entry has not filled has no stops of its own — the core gives it one at the fill,
+/// from the strategy or the general settings — so until then the strategy's flag IS the answer, and
+/// both the table and an outgoing StopSettings say so. From the fill on, the order's own flag is
+/// the state: keeping the strategy in the answer past that point is what made a stop-loss switched
+/// off by hand read ON again after a restart, and what let a click on the neighbouring stop re-arm
+/// it inside the packet.
+///
+/// Args:
+///     entry_filled: Whether the entry leg has filled, from [`order_entry_filled`] — the moment the
+///         core materializes the stop into the order.
+///     strat_on: Whether the effective strategy (or the ClientSettings default for a manual order)
+///         enables this stop.
+///
+/// Returns:
+///     `true` while the strategy still supplies this stop.
+pub fn stop_inherited_from_strategy(entry_filled: bool, strat_on: bool) -> bool {
+    !entry_filled && strat_on
+}
+
+#[cfg(test)]
+mod tests;
+
 /// Order stop flag toggled by clicking a cell in the Orders table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrderStopKind {
