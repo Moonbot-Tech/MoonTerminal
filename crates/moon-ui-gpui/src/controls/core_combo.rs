@@ -8,11 +8,22 @@
 //! Every exchange row is clickable, the unnamed section included: it has no reported exchange
 //! identity, but its members are still a batch worth toggling at once.
 //!
-//! Above its core rows the menu carries the All row and, unless the selector is pinned, the Select
-//! all row supplied through [`CoreComboExtras`]. The two are deliberately different: the All row
-//! CLEARS the selection — empty means all cores — while Select all produces the explicit full set a
-//! user can then remove one core from. Keeping both is what makes an all-but-one selection
-//! representable at all.
+//! Above its core rows the menu carries the All row, which CLEARS the selection — empty means all
+//! cores — and, unless the selector is pinned, the saved-groups block [`CoreComboExtras`] supplies.
+//! Its actions sit at the very BOTTOM of the menu, past the cores.
+//!
+//! There is no "select all" row. An explicit full selection — the state a user removes ONE core
+//! from, which is the whole reason this picker was reworked — is reached by saving the implicit-All
+//! selection as a group and clicking it: `saved_group_cores` materializes every live core at save
+//! time, so applying that group yields the explicit set. One deliberate setup step replaced a
+//! permanent row.
+//!
+//! The menu is `close_on_select(false)`, because its core rows are checkboxes and a multi-select
+//! menu must survive them. The two rows that open a dialog are the exception and say so themselves
+//! with `MoonMenuItem::closes_menu(true)`: a menu left standing paints OVER the dialog it just
+//! opened, since MoonUI defers popovers above the dialog layer. That per-row override is a MoonUI
+//! affordance that avoids making all six hosts mirror the dropdown's open state and retain another
+//! callback.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -20,12 +31,15 @@ use std::rc::Rc;
 use gpui::{App, Window};
 use rust_i18n::t;
 
-use super::core_quick::{
-    exchange_state_label, group_check_state, section_core_ids, select_all_preview,
+use super::core_groups::{
+    applicable_count, group_dead_count, group_facts, group_is_applied, saved_group_cores,
+    saves_core,
 };
+use super::core_quick::{exchange_state_label, group_check_state, section_core_ids};
 use super::exchange_label::exchange_display_name;
 use crate::controls::CORE_COMBO_TRIGGER_W;
 use crate::core_order::OrderedCores;
+use moon_core::config::CoreGroup;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
 
 #[cfg(test)]
@@ -43,27 +57,52 @@ pub(crate) enum CoreAllRowMode {
     ImplicitOnly,
 }
 
-/// The picker's one interactive affordance beyond its rows: the Select all action.
+/// Everything the picker offers beyond its own rows.
 ///
-/// A selector pinned by an Auto workspace is disabled, so it takes `None` rather than a row nobody
-/// can click. [`super::core_combo_extras`] is the only caller of this constructor, which is what
-/// keeps that policy in one place.
-pub(crate) struct CoreComboExtras {
-    /// Invoked with the selectable ids the menu rendered.
-    on_select_all: Rc<dyn Fn(Vec<u64>, &mut Window, &mut App)>,
+/// A selector pinned by an Auto workspace is disabled, so it takes `None` rather than rows nobody
+/// can click. Private fields keep construction on [`CoreComboExtras::new`], while
+/// [`super::core_combo_extras`] is the shared assembly path that applies the pin policy and uses
+/// weak view captures for retained handlers.
+///
+/// The groups are BORROWED from the live config for the duration of one render. Both this and
+/// [`core_combo`] are called inside the same expression at every call site, and cloning 32 names
+/// and member lists per host per repaint, to render rows a closed menu never shows, is exactly the
+/// per-frame work this codebase forbids panels.
+pub(crate) struct CoreComboExtras<'a> {
+    groups: &'a [CoreGroup],
+    configured: HashSet<u64>,
+    on_apply_group: Rc<dyn Fn(String, bool, Vec<u64>, &mut Window, &mut App)>,
+    on_save_group: Rc<dyn Fn(Vec<u64>, &mut Window, &mut App)>,
+    on_manage_groups: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
-impl CoreComboExtras {
-    /// Assemble the affordance.
+impl<'a> CoreComboExtras<'a> {
+    /// Assemble the affordances.
     ///
     /// Args:
-    ///     on_select_all: Handler applying the Select all click.
+    ///     groups: The saved groups, borrowed from the live config in their persisted order.
+    ///     configured: Every uid in `AppConfig.servers` — the authority on a missing member.
+    ///     on_apply_group: Applies a group click, given its NAME, whether the click was additive,
+    ///         and the selectable ids. By name, not position: the saved list is application state
+    ///         and a management modal in another window can reorder it under an open menu.
+    ///     on_save_group: Opens the save modal for the member uids a new group would store.
+    ///     on_manage_groups: Opens the management modal.
     ///
     /// Returns:
-    ///     The affordance, ready to hand to [`core_combo`].
-    pub(crate) fn new(on_select_all: impl Fn(Vec<u64>, &mut Window, &mut App) + 'static) -> Self {
+    ///     The affordances, ready to hand to [`core_combo`].
+    pub(crate) fn new(
+        groups: &'a [CoreGroup],
+        configured: HashSet<u64>,
+        on_apply_group: Rc<dyn Fn(String, bool, Vec<u64>, &mut Window, &mut App)>,
+        on_save_group: Rc<dyn Fn(Vec<u64>, &mut Window, &mut App)>,
+        on_manage_groups: Rc<dyn Fn(&mut Window, &mut App)>,
+    ) -> Self {
         Self {
-            on_select_all: Rc::new(on_select_all),
+            groups,
+            configured,
+            on_apply_group,
+            on_save_group,
+            on_manage_groups,
         }
     }
 }
@@ -208,44 +247,157 @@ fn selection_summary(
     (label, all_on)
 }
 
-/// Append the Select all row above the core list.
+/// Append the saved-groups block above the exchange sections: a heading and one row per group.
 ///
-/// The row carries the selection size it would produce as its trailing count, and is disabled only
-/// when the action is REFUSED — already the full explicit set, or nothing selectable at all. The
-/// gate is refusal rather than "changes nothing visible", because in the implicit-All state Select
-/// all changes the representation without changing the effective scope, and that representation is
-/// the whole point.
+/// Only the heading and the group rows: the two management ACTIONS live at the bottom of the menu,
+/// in [`group_actions_block`], because every row here delays the core list the picker exists for.
+///
+/// A group whose members this consumer cannot select is DISABLED rather than hidden: hiding it
+/// would suggest the group was deleted, while a greyed row correctly says "not here".
+///
+/// Its trailing count is what the CLICK produces — the members this consumer can actually select —
+/// not the group's own size, for the reason any acting row states its own effect: an
+/// action row's number is a promise about the action. A group of ten reading `10` in a panel scoped
+/// to three of them would enable a row that then selects three. The missing count beside it
+/// distinguishes cores absent from the configuration from those merely outside this panel's scope.
+///
+/// Save is gated on the selection resolving to at least one CONFIGURED core, since a group of
+/// nothing cannot be applied later. Manage is never gated: a group whose members all died must
+/// stay reachable to be renamed or deleted.
 ///
 /// Args:
 ///     menu: The menu being built.
-///     id: Dropdown id, the prefix of the generated key.
-///     selected: Currently selected core ids.
-///     selectable: Every core this consumer can select.
-///     on_select_all: The consumer's handler.
+///     id: Dropdown id, the prefix of the generated keys.
+///     selected: Currently selected core ids, which decide whether a group reads as applied.
+///     selectable: Every core this consumer can select, shared with each row's handler.
+///     cores_n: The consumer's own localized core-count formatter.
+///     extras: The consumer's groups and handlers.
 ///
 /// Returns:
-///     The menu with the Select all row appended.
-fn select_all_row(
+///     The menu with the block appended.
+fn groups_block(
     menu: MoonDropdown,
     id: &'static str,
     selected: &HashSet<u64>,
-    selectable: Vec<u64>,
-    on_select_all: &Rc<dyn Fn(Vec<u64>, &mut Window, &mut App)>,
+    selectable: &Rc<[u64]>,
+    cores_n: &impl Fn(usize) -> String,
+    extras: &CoreComboExtras,
 ) -> MoonDropdown {
-    let preview = select_all_preview(selected, &selectable);
-    let on_select_all = on_select_all.clone();
-    let mut row = MoonMenuItem::action_label(
-        format!("{id}-select-all"),
-        t!("common.core_pick.all").to_string(),
-    )
-    .disabled(preview.is_none())
-    .on_click(move |_, window, app| {
-        on_select_all(selectable.clone(), window, app);
-    });
-    if let Some(result) = preview {
-        row = row.right_label(result.to_string());
+    let mut menu = menu;
+    if !extras.groups.is_empty() {
+        menu = menu.item(MoonMenuItem::label(
+            t!("common.core_pick.groups_heading").to_string(),
+        ));
     }
-    menu.item(row)
+    let pickable: HashSet<u64> = selectable.iter().copied().collect();
+    for (index, group) in extras.groups.iter().enumerate() {
+        let applicable = applicable_count(&group.cores, &pickable);
+        let on_apply = extras.on_apply_group.clone();
+        let payload = selectable.clone();
+        let name = group.name.clone();
+        // `cores_n` and NOT a group-specific string: this row sits directly under a trigger that
+        // renders the very same fact through that formatter, and two wordings for one count in one
+        // menu read as two different numbers.
+        let trailing = group_facts(
+            cores_n(applicable),
+            group_dead_count(&group.cores, &extras.configured),
+        );
+        // A checkbox row (`with_key`), not the `action_label` the exchange headings use, because a
+        // group row genuinely HAS state: the tick says the current selection IS this group. An
+        // exchange heading cannot say that — it TOGGLES, so it has no stable "on" — which is why
+        // it keeps a `3/8` count instead. Ticking an already-ticked group is inert, so the tick
+        // never contradicts what the click does.
+        let applied = group_is_applied(&group.cores, &pickable, selected);
+        menu = menu.item(
+            MoonMenuItem::with_key(format!("{id}-cg-{index}"), group.name.clone())
+                .checked(applied)
+                .selected(applied)
+                .right_label(trailing)
+                .disabled(applicable == 0)
+                .on_click(move |event, window, app| {
+                    on_apply(
+                        name.clone(),
+                        event.modifiers().secondary(),
+                        payload.to_vec(),
+                        window,
+                        app,
+                    );
+                }),
+        );
+    }
+
+    menu
+}
+
+/// Append the two group-management actions at the very BOTTOM of the menu.
+///
+/// Separate from [`groups_block`], and deliberately far from it. Every row above the core list
+/// pushes the cores themselves further down, and this picker's list runs to fifty-odd rows: with
+/// the actions up top, creating a single group turned the head of the menu into five rows of
+/// chrome before the first core. Saving and managing are rare, deliberate acts, so they pay the
+/// scroll; applying a saved group is the frequent one and stays where the eye lands.
+///
+/// Both rows take the menu down with them: MoonUI defers popovers above the dialog layer, so a
+/// menu left standing paints opaquely over the modal it just opened, and the first click into that
+/// modal both dismisses the menu and yanks focus back out of the dialog.
+///
+/// Save is gated on the selection resolving to at least one CONFIGURED core, since a group of
+/// nothing cannot be applied later. Manage is never gated: a group whose members all died must
+/// stay reachable to be renamed or deleted.
+///
+/// Args:
+///     menu: The menu being built.
+///     id: Dropdown id, the prefix of the generated keys.
+///     selected: Currently selected core ids.
+///     selectable: Every core this consumer can select.
+///     extras: The consumer's groups and handlers.
+///
+/// Returns:
+///     The menu with a separator and the two action rows appended.
+fn group_actions_block(
+    menu: MoonDropdown,
+    id: &'static str,
+    selected: &HashSet<u64>,
+    selectable: &Rc<[u64]>,
+    extras: &CoreComboExtras,
+) -> MoonDropdown {
+    let mut menu = menu.item(MoonMenuItem::separator());
+    let can_save = selectable
+        .iter()
+        .any(|core| saves_core(selected, &extras.configured, *core));
+    let on_save = extras.on_save_group.clone();
+    let save_selectable = selectable.clone();
+    let save_configured = extras.configured.clone();
+    let save_selected = selected.clone();
+    menu = menu.item(
+        MoonMenuItem::action_label(
+            format!("{id}-cg-save"),
+            t!("common.core_pick.save_as_group").to_string(),
+        )
+        .disabled(!can_save)
+        .closes_menu(true)
+        .on_click(move |_, window, app| {
+            on_save(
+                saved_group_cores(&save_selected, &save_selectable, &save_configured),
+                window,
+                app,
+            );
+        }),
+    );
+    if !extras.groups.is_empty() {
+        let on_manage = extras.on_manage_groups.clone();
+        menu = menu.item(
+            MoonMenuItem::action_label(
+                format!("{id}-cg-manage"),
+                t!("common.core_pick.manage_groups").to_string(),
+            )
+            .closes_menu(true)
+            .on_click(move |_, window, app| {
+                on_manage(window, app);
+            }),
+        );
+    }
+    menu
 }
 
 /// Build a checkbox-based core multi-selector with clickable exchange rows.
@@ -266,7 +418,8 @@ fn select_all_row(
 ///     all_label: Localized label for the All item and every state that activates it.
 ///     cores_n: Localized formatter for every partial selection count.
 ///     min_menu_w: Caller-specific lower bound for the fitted menu width.
-///     extras: The Select all row, or `None` for a pinned selector that takes no input.
+///     extras: The saved-groups block and its bottom actions, or `None` for a pinned selector
+///         that takes no input.
 ///     on_toggle: Callback receiving `None` for All or `Some(id)` for one core.
 ///     on_toggle_exchange: Callback receiving the core ids of the clicked exchange section.
 ///
@@ -282,7 +435,7 @@ pub(crate) fn core_combo<F, G>(
     all_label: String,
     cores_n: impl Fn(usize) -> String,
     min_menu_w: f32,
-    extras: Option<CoreComboExtras>,
+    extras: Option<CoreComboExtras<'_>>,
     on_toggle: F,
     on_toggle_exchange: G,
 ) -> MoonDropdown
@@ -302,7 +455,7 @@ where
         .trigger_size(MoonButtonSize::Action)
         .trigger_width_scaled(CORE_COMBO_TRIGGER_W)
         .fit_menu_width(min_menu_w, 560.0)
-        .menu_max_height_ui(360.0)
+        .menu_max_height_ui(520.0)
         .menu_size(MoonMenuSize::Compact)
         .close_on_select(false)
         .item(
@@ -312,9 +465,13 @@ where
                 .selected(all_on)
                 .on_click(move |_, _, app| toggle_all(None, app)),
         );
-    if let Some(extras) = extras {
-        let selectable: Vec<u64> = cores.iter().map(|(core, _)| *core).collect();
-        menu = select_all_row(menu, id, selected, selectable, &extras.on_select_all);
+    // The selectable ids are shared by every row handler below, so they are built once here and
+    // handed down rather than re-collected per block.
+    let selectable: Option<Rc<[u64]>> = extras
+        .is_some()
+        .then(|| cores.iter().map(|(core, _)| *core).collect());
+    if let (Some(extras), Some(selectable)) = (extras.as_ref(), selectable.as_ref()) {
+        menu = groups_block(menu, id, selected, selectable, &cores_n, extras);
     }
     if !sections.is_empty() {
         menu = menu.item(MoonMenuItem::separator());
@@ -348,6 +505,9 @@ where
                     .on_click(move |_, _, app| on_toggle(Some(core), app)),
             );
         }
+    }
+    if let (Some(extras), Some(selectable)) = (extras.as_ref(), selectable.as_ref()) {
+        menu = group_actions_block(menu, id, selected, selectable, extras);
     }
     menu
 }

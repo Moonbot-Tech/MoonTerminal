@@ -12,8 +12,10 @@
 //! - [`core_broadcast`] resolves the cross-window core filter the Profit Monitor publishes;
 //! - [`core_combo`] provides exchange grouping plus the shared multi-select core picker for Orders,
 //!   Report, Assets, Alerts, Analytics, and Core Status;
-//! - [`core_quick`] holds that picker's pure decisions — row toggling, Select all, and the
-//!   per-exchange selection state;
+//! - [`core_quick`] holds that picker's pure decisions — row toggling and the per-exchange
+//!   selection state;
+//! - [`core_groups`] holds the pure decisions behind its saved core groups;
+//! - [`core_group_dialogs`] owns the two modals that create and manage those groups;
 //! - [`core_host`] is the adapter each of its six consumers implements, plus the extras assembly
 //!   they all share;
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
@@ -28,6 +30,8 @@ mod coin_menu;
 pub(crate) mod coin_search;
 mod core_broadcast;
 mod core_combo;
+mod core_group_dialogs;
+mod core_groups;
 mod core_host;
 mod core_quick;
 pub(crate) mod date_range;
@@ -45,7 +49,7 @@ pub(crate) use core_combo::{
     CoreAllRowMode, core_combo, core_menu_sections, toggle_exchange_cores,
 };
 pub(crate) use core_host::{CoreComboHost, core_combo_extras};
-pub(crate) use core_quick::{select_all_cores, toggle_core_selection};
+pub(crate) use core_quick::toggle_core_selection;
 pub(crate) use exchange_label::{exchange_display_name, exchange_display_name_with_spot};
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;

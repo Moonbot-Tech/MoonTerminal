@@ -1,8 +1,8 @@
 use super::super::schema::{
     default_ui_font_delta, default_ui_scale, ServersFile, SettingsFile, SCHEMA_VERSION,
 };
-use super::{merge, Merged};
-use crate::config::{GroupConfig, DEFAULT_ORDER_SIZES_USD};
+use super::{merge, split, Merged};
+use crate::config::{CoreGroup, GroupConfig, DEFAULT_ORDER_SIZES_USD};
 
 /// Merge a settings file carrying nothing but the two scaling knobs.
 fn merged_with(ui_scale: f32, ui_font_delta: f32) -> Merged {
@@ -173,4 +173,103 @@ fn every_group_is_repaired_even_after_an_earlier_change() {
         DEFAULT_ORDER_SIZES_USD[0]
     );
     assert_eq!(merged.groups[1].trade.exit, Default::default());
+}
+
+/// Named breakage (`config::reconcile::merge`): replacing
+/// `dirty |= sanitize_core_groups(&mut core_groups);` with a bare `let core_groups =
+/// meta.core_groups.clone();` would stop repairing a hand-edited `settings.toml` at load time.
+/// Consequence: a duplicate-name pair (`Scalpers` / `scalpers`) never converges -- the same
+/// broken pair reloads every launch instead of being repaired once and written back.
+#[test]
+fn a_core_group_list_needing_repair_marks_the_merge_dirty() {
+    let settings = SettingsFile {
+        version: SCHEMA_VERSION,
+        next_uid: 1,
+        core_groups: vec![
+            CoreGroup {
+                name: "Scalpers".to_string(),
+                cores: vec![1],
+            },
+            CoreGroup {
+                name: "scalpers".to_string(),
+                cores: vec![2],
+            },
+        ],
+        ..Default::default()
+    };
+
+    let merged = merge(ServersFile::default(), settings, None);
+
+    assert!(
+        merged.dirty,
+        "a duplicate-name core group list must be repaired and the merge marked dirty, so the \
+         fix is written back instead of re-derived on every launch"
+    );
+    assert_eq!(
+        merged.core_groups.len(),
+        2,
+        "sanitize renames a collision, it does not drop it"
+    );
+    assert_ne!(
+        merged.core_groups[0].name, merged.core_groups[1].name,
+        "the two groups must no longer collide after repair"
+    );
+}
+
+/// A clean core-group list survives `merge` -> `split` unchanged: nothing in the round trip may
+/// reorder, rename or drop a member, and an already-clean list must not itself mark the merge
+/// dirty (or every launch would rewrite `settings.toml` for nothing).
+#[test]
+fn a_clean_core_group_list_round_trips_through_merge_and_split() {
+    let groups = vec![
+        CoreGroup {
+            name: "Scalpers".to_string(),
+            cores: vec![1, 2],
+        },
+        CoreGroup {
+            name: "Swing".to_string(),
+            cores: vec![3],
+        },
+    ];
+    let settings = SettingsFile {
+        version: SCHEMA_VERSION,
+        next_uid: 1,
+        core_groups: groups.clone(),
+        ..Default::default()
+    };
+
+    let merged = merge(ServersFile::default(), settings, None);
+    assert!(
+        !merged.dirty,
+        "an already-clean core group list must not itself mark the merge dirty"
+    );
+    assert_eq!(merged.core_groups, groups);
+
+    let (_, split_settings) = split(
+        &merged.servers,
+        &merged.groups,
+        &merged.core_groups,
+        merged.language,
+        merged.market_mode,
+        merged.charts_split_by_core,
+        merged.charts_stack_scroll,
+        merged.charts_stack_compress,
+        merged.chart_stack_height,
+        merged.separate_control_zones,
+        merged.main_idle_close_secs,
+        merged.log_to_file,
+        merged.log_retention_days,
+        merged.ui_font_delta,
+        merged.ui_theme_mode,
+        merged.ui_scale,
+        merged.chart_memory_percent,
+        merged.core_sort,
+        merged.report_valuation_mode,
+        merged.next_uid.get(),
+    );
+
+    assert_eq!(
+        split_settings.core_groups, groups,
+        "split must carry the merged groups through unchanged"
+    );
 }

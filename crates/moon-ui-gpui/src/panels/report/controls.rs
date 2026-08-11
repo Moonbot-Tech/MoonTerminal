@@ -293,7 +293,7 @@ impl ReportPanel {
                 crate::workspace::EffectiveScopeLabel::All
                 | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
             });
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view);
+        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
         let combo = crate::controls::core_combo(
             "rep-core",
             &cores,

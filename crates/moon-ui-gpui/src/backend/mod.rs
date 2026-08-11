@@ -21,7 +21,8 @@ use crate::backend::core_warn::axis_has_series;
 use crate::chartdx::ChartDataHandle;
 use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::config::{
-    DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode, WorkspaceMode,
+    CoreGroup, DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
+    WorkspaceMode,
 };
 use moon_core::db::valuation::ValuationMode;
 use moon_core::feed::ClientSettingsEdit;
@@ -655,6 +656,45 @@ impl Backend {
             .map(|preview| &mut preview.group_mut(group).trade);
         update_group_trade_pair(live, preview, update);
         self.config_dirty = true;
+    }
+
+    /// Apply one edit to the saved core groups, sanitize the result, and persist it.
+    ///
+    /// The dialogs use this centralized write path so their edits cannot store a shape the loader
+    /// would have to repair or forget `config_dirty`. The edit works on a copy: the dirty flag is
+    /// raised only when the sanitized result actually differs, so a rename to the same text or a
+    /// refused reorder costs no disk write.
+    ///
+    /// The result is mirrored into an open Settings PREVIEW, exactly as `update_group_trade` does.
+    /// Settings saves the preview it cloned when it opened and then replaces the live config with
+    /// it, so an edit written only here would be rolled back by a Settings save that touched
+    /// nothing related.
+    ///
+    /// Args:
+    ///     edit: The mutation, reporting whether it changed anything worth sanitizing.
+    ///
+    /// Returns:
+    ///     Whether the saved list actually changed. `false` covers a refused edit AND one the
+    ///     sanitizer undid — at the group ceiling an append survives the closure and not the
+    ///     sanitize, and a caller reporting success there would close its dialog over nothing.
+    pub(crate) fn edit_core_groups(
+        &mut self,
+        edit: impl FnOnce(&mut Vec<CoreGroup>) -> bool,
+    ) -> bool {
+        let mut groups = self.config.core_groups.clone();
+        if !edit(&mut groups) {
+            return false;
+        }
+        moon_core::config::sanitize_core_groups(&mut groups);
+        if groups == self.config.core_groups {
+            return false;
+        }
+        if let Some(preview) = self.preview.as_mut() {
+            preview.core_groups = groups.clone();
+        }
+        self.config.core_groups = groups;
+        self.config_dirty = true;
+        true
     }
 
     /// Synchronize each group's complete local exit generation to every live core in that group.

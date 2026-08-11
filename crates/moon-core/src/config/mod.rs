@@ -17,6 +17,7 @@
 //! - `uid_counter` requires every counter construction path to name the optional store floor.
 
 pub mod badges;
+pub mod core_groups;
 pub mod crypto;
 pub mod detect_view;
 pub mod groups;
@@ -46,6 +47,10 @@ mod uid_counter;
 mod tests;
 
 pub use badges::{BadgeEntry, BadgesConfig};
+pub use core_groups::{
+    move_group, sanitize_core_groups, unique_group_name, CoreGroup, CORE_GROUPS_MAX,
+    CORE_GROUP_MEMBERS_MAX, CORE_GROUP_NAME_MAX,
+};
 pub use detect_view::{
     detect_slot_count, DetectChart, DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg,
     DetectViewFile, DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI,
@@ -149,6 +154,12 @@ pub fn ensure_server_group_configs(
 pub struct AppConfig {
     pub servers: Vec<ServerConfig>,
     pub groups: Vec<GroupConfig>,
+    /// User-saved named sets of cores (settings.toml), applied from the shared core picker.
+    ///
+    /// Unrelated to [`Self::groups`], which is per-server-group trading state. These are a
+    /// selection bookmark and nothing else, so they are deliberately absent from
+    /// [`Self::structural_sig`]: renaming one must never reconnect a core.
+    pub core_groups: Vec<CoreGroup>,
     /// Interface language (settings.toml). Defaults to the system locale.
     pub language: Language,
     /// Market-data source (settings.toml). Defaults to Dedup, one provider per exchange.
@@ -229,6 +240,7 @@ impl AppConfig {
             next_uid: UidCounter::new(0, uid_floor),
             servers: Default::default(),
             groups: Default::default(),
+            core_groups: Default::default(),
             language: Default::default(),
             market_mode: Default::default(),
             charts_split_by_core: Default::default(),
@@ -323,6 +335,7 @@ impl AppConfig {
             let mut cfg = Self {
                 servers: merged.servers,
                 groups: merged.groups,
+                core_groups: merged.core_groups,
                 language: merged.language,
                 market_mode: merged.market_mode,
                 charts_split_by_core: merged.charts_split_by_core,
@@ -548,6 +561,7 @@ impl AppConfig {
                 default_alert_strategy: 0,
             }],
             groups: Vec::new(),
+            core_groups: Vec::new(),
             language: Language::default(),
             market_mode: MarketDataMode::default(),
             charts_split_by_core: true,
@@ -602,10 +616,16 @@ impl AppConfig {
         reconcile::ensure_uids(&mut self.servers, &mut self.next_uid);
         ensure_server_group_configs(&self.servers, &mut self.groups);
         self.prune_orphan_groups();
+        // Sanitize on the way OUT as well as on the way in: every settings persistence path
+        // funnels through this write, so the file cannot retain a shape the loader would repair.
+        // Deliberately NOT pruned like `prune_orphan_groups` above — a saved core group keeps a
+        // member whose core is currently gone.
+        core_groups::sanitize_core_groups(&mut self.core_groups);
         self.validate()?;
         let (sf, meta) = reconcile::split(
             &self.servers,
             &self.groups,
+            &self.core_groups,
             self.language,
             self.market_mode,
             self.charts_split_by_core,
@@ -677,10 +697,11 @@ impl AppConfig {
         Ok(())
     }
 
-    /// Signature of the structural config: servers + groups, WITHOUT theme/language/market mode/
-    /// hotkeys. The application uses it to decide whether saving settings requires reconnecting
-    /// cores and recreating windows. Theme updates live, while language, market mode, and hotkeys
-    /// need no reconnect, so they are neutralized to defaults.
+    /// Signature of the structural config: servers + server-group settings, WITHOUT saved core
+    /// groups, theme, language, market mode, or hotkeys. The application uses it to decide whether
+    /// saving settings requires reconnecting cores and recreating windows. Saved core groups and
+    /// the other presentation or interaction settings are neutralized because they need no
+    /// reconnect.
     pub fn structural_sig(&self) -> String {
         // Chart bundles and manual-trading values are local presentation/behavior settings.
         // Changing them does not reconnect cores or rebuild sessions.
@@ -704,6 +725,9 @@ impl AppConfig {
         let (sf, meta) = reconcile::split(
             &servers,
             &groups,
+            // Saved core groups are a selection bookmark: renaming, adding or deleting one must
+            // never reconnect a core or rebuild a window, so they are neutralized to empty.
+            &[],
             Language::default(),
             MarketDataMode::default(),
             true,  // The chart toggle is non-structural; no rebuild.

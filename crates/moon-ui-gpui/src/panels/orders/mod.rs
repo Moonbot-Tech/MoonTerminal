@@ -115,29 +115,22 @@ pub struct OrdersPanel {
 }
 
 impl crate::controls::CoreComboHost for OrdersPanel {
-    /// Select every core in the retained Classic filter.
-    ///
-    /// The ids are the ones the menu rendered. Auto owns the effective scope and leaves the
-    /// retained selection untouched.
-    ///
-    /// Args:
-    ///     selectable: Every core id available to this picker.
-    ///     cx: Panel context used to rebuild cached rows and request a repaint.
-    ///
-    /// Returns:
-    ///     Nothing; workspace-owned or inert actions leave the panel unchanged.
-    fn select_all_cores(&mut self, selectable: Vec<CoreId>, cx: &mut Context<Self>) {
-        if self
-            .effective_scope(self.backend.read(cx))
+    /// Auto owns the effective scope and leaves the retained Classic selection untouched.
+    fn core_selection_pinned(&self, cx: &App) -> bool {
+        self.effective_scope(self.backend.read(cx))
             .is_workspace_owned()
-        {
-            return;
-        }
-        if crate::controls::select_all_cores(&mut self.sel_cores, &selectable) {
-            let backend = self.backend.clone();
-            self.rebuild_cache(backend.read(cx));
-            cx.notify();
-        }
+    }
+
+    /// Return the retained Classic core filter for shared picker edits.
+    fn core_selection_mut(&mut self) -> &mut HashSet<CoreId> {
+        &mut self.sel_cores
+    }
+
+    /// Rebuild the cached rows against the new filter and repaint.
+    fn after_core_selection_change(&mut self, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        self.rebuild_cache(backend.read(cx));
+        cx.notify();
     }
 }
 

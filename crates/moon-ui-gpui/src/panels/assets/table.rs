@@ -186,7 +186,7 @@ impl AssetsView {
             .session
             .market_source()
             .core_exchange_names();
-        let extras = crate::controls::core_combo_extras(!workspace_owned, &view);
+        let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
         let combo = crate::controls::core_combo(
             "assets-core",
             cores,
