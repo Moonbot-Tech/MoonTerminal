@@ -96,7 +96,12 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 - `main` has no branch protection and no required checks: a direct push is public and untested
   the instant it lands, with CI reporting only afterwards. Branch from fresh `main`, open a PR,
   squash-merge — history stays linear.
-- **CI runs neither `fmt` nor `clippy`.** Run `make fmt` yourself before pushing.
+- **CI runs neither `fmt` nor `clippy`.** Run `cargo clippy` yourself before pushing, and format
+  **only the files you touched** — `rustfmt --config skip_children=true <files>`. The committed
+  tree is not rustfmt-clean, so `make fmt` (`cargo fmt --all`) silently reformats files your
+  change never touched and buries the real diff. Read the formatter's own diff too: with two
+  editions in the workspace it also reorders `use` blocks it had no business touching — revert
+  those hunks.
 - Three CI gates, all on every PR and all meant to be green before you merge: the Windows
   `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo test --workspace`, and
   `Dependency audit (cargo-deny)`. They run in parallel. The macOS job is diagnostic
