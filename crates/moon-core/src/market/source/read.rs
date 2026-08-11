@@ -62,6 +62,40 @@ fn deep_history_kind(tf_min: u32) -> DeepHistoryKind {
     }
 }
 
+const DEEP_HISTORY_MIN_ROWS_FOR_COVERAGE: usize = 30;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeepHistoryRequestReason {
+    Missing,
+    Stale,
+    Shallow,
+    DoesNotCoverWindow,
+}
+
+fn deep_history_request_reason(
+    rows: Option<(usize, i64, i64)>,
+    from_base_ms: i64,
+    current_bucket_ms: i64,
+    base_tf_ms: i64,
+) -> Option<DeepHistoryRequestReason> {
+    let Some((len, first_ms, last_ms)) = rows else {
+        return Some(DeepHistoryRequestReason::Missing);
+    };
+    if last_ms < current_bucket_ms {
+        return Some(DeepHistoryRequestReason::Stale);
+    }
+    if len < DEEP_HISTORY_MIN_ROWS_FOR_COVERAGE {
+        return Some(DeepHistoryRequestReason::Shallow);
+    }
+    if first_ms > from_base_ms.saturating_add(base_tf_ms.max(1)) {
+        return Some(DeepHistoryRequestReason::DoesNotCoverWindow);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests;
+
 impl MarketDataSource {
     /// Cheap hot-path revision for a consumer core. This reads one monotonic
     /// MoonProto snapshot number and does not clone the snapshot or drain rings.
@@ -953,14 +987,11 @@ impl MarketDataSource {
                     }
                 }
             }
-            // Check base freshness on every pass, not only reset. When K is zero and the trade zone
-            // is disabled, no resets occur between configuration changes, so a lost or expired
-            // response used to freeze the series forever. Stale means the current bucket has no
-            // row; the live subscription must maintain it, and a gap means a missed response or
-            // disconnect. The core fetches deep history from the exchange API and consumes request
-            // weight, so retries without progress use exponential backoff from 30 seconds to 10
-            // minutes. New rows or a kind change reset the delay. A fixed 30-second retry against a
-            // silent core or exchange previously triggered the core's API-limit auto-stop.
+            // Check base coverage on every pass, not only reset. A live subscription can provide
+            // the current bucket while the retained deep layer is still only a tiny live tail; Gate
+            // futures is one concrete case because its chart archive request can be unsupported.
+            // The core fetches deep history from the exchange API and consumes request weight, so
+            // retries without progress use exponential backoff from 30 seconds to 10 minutes.
             if use_deep {
                 let base_tf_native_ms = deep_kind_min as i64 * 60_000;
                 let rows = snapshot.tf_candles(market, deep_kind);
@@ -969,12 +1000,23 @@ impl MarketDataSource {
                     .map_or(0.0, |d| d.as_millis() as f64);
                 let cur_bucket_ms =
                     crate::market::candles::bucket_open_ms(now_unix_ms, base_tf_native_ms);
-                let deep_stale = rows
-                    .and_then(|r| r.last())
-                    .map_or(true, |r| (r.unix_millis() as f64) < cur_bucket_ms);
+                let from_base_ms =
+                    (epoch_ms + (from_rel_ms - cp.tf_ms.max(0) as f32) as f64) as i64;
+                let request_reason = deep_history_request_reason(
+                    rows.map(|r| {
+                        (
+                            r.len(),
+                            r.first().map_or(0, |row| row.unix_millis()),
+                            r.last().map_or(0, |row| row.unix_millis()),
+                        )
+                    }),
+                    from_base_ms,
+                    cur_bucket_ms as i64,
+                    base_tf_native_ms,
+                );
                 let kind_changed = cursor.last_deep_kind != Some(deep_kind);
                 let retry_delay = Duration::from_secs(cursor.deep_retry_delay_s.max(30) as u64);
-                if deep_stale
+                if request_reason.is_some()
                     && (kind_changed
                         || cursor
                             .last_deep_request
@@ -1008,6 +1050,10 @@ impl MarketDataSource {
                         if let Err(e) = client.candles().request_coin_card(market, deep_kind) {
                             super::market_diag(format!(
                                 "coin-card request failed {market} kind={deep_kind:?}: {e}"
+                            ));
+                        } else if let Some(reason) = request_reason {
+                            super::market_diag(format!(
+                                "coin-card requested {market} kind={deep_kind:?}: {reason:?}"
                             ));
                         }
                     }

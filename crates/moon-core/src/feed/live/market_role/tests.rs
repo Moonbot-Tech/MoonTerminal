@@ -17,6 +17,7 @@ fn a_new_client_reapplies_the_retained_complete_plan() {
     let mut role = MarketRoleState {
         desired: Some(MarketPlan::new(false, Vec::new(), Vec::new())),
         applied: Some(MarketPlan::new(false, Vec::new(), Vec::new())),
+        ..Default::default()
     };
     role.begin_client();
 
