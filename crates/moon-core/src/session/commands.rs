@@ -1,7 +1,9 @@
 //! Commands to cores (strategy, trading, and Engine actions) through the per-core `CoreCmd`
 //! channel, plus read-only manager accessors (`store`, `sessions`, `market_source`, etc.).
 
-use anyhow::{Result, anyhow};
+use std::collections::HashMap;
+
+use anyhow::{anyhow, Result};
 
 use crate::data::OrderBookModel;
 use crate::feed::{
@@ -9,6 +11,7 @@ use crate::feed::{
     OrderStopKind, OrderStopsForm, ResetProfitKind, WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
+use crate::venue::CoreVenue;
 
 use super::{CoreId, CoreSession, CoreStore, SessionManager};
 
@@ -557,6 +560,24 @@ impl SessionManager {
     /// This is raw config order; the UI applies the selected `CoreSortMode` separately.
     pub fn sessions(&self) -> &[CoreSession] {
         &self.sessions
+    }
+
+    /// Return what each identified core is connected to, keyed by core.
+    ///
+    /// THE answer for every consumer that groups cores by exchange, captions one, or draws its
+    /// logo: the platform code decides all three through [`crate::venue`], so a picker, the
+    /// Profit Monitor and the workspace rail cannot disagree about which venue a core is on.
+    ///
+    /// Borrowed, not rebuilt: a core's venue arrives once per connection and changes only when the
+    /// connection does, while these consumers ask on their render path. A core absent from the map
+    /// has not completed `BaseCheck`; one that is present but not
+    /// [`CoreVenue::is_nameable`] is identified without being nameable, and belongs in the caller's
+    /// "not identified" group.
+    ///
+    /// Returns:
+    ///     One entry per core that reported an identity.
+    pub fn core_venues(&self) -> &HashMap<CoreId, CoreVenue> {
+        &self.core_venue
     }
 
     /// Return the core account's base currency, such as `USDT` or `BTC`, once `CoreBase` has

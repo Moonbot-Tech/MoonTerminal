@@ -4,10 +4,11 @@
 //! carry the privately constructed [`OrderedCores`] marker; arbitrary row shapes use
 //! [`CoreOrder::sort_by`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use moon_core::config::{AppConfig, CoreSortMode};
 use moon_core::session::CoreId;
+use moon_core::venue::CoreVenue;
 
 /// Cores in canonical order, paired with the name to display.
 ///
@@ -34,40 +35,81 @@ impl IntoIterator for OrderedCores {
     }
 }
 
-/// Partition ordered rows into unknown-first, alphabetically named exchange sections.
+/// Partition ordered rows into unknown-first exchange sections ordered by brand.
 ///
-/// Callers decide membership and row order before invoking this helper. The returned member
-/// indices preserve that input order inside each exchange, while a [`BTreeMap`] makes known
-/// exchange sections deterministic. A missing exchange remains explicit rather than being guessed
-/// from a user-defined core name.
+/// Callers decide membership and row order before invoking this helper; the returned member indices
+/// preserve that input order inside each section. Rows are bucketed by venue IDENTITY rather than by
+/// the caption a core reported, so two cores on one venue always land in one section however their
+/// core builds spell its name, and two Hyperliquid cores on different HIP-3 DEXes stay apart. An
+/// unidentified core remains explicit rather than being guessed from a user-defined core name.
+///
+/// Section order comes from the directory ([`section_order`]): brands in alphabetical order, and
+/// within one brand its spot venue before its derivatives — NOT the alphabetical order of the
+/// rendered captions, which would put `Binance Futures` above `Binance Spot`.
 ///
 /// Args:
-///     rows: `(source index, reported exchange name)` pairs in the desired member order.
+///     rows: `(source index, core venue)` pairs in the desired member order.
 ///
 /// Returns:
-///     Exchange names and the source indices belonging to each section.
+///     Venues and the source indices belonging to each section, the unidentified one first.
 pub(crate) fn exchange_sections<'a>(
-    rows: impl IntoIterator<Item = (usize, Option<&'a str>)>,
-) -> Vec<(Option<&'a str>, Vec<usize>)> {
+    rows: impl IntoIterator<Item = (usize, Option<&'a CoreVenue>)>,
+) -> Vec<(Option<&'a CoreVenue>, Vec<usize>)> {
     let mut unknown = Vec::new();
-    let mut known: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (index, exchange) in rows {
-        match exchange {
-            Some(name) => known.entry(name).or_default().push(index),
-            None => unknown.push(index),
+    // Grouped by identity in insertion order, then ordered below. A linear scan beats a map here:
+    // the key is a `Copy` pair of integers and there are at most a dozen sections.
+    let mut known: Vec<(&CoreVenue, Vec<usize>)> = Vec::new();
+    for (index, venue) in rows {
+        // A core whose venue nothing can name belongs in the unidentified group, not in a section
+        // of its own captioned with that same wording.
+        let Some(venue) = venue.filter(|venue| venue.is_nameable()) else {
+            unknown.push(index);
+            continue;
+        };
+        match known.iter_mut().find(|(known, _)| known.id == venue.id) {
+            Some((_, members)) => members.push(index),
+            None => known.push((venue, vec![index])),
         }
     }
+    // Ordered by the DIRECTORY, not by the rendered caption: sorting on the caption would make
+    // section order depend on the interface language and on the wire-text sanitizer, and would
+    // format every caption twice — once to compare, once to draw.
+    known.sort_by(|(a, _), (b, _)| section_order(a).cmp(&section_order(b)));
 
-    let mut sections = Vec::with_capacity(known.len() + usize::from(!unknown.is_empty()));
-    if !unknown.is_empty() {
-        sections.push((None, unknown));
+    std::iter::once((None, unknown))
+        .filter(|(_, members)| !members.is_empty())
+        .chain(
+            known
+                .into_iter()
+                .map(|(venue, members)| (Some(venue), members)),
+        )
+        .collect()
+}
+
+/// Stable ordering key for one exchange section.
+///
+/// Known venues sort by brand and then by market kind, which is the order their captions read in
+/// since every caption is `"{Brand} {Kind}"`. An ordinal the directory cannot name has no brand to
+/// sort by and takes its own ordinal instead — deliberately NOT the caption its core reported:
+/// ordering by wire text would make the list depend on a string this build does not control, and
+/// on which core happened to connect first.
+///
+/// Args:
+///     venue: Venue the section stands for.
+///
+/// Returns:
+///     Comparable key: known venues by brand and kind, then unknown ordinals by code.
+fn section_order(venue: &CoreVenue) -> (u8, &str, u8, u8, &str) {
+    match venue.resolved() {
+        Some(known) => (
+            0,
+            known.brand.display(),
+            known.kind as u8,
+            0,
+            venue.dex.as_str(),
+        ),
+        None => (1, "", 0, venue.id.code, venue.dex.as_str()),
     }
-    sections.extend(
-        known
-            .into_iter()
-            .map(|(name, members)| (Some(name), members)),
-    );
-    sections
 }
 
 /// Insertion-order key, shared by both `Added*` modes so they cannot drift apart.

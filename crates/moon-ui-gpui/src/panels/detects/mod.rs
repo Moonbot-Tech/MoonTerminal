@@ -53,9 +53,13 @@ pub(crate) struct DetectItem {
     /// 24-hour and one-hour percentage price changes at detection time.
     delta_24h: f32,
     delta_1h: f32,
-    /// Exchange name captured at detection time.
-    exchange_name: String,
-    /// Exchange kind, such as spot, futures, or DEX, captured at detection time.
+    /// Venue captured at detection time, captioned through the shared directory.
+    venue: Option<moon_core::venue::CoreVenue>,
+    /// Connection type, such as spot, futures, or DEX, captured at detection time.
+    ///
+    /// A separate axis from [`Self::venue`]: this is the capability mask the connection reported
+    /// and can name two markets at once (`Спот/Фьючи`), while the venue is the one market the core
+    /// actually trades.
     exchange_kind: String,
 }
 
@@ -273,7 +277,7 @@ impl DetectsPanel {
                     it.line = snap.line;
                     it.delta_24h = snap.delta_24h;
                     it.delta_1h = snap.delta_1h;
-                    it.exchange_name = snap.exchange_name;
+                    it.venue = snap.venue;
                     it.exchange_kind = snap.exchange_kind;
                     changed = true;
                 } else {
@@ -299,7 +303,7 @@ impl DetectsPanel {
                         line: snap.line,
                         delta_24h: snap.delta_24h,
                         delta_1h: snap.delta_1h,
-                        exchange_name: snap.exchange_name,
+                        venue: snap.venue,
                         exchange_kind: snap.exchange_kind,
                     });
                     changed = true;

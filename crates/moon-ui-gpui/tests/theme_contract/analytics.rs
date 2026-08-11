@@ -2050,15 +2050,14 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
     );
     assert!(
         code.contains("use crate::media::exchange_logos::exchange_logo;")
-            && code.contains("exchange_logo(exchange)")
+            && code.contains("exchange_logo(brand)")
             && !code.contains("svg()"),
         "exchange logos must come from the shared rasterizer rather than gpui's monochrome svg()"
     );
     assert!(
-        code.contains(".entry(exchange)")
-            && code.contains(".or_insert_with(|| exchange_logo(exchange))"),
-        "logos must be resolved once per distinct exchange, not once per row: the render path pays \
-         a global-cache lock and a fresh key string for every one of them"
+        code.contains(".entry(brand)") && code.contains(".or_insert_with(|| exchange_logo(brand))"),
+        "logos must be resolved once per distinct brand, not once per row: the render path pays \
+         a global-cache lock for every one of them"
     );
 }
 

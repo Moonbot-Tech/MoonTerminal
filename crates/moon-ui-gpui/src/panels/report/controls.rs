@@ -273,11 +273,11 @@ impl ReportPanel {
         let exchange_view = view.clone();
         // Rank the raw DB result at render time; the query has no config and may include
         // deleted cores with database-owned names.
-        let (cores, exchange_names) = {
+        let (cores, venues) = {
             let backend = self.backend.read(cx);
             (
                 CoreOrder::new(&backend.config).from_db(self.cores.clone()),
-                backend.session.market_source().core_exchange_names(),
+                backend.session.core_venues(),
             )
         };
         let pinned_label = workspace_scope
@@ -297,7 +297,7 @@ impl ReportPanel {
         let combo = crate::controls::core_combo(
             "rep-core",
             &cores,
-            &exchange_names,
+            &venues,
             if workspace_owned {
                 &effective_selection
             } else {

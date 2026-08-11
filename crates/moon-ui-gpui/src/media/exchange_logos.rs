@@ -10,12 +10,17 @@
 //! directory or beside the executable takes priority so a logo can be replaced without rebuilding.
 //! An exchange with no logo simply renders without one — never a placeholder glyph pretending to
 //! be a brand.
+//!
+//! WHICH logo a core gets is not decided here: `moon_core::venue` resolves the core's platform code
+//! to a [`Brand`], and this module only rasterizes that brand's file. Matching on the name a core
+//! reports is what used to leave Binance COIN-M (`Binance Quarterly`) unbranded.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use gpui::RenderImage;
 use include_dir::{Dir, include_dir};
+use moon_core::venue::Brand;
 
 /// Embedded logo set: every SVG under `assets/exchanges`, a few kilobytes in total.
 static EMBEDDED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/exchanges");
@@ -26,41 +31,6 @@ static EMBEDDED: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/e
 /// a 200% display without a per-scale cache, and GPUI's own sampling handles the way down.
 const RASTER_PX: u32 = 48;
 
-/// Market-type words that are part of a core's exchange name but never part of its brand.
-///
-/// Stripping them keeps `"Binance Futures"` and `"Binance Spot"` on one logo instead of turning
-/// the suffix into a second, unknown exchange.
-const MARKET_WORDS: [&str; 6] = ["spot", "futures", "perp", "swap", "usdm", "coinm"];
-
-/// Explicit normalized exchange aliases and their file stems in `assets/exchanges`.
-///
-/// Exact aliases prevent an unrelated exchange such as `GateHub` or `HyperTrade` from inheriting
-/// a shipped brand merely because its name contains a known fragment.
-const BRANDS: [(&str, &str); 22] = [
-    ("hyperliquid", "hyperliquid"),
-    ("fhyperliquid", "hyperliquid"),
-    ("hyper", "hyperliquid"),
-    ("fhyper", "hyperliquid"),
-    ("binance", "binance"),
-    ("fbinance", "binance"),
-    ("bybit", "bybit"),
-    ("fbybit", "bybit"),
-    ("bitget", "bitget"),
-    ("fbitget", "bitget"),
-    ("gateio", "gate"),
-    ("gate", "gate"),
-    ("fgateio", "gate"),
-    ("fgate", "gate"),
-    ("okex", "okx"),
-    ("okx", "okx"),
-    ("fokex", "okx"),
-    ("fokx", "okx"),
-    ("huobi", "htx"),
-    ("htx", "htx"),
-    ("fhuobi", "htx"),
-    ("fhtx", "htx"),
-];
-
 /// Resolve the override directory once.
 ///
 /// `asset_dir` stats the working directory and possibly the executable's, and `load` runs per
@@ -70,50 +40,10 @@ fn logos_dir() -> &'static PathBuf {
     DIR.get_or_init(|| super::asset_dir("exchanges"))
 }
 
-/// Resolve a core-reported exchange name to an embedded logo stem.
-///
-/// The name is whatever the core published (`Binance Futures`, `FBybit`, `Gate.io`, `OKEx`). It is
-/// normalized, stripped of trailing market-kind suffixes, and then matched against explicit
-/// aliases so arbitrary containing strings cannot claim a known brand.
-///
-/// Args:
-///     exchange: Raw exchange name reported by a core.
-///
-/// Returns:
-///     The logo stem, or `None` when no shipped brand matches.
-pub(crate) fn logo_slug(exchange: &str) -> Option<&'static str> {
-    let mut key: String = exchange
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    loop {
-        let mut stripped = false;
-        for suffix in MARKET_WORDS {
-            if let Some(base) = key.strip_suffix(suffix) {
-                let base_len = base.len();
-                key.truncate(base_len);
-                stripped = true;
-                break;
-            }
-        }
-        if !stripped {
-            break;
-        }
-    }
-    if key.is_empty() {
-        return None;
-    }
-    BRANDS
-        .iter()
-        .find(|(alias, _)| key == *alias)
-        .map(|(_, slug)| *slug)
-}
-
 /// Rasterize one logo stem into the straight-alpha BGRA layout GPUI's `img()` expects.
 ///
 /// Args:
-///     slug: Logo file stem, already resolved by [`logo_slug`].
+///     slug: Logo file stem from [`Brand::slug`].
 ///
 /// Returns:
 ///     The decoded texture, or `None` when the file is missing or unparsable.
@@ -162,20 +92,19 @@ fn load(slug: &str) -> Option<Arc<RenderImage>> {
     super::render_image_bgra(RASTER_PX, RASTER_PX, bgra)
 }
 
-/// Return the lazily rasterized logo for a core-reported exchange name.
+/// Return the lazily rasterized logo for one brand.
 ///
 /// Every decode is cached, including the ones that produced nothing, so a brand is rasterized at
-/// most once per process. A name matching NO brand returns before the cache and costs only the
-/// resolver — callers that draw many rows resolve once per distinct exchange, not once per row.
+/// most once per process.
 ///
 /// Args:
-///     exchange: Raw exchange name reported by a core.
+///     brand: Brand resolved from a core's platform code by `moon_core::venue`.
 ///
 /// Returns:
-///     The cached texture, or `None` for an unknown brand or an unreadable file.
-pub(crate) fn exchange_logo(exchange: &str) -> Option<Arc<RenderImage>> {
+///     The cached texture, or `None` when the file is missing or unreadable.
+pub(crate) fn exchange_logo(brand: Brand) -> Option<Arc<RenderImage>> {
     static CACHE: OnceLock<super::TextureCache<&'static str>> = OnceLock::new();
-    super::cached(&CACHE, logo_slug(exchange)?, |slug| load(slug))
+    super::cached(&CACHE, brand.slug(), |slug| load(slug))
 }
 
 /// Decode every shipped logo, for a caller that will run this OFF the render path.
@@ -188,14 +117,8 @@ pub(crate) fn exchange_logo(exchange: &str) -> Option<Arc<RenderImage>> {
 pub(crate) fn prewarm() {
     static PREWARMED: OnceLock<()> = OnceLock::new();
     prewarm_once(&PREWARMED, || {
-        let mut done: Vec<&str> = Vec::with_capacity(BRANDS.len());
-        for (_, slug) in BRANDS {
-            // BRANDS has aliases, so several aliases share one file; decode each file once.
-            if done.contains(&slug) {
-                continue;
-            }
-            done.push(slug);
-            let _ = exchange_logo(slug);
+        for brand in Brand::ALL {
+            let _ = exchange_logo(brand);
         }
     });
 }

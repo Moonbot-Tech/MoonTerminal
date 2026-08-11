@@ -37,17 +37,12 @@ impl OrdersPanel {
         };
         let view = cx.entity();
         let exchange_view = view.clone();
-        let exchange_names = self
-            .backend
-            .read(cx)
-            .session
-            .market_source()
-            .core_exchange_names();
+        let venues = self.backend.read(cx).session.core_venues();
         let extras = crate::controls::core_combo_extras(!workspace_owned, &view, &self.backend, cx);
         let combo = crate::controls::core_combo(
             "orders-source",
             cores,
-            &exchange_names,
+            &venues,
             if workspace_owned {
                 &effective_selection
             } else {

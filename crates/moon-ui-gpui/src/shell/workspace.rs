@@ -9,6 +9,7 @@ use moon_core::config::{
     AUTO_WORKSPACE_RAIL_WIDTH_MAX, AUTO_WORKSPACE_RAIL_WIDTH_MIN, WorkspaceMode,
 };
 use moon_core::feed::ConnStatus;
+use moon_core::venue::CoreVenue;
 use moon_ui::{
     DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonPalette,
     MoonScrollbarVisibility, MoonTooltipView, MoonVirtualList, h_flex, moon_h_resizable,
@@ -206,9 +207,9 @@ fn icon_workspace_summary(configured: usize) -> String {
 enum RailItem {
     /// Current group aggregate scope.
     Overview { selected: bool },
-    /// Reported exchange heading and its logo resolved before the virtual row closure.
+    /// Venue heading and its logo, both resolved before the virtual row closure.
     Exchange {
-        exchange: Option<String>,
+        venue: Option<CoreVenue>,
         logo: Option<Arc<RenderImage>>,
     },
     /// Configured core row and whether its branch stem ends at this leaf.
@@ -681,14 +682,14 @@ impl Shell {
             let mut servers = backend.config.servers.clone();
             crate::core_order::CoreOrder::new(&backend.config)
                 .sort_by(&mut servers, |server| server.id);
-            let exchange_names = backend.session.market_source().core_exchange_names();
+            let venues = backend.session.core_venues();
             let inputs = servers
                 .into_iter()
                 .map(|server| WorkspaceRosterInput {
                     core: server.id,
                     name: server.name,
                     group: server.group.clone(),
-                    exchange: exchange_names.get(&server.id).cloned(),
+                    venue: venues.get(&server.id).cloned(),
                     availability: backend.workspace_core_availability(&server.group, server.id),
                     ready: backend
                         .session
@@ -710,14 +711,15 @@ impl Shell {
         for section in roster.sections {
             let logo = if self.exchange_logos_ready {
                 section
-                    .exchange
+                    .venue
                     .as_ref()
-                    .and_then(|exchange| crate::media::exchange_logos::exchange_logo(exchange))
+                    .and_then(|venue| venue.brand())
+                    .and_then(crate::media::exchange_logos::exchange_logo)
             } else {
                 None
             };
             items.push(RailItem::Exchange {
-                exchange: section.exchange,
+                venue: section.venue,
                 logo,
             });
             append_core_section_items(&mut items, section.rows);
@@ -886,16 +888,16 @@ fn render_rail_item(
                 })
                 .into_any_element()
         }
-        RailItem::Exchange { exchange, logo } => {
-            let label = exchange
-                .as_deref()
-                .map(crate::controls::exchange_display_name)
-                .unwrap_or_else(|| t!("common.exchange_unknown").to_string());
+        RailItem::Exchange { venue, logo } => {
+            let label = crate::controls::venue_section_label(venue.as_ref());
             let tooltip = label.clone();
-            let row_id = SharedString::from(format!(
-                "workspace-exchange-{}",
-                exchange.as_deref().unwrap_or("unknown")
-            ));
+            // Keyed on the venue IDENTITY, never on the caption: an element id built from rendered
+            // text changes with the locale and with a core build's spelling, which makes GPUI treat
+            // the same heading as a different element and drop its hover and tooltip state.
+            let row_id = SharedString::from(match venue.as_ref() {
+                Some(venue) => format!("workspace-exchange-{}-{}", venue.id.code, venue.id.dex),
+                None => "workspace-exchange-unknown".to_string(),
+            });
             let compact_label = match density {
                 WorkspaceRailDensity::Icon if logo.is_none() => {
                     Some(label.chars().next().unwrap_or('?').to_string())

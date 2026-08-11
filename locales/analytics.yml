@@ -51,10 +51,6 @@ profit_monitor.core_fallback:
   ru: "Ядро"
   en: "Core"
   es: "Núcleo"
-profit_monitor.unknown_exchange:
-  ru: "Биржа неизвестна"
-  en: "Unknown exchange"
-  es: "Exchange desconocido"
 profit_monitor.auto:
   ru: "Обновляется автоматически"
   en: "Updates automatically"

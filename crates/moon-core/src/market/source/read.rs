@@ -5,7 +5,6 @@ use crate::feed::SharedMoonClient;
 use crate::market::source::MarketLabel;
 use crate::session::CoreId;
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use moonproto::DeepHistoryKind;
@@ -312,30 +311,6 @@ impl MarketDataSource {
         inner.clients.get(&core).and_then(SharedMoonClient::get)
     }
 
-    /// Return trimmed display exchange names for live cores whose own clients reported one.
-    ///
-    /// This reads each core's direct client rather than its deduplicated market-data provider, so
-    /// connection rows retain their own identity. Missing clients, snapshots, and blank names are
-    /// omitted from the returned map.
-    pub fn core_exchange_names(&self) -> HashMap<CoreId, String> {
-        let clients: Vec<(CoreId, std::sync::Arc<moonproto::MoonClient>)> = {
-            let inner = self.inner.read().expect("market source poisoned");
-            inner
-                .clients
-                .iter()
-                .filter_map(|(&core, client)| client.get().map(|client| (core, client)))
-                .collect()
-        };
-        clients
-            .into_iter()
-            .filter_map(|(core, client)| {
-                let name = client.snapshot()?.server_info().exchange_name.clone()?;
-                let name = name.trim();
-                (!name.is_empty()).then(|| (core, name.to_string()))
-            })
-            .collect()
-    }
-
     /// Return the market price step from MoonProto's `chart_price_step`.
     ///
     /// This is the keyboard increment for `shift_buy/sell_up/down`. `None` means the provider,
@@ -416,12 +391,21 @@ impl MarketDataSource {
             return DetectSnapshot::default();
         };
         let mut out = DetectSnapshot::default();
-        // Read the exchange name and type from the connection identity supplied by BaseCheck's
-        // server_info.
+        // Read the venue and the connection type from the identity BaseCheck supplied. The venue
+        // comes from the platform CODE, as everywhere else; the reported name rides along only for
+        // an ordinal this build cannot name, and the type mask is a separate axis — it states which
+        // wallets the connection can trade, which is not the same question as which venue it is.
         let info = snapshot.server_info();
-        if let Some(name) = &info.exchange_name {
-            out.exchange_name = name.clone();
-        }
+        out.venue = info
+            .exchange_code
+            .map(|code| {
+                crate::venue::CoreVenue::identify(
+                    code.stable_id(),
+                    info.dex_name.as_deref().unwrap_or_default(),
+                    info.exchange_name.as_deref(),
+                )
+            })
+            .filter(crate::venue::CoreVenue::is_nameable);
         out.exchange_kind = exchange_kind_label(info);
 
         let tf_ms: i64 = 300_000; // 5 minutes

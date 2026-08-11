@@ -502,12 +502,12 @@ fn log_row_viewports_keep_a_reachable_horizontal_scrollbar() {
 fn log_exchange_headers_select_a_live_exchange_aggregate() {
     let controls = read_src("panels/log/controls.rs");
     let combo = braced_body(&controls, "pub(super) fn source_combo(");
-    let known_exchange = braced_body(combo, "if let Some(exchange) = exchange");
+    let known_exchange = braced_body(combo, "if let Some(venue) = venue");
     let unknown_exchange = braced_body(combo, "} else {");
     assert!(
         known_exchange.contains("MoonMenuItem::action_label(")
-            && known_exchange.contains("let source = exchange.to_string();")
-            && known_exchange.contains("this.set_source(LogSource::Exchange(source), cx);")
+            && known_exchange.contains("let exchange = venue.id;")
+            && known_exchange.contains("this.set_source(LogSource::Exchange(exchange), cx);")
             && !known_exchange.contains("MoonMenuItem::label(exchange_label)")
             && unknown_exchange.contains("MoonMenuItem::label(exchange_label)")
             && !unknown_exchange.contains("MoonMenuItem::action_label("),
@@ -528,7 +528,7 @@ fn log_exchange_headers_select_a_live_exchange_aggregate() {
             .count()
     };
     assert!(
-        panel.contains("Exchange(String)")
+        panel.contains("Exchange(ExchangeId)")
             && snapshot.contains("LogSource::Exchange(_)")
             && snapshot.contains("exchange_membership")
             && arms(&panel) == 1

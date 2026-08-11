@@ -15,9 +15,10 @@ use super::SettingsView;
 use crate::design;
 use moon_core::config::GroupConfig;
 use moon_core::session::CoreId;
+use moon_core::venue::CoreVenue;
 
 /// Draft server metadata needed to assemble the Connections hierarchy.
-pub(super) type ServerRowMeta = (CoreId, u64, bool, String, Option<String>);
+pub(super) type ServerRowMeta = (CoreId, u64, bool, String, Option<CoreVenue>);
 
 /// Visible group metadata needed to render one Connections branch.
 pub(super) type GroupRowMeta = (String, bool, u32);
@@ -60,25 +61,25 @@ pub(super) fn pending_server_indices(servers: &[ServerRowMeta]) -> Vec<usize> {
 
 /// Group one window group's server indices into an unknown-first exchange hierarchy.
 ///
-/// Known exchange names use stable alphabetical order. Member indices retain draft order here and
-/// are ranked through `CoreOrder` by the renderer, keeping membership and user ordering separate.
+/// Known venues use stable caption order. Member indices retain draft order here and are ranked
+/// through `CoreOrder` by the renderer, keeping membership and user ordering separate.
 ///
 /// Args:
 ///     servers: Draft and saved server rows from Connections settings.
 ///     group: Window group whose saved server rows should be included.
 ///
 /// Returns:
-///     Exchange names and their source indices, with the unidentified section first.
+///     Venues and their source indices, with the unidentified section first.
 pub(super) fn exchange_sections<'a>(
     servers: &'a [ServerRowMeta],
     group: &str,
-) -> Vec<(Option<&'a str>, Vec<usize>)> {
+) -> Vec<(Option<&'a CoreVenue>, Vec<usize>)> {
     crate::core_order::exchange_sections(
         servers
             .iter()
             .enumerate()
             .filter(|(_, (_, uid, _, server_group, _))| *uid != 0 && server_group == group)
-            .map(|(index, (_, _, _, _, exchange))| (index, exchange.as_deref())),
+            .map(|(index, (_, _, _, _, venue))| (index, venue.as_ref())),
     )
 }
 
@@ -387,7 +388,7 @@ impl SettingsView {
         let (order, servers, mut groups) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
-            let exchange_names = b.session.market_source().core_exchange_names();
+            let venues = b.session.core_venues();
             let servers = d
                 .servers
                 .iter()
@@ -397,7 +398,7 @@ impl SettingsView {
                         s.uid,
                         s.active,
                         s.group.clone(),
-                        exchange_names.get(&s.id).cloned(),
+                        venues.get(&s.id).cloned(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -506,13 +507,11 @@ impl SettingsView {
             // Render exchange branches with their core leaves. Keep inactive cores at their
             // canonical position; the status dot shows state. Each member index is also the index
             // in `preview.servers` used by row mutations.
-            for (exchange_index, (exchange, mut members)) in
+            for (exchange_index, (venue, mut members)) in
                 exchange_sections(&servers, name).into_iter().enumerate()
             {
-                let identified = exchange.is_some();
-                let exchange_name = exchange
-                    .map(crate::controls::exchange_display_name)
-                    .unwrap_or_else(|| t!("common.exchange_unknown").to_string());
+                let identified = venue.is_some();
+                let exchange_name = crate::controls::venue_section_label(venue);
                 list_col = list_col.child(Self::subsection_header_row(
                     SharedString::from(format!("exchange-{group_index}-{exchange_index}")),
                     exchange_name,

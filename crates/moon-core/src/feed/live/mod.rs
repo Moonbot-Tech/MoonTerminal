@@ -18,8 +18,8 @@ mod market_role;
 mod tests;
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::mpsc::{sync_channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use moonproto::state::{AccountEvent, MarketHistorySizing, OrderEvent, SettingsEvent};
@@ -69,7 +69,7 @@ fn apply_strategy_delivery_ack(
 
 use account_reconciliation::AccountReconciliation;
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
-use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
+use commands::{drain_commands, CommandDrain, LocalStratEdits, StrategyPlacementGuard};
 use convert::{
     build_order_rows, client_settings_from_proto, lev_manage_from_proto, license_state_from_proto,
     runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto,
@@ -404,7 +404,13 @@ pub(super) fn run(
                         dex,
                         id
                     );
-                    let _ = tx.send(FeedMsg::Identity(id));
+                    let _ = tx.send(FeedMsg::Identity {
+                        id,
+                        dex: dex.to_string(),
+                        // The core's own caption travels with the identity so no consumer has to
+                        // reach back into a client snapshot for it while rendering.
+                        reported: info.exchange_name.clone().unwrap_or_default(),
+                    });
                     // The account base currency selects the USD conversion used for manual orders.
                     let base = info.base_currency_name.unwrap_or_default();
                     if !base.is_empty() {

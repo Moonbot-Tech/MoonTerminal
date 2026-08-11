@@ -9,7 +9,9 @@ use crate::panels::log::{
     AGG_PER_CORE, LogSource, LogSourceItem, VIEW_LIMIT, exchange_membership_changed,
 };
 use moon_core::applog::LogLine;
+use moon_core::feed::ExchangeId;
 use moon_core::session::CoreStore;
+use moon_core::venue::CoreVenue;
 use std::collections::{HashMap, HashSet};
 
 /// Builds a core selector entry for aggregate tests without involving UI state.
@@ -179,24 +181,15 @@ fn aggregate_preserves_source_and_row_order_for_equal_timestamps() {
 fn exchange_members_require_every_membership_constraint() {
     let configured = [(1, "desk"), (2, "desk"), (3, "other"), (4, "desk")];
     let live = HashSet::from([1, 2, 3]);
-    let exchange_names = HashMap::from([
-        (1, "Binance Futures".to_string()),
-        (2, "ByBit Futures".to_string()),
-        (3, "Binance Futures".to_string()),
-        (4, "Binance Futures".to_string()),
-    ]);
+    let binance_futures = ExchangeId::new(4);
+    let venue = |code: u8| CoreVenue::identify(code, "", None);
+    let venues = HashMap::from([(1, venue(4)), (2, venue(2)), (3, venue(4)), (4, venue(4))]);
 
-    let members = exchange_members_from(
-        configured,
-        &live,
-        &exchange_names,
-        "desk",
-        "Binance Futures",
-    );
+    let members = exchange_members_from(configured, &live, &venues, "desk", binance_futures);
 
     assert_eq!(members, HashSet::from([1]));
     assert_eq!(
-        exchange_members_from(configured, &live, &exchange_names, "", "Binance Futures",),
+        exchange_members_from(configured, &live, &venues, "", binance_futures),
         HashSet::from([1, 3]),
         "an empty panel group must include matching live cores from every group"
     );

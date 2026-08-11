@@ -517,7 +517,8 @@ impl CoreData {
                 }
             }
             // Identity and market wake-up messages are not routed into this store.
-            FeedMsg::Identity(_) | FeedMsg::CoreBase { .. } | FeedMsg::MarketDataChanged(_) => {}
+            FeedMsg::Identity { .. } | FeedMsg::CoreBase { .. } | FeedMsg::MarketDataChanged(_) => {
+            }
         }
     }
 

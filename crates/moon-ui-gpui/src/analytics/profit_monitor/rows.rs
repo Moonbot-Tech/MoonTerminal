@@ -4,9 +4,11 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
+use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
+use moon_core::venue::CoreVenue;
 
-use crate::controls::exchange_display_name_with_spot;
+use crate::controls::venue_section_label;
 
 /// User-selected grouping axis for the monitor table.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -14,7 +16,7 @@ pub(super) enum GroupMode {
     /// Keep one row per report core in canonical core order.
     #[default]
     Core,
-    /// Merge every core reporting the same exchange name.
+    /// Merge every core connected to the same venue.
     Exchange,
 }
 
@@ -49,8 +51,8 @@ impl GroupMode {
 /// Cached non-database context that can regroup an existing report snapshot.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct LiveContext {
-    /// Last known nonblank exchange names keyed by core.
-    pub(super) exchange_names: HashMap<CoreId, String>,
+    /// Last known venue keyed by core.
+    pub(super) venues: HashMap<CoreId, CoreVenue>,
     /// Current configured names keyed by core.
     pub(super) core_names: HashMap<CoreId, String>,
     /// Configured cores in canonical display order.
@@ -62,8 +64,6 @@ pub(super) struct LiveContext {
 pub(super) struct MonitorRow {
     /// Visible group label.
     pub(super) name: String,
-    /// Unformatted identity used to preserve raw exchange-name sorting.
-    pub(super) sort_name: String,
     /// Projected profit.
     pub(super) profit: f64,
     /// Closed-trade count.
@@ -95,11 +95,12 @@ pub(super) struct MonitorRow {
     /// core that happened to close nothing this hour would silently vanish from Orders too. The
     /// `Rc` is what lets the table hand this to a click handler per row without copying it.
     pub(super) filter_cores: Rc<[CoreId]>,
-    /// Raw exchange name reported for `primary_core`, used only to pick a logo.
+    /// Venue of `primary_core`, used to pick the row's logo and to resolve its filter payload.
     ///
-    /// Kept unformatted: the Spot/Futures display policy belongs to the visible `name`, while the
-    /// logo lookup wants the identity the core actually reported.
-    pub(super) exchange: Option<String>,
+    /// Populated in BOTH modes — a Core row draws its own core's brand — and `None` when nothing
+    /// can name the core's venue, whether because none was reported or because the one reported is
+    /// not nameable. That is also what the unidentified Exchange row stands for.
+    pub(super) venue: Option<CoreVenue>,
 }
 
 impl MonitorRow {
@@ -151,36 +152,35 @@ impl MonitorRow {
     }
 }
 
-/// Localized fallback labels used by the pure grouping pass.
+/// Localized fallback label used by the pure grouping pass.
+///
+/// Only the core prefix is injected. The exchange caption comes from
+/// [`crate::controls::venue_section_label`], so the Profit Monitor cannot word an unidentified
+/// venue differently from every picker that lists the same core.
 pub(super) struct RowLabels<'a> {
     /// Prefix used when no usable core name exists.
     pub(super) core: &'a str,
-    /// One shared explicit label for missing exchange metadata.
-    pub(super) unknown_exchange: &'a str,
-    /// Localized suffix for a known spot exchange.
-    pub(super) spot: &'a str,
 }
 
-/// Bucket every configured core by the exchange it reports, keyed as the row grouping keys it.
+/// Bucket every configured core by the venue it is connected to, keyed as the rows key it.
 ///
 /// One pass, so resolving each row's click payload is a lookup rather than a scan of every core:
 /// two hundred cores across eight exchange rows would otherwise be sixteen hundred comparisons on
-/// each rebuild. The key is `to_lowercase()`, matching [`grouped_rows`] exactly — two spellings of
-/// one exchange render as one row and must therefore filter as one row.
+/// each rebuild. The key is the venue identity, matching [`grouped_rows`] exactly — cores that
+/// render as one row must therefore filter as one row.
 ///
 /// Args:
-///     live: Current configured core order and reported exchange names.
+///     live: Current configured core order and per-core venues.
 ///
 /// Returns:
-///     Configured cores per lowercased exchange name, each in configured order.
-fn cores_by_exchange(live: &LiveContext) -> HashMap<String, Vec<CoreId>> {
-    let mut buckets: HashMap<String, Vec<CoreId>> = HashMap::new();
+///     Configured cores per venue, each in configured order.
+fn cores_by_exchange(live: &LiveContext) -> HashMap<ExchangeId, Vec<CoreId>> {
+    let mut buckets: HashMap<ExchangeId, Vec<CoreId>> = HashMap::new();
     for core in &live.core_order {
-        if let Some(exchange) = live.exchange_names.get(core) {
-            buckets
-                .entry(exchange.to_lowercase())
-                .or_default()
-                .push(*core);
+        // The same `is_nameable` filter `grouped_rows` applies. Without it a core that renders on
+        // the unidentified row would still be filtered in by a named row's click.
+        if let Some(venue) = live.venues.get(core).filter(|venue| venue.is_nameable()) {
+            buckets.entry(venue.id).or_default().push(*core);
         }
     }
     buckets
@@ -195,22 +195,22 @@ fn cores_by_exchange(live: &LiveContext) -> HashMap<String, Vec<CoreId>> {
 ///
 /// Args:
 ///     row: Finished row, already carrying the cores that traded.
-///     buckets: Configured cores per lowercased exchange name.
+///     buckets: Configured cores per venue.
 ///     mode: Selected grouping axis.
 ///
 /// Returns:
 ///     The row's click payload, never empty for a row that has at least one traded core.
 fn filter_cores(
     row: &MonitorRow,
-    buckets: &HashMap<String, Vec<CoreId>>,
+    buckets: &HashMap<ExchangeId, Vec<CoreId>>,
     mode: GroupMode,
 ) -> Rc<[CoreId]> {
-    // The "unknown exchange" row groups cores whose exchange nobody reported; a configured core
-    // that reported nothing is not evidence it belongs there, so that row stays literal too.
+    // The "unknown exchange" row groups cores no venue was reported for; a configured core that
+    // reported nothing is not evidence it belongs there, so that row stays literal too.
     let bucket = (mode == GroupMode::Exchange)
-        .then_some(row.exchange.as_deref())
+        .then_some(row.venue.as_ref())
         .flatten()
-        .and_then(|exchange| buckets.get(&exchange.to_lowercase()));
+        .and_then(|venue| buckets.get(&venue.id));
     let Some(bucket) = bucket else {
         return Rc::from(row.cores.as_slice());
     };
@@ -224,6 +224,19 @@ fn filter_cores(
             .filter(|core| !configured.contains(core)),
     );
     Rc::from(cores.as_slice())
+}
+
+/// Identity one displayed row merges its cores under.
+///
+/// Exchange rows key on the VENUE, not on its caption: two cores whose builds spell one venue
+/// differently still merge, and the unidentified row is one explicit bucket rather than whatever
+/// the localized fallback label happens to be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum RowKey {
+    /// One row per report core.
+    Core(CoreId),
+    /// One row per venue; `None` collects every core with no reported identity.
+    Exchange(Option<ExchangeId>),
 }
 
 /// Group per-core report aggregates into visible Core or Exchange rows.
@@ -242,7 +255,7 @@ pub(super) fn grouped_rows(
     mode: GroupMode,
     labels: RowLabels<'_>,
 ) -> Vec<MonitorRow> {
-    let mut grouped = HashMap::<String, MonitorRow>::new();
+    let mut grouped = HashMap::<RowKey, MonitorRow>::new();
     for source in &summary.cores {
         let core = source.core_uid;
         let configured = live
@@ -251,39 +264,30 @@ pub(super) fn grouped_rows(
             .map(String::as_str)
             .filter(|name| !name.trim().is_empty());
         let report = (!source.report_name.trim().is_empty()).then_some(source.report_name.as_str());
-        let (key, name, sort_name) = match mode {
-            GroupMode::Core => {
-                let name = configured
-                    .or(report)
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("{} {core}", labels.core));
-                (format!("core:{core}"), name.clone(), name)
-            }
-            GroupMode::Exchange => match live.exchange_names.get(&core) {
-                Some(exchange) => (
-                    format!("exchange:{}", exchange.to_lowercase()),
-                    exchange_display_name_with_spot(exchange, labels.spot),
-                    exchange.clone(),
-                ),
-                None => {
-                    let unknown = labels.unknown_exchange.to_string();
-                    (
-                        format!("exchange:{}", unknown.to_lowercase()),
-                        unknown.clone(),
-                        unknown,
-                    )
-                }
-            },
+        // A venue nothing can name groups with the cores that reported none at all, exactly as the
+        // core pickers do — one "not identified" row, never two.
+        let venue = live.venues.get(&core).filter(|venue| venue.is_nameable());
+        let key = match mode {
+            GroupMode::Core => RowKey::Core(core),
+            GroupMode::Exchange => RowKey::Exchange(venue.map(|venue| venue.id)),
         };
+        // The caption is built INSIDE the vacancy closure, never before the lookup: two hundred
+        // cores merge into a handful of exchange rows, and formatting one label per core would
+        // throw almost all of them away — on a pass `body()` runs every render.
         grouped
             .entry(key)
             .or_insert_with(|| MonitorRow {
-                name,
-                sort_name,
+                name: match mode {
+                    GroupMode::Core => configured
+                        .or(report)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("{} {core}", labels.core)),
+                    GroupMode::Exchange => venue_section_label(venue),
+                },
                 primary_core: core,
-                exchange: live.exchange_names.get(&core).cloned(),
+                venue: venue.cloned(),
                 ..MonitorRow::default()
             })
             .push(source);
@@ -312,11 +316,10 @@ pub(super) fn grouped_rows(
             )
         });
     } else {
-        rows.sort_by(|a, b| {
-            b.profit
-                .total_cmp(&a.profit)
-                .then_with(|| a.sort_name.to_lowercase().cmp(&b.sort_name.to_lowercase()))
-        });
+        // Cached keys: the tiebreak lowercases a name, and doing that inside the comparator
+        // allocates twice per comparison rather than once per row.
+        rows.sort_by_cached_key(|row| row.name.to_lowercase());
+        rows.sort_by(|a, b| b.profit.total_cmp(&a.profit));
     }
     rows
 }

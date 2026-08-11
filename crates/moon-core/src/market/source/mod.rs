@@ -162,8 +162,12 @@ pub struct DetectSnapshot {
     pub delta_24h: f32,
     /// Actual 1-hour price change in percent, comparing now with a close from about one hour ago.
     pub delta_1h: f32,
-    /// Human-readable exchange name from `server_info`, such as `Binance Futures` or `Bybit`.
-    pub exchange_name: String,
+    /// Venue the detecting core's provider is connected to, frozen with the rest of the card.
+    ///
+    /// The card captions this through the venue directory like every other core list, so a
+    /// detection on Binance COIN-M reads as the same venue the Orders picker shows. `None` when the
+    /// provider reported no identity this build can name.
+    pub venue: Option<crate::venue::CoreVenue>,
     /// Short Russian-language exchange type label derived from `exchange_type_mask`.
     ///
     /// The label distinguishes spot, futures, DEX, and combined connections. Empty when the type

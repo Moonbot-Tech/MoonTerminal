@@ -1,6 +1,8 @@
 //! Pure regressions for workspace scope, roster, navigation, ownership, and rail presentation.
 
 use moon_core::config::WorkspaceMode;
+use moon_core::feed::ExchangeId;
+use moon_core::venue::CoreVenue;
 
 use super::{
     EffectiveScopeLabel, RetainedCoreScope, WORKSPACE_RAIL_COMPACT_MIN_WIDTH,
@@ -202,17 +204,7 @@ fn hidden_owner_reconciles_once_after_config_and_window_changes() {
 #[test]
 fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
     let inputs = vec![
-        roster_input(
-            11,
-            "Ready",
-            "alpha",
-            Some("Binance Futures"),
-            true,
-            true,
-            true,
-            true,
-            true,
-        ),
+        roster_input(11, "Ready", "alpha", Some(4), true, true, true, true, true),
         roster_input(
             22, "Disabled", "alpha", None, false, true, false, true, false,
         ),
@@ -220,7 +212,7 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
             33,
             "No window",
             "beta",
-            Some("Bybit Futures"),
+            Some(2),
             true,
             true,
             true,
@@ -231,7 +223,7 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
             44,
             "Connecting",
             "beta",
-            Some("Binance Futures"),
+            Some(4),
             true,
             true,
             true,
@@ -241,14 +233,20 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
     ];
     let roster = derive_workspace_roster(&inputs, "alpha", Some(11));
 
-    assert_eq!(roster.sections[0].exchange, None);
+    assert_eq!(roster.sections[0].venue, None);
     assert_eq!(
-        roster.sections[1].exchange.as_deref(),
-        Some("Binance Futures")
+        roster.sections[1]
+            .venue
+            .as_ref()
+            .map(crate::controls::venue_label),
+        Some("Binance Futures".to_string())
     );
     assert_eq!(
-        roster.sections[2].exchange.as_deref(),
-        Some("Bybit Futures")
+        roster.sections[2]
+            .venue
+            .as_ref()
+            .map(crate::controls::venue_label),
+        Some("Bybit Futures".to_string())
     );
     assert_eq!(
         roster.sections[1]
@@ -368,7 +366,7 @@ fn roster_input(
     core: u64,
     name: &str,
     group: &str,
-    exchange: Option<&str>,
+    exchange: Option<u8>,
     core_active: bool,
     group_active: bool,
     live_session: bool,
@@ -379,7 +377,11 @@ fn roster_input(
         core,
         name: name.to_string(),
         group: group.to_string(),
-        exchange: exchange.map(str::to_string),
+        venue: exchange.map(|code| CoreVenue {
+            id: ExchangeId::new(code),
+            dex: String::new(),
+            reported: String::new(),
+        }),
         availability: availability(
             group_active,
             core_active,
