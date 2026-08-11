@@ -519,3 +519,22 @@ fn a_core_folder_row_marker_stays_passive() {
         "an interactive MoonDisclosure::button here would take a hitbox and swallow the row's click"
     );
 }
+
+/// The Strategies window seeds its tree expansion from the Auto workspace's selected core, not
+/// from an unconditional empty set.
+///
+/// Plausible edit: reverting construction to the literal `expanded_cores: HashSet::new()` — the
+/// window would then always open fully collapsed even with a concrete Auto core selected on the
+/// rail, and the user has to re-find that server by hand every time.
+#[test]
+fn strategies_window_seeds_expansion_from_the_auto_workspace() {
+    let src = code_only(&read_src("strategies/state.rs"));
+    assert!(
+        src.contains("initial_expanded_cores("),
+        "construction must seed its expanded cores through initial_expanded_cores"
+    );
+    assert!(
+        !src.contains("expanded_cores: HashSet::new()"),
+        "construction must not hard-code an empty expansion, or the Auto rail seed is dead code"
+    );
+}
