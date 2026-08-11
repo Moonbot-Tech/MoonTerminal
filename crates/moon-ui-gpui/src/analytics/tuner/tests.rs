@@ -33,7 +33,7 @@ fn coin_axis_defaults_to_showing_the_lists() {
     );
 }
 
-/// Removing effective filtering from `tuner/mod.rs:selected_targets` would keep a stale owner
+/// Routing `tuner/mod.rs:selected_targets` through the read authority would keep a stale owner
 /// strategy writable after the singleton Auto workspace moves to another core.
 #[test]
 fn stale_owner_strategy_selection_is_hidden_without_erasing_classic_state() {
@@ -43,12 +43,22 @@ fn stale_owner_strategy_selection_is_hidden_without_erasing_classic_state() {
     assert!(strategy_selection_visible(retained, None));
 
     let tuner = include_str!("mod.rs");
-    let targets = tuner
+    let visible = tuner
+        .split("fn visible_targets<'a>(")
+        .nth(1)
+        .and_then(|tail| tail.split("\n    }").next())
+        .expect("visible_targets must exist");
+    assert!(visible.contains("strategy_selection_visible(key, workspace)"));
+
+    // `selected_targets` feeds Save/Copy/purge, so it must filter through the WRITE authority
+    // (`action_core_ids`), not the read filter — the two differ on Auto+Overview, where the core
+    // dropdown is unpinned but write access still stays confined to the focused group.
+    let selected = tuner
         .split("fn selected_targets(&self)")
         .nth(1)
         .and_then(|tail| tail.split("\n    }").next())
         .expect("selected_targets must exist");
-    assert!(targets.contains("strategy_selection_visible(key, workspace)"));
+    assert!(selected.contains("self.action_core_ids()"));
 
     let save = include_str!("save.rs");
     assert!(save.contains("if !self.save_target_in_workspace(target)"));

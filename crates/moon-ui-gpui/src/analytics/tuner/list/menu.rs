@@ -28,6 +28,12 @@ pub(in crate::analytics) enum PurgeGate {
     NoReportFeed,
     /// The core is not connected, or no longer carries this strategy.
     Offline,
+    /// The core is live, but it sits outside the focused Auto group, which owns write authority.
+    ///
+    /// Distinct from [`PurgeGate::Offline`] because the core is perfectly reachable: on
+    /// Auto+Overview the unpinned core filter routinely puts such a row on screen, and calling it
+    /// "not connected" would send the user off diagnosing a connection that is fine.
+    OutOfWorkspace,
 }
 
 impl PurgeGate {
@@ -39,23 +45,30 @@ impl PurgeGate {
             PurgeGate::AlreadyDeleted => Some("analytics.purge.gate_deleted"),
             PurgeGate::NoReportFeed => Some("analytics.purge.gate_no_report_feed"),
             PurgeGate::Offline => Some("analytics.purge.gate_offline"),
+            PurgeGate::OutOfWorkspace => Some("analytics.purge.gate_out_of_workspace"),
         }
     }
 }
 
 /// Classify one strategy row against the live core state.
 ///
-/// Pure: the two live facts arrive as closures so the decision can be unit-tested without a
-/// window, a backend, or a core session.
+/// Pure: report replication, strategy liveness, and workspace membership arrive as closures so
+/// the decision can be unit-tested without a window, a backend, or a core session.
 ///
 /// `alive` is the aggregate's liveness marker (0 deleted, 1 disabled, 2 enabled). `None` means no
 /// strategy database is attached, which says nothing about the core — `live` decides that.
+///
+/// Refusals are resolved in this order: invalid target, manual strategy, deleted strategy,
+/// disabled report replication, offline or missing strategy, then workspace membership. Asking
+/// `in_workspace` last makes an offline core outside the group report the actionable connection
+/// state first and keeps every refusal reason and its precedence in one place.
 ///
 /// Args:
 ///     key: Strategy row key in `strategyid@core_uid` form.
 ///     alive: Liveness marker carried by the row's aggregate.
 ///     replicates: Whether that core replicates its report (`ServerConfig.feed.reports`).
 ///     live: Whether that core is connected AND still carries this strategy id.
+///     in_workspace: Whether the focused Auto group holds write authority over that core.
 ///
 /// Returns:
 ///     The exact target when allowed, else the reason it is not.
@@ -64,6 +77,7 @@ pub(in crate::analytics) fn purge_gate(
     alive: Option<i64>,
     replicates: impl Fn(u64) -> bool,
     live: impl Fn(u64, u64) -> bool,
+    in_workspace: impl Fn(u64) -> bool,
 ) -> PurgeGate {
     let Some((strategy_id, Some(core_uid))) = parse_strat_key(key) else {
         // A legacy key without a core cannot address a soft-delete, which is per core.
@@ -82,6 +96,9 @@ pub(in crate::analytics) fn purge_gate(
     if !live(core_uid, sid) {
         return PurgeGate::Offline;
     }
+    if !in_workspace(core_uid) {
+        return PurgeGate::OutOfWorkspace;
+    }
     PurgeGate::Allowed { core_uid, sid }
 }
 
@@ -89,7 +106,7 @@ pub(in crate::analytics) fn purge_gate(
 const MENU_W: f32 = 340.0;
 
 impl AnalyticsView {
-    /// Classify a row using the live backend state.
+    /// Classify a row using live backend state and the current action authority.
     ///
     /// Args:
     ///     key: Strategy row key in `strategyid@core_uid` form.
@@ -97,7 +114,7 @@ impl AnalyticsView {
     ///     cx: Application context used to read live core and workspace state.
     ///
     /// Returns:
-    ///     An allowed exact target only when its core is live and still workspace-visible.
+    ///     An allowed exact target only when its core is live and action-authorized.
     pub(in crate::analytics) fn strategy_purge_gate(
         &self,
         key: &str,
@@ -105,7 +122,8 @@ impl AnalyticsView {
         cx: &gpui::App,
     ) -> PurgeGate {
         let backend = self.backend.read(cx);
-        let gate = purge_gate(
+        let action_cores = self.action_core_ids();
+        purge_gate(
             key,
             alive,
             |core_uid| {
@@ -127,18 +145,9 @@ impl AnalyticsView {
                         && core.strategies.iter().any(|strategy| strategy.id == sid)
                 })
             },
-        );
-        match gate {
-            PurgeGate::Allowed { core_uid, .. }
-                if self
-                    .workspace_scope
-                    .as_ref()
-                    .is_some_and(|scope| !scope.core_ids.contains(&core_uid)) =>
-            {
-                PurgeGate::Offline
-            }
-            gate => gate,
-        }
+            // Classic holds no group, so it authorizes every core.
+            |core_uid| action_cores.is_none_or(|cores| cores.contains(&core_uid)),
+        )
     }
 
     /// Open the strategy row's context menu at `pos`.

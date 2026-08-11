@@ -94,13 +94,13 @@ pub(super) fn sole_core_name<'a>(
 /// Convert the effective Analytics selection into database filter ids.
 ///
 /// Args:
-///     selected: Retained explicit core ids; only an empty set represents the Classic All row.
-///     workspace: Concrete Auto-workspace ids, when a live singleton owner pins Analytics.
+///     selected: Retained explicit core ids; an empty set represents the unpinned All row.
+///     workspace: Concrete Auto-workspace ids when a selected rail core pins Analytics.
 ///
 /// Returns:
-///     Workspace ids when pinned, every retained explicit id in Classic, or an empty unfiltered
-///     list only for Classic All. An empty Auto group uses core id zero, which cannot be assigned to
-///     a reconciled server, so it stays an explicit no-match query instead of broadening globally.
+///     Workspace ids when pinned, every retained explicit id when unpinned, or an empty unfiltered
+///     list for All. An empty pinned Auto group uses core id zero, which cannot be assigned to a
+///     reconciled server, so it stays an explicit no-match query instead of broadening globally.
 pub(super) fn analytics_core_filter_ids(
     selected: &HashSet<u64>,
     workspace: Option<&[u64]>,
@@ -184,12 +184,13 @@ impl AnalyticsView {
     /// Returns:
     ///     The rendered tab-strip element.
     pub(super) fn tabs_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
-        let workspace_pinned = self.workspace_scope.is_some();
-        let presented_selection: HashSet<u64> = match &self.workspace_scope {
+        let filter_pin = self.core_filter_pin();
+        let workspace_pinned = filter_pin.is_some();
+        let presented_selection: HashSet<u64> = match filter_pin {
             Some(scope) => scope.selected_core.into_iter().collect(),
             None => self.sel_cores.clone(),
         };
-        let presented_cores: Vec<(u64, String)> = match &self.workspace_scope {
+        let presented_cores: Vec<(u64, String)> = match filter_pin {
             Some(scope) => self
                 .cores
                 .iter()
@@ -415,8 +416,9 @@ impl AnalyticsView {
     ///     The configured fixed-trigger dropdown.
     fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let workspace_pinned = self.workspace_scope.is_some();
-        let selected: HashSet<u64> = match &self.workspace_scope {
+        let filter_pin = self.core_filter_pin();
+        let workspace_pinned = filter_pin.is_some();
+        let selected: HashSet<u64> = match filter_pin {
             Some(scope) => scope.selected_core.into_iter().collect(),
             None => self.sel_cores.clone(),
         };
@@ -424,7 +426,7 @@ impl AnalyticsView {
         // deleted) — ranked here, on render, against the current config.
         let (cores, exchange_names) = {
             let backend = self.backend.read(cx);
-            let db_cores = match &self.workspace_scope {
+            let db_cores = match filter_pin {
                 Some(scope) => self
                     .cores
                     .iter()
@@ -438,15 +440,9 @@ impl AnalyticsView {
                 backend.session.market_source().core_exchange_names(),
             )
         };
-        let all_label = if self
-            .workspace_scope
-            .as_ref()
-            .is_some_and(|scope| scope.selected_core.is_none())
-        {
-            t!("workspace.overview").to_string()
-        } else {
-            t!("report.all_cores").to_string()
-        };
+        // The unpinned selector always uses the generic All label; Overview is a rail state, not
+        // a distinct selector row.
+        let all_label = t!("report.all_cores").to_string();
         let toggle_view = view.clone();
         let extras =
             crate::controls::core_combo_extras(!workspace_pinned, &view, &self.backend, cx);

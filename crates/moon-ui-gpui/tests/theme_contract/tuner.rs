@@ -362,6 +362,42 @@ fn manual_v1_edits_retire_filter_and_time_suggestions() {
     }
 }
 
+/// `tuner_query` must scope strategies by the READ filter, never the write authority.
+///
+/// Mutation: swapping `self.read_core_ids()` for `self.action_core_ids()` reads unchanged on
+/// every rail except Auto+Overview, where the core dropdown is unpinned but write access still
+/// stays confined to the group. There, a selected out-of-group strategy row would drop out of
+/// `q.strategies`, so the query comes back empty and the tuner silently analyses EVERY strategy
+/// the (unpinned) core filter admits while the page still shows one row selected.
+#[test]
+fn tuner_query_scopes_strategies_by_the_read_filter() {
+    let filter = read_src("analytics/tuner/filter/mod.rs");
+    let body = code_only(braced_body(&filter, "fn tuner_query("));
+    assert!(
+        body.contains("self.visible_target_keys(self.read_core_ids())"),
+        "`tuner_query` must scope `q.strategies` through `read_core_ids`, the READ authority; \
+         scoping through `action_core_ids` would silently widen the analysis on Auto+Overview"
+    );
+}
+
+/// `selected_targets` feeds Save/Copy/purge and must scope by the WRITE authority, never the
+/// read filter.
+///
+/// Mutation: swapping `self.action_core_ids()` for `self.read_core_ids()` reads unchanged on
+/// every rail except Auto+Overview, where the core dropdown is unpinned. There, a destructive
+/// write would reach a target outside the focused Auto group — this is the access-control
+/// boundary the filter/action split exists to hold.
+#[test]
+fn selected_targets_scopes_by_the_write_authority() {
+    let tuner = read_src("analytics/tuner/mod.rs");
+    let body = code_only(braced_body(&tuner, "fn selected_targets(&self)"));
+    assert!(
+        body.contains("self.targets_visible_in(self.action_core_ids())"),
+        "`selected_targets` must scope through `action_core_ids`, the WRITE authority; scoping \
+         through `read_core_ids` would let Save/Copy reach a target outside the focused group"
+    );
+}
+
 /// Every checkbox that changes the tuner's field selection must also persist it.
 ///
 /// `moon-ui-gpui` is a binary crate, so the click handlers live in GPUI closures no integration
