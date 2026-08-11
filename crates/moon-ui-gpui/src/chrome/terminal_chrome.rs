@@ -510,14 +510,11 @@ fn core_selector(
     // The header renders continuously, but exchange discovery scans every client snapshot. Build
     // the hidden menu only after controlled open state triggers a repaint.
     let items = if open && !auto {
-        let exchange_names = b.session.market_source().core_exchange_names();
-        let unknown_exchange = t!("common.exchange_unknown").to_string();
-        let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
+        let venues = b.session.core_venues();
+        let sections = crate::controls::core_menu_sections(&cores, venues);
         let mut items = Vec::with_capacity(cores.len() + sections.len());
-        for (exchange, members) in sections {
-            let exchange_label = exchange
-                .map(crate::controls::exchange_display_name)
-                .unwrap_or_else(|| unknown_exchange.clone());
+        for (venue, members) in sections {
+            let exchange_label = crate::controls::venue_section_label(venue);
             items.push(MoonMenuItem::label(exchange_label));
             for (id, name) in members {
                 let backend = backend.clone();

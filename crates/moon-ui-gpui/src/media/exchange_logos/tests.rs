@@ -3,61 +3,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use super::{BRANDS, EMBEDDED, RASTER_PX, load, logo_slug, prewarm_once};
+use moon_core::venue::Brand;
 
-/// Core-reported names carry a market type, a leading futures letter, or an old brand spelling, and
-/// all three must land on the one shipped logo.
-///
-/// Breakage: dropping the trailing market-word strip splits `Binance Futures` off from `Binance`;
-/// removing an explicit leading-F alias loses real futures exchange names.
-#[test]
-fn reported_exchange_names_resolve_to_one_brand() {
-    for (name, slug) in [
-        ("Binance", "binance"),
-        ("Binance Futures", "binance"),
-        ("FBinance", "binance"),
-        ("Binance COIN-M", "binance"),
-        ("FBinance USD-M Futures", "binance"),
-        ("ByBit Spot", "bybit"),
-        ("FByBit", "bybit"),
-        ("Gate.io", "gate"),
-        ("FGate", "gate"),
-        ("OKEx", "okx"),
-        ("OKX Futures", "okx"),
-        ("FOKX", "okx"),
-        ("Huobi", "htx"),
-        ("HTX Spot", "htx"),
-        ("Hyperliquid", "hyperliquid"),
-        ("FHyper", "hyperliquid"),
-        ("Bitget Futures", "bitget"),
-        ("FBitget", "bitget"),
-    ] {
-        assert_eq!(logo_slug(name), Some(slug), "{name} must resolve to {slug}");
-    }
-}
-
-/// An unknown or empty exchange must resolve to nothing rather than to the nearest brand.
-///
-/// Breakage: matching on a prefix of the needle instead of the whole one would let `Kraken` or a
-/// bare market type claim a logo it has no right to.
-#[test]
-fn unknown_exchanges_get_no_logo() {
-    for name in [
-        "",
-        "   ",
-        "Kraken",
-        "Spot",
-        "Futures",
-        "MEXC",
-        "GateHub",
-        "HyperTrade",
-        "BinanceClone",
-        "NotOKX",
-        "MyByBit",
-    ] {
-        assert_eq!(logo_slug(name), None, "{name:?} must have no logo");
-    }
-}
+use super::{EMBEDDED, RASTER_PX, load, prewarm_once};
 
 /// Catches replacing `exchange_logos.rs:prewarm_once` with an ordinary cache check: concurrent
 /// Shell entries could all begin filesystem reads and SVG decode before any one task fills it.
@@ -92,13 +40,15 @@ fn concurrent_logo_prewarm_runs_one_blocking_initializer() {
     );
 }
 
-/// Every brand the resolver can return must exist in the embedded set and rasterize.
+/// Every brand the directory can name must ship a file that actually rasterizes.
 ///
-/// Breakage: renaming or deleting an SVG leaves the resolver pointing at a stem that silently
-/// resolves to no icon at runtime, which reads as "this exchange has no logo" instead of a bug.
+/// Breakage: adding a brand to `moon_core::venue` without its SVG, or renaming an asset, leaves the
+/// resolver pointing at a stem that silently produces no icon at runtime — which reads as "this
+/// exchange has no logo" instead of as a bug.
 #[test]
-fn every_resolvable_brand_ships_a_rasterizable_file() {
-    for (_, slug) in BRANDS {
+fn every_brand_ships_a_rasterizable_file() {
+    for brand in Brand::ALL {
+        let slug = brand.slug();
         assert!(
             EMBEDDED.get_file(format!("{slug}.svg")).is_some(),
             "assets/exchanges/{slug}.svg is missing from the embedded set"

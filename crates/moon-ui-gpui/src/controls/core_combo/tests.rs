@@ -2,14 +2,23 @@
 
 use std::collections::{HashMap, HashSet};
 
+use moon_core::venue::CoreVenue;
+
 use super::{
     CoreAllRowMode, core_menu_sections, core_selection_is_all, selection_summary,
     toggle_exchange_cores,
 };
+use crate::controls::venue_label;
 
-/// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections,
-/// and preserve the incoming canonical member order. Replacing the shared section helper with one
-/// direct pass over `cores` removes the exchange hierarchy from every core dropdown.
+/// Build one core's venue as the session publishes it.
+fn venue(code: u8) -> CoreVenue {
+    CoreVenue::identify(code, "", None)
+}
+
+/// `core_combo.rs:core_menu_sections` must keep unidentified cores first, sort exchange sections by
+/// their visible caption, and preserve the incoming canonical member order. Replacing the shared
+/// section helper with one direct pass over `cores` removes the exchange hierarchy from every core
+/// dropdown.
 #[test]
 fn menu_sections_are_unknown_first_alphabetical_and_member_stable() {
     let cores = vec![
@@ -19,19 +28,14 @@ fn menu_sections_are_unknown_first_alphabetical_and_member_stable() {
         (4, "Bybit second".to_string()),
         (5, "Binance second".to_string()),
     ];
-    let exchange_names = HashMap::from([
-        (1, "Bybit".to_string()),
-        (3, "Binance Futures".to_string()),
-        (4, "Bybit".to_string()),
-        (5, "Binance Futures".to_string()),
-    ]);
+    let venues = HashMap::from([(1, venue(2)), (3, venue(4)), (4, venue(2)), (5, venue(4))]);
 
-    let sections = core_menu_sections(&cores, &exchange_names);
-    let actual: Vec<(Option<&str>, Vec<u64>)> = sections
+    let sections = core_menu_sections(&cores, &venues);
+    let actual: Vec<(Option<String>, Vec<u64>)> = sections
         .into_iter()
-        .map(|(exchange, members)| {
+        .map(|(venue, members)| {
             (
-                exchange,
+                venue.map(venue_label),
                 members.into_iter().map(|(core, _)| core).collect(),
             )
         })
@@ -41,8 +45,8 @@ fn menu_sections_are_unknown_first_alphabetical_and_member_stable() {
         actual,
         vec![
             (None, vec![2]),
-            (Some("Binance Futures"), vec![3, 5]),
-            (Some("Bybit"), vec![1, 4]),
+            (Some("Binance Futures".to_string()), vec![3, 5]),
+            (Some("Bybit Futures".to_string()), vec![1, 4]),
         ]
     );
 }

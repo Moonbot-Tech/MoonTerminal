@@ -65,12 +65,9 @@ impl AlertsPanel {
         let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
         let view = cx.entity();
         let exchange_view = view.clone();
-        let (cores, exchange_names) = {
+        let (cores, venues) = {
             let b = self.backend.read(cx);
-            (
-                self.group_cores(b),
-                b.session.market_source().core_exchange_names(),
-            )
+            (self.group_cores(b), b.session.core_venues())
         };
         let pinned_label = match scope.label() {
             crate::workspace::EffectiveScopeLabel::Overview => {
@@ -87,7 +84,7 @@ impl AlertsPanel {
         let combo = crate::controls::core_combo(
             "alerts-cores",
             &cores,
-            &exchange_names,
+            &venues,
             if workspace_owned {
                 &effective_selection
             } else {

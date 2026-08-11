@@ -73,7 +73,13 @@ pub fn run(
 
     let _ = tx.send(FeedMsg::Status(ConnStatus::Ready));
     // Synthetic exchange (code 200): the coordinator elects this core as its sole provider.
-    let _ = tx.send(FeedMsg::Identity(ExchangeId::new(200)));
+    let _ = tx.send(FeedMsg::Identity {
+        id: ExchangeId::new(200),
+        dex: String::new(),
+        // No caption: the synthetic feed is not a venue, and naming it one would give it a section
+        // of its own in every core list instead of the shared unidentified group.
+        reported: String::new(),
+    });
     // Synthetic base currency is USDT, so group-local USD sizes convert at a one-to-one rate.
     let _ = tx.send(FeedMsg::CoreBase {
         base: "USDT".to_string(),

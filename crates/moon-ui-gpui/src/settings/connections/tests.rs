@@ -6,6 +6,12 @@ use moon_core::config::{
     FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret, ServerConfig,
     TakeProfitMode,
 };
+use moon_core::venue::CoreVenue;
+
+/// Build one identified core's venue from its platform ordinal.
+fn venue(code: u8) -> CoreVenue {
+    CoreVenue::identify(code, "", None)
+}
 
 /// Build a minimal server fixture for preview-group synchronization.
 fn server(group: &str) -> ServerConfig {
@@ -31,39 +37,31 @@ fn server(group: &str) -> ServerConfig {
 #[test]
 fn exchange_sections_group_known_names_and_keep_unknown_first() {
     let servers: Vec<ServerRowMeta> = vec![
-        (
-            1,
-            11,
-            true,
-            "default".to_string(),
-            Some("Bybit".to_string()),
-        ),
+        (1, 11, true, "default".to_string(), Some(venue(7))),
         (2, 12, true, "default".to_string(), None),
-        (
-            3,
-            13,
-            true,
-            "default".to_string(),
-            Some("Binance Futures".to_string()),
-        ),
-        (
-            4,
-            14,
-            false,
-            "default".to_string(),
-            Some("Bybit".to_string()),
-        ),
+        (3, 13, true, "default".to_string(), Some(venue(4))),
+        (4, 14, false, "default".to_string(), Some(venue(7))),
         (5, 15, true, "secondary".to_string(), None),
     ];
 
     let sections = exchange_sections(&servers, "default");
-    let names: Vec<Option<&str>> = sections.iter().map(|(name, _)| *name).collect();
+    let names: Vec<Option<String>> = sections
+        .iter()
+        .map(|(venue, _)| venue.map(crate::controls::venue_label))
+        .collect();
     let members: Vec<Vec<usize>> = sections
         .iter()
         .map(|(_, members)| members.clone())
         .collect();
 
-    assert_eq!(names, vec![None, Some("Binance Futures"), Some("Bybit")]);
+    assert_eq!(
+        names,
+        vec![
+            None,
+            Some("Binance Futures".to_string()),
+            Some("Bybit Spot".to_string())
+        ]
+    );
     assert_eq!(members, vec![vec![1], vec![2], vec![0, 3]]);
 }
 
@@ -72,13 +70,7 @@ fn exchange_sections_group_known_names_and_keep_unknown_first() {
 #[test]
 fn pending_section_selects_only_unsaved_cores_and_excludes_them_from_groups() {
     let servers: Vec<ServerRowMeta> = vec![
-        (
-            1,
-            21,
-            true,
-            "default".to_string(),
-            Some("Binance Futures".to_string()),
-        ),
+        (1, 21, true, "default".to_string(), Some(venue(4))),
         (2, 0, true, "default".to_string(), None),
         (3, 0, true, "secondary".to_string(), None),
     ];
@@ -135,7 +127,7 @@ fn retyping_a_group_name_preserves_its_complete_local_state_until_save() {
 fn only_current_server_group_names_become_visible_branches() {
     let servers: Vec<ServerRowMeta> = vec![
         (1, 0, true, String::new(), None),
-        (2, 21, true, "desk".to_string(), Some("Bybit".to_string())),
+        (2, 21, true, "desk".to_string(), Some(venue(7))),
         (3, 22, true, "desk".to_string(), None),
         (4, 23, true, "ops".to_string(), None),
     ];

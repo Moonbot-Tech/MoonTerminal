@@ -35,13 +35,13 @@ mod core_groups;
 mod core_host;
 mod core_quick;
 pub(crate) mod date_range;
-mod exchange_label;
 mod fmt;
 mod manual_strat;
 mod metric;
 mod scale;
 mod strips;
 pub(crate) mod toolbar;
+mod venue_label;
 
 pub use coin_menu::{CoinMenuCtx, CoinMenuOrigin, OrderSide, open_coin_menu};
 pub(crate) use core_broadcast::{apply_core_broadcast, next_core_filter};
@@ -50,13 +50,13 @@ pub(crate) use core_combo::{
 };
 pub(crate) use core_host::{CoreComboHost, core_combo_extras};
 pub(crate) use core_quick::toggle_core_selection;
-pub(crate) use exchange_label::{exchange_display_name, exchange_display_name_with_spot};
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;
 pub use metric::{MetricTarget, TradeMetric, metric_popup_content};
 pub(crate) use scale::{scale_dropdown_for_add_stack, scale_dropdown_for_tabs, step_scale};
 pub use toolbar::toolbar;
+pub(crate) use venue_label::{venue_id_label, venue_label, venue_section_label};
 
 /// Unscaled width of the shared core-selector trigger.
 ///

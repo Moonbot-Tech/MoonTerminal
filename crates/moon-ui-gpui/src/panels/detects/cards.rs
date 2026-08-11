@@ -305,11 +305,12 @@ fn chip(
         DetectField::Delta24h => delta_chip(it.delta_24h, over, decimals, p, cx).into_any_element(),
         DetectField::Delta1h => delta_chip(it.delta_1h, over, decimals, p, cx).into_any_element(),
         DetectField::Exchange => {
-            let exchange = crate::controls::exchange_display_name(&it.exchange_name);
-            if exchange.is_empty() {
-                return None;
-            }
-            soft(exchange, p).render().into_any_element()
+            // Captioned through the same directory as every other core list, from the venue frozen
+            // with the card. A detection has no chip when its provider reported no nameable venue.
+            let venue = it.venue.as_ref()?;
+            soft(crate::controls::venue_label(venue), p)
+                .render()
+                .into_any_element()
         }
         DetectField::ExchangeKind => {
             if it.exchange_kind.is_empty() {

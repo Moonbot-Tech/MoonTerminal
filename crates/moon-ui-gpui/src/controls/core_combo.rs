@@ -36,17 +36,18 @@ use super::core_groups::{
     saves_core,
 };
 use super::core_quick::{exchange_state_label, group_check_state, section_core_ids};
-use super::exchange_label::exchange_display_name;
+use super::venue_label::venue_section_label;
 use crate::controls::CORE_COMBO_TRIGGER_W;
 use crate::core_order::OrderedCores;
 use moon_core::config::CoreGroup;
+use moon_core::venue::CoreVenue;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem, MoonMenuSize};
 
 #[cfg(test)]
 mod tests;
 
-/// One exchange section as its reported name and canonically ordered core rows.
-pub(crate) type CoreMenuSection<'a> = (Option<&'a str>, Vec<(u64, &'a str)>);
+/// One exchange section as its venue and canonically ordered core rows.
+pub(crate) type CoreMenuSection<'a> = (Option<&'a CoreVenue>, Vec<(u64, &'a str)>);
 
 /// Controls when the selector's All row represents an explicit complete selection.
 #[derive(Clone, Copy)]
@@ -107,31 +108,31 @@ impl<'a> CoreComboExtras<'a> {
     }
 }
 
-/// Group canonically ordered cores by their reported exchange names.
+/// Group canonically ordered cores by the venue each is connected to.
 ///
-/// The common ordering helper owns unknown-first and alphabetical exchange ordering. This adapter
-/// maps its stable source indices back to the core ids and display names consumed by menus.
+/// The common ordering helper owns unknown-first and caption ordering. This adapter maps its stable
+/// source indices back to the core ids and display names consumed by menus.
 ///
 /// Args:
 ///     cores: Core ids and display names in canonical order.
-///     exchange_names: Reported display exchange names keyed by core id.
+///     venues: What each identified core is connected to, keyed by core id.
 ///
 /// Returns:
 ///     Exchange sections whose member order matches `cores`.
 pub(crate) fn core_menu_sections<'a>(
     cores: &'a [(u64, String)],
-    exchange_names: &'a HashMap<u64, String>,
+    venues: &'a HashMap<u64, CoreVenue>,
 ) -> Vec<CoreMenuSection<'a>> {
-    crate::core_order::exchange_sections(cores.iter().enumerate().map(|(index, (core, _))| {
-        (
-            index,
-            exchange_names.get(core).map(|exchange| exchange.as_str()),
-        )
-    }))
+    crate::core_order::exchange_sections(
+        cores
+            .iter()
+            .enumerate()
+            .map(|(index, (core, _))| (index, venues.get(core))),
+    )
     .into_iter()
-    .map(|(exchange, members)| {
+    .map(|(venue, members)| {
         (
-            exchange,
+            venue,
             members
                 .into_iter()
                 .map(|index| (cores[index].0, cores[index].1.as_str()))
@@ -412,7 +413,7 @@ fn group_actions_block(
 /// Args:
 ///     id: Dropdown id and prefix for generated item keys.
 ///     cores: Ordered core ids and display names — everything this consumer can select.
-///     exchange_names: Reported display exchange names keyed by core id.
+///     venues: What each identified core is connected to, keyed by core id.
 ///     selected: Currently selected core ids.
 ///     all_row_mode: Whether a complete explicit selection also represents the All row.
 ///     all_label: Localized label for the All item and every state that activates it.
@@ -429,7 +430,7 @@ fn group_actions_block(
 pub(crate) fn core_combo<F, G>(
     id: &'static str,
     cores: &OrderedCores,
-    exchange_names: &HashMap<u64, String>,
+    venues: &HashMap<u64, CoreVenue>,
     selected: &HashSet<u64>,
     all_row_mode: CoreAllRowMode,
     all_label: String,
@@ -445,8 +446,7 @@ where
 {
     let on_toggle_exchange: Rc<dyn Fn(Vec<u64>, &mut App)> = Rc::new(on_toggle_exchange);
     let (cur, all_on) = selection_summary(cores, selected, all_row_mode, &all_label, &cores_n);
-    let unknown_exchange = t!("common.exchange_unknown").to_string();
-    let sections = core_menu_sections(cores, exchange_names);
+    let sections = core_menu_sections(cores, venues);
     let toggle_all = on_toggle.clone();
     let mut menu = MoonDropdown::new(id)
         .label(cur)
@@ -476,13 +476,11 @@ where
     if !sections.is_empty() {
         menu = menu.item(MoonMenuItem::separator());
     }
-    for (section_index, (exchange, members)) in sections.into_iter().enumerate() {
+    for (section_index, (venue, members)) in sections.into_iter().enumerate() {
         if members.is_empty() {
             continue;
         }
-        let exchange_label = exchange
-            .map(exchange_display_name)
-            .unwrap_or_else(|| unknown_exchange.clone());
+        let exchange_label = venue_section_label(venue);
         let exchange_cores: Vec<u64> = section_core_ids(&members);
         let trailing = exchange_state_label(group_check_state(&exchange_cores, selected));
         let on_section = on_toggle_exchange.clone();

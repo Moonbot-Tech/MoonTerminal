@@ -43,6 +43,7 @@ use crate::Backend;
 use crate::core_order::CoreOrder;
 use crate::workspace::{EffectiveScopeLabel, RetainedCoreScope};
 use moon_core::applog::{self, LogLine};
+use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
 use std::collections::HashSet;
 
@@ -70,7 +71,9 @@ fn record_work_us(timer: Option<std::time::Instant>) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum LogSource {
     Aggregate,
-    Exchange(String),
+    /// Every live core on one venue, keyed by its identity rather than by its caption so the
+    /// selection survives a relocalized label and cannot split on two spellings of one venue.
+    Exchange(ExchangeId),
     Local,
     Core(CoreId),
 }
@@ -758,7 +761,7 @@ impl LogPanel {
             let candidates = match &source {
                 LogSource::Core(id) => vec![*id],
                 LogSource::Exchange(exchange) => {
-                    let members = render::exchange_core_ids(b, &self.group, exchange);
+                    let members = render::exchange_core_ids(b, &self.group, *exchange);
                     render::exchange_chart_candidates(
                         b.config
                             .servers
@@ -806,7 +809,7 @@ impl LogPanel {
     fn resolve_membership(&self, b: &Backend, source: &LogSource) -> Option<HashSet<CoreId>> {
         match source {
             LogSource::Exchange(exchange) => {
-                Some(render::exchange_core_ids(b, &self.group, exchange))
+                Some(render::exchange_core_ids(b, &self.group, *exchange))
             }
             LogSource::Aggregate | LogSource::Local | LogSource::Core(_) => None,
         }

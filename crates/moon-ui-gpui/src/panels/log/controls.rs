@@ -23,13 +23,24 @@ impl LogPanel {
     ) -> impl IntoElement {
         let (effective_source, _, workspace_owned) =
             self.effective_selection(self.backend.read(cx));
+        let venues = self.backend.read(cx).session.core_venues();
         let cur = sources
             .iter()
             .find(|s| s.source == effective_source)
             .map(|s| s.display.clone())
             .unwrap_or_else(|| match &effective_source {
                 LogSource::Core(core) => format!("#{core}"),
-                LogSource::Exchange(exchange) => crate::controls::exchange_display_name(exchange),
+                // A live member captions the full venue — its DEX suffix included, and its own
+                // spelling when the ordinal is one this build cannot name. The member is chosen by
+                // lowest core id rather than by HashMap order, so two spellings of one unknown
+                // ordinal cannot alternate between renders. With every member disconnected the
+                // selection still stands, and the identity alone still names it.
+                LogSource::Exchange(exchange) => venues
+                    .iter()
+                    .filter(|(_, venue)| venue.id == *exchange)
+                    .min_by_key(|(core, _)| **core)
+                    .map(|(_, venue)| crate::controls::venue_label(venue))
+                    .unwrap_or_else(|| crate::controls::venue_id_label(*exchange)),
                 LogSource::Aggregate | LogSource::Local => t!("log.source.local").to_string(),
             });
         let cores: Vec<(CoreId, String)> = sources
@@ -39,14 +50,7 @@ impl LogPanel {
                 LogSource::Aggregate | LogSource::Exchange(_) | LogSource::Local => None,
             })
             .collect();
-        let exchange_names = self
-            .backend
-            .read(cx)
-            .session
-            .market_source()
-            .core_exchange_names();
-        let unknown_exchange = t!("common.exchange_unknown").to_string();
-        let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
+        let sections = crate::controls::core_menu_sections(&cores, &venues);
         let view = cx.entity();
         let mut items = Vec::with_capacity(sources.len() + sections.len() + 1);
         for (index, item) in sources
@@ -69,13 +73,11 @@ impl LogPanel {
         if !sections.is_empty() {
             items.push(MoonMenuItem::separator());
         }
-        for (section_index, (exchange, members)) in sections.into_iter().enumerate() {
-            let exchange_label = exchange
-                .map(crate::controls::exchange_display_name)
-                .unwrap_or_else(|| unknown_exchange.clone());
-            if let Some(exchange) = exchange {
-                let selected = matches!(&effective_source, LogSource::Exchange(current) if current == exchange);
-                let source = exchange.to_string();
+        for (section_index, (venue, members)) in sections.into_iter().enumerate() {
+            let exchange_label = crate::controls::venue_section_label(venue);
+            if let Some(venue) = venue {
+                let exchange = venue.id;
+                let selected = matches!(&effective_source, LogSource::Exchange(current) if *current == exchange);
                 let item_view = view.clone();
                 items.push(
                     MoonMenuItem::action_label(
@@ -84,9 +86,8 @@ impl LogPanel {
                     )
                     .selected(selected)
                     .on_click(move |_, _, app| {
-                        let source = source.clone();
                         item_view.update(app, |this, cx| {
-                            this.set_source(LogSource::Exchange(source), cx);
+                            this.set_source(LogSource::Exchange(exchange), cx);
                         });
                     }),
                 );

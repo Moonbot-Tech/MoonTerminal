@@ -121,55 +121,98 @@ fn the_main_tab_row_labels_charts_from_the_panels_own_ticker() {
     );
 }
 
-/// Every current exchange-name surface must use the one Spot/Futures presentation policy.
+/// Every visible exchange caption must come from the one venue-directory formatter.
 ///
-/// Removing the formatter from `controls/core_combo.rs:core_combo`,
-/// `screener/view.rs:source_combo`, `chrome/terminal_chrome.rs:header`,
-/// `settings/connections/tab.rs:connections_tab`, `profit_monitor/rows.rs:grouped_rows`,
-/// `panels/log/controls.rs:source_combo`, `panels/detects/cards.rs:chip`, or
-/// `panels/news/mod.rs:open_coin` makes spot read as Hyper on that surface instead of Hyper Spot.
-/// The Log selector additionally keeps the raw name in state because membership compares raw
-/// identities; assigning `exchange_label` to its source makes the selected aggregate empty.
+/// Removing it from `controls/core_combo.rs:core_combo`, `screener/view.rs:source_combo`,
+/// `chrome/terminal_chrome.rs:header`, `settings/connections/tab.rs:connections_tab`,
+/// `profit_monitor/rows.rs:grouped_rows`, `panels/news/mod.rs:open_coin`,
+/// `panels/detects/cards.rs:chip` or `shell/workspace.rs:render_rail_item` puts a core build's own
+/// spelling back on that surface — which is how `Binance Quarterly` (COIN-M, code 6) rendered
+/// without its brand while every other surface showed `Binance`. The Log selector captions from the
+/// venue identity instead, because its selection outlives the cores that carry it.
 #[test]
 fn current_exchange_surfaces_share_display_policy_without_changing_identity() {
     for (rel, formatter) in [
-        ("controls/core_combo.rs", ".map(exchange_display_name)"),
-        ("screener/view.rs", "exchange_display_name(name)"),
+        ("controls/core_combo.rs", "venue_section_label(venue)"),
+        (
+            "screener/view.rs",
+            "crate::controls::venue_section_label(*venue)",
+        ),
         (
             "chrome/terminal_chrome.rs",
-            ".map(crate::controls::exchange_display_name)",
+            "crate::controls::venue_section_label(venue)",
         ),
         (
             "settings/connections/tab.rs",
-            ".map(crate::controls::exchange_display_name)",
+            "crate::controls::venue_section_label(venue)",
         ),
         (
             "analytics/profit_monitor/rows.rs",
-            "exchange_display_name_with_spot(",
+            "venue_section_label(venue)",
         ),
+        ("panels/news/mod.rs", "crate::controls::venue_label(venue)"),
         (
-            "panels/detects/cards.rs",
-            "exchange_display_name(&it.exchange_name)",
+            "shell/workspace.rs",
+            "crate::controls::venue_section_label(venue.as_ref())",
         ),
-        ("panels/news/mod.rs", "exchange_display_name(ex)"),
+        ("panels/detects/cards.rs", "crate::controls::venue_label("),
+        (
+            "panels/log/controls.rs",
+            "crate::controls::venue_section_label(venue)",
+        ),
     ] {
         let source = read_src(rel);
         assert!(
             source.contains(formatter),
-            "{rel}: every visible exchange name must pass through {formatter}"
+            "{rel}: every visible exchange caption must pass through {formatter}"
         );
     }
+
+    // A CLOSED rule, not a list: the caption is presentation and the platform code is identity, so
+    // `CoreVenue::reported` — the one field carrying a core build's own spelling — may be read only
+    // inside the formatter that displays it. Sweeping the whole crate means a panel added tomorrow
+    // is covered by default, which an enumerated list cannot promise.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+    let mut readers = Vec::new();
+    for path in sources {
+        let rel = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
+        // The formatter itself and its sibling tests — that exact module, not any file that
+        // happens to be named `venue_label.rs`. Compared component by component because a literal
+        // `"controls/venue_label"` never matches on Windows, where the separator is a backslash,
+        // and an exemption that silently covers nothing reports PASS forever.
+        let parts: Vec<_> = rel.components().map(|part| part.as_os_str()).collect();
+        let exempt = matches!(parts.as_slice(), [first, second, ..]
+            if *first == "controls"
+                && (*second == "venue_label" || *second == "venue_label.rs"));
+        if exempt {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        for line in text.lines() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains(".reported") {
+                readers.push(rel.display().to_string());
+                break;
+            }
+        }
+    }
+    assert!(
+        readers.is_empty(),
+        "a venue's reported caption belongs to controls/venue_label.rs alone, but it is read in \
+         {readers:?}"
+    );
 
     let log = read_src("panels/log/controls.rs");
     let source_combo = braced_body(&log, "pub(super) fn source_combo(");
     assert!(
-        source_combo.contains("exchange_display_name(exchange)")
-            && source_combo.contains(".map(crate::controls::exchange_display_name)"),
-        "both the Log trigger and exchange menu labels must use the shared display policy"
-    );
-    assert!(
-        source_combo.contains("let source = exchange.to_string();"),
-        "LogSource::Exchange must retain the raw exchange identity"
+        source_combo.contains("let exchange = venue.id;")
+            && source_combo.contains("this.set_source(LogSource::Exchange(exchange), cx);"),
+        "LogSource::Exchange must retain the venue identity, never its caption"
     );
     assert!(
         !source_combo.contains("LogSource::Exchange(exchange_label"),

@@ -347,10 +347,7 @@ impl MonitorSortColumn {
     ///     Ascending column ordering.
     fn compare(self, left: &MonitorRow, right: &MonitorRow) -> SortOrdering {
         match self {
-            Self::Name => left
-                .sort_name
-                .to_lowercase()
-                .cmp(&right.sort_name.to_lowercase()),
+            Self::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
             Self::Profit => left.profit.total_cmp(&right.profit),
             Self::Trades => left.trades.cmp(&right.trades),
             Self::WinRate => left.win_rate().total_cmp(&right.win_rate()),
@@ -420,11 +417,7 @@ fn sort_rows(rows: &mut [MonitorRow], sort: Option<MonitorSort>) {
             primary
         };
         primary
-            .then_with(|| {
-                left.sort_name
-                    .to_lowercase()
-                    .cmp(&right.sort_name.to_lowercase())
-            })
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.primary_core.cmp(&right.primary_core))
     });
 }
@@ -472,23 +465,21 @@ fn context_change(
     }
 }
 
-/// Preserve the last known exchange name while a core is temporarily disconnected.
+/// Preserve the last known venue while a core is temporarily disconnected.
+///
+/// A core drops out of the session's venue map the moment its feed goes down, and without this
+/// carry-forward a reconnecting core would leave its exchange row for the unidentified one and come
+/// back a few seconds later — a visible flicker on a row the user is reading.
 ///
 /// Args:
-///     previous: Exchange context already represented by the open monitor.
+///     previous: Venue context already represented by the open monitor.
 ///     sampled: Newly sampled live and configured context.
 ///
 /// Returns:
-///     New context with missing exchange names filled from their last observed values.
-fn retain_last_known_exchange_names(
-    previous: &LiveContext,
-    mut sampled: LiveContext,
-) -> LiveContext {
-    for (core, exchange) in &previous.exchange_names {
-        sampled
-            .exchange_names
-            .entry(*core)
-            .or_insert_with(|| exchange.clone());
+///     New context with missing venues filled from their last observed values.
+fn retain_last_known_venues(previous: &LiveContext, mut sampled: LiveContext) -> LiveContext {
+    for (core, venue) in &previous.venues {
+        sampled.venues.entry(*core).or_insert_with(|| venue.clone());
     }
     sampled
 }
@@ -898,7 +889,7 @@ impl ProfitMonitorView {
     ///     cx: View context used to read Backend and repaint or reload as required.
     fn sync_context(&mut self, cx: &mut Context<Self>) {
         let backend = self.backend.read(cx);
-        let next = retain_last_known_exchange_names(&self.live, capture_live_context(backend));
+        let next = retain_last_known_venues(&self.live, capture_live_context(backend));
         let valuation = backend.valuation_mode();
         let zone = monitor_zone(backend.header_clock_zone());
         let zone_changed = self.zone != zone;
@@ -1339,17 +1330,11 @@ impl ProfitMonitorView {
             ),
             ProfitLoadState::Ready { unit, data } => {
                 let core_label = t!("profit_monitor.core_fallback").to_string();
-                let unknown_exchange = t!("profit_monitor.unknown_exchange").to_string();
-                let spot = t!("common.exchange_spot").to_string();
                 let mut rows = grouped_rows(
                     data,
                     &self.live,
                     self.group,
-                    RowLabels {
-                        core: &core_label,
-                        unknown_exchange: &unknown_exchange,
-                        spot: &spot,
-                    },
+                    RowLabels { core: &core_label },
                 );
                 sort_rows(&mut rows, self.sort);
                 table::table(
@@ -1474,10 +1459,10 @@ fn window_width(window: &Window) -> f32 {
 /// Returns:
 ///     Context sufficient to regroup cached per-core aggregates.
 fn capture_live_context(backend: &Backend) -> LiveContext {
-    let exchange_names = backend.session.market_source().core_exchange_names();
+    let venues = backend.session.core_venues().clone();
     let (core_names, core_order) = capture_config_context(&backend.config);
     LiveContext {
-        exchange_names,
+        venues,
         core_names,
         core_order,
     }

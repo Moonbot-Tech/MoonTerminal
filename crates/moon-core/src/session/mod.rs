@@ -32,6 +32,7 @@ use moonproto::state::OrderBookKind;
 use crate::config::ServerConfig;
 use crate::feed::{ConnStatus, ExchangeId, FeedHandle, FeedWakeTx};
 use crate::market::{MarketDataMode, MarketDataSource, SharedMarketStore};
+use crate::venue::CoreVenue;
 
 pub struct CoreSession {
     pub id: CoreId,
@@ -105,8 +106,13 @@ pub struct SessionManager {
     market_source: MarketDataSource,
     /// Market-data source mode; its current default is `Dedup`.
     mode: MarketDataMode,
-    /// Core-to-exchange mapping from `Identity`. A core cannot become a provider without it.
-    core_key: HashMap<CoreId, ExchangeId>,
+    /// Core-to-venue mapping from `Identity`. A core cannot become a provider without it.
+    ///
+    /// One map, not an identity map beside a caption map: both halves arrive in the same message
+    /// and are cleared together, and a second map keyed by the same id is a stale-caption hazard
+    /// with nothing to prevent it. Consumers borrow this through
+    /// [`SessionManager::core_venues`] rather than rebuilding it per render.
+    core_venue: HashMap<CoreId, CoreVenue>,
     /// Core-to-account-base mapping from `CoreBase`, such as "USDT" or "BTC". The UI uses it for
     /// group-USD-to-base order-size conversion. It remains empty until the core is identified.
     core_base: HashMap<CoreId, String>,
@@ -138,12 +144,26 @@ pub struct DrainStats {
     pub ui_state: bool,
 }
 
+/// Which order book a core's provider pulls, from the venue its platform code names.
+///
+/// An ordinal this build does not know pulls the futures book, which is also moonproto's own
+/// default: it is the book every derivative venue uses, and the terminal connects to far more
+/// derivative cores than spot ones.
+///
+/// This DID change one answer when it moved onto the directory: the previous table listed spot as
+/// `3|5|7|8|10|12` and let OKX spot (14) fall through to futures, which was a gap rather than a
+/// decision — 14 is a spot venue. An OKX spot core therefore now asks for the spot book first.
+/// `market::source::refresh` retries the opposite kind when the expected one misses, so a
+/// misclassified core degrades to one extra lookup rather than to an empty panel.
+///
+/// Args:
+///     ex: Core exchange identity from `Identity`.
+///
+/// Returns:
+///     Spot book for a spot venue, futures book otherwise.
 fn orderbook_kind_for_exchange(ex: ExchangeId) -> OrderBookKind {
-    match ex.code {
-        // Spot exchanges.
-        3 | 5 | 7 | 8 | 10 | 12 => OrderBookKind::Spot,
-        // Futures/quarterly derivatives.
-        2 | 4 | 6 | 9 | 11 | 13 => OrderBookKind::Futures,
+    match crate::venue::venue(ex.code) {
+        Some(venue) if venue.is_spot() => OrderBookKind::Spot,
         _ => OrderBookKind::Futures,
     }
 }

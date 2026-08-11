@@ -7,14 +7,15 @@ use chrono::{NaiveDate, TimeZone, Utc};
 use chrono_tz::{Europe::Warsaw, Pacific::Apia, Tz};
 use moon_core::db::analytics::{ProfitMonitorCore, ProfitMonitorSummary};
 use moon_core::db::{ProfitUnit, QuoteCurrency};
+use moon_core::feed::ExchangeId;
 use moon_core::util::fmt::DeltaSign;
+use moon_core::venue::CoreVenue;
 
 use super::rows::{GroupMode, LiveContext, RowLabels, grouped_rows};
 use super::table::{format_profit, profit_column_width};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
-    duration_until_period_refresh, monitor_zone, next_sort, retain_last_known_exchange_names,
-    sort_rows,
+    duration_until_period_refresh, monitor_zone, next_sort, retain_last_known_venues, sort_rows,
 };
 
 /// Return deterministic fallback labels for pure grouping tests.
@@ -22,10 +23,23 @@ use super::{
 /// Returns:
 ///     English labels that keep expected rows readable.
 fn labels() -> RowLabels<'static> {
-    RowLabels {
-        core: "Core",
-        unknown_exchange: "Unknown exchange",
-        spot: "Spot",
+    RowLabels { core: "Core" }
+}
+
+/// Build one core's venue as the session publishes it.
+///
+/// Args:
+///     code: MoonBot platform ordinal.
+///     dex: HIP-3 DEX name, empty for a regular exchange.
+///     reported: Caption the core published.
+///
+/// Returns:
+///     The venue a `LiveContext` entry holds.
+fn venue(code: u8, dex: &str, reported: &str) -> CoreVenue {
+    CoreVenue {
+        id: ExchangeId::with_dex(code, dex),
+        dex: dex.to_string(),
+        reported: reported.to_string(),
     }
 }
 
@@ -80,7 +94,7 @@ fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
         last_close: 1_700_000_050,
     });
     let live = LiveContext {
-        exchange_names: HashMap::new(),
+        venues: HashMap::new(),
         core_names: HashMap::from([(2, "Configured second".to_string())]),
         core_order: vec![2],
     };
@@ -94,22 +108,30 @@ fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
     );
     let exchange_rows = grouped_rows(&summary, &live, GroupMode::Exchange, labels());
     assert_eq!(exchange_rows.len(), 1);
-    assert_eq!(exchange_rows[0].name, "Unknown exchange");
+    // The shared wording, not a Profit-Monitor-only one: the same unidentified core reads
+    // identically here and in every core picker that lists it.
+    assert_eq!(
+        exchange_rows[0].name,
+        rust_i18n::t!("common.exchange_unknown").to_string()
+    );
     assert_eq!(exchange_rows[0].trades, 6);
 }
 
-/// profit_monitor/rows.rs:grouped_rows must format only the visible exchange label while
-/// retaining raw identities for grouping and sorting; replacing sort_name with the display name
-/// reorders this equal-profit set, while grouping by display merges Hyper with Hyper Spot.
+/// `profit_monitor/rows.rs:grouped_rows` must key Exchange rows on the venue IDENTITY, so cores
+/// whose builds caption one venue differently merge, and two HIP-3 DEXes do not.
+///
+/// Breakage: grouping by the reported caption again splits one venue into two rows whenever two
+/// cores spell it differently (`Hyper Futures` vs `Hyperliquid Futures`); keying on the platform
+/// code alone merges two Hyperliquid DEXes whose markets have nothing in common.
 #[test]
-fn exchange_spot_label_preserves_raw_grouping_and_sorting() {
+fn exchange_rows_group_by_venue_identity_not_by_caption() {
     let mut summary = summary();
     for core in &mut summary.cores {
         core.profit = 0.0;
     }
     summary.cores.push(ProfitMonitorCore {
         core_uid: 3,
-        report_name: "Explicit spot".to_string(),
+        report_name: "Third".to_string(),
         profit: 0.0,
         trades: 7,
         wins: 3,
@@ -119,35 +141,26 @@ fn exchange_spot_label_preserves_raw_grouping_and_sorting() {
         last_close: 1_700_000_010,
     });
     let live = LiveContext {
-        exchange_names: HashMap::from([
-            (1, "Hyper".to_string()),
-            (2, "Hyper Futures".to_string()),
-            (3, "Hyper Spot".to_string()),
+        venues: HashMap::from([
+            (1, venue(13, "", "Hyper Futures")),
+            // The same venue, captioned differently by an older core build.
+            (2, venue(13, "", "Hyperliquid Futures")),
+            (3, venue(13, "xyz", "Hyper Futures")),
         ]),
         ..LiveContext::default()
     };
 
     let mut rows = grouped_rows(&summary, &live, GroupMode::Exchange, labels());
-    assert_eq!(
-        rows.len(),
-        3,
-        "equal display labels must not merge raw groups"
-    );
-    assert_eq!(
-        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-        ["Hyper Spot", "Hyper Futures", "Hyper Spot"]
-    );
-    assert_eq!(
-        rows.iter()
-            .map(|row| row.sort_name.as_str())
-            .collect::<Vec<_>>(),
-        ["Hyper", "Hyper Futures", "Hyper Spot"]
-    );
-
+    assert_eq!(rows.len(), 2, "two captions of one venue are one row");
     sort_rows(&mut rows, Some(next_sort(None, MonitorSortColumn::Name)));
     assert_eq!(
         rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-        ["Hyper Spot", "Hyper Futures", "Hyper Spot"]
+        ["Hyperliquid Futures", "Hyperliquid Futures · xyz"]
+    );
+    assert_eq!(
+        rows[0].cores.len(),
+        2,
+        "both differently captioned cores belong to the merged row"
     );
 }
 
@@ -158,7 +171,7 @@ fn exchange_spot_label_preserves_raw_grouping_and_sorting() {
 fn exchange_only_context_change_regroups_without_database_read() {
     let before = LiveContext::default();
     let after = LiveContext {
-        exchange_names: HashMap::from([(1, "Binance".to_string())]),
+        venues: HashMap::from([(1, venue(3, "", "Binance"))]),
         ..LiveContext::default()
     };
     assert_eq!(
@@ -187,17 +200,17 @@ fn zone_change_reloads_and_restarts_the_calendar_timer() {
     );
 }
 
-/// `profit_monitor/mod.rs:retain_last_known_exchange_names` must preserve an exchange when its live
+/// `profit_monitor/mod.rs:retain_last_known_venues` must preserve an exchange when its live
 /// client temporarily disappears; removing that carry-forward moves the core into Unknown exchange
 /// during every reconnect.
 #[test]
 fn disconnect_keeps_the_last_known_exchange_name() {
     let before = LiveContext {
-        exchange_names: HashMap::from([(1, "Binance".to_string())]),
+        venues: HashMap::from([(1, venue(3, "", "Binance"))]),
         ..LiveContext::default()
     };
-    let retained = retain_last_known_exchange_names(&before, LiveContext::default());
-    assert_eq!(retained.exchange_names, before.exchange_names);
+    let retained = retain_last_known_venues(&before, LiveContext::default());
+    assert_eq!(retained.venues, before.venues);
 }
 
 /// `profit_monitor/rows.rs:GroupMode` must reject the retired `bot` id and default to Core;
@@ -337,7 +350,6 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
     let rows = vec![
         super::rows::MonitorRow {
             name: "Alpha".to_string(),
-            sort_name: "Alpha".to_string(),
             profit: 5.0,
             trades: 4,
             wins: 1,
@@ -348,7 +360,6 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
         },
         super::rows::MonitorRow {
             name: "Beta".to_string(),
-            sort_name: "Beta".to_string(),
             profit: 12.0,
             trades: 2,
             wins: 2,
@@ -359,7 +370,6 @@ fn every_heading_sorts_its_own_value_and_repeated_click_reverses() {
         },
         super::rows::MonitorRow {
             name: "Gamma".to_string(),
-            sort_name: "Gamma".to_string(),
             profit: -3.0,
             trades: 8,
             wins: 4,
@@ -590,9 +600,9 @@ fn last_trade_column_never_starves_the_name_column() {
 fn merged_rows_carry_the_newest_trade_of_their_cores() {
     let summary = summary();
     let live = LiveContext {
-        exchange_names: HashMap::from([
-            (1, "Binance Futures".to_string()),
-            (2, "Binance Futures".to_string()),
+        venues: HashMap::from([
+            (1, venue(4, "", "Binance Futures")),
+            (2, venue(4, "", "Binance Futures")),
         ]),
         ..LiveContext::default()
     };
@@ -606,9 +616,9 @@ fn merged_rows_carry_the_newest_trade_of_their_cores() {
         "the highlight must follow the core that actually traded"
     );
     assert_eq!(
-        rows[0].exchange.as_deref(),
-        Some("Binance Futures"),
-        "the logo lookup needs the raw reported identity, not the Spot/Futures display form"
+        rows[0].venue.as_ref().map(|venue| venue.id),
+        Some(ExchangeId::new(4)),
+        "the row must carry the venue its logo and filter payload are resolved from"
     );
 }
 

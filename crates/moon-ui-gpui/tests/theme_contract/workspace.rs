@@ -425,11 +425,11 @@ fn auto_body_keeps_a_visible_dock_resizable_rail_and_exchange_sections() {
 
     let rail = code_only(braced_body(&workspace, "fn workspace_rail("));
     assert!(
-        rail.contains("core_exchange_names()")
-            && rail.contains("exchange_names.get(&server.id).cloned()")
+        rail.contains("core_venues()")
+            && rail.contains("venues.get(&server.id).cloned()")
             && rail.contains("RailItem::Exchange {")
-            && rail.contains("exchange: section.exchange"),
-        "the rail must section canonical rows by reported exchange identity"
+            && rail.contains("venue: section.venue"),
+        "the rail must section canonical rows by venue identity, not by a reported caption"
     );
 }
 
@@ -452,8 +452,8 @@ fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
         .find("if self.exchange_logos_ready")
         .expect("logo resolution must be gated by the ready edge");
     let resolve = rail
-        .find("crate::media::exchange_logos::exchange_logo(exchange)")
-        .expect("ready rail build must resolve each exchange through the shared cache");
+        .find("and_then(crate::media::exchange_logos::exchange_logo)")
+        .expect("ready rail build must resolve each brand through the shared cache");
     let virtual_list = rail
         .find("MoonVirtualList::new(")
         .expect("the rail must remain virtualized");
@@ -461,7 +461,7 @@ fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
 
     let render = code_only(braced_body(&workspace, "fn render_rail_item("));
     let exchange = render
-        .find("RailItem::Exchange { exchange, logo }")
+        .find("RailItem::Exchange { venue, logo }")
         .expect("exchange headings must own the resolved logo");
     let image = render[exchange..]
         .find("img(logo)")
@@ -472,7 +472,8 @@ fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
         .expect("core leaves must remain explicit");
     assert!(exchange < image && image < core);
     assert!(
-        !render[core..].contains("img(") && workspace.matches("exchange_logo(").count() == 1,
+        !render[core..].contains("img(")
+            && workspace.matches("exchange_logos::exchange_logo").count() == 1,
         "core rows and the virtual row closure must never resolve or render exchange logos"
     );
 }

@@ -424,7 +424,7 @@ impl AnalyticsView {
         };
         // Raw DB result (names from `reports.sqlite`, possibly including cores whose server was
         // deleted) — ranked here, on render, against the current config.
-        let (cores, exchange_names) = {
+        let (cores, venues) = {
             let backend = self.backend.read(cx);
             let db_cores = match filter_pin {
                 Some(scope) => self
@@ -437,7 +437,7 @@ impl AnalyticsView {
             };
             (
                 crate::core_order::CoreOrder::new(&backend.config).from_db(db_cores),
-                backend.session.market_source().core_exchange_names(),
+                backend.session.core_venues(),
             )
         };
         // The unpinned selector always uses the generic All label; Overview is a rail state, not
@@ -449,7 +449,7 @@ impl AnalyticsView {
         crate::controls::core_combo(
             "an-core",
             &cores,
-            &exchange_names,
+            &venues,
             &selected,
             crate::controls::CoreAllRowMode::ImplicitOnly,
             all_label,

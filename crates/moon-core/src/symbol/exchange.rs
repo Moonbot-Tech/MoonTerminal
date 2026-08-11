@@ -36,21 +36,14 @@ pub enum Exchange {
 impl Exchange {
     /// Maps MoonProto's `ExchangeCode` ordinal onto a naming family.
     ///
-    /// The ordinals are the core's `TBotPlatform` values and are part of the wire protocol, so they
-    /// are matched numerically rather than through a moonproto type: this module stays usable from
-    /// report rows and log lines that never touched moonproto. An unknown future ordinal falls back
-    /// to [`Exchange::Unknown`], which parses by shape instead of guessing a scheme.
+    /// The ordinal is resolved through [`crate::venue`], the one table that answers everything a
+    /// platform code decides — brand, market kind, naming rules, order-book kind — so a venue
+    /// cannot be spelled by one rule here and drawn by another elsewhere. An unknown future ordinal
+    /// falls back to [`Exchange::Unknown`], which parses by shape instead of guessing a scheme.
     pub const fn from_code(code: u8) -> Self {
-        match code {
-            2 | 7 => Self::Bybit,
-            3 | 4 => Self::Binance,
-            5 => Self::Huobi,
-            6 => Self::BinanceCoinM,
-            8 | 9 => Self::Gate,
-            10 | 11 => Self::BitGet,
-            12 | 13 => Self::Hyperliquid,
-            14 | 15 => Self::Okx,
-            _ => Self::Unknown,
+        match crate::venue::venue(code) {
+            Some(venue) => venue.naming(),
+            None => Self::Unknown,
         }
     }
 }

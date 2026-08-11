@@ -376,12 +376,12 @@ impl ScreenerView {
     /// Returns:
     ///     The configured source dropdown.
     fn source_combo(&self, cx: &Context<Self>) -> impl IntoElement {
-        let (cores, exchange_names) = {
+        let (cores, venues) = {
             let b = self.backend.read(cx);
             (
                 crate::core_order::CoreOrder::new(&b.config)
                     .from_sessions(b.session.sessions(), |_| true),
-                b.session.market_source().core_exchange_names(),
+                b.session.core_venues(),
             )
         };
         // Resolve the localized All-cores label once for every use in this selector.
@@ -394,8 +394,7 @@ impl ScreenerView {
                 .map(|(_, n)| n.clone())
                 .unwrap_or_else(|| format!("#{id}")),
         };
-        let unknown_exchange = t!("common.exchange_unknown").to_string();
-        let sections = crate::controls::core_menu_sections(&cores, &exchange_names);
+        let sections = crate::controls::core_menu_sections(&cores, &venues);
         let view = cx.entity();
         let all_view = view.clone();
         let mut items = vec![
@@ -408,10 +407,8 @@ impl ScreenerView {
         if !sections.is_empty() {
             items.push(MoonMenuItem::separator());
         }
-        for (exchange, members) in &sections {
-            let exchange_label = exchange
-                .map(|name| crate::controls::exchange_display_name(name))
-                .unwrap_or_else(|| unknown_exchange.clone());
+        for (venue, members) in &sections {
+            let exchange_label = crate::controls::venue_section_label(*venue);
             items.push(MoonMenuItem::label(exchange_label));
             for (id, name) in members {
                 let id = *id;

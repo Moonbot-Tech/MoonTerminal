@@ -8,6 +8,7 @@
 use gpui::Context;
 use moon_core::config::WorkspaceMode;
 use moon_core::session::CoreId;
+use moon_core::venue::CoreVenue;
 
 /// Notification generation for changes that can invalidate an effective workspace scope.
 ///
@@ -429,7 +430,7 @@ pub(crate) struct WorkspaceRosterInput {
     pub(crate) core: CoreId,
     pub(crate) name: String,
     pub(crate) group: String,
-    pub(crate) exchange: Option<String>,
+    pub(crate) venue: Option<CoreVenue>,
     pub(crate) availability: WorkspaceCoreAvailability,
     pub(crate) ready: bool,
 }
@@ -445,10 +446,10 @@ pub(crate) struct WorkspaceRosterRow {
     pub(crate) selected: bool,
 }
 
-/// One reported exchange section in the all-core roster.
+/// One venue section in the all-core roster.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorkspaceRosterSection {
-    pub(crate) exchange: Option<String>,
+    pub(crate) venue: Option<CoreVenue>,
     pub(crate) rows: Vec<WorkspaceRosterRow>,
 }
 
@@ -491,10 +492,10 @@ pub(crate) fn derive_workspace_roster(
         inputs
             .iter()
             .enumerate()
-            .map(|(index, input)| (index, input.exchange.as_deref())),
+            .map(|(index, input)| (index, input.venue.as_ref())),
     );
     let mut sections = Vec::with_capacity(exchange_sections.len());
-    for (exchange, indices) in exchange_sections {
+    for (venue, indices) in exchange_sections {
         let rows = indices
             .into_iter()
             .map(|index| {
@@ -519,7 +520,7 @@ pub(crate) fn derive_workspace_roster(
             })
             .collect();
         sections.push(WorkspaceRosterSection {
-            exchange: exchange.map(str::to_string),
+            venue: venue.cloned(),
             rows,
         });
     }

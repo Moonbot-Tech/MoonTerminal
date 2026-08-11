@@ -162,7 +162,7 @@ impl SessionManager {
             .sessions
             .iter()
             .map(|s| {
-                let key = self.core_key.get(&s.id).copied();
+                let key = self.core_venue.get(&s.id).map(|venue| venue.id);
                 let ready = self
                     .store
                     .core(s.id)
@@ -233,7 +233,7 @@ impl SessionManager {
         // exchange to share cached data and preserving that cache across provider elections.
         let provider_exchange: HashMap<CoreId, ExchangeId> = new_core_provider
             .values()
-            .filter_map(|p| self.core_key.get(p).map(|k| (*p, *k)))
+            .filter_map(|p| self.core_venue.get(p).map(|venue| (*p, venue.id)))
             .collect();
         self.market_source
             .set_provider_exchanges(&provider_exchange);

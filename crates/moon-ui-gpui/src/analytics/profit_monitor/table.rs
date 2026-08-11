@@ -33,6 +33,7 @@ use super::{
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use crate::media::exchange_logos::exchange_logo;
+use moon_core::venue::Brand;
 
 /// Render a centered neutral message.
 ///
@@ -235,13 +236,13 @@ pub(super) fn table(
         Vec::new()
     };
     let logos: Vec<Option<Arc<RenderImage>>> = if prefs.exchange_icons {
-        let mut resolved: HashMap<&str, Option<Arc<RenderImage>>> = HashMap::new();
+        let mut resolved: HashMap<Brand, Option<Arc<RenderImage>>> = HashMap::new();
         rows.iter()
             .map(|row| {
-                let exchange = row.exchange.as_deref()?;
+                let brand = row.venue.as_ref()?.brand()?;
                 resolved
-                    .entry(exchange)
-                    .or_insert_with(|| exchange_logo(exchange))
+                    .entry(brand)
+                    .or_insert_with(|| exchange_logo(brand))
                     .clone()
             })
             .collect()

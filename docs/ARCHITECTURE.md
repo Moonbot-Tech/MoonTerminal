@@ -267,7 +267,9 @@ The Auto rail and `DockArea` use the standard `MoonResizablePanelGroup`. Backend
 persists one draggable global rail width, while each window applies its own fit clamp without
 rewriting that preference. The virtualized rail is a tree: Overview is the root, exchanges are
 section headings, and canonically ordered cores are indented leaves with branch connectors and
-status dots. Logos appear only on known exchange headings; unknown exchanges keep their text label
+status dots. Sections are keyed by venue identity — see the venue directory below — not by the name
+a core reported, so two cores on one venue always share a heading however their builds spell it.
+Logos appear only on known exchange headings; unknown exchanges keep their text label
 without a placeholder, and core rows never inherit a logo. Entering Auto starts process-wide
 single-flight logo prewarm on the background executor. Each Shell publishes its own UI-thread ready
 edge and repaint; before that edge the rail performs no loading resolution, and afterward it
@@ -276,6 +278,32 @@ Full and Compact retain truncating labels, while Icon uses a known exchange logo
 short label and a reduced core-leaf spacing budget. Tooltips preserve complete exchange, core, and
 status meaning at every density. The terminal group remains the authority for selecting its core or
 activating another group window, not a visual grouping key.
+
+### The venue directory
+
+A core publishes two things about the exchange it is connected to: a platform ordinal
+(`ServerInfo::exchange_code`, the MoonBot `TBotPlatform` value) and a free-form UI name whose
+spelling belongs to that core build — `Binance Quarterly`, `FBybit`, `Gate.io`. The ordinal is the
+identity; the name is a caption. `moon_core::venue` is the one table that turns the ordinal into
+everything the terminal decides about a venue: its brand (which logo), its market kind
+(Spot/Futures/Quarterly), the naming family `symbol::parse` spells its markets with, and which order
+book its provider pulls. `Exchange::from_code` and `session::orderbook_kind_for_exchange` are
+projections of that table rather than tables of their own.
+
+A core's venue arrives once per connection, on `FeedMsg::Identity { id, dex, reported }`, and
+`SessionManager` retains one `CoreVenue` per identified core. `core_venues()` hands that map out by
+reference, so no consumer rebuilds it — or reaches back into a client snapshot for a caption — while
+rendering. Every core list (the pickers, the Profit Monitor, the rail, Log sources, Connections,
+detection cards) groups by `ExchangeId` and captions through `controls::venue_section_label`.
+
+`reported` is carried only for an ordinal newer than this build, the single case the directory
+cannot name. A venue with neither a known ordinal nor a caption of its own is identified but not
+`is_nameable()`: it still elects a market-data provider — the synthetic feed is exactly that case —
+while every core list folds it into the shared "not identified" section rather than giving it a
+section of its own headed with that same wording. Recognizing an exchange by matching its reported
+name is what left Binance COIN-M (code 6, reports `Binance Quarterly`) with no brand; a contract
+test in `tests/theme_contract/naming.rs` sweeps the whole crate to keep `reported` out of every
+surface but the formatter.
 
 Все три layout-класса — `layout.toml`, общая `auto_dock.json` и совместный Classic snapshot —
 сериализуются одним persistence worker. Live GPUI-контур только передаёт immutable snapshots и

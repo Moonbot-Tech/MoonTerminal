@@ -901,7 +901,25 @@ pub enum FeedMsg {
     /// access to plaintext credentials. Several cores may use different ports on one host.
     Endpoint(CoreEndpoint),
     /// Core exchange from `server_info` after BaseCheck, sent once.
-    Identity(ExchangeId),
+    ///
+    /// Everything the terminal knows about a core's venue arrives here, once per connection, and
+    /// is retained by `SessionManager`. Consumers therefore read it from memory: nothing needs to
+    /// re-derive a venue from a client snapshot while rendering.
+    Identity {
+        /// Grouping and provider-election key: platform code plus HIP-3 DEX discriminator.
+        id: ExchangeId,
+        /// HIP-3 DEX name as the core reported it, empty for every regular exchange.
+        ///
+        /// [`ExchangeId`] keeps only a hash of this, which distinguishes two DEXes but cannot name
+        /// either. The caption needs the name itself, so it travels alongside the key rather than
+        /// being reconstructed from it.
+        dex: String,
+        /// Free-form venue caption from `server_info`, such as `Binance Quarterly`.
+        ///
+        /// Carried for the one case the venue directory cannot answer — an ordinal newer than this
+        /// build. Never an identity: its spelling belongs to the core build that sent it.
+        reported: String,
+    },
     /// Core account base currency such as USDT or BTC from `server_info`, sent once alongside
     /// `Identity`. The UI uses it to convert a group-local USD-equivalent size before placement.
     CoreBase {

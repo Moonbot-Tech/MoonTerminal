@@ -27,3 +27,4 @@ pub mod session;
 pub mod strat_db;
 pub mod symbol;
 pub mod util;
+pub mod venue;

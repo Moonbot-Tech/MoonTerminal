@@ -8,7 +8,9 @@
 
 use super::*;
 use crate::panels::line_list::{self, Cat, Sev};
+use moon_core::feed::ExchangeId;
 use moon_core::session::CoreStore;
+use moon_core::venue::CoreVenue;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::ops::Range;
 
@@ -307,25 +309,25 @@ pub(super) fn find_coin(msg: &str, known: &HashSet<String>) -> Option<(Range<usi
 /// Args:
 ///     configured: Configured core ids paired with their window-group names.
 ///     live: Core ids with current sessions.
-///     exchange_names: Reported exchange names keyed by core id.
+///     venues: Venue identities keyed by core id.
 ///     group: Panel window group, or empty for the global scope.
-///     exchange: Exact reported exchange name selected by the user.
+///     exchange: Venue identity selected by the user.
 ///
 /// Returns:
 ///     Core ids present in every membership input.
 fn exchange_members_from<'a>(
     configured: impl IntoIterator<Item = (CoreId, &'a str)>,
     live: &HashSet<CoreId>,
-    exchange_names: &HashMap<CoreId, String>,
+    venues: &HashMap<CoreId, CoreVenue>,
     group: &str,
-    exchange: &str,
+    exchange: ExchangeId,
 ) -> HashSet<CoreId> {
     configured
         .into_iter()
         .filter(|(id, configured_group)| {
             (group.is_empty() || *configured_group == group)
                 && live.contains(id)
-                && exchange_names.get(id).is_some_and(|name| name == exchange)
+                && venues.get(id).is_some_and(|venue| venue.id == exchange)
         })
         .map(|(id, _)| id)
         .collect()
@@ -334,27 +336,29 @@ fn exchange_members_from<'a>(
 /// Resolve the current exchange membership shared by rows, refreshes, and chart actions.
 ///
 /// Args:
-///     b: Backend containing config, live sessions, and reported exchange identities.
+///     b: Backend containing config, live sessions, and per-core venues.
 ///     group: Panel window group, or empty for the global scope.
-///     exchange: Exact reported exchange name selected by the user.
+///     exchange: Venue identity selected by the user.
 ///
 /// Returns:
-///     Live configured core ids belonging to the selected exchange and panel scope.
-pub(super) fn exchange_core_ids(b: &Backend, group: &str, exchange: &str) -> HashSet<CoreId> {
+///     Live configured core ids belonging to the selected venue and panel scope.
+pub(super) fn exchange_core_ids(b: &Backend, group: &str, exchange: ExchangeId) -> HashSet<CoreId> {
     let live: HashSet<CoreId> = b
         .session
         .sessions()
         .iter()
         .map(|session| session.id)
         .collect();
-    let exchange_names = b.session.market_source().core_exchange_names();
+    // Borrowed, not rebuilt: this runs from `log_sig` on every backend notify while the panel is
+    // open, and it only compares identities.
+    let venues = b.session.core_venues();
     exchange_members_from(
         b.config
             .servers
             .iter()
             .map(|server| (server.id, server.group.as_str())),
         &live,
-        &exchange_names,
+        &venues,
         group,
         exchange,
     )
@@ -437,7 +441,7 @@ pub(super) fn log_sig(b: &Backend, group: &str, source: &LogSource) -> u64 {
             selected_core_log_sig(store, &core_ids)
         }
         LogSource::Exchange(exchange) => {
-            selected_core_log_sig(store, &exchange_core_ids(b, group, exchange))
+            selected_core_log_sig(store, &exchange_core_ids(b, group, *exchange))
         }
         LogSource::Local => applog::revision(),
         LogSource::Core(id) => store.core(*id).map_or(0, |core| core.log_rev),

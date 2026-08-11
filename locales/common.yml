@@ -47,6 +47,15 @@ common.exchange_spot:
   ru: "Spot"
   en: "Spot"
   es: "Spot"
+common.exchange_futures:
+  ru: "Futures"
+  en: "Futures"
+  es: "Futures"
+# Binance COIN-M delivery contracts, which the core itself calls "Binance Quarterly".
+common.exchange_quarterly:
+  ru: "Quarterly"
+  en: "Quarterly"
+  es: "Quarterly"
 # The shared core picker, used by Orders, Alerts, Assets, Core Status, Report and Analytics. Its
 # strings live here rather than in any one panel's file for the same reason the Analytics
 # placeholders do: six panels share the control, so no single namespace owns it.

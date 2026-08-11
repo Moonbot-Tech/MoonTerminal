@@ -965,7 +965,7 @@ impl NewsView {
             let rows = scoped_chart_candidates(candidates, &scope_ids);
             // Exchange labels are only needed to disambiguate the multi-core picker.
             let exchanges = if rows.len() > 1 {
-                b.session.market_source().core_exchange_names()
+                b.session.core_venues().clone()
             } else {
                 std::collections::HashMap::new()
             };
@@ -991,11 +991,14 @@ impl NewsView {
                 let items: Vec<MoonMenuItem> = rows
                     .into_iter()
                     .map(|(core, market, name)| {
-                        let label = match exchanges.get(&core) {
-                            Some(ex) if !ex.is_empty() => {
-                                format!("{name} · {}", crate::controls::exchange_display_name(ex))
+                        // Only a NAMEABLE venue earns a suffix: this row disambiguates two
+                        // cores holding the same coin, and " · not identified" disambiguates
+                        // nothing while making the row longer.
+                        let label = match exchanges.get(&core).filter(|venue| venue.is_nameable()) {
+                            Some(venue) => {
+                                format!("{name} · {}", crate::controls::venue_label(venue))
                             }
-                            _ => name,
+                            None => name,
                         };
                         let backend = backend.clone();
                         let group = group.clone();

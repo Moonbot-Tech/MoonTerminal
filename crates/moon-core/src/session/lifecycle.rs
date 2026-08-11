@@ -6,6 +6,7 @@ use crate::config::{AppConfig, ServerConfig};
 use crate::db::ReportTx;
 use crate::feed::{self, ConnStatus, EngineActionResult, FeedHandle, FeedMsg, FeedWakeTx};
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
+use crate::venue::CoreVenue;
 
 use super::{
     conn_sig, orderbook_kind_for_exchange, ConnSummary, CoreId, CoreSession, CoreStore, DrainStats,
@@ -65,7 +66,7 @@ impl SessionManager {
             market,
             market_source,
             mode: MarketDataMode::default(),
-            core_key: HashMap::new(),
+            core_venue: HashMap::new(),
             core_base: HashMap::new(),
             core_provider: HashMap::new(),
             providers: HashMap::new(),
@@ -106,7 +107,7 @@ impl SessionManager {
     /// and base before coordination recomputes the provider role and last command. Removal leaves
     /// this state absent.
     fn clear_core_coordination(&mut self, id: CoreId) {
-        self.core_key.remove(&id);
+        self.core_venue.remove(&id);
         self.core_base.remove(&id);
         self.core_provider.remove(&id);
         self.providers.retain(|_, prov| *prov != id);
@@ -266,7 +267,7 @@ impl SessionManager {
     ///
     /// Account messages go to `CoreStore`. Live and synthetic feeds publish market payloads to the
     /// read model or `MarketStore` and send only a lightweight `MarketDataChanged` wake-up here.
-    /// Identity messages populate `core_key`. This event-driven drain is independent of the
+    /// Identity messages populate `core_venue`. This event-driven drain is independent of the
     /// coordination loop that calls `set_open`; the result separates general UI state from data
     /// that can change chart pixels.
     pub fn drain(&mut self) -> DrainStats {
@@ -275,10 +276,13 @@ impl SessionManager {
             while let Ok(msg) = sess.handle.rx.try_recv() {
                 stats.any = true;
                 match msg {
-                    FeedMsg::Identity(ex) => {
-                        self.core_key.insert(sess.id, ex);
+                    FeedMsg::Identity { id, dex, reported } => {
+                        // One insert replaces the whole entry, so a reconnect onto a different
+                        // venue cannot leave the previous caption or DEX name behind.
+                        self.core_venue
+                            .insert(sess.id, CoreVenue::identify(id.code, &dex, Some(&reported)));
                         self.market_source
-                            .set_orderbook_kind(sess.id, orderbook_kind_for_exchange(ex));
+                            .set_orderbook_kind(sess.id, orderbook_kind_for_exchange(id));
                         stats.ui_state = true;
                     }
                     FeedMsg::CoreBase { base } => {
