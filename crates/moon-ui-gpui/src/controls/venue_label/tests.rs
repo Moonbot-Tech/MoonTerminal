@@ -93,6 +93,37 @@ fn a_wire_dex_name_is_clamped_and_stripped_before_display() {
     );
 }
 
+/// A DEX this build has never heard of must caption itself, with no table to add it to.
+///
+/// Breakage: any per-DEX list — a name map, a brand alias, a hardcoded set — makes a newly deployed
+/// HIP-3 venue render as plain `Hyperliquid Futures` beside the others it must be told apart from.
+/// Hyperliquid already carries more than a dozen, and builders add them without asking us.
+#[test]
+fn an_unseen_hip3_dex_captions_itself() {
+    for dex in ["ventuals", "felix", "kinetiq", "not-shipped-yet"] {
+        let label = venue_label(&core_venue(13, dex, ""));
+        assert!(
+            label.starts_with("Hyperliquid Futures · "),
+            "{dex} must keep the venue caption: {label}"
+        );
+        assert!(label.ends_with(dex), "{dex} must name itself: {label}");
+    }
+    // 15 bytes is the protocol maximum for a DEX name (`DexInfo` is a Pascal short string of one
+    // length byte plus fifteen), and the display clamp sits above it deliberately — a name a core
+    // can actually send must never be drawn clipped.
+    let longest = "123456789012345";
+    assert_eq!(longest.len(), 15);
+    assert_eq!(
+        venue_label(&core_venue(13, longest, "")),
+        format!("Hyperliquid Futures · {longest}")
+    );
+    // Two different DEXes must never produce one caption.
+    assert_ne!(
+        venue_label(&core_venue(13, "ventuals", "")),
+        venue_label(&core_venue(13, "felix", ""))
+    );
+}
+
 /// An ordinal newer than this build has no brand, so the core's own caption is all there is.
 ///
 /// Breakage: resolving an unknown ordinal to a neighbouring brand would label a new exchange as the

@@ -125,3 +125,67 @@ fn a_re_answered_key_is_not_a_change() {
     };
     assert!(!first.answer_eq(&replaced));
 }
+
+/// A HIP-3 DEX the terminal has never seen must key, caption and group correctly with no code
+/// change — a new one appears whenever a builder deploys it, and Hyperliquid already carries more
+/// than a dozen.
+///
+/// Breakage: replacing the hash with something that ignores order or case (a byte sum, a
+/// `to_lowercase` fold) collapses two DEXes onto one `ExchangeId`, which silently merges their
+/// market universes onto one provider — the exact failure `with_dex` exists to prevent. An empty
+/// name colliding with a real one would do the same to plain Hyperliquid futures.
+#[test]
+fn every_hip3_dex_name_keys_its_own_venue() {
+    // Names as a core reports them: the protocol caps them at 15 bytes, and nothing promises they
+    // are ASCII, lowercase, or unpadded.
+    let names = [
+        "xyz",
+        "ventuals",
+        "felix",
+        "hyena",
+        "kinetiq",
+        "dreamcash",
+        "sekai",
+        "nunchi",
+        "liquid",
+        "onlyvibes",
+        "aura",
+        "paragon",
+        "XYZ",
+        "Xyz",
+        "x y z",
+        "стакан",
+        "123456789012345",
+    ];
+    let mut ids: Vec<u32> = names
+        .iter()
+        .map(|name| super::ExchangeId::with_dex(13, name).dex)
+        .collect();
+    let distinct = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        distinct,
+        "two DEX names must never share one discriminator"
+    );
+
+    // The plain venue is `dex = 0`, and no named DEX may land on it.
+    assert_eq!(super::ExchangeId::with_dex(13, "").dex, 0);
+    assert_eq!(super::ExchangeId::new(13), super::ExchangeId::with_dex(13, ""));
+    assert!(
+        !ids.contains(&0),
+        "a named DEX must not key as the plain venue"
+    );
+
+    // Same DEX, different platform code: futures and spot stay separate venues.
+    assert_ne!(
+        super::ExchangeId::with_dex(13, "xyz"),
+        super::ExchangeId::with_dex(12, "xyz")
+    );
+    // And the discriminator is stable across calls, which is what makes it a grouping key.
+    assert_eq!(
+        super::ExchangeId::with_dex(13, "ventuals"),
+        super::ExchangeId::with_dex(13, "ventuals")
+    );
+}
