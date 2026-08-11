@@ -73,16 +73,13 @@ impl AnalyticsView {
 
     /// Tuner query: the shared filters plus the scope of EVERY selected strategy.
     ///
-    /// The whole selection, not just the anchor row: the KPI matrix, histogram, and sweep must
-    /// describe the same Ctrl- or Shift-built set the user sees highlighted and Save writes to.
+    /// The whole read-visible selection, not just the anchor row: the KPI matrix, histogram, and
+    /// sweep must describe the same Ctrl- or Shift-built set the user sees highlighted. Write
+    /// targets are bounded separately by the Auto group's action authority.
     pub(in crate::analytics::tuner) fn tuner_query(&self) -> moon_core::db::analytics::Query {
         let mut q = self.query();
         // Row keys are `strategyid@core_uid`, so the scope is per strategy AND per core.
-        q.strategies = self
-            .selected_targets()
-            .into_iter()
-            .map(|t| (t.sid, t.core))
-            .collect();
+        q.strategies = self.visible_target_keys(self.read_core_ids());
         q
     }
 

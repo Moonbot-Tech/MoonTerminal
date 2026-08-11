@@ -505,7 +505,7 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
         ("analytics/tuner/mod.rs", "strategy_selection_visible"),
         ("analytics/tuner/save.rs", "workspace_core_visible"),
         ("analytics/purge.rs", "purge_core_visible"),
-        ("analytics/tuner/list/menu.rs", "workspace_scope"),
+        ("analytics/tuner/list/menu.rs", "action_core_ids"),
         ("strategies/state.rs", "singleton_strategy_cores"),
         ("strategies/logic.rs", "strategy_core_is_visible"),
         ("strategies/actions.rs", "strategy_core_is_visible"),

@@ -206,7 +206,7 @@ fn workspace_query_wiring_preserves_retained_classic_selection() {
         .nth(1)
         .and_then(|tail| tail.split("\n    }").next())
         .expect("Analytics query core selector must exist");
-    assert!(cores_selected.contains("self.workspace_scope"));
+    assert!(cores_selected.contains("self.read_core_ids()"));
 
     let observer = analytics
         .split("cx.observe(&workspace_revision")

@@ -896,7 +896,8 @@ fn analytics_tabs_and_core_caption_follow_their_content() {
     }
     let core_combo_body = braced_body(&toolbar, "fn core_combo(");
     assert!(
-        core_combo_body.contains("let workspace_pinned = self.workspace_scope.is_some();")
+        core_combo_body.contains("let filter_pin = self.core_filter_pin();")
+            && core_combo_body.contains("let workspace_pinned = filter_pin.is_some();")
             && core_combo_body.contains(".disabled(workspace_pinned)"),
         "the Auto-owned core selector must display effective scope without mutating retained Classic state"
     );
@@ -1014,15 +1015,16 @@ fn analytics_reopen_state_is_process_lifetime_only() {
         "Analytics construction and all reopen choices must share the Backend UI-session snapshot"
     );
     let cores_selected = braced_body(&analytics, "fn cores_selected(");
+    let read_core_ids = braced_body(&analytics, "fn read_core_ids(");
     let filter_ids = braced_body(&toolbar, "pub(super) fn analytics_core_filter_ids(");
     assert!(
         cores_selected.contains("&self.sel_cores")
-            && cores_selected.contains("self.workspace_scope")
-            && cores_selected.contains("scope.core_ids.as_slice()")
+            && cores_selected.contains("self.read_core_ids()")
+            && read_core_ids.contains("scope.core_ids.as_slice()")
             && filter_ids.contains("Some([]) => vec![0]")
             && filter_ids.contains("Some(cores) => cores.to_vec()")
             && filter_ids.contains("None => selected.iter().copied().collect()"),
-        "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match"
+        "Analytics queries must preserve retained Classic selection while using concrete Auto ids and an explicit empty-scope no-match, reading the filter (not action) authority"
     );
     let workspace_observer = analytics
         .split("cx.observe(&workspace_revision")

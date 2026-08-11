@@ -174,9 +174,10 @@ impl AnalyticsView {
                     ),
                 );
         }
-        // Writing (Copy / Save) — ONLY into a selected strategy.
+        // Render write controls for a retained anchor, but enable them only when the action
+        // authority admits at least one selected target.
         if self.sel_strategy.is_some() {
-            let workspace_target_visible = !self.selected_targets().is_empty();
+            let workspace_target_visible = self.visible_target_count(self.action_core_ids()) > 0;
             // Copy is single-target only — hidden in multi-select (many addressees, no
             // per-target preview); bulk Save is the multi path.
             if !self.is_multi() {

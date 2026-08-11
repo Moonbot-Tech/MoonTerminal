@@ -83,14 +83,14 @@ pub(super) fn parse_strat_key(key: &str) -> Option<(i64, Option<u64>)> {
     }
 }
 
-/// Return whether a retained strategy row belongs to the effective Analytics workspace.
+/// Return whether a retained strategy row belongs to a caller-provided core scope.
 ///
 /// Args:
 ///     key: Retained `strategy@core` row identity.
-///     workspace: Effective Auto core ids, or `None` for Classic.
+///     workspace: Admitted core ids, or `None` for an unrestricted scope.
 ///
 /// Returns:
-///     `true` when the row may participate in current queries and writes.
+///     `true` when the row may participate in the caller's read or action operation.
 fn strategy_selection_visible(key: &str, workspace: Option<&[u64]>) -> bool {
     workspace.is_none_or(|cores| {
         parse_strat_key(key)
@@ -278,44 +278,80 @@ impl AnalyticsView {
     /// Additional Ctrl- or Shift-selected targets. Each key `strategyid@core_uid` maps to
     /// `(sid, core, name)`.
     ///
-    /// Returns:
-    ///     Effective targets only; hidden retained Classic rows are omitted without mutation.
-    fn selected_targets(&self) -> Vec<shared::SaveTarget> {
-        let mut out = Vec::new();
-        let workspace = self
-            .workspace_scope
-            .as_ref()
-            .map(|scope| scope.core_ids.as_slice());
-        let mut push = |key: &str, name: &str| {
-            if !strategy_selection_visible(key, workspace) {
-                return;
-            }
-            if let Some((sid, core)) = parse_strat_key(key) {
-                out.push(shared::SaveTarget {
-                    sid,
-                    core,
-                    name: name.to_string(),
-                });
-            }
-        };
-        if let Some((k, n)) = &self.sel_strategy {
-            push(k, n);
-        }
-        for (k, n) in &self.sel_extra {
-            push(k, n);
-        }
-        out
-    }
-
-    /// Return effective selected row keys without changing retained Classic selection state.
+    /// Gated by the ACTION authority, so it never offers a core the focused Auto group may not
+    /// write to. Read and display callers use [`Self::visible_targets`] with
+    /// [`Self::read_core_ids`] instead — the two answers differ on Auto+Overview, where the
+    /// unpinned core filter can put an out-of-group row on screen.
     ///
     /// Returns:
-    ///     Retained anchor and extra keys whose cores are visible now.
+    ///     Action-authorized targets only; refused retained rows are omitted without mutation.
+    fn selected_targets(&self) -> Vec<shared::SaveTarget> {
+        self.targets_visible_in(self.action_core_ids())
+    }
+
+    /// Walk the retained selection ONCE, anchor first, keeping the rows one core scope admits.
+    ///
+    /// The borrowing form is the one every caller is built on, because most of them want a count
+    /// or a `(sid, core)` pair rather than an owned target: the page's card titles and both
+    /// multi-selection predicates run on the render path, where materializing a `SaveTarget` per
+    /// selected row — each cloning its name — would allocate once per frame and throw it away.
+    ///
+    /// Args:
+    ///     workspace: Core ids the caller admits, or `None` to admit every selected row.
+    ///
+    /// Returns:
+    ///     Anchor-first `(sid, core, name)` for the passing rows, borrowing the retained selection.
+    fn visible_targets<'a>(
+        &'a self,
+        workspace: Option<&'a [u64]>,
+    ) -> impl Iterator<Item = (i64, Option<u64>, &'a str)> + 'a {
+        self.sel_strategy
+            .iter()
+            .chain(self.sel_extra.iter())
+            .filter(move |(key, _)| strategy_selection_visible(key, workspace))
+            .filter_map(|(key, name)| {
+                parse_strat_key(key).map(|(sid, core)| (sid, core, name.as_str()))
+            })
+    }
+
+    /// How many selected rows one core scope admits, without building a target for any of them.
+    fn visible_target_count(&self, workspace: Option<&[u64]>) -> usize {
+        self.visible_targets(workspace).count()
+    }
+
+    /// The passing rows as bare query identities — the shape both scoped reads need.
+    fn visible_target_keys(&self, workspace: Option<&[u64]>) -> Vec<(i64, Option<u64>)> {
+        self.visible_targets(workspace)
+            .map(|(sid, core, _)| (sid, core))
+            .collect()
+    }
+
+    /// Resolve the retained selection against one concrete core scope, with owned names.
+    ///
+    /// Args:
+    ///     workspace: Core ids the caller admits, or `None` to admit every selected row.
+    ///
+    /// Returns:
+    ///     Anchor-first targets whose cores pass, leaving the retained selection untouched.
+    fn targets_visible_in(&self, workspace: Option<&[u64]>) -> Vec<shared::SaveTarget> {
+        self.visible_targets(workspace)
+            .map(|(sid, core, name)| shared::SaveTarget {
+                sid,
+                core,
+                name: name.to_string(),
+            })
+            .collect()
+    }
+
+    /// Return action-authorized selected row keys without changing retained selection state.
+    ///
+    /// Returns:
+    ///     Retained anchor and extra keys whose cores the action authority admits.
     pub(in crate::analytics) fn effective_strategy_selection(&self) -> Vec<String> {
-        let workspace = self
-            .workspace_scope
-            .as_ref()
-            .map(|scope| scope.core_ids.as_slice());
+        // Deliberately NOT derived from `visible_targets`: this keeps a key `parse_strat_key`
+        // rejects, so an unparseable retained row still counts as present and cannot make the
+        // observer read the selection as having silently changed.
+        let workspace = self.action_core_ids();
         self.sel_strategy
             .iter()
             .chain(self.sel_extra.iter())
@@ -394,31 +430,34 @@ impl AnalyticsView {
 
     /// Whether any Ctrl- or Shift-selected strategies extend the anchor selection.
     pub(super) fn is_multi(&self) -> bool {
-        self.selected_targets().len() > 1
+        self.visible_target_count(self.read_core_ids()) > 1
     }
 
     /// Label for "what these numbers cover", used by every card title on the page.
     ///
-    /// The numbers are computed over the WHOLE selection (`tuner_query`), so naming the
-    /// anchor while several rows are highlighted would assert one strategy over N
-    /// strategies' figures — a count is the only honest label there.
+    /// The numbers are computed over the whole read-visible selection (`tuner_query`), so naming
+    /// the anchor while several rows are highlighted would assert one strategy over N strategies'
+    /// figures — a count is the only honest label there.
     pub(super) fn scope_label(&self) -> String {
-        let targets = self.selected_targets();
-        let n = targets.len();
-        match targets.first() {
-            None => t!("analytics.strat.scope_all").to_string(),
-            Some(target) if n <= 1 => target.name.clone(),
-            _ => t!("analytics.strat.scope_many", n = n).to_string(),
+        // One pass, and the only allocation is the label itself: this runs on every card title of
+        // the page, and every name past the first is never read.
+        let mut visible = self.visible_targets(self.read_core_ids());
+        let Some((_, _, first)) = visible.next() else {
+            return t!("analytics.strat.scope_all").to_string();
+        };
+        match visible.count() {
+            0 => first.to_string(),
+            rest => t!("analytics.strat.scope_many", n = rest + 1).to_string(),
         }
     }
 
     /// THE rule for every "in strategy" / "now" current-value display: a per-strategy current
-    /// value is meaningful only when exactly ONE strategy is selected. With several selected
-    /// each has its own value, so this returns `None` and callers render a neutral "varies" /
-    /// blank instead of the anchor's (which would misrepresent the rest). Both tuning axes and
-    /// the save dialog go through this so the behavior can't drift between them.
+    /// value is meaningful only when exactly ONE read-visible strategy is selected. With several
+    /// selected each has its own value, so this returns `None` and callers render a neutral
+    /// "varies" / blank instead of the anchor's (which would misrepresent the rest). Both tuning
+    /// axes and the save dialog go through this so the behavior can't drift between them.
     pub(super) fn current_if_single<T>(&self, value: T) -> Option<T> {
-        (self.selected_targets().len() == 1).then_some(value)
+        (self.visible_target_count(self.read_core_ids()) == 1).then_some(value)
     }
 
     /// The SET of selected strategies changed while the anchor stayed put. Every number on the
@@ -498,8 +537,8 @@ impl AnalyticsView {
     }
 
     /// Ctrl click: toggle this row in/out of the multi-set. The anchor (`sel_strategy`) drives
-    /// scope/suggest/detail; the extras are bulk-write addressees only. Removing the anchor
-    /// promotes the first extra (re-scoping to it), or clears the whole selection.
+    /// detail, while the anchor and extras form the read scope and the action-authorized bulk
+    /// targets. Removing the anchor promotes the first extra, or clears the whole selection.
     fn toggle_multi(&mut self, key: String, name: String, cx: &mut Context<Self>) {
         match &self.sel_strategy {
             None => {

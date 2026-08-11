@@ -14,7 +14,7 @@ fn a_live_strategy_is_allowed() {
     let (replicates, live) = open();
 
     assert_eq!(
-        purge_gate("7@3", Some(2), replicates, live),
+        purge_gate("7@3", Some(2), replicates, live, |_| true),
         PurgeGate::Allowed {
             core_uid: 3,
             sid: 7
@@ -29,7 +29,7 @@ fn manual_orders_are_refused() {
     let (replicates, live) = open();
 
     assert_eq!(
-        purge_gate("0@3", Some(2), replicates, live),
+        purge_gate("0@3", Some(2), replicates, live, |_| true),
         PurgeGate::Manual
     );
 }
@@ -39,7 +39,7 @@ fn manual_orders_are_refused() {
 #[test]
 fn a_core_that_does_not_replicate_its_report_is_refused() {
     assert_eq!(
-        purge_gate("7@3", Some(2), |_| false, |_, _| true),
+        purge_gate("7@3", Some(2), |_| false, |_, _| true, |_| true),
         PurgeGate::NoReportFeed
     );
 }
@@ -49,7 +49,7 @@ fn a_core_that_does_not_replicate_its_report_is_refused() {
 #[test]
 fn a_core_that_is_not_live_is_refused() {
     assert_eq!(
-        purge_gate("7@3", Some(2), |_| true, |_, _| false),
+        purge_gate("7@3", Some(2), |_| true, |_, _| false, |_| true),
         PurgeGate::Offline
     );
 }
@@ -60,7 +60,7 @@ fn an_already_deleted_strategy_is_refused() {
     let (replicates, live) = open();
 
     assert_eq!(
-        purge_gate("7@3", Some(0), replicates, live),
+        purge_gate("7@3", Some(0), replicates, live, |_| true),
         PurgeGate::AlreadyDeleted
     );
 }
@@ -71,7 +71,7 @@ fn an_unknown_liveness_marker_does_not_refuse_by_itself() {
     let (replicates, live) = open();
 
     assert!(matches!(
-        purge_gate("7@3", None, replicates, live),
+        purge_gate("7@3", None, replicates, live, |_| true),
         PurgeGate::Allowed { .. }
     ));
 }
@@ -82,7 +82,31 @@ fn a_key_without_a_core_is_refused() {
     let (replicates, live) = open();
 
     assert_eq!(
-        purge_gate("7", Some(2), replicates, live),
+        purge_gate("7", Some(2), replicates, live, |_| true),
+        PurgeGate::Offline
+    );
+}
+
+/// A live, replicating, in-strategy core outside the focused Auto group is refused as
+/// `OutOfWorkspace`, not `Offline` — the core is perfectly reachable, so "not connected" would
+/// send the user off diagnosing a connection that is fine.
+#[test]
+fn a_live_core_outside_the_workspace_is_refused_as_out_of_workspace() {
+    let (replicates, live) = open();
+
+    assert_eq!(
+        purge_gate("7@3", Some(2), replicates, live, |_| false),
+        PurgeGate::OutOfWorkspace
+    );
+}
+
+/// Offline is asked BEFORE workspace membership, deliberately: an offline core outside the
+/// group must still report `Offline`, the condition the user can actually act on and the one
+/// they would hit again the moment the rail moved back onto the group.
+#[test]
+fn an_offline_core_outside_the_workspace_still_reports_offline() {
+    assert_eq!(
+        purge_gate("7@3", Some(2), |_| true, |_, _| false, |_| false),
         PurgeGate::Offline
     );
 }
@@ -95,6 +119,7 @@ fn every_refusal_names_its_own_reason() {
         PurgeGate::AlreadyDeleted.reason_key(),
         PurgeGate::NoReportFeed.reason_key(),
         PurgeGate::Offline.reason_key(),
+        PurgeGate::OutOfWorkspace.reason_key(),
     ];
 
     assert!(reasons.iter().all(|reason| reason.is_some()));
@@ -109,5 +134,16 @@ fn every_refusal_names_its_own_reason() {
         }
         .reason_key()
         .is_none()
+    );
+}
+
+/// The out-of-workspace refusal must resolve to its own locale key, not fall back to a
+/// neighbouring one — the greyed menu item would then explain a connection problem the core
+/// does not have.
+#[test]
+fn out_of_workspace_names_its_own_locale_key() {
+    assert_eq!(
+        PurgeGate::OutOfWorkspace.reason_key(),
+        Some("analytics.purge.gate_out_of_workspace")
     );
 }

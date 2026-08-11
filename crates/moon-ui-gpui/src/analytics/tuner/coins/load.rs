@@ -79,14 +79,10 @@ impl AnalyticsView {
         let universe_empty = universe.is_empty();
         let saved_at_start = self.coins.saved.duplicate();
         let work_at_start = self.coins.work.duplicate();
-        // Lists come from EVERY selected strategy, not just the anchor: the set is tuned
-        // and written as one, so its lists are one union — and a union BY COIN, because
-        // summing sizes would count a coin twice for every pair that happens to share it.
-        let list_targets: Vec<(i64, Option<u64>)> = self
-            .selected_targets()
-            .into_iter()
-            .map(|t| (t.sid, t.core))
-            .collect();
+        // Lists come from EVERY read-visible selected strategy, not just the anchor, because the
+        // tuner describes their combined scope. They form a union BY COIN: summing sizes would
+        // count a coin twice for every pair that happens to share it.
+        let list_targets: Vec<(i64, Option<u64>)> = self.visible_target_keys(self.read_core_ids());
         // The picker reads the SAME strategies, so it rides this pass rather than opening
         // the database a second time. Its own generation guards it, though:
         // `CoinListsState::invalidate` must be able to retire it on its own.

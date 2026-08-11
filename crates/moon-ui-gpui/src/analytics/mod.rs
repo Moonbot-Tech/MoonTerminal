@@ -287,11 +287,33 @@ pub(crate) struct AnalyticsSessionState {
 struct AnalyticsWorkspaceScope {
     /// Selected core, or `None` when the owning group is on Overview.
     selected_core: Option<u64>,
-    /// Concrete live group cores used by every Analytics query.
+    /// Concrete live group cores that bound actions and pinned-filter reads.
     core_ids: Vec<u64>,
 }
 
+impl AnalyticsWorkspaceScope {
+    /// Whether this scope also PINS which cores the window reads, not just what it may write to.
+    ///
+    /// The two answers part on the rail's Overview row. Overview is not a narrower question the
+    /// user asked of Analytics — it is the absence of one, and answering it with the whole group
+    /// would overrule a core filter the user set here and lock the selector against changing it,
+    /// on the one surface where "every core in the group" and "the cores I want to compare"
+    /// routinely differ. Action authority is unaffected: Save, Copy and purge stay confined to
+    /// the group for the whole of Auto.
+    ///
+    /// Returns:
+    ///     `true` only while the rail is on a concrete core.
+    fn pins_core_filter(&self) -> bool {
+        self.selected_core.is_some()
+    }
+}
+
 /// Resolve the current singleton workspace without changing Analytics' retained selection.
+///
+/// This is Analytics' ACTION authority and stays present for the whole of Auto, Overview
+/// included — it is what confines Save, Copy and strategy purge to the focused group's cores and
+/// what invalidates a captured dialog when the group moves. Which cores the window READS is a
+/// separate, narrower question answered by [`AnalyticsView::core_filter_pin`].
 ///
 /// Args:
 ///     backend: Shared authority for singleton ownership and group-effective scope.
@@ -363,7 +385,8 @@ pub struct AnalyticsView {
     core_refresh_needed: bool,
     /// Whether a trailing core-list refresh timer is already scheduled.
     core_refresh_timer_armed: bool,
-    /// Auto scope mirrored from `WorkspaceRevision`; `None` leaves the retained filter authoritative.
+    /// Auto action scope mirrored from `WorkspaceRevision`; only a concrete rail core also pins
+    /// the retained read filter.
     workspace_scope: Option<AnalyticsWorkspaceScope>,
     sel_cores: HashSet<u64>,
     side: SideFilter,
@@ -532,9 +555,10 @@ pub struct AnalyticsView {
 }
 
 impl crate::controls::CoreComboHost for AnalyticsView {
-    /// Auto pins the selector to its workspace scope and leaves the retained filter untouched.
+    /// Auto on a concrete core pins the selector to its workspace scope and leaves the retained
+    /// filter untouched; Auto on Overview leaves the selector free, exactly as in Classic.
     fn core_selection_pinned(&self, _cx: &App) -> bool {
-        self.workspace_scope.is_some()
+        self.core_filter_pinned()
     }
 
     /// Return the retained Analytics core filter for shared picker edits.
@@ -1126,18 +1150,55 @@ impl AnalyticsView {
         }
     }
 
+    /// Return the Auto scope only while it also PINS which cores this window reads.
+    ///
+    /// Deliberately NARROWER than [`Self::workspace_scope`], which stays present for the whole of
+    /// Auto: unpinning the filter must never unpin the ACTION authority that confines Save, Copy
+    /// and purge to the focused group. The narrowing rule itself lives on
+    /// [`AnalyticsWorkspaceScope::pins_core_filter`], beside the struct it constrains.
+    ///
+    /// Returns:
+    ///     The scope while the rail is on a concrete core, or `None` on Overview and in Classic.
+    fn core_filter_pin(&self) -> Option<&AnalyticsWorkspaceScope> {
+        self.workspace_scope
+            .as_ref()
+            .filter(|scope| scope.pins_core_filter())
+    }
+
+    /// Whether the core selector is pinned and its edit paths must refuse.
+    fn core_filter_pinned(&self) -> bool {
+        self.core_filter_pin().is_some()
+    }
+
+    /// Cores this window may READ, or `None` while the filter is the user's to set.
+    ///
+    /// Pairs with [`Self::action_core_ids`]; naming the two authorities is what keeps a call site
+    /// from picking the wrong one by copying a neighbouring borrow chain. Anything that DESCRIBES
+    /// the selection takes this one, because the tuner is only ever meaningful scoped to concrete
+    /// strategies: an empty strategy list is not "no scope", it is EVERY strategy the core filter
+    /// admits, which measures the mixture instead of the tuning. So a row the user can see
+    /// highlighted must reach the query even when the Auto group may not write to its core —
+    /// otherwise selecting it silently widens the analysis while the page still shows one row
+    /// selected. Writing to it is refused separately, and visibly, through `action_core_ids`.
+    pub(in crate::analytics) fn read_core_ids(&self) -> Option<&[u64]> {
+        self.core_filter_pin()
+            .map(|scope| scope.core_ids.as_slice())
+    }
+
+    /// Cores this window may WRITE to, or `None` in Classic, where nothing confines it.
+    pub(in crate::analytics) fn action_core_ids(&self) -> Option<&[u64]> {
+        self.workspace_scope
+            .as_ref()
+            .map(|scope| scope.core_ids.as_slice())
+    }
+
     /// Return the effective core filter without overwriting the retained Classic selection.
     ///
     /// Returns:
-    ///     Explicit Auto workspace ids, the no-match sentinel for an empty Auto scope, retained
-    ///     explicit Classic ids, or an empty vector only for Classic All.
+    ///     Pinned Auto workspace ids, the no-match sentinel for an empty pinned scope, retained
+    ///     user-selected ids when unpinned, or an empty vector for an unfiltered query.
     fn cores_selected(&self) -> Vec<u64> {
-        toolbar::analytics_core_filter_ids(
-            &self.sel_cores,
-            self.workspace_scope
-                .as_ref()
-                .map(|scope| scope.core_ids.as_slice()),
-        )
+        toolbar::analytics_core_filter_ids(&self.sel_cores, self.read_core_ids())
     }
 
     /// Start accounting for a blocking background operation.
@@ -1596,17 +1657,20 @@ impl AnalyticsView {
     ///
     /// The All row clears every explicit selection so only its own checkmark remains. A specific
     /// core toggles independently and therefore removes the All checkmark from the empty state.
-    /// Auto pins the selector to its effective scope, so clicks are no-ops and the retained
-    /// Classic selection remains byte-for-byte available when Auto ownership ends.
+    /// Auto on a concrete core pins the selector to its effective scope, so clicks are no-ops and
+    /// the retained Classic selection remains byte-for-byte available when Auto ownership ends.
+    /// Auto on Overview leaves the filter unpinned and edits the retained selection like Classic,
+    /// while still carrying the group's action authority.
     ///
     /// Args:
     ///     core: Core to toggle, or `None` for the All row.
     ///     cx: Analytics context used to reload data and request a repaint.
     ///
     /// Returns:
-    ///     Nothing; Classic updates in place, while Auto leaves the retained filter unchanged.
+    ///     Nothing; an unpinned selector updates in place, while a pinned selector leaves the
+    ///     retained filter unchanged.
     fn toggle_core(&mut self, core: Option<u64>, cx: &mut Context<Self>) {
-        if self.workspace_scope.is_some() {
+        if self.core_filter_pinned() {
             return;
         }
         if crate::controls::toggle_core_selection(&mut self.sel_cores, core) {
@@ -1619,17 +1683,20 @@ impl AnalyticsView {
     /// Empty means All before the click, so the first exchange selection becomes explicit. A second
     /// click removes the exchange when all of its available cores are selected. Partial selections
     /// retain cores from other exchanges, while a stale-only batch is a no-op.
-    /// Auto pins every exchange section to the workspace-derived scope, so clicks are no-ops and
-    /// the retained Classic selection is neither persisted nor reloaded.
+    /// Auto on a concrete core pins every exchange section to the workspace-derived scope, so
+    /// clicks are no-ops and the retained Classic selection is neither persisted nor reloaded.
+    /// Auto on Overview leaves the filter unpinned and edits the retained selection like Classic,
+    /// while still carrying the group's action authority.
     ///
     /// Args:
     ///     exchange_cores: Core ids captured from the rendered Analytics exchange section.
     ///     cx: Analytics context used to persist and reload a changed selection.
     ///
     /// Returns:
-    ///     Nothing; Classic changes persist atomically, while Auto retains the prior filter.
+    ///     Nothing; an unpinned selector persists changes atomically, while a pinned selector
+    ///     retains the prior filter.
     fn toggle_exchange_cores(&mut self, exchange_cores: Vec<u64>, cx: &mut Context<Self>) {
-        if self.workspace_scope.is_some() {
+        if self.core_filter_pinned() {
             return;
         }
         let available = self.cores.iter().map(|(core, _)| *core).collect();
@@ -2095,3 +2162,8 @@ pub fn open(
         crate::window::windowing::activate_new_window(handle.into(), cx);
     }
 }
+
+// Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
+// shadows the built-in attribute and makes `#[test]` expand recursively.
+#[cfg(test)]
+mod tests;

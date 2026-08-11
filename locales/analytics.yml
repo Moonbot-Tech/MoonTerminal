@@ -1354,6 +1354,10 @@ analytics.purge.gate_offline:
   ru: "ядро не на связи"
   en: "the core is not connected"
   es: "el núcleo no está conectado"
+analytics.purge.gate_out_of_workspace:
+  ru: "ядро вне выбранной группы"
+  en: "the core is outside the selected group"
+  es: "el núcleo está fuera del grupo seleccionado"
 analytics.purge.gate_deleted:
   ru: "стратегия уже удалена из ядра"
   en: "the strategy is already deleted from the core"
