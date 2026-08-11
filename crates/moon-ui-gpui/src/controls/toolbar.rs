@@ -151,11 +151,11 @@ fn row_fit(
         + fw(SL_TOGGLE_LABEL_W)
         + fw(LIVE_W)
         + ICON_BTN_W * 5.0;
-    // Six 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
+    // Seven 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
     // against the row itself by `toolbar_row_budget_counts_every_rule_it_draws` in
     // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
     // until the trailing cluster clips off the edge of some narrow window.
-    let rules = 6.0;
+    let rules = 7.0;
     // Row gaps: 13 between the 14 root children (both sides of the zero-width spacer included)
     // plus 5 inside sections — one in Risk, one in Exit, one between the first two launchers, and
     // two between the final three launchers.

@@ -64,6 +64,9 @@ fn action_button(
         .disabled(!allowed)
         .on_click(move |_, _w, app| {
             backend.update(app, |b, cx| {
+                if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                    return;
+                }
                 let targets = if sync_on {
                     b.sync_market_action_targets(core, &market, &sync_targets)
                 } else {

@@ -47,7 +47,7 @@ fn every_chart_command_and_navigation_path_revalidates_auto_authority() {
             && action_callback
                 .find("workspace_action_allows_core")
                 .unwrap()
-                < action_callback.find("cancel_market_buys").unwrap()
+                < action_callback.find("cancel_buy_orders").unwrap()
             && action_callback
                 .find("workspace_action_allows_core")
                 .unwrap()
