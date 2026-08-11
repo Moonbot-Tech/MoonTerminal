@@ -406,7 +406,7 @@ vertex VolumeOut volume_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     }
     float inv = c.side == 0 ? cv.volume_buy_inv : cv.volume_sell_inv;
     float norm = saturate(c.qty * inv);
-    float style = clamp(cv.volume_style, 0.0, 2.0);
+    float volume_kind = clamp(cv.volume_style, 0.0, 2.0);
     float band_h = cv.bounds.w * clamp(cv.volume_height_frac, 0.02, 0.45);
     float h = max(1.0, sqrt(norm) * band_h);
     float base = cv.bounds.y + cv.bounds.w - 1.0;
@@ -414,8 +414,8 @@ vertex VolumeOut volume_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
         clamp(cv.time_to_px * 0.35, 1.0, 3.0),
         select(clamp(cv.time_to_px * 1.05, 2.0, 10.0),
                clamp(cv.time_to_px * 24.0, 24.0, 84.0),
-               style >= 1.5),
-        style >= 0.5);
+               volume_kind >= 1.5),
+        volume_kind >= 0.5);
     float2 local = CORNERS_01[vid];
     float2 px = float2(round(sx) - bar_w * 0.5, base - h) + local * float2(bar_w, h);
     return { to_clip(px, cv.resolution), c.side, local };
