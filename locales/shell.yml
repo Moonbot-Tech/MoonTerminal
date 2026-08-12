@@ -569,6 +569,10 @@ chart.coin.search:
   ru: "Монета…"
   en: "Coin…"
   es: "Moneda…"
+chart.coin.server_context:
+  ru: "Все результаты на сервере %{server}"
+  en: "All results are on %{server}"
+  es: "Todos los resultados están en %{server}"
 chart.coin.no_results:
   ru: "Нет совпадений"
   en: "No matches"
