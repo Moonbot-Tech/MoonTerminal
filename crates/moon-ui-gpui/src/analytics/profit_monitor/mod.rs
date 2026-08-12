@@ -11,15 +11,15 @@ mod window;
 
 // The window's own lifecycle lives in `window.rs`; the toolbar and startup reach it through here,
 // so the module path callers use does not change when the file it lives in does.
-pub(crate) use window::{ProfitMonitorOpenRequest, open, restore};
+pub(crate) use window::{open, restore, ProfitMonitorOpenRequest};
 
 #[cfg(test)]
 mod tests;
 
 use std::cmp::Ordering as SortOrdering;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Datelike, Utc};
@@ -38,11 +38,11 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::refresh::{report_result_is_stale, BusyRetryBudget, RefreshGate, RefreshPlan};
 use super::ProfitLoadState;
-use super::refresh::{BusyRetryBudget, RefreshGate, RefreshPlan, report_result_is_stale};
 use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
-use crate::{Backend, design};
+use crate::{design, Backend};
 use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use sections::SectionLabels;
 use settings::MonitorPrefs;
@@ -983,6 +983,9 @@ impl ProfitMonitorView {
             strategies: Vec::new(),
             metric: ProfitMetric::Quote,
             valuation: self.valuation,
+            // The monitor already renders one line per core, each in its own quote, so pinning the
+            // scale here would convert figures the panel deliberately keeps native.
+            prefer_usdt: false,
         }
     }
 

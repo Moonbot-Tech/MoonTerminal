@@ -25,6 +25,7 @@ fn q() -> Query {
         strategies: Vec::new(),
         metric: Default::default(),
         valuation: Default::default(),
+        prefer_usdt: false,
     }
 }
 

@@ -1182,6 +1182,11 @@ fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
             legacy: true,
         });
     }
+    // Every money reader passes through here, and this is the last point that still holds BOTH a
+    // connection and the sources. The quote module's SQL builders are pure functions of the
+    // columns they are handed, so the one fact they cannot derive — which cores own COIN-M rows —
+    // is learned here instead of being threaded through every builder signature.
+    quote::learn_coin_m_cores(conn, &out);
     Ok(out)
 }
 

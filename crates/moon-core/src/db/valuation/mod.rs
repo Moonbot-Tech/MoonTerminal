@@ -91,11 +91,17 @@ pub(super) fn test_health_guard() -> TestHealthGuard {
     TestHealthGuard { _lock: guard }
 }
 
-/// SQL fragments used only by the per-row Report reader.
+/// SQL fragments used by the per-row Report reader, plus the rate the Analytics source projects.
 ///
-/// Aggregates never need these: they sum [`CoverageSql::profit_usdt`] instead. A row-level reader
-/// wants the applied rate and its provenance beside the converted profit, so a user can check one
-/// trade rather than trust a total.
+/// A row-level reader wants the applied rate and its provenance beside the converted profit, so a
+/// user can check one trade rather than trust a total.
+///
+/// [`rate`](Self::rate) has a SECOND consumer: the Analytics unified source projects it as
+/// `quote_rate`, so an aggregate can convert a figure built from raw quantities and prices, which
+/// no valuation column replaces. That is sound because `rate` reads the `v` value join alone,
+/// which [`CoverageSql::joins`] already carries — but it holds ONLY for `rate`.
+/// [`source`](Self::source) additionally needs the `ra` provenance join and must not follow it
+/// into an aggregate.
 pub(crate) struct PerRowSql {
     /// The `v` prepared-value join followed by the `ra` ready-rate provenance join.
     ///
@@ -276,9 +282,13 @@ pub(super) fn source_predicates(
         } else {
             "0".to_string()
         },
+        // The type check reads the STORED cell, while the value taken from it is the settled one:
+        // a COIN-M liquidation stores its amount in a unit that is not the row's currency, and
+        // valuing the stored number would convert the wrong quantity at the right rate.
         spent_value: if columns.contains("spentbtc") {
             format!(
-                "CASE WHEN typeof({alias}.spentbtc) IN ('integer','real') THEN {alias}.spentbtc END"
+                "CASE WHEN typeof({alias}.spentbtc) IN ('integer','real') THEN {settled} END",
+                settled = super::quote::settled_amount_expr(alias, columns, "spentbtc")
             )
         } else {
             "NULL".to_string()
@@ -332,9 +342,10 @@ pub(crate) fn coverage_sql(
              AND v.core_uid={alias}.core_uid AND v.row_id={alias}.{id_column}
              AND v.algorithm_version={algorithm_version}
              AND v.closedate={alias}.closedate AND v.quote_ordinal=({quote})
-             AND v.profit_quote={alias}.profitbtc AND v.spent_quote IS {spent_value}",
+             AND v.profit_quote={settled_profit} AND v.spent_quote IS {spent_value}",
             source_kind = source.code(),
             algorithm_version = ALGORITHM_VERSION,
+            settled_profit = super::quote::settled_amount_expr(alias, columns, "profitbtc"),
         )
     } else {
         "0".to_string()
@@ -368,8 +379,9 @@ pub(crate) fn coverage_sql(
     );
     let profit_usdt = if has_profit {
         format!(
-            "CASE WHEN {identity} THEN {alias}.profitbtc
-                  WHEN {prepared} THEN v.profit_usdt END"
+            "CASE WHEN {identity} THEN {settled}
+                  WHEN {prepared} THEN v.profit_usdt END",
+            settled = super::quote::settled_amount_expr(alias, columns, "profitbtc")
         )
     } else {
         "NULL".to_string()

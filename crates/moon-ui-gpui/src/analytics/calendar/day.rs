@@ -17,7 +17,7 @@ use super::super::summary::{fmt_signed_unit, sign_color};
 use super::{date_of, day_window, hour_start, next_day, previous_day, split_i18n};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::analytics::DayCell;
+use moon_core::db::analytics::{CellTotals, DayCell};
 use moon_core::util::fmt::compact;
 
 /// Sign + compact form with no fraction — the hour cells are narrow.
@@ -38,21 +38,22 @@ impl AnalyticsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let map: HashMap<i64, &DayCell> = hours.iter().map(|c| (c.start, c)).collect();
-        // Daily aggregate (over the window's hourly cells).
-        let day_agg = |d0: i64| -> (f64, i64, i64) {
+        // Daily aggregate (over the window's hourly cells), folded through the same accumulator
+        // the Month KPI uses, so the two headers cannot disagree about what a day sums to.
+        let day_agg = |d0: i64| -> CellTotals {
             let end = next_day(d0, self.display_zone);
             hours
                 .iter()
                 .filter(|c| c.start >= d0 && c.start < end)
-                .fold((0.0f64, 0i64, 0i64), |a, c| {
-                    (a.0 + c.profit, a.1 + c.trades, a.2 + c.wins)
+                .fold(CellTotals::default(), |mut acc, c| {
+                    acc.merge(&c.totals);
+                    acc
                 })
         };
         let sel = self.cal_day;
-        let (profit, trades, wins) = day_agg(sel);
-        let previous = previous_day(sel, self.display_zone);
-        let (pp, pt, pw) = day_agg(previous);
-        let has_prev = pt > 0 || pp != 0.0;
+        let today = day_agg(sel);
+        let previous = day_agg(previous_day(sel, self.display_zone));
+        let has_prev = previous.trades > 0 || previous.profit != 0.0;
 
         v_flex()
             .flex_1()
@@ -60,7 +61,7 @@ impl AnalyticsView {
             .w_full()
             .p(design::ui_px(cx, 10.0))
             .gap(design::ui_px(cx, 8.0))
-            .child(self.day_kpi(profit, trades, wins, (pp, pt, pw), has_prev, p, cx))
+            .child(self.day_kpi(&today, &previous, has_prev, p, cx))
             .child(
                 div()
                     .flex_1()
@@ -74,39 +75,27 @@ impl AnalyticsView {
     /// Render the Day KPI strip with exact-unit current and previous aggregates.
     ///
     /// Args:
-    ///     profit: Current-day profit in the active unit.
-    ///     trades: Current-day trade count.
-    ///     wins: Current-day winning trades.
-    ///     prev: Previous-day profit, trades, and wins.
+    ///     today: Selected day's totals.
+    ///     prev: Previous day's totals, for the deltas.
     ///     has_prev: Whether the comparison day is available.
     ///     p: Active MoonUI palette.
     ///     cx: Analytics view context.
     ///
     /// Returns:
     ///     Complete KPI row element.
-    #[allow(clippy::too_many_arguments)]
     fn day_kpi(
         &self,
-        profit: f64,
-        trades: i64,
-        wins: i64,
-        prev: (f64, i64, i64),
+        today: &CellTotals,
+        prev: &CellTotals,
         has_prev: bool,
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let (pp, pt, pw) = prev;
+        let (profit, trades, wins) = (today.profit, today.trades, today.wins);
+        let (pp, pt, pw) = (prev.profit, prev.trades, prev.wins);
         let losses = trades - wins;
-        let wr = if trades > 0 {
-            wins as f64 / trades as f64 * 100.0
-        } else {
-            0.0
-        };
-        let prev_wr = if pt > 0 {
-            pw as f64 / pt as f64 * 100.0
-        } else {
-            0.0
-        };
+        let wr = today.winrate().unwrap_or(0.0);
+        let prev_wr = prev.winrate().unwrap_or(0.0);
         let dp = move |c: f64, pr: f64| -> Option<f64> {
             (has_prev && pr.abs() > f64::EPSILON).then(|| (c - pr) / pr.abs() * 100.0)
         };
@@ -195,9 +184,9 @@ impl AnalyticsView {
                     if let Some(c) =
                         hour_start(d, h as u32, self.display_zone).and_then(|start| map.get(&start))
                     {
-                        if c.trades > 0 {
-                            hour_max = hour_max.max(c.profit.abs());
-                            hour_sum[h] += c.profit;
+                        if c.has_activity() {
+                            hour_max = hour_max.max(c.totals.profit.abs());
+                            hour_sum[h] += c.totals.profit;
                             hour_cnt[h] += 1;
                         }
                     }
@@ -343,9 +332,11 @@ fn hour_cell(
     cx: &App,
 ) -> AnyElement {
     let r = design::ui_px(cx, 4.0);
-    let profit = cell.map_or(0.0, |c| c.profit);
-    let trades = cell.map_or(0, |c| c.trades);
-    let tint = (trades > 0 && profit != 0.0 && hour_max > 0.0).then(|| {
+    let profit = cell.map_or(0.0, |c| c.totals.profit);
+    // An hour whose only row was funding counts no trades yet moved money, and the Day KPI above
+    // still carries it — so the cell follows the figures rather than the trade count.
+    let active = cell.is_some_and(|c| c.has_activity());
+    let tint = (active && profit != 0.0 && hour_max > 0.0).then(|| {
         let a = (profit.abs() / hour_max).min(1.0) as f32 * 0.35;
         moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
     });
@@ -360,7 +351,7 @@ fn hour_cell(
     } else {
         moon_alpha(p.border, 0.4)
     };
-    let label: AnyElement = if trades > 0 {
+    let label: AnyElement = if active {
         div()
             .text_size(design::t_caption(cx))
             .text_color(moon(sign_color(p, profit)))

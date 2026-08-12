@@ -1261,15 +1261,21 @@ fn load_trade(
         return Ok(None);
     }
     let spent = if columns.contains("spentbtc") {
-        "CASE WHEN typeof(r.spentbtc) IN ('integer','real') THEN r.spentbtc END"
+        &format!(
+            "CASE WHEN typeof(r.spentbtc) IN ('integer','real') THEN {} END",
+            super::super::quote::settled_amount_expr("r", &columns, "spentbtc")
+        )
     } else {
         "NULL"
     };
     // The prepared value is keyed by the quote it was computed in, so this projection must yield
     // the EFFECTIVE ordinal — the same one every reader joins the cache with.
     let quote = super::super::quote::effective_ordinal_expr("r", &columns);
+    // Cached under the SETTLED amount, so a reader that corrects a COIN-M liquidation still
+    // matches the entry the worker wrote for it.
+    let settled_profit = super::super::quote::settled_amount_expr("r", &columns, "profitbtc");
     let sql = format!(
-        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), r.profitbtc, {spent}
+        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), {settled_profit}, {spent}
          FROM {table} r
          WHERE r.core_uid=?1 AND r.{id_column}=?2
            AND typeof(r.closedate)='integer' AND r.closedate>0
@@ -1332,12 +1338,18 @@ fn reconciliation_batch(
         return Ok(Vec::new());
     }
     let spent = if columns.contains("spentbtc") {
-        "CASE WHEN typeof(r.spentbtc) IN ('integer','real') THEN r.spentbtc END"
+        &format!(
+            "CASE WHEN typeof(r.spentbtc) IN ('integer','real') THEN {} END",
+            super::super::quote::settled_amount_expr("r", &columns, "spentbtc")
+        )
     } else {
         "NULL"
     };
     let spent_match = if columns.contains("spentbtc") {
-        "v.spent_quote IS CASE WHEN typeof(r.spentbtc) IN ('integer','real') THEN r.spentbtc END"
+        &format!(
+            "v.spent_quote IS CASE WHEN typeof(r.spentbtc) IN ('integer','real') THEN {} END",
+            super::super::quote::settled_amount_expr("r", &columns, "spentbtc")
+        )
     } else {
         "v.spent_quote IS NULL"
     };
@@ -1351,15 +1363,18 @@ fn reconciliation_batch(
     // One expression for the projection, both joins and the guard: a batch that selected the raw
     // ordinal while joining the effective one would re-prepare the same row on every pass.
     let quote = super::super::quote::effective_ordinal_expr("r", &columns);
+    // Cached under the SETTLED amount, so a reader that corrects a COIN-M liquidation still
+    // matches the entry the worker wrote for it.
+    let settled_profit = super::super::quote::settled_amount_expr("r", &columns, "profitbtc");
     let sql = format!(
-        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), r.profitbtc, {spent}
+        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), {settled_profit}, {spent}
          FROM {table} r
          LEFT JOIN valuation.trade_values v
            ON v.source_kind={source_kind}
           AND v.core_uid=r.core_uid AND v.row_id=r.{id_column}
           AND v.algorithm_version={algorithm_version}
           AND v.closedate=r.closedate AND v.quote_ordinal=({quote})
-          AND v.profit_quote=r.profitbtc AND {spent_match}
+          AND v.profit_quote={settled_profit} AND {spent_match}
          LEFT JOIN valuation.rates mr
            ON mr.algorithm_version={algorithm_version}
           AND mr.quote_ordinal=({quote})

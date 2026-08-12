@@ -22,6 +22,7 @@ use super::{
     ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, QuoteScope, ReadFail, ReadResult,
 };
 
+mod basis;
 mod calendar;
 mod groups;
 mod profit_monitor;
@@ -30,7 +31,7 @@ mod summary_stream;
 pub(crate) mod time_zone;
 
 pub use calendar::{
-    calendar_cells, calendar_hours, hourly_profiles, CalendarPeriod, DayCell, HourStat,
+    calendar_cells, calendar_hours, hourly_profiles, CalendarPeriod, CellTotals, DayCell, HourStat,
 };
 pub use groups::{coin_groups, strategies_for_coins, GroupStat, KindCore, KindStat, TopTrade};
 pub use profit_monitor::{profit_monitor, ProfitMonitorCore, ProfitMonitorSummary};
@@ -232,9 +233,10 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
             .iter()
             .map(|where_sql| {
                 format!(
-                    "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0), COUNT(*) \
+                    "SELECT {quote}, COALESCE(SUM({settled_profit}), 0), COUNT(*) \
                      FROM {} r WHERE {where_sql}{group_by}",
                     src.table,
+                    settled_profit = super::quote::settled_amount_expr("r", &src.cols, "profitbtc"),
                 )
             })
             .collect::<Vec<_>>()
@@ -392,6 +394,19 @@ fn scope_decision_on(conn: &Connection, q: &Query) -> ReadResult<ScopeDecision> 
         QuoteScope::Empty => ScopeDecision::Empty {
             projection: ProjectionMode::Native,
         },
+        // An explicit USDT choice converts a single-quote scope too, so the unit stops depending on
+        // which trades the period happened to catch. USDT itself keeps the cheaper native path:
+        // converting it to itself would gate the scope behind valuation coverage for no gain.
+        QuoteScope::Single(currency)
+            if q.prefer_usdt
+                && currency != crate::db::QuoteCurrency::usdt()
+                && totals.unified_usdt().is_some() =>
+        {
+            ScopeDecision::Comparable {
+                unit: ProfitUnit::Quote(crate::db::QuoteCurrency::usdt()),
+                projection: ProjectionMode::usdt_for(q.valuation),
+            }
+        }
         QuoteScope::Single(currency) => ScopeDecision::Comparable {
             unit: ProfitUnit::Quote(currency),
             projection: ProjectionMode::Native,

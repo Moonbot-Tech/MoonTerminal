@@ -460,7 +460,10 @@ pub(crate) fn current_rate_sql(
         "0".to_string()
     };
     let profit_usdt = if has_profit {
-        format!("CASE WHEN {valued} THEN {alias}.profitbtc * {rate_case} END")
+        format!(
+            "CASE WHEN {valued} THEN ({settled}) * {rate_case} END",
+            settled = super::super::quote::settled_amount_expr(alias, columns, "profitbtc")
+        )
     } else {
         "NULL".to_string()
     };

@@ -293,8 +293,10 @@ fn synthetic_expression(
     }
     Some(match entry.name {
         PROFIT_PERCENT_COLUMN => {
-            "CASE WHEN r.\"spentbtc\" > 0 THEN r.\"profitbtc\" / r.\"spentbtc\" * 100.0 END"
-                .to_string()
+            // Both legs are the SETTLED amounts, so a COIN-M liquidation divides like for like.
+            let profit = super::quote::settled_amount_expr("r", &src.cols, "profitbtc");
+            let spent = super::quote::settled_amount_expr("r", &src.cols, "spentbtc");
+            format!("CASE WHEN {spent} > 0 THEN {profit} / {spent} * 100.0 END")
         }
         // A cache-free retry has no `v` or `ra` aliases, so the expression must vanish with the
         // joins that back it.
@@ -357,10 +359,21 @@ fn source_select(
 /// Returns:
 ///     The expression, or `None` for every column this reader serves as stored.
 fn corrected_column_expression(src: &ReadSource, col: &str) -> Option<String> {
-    (col == "basecurrency" && src.cols.contains(col))
+    if col == "basecurrency" && src.cols.contains(col) {
         // The displayed ticker must name the currency the row's own profit column is in, or the
         // table would print USDT beside a total the footer counted as BTC.
-        .then(|| super::quote::effective_ordinal_expr("r", &src.cols))
+        return Some(super::quote::effective_ordinal_expr("r", &src.cols));
+    }
+    // The money columns for the same reason: the footer, the percent column and the USDT valuation
+    // all read the settled amount, so a grid serving the stored one would show 0.00001826 in the
+    // row, 0.01120 in the total, and sort by the dust.
+    if !matches!(col, "profitbtc" | "spentbtc") || !src.cols.contains(col) {
+        return None;
+    }
+    let settled = super::quote::settled_amount_expr("r", &src.cols, col);
+    // A source that cannot evidence a liquidation gets the plain column back. Reporting that as a
+    // "correction" would be a lie the sort/projection contract test rightly refuses.
+    (settled != format!("r.\"{col}\"")).then_some(settled)
 }
 
 /// Compare values while merging sorted sources: numbers as `f64`, text
@@ -878,9 +891,12 @@ fn query_totals_attempt(
     for src in sources {
         let (where_sql, params) = build_where(f, &src.cols, has_strategy_names);
         let profit = if src.cols.contains("profitbtc") {
-            "COALESCE(SUM(r.profitbtc),0.0)"
+            format!(
+                "COALESCE(SUM({}),0.0)",
+                super::quote::settled_amount_expr("r", &src.cols, "profitbtc")
+            )
         } else {
-            "0.0"
+            "0.0".to_string()
         };
         let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
         let valuation = super::valuation::projection(

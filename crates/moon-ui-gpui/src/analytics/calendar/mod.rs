@@ -3,10 +3,11 @@
 //! - "Year" — every year at once, each one a grid of 12 month squares (current
 //!   year on top, future months greyed out). Clicking a month switches to
 //!   "Month" mode. See `year`;
-//! - "Month" — large day cards (date on the left, PnL + trades + W/L + winrate
-//!   on the right), grey background + red/green overlay whose alpha tracks
-//!   |PnL|; a KPI row on top (with the delta to the previous month), a
-//!   plus/minus-day bar below. Clicking a day switches to "Day" mode;
+//! - "Month" — large day cards (date on the left; on the right the PnL, the win
+//!   rate with its counts, turnover and execution cost, and the average holding
+//!   time), grey background + red/green overlay whose alpha tracks |PnL|; a KPI
+//!   row on top (with the delta to the previous month), a plus/minus-day bar
+//!   below. Clicking a day switches to "Day" mode;
 //! - "Day" — hour-by-hour detail of a single day. See `day`.
 //! Each mode builds its own query (`cal_query` in mod.rs); the window's period
 //! bar is hidden here.
@@ -27,7 +28,7 @@ use super::{AnalyticsView, ProfitLoadState};
 use crate::design;
 use crate::design::moon;
 use crate::load_state::{LoadState, note_el};
-use moon_core::db::analytics::{CalendarPeriod, DayCell, PreviousPeriodBasis, Query};
+use moon_core::db::analytics::{CalendarPeriod, CellTotals, DayCell, PreviousPeriodBasis, Query};
 use moon_core::db::{ProfitScope, ProfitUnit, ReadResult};
 
 /// Store one consistent Calendar period result without collapsing classified read failures.
@@ -42,7 +43,7 @@ use moon_core::db::{ProfitScope, ProfitUnit, ReadResult};
 ///     `true` when the shared period read failed.
 fn apply_calendar_results(
     days: &mut ProfitLoadState<Vec<DayCell>>,
-    previous: &mut LoadState<Option<(f64, i64, i64)>>,
+    previous: &mut LoadState<Option<CellTotals>>,
     period_result: ReadResult<ProfitScope<CalendarPeriod>>,
     has_previous: bool,
 ) -> bool {
@@ -201,11 +202,19 @@ pub(super) fn month_start(y: i32, m: u32, zone: chrono_tz::Tz) -> i64 {
 }
 
 pub(super) fn next_month(y: i32, m: u32) -> (i32, u32) {
-    if m == 12 { (y + 1, 1) } else { (y, m + 1) }
+    if m == 12 {
+        (y + 1, 1)
+    } else {
+        (y, m + 1)
+    }
 }
 
 fn prev_month(y: i32, m: u32) -> (i32, u32) {
-    if m == 1 { (y - 1, 12) } else { (y, m - 1) }
+    if m == 1 {
+        (y - 1, 12)
+    } else {
+        (y, m - 1)
+    }
 }
 
 /// Return the number of civil dates in a month from adjacent `NaiveDate` values.
@@ -323,6 +332,81 @@ pub(super) fn next_day(day: i64, zone: chrono_tz::Tz) -> i64 {
 /// Localized list parsed out of an "a,b,c" string.
 pub(super) fn split_i18n(s: String) -> Vec<String> {
     s.split(',').map(|x| x.trim().to_string()).collect()
+}
+
+// ── Money and duration formatting ───────────────────────────────────────────
+
+/// Format traded turnover: SI-compact, unsigned, unitless.
+///
+/// Turnover is large and always positive, so it reads as "1.5M" rather than as an exact figure.
+/// The quote ticker is NOT appended: the navigation bar already carries the scope's quote badge,
+/// and repeating it on every card would spend the width the numbers need.
+pub(super) fn fmt_volume(v: f64) -> String {
+    if !v.is_finite() {
+        return "—".to_string();
+    }
+    moon_core::util::fmt::compact_si(v)
+}
+
+/// Format an unsigned cost, marking it approximate when it does not cover every trade.
+///
+/// A source without execution prices contributes no fee, so a total can silently omit trades. The
+/// tilde is what separates "this is the cost" from "this is the cost of the trades we could
+/// price", which is otherwise indistinguishable.
+///
+/// Args:
+///     v: Amount in the projection's currency.
+///     complete: Whether every counted trade contributed.
+///
+/// Returns:
+///     Compact amount, prefixed with a tilde when incomplete.
+pub(super) fn fmt_amount(v: f64, complete: bool) -> String {
+    if !v.is_finite() {
+        return "—".to_string();
+    }
+    let s = moon_core::util::fmt::compact_si(v);
+    if complete {
+        s
+    } else {
+        format!("~{s}")
+    }
+}
+
+/// Format a short duration as at most two units: "45s", "1m 29s", "2h 15m", "3d 4h".
+///
+/// The card has one line for it, so the second unit is dropped when it is zero and never a third.
+///
+/// Args:
+///     secs: Duration in seconds; negative and non-finite inputs yield an em dash.
+///
+/// Returns:
+///     Localized compact duration.
+pub(super) fn fmt_duration_short(secs: f64) -> String {
+    if !secs.is_finite() || secs < 0.0 {
+        return "—".to_string();
+    }
+    let total = secs.round() as i64;
+    let (s, m, h, d) = (
+        t!("analytics.cal.dur_s"),
+        t!("analytics.cal.dur_m"),
+        t!("analytics.cal.dur_h"),
+        t!("analytics.cal.dur_d"),
+    );
+    // Each arm picks the largest unit that fits and one below it, so precision falls away with
+    // scale instead of printing "3d 4h 12m 6s" into a cell that has room for eight characters.
+    let pair = |big: i64, big_unit: &str, small: i64, small_unit: &str| {
+        if small > 0 {
+            format!("{big}{big_unit} {small}{small_unit}")
+        } else {
+            format!("{big}{big_unit}")
+        }
+    };
+    match total {
+        ..=59 => format!("{total}{s}"),
+        60..=3_599 => pair(total / 60, &m, total % 60, &s),
+        3_600..=86_399 => pair(total / 3_600, &h, total % 3_600 / 60, &m),
+        _ => pair(total / 86_400, &d, total % 86_400 / 3_600, &h),
+    }
 }
 
 impl AnalyticsView {
@@ -627,6 +711,7 @@ impl AnalyticsView {
             strategies: Vec::new(),
             metric: self.metric,
             valuation: self.valuation_mode,
+            prefer_usdt: self.prefer_usdt,
         }
     }
 
@@ -647,6 +732,7 @@ impl AnalyticsView {
             strategies: Vec::new(),
             metric: self.metric,
             valuation: self.valuation_mode,
+            prefer_usdt: self.prefer_usdt,
         })
     }
 

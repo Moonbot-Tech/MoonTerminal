@@ -335,3 +335,198 @@ fn no_reader_selects_the_raw_quote_column_behind_this_module() {
         "read the quote through quote::effective_ordinal_expr instead: {offenders:?}"
     );
 }
+
+// ── COIN-M liquidations: two eras ───────────────────────────────────────────
+
+/// Evaluate the settled amount and the effective quote over a liquidation fixture.
+///
+/// Args:
+///     rows: `(closedate, sellreason, coin, fname, buyprice, spentbtc)` fixtures.
+///
+/// Returns:
+///     `(settled spentbtc, effective ordinal)` per row.
+fn settled_and_quote(
+    rows: &[(i64, i64, &str, &str, Option<&str>, f64, f64)],
+) -> Vec<(f64, Option<i64>)> {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (id INTEGER PRIMARY KEY, core_uid INTEGER, closedate INTEGER,
+             sellreason TEXT, coin TEXT, fname TEXT, buyprice REAL, spentbtc REAL,
+             basecurrency INTEGER)",
+    )
+    .unwrap();
+    for (index, (core, close, reason, coin, fname, price, spent)) in rows.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO orders_rep (id, core_uid, closedate, sellreason, coin, fname, buyprice,
+                 spentbtc, basecurrency) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+            rusqlite::params![index as i64, core, close, reason, coin, fname, price, spent],
+        )
+        .unwrap();
+    }
+    let cols = columns(&[
+        "basecurrency",
+        "core_uid",
+        "fname",
+        "coin",
+        "sellreason",
+        "closedate",
+        "buyprice",
+        "spentbtc",
+    ]);
+    // A nameless liquidation is only recognizable once the core is known to own COIN-M rows, so
+    // the fixture proves that the same way production does — from a NAMED row of that core.
+    learn_coin_m_cores(
+        &conn,
+        &[crate::db::ReadSource {
+            table: "orders_rep",
+            cols: cols.clone(),
+            legacy: false,
+        }],
+    );
+    let sql = format!(
+        "SELECT ({}), ({}) FROM orders_rep r ORDER BY r.id",
+        settled_amount_expr("r", &cols, "spentbtc"),
+        effective_ordinal_expr("r", &cols),
+    );
+    let mut statement = conn.prepare(&sql).unwrap();
+    statement
+        .query_map([], |row| {
+            Ok((row.get::<_, f64>(0)?, row.get::<_, Option<i64>>(1)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+/// The core books a COIN-M liquidation two different ways, and the boundary between them is a
+/// measured date. Getting either era wrong is catastrophic in a different direction: era two left
+/// alone shows 33 750 USD of real liquidations as 19 cents, while applying era two's correction to
+/// era one would multiply a 129-dollar loss by the coin's price.
+#[test]
+fn a_coin_m_liquidation_is_corrected_per_era() {
+    const BEFORE: i64 = 1_693_492_380; // 2023-08-31 14:33 UTC, the last row of era one.
+    const AFTER: i64 = 1_711_700_027; // 2024-03-29 08:13 UTC, the first row of era two.
+    let out = settled_and_quote(&[
+        // Era one: the stored value already IS the margin in USD, which the USDT label fits.
+        (
+            7,
+            BEFORE,
+            "LIQUIDATION",
+            "THETA_RP",
+            None,
+            14.59854,
+            129.197_080,
+        ),
+        // Era two: the value is margin-in-BTC divided by the price, so the price restores it,
+        // and the row is BTC from then on.
+        (
+            7,
+            AFTER,
+            "LIQUIDATION",
+            "BNB_0927",
+            None,
+            613.253,
+            0.000_018_264_459,
+        ),
+        // The named row that proves core 7 is COIN-M at all.
+        (
+            7,
+            AFTER,
+            "Sell Price",
+            "ETH_0927",
+            Some("Pump_USD-ETH_0927_x"),
+            3_600.0,
+            0.5,
+        ),
+    ]);
+
+    let (era_one, quote_one) = out[0];
+    assert!((era_one - 129.197_080).abs() < 1e-9, "era one is untouched");
+    assert_eq!(quote_one, Some(1), "era one keeps its USDT label");
+
+    let (era_two, quote_two) = out[1];
+    let expected = 0.000_018_264_459 * 613.253;
+    assert!(
+        (era_two - expected).abs() < 1e-12,
+        "era two restores margin in BTC: {era_two} vs {expected}"
+    );
+    assert_eq!(quote_two, Some(0), "era two settles in BTC");
+}
+
+/// The correction is keyed on the liquidation, not on the date alone: an ordinary COIN-M trade of
+/// the same era must keep its stored amount, or every normal row would be multiplied by its price.
+#[test]
+fn an_ordinary_trade_is_never_rewritten() {
+    let out = settled_and_quote(&[
+        // A named COIN-M trade after the switch: relabeled by the market rule, amount untouched.
+        (
+            7,
+            1_711_700_027,
+            "Sell Price",
+            "BTC_1226",
+            Some("Pump_USD-BTC_1226_x"),
+            128_146.0,
+            2.05,
+        ),
+        // A liquidation whose coin is not a contract shape at all: not COIN-M, nothing to correct.
+        (7, 1_711_700_027, "LIQUIDATION", "BTC", None, 70_000.0, 1.5),
+        // A USD-M core liquidating a DATED contract: same shape, same missing name, same era —
+        // and it must be left alone, or a -1.5 loss becomes -105 000.
+        (
+            42,
+            1_711_700_027,
+            "LIQUIDATION",
+            "BTC_0926",
+            None,
+            70_000.0,
+            1.5,
+        ),
+    ]);
+    assert!(
+        (out[0].0 - 2.05).abs() < 1e-12,
+        "a named trade is not rewritten"
+    );
+    assert_eq!(out[0].1, Some(0), "the market rule still relabels it");
+    assert!(
+        (out[1].0 - 1.5).abs() < 1e-12,
+        "a spot liquidation is not rewritten"
+    );
+    assert_eq!(out[1].1, Some(1), "and it keeps its label");
+    assert!(
+        (out[2].0 - 1.5).abs() < 1e-12,
+        "a USD-M core's dated liquidation is not COIN-M and must not be rewritten"
+    );
+    assert_eq!(out[2].1, Some(1), "nor relabeled");
+}
+
+/// A liquidation without a usable price cannot be restored, and must keep its stored amount rather
+/// than collapsing to zero — deleting a loss is worse than reporting it in the wrong unit.
+#[test]
+fn a_liquidation_without_a_price_keeps_its_amount() {
+    let out = settled_and_quote(&[
+        (
+            7,
+            1_711_700_027,
+            "LIQUIDATION",
+            "ENS_RP",
+            None,
+            0.0,
+            0.000_33,
+        ),
+        (
+            7,
+            1_711_700_027,
+            "Sell Price",
+            "ETH_0927",
+            Some("Pump_USD-ETH_0927_x"),
+            3_600.0,
+            0.5,
+        ),
+    ]);
+    assert!((out[0].0 - 0.000_33).abs() < 1e-12);
+    assert_eq!(
+        out[0].1,
+        Some(1),
+        "an uncorrected amount keeps its old label"
+    );
+}

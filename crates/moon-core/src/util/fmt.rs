@@ -19,9 +19,11 @@ pub fn compact(v: f64, decimals: usize) -> String {
 }
 
 /// Format a compact number with an SI suffix (K/M/B/T): 1_500 → "1.5K", 2_300_000 → "2.3M".
-/// Values below 1000 use [`adaptive`] without a suffix. Every trailing `0` character is stripped
-/// from the whole formatted mantissa, even when it has no decimal point; consequently, 100_000
-/// becomes "1K" rather than "100K" under the existing behavior.
+/// Values below 1000 use [`adaptive`] without a suffix.
+///
+/// Trailing zeros are trimmed from the FRACTION only, through [`compact`]. Trimming the whole
+/// mantissa used to eat a mantissa's own zeros — 100_000 rendered as "1K" rather than "100K", a
+/// hundredfold understatement of any value that happened to land on a round hundred.
 pub fn compact_si(v: f64) -> String {
     let a = v.abs();
     if a < 1000.0 {
@@ -32,13 +34,12 @@ pub fn compact_si(v: f64) -> String {
         if a >= scale {
             let n = v / scale;
             let s = if n.abs() >= 100.0 {
-                format!("{n:.0}")
+                compact(n, 0)
             } else if n.abs() >= 10.0 {
-                format!("{n:.1}")
+                compact(n, 1)
             } else {
-                format!("{n:.2}")
+                compact(n, 2)
             };
-            let s = s.trim_end_matches('0').trim_end_matches('.');
             return format!("{s}{suffix}");
         }
     }

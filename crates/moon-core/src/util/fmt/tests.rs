@@ -14,6 +14,23 @@ fn compact_keeps_integer_zeros() {
     assert_eq!(compact(45.20, 2), "45.2");
 }
 
+/// The SI mantissa must keep its own zeros. Trimming the whole string turned 100_000 into "1K"
+/// and 100_000_000 into "1M" — a hundredfold understatement on every round value, which is exactly
+/// the shape a turnover figure lands on.
+#[test]
+fn compact_si_trims_the_fraction_but_never_the_mantissa() {
+    assert_eq!(compact_si(100_000.0), "100K");
+    assert_eq!(compact_si(100_000_000.0), "100M");
+    assert_eq!(compact_si(-100_000.0), "-100K");
+    assert_eq!(compact_si(20_000.0), "20K");
+    // Fractional zeros still go.
+    assert_eq!(compact_si(1_500.0), "1.5K");
+    assert_eq!(compact_si(2_300_000.0), "2.3M");
+    assert_eq!(compact_si(2_000_000.0), "2M");
+    // Below the first unit nothing is suffixed.
+    assert_eq!(compact_si(999.0), adaptive(999.0));
+}
+
 #[test]
 fn adaptive_thousands_intact() {
     assert_eq!(adaptive(25000.0), "25000");

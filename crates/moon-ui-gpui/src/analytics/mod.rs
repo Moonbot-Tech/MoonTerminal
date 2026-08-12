@@ -400,6 +400,8 @@ pub struct AnalyticsView {
     /// Profit metric: absolute quote money (`Quote`) or the report `Profit` column
     /// (`Percent` = profit ÷ spent). Persisted in `layout.analytics_profit_percent`.
     metric: ProfitMetric,
+    /// Whether money is reported in USDT even when the scope has one native quote.
+    prefer_usdt: bool,
     /// Which conversion turns quote money into USDT. Mirrors the application-wide backend setting;
     /// see [`Self::observe_valuation_mode`] for why it is a mirror rather than a live read.
     valuation_mode: ValuationMode,
@@ -516,7 +518,7 @@ pub struct AnalyticsView {
     pub(super) cal_day: i64,
     /// PREVIOUS month's aggregate `(profit, trades, wins)` for the KPI deltas against the
     /// previous period (calendar month versus calendar month, not 30 days).
-    pub(super) cal_prev: LoadState<Option<(f64, i64, i64)>>,
+    pub(super) cal_prev: LoadState<Option<moon_core::db::analytics::CellTotals>>,
     /// Strategies-tab mode (Filters / Coins / Time). Privacy is module-based: tab submodules
     /// can see their parent's fields without `pub(super)`.
     strat_mode: tuner::StratMode,
@@ -715,6 +717,8 @@ impl AnalyticsView {
         } else {
             ProfitMetric::Quote
         };
+        // Money scale from the previous run (default: follow each period's own quote).
+        let saved_prefer_usdt = backend.read(cx).layout.analytics_profit_usdt;
         // KPI matrix collapse state from the previous run (default expanded).
         let saved_kpi_collapsed = backend.read(cx).layout.analytics_kpi_collapsed;
         // Distribution card collapse state from the previous run (default expanded).
@@ -813,6 +817,7 @@ impl AnalyticsView {
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
             metric: saved_metric,
+            prefer_usdt: saved_prefer_usdt,
             valuation_mode: saved_valuation_mode,
             data: ProfitLoadState::default(),
             strategy_data: ProfitLoadState::default(),
@@ -1165,6 +1170,7 @@ impl AnalyticsView {
             strategies: Vec::new(),
             metric: self.metric,
             valuation: self.valuation_mode,
+            prefer_usdt: self.prefer_usdt,
         }
     }
 
@@ -1768,13 +1774,16 @@ impl AnalyticsView {
     ///
     /// Returns:
     ///     Nothing.
-    fn set_metric(&mut self, metric: ProfitMetric, cx: &mut Context<Self>) {
-        if self.metric == metric {
+    fn set_metric_choice(&mut self, choice: toolbar::MetricChoice, cx: &mut Context<Self>) {
+        let (metric, prefer_usdt) = choice.flags();
+        if self.metric == metric && self.prefer_usdt == prefer_usdt {
             return;
         }
         self.metric = metric;
+        self.prefer_usdt = prefer_usdt;
         self.backend.update(cx, |b, _| {
             b.layout.analytics_profit_percent = metric == ProfitMetric::Percent;
+            b.layout.analytics_profit_usdt = prefer_usdt;
             b.layout_dirty = true;
         });
         self.reload(cx);

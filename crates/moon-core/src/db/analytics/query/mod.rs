@@ -51,6 +51,14 @@ pub struct Query {
     /// reader — summary, calendar, coin groups, the tuner source — inherits one answer; a reader
     /// that missed the parameter would render a differently converted number under the same label.
     pub valuation: ValuationMode,
+    /// Convert a single-quote scope to USDT instead of reporting it in its own currency.
+    ///
+    /// Without this, the unit follows whatever the PERIOD happens to contain: a BTC-quoted core
+    /// reads in BTC for a month that holds only its trades, and flips to USDT for a year that also
+    /// holds a USDT trade — same core, same screen, two scales. Setting it pins the scale to USDT
+    /// whenever every row can be valued; it cannot invent a rate, so an unpriced scope still falls
+    /// back to its native quote rather than showing a converted figure that is partly guessed.
+    pub prefer_usdt: bool,
 }
 
 impl Query {
@@ -220,6 +228,17 @@ const UNIFIED_COLS: &[&str] = &[
     "emulator",
     "spentbtc",
     "basecurrency",
+    // Execution inputs. Money columns above are REPLACED by the active projection; these are raw
+    // quantities and prices, so they stay native and any figure built from them must be converted
+    // with `quote_rate` below before it meets a projected sum. `lev` is NOT listed: it already
+    // arrives through `tuner::FIELDS`, and naming it twice would project two identical columns.
+    "boughtq",
+    "buyprice",
+    "sellprice",
+    // Funding is booked as a pseudo-order (`buydate == closedate`, entry price == exit price,
+    // `spentbtc == boughtq`). It carries real money, so it belongs in profit — but it is not a
+    // trade, and counting it would inflate trade counts, turnover and win rate alike.
+    "sellreason",
 ];
 
 /// Money projection resolved by quote coverage before one analytical scan.
@@ -377,9 +396,12 @@ fn quote_breakdown_attempt(
             .iter()
             .map(|where_sql| {
                 format!(
-                    "SELECT {quote}, COALESCE(SUM(r.profitbtc), 0.0), COUNT(*){coverage_columns} \
+                    "SELECT {quote}, COALESCE(SUM({settled_profit}), 0.0), COUNT(*)\
+                     {coverage_columns} \
                      FROM {} r{joins} WHERE {where_sql}{group_by}",
                     src.table,
+                    settled_profit =
+                        super::super::quote::settled_amount_expr("r", &src.cols, "profitbtc"),
                 )
             })
             .collect::<Vec<_>>()
@@ -613,6 +635,13 @@ pub(in crate::db) fn unified_from_mode(
                     )
                 } else if mode.is_usdt() && *c == "basecurrency" {
                     "1 AS \"basecurrency\"".to_string()
+                } else if matches!(*c, "profitbtc" | "spentbtc") && src.cols.contains(*c) {
+                    // A COIN-M liquidation stores its amount in a unit that is not its currency,
+                    // so every reader of this source gets the corrected number under the same name.
+                    format!(
+                        "{} AS \"{c}\"",
+                        super::super::quote::settled_amount_expr("r", &src.cols, c)
+                    )
                 } else if *c == "basecurrency" && src.cols.contains(*c) {
                     // Published under the original name, like the attributed strategy id above, so
                     // every consumer of this unified source — the group quote split, the summary
@@ -636,12 +665,39 @@ pub(in crate::db) fn unified_from_mode(
         // COUNT, SUM, wins, streaks and the top list all describe the SAME set of trades. Sign is
         // preserved (spent > 0), so win/loss, profit factor and best/worst stay correct on `pnl`.
         let pnl = if pct {
-            "r.\"profitbtc\" / r.\"spentbtc\" * 100.0 AS \"pnl\"".to_string()
+            format!(
+                "{profit} / {spent} * 100.0 AS \"pnl\"",
+                profit = super::super::quote::settled_amount_expr("r", &src.cols, "profitbtc"),
+                spent = super::super::quote::settled_amount_expr("r", &src.cols, "spentbtc"),
+            )
         } else if let Some(parts) = &valuation {
             format!("{} AS \"pnl\"", parts.profit_usdt)
         } else {
-            "r.\"profitbtc\" AS \"pnl\"".to_string()
+            format!(
+                "{} AS \"pnl\"",
+                super::super::quote::settled_amount_expr("r", &src.cols, "profitbtc")
+            )
         };
+        // USDT paid for one unit of this row's quote, projected ONCE beside `pnl` so a consumer can
+        // convert a figure the projection does not replace — the notional built from `boughtq` and
+        // the entry/exit prices, which no valuation column covers. `1.0` under a native or percent
+        // projection keeps every such expression written the same way in both worlds.
+        //
+        // `per_row.rate` reads the `v` value join only, and `CoverageSql::joins` below already
+        // carries it. Its sibling `per_row.source` does NOT qualify: it needs the `ra` provenance
+        // join, which aggregates deliberately omit.
+        let quote_rate = match &valuation {
+            Some(parts) => format!("{} AS \"quote_rate\"", parts.per_row.rate),
+            None => "1.0 AS \"quote_rate\"".to_string(),
+        };
+        // Whether this row's prices are denominated in the same currency as its money. A consumer
+        // that multiplies quantity by price must gate on this, or an inverse contract makes the
+        // figure wrong by the price of a bitcoin. The rule itself lives in `quote`, which owns
+        // every comparison against the persisted label.
+        let prices_in_money_quote = format!(
+            "({}) AS \"prices_in_money_quote\"",
+            super::super::quote::prices_share_money_quote_expr("r", &src.cols)
+        );
         let joins = valuation
             .as_ref()
             .map(|parts| parts.joins.as_str())
@@ -655,7 +711,8 @@ pub(in crate::db) fn unified_from_mode(
                 where_sql.push_str(&format!(" AND ({})", parts.valued));
             }
             branches.push(format!(
-                "SELECT {proj}, {pnl} FROM {} r{joins} WHERE {where_sql}",
+                "SELECT {proj}, {pnl}, {quote_rate}, {prices_in_money_quote}
+                 FROM {} r{joins} WHERE {where_sql}",
                 src.table,
             ));
         }
