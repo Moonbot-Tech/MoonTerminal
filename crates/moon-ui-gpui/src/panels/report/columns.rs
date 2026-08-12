@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
+use moon_core::db::QuoteCurrency;
 use rust_i18n::t;
 
 /// Report column that is redundant when a group-owned Auto workspace selects one core.
@@ -170,6 +171,9 @@ pub(super) fn report_data_row(
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = data.rows.get(ri) {
         let core_uid = data.core_uids.get(ri).copied().unwrap_or(0);
+        // Resolved from the whole row, not from the visible set: money precision must not change
+        // because the user hid the currency column.
+        let quote = row_quote(cols, r);
         for &i in vis {
             let cname = cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
@@ -180,7 +184,7 @@ pub(super) fn report_data_row(
             } else if cname == "deleted" {
                 cells.push(deleted_cell(ri, val));
             } else {
-                cells.push(report_data_cell(cname, val, p, zone));
+                cells.push(report_data_cell(cname, val, quote, p, zone));
             }
         }
     }
@@ -469,13 +473,20 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
 /// Args:
 ///     col: Runtime report column name.
 ///     val: SQLite value from the row.
+///     quote: The row's quote currency, deciding money precision.
 ///     p: Active MoonUI palette.
 ///     zone: Selected IANA display zone for timestamp columns.
 ///
 /// Returns:
 ///     Clipped table cell ready for MoonDataTable.
-fn report_data_cell(col: &str, val: &Value, p: MoonPalette, zone: Tz) -> MoonDataCell {
-    let (text, color) = cell(col, val, p, zone);
+fn report_data_cell(
+    col: &str,
+    val: &Value,
+    quote: Option<QuoteCurrency>,
+    p: MoonPalette,
+    zone: Tz,
+) -> MoonDataCell {
+    let (text, color) = cell(col, val, quote, p, zone);
     // Clip formatted content to the column's actual width. Alignment matches the column, while
     // MoonDataTable also protects cell boundaries at the container level. Every other column's
     // font styling comes from the cell style through MoonUI cascading.
@@ -550,12 +561,20 @@ fn is_numeric_report_column(col: &str) -> bool {
 /// Args:
 ///     col: Runtime Report column key.
 ///     v: Database value to format.
+///     quote: The row's quote currency, which decides money precision; `None` when the row does not
+///         name one, and the cell then falls back to two decimals.
 ///     p: Active palette used for signed coloring.
 ///     zone: User-selected display time zone.
 ///
 /// Returns:
 ///     Display text and optional text color.
-pub(super) fn cell(col: &str, v: &Value, p: MoonPalette, zone: Tz) -> (String, Option<u32>) {
+pub(super) fn cell(
+    col: &str,
+    v: &Value,
+    quote: Option<QuoteCurrency>,
+    p: MoonPalette,
+    zone: Tz,
+) -> (String, Option<u32>) {
     match col {
         "buydate" | "closedate" | "sellsetdate" | "last_update_at" => (
             as_i64(v)
@@ -583,14 +602,22 @@ pub(super) fn cell(col: &str, v: &Value, p: MoonPalette, zone: Tz) -> (String, O
                 Some(x) if x < 0.0 => Some(p.red),
                 _ => None,
             };
-            // Profit cells use two decimals without a currency marker; the
-            // totals row owns the marker for the aggregate.
+            // Profit cells carry no currency marker — the totals row owns it for the aggregate —
+            // so precision comes from the ROW's quote, exactly as the totals resolve theirs. Two
+            // decimals on every column would print a whole BTC-denominated core as `-0.00`: those
+            // rows live in the fourth decimal and below (`-0.00041380`), which is the precision
+            // MoonBot's own report shows them at. Percent and the USDT conversion are fixed at two:
+            // one is a ratio, the other is always USDT whatever the row is denominated in.
+            let decimals = match col {
+                "profitpct" | db::VALUATION_PROFIT_COLUMN => 2,
+                _ => quote.map_or(2, |currency| currency.display_decimals()),
+            };
             let text = n
                 .map(|x| {
                     if col == "profitpct" {
                         format!("{x:+.2}%")
                     } else {
-                        format!("{x:+.2}")
+                        format!("{x:+.decimals$}")
                     }
                 })
                 .unwrap_or_default();
@@ -598,6 +625,22 @@ pub(super) fn cell(col: &str, v: &Value, p: MoonPalette, zone: Tz) -> (String, O
         }
         _ => (cell_display_text(v), None),
     }
+}
+
+/// Resolve the quote currency one report row's money is denominated in.
+///
+/// The read layer already publishes the EFFECTIVE ordinal in this column, so a COIN-M row arrives
+/// as BTC and this stays a plain decode rather than a second place stating the correction.
+///
+/// Args:
+///     cols: Complete runtime Report schema, in row order.
+///     row: The row's values, parallel to `cols`.
+///
+/// Returns:
+///     The row's currency, or `None` when the schema omits it or the value is untrusted.
+pub(super) fn row_quote(cols: &[String], row: &[Value]) -> Option<QuoteCurrency> {
+    let index = cols.iter().position(|column| column == "basecurrency")?;
+    QuoteCurrency::from_report_value(row.get(index)?)
 }
 
 /// Format a persisted MoonBot base-currency ordinal as its exact quote ticker.

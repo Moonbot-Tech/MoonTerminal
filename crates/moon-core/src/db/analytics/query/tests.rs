@@ -475,8 +475,11 @@ fn the_current_rate_mode_emits_its_own_projection() {
         native, current,
         "falling through to native money is the failure this test exists to catch"
     );
+    // The rate arms switch on the EFFECTIVE quote rather than the raw column, so the assertion
+    // names the identity arm and the column it is ultimately built from, not the exact spelling of
+    // the correction — that expression belongs to `quote`, and its own tests pin it.
     assert!(
-        current.contains("CASE r.basecurrency WHEN 1 THEN 1.0"),
+        current.contains("WHEN 1 THEN 1.0") && current.contains("r.basecurrency"),
         "the current-rate projection must carry the rate CASE, got {current}"
     );
 }

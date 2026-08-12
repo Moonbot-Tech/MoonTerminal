@@ -120,7 +120,10 @@ fn natural_widths(
             let weight = columns::cell_weight(column);
             for row in rows.iter().take(query::MAX_REPORT_ROWS) {
                 let value = row.get(column_index).unwrap_or(&Value::Null);
-                let text = columns::cell(column, value, p, zone).0;
+                // Measured with the row's own quote, exactly as the renderer formats it: a
+                // BTC-denominated row prints eight decimals, and measuring it at two would size the
+                // column to clip them.
+                let text = columns::cell(column, value, columns::row_quote(cols, row), p, zone).0;
                 width = width.max(measurer.text_width(&text, weight));
             }
             let (floor, ceiling) = width_bounds(column);

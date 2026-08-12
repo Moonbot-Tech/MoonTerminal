@@ -433,9 +433,12 @@ pub(crate) fn current_rate_sql(
                 text_literal(&format!("current {} {}", rate.provider, rate.symbol))
             ));
         }
+        // Switched on the EFFECTIVE ordinal, like every other quote reference: a COIN-M row is
+        // denominated in BTC, so it must pick the BTC arm rather than the identity one.
+        let quote = super::super::quote::effective_ordinal_expr(alias, columns);
         (
-            format!("(CASE {alias}.basecurrency{rate_arms} END)"),
-            format!("(CASE {alias}.basecurrency{source_arms} END)"),
+            format!("(CASE ({quote}){rate_arms} END)"),
+            format!("(CASE ({quote}){source_arms} END)"),
         )
     } else {
         ("NULL".to_string(), "NULL".to_string())
@@ -449,8 +452,9 @@ pub(crate) fn current_rate_sql(
     let unavailable = if has_quote && !unroutable.is_empty() {
         format!(
             "({eligible} AND {numeric_profit} AND {rate_case} IS NULL
-              AND {alias}.basecurrency IN ({}))",
-            unroutable.join(",")
+              AND ({quote}) IN ({}))",
+            unroutable.join(","),
+            quote = super::super::quote::effective_ordinal_expr(alias, columns)
         )
     } else {
         "0".to_string()

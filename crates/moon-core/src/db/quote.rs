@@ -31,23 +31,183 @@ pub(crate) fn report_ordinal_from_value(value: &Value) -> Option<i64> {
     }
 }
 
-/// Build the trusted quote projection and grouping suffix for one report source.
+/// One market family whose report money is denominated in a currency the core does not label it
+/// with.
 ///
-/// SQLite considers numeric `INTEGER 1` and malformed `REAL 1.0` equal for `GROUP BY`. Grouping
-/// the raw column could therefore let an arbitrary row decide whether the complete amount is
-/// trusted. The storage-class guard separates every non-integer value into the unknown bucket.
+/// A rule fires on THREE facts at once — the market spelling in `fname`, the exact ordinal the core
+/// wrote, and nothing else — so it can only ever move rows it was written for. Adding a venue with
+/// the same habit is one entry in [`DENOMINATION_RULES`]; no SQL builder changes with it.
+struct DenominationRule {
+    /// SQL `LIKE` patterns for the market spelling in `fname`, any one of which may match.
+    ///
+    /// Deliberately NOT anchored to the `_` that separates `fname`'s `<source>_<market>_<stamp>`
+    /// segments: measured on the replica, 1 476 COIN-M rows spell the market with its last letter
+    /// rotated to the front — `Pump_TUSD-DO_0329_…` for market `USD-DOT_0329`, `Pump_BUSD-BN_0630_…`
+    /// for `USD-BNB_0630` — and an anchor drops every one of them. [`Self::excluded_markers`] and
+    /// the contract shape carry the precision the anchor would have.
+    market_markers: &'static [&'static str],
+    /// SQL `LIKE` patterns that VETO the rule, whatever else matched.
+    ///
+    /// `fname`'s first segment is a user-named strategy, so a strategy called `USD-hedge` satisfies
+    /// an unanchored marker on a USD-M core. Its market segment still spells the quote in full
+    /// (`USDT-ETH_0927`), and a COIN-M row never does — including the rotated spellings, where
+    /// `TUSD-` and `BUSD-` contain no `USDT-`. So this veto separates the one collision the
+    /// contract shape cannot: a USD-M DATED contract, whose coin has the same shape.
+    excluded_markers: &'static [&'static str],
+    /// SQL `GLOB` patterns for the contract shape in `coin`, any one of which may match.
+    ///
+    /// The second independent fact. Neither alone is proof — a USD-M core trades the same
+    /// `ETH_0926` shape, and a strategy name can contain anything — but a row moves only when the
+    /// market spelling and the contract shape agree and no veto fires.
+    contract_shapes: &'static [&'static str],
+    /// Ordinal the core writes for such a row.
+    labeled: QuoteCurrency,
+    /// Ordinal the row's money is actually in.
+    denominated: QuoteCurrency,
+}
+
+impl DenominationRule {
+    /// Build this rule's guard over one source, or `None` when the source cannot evidence it.
+    ///
+    /// Args:
+    ///     alias: Report source alias the row is selected through.
+    ///     columns: Columns the source actually carries.
+    ///
+    /// Returns:
+    ///     A predicate naming only columns the source has, or `None` to skip the rule entirely.
+    fn guard_sql(
+        &self,
+        alias: &str,
+        columns: &std::collections::HashSet<String>,
+    ) -> Option<String> {
+        // A source missing either fact cannot prove the rule, so every row keeps its persisted
+        // identity — the answer this module gave before any rule existed.
+        if !columns.contains("fname") || !columns.contains("coin") {
+            return None;
+        }
+        // An empty list collapses to the neutral `1`, never to `()`: a rule that states no veto —
+        // or no shape — is a legitimate rule, and joining nothing into parentheses would produce
+        // SQL that fails to prepare, taking every money query down with it.
+        let joined = |parts: Vec<String>, separator: &str| {
+            if parts.is_empty() {
+                "1".to_string()
+            } else {
+                format!("({})", parts.join(separator))
+            }
+        };
+        let markers = joined(
+            self.market_markers
+                .iter()
+                .map(|marker| format!("{alias}.fname LIKE '{marker}'"))
+                .collect(),
+            " OR ",
+        );
+        let vetoes = joined(
+            self.excluded_markers
+                .iter()
+                .map(|marker| format!("{alias}.fname NOT LIKE '{marker}'"))
+                .collect(),
+            " AND ",
+        );
+        let shapes = joined(
+            self.contract_shapes
+                .iter()
+                .map(|shape| format!("{alias}.coin GLOB '{shape}'"))
+                .collect(),
+            " OR ",
+        );
+        Some(format!("{markers} AND {vetoes} AND {shapes}"))
+    }
+}
+
+/// Every known label-versus-denomination mismatch, applied in order.
+///
+/// Binance COIN-M (`QBinance`, the cores reporting `Binance Quarterly`) writes its markets as
+/// `USD-<COIN>` — `Pump_USD-UNI_RP_…`, `BinanceQ_USD-ETH_0926_…` — while a USD-M core writes the
+/// very same dated contract as `USDT-<COIN>` (`Pump_USDT-ETH_0927_…`). The `coin` column keeps only
+/// the contract part, `ETH_0926` on both, so the spelling in `fname` is the ONE per-row fact that
+/// separates them; measured on the live replica, the marker selects every row of the three COIN-M
+/// cores and no row of any other.
+///
+/// Those rows quote in USD but settle in the base coin, and MoonBot normalizes the settled amount
+/// to BTC before storing it: `notional / spentbtc` holds the BTC price of its period for every one
+/// of them (median 65k in 2024, 106k in 2025, 67k in 2026), and MoonBot's own report converts them
+/// with the BTC rate. Left uncorrected, a −0.00041380 BTC trade values as −0.0004 USDT instead of
+/// −26.33.
+///
+/// Measured against the live replica: the three facts together select 13 381 rows — every row of
+/// the three COIN-M cores that carries a filename, and not one row of the other twenty cores.
+const DENOMINATION_RULES: &[DenominationRule] = &[DenominationRule {
+    market_markers: &["%USD-%"],
+    excluded_markers: &["%USDT-%"],
+    contract_shapes: &["*_RP", "*_[0-9][0-9][0-9][0-9]"],
+    labeled: QuoteCurrency::usdt(),
+    denominated: QuoteCurrency::btc(),
+}];
+
+/// Build the EFFECTIVE quote ordinal of one report row.
+///
+/// THE one place a row's currency is decided. Two corrections ride on the persisted `basecurrency`,
+/// and both must apply wherever that row's money is read, or two surfaces disagree about what one
+/// number means:
+///
+/// * SQLite considers numeric `INTEGER 1` and malformed `REAL 1.0` equal for `GROUP BY`, so the
+///   storage-class guard separates every non-integer value into the unknown bucket.
+/// * A row whose market family denominates elsewhere than its label says is moved by
+///   [`DENOMINATION_RULES`]. Only an exact labeled ordinal is rewritten, so a currency the core
+///   named deliberately — USDC, ETH, a fiat quote — passes through whatever its market is called.
+///
+/// The correction reads the ROW, never the core's current configuration: a core can change venue,
+/// and a historical row must keep the identity it was written with.
 ///
 /// Args:
-///     column: Qualified report column expression.
-///     available: Whether the source actually carries that column.
+///     alias: Report source alias the row is selected through.
+///     columns: Columns the source actually carries.
+///
+/// Returns:
+///     SQL expression yielding a trusted ordinal, or NULL for a row whose identity is unknown.
+pub(crate) fn effective_ordinal_expr(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+) -> String {
+    if !columns.contains("basecurrency") {
+        return "NULL".to_string();
+    }
+    let raw = format!("{alias}.basecurrency");
+    let trusted = format!("CASE WHEN typeof({raw}) = 'integer' THEN {raw} END");
+    let arms = DENOMINATION_RULES
+        .iter()
+        .filter_map(|rule| {
+            let guard = rule.guard_sql(alias, columns)?;
+            Some(format!(
+                " WHEN ({trusted}) = {labeled} AND {guard} THEN {denominated}",
+                labeled = rule.labeled.ordinal(),
+                denominated = rule.denominated.ordinal(),
+            ))
+        })
+        .collect::<String>();
+    if arms.is_empty() {
+        return trusted;
+    }
+    format!("CASE{arms} ELSE ({trusted}) END")
+}
+
+/// Build the trusted quote projection and grouping suffix for one report source.
+///
+/// Args:
+///     alias: Report source alias the row is selected through.
+///     columns: Columns the source actually carries.
 ///
 /// Returns:
 ///     Safe SELECT expression and optional GROUP BY suffix using exactly the same expression.
-pub(crate) fn trusted_quote_group(column: &str, available: bool) -> (String, String) {
-    if !available {
+pub(crate) fn trusted_quote_group(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+) -> (String, String) {
+    if !columns.contains("basecurrency") {
         return ("NULL".to_string(), String::new());
     }
-    let quote = format!("CASE WHEN typeof({column}) = 'integer' THEN {column} END");
+    let quote = effective_ordinal_expr(alias, columns);
     let group_by = format!(" GROUP BY {quote}");
     (quote, group_by)
 }
@@ -63,6 +223,25 @@ impl QuoteCurrency {
     ///     Persisted USDT currency identity.
     pub const fn usdt() -> Self {
         Self(1)
+    }
+
+    /// Exact BTC quote identity, which every COIN-M report row is denominated in.
+    ///
+    /// Returns:
+    ///     Persisted BTC currency identity.
+    pub const fn btc() -> Self {
+        Self(0)
+    }
+
+    /// Persisted ordinal behind this identity.
+    ///
+    /// Exposed because the effective-quote SQL has to embed the ordinals as literals; nothing else
+    /// should need to unwrap the identity back into a number.
+    ///
+    /// Returns:
+    ///     The `TBaseCurrency` ordinal.
+    pub const fn ordinal(self) -> u8 {
+        self.0
     }
 
     /// Decode a raw SQLite report value into a known quote currency.
