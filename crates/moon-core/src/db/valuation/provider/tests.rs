@@ -61,6 +61,69 @@ impl SpotRateSource for FakeSource {
     }
 }
 
+/// Route-aware source with a newer fallback candle than its preferred Binance candle.
+struct RoutePrioritySource {
+    /// Every provider and symbol requested, in canonical order.
+    calls: Mutex<Vec<(String, String)>>,
+    /// Closed minute available on the preferred Binance direct route.
+    preferred_minute: i64,
+    /// Newer closed minute available only on the fallback Bybit direct route.
+    fallback_minute: i64,
+}
+
+impl RoutePrioritySource {
+    /// Build a route-aware source for the canonical-priority regression.
+    ///
+    /// Args:
+    ///     preferred_minute: Closed minute returned by Binance direct.
+    ///     fallback_minute: Newer closed minute returned by Bybit direct.
+    ///
+    /// Returns:
+    ///     Source with an empty request log and permanent misses on inverse routes.
+    fn new(preferred_minute: i64, fallback_minute: i64) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            preferred_minute,
+            fallback_minute,
+        }
+    }
+}
+
+impl SpotRateSource for RoutePrioritySource {
+    /// Return route-specific candles so provider ordering cannot hide behind response ordering.
+    ///
+    /// Args:
+    ///     provider: Canonical provider identifier.
+    ///     symbol: Provider-native spot symbol.
+    ///     _start_minute_utc: First requested UTC minute.
+    ///     _end_minute_utc: Last requested UTC minute.
+    ///
+    /// Returns:
+    ///     Binance and Bybit direct candles, or permanent absence for every inverse route.
+    fn candles(
+        &self,
+        provider: &'static str,
+        symbol: &str,
+        _start_minute_utc: i64,
+        _end_minute_utc: i64,
+    ) -> Result<Vec<SpotCandle>, FetchFailure> {
+        self.calls
+            .lock()
+            .expect("lock priority calls")
+            .push((provider.to_string(), symbol.to_string()));
+        let (minute, close) = match (provider, symbol) {
+            ("binance_spot", "USDCUSDT") => (self.preferred_minute, 1.01),
+            ("bybit_spot", "USDCUSDT") => (self.fallback_minute, 1.02),
+            _ => return Err(FetchFailure::Missing),
+        };
+        Ok(vec![SpotCandle {
+            open_ms: minute * 1_000,
+            close_ms: minute * 1_000 + 59_999,
+            close,
+        }])
+    }
+}
+
 /// Removing inverse routing from `provider::resolve_rate` would leave a quote that trades only as
 /// `USDTQUOTE` uncovered; the second Binance route must invert its close.
 #[test]
@@ -104,8 +167,87 @@ fn inverse_binance_route_is_used_after_direct_absence() {
 fn transient_primary_failure_does_not_fall_through() {
     let source = FakeSource::new(vec![Err(FetchFailure::Transient("timeout".to_string()))]);
     let result = resolve_rate(&source, 0, "BTC", 1_700_000_040);
-    assert_eq!(result, Err(FetchFailure::Transient("timeout".to_string())));
+    assert_eq!(
+        result,
+        Err(FetchFailure::Transient(
+            "binance_spot BTCUSDT: timeout".to_string()
+        ))
+    );
     assert_eq!(source.calls.into_inner().expect("take fake calls").len(), 1);
+}
+
+/// Breakage: replacing `resolve_latest_rate`'s `max_by_key(open_ms)` with response-order selection
+/// would choose an older Bybit-style reverse-ordered candle, keeping Analytics on a stale rate even
+/// though a newer closed price was returned by the preferred direct route.
+#[test]
+fn current_resolution_uses_the_newest_candle_on_the_first_available_route() {
+    let newest = 1_700_000_040;
+    let older = newest - 120;
+    let source = FakeSource::new(vec![Ok(vec![
+        SpotCandle {
+            open_ms: newest * 1_000,
+            close_ms: newest * 1_000 + 59_999,
+            close: 1.01,
+        },
+        SpotCandle {
+            open_ms: older * 1_000,
+            close_ms: older * 1_000 + 59_999,
+            close: 0.99,
+        },
+    ])]);
+
+    let rate = resolve_latest_rate(&source, 8, "USDC", older, newest)
+        .expect("resolve latest current rate");
+
+    assert_eq!(rate.minute_utc, newest);
+    assert_eq!(rate.rate_usdt, 1.01);
+    assert_eq!(rate.provider, "binance_spot");
+    assert_eq!(rate.symbol, "USDCUSDT");
+    assert_eq!(source.calls.into_inner().expect("take fake calls").len(), 1);
+}
+
+/// Breakage: moving Bybit ahead of Binance in `canonical_routes` would let its newer fallback
+/// candle override an available preferred route, changing the current PnL source and value.
+#[test]
+fn current_resolution_keeps_canonical_priority_over_cross_route_recency() {
+    let preferred_minute = 1_700_000_040;
+    let fallback_minute = preferred_minute + 60;
+    let source = RoutePrioritySource::new(preferred_minute, fallback_minute);
+
+    let rate = resolve_latest_rate(&source, 8, "USDC", preferred_minute - 60, fallback_minute)
+        .expect("resolve preferred current route");
+
+    assert_eq!(rate.minute_utc, preferred_minute);
+    assert_eq!(rate.rate_usdt, 1.01);
+    assert_eq!(rate.provider, "binance_spot");
+    assert_eq!(rate.symbol, "USDCUSDT");
+    assert_eq!(
+        source.calls.into_inner().expect("take priority calls"),
+        vec![("binance_spot".to_string(), "USDCUSDT".to_string())]
+    );
+}
+
+/// Breakage: routing historical `resolve_rate` through the current lookback resolver would borrow
+/// a neighboring candle, changing the USDT value of trades whose exact close minute had no price.
+#[test]
+fn historical_resolution_still_requires_the_exact_minute() {
+    let requested = 1_700_000_040;
+    let neighbor = requested - 60;
+    let source = FakeSource::new(vec![
+        Ok(vec![SpotCandle {
+            open_ms: neighbor * 1_000,
+            close_ms: neighbor * 1_000 + 59_999,
+            close: 1.01,
+        }]),
+        Err(FetchFailure::Missing),
+        Err(FetchFailure::Missing),
+        Err(FetchFailure::Missing),
+    ]);
+
+    assert_eq!(
+        resolve_rate(&source, 8, "USDC", requested),
+        Err(FetchFailure::Missing)
+    );
 }
 
 /// Parsing the wrong Binance array slot would value every trade from volume or high price; the
@@ -207,21 +349,73 @@ fn only_structured_binance_invalid_symbol_is_permanent() {
     ));
 }
 
-/// Treating Bybit's generic `10001` parameter failure as an absent market would permanently cache
-/// a client/API-contract bug, while missing `10029` would stop before the inverse fallback route.
+/// Breakage: removing the message-qualified `10001` arm would reproduce the observed endless
+/// `current_rates/provider` retry, while matching every `10001` would hide real client/API bugs as
+/// absent symbols. Missing `retMsg` must remain retryable for the same reason.
 #[test]
-fn only_bybit_invalid_symbol_is_permanent() {
+fn only_bybit_invalid_or_observed_unsupported_symbols_are_permanent() {
     let invalid_symbol = serde_json::json!({"retCode": 10029, "retMsg": "symbol invalid"});
     assert_eq!(
         parse_bybit(&invalid_symbol, 1_700_000_040, 1_700_000_040),
         Err(FetchFailure::Missing)
     );
-    assert!(matches!(
+    let unsupported = serde_json::json!({
+        "retCode": 10001,
+        "retMsg": "  Not supported symbols \r\n"
+    });
+    assert_eq!(
+        parse_bybit(&unsupported, 1_700_000_040, 1_700_000_040),
+        Err(FetchFailure::Missing)
+    );
+    assert_eq!(
         parse_bybit(
             &serde_json::json!({"retCode": 10001, "retMsg": "request parameter error"}),
             1_700_000_040,
             1_700_000_040,
         ),
-        Err(FetchFailure::Transient(_))
-    ));
+        Err(FetchFailure::Transient(
+            "bybit retCode 10001: request parameter error".to_string()
+        ))
+    );
+    assert_eq!(
+        parse_bybit(
+            &serde_json::json!({"retCode": 10001}),
+            1_700_000_040,
+            1_700_000_040,
+        ),
+        Err(FetchFailure::Transient(
+            "bybit retCode 10001: missing retMsg".to_string()
+        ))
+    );
+}
+
+/// Breakage: returning a parser's raw transient from `resolve_rate_batch` would again reduce the
+/// user-facing stall reason to `retCode 10001`, hiding which provider and symbol must be checked;
+/// falling through after it could also cache a false permanent miss.
+#[test]
+fn transient_bybit_fault_names_the_route_code_and_message() {
+    let minute = 1_700_000_040;
+    let failure = parse_bybit(
+        &serde_json::json!({"retCode": 10001, "retMsg": "request parameter error"}),
+        minute,
+        minute,
+    )
+    .expect_err("generic parameter failure stays transient");
+    let source = FakeSource::new(vec![
+        Err(FetchFailure::Missing),
+        Err(FetchFailure::Missing),
+        Err(failure),
+    ]);
+
+    assert_eq!(
+        resolve_rate(&source, 8, "USDC", minute),
+        Err(FetchFailure::Transient(
+            "bybit_spot USDCUSDT: bybit retCode 10001: request parameter error".to_string()
+        ))
+    );
+    assert_eq!(
+        source.calls.into_inner().expect("take fake calls").len(),
+        3,
+        "a transient direct Bybit route must stop before inverse fallback"
+    );
 }

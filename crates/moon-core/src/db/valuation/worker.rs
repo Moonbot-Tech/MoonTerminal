@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use super::health::{
     self, FailureKind, FaultCause, ValuationFault, ValuationStage, ValuationStatus,
 };
-use super::provider::{resolve_rate, resolve_rate_batch, FetchFailure};
+use super::provider::{resolve_latest_rate, resolve_rate, resolve_rate_batch, FetchFailure};
 use super::{
     CachedRate, HttpSpotRateSource, OutboxAction, OutboxEvent, SpotRateSource, TradeInput,
     TradeSource,
@@ -1441,7 +1441,7 @@ const CURRENT_REFRESH_MINUTES: i64 = 5;
 /// blanking every figure on one bad request.
 #[derive(Default)]
 struct CurrentRateState {
-    /// Minute the most recent pass was armed in, and the candle that pass asks for.
+    /// Minute the most recent pass was armed in, used by the five-minute refresh throttle.
     minute: Option<i64>,
     /// Ordinals still to resolve in this pass, popped from the back.
     pending: Vec<i64>,
@@ -1665,8 +1665,9 @@ fn minutes_elapsed(now: i64, since: Option<i64>, minutes: i64) -> bool {
 /// provider routes at a fifteen-second timeout each, and doing them in one turn would park the
 /// reconciliation and outbox stages behind minutes of network wait.
 ///
-/// The minute asked for is the PREVIOUS one: the current minute's candle has not closed, and the
-/// historical path already refuses to value against it for the same reason.
+/// The newest eligible minute is the previous one because the current candle has not closed. A
+/// bounded lookback admits the latest known closed price when a sparse market had no trade in that
+/// exact minute; historical valuation keeps its separate exact-minute resolver.
 ///
 /// Args:
 ///     source: Spot candle boundary.
@@ -1732,7 +1733,8 @@ fn resolve_next_rate(
     let ticker = crate::db::QuoteCurrency::from_report_ordinal(ordinal)
         .map(|currency| currency.ticker())
         .unwrap_or("UNKNOWN");
-    match resolve_rate(source, ordinal, ticker, minute - 60) {
+    let (oldest_minute, newest_minute) = current_rate_window(minute);
+    match resolve_latest_rate(source, ordinal, ticker, oldest_minute, newest_minute) {
         Ok(rate) => {
             state.missing.remove(&ordinal);
             state.rates.insert(
@@ -1764,6 +1766,21 @@ fn resolve_next_rate(
     } else {
         Ok(StageTurn::Ran { more: true })
     }
+}
+
+/// Bound one current-rate lookup to fully closed candles inside the freshness window.
+///
+/// Args:
+///     minute: Current UTC minute start in Unix seconds.
+///
+/// Returns:
+///     Inclusive oldest and newest eligible candle-open minutes. The range contains ten one-minute
+///     opens when [`super::FRESHNESS_MS`] is ten minutes.
+fn current_rate_window(minute: i64) -> (i64, i64) {
+    (
+        minute.saturating_sub(super::FRESHNESS_MS.div_euclid(1_000)),
+        minute.saturating_sub(60),
+    )
 }
 
 /// Resolve one source's physical table, column set, and stable row-id column.

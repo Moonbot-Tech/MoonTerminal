@@ -1,4 +1,4 @@
-//! Historical public spot-candle providers and canonical routing.
+//! Public spot-candle providers and canonical historical/current rate routing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -258,6 +258,73 @@ pub(crate) fn resolve_rate(
     Err(FetchFailure::Missing)
 }
 
+/// Resolve the newest available closed rate inside one current-rate window.
+///
+/// Unlike historical valuation, current valuation needs the latest known price rather than one
+/// exact minute. Canonical route priority still wins over recency across routes: the newest candle
+/// from the first route with data is used, so an inverse or fallback market cannot outrank an
+/// available direct market.
+///
+/// Args:
+///     source: Public candle boundary.
+///     quote_ordinal: Persisted MoonBot quote ordinal.
+///     quote_ticker: Uppercase neutral quote ticker.
+///     start_minute_utc: Oldest eligible closed UTC minute start.
+///     end_minute_utc: Newest eligible closed UTC minute start.
+///
+/// Returns:
+///     Newest validated rate on the first available route, permanent absence after every route,
+///     or a transient failure that stops fallback.
+pub(crate) fn resolve_latest_rate(
+    source: &dyn SpotRateSource,
+    quote_ordinal: i64,
+    quote_ticker: &str,
+    start_minute_utc: i64,
+    end_minute_utc: i64,
+) -> Result<ResolvedRate, FetchFailure> {
+    if quote_ticker == "USDT" {
+        return Ok(ResolvedRate {
+            quote_ordinal,
+            minute_utc: end_minute_utc,
+            rate_usdt: 1.0,
+            provider: "identity".to_string(),
+            symbol: "USDT".to_string(),
+            orientation: RateOrientation::Identity,
+            candle_open_ms: end_minute_utc.saturating_mul(1_000),
+            candle_close_ms: end_minute_utc.saturating_mul(1_000).saturating_add(59_999),
+        });
+    }
+    for (provider, symbol, orientation) in canonical_routes(quote_ticker) {
+        match source.candles(provider, &symbol, start_minute_utc, end_minute_utc) {
+            Ok(candles) => {
+                let Some(candle) = candles.into_iter().max_by_key(|candle| candle.open_ms) else {
+                    continue;
+                };
+                let rate_usdt = validated_rate(candle.close, orientation).map_err(|error| {
+                    FetchFailure::Transient(route_transient(provider, &symbol, error))
+                })?;
+                return Ok(ResolvedRate {
+                    quote_ordinal,
+                    minute_utc: candle.open_ms.div_euclid(60_000) * 60,
+                    rate_usdt,
+                    provider: provider.to_string(),
+                    symbol,
+                    orientation,
+                    candle_open_ms: candle.open_ms,
+                    candle_close_ms: candle.close_ms,
+                });
+            }
+            Err(FetchFailure::Missing) => continue,
+            Err(FetchFailure::Transient(error)) => {
+                return Err(FetchFailure::Transient(route_transient(
+                    provider, &symbol, error,
+                )))
+            }
+        }
+    }
+    Err(FetchFailure::Missing)
+}
+
 /// Batch result that preserves successful canonical routes before a later transient failure.
 pub(crate) struct RateBatch {
     /// Validated rates resolved for requested minutes.
@@ -316,30 +383,8 @@ pub(crate) fn resolve_rate_batch(
         };
     };
     let end_minute = unresolved.last().copied().unwrap_or(start_minute);
-    let routes = [
-        (
-            "binance_spot",
-            format!("{quote_ticker}USDT"),
-            RateOrientation::Direct,
-        ),
-        (
-            "binance_spot",
-            format!("USDT{quote_ticker}"),
-            RateOrientation::Inverse,
-        ),
-        (
-            "bybit_spot",
-            format!("{quote_ticker}USDT"),
-            RateOrientation::Direct,
-        ),
-        (
-            "bybit_spot",
-            format!("USDT{quote_ticker}"),
-            RateOrientation::Inverse,
-        ),
-    ];
     let mut ready = Vec::new();
-    for (provider, symbol, orientation) in routes {
+    for (provider, symbol, orientation) in canonical_routes(quote_ticker) {
         if unresolved.is_empty() {
             break;
         }
@@ -360,7 +405,7 @@ pub(crate) fn resolve_rate_batch(
                             return RateBatch {
                                 ready,
                                 missing: Vec::new(),
-                                transient: Some(format!("{provider} {symbol}: {error}")),
+                                transient: Some(route_transient(provider, &symbol, error)),
                             };
                         }
                     };
@@ -382,7 +427,7 @@ pub(crate) fn resolve_rate_batch(
                 return RateBatch {
                     ready,
                     missing: Vec::new(),
-                    transient: Some(error),
+                    transient: Some(route_transient(provider, &symbol, error)),
                 };
             }
         }
@@ -392,6 +437,51 @@ pub(crate) fn resolve_rate_batch(
         missing: unresolved.into_iter().collect(),
         transient: None,
     }
+}
+
+/// Build the canonical direct, inverse, and provider fallback order for one quote.
+///
+/// Args:
+///     quote_ticker: Uppercase neutral quote ticker.
+///
+/// Returns:
+///     Binance direct/inverse followed by Bybit direct/inverse.
+fn canonical_routes(quote_ticker: &str) -> [(&'static str, String, RateOrientation); 4] {
+    [
+        (
+            "binance_spot",
+            format!("{quote_ticker}USDT"),
+            RateOrientation::Direct,
+        ),
+        (
+            "binance_spot",
+            format!("USDT{quote_ticker}"),
+            RateOrientation::Inverse,
+        ),
+        (
+            "bybit_spot",
+            format!("{quote_ticker}USDT"),
+            RateOrientation::Direct,
+        ),
+        (
+            "bybit_spot",
+            format!("USDT{quote_ticker}"),
+            RateOrientation::Inverse,
+        ),
+    ]
+}
+
+/// Attach the canonical route to one transient provider detail.
+///
+/// Args:
+///     provider: Canonical provider identifier.
+///     symbol: Provider-native spot symbol.
+///     detail: Transport, parser, service, or validation detail.
+///
+/// Returns:
+///     Safe diagnostic text naming the route that stopped fallback.
+fn route_transient(provider: &str, symbol: &str, detail: String) -> String {
+    format!("{provider} {symbol}: {detail}")
 }
 
 /// Validate and orient one provider close into USDT per quote unit.
@@ -531,10 +621,15 @@ fn parse_bybit(
             FetchFailure::Transient("bybit response has no integer retCode".to_string())
         })?;
     if code != 0 {
-        return if code == 10029 {
+        let message = value.get("retMsg").and_then(Value::as_str).map(str::trim);
+        return if code == 10029 || (code == 10001 && message == Some("Not supported symbols")) {
             Err(FetchFailure::Missing)
         } else {
-            Err(FetchFailure::Transient(format!("bybit retCode {code}")))
+            let detail = message.filter(|message| !message.is_empty()).map_or_else(
+                || format!("bybit retCode {code}: missing retMsg"),
+                |message| format!("bybit retCode {code}: {message}"),
+            );
+            Err(FetchFailure::Transient(detail))
         };
     }
     let rows = value
