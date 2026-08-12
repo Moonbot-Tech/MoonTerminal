@@ -21,13 +21,48 @@ impl OrdersPanel {
         // Without one, the legacy set remains as a migration seed until the first column toggle
         // writes it to shared storage.
         this.apply_ctx_columns(cx);
+        this.apply_ctx_sort(cx);
         // Persist drag-defined column order separately because it is not part of the copyable view.
         let order = column_order_from_info(info);
         if !order.is_empty() {
             this.col_order_cache = order.clone();
             this.table_state.update(cx, |s, _| s.column_order = order);
         }
+        let backend_for_restored_cache = this.backend.clone();
+        this.rebuild_cache(backend_for_restored_cache.read(cx));
         this
+    }
+
+    /// Apply a valid visible-column sort saved for the current dock/window context.
+    pub(super) fn apply_ctx_sort(&mut self, cx: &mut Context<Self>) {
+        let saved =
+            crate::persistence::table_persist::saved_sort(self.backend.read(cx), &self.widths_id);
+        self.view.header_sort = saved.and_then(|preference| {
+            OrdCol::from_key(&preference.column)
+                .filter(|column| self.view.shows(*column))
+                .map(|column| (column, preference.ascending))
+        });
+        self.sync_sort_indicator(cx);
+    }
+
+    /// Persist the active header override, or remove the entry for the legacy default order.
+    pub(super) fn save_ctx_sort(&self, cx: &mut App) {
+        let preference = self.view.header_sort.map(|(column, ascending)| {
+            moon_core::config::TableSortPreference {
+                column: column.key().to_string(),
+                ascending,
+            }
+        });
+        crate::persistence::table_persist::set_sort(&self.backend, &self.widths_id, preference, cx);
+    }
+
+    /// Keep MoonUI's arrow aligned with the panel-owned comparator state.
+    pub(super) fn sync_sort_indicator(&self, cx: &mut Context<Self>) {
+        self.table_state
+            .update(cx, |state, _| match self.view.header_sort {
+                Some((column, ascending)) => state.set_sort(column.key(), ascending),
+                None => state.sort_column = None,
+            });
     }
 
     /// Apply a saved per-context visible-column set for `widths_id`, when valid.
@@ -72,7 +107,18 @@ impl OrdersPanel {
             f(&mut next);
             if next != this.view {
                 let cols_changed = next.columns != this.view.columns;
+                if next
+                    .header_sort
+                    .is_some_and(|(column, _)| !next.shows(column))
+                {
+                    next.header_sort = None;
+                }
+                let sort_changed = next.header_sort != this.view.header_sort;
                 this.view = next;
+                if sort_changed {
+                    this.sync_sort_indicator(cx);
+                    this.save_ctx_sort(cx);
+                }
                 let backend = this.backend.clone();
                 this.rebuild_cache(backend.read(cx));
                 // Persist a changed visible-column set through the shared per-context descriptor.

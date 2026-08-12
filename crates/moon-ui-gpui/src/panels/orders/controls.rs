@@ -286,20 +286,31 @@ impl OrdersPanel {
             ],
             cur.primary,
             crate::panels::RadioMark::Check,
-            move |app, primary| Self::mutate(&sort_view, app, |state| state.primary = primary),
+            move |app, primary| {
+                Self::mutate(&sort_view, app, |state| {
+                    state.primary = primary;
+                    state.header_sort = None;
+                })
+            },
         ));
         items.push(MoonMenuItem::separator());
         items.push(item(
             "m-new",
             t!("orders.sort.new").to_string(),
             cur.newest_first,
-            |s| s.newest_first = true,
+            |s| {
+                s.newest_first = true;
+                s.header_sort = None;
+            },
         ));
         items.push(item(
             "m-old",
             t!("orders.sort.old").to_string(),
             !cur.newest_first,
-            |s| s.newest_first = false,
+            |s| {
+                s.newest_first = false;
+                s.header_sort = None;
+            },
         ));
         // Main on top offers two mutually exclusive choices; clicking the active choice returns to
         // Off. Row highlighting is independent of this ordering mode.

@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use gpui::Entity;
 use moon_ui::{MoonInputState, MoonSliderState};
 
-use super::super::COIN_DEFAULT_SORT;
+use super::super::{COIN_COLS, COIN_DEFAULT_SORT};
 use crate::load_state::LoadState;
 use moon_core::db::ReadResult;
 use moon_core::db::analytics::GroupStat;
@@ -218,6 +218,28 @@ impl Default for CoinsState {
 }
 
 impl CoinsState {
+    /// Build coin-table state with a validated process-persistent sort preference.
+    ///
+    /// Args:
+    ///     preference: Shared layout value whose direction uses MoonUI's `ascending` convention.
+    ///
+    /// Returns:
+    ///     Default coin state carrying the saved `(key, descending)` sort when the key is current.
+    pub(in crate::analytics) fn load(
+        preference: Option<moon_core::config::TableSortPreference>,
+    ) -> Self {
+        let mut state = Self::default();
+        if let Some(preference) = preference.filter(|preference| {
+            preference.column == super::super::SORT_NAME
+                || COIN_COLS
+                    .iter()
+                    .any(|column| column.key == preference.column)
+        }) {
+            state.sort = Some((preference.column, !preference.ascending));
+        }
+        state
+    }
+
     /// Mark report-derived coin statistics stale while preserving working lists and picks.
     ///
     /// Report commits can change the table, KPI, and picked-strategy highlight. They cannot change

@@ -312,6 +312,16 @@ surface but the formatter.
 финальный полный snapshot за уже выполняющейся записью, join'ит worker и использует синхронный
 fallback только для классов, которые worker не смог подтвердить.
 
+Интерактивные таблицы без собственного хранилища сохраняют выбранную колонку и направление в
+`WindowLayout.table_sorts` через `persistence/table_persist.rs`. Ключ включает устойчивый id
+таблицы и host-контекст (`:dock` / `:win`); каждое сохранённое имя валидирует сам panel по своим
+текущим sortable/visible колонкам, а отсутствие или устаревший ключ оставляет исторический default.
+Orders, Assets, Core Status Flat/By IP, Screener и Analytics Tuner By coin используют этот общий
+контракт. Alerts сохраняет sort вместе с dock state, Report — в SQLite, а Analytics strategy list,
+Profit Monitor и Settings core order сохраняют свои отдельные layout/settings preferences; общий
+map не дублирует эти authorities. Все compare-then-dirty записи уходят через существующий
+debounced layout worker и финальный quit flush.
+
 `ReportPanel` is a lightweight GPUI entity: its SQLite connection/schema, core list, columns, and
 saved display preferences load on the background executor and publish only into a still-live panel.
 Independent revision counters prevent a late result from replacing a value the user changed and

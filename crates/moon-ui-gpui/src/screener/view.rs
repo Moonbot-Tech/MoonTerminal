@@ -73,11 +73,35 @@ impl ScreenerView {
 
         // Screener always runs in a separate window, so its width context is fixed to `:win`.
         let widths_id = crate::persistence::table_persist::ctx_id("screener-table", true);
+
+        // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
+        // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
+        // or removed columns; an empty valid set falls back to every current column.
+        let saved_cols = crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
+            .or_else(|| backend.read(cx).layout.screener_columns.clone());
+        let visible_cols: HashSet<String> = match saved_cols {
+            Some(list) => {
+                let set: HashSet<String> = list
+                    .iter()
+                    .filter(|k| COLS.iter().any(|c| c.0 == k.as_str()))
+                    .cloned()
+                    .collect();
+                if set.is_empty() {
+                    COLS.iter().map(|c| c.0.to_string()).collect()
+                } else {
+                    set
+                }
+            }
+            None => COLS.iter().map(|c| c.0.to_string()).collect(),
+        };
+        let restored_sort = super::table::restore_sort(
+            crate::persistence::table_persist::saved_sort(backend.read(cx), &widths_id),
+            &visible_cols,
+        );
         let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
-            s.sort_column = Some("vol24".into());
-            s.sort_ascending = false;
+            s.set_sort(restored_sort.0.clone(), !restored_sort.1);
             s.column_widths = saved_widths;
             s
         });
@@ -116,35 +140,14 @@ impl ScreenerView {
         })
         .detach();
 
-        // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
-        // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
-        // or removed columns; an empty valid set falls back to every current column.
-        let saved_cols = crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
-            .or_else(|| backend.read(cx).layout.screener_columns.clone());
-        let visible_cols: HashSet<String> = match saved_cols {
-            Some(list) => {
-                let set: HashSet<String> = list
-                    .iter()
-                    .filter(|k| COLS.iter().any(|c| c.0 == k.as_str()))
-                    .cloned()
-                    .collect();
-                if set.is_empty() {
-                    COLS.iter().map(|c| c.0.to_string()).collect()
-                } else {
-                    set
-                }
-            }
-            None => COLS.iter().map(|c| c.0.to_string()).collect(),
-        };
-
         let mut this = Self {
             backend,
             rows: Rc::new(Vec::new()),
             total: 0,
             coin_input,
             dvol_input,
-            sort_key: "vol24".to_string(),
-            sort_desc: true,
+            sort_key: restored_sort.0,
+            sort_desc: restored_sort.1,
             source: ScrSource::All,
             visible_cols,
             table_state,
@@ -231,8 +234,28 @@ impl ScreenerView {
     }
 
     fn set_sort(&mut self, key: &str, desc: bool, cx: &mut Context<Self>) {
-        self.sort_key = key.to_string();
-        self.sort_desc = desc;
+        let next = super::table::restore_sort(
+            Some(moon_core::config::TableSortPreference {
+                column: key.to_string(),
+                ascending: !desc,
+            }),
+            &self.visible_cols,
+        );
+        self.sort_key = next.0;
+        self.sort_desc = next.1;
+        let indicator_key = self.sort_key.clone();
+        let indicator_ascending = !self.sort_desc;
+        self.table_state.update(cx, move |state, _| {
+            state.set_sort(indicator_key, indicator_ascending)
+        });
+        let preference = (self.sort_key != "vol24" || !self.sort_desc).then(|| {
+            moon_core::config::TableSortPreference {
+                column: self.sort_key.clone(),
+                ascending: !self.sort_desc,
+            }
+        });
+        let id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
         self.rebuild(cx);
         cx.notify();
     }
@@ -258,6 +281,10 @@ impl ScreenerView {
             self.visible_cols.insert(key.to_string());
         }
         self.persist_visible_cols(cx);
+        if !self.visible_cols.contains(&self.sort_key) {
+            let hidden_sort = self.sort_key.clone();
+            self.set_sort(&hidden_sort, self.sort_desc, cx);
+        }
     }
 
     /// Toggle every column on, or retain only the first when all are already visible.
@@ -271,6 +298,10 @@ impl ScreenerView {
             COLS.iter().map(|c| c.0.to_string()).collect()
         };
         self.persist_visible_cols(cx);
+        if !self.visible_cols.contains(&self.sort_key) {
+            let hidden_sort = self.sort_key.clone();
+            self.set_sort(&hidden_sort, self.sort_desc, cx);
+        }
     }
 
     /// Persist visible column keys in canonical `COLS` order.

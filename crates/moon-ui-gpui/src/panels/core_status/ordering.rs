@@ -33,6 +33,69 @@ pub(super) enum GroupSortField {
     ApiKey,
 }
 
+impl GroupSortField {
+    /// Return the stable persistence key for one By-IP sort column.
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Cpu => "cpu",
+            Self::Mem => "mem",
+            Self::Ping => "ping",
+            Self::Exch => "exch",
+            Self::Cores => "cores",
+            Self::ApiKey => "api_key",
+        }
+    }
+
+    /// Resolve a persisted By-IP key without treating an unknown value as Name.
+    pub(super) fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "name" => Some(Self::Name),
+            "cpu" => Some(Self::Cpu),
+            "mem" => Some(Self::Mem),
+            "ping" => Some(Self::Ping),
+            "exch" => Some(Self::Exch),
+            "cores" => Some(Self::Cores),
+            "api_key" => Some(Self::ApiKey),
+            _ => None,
+        }
+    }
+}
+
+/// Restore a valid Flat-mode sort, leaving `None` as the historical attention order.
+pub(super) fn restore_flat_sort(
+    preference: Option<moon_core::config::TableSortPreference>,
+) -> Option<(String, bool)> {
+    const KEYS: [&str; 11] = [
+        "server",
+        "core",
+        "status",
+        "cpu_proc",
+        "cpu_sys",
+        "mem_used",
+        "free_phys",
+        "ping",
+        "ping_exch",
+        "cpus",
+        "api_key",
+    ];
+    preference.and_then(|preference| {
+        KEYS.contains(&preference.column.as_str())
+            .then_some((preference.column, preference.ascending))
+    })
+}
+
+/// Restore a valid By-IP sort, falling back to its historical Name-ascending order.
+pub(super) fn restore_group_sort(
+    preference: Option<moon_core::config::TableSortPreference>,
+) -> (GroupSortField, bool) {
+    preference
+        .and_then(|preference| {
+            GroupSortField::from_key(&preference.column).map(|field| (field, preference.ascending))
+        })
+        .unwrap_or((GroupSortField::Name, true))
+}
+
 /// Worst (highest) latency among a group's READY cores for one accessor, matching the value the
 /// server row surfaces. `None` when no ready core has the reading.
 fn worst_latency(

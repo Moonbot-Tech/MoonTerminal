@@ -220,6 +220,7 @@ impl OrdersPanel {
             focus: cx.focus_handle(),
         };
         this.apply_ctx_columns(cx);
+        this.apply_ctx_sort(cx);
         // A panel created while a filter is on air joins it: a tab detached, re-docked or restored
         // from a saved layout must not be the one surface still showing every core.
         this.adopt_broadcast_core_filter(cx);
@@ -464,7 +465,7 @@ impl OrdersPanel {
             OrderKind::Real => !e.row.emulator,
             OrderKind::Emu => e.row.emulator,
         });
-        sort_entries(&mut entries, view);
+        sort_entries(&mut entries, view, &self.stop_overlay);
         (entries, count_real, count_emu)
     }
 
@@ -520,6 +521,7 @@ impl OrdersPanel {
             c.notify();
         });
         self.apply_ctx_columns(cx);
+        self.apply_ctx_sort(cx);
         let backend = self.backend.clone();
         self.rebuild_cache(backend.read(cx));
         cx.notify();

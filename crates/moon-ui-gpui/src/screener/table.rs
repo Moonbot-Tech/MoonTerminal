@@ -1,5 +1,7 @@
 //! Screener table columns and rows: schema, value formatting, sorting, and `MoonDataRow` rendering.
 
+use std::collections::HashSet;
+
 use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
 
@@ -42,6 +44,33 @@ pub(super) const COLS: &[ColDef] = &[
     ("session", "Session", 76.0, true),
     ("pos", "Pos", 66.0, true),
 ];
+
+/// Restore a visible Screener sort as `(key, descending)`.
+///
+/// The historical Vol.-descending default remains preferred while that column is visible. If it is
+/// hidden, the first visible canonical column becomes the descending fallback so sorting can never
+/// remain active behind a header the user cannot click.
+pub(super) fn restore_sort(
+    preference: Option<moon_core::config::TableSortPreference>,
+    visible: &HashSet<String>,
+) -> (String, bool) {
+    preference
+        .filter(|preference| {
+            visible.contains(&preference.column)
+                && COLS.iter().any(|column| column.0 == preference.column)
+        })
+        .map(|preference| (preference.column, !preference.ascending))
+        .unwrap_or_else(|| {
+            let key = if visible.contains("vol24") {
+                "vol24"
+            } else {
+                COLS.iter()
+                    .find(|column| visible.contains(column.0))
+                    .map_or("vol24", |column| column.0)
+            };
+            (key.to_string(), true)
+        })
+}
 
 /// Screener row data plus the displayed core name and the core used to open the chart.
 ///
@@ -321,3 +350,6 @@ fn market_cell(
             });
         })
 }
+
+#[cfg(test)]
+mod tests;

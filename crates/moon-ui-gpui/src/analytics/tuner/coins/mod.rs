@@ -39,8 +39,8 @@ use super::super::AnalyticsView;
 use super::kpi::kpi_matrix_card;
 use super::list::MAX_ROWS;
 use super::{
-    COIN_COLS, COIN_NAME_MIN_W, COIN_ROW_GAP, COIN_ROW_PAD_X, COIN_TICK_W, SORT_NAME, metric_cell,
-    sort_arrow_of, toggle_sort_key,
+    COIN_COLS, COIN_DEFAULT_SORT, COIN_NAME_MIN_W, COIN_ROW_GAP, COIN_ROW_PAD_X, COIN_TICK_W,
+    SORT_NAME, metric_cell, sort_arrow_of, toggle_sort_key,
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -240,6 +240,25 @@ impl AnalyticsView {
                     .child(format!("{title}{arrow}"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle_sort_key(&mut this.coins.sort, key);
+                        let preference = this
+                            .coins
+                            .sort
+                            .as_ref()
+                            .filter(|(column, descending)| {
+                                column.as_str() != COIN_DEFAULT_SORT || !*descending
+                            })
+                            .map(
+                                |(column, descending)| moon_core::config::TableSortPreference {
+                                    column: column.clone(),
+                                    ascending: !*descending,
+                                },
+                            );
+                        crate::persistence::table_persist::set_sort(
+                            &this.backend,
+                            "analytics-tuner-coins:win",
+                            preference,
+                            cx,
+                        );
                         cx.notify();
                     }));
                 match w {

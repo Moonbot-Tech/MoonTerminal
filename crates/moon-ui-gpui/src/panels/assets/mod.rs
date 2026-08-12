@@ -132,7 +132,7 @@ pub struct AssetsView {
     /// Active header sort as `(column, ascending)`. `None` keeps the default order — largest value
     /// first. Applied while rebuilding the cache, never during a repaint.
     sort: Option<(AssetCol, bool)>,
-    /// Asset-table column widths and sorting state. Its widths persist through
+    /// Asset-table column widths and sorting state. Both persist through
     /// [`crate::persistence::table_persist`].
     table_state: Entity<MoonDataTableState>,
     /// Contextual width-storage ID: `assets-table:dock` for a dock tab and `assets-table:win` for
@@ -309,6 +309,7 @@ impl AssetsView {
         // Restore the persisted field set before the first cache build so the initial frame already
         // renders the user's columns.
         this.apply_ctx_columns(cx);
+        this.apply_ctx_sort(cx);
         for core in &query_cores {
             if let Err(error) = this.backend.read(cx).session.refresh_transfer_assets(*core) {
                 log::warn!(

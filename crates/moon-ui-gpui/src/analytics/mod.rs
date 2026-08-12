@@ -711,6 +711,10 @@ impl AnalyticsView {
         // profit-descending default used before this preference existed.
         let saved_strat_sort =
             tuner::restore_strat_sort(backend.read(cx).layout.analytics_strat_sort.clone());
+        let saved_coin_sort = crate::persistence::table_persist::saved_sort(
+            backend.read(cx),
+            "analytics-tuner-coins:win",
+        );
         // Profit metric from the previous run (default raw quote money).
         let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
             ProfitMetric::Percent
@@ -882,7 +886,7 @@ impl AnalyticsView {
                 saved_tuner_fields,
                 saved_tuner_compose,
             ),
-            coins: tuner::CoinsState::default(),
+            coins: tuner::CoinsState::load(saved_coin_sort),
             coin_lists: tuner::CoinListsState::default(),
             time_tuner: tuner::TimeTunerState::load(),
             cal_from,

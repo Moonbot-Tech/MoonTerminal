@@ -5,10 +5,13 @@
 
 use std::cmp::Ordering;
 
+use moon_core::config::TableSortPreference;
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreSysStatus;
 
-use super::{GroupSortField, compare_flat_rows, compare_groups};
+use super::{
+    GroupSortField, compare_flat_rows, compare_groups, restore_flat_sort, restore_group_sort,
+};
 use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{
     ApiKeyState, CoreStatusRow, ServerConnectivity, ServerKey, ServerStatusGroup,
@@ -224,5 +227,49 @@ fn a_server_sorts_by_the_key_it_displays() {
         compare_groups(&urgent, &relaxed, GroupSortField::ApiKey),
         Ordering::Less,
         "3 days beats the other server's soonest (20)"
+    );
+}
+
+/// `ordering.rs:restore_flat_sort` must retain valid keys/directions and reject retired keys.
+///
+/// Mutation: accept every string or force ascending. Flat mode would reopen with an invisible
+/// active key or the wrong arrow, and one of these assertions reddens.
+#[test]
+fn flat_sort_restore_validates_key_and_direction() {
+    assert_eq!(
+        restore_flat_sort(Some(TableSortPreference {
+            column: "ping_exch".to_string(),
+            ascending: false,
+        })),
+        Some(("ping_exch".to_string(), false))
+    );
+    assert_eq!(
+        restore_flat_sort(Some(TableSortPreference {
+            column: "retired".to_string(),
+            ascending: true,
+        })),
+        None
+    );
+}
+
+/// `ordering.rs:restore_group_sort` must preserve a valid choice and default unknown keys to Name.
+///
+/// Mutation: let `from_key` fall through to CPU or discard the stored direction. By-IP would
+/// restart on a different column/order, and an exact tuple assertion reddens.
+#[test]
+fn by_ip_sort_restore_keeps_valid_choice_and_historical_default() {
+    assert_eq!(
+        restore_group_sort(Some(TableSortPreference {
+            column: "api_key".to_string(),
+            ascending: false,
+        })),
+        (GroupSortField::ApiKey, false)
+    );
+    assert_eq!(
+        restore_group_sort(Some(TableSortPreference {
+            column: "retired".to_string(),
+            ascending: false,
+        })),
+        (GroupSortField::Name, true)
     );
 }
