@@ -20,9 +20,10 @@ use crate::Backend;
 /// token list, matching the core-wide blacklist format.
 const FIELD_COINS_BLACK_LIST: &str = "CoinsBlackList";
 
-/// Popup menu width in pixels. It is wider than the 170-pixel order menu to accommodate core-wide
-/// blacklist labels containing a core name.
-const MENU_WIDTH: f32 = 220.0;
+/// Minimum fitted width preserving the former shared coin-menu footprint.
+const MENU_MIN_WIDTH: f32 = 220.0;
+/// Maximum fitted width before anomalously long dynamic labels truncate inside the viewport.
+const MENU_MAX_WIDTH: f32 = 560.0;
 
 /// Side of the order line at the clicked point. The chart distinguishes Buy from Sell by line type;
 /// Buy provides Cancel, while Sell provides Join All Sells and Split actions.
@@ -89,7 +90,14 @@ pub fn open_coin_menu(
     if items.is_empty() {
         return;
     }
-    window.open_moon_context_menu(cx, "coin-context-menu", pos, items, MENU_WIDTH);
+    window.open_fitted_moon_context_menu(
+        cx,
+        "coin-context-menu",
+        pos,
+        items,
+        MENU_MIN_WIDTH,
+        MENU_MAX_WIDTH,
+    );
 }
 
 /// Builds context-dependent entries. It reads core state through `cx` to mark existing blacklist
