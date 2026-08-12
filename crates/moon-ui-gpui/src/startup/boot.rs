@@ -320,8 +320,17 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         let (to_close, quit) = quit_backend.update(app, |b, bcx| {
             if let Some((group, last_group_window)) = b.close_group_window(closed_id, bcx) {
                 if last_group_window {
-                    // The last group window triggers a full exit; quit closes everything detached too.
-                    return (Vec::new(), true);
+                    // The last group window triggers a full exit; quit closes everything detached
+                    // too. Unregister the detached panel windows FIRST, for the same reason the
+                    // multi-window branch below does: they die with the application, and a release
+                    // that still finds itself in the map queues a repin — which docks the panel and
+                    // DELETES its `DetachedSpec`, so the final save would persist every panel docked
+                    // and the next launch would lose the detachment. `quitting` covers the exits
+                    // that close no group window at all (the macOS menu, Cmd+Q).
+                    b.quitting = true;
+                    let doomed = detached::take_windows(b, |_| true);
+                    detached::prune_requests(b, |_| true);
+                    return (doomed, true);
                 }
                 // Otherwise close detached charts belonging to this group only.
                 let mut close: Vec<WindowHandle<Root>> = b
@@ -731,3 +740,6 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

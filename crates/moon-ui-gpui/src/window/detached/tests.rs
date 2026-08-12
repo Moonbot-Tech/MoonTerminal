@@ -177,6 +177,44 @@ fn owned_window_release_queues_removes_and_then_wakes_shell() {
     assert!(owns < queue && queue < remove && remove < notify);
 }
 
+/// Removing the `user_close` guard from `DetachedWindow::on_release` must fail. A detached panel is
+/// an OS-owned child of its group window, so application exit destroys it BEFORE the group window
+/// whose close unregisters it: without the guard that release reads as user-driven, docks the panel
+/// and deletes its `DetachedSpec`, and the detachment does not survive the restart. The flag is fed
+/// by `on_window_should_close`, which on Windows every user-driven close routes through.
+#[test]
+fn a_release_the_user_did_not_ask_for_stays_silent() {
+    let source = include_str!("../detached.rs");
+    assert!(
+        source.contains("window.on_window_should_close(cx"),
+        "the user-close signal must come from the platform close request"
+    );
+    let release = source
+        .split("cx.on_release(move |this, app|")
+        .nth(1)
+        .and_then(|tail| tail.split(".detach();").next())
+        .expect("DetachedWindow must retain its native release observer");
+    let guard = release
+        .find("if !this.user_close.get()")
+        .expect("release must ignore a close the user did not request");
+    let queue = release
+        .find("b.repin_request.push")
+        .expect("a user-driven release must queue a repin");
+    assert!(guard < queue, "the guard must precede queueing the repin");
+
+    // Seeding the flag `true` everywhere would restore the bug on the shipping platforms, where the
+    // hook is authoritative. Only a platform whose frame button bypasses it (Linux) may start true.
+    let seed = source
+        .split("let user_close = std::rc::Rc::new(std::cell::Cell::new(")
+        .nth(1)
+        .and_then(|tail| tail.split("));").next())
+        .expect("the flag must be seeded from the platform's close semantics");
+    assert!(
+        seed.contains("target_os = \"windows\"") && seed.contains("target_os = \"macos\""),
+        "Windows and macOS route every user close through the hook and must start from false"
+    );
+}
+
 /// Replacing the timer await in `detached.rs:respawn_all` with `cx.defer` must fail: GPUI may drain
 /// every deferred open in one turn, recreating the multi-window Classic transition stall.
 #[test]

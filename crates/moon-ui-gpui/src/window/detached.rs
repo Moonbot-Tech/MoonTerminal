@@ -6,7 +6,10 @@
 //! but only when the close was the user's. A repin is queued only while
 //! `Backend.detached_panel_windows` still names this window, so a deliberate teardown (a group
 //! window rebuild, whose OS-owned children die with it) closes and reopens these windows without
-//! undoing the detachment.
+//! undoing the detachment. Application exit is the same kind of teardown, handled at two points:
+//! closing the last group window unregisters these windows before requesting the quit, and
+//! `Backend.quitting` stops `Shell::drain_repin_requests` from acting on any request that still
+//! arrives.
 //!
 //! Each window contains a fresh panel instance backed by the shared `Backend`, so its data remains
 //! live. [`DetachedWindow`] renders it, observes window geometry, and requests repinning when
@@ -247,6 +250,26 @@ pub struct DetachedWindow {
     /// configured branches pass table state explicitly. None means this detached branch exposes no
     /// reset callback; for example, Assets has table state but does not configure this button here.
     widths_reset: Option<(&'static str, Entity<moon_ui::MoonDataTableState>)>,
+    /// Whether the user asked to close THIS window, which is what a repin actually requires.
+    ///
+    /// Ownership of the registry entry is not enough. A detached panel is an OS-owned child of its
+    /// group window, so application exit destroys it BEFORE the group window whose close would
+    /// unregister it — its release then looks user-driven, docks the panel and deletes the
+    /// `DetachedSpec`, which is how a detachment failed to survive a restart.
+    ///
+    /// The flag is authoritative rather than a guess on both shipping platforms. On Windows every
+    /// user-driven close of this window — the frame's ✕ (a `window_control_area` hit-test, which the
+    /// platform turns into `WM_CLOSE`), Alt+F4, the system menu, the taskbar — arrives through
+    /// `on_window_should_close`, while dying with the owner arrives as a bare `WM_DESTROY` that
+    /// never runs it. On macOS the same hook is `windowShouldClose:`, which AppKit sends only for a
+    /// user close (the red button, Cmd+W); MoonUI draws no frame buttons there, and both the
+    /// programmatic `close` and a child window dying with its parent skip it.
+    ///
+    /// Linux is the exception: MoonUI's frame button calls `remove_window()` directly and bypasses
+    /// the hook (logged in `docs-internal/FORK_BUGS.md`), so it starts from `true` and keeps the
+    /// previous behaviour, guarded by `Backend::quitting` and by the shutdown branch that
+    /// unregisters these windows.
+    user_close: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl DetachedWindow {
@@ -290,6 +313,20 @@ impl DetachedWindow {
             }
         })
         .detach();
+        // Record the user's own request to close this window. See `DetachedWindow::user_close`:
+        // ownership alone cannot tell a real close from this window being destroyed with its owner,
+        // because the child dies FIRST and the owner's close is what would have unregistered it.
+        let user_close = std::rc::Rc::new(std::cell::Cell::new(!cfg!(any(
+            target_os = "windows",
+            target_os = "macos"
+        ))));
+        {
+            let requested = user_close.clone();
+            window.on_window_should_close(cx, move |_window, _app| {
+                requested.set(true);
+                true
+            });
+        }
         // A user-owned close queues a repin, removes ownership, and wakes Shell in that order.
         // Programmatic teardown first removes ownership through `take_windows`, so its later
         // release remains deliberately silent. During shutdown, the final on_app_quit flush
@@ -297,6 +334,9 @@ impl DetachedWindow {
         let key = (group.clone(), panel.clone());
         let window_id = window.window_handle().window_id();
         cx.on_release(move |this, app| {
+            if !this.user_close.get() {
+                return;
+            }
             this.backend.update(app, |b, cx| {
                 if !owns_panel(b, &key, this.window_id) {
                     return;
@@ -315,6 +355,7 @@ impl DetachedWindow {
             content,
             window_id,
             widths_reset,
+            user_close,
         }
     }
 
