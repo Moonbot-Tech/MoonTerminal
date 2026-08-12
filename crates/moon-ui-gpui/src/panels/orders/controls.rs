@@ -6,6 +6,10 @@ use rust_i18n::t;
 
 /// Maximum fitted width that keeps the pinned Auto core inside the narrow Orders panel by itself.
 const AUTO_CORE_TRIGGER_MAX_W: f32 = 250.0;
+/// Minimum settings-menu width preserving the former compact footprint.
+const SETTINGS_MENU_MIN_W: f32 = 220.0;
+/// Maximum settings-menu width before unusually long translations truncate safely.
+const SETTINGS_MENU_MAX_W: f32 = 560.0;
 
 impl OrdersPanel {
     /// Build the effective core dropdown shared with the Report and Assets panels through
@@ -212,7 +216,7 @@ impl OrdersPanel {
             .trigger_variant(MoonButtonVariant::Ghost)
             .trigger_size(MoonButtonSize::Action)
             .trigger_width(design::glyph_btn_w(cx))
-            .menu_width(220.0)
+            .fit_menu_width(SETTINGS_MENU_MIN_W, SETTINGS_MENU_MAX_W)
             .items(Self::sort_menu_items(&view, self.view));
         div()
             .id("orders-sort-tip")

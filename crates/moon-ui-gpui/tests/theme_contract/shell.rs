@@ -1340,3 +1340,34 @@ fn the_alerts_table_sits_in_a_container_that_gives_it_height() {
         "the Alerts render must not lay its body out with `h_flex()`: it centres its children, and          a centred virtual list is drawn at zero height"
     );
 }
+
+/// Protects the two menus from silently returning to their fixed 220-pixel widths.
+///
+/// The plausible production edit is replacing the fitted calls in `controls/coin_menu.rs` and
+/// `panels/orders/controls.rs` with their former fixed-width APIs. It compiles and preserves every
+/// action, but long core names and translated settings rows clip as in the reported screenshots.
+#[test]
+fn coin_and_orders_settings_menus_keep_fitted_width_routes() {
+    let coin_menu = code_only(&read_src("controls/coin_menu.rs"));
+    let orders = code_only(&read_src("panels/orders/controls.rs"));
+
+    assert!(
+        coin_menu.contains("window.open_fitted_moon_context_menu(")
+            && coin_menu.contains("MENU_MIN_WIDTH,")
+            && coin_menu.contains("MENU_MAX_WIDTH,"),
+        "the shared coin menu must use the fitted Root-owned MoonUI context-menu route"
+    );
+    assert!(
+        !coin_menu.contains("window.open_moon_context_menu("),
+        "the shared coin menu must not restore its fixed-width Root route"
+    );
+    assert!(
+        orders.contains(".fit_menu_width(SETTINGS_MENU_MIN_W, SETTINGS_MENU_MAX_W)")
+            && orders.contains(".items(Self::sort_menu_items(&view, self.view))"),
+        "Orders settings must fit its existing item model without replacing its callbacks"
+    );
+    assert!(
+        !orders.contains(".menu_width(220.0)"),
+        "Orders settings must not restore the fixed width that clips translated rows"
+    );
+}
