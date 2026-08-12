@@ -10,9 +10,9 @@
 //!
 //! Five rules the tests pin down, because each is a decision rather than an implementation detail:
 //! - a core saved into two groups appears in BOTH, and its numbers count toward both subtotals. The
-//!   window's own `Total` is therefore NOT the sum of the subtotals: its caller folds it from the
-//!   rows BEFORE they reach this module, so every core counts once there however many groups name
-//!   it;
+//!   window's grand-total footer is therefore NOT the sum of the subtotals: its caller folds it
+//!   from the rows BEFORE they reach this module, so every core counts once there however many
+//!   groups name it;
 //! - sections are ordered by NAME, while the ungrouped remainder always comes last, wherever its
 //!   localized caption would otherwise sort;
 //! - the table is left unsectioned whenever sectioning would produce ONE caption over everything —
@@ -60,7 +60,7 @@ pub(super) enum MonitorEntry {
     },
     /// The fold of one section's rows.
     Subtotal {
-        /// Already-localized caption, such as `Total: Scalpers`.
+        /// Already-localized caption, such as `Scalpers: total`.
         label: String,
         /// The combined values.
         row: MonitorRow,
@@ -265,9 +265,9 @@ pub(super) fn flat(mut rows: Vec<MonitorRow>, sort: Option<MonitorSort>) -> Vec<
 /// Append one complete section, or nothing at all when it holds no row.
 ///
 /// An empty section is dropped rather than drawn with zeroes: a group whose cores were all quiet
-/// says nothing the `Total` does not, and on a configuration with a dozen saved groups it would
-/// push the rows that DO carry trades off the visible area. (With zero rows for idle cores switched
-/// on, a group of active cores is never empty — that preference is a request to see them.)
+/// says nothing the grand-total footer does not, and on a configuration with a dozen saved groups
+/// it would push the rows that DO carry trades off the visible area. (With zero rows for idle cores
+/// switched on, a group of active cores is never empty — that preference is a request to see them.)
 ///
 /// Args:
 ///     entries: The sequence being built.
@@ -292,11 +292,14 @@ fn push_section(
     sort_rows(&mut rows, sort);
     let section = drawn.index;
     drawn.index += 1;
+    // A hand-edited saved name may contain a hard break. Fold it once for both visible labels:
+    // GPUI's nowrap suppresses soft wrapping only, so raw CR/LF would violate the fixed row height.
+    let display_name = crate::display_text::flatten_lines(name);
     // Folded before the rows move out, and only where there is something to add up: a fold of one
     // row restates the row above it.
     let subtotal = (rows.len() > 1).then(|| fold_total(&rows));
     entries.push(MonitorEntry::Header(SectionHead {
-        name: name.to_string(),
+        name: display_name.clone(),
         cores,
         section,
     }));
@@ -311,7 +314,7 @@ fn push_section(
     }
     if let Some(row) = subtotal {
         entries.push(MonitorEntry::Subtotal {
-            label: (labels.subtotal)(name),
+            label: (labels.subtotal)(&display_name),
             row,
             section,
         });

@@ -268,7 +268,8 @@ fn profit_monitor_clock_ticks_in_one_retained_child_view() {
 /// total row is visibly stronger than ordinary data rows.
 ///
 /// Breakage: recolouring from the raw value turns a displayed zero red; dropping the footer height,
-/// weight, background, or accent border makes `Total` indistinguishable from the final data row.
+/// weight, background, or accent border makes the grand total indistinguishable from the final
+/// data row.
 #[test]
 fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
     let source = read_module("analytics/profit_monitor");
@@ -313,6 +314,53 @@ fn profit_monitor_profit_tones_and_total_emphasis_stay_wired() {
     ] {
         assert!(footer.contains(marker), "the total row lost `{marker}`");
     }
+}
+
+/// Profit Monitor sections must read as one hierarchy without weakening the fixed grand total.
+///
+/// Breakage: changing `table.rs:table` to assign `RowRole::Plain` to a section member removes its
+/// inset and continuation rail, so core names align flat with the group heading and users can no
+/// longer scan where one saved group begins and ends.
+///
+/// Mutation: replace the `RowRole::SectionMember` assignment in `table` with `RowRole::Plain`; the
+/// member-role assertion below must fail while the other hierarchy roles remain present.
+#[test]
+fn profit_monitor_group_hierarchy_stays_visually_distinct() {
+    let source = read_module("analytics/profit_monitor");
+    let table = code_only(braced_body(&source, "fn table("));
+    let row = code_only(braced_body(&source, "fn table_row("));
+    let header = code_only(braced_body(&source, "fn section_header("));
+
+    assert_eq!(
+        table.matches("RowRole::SectionMember").count(),
+        1,
+        "every row under a visible group heading must receive the nested member role"
+    );
+    assert!(
+        table.contains("RowRole::SectionSubtotal")
+            && table.contains("RowRole::Plain")
+            && table.contains("profit_monitor.grand_total"),
+        "section subtotals, flat rows, and the fixed grand total need distinct presentation roles"
+    );
+    assert!(
+        header.contains(".border_l(px(2.0))")
+            && header.contains("palette.border_soft")
+            && header.contains("design::t_body_lg(cx)")
+            && header.contains("text_tooltip(head.name.clone())"),
+        "a group heading needs a quiet boundary rail, stronger label, and its full-name tooltip"
+    );
+    assert!(
+        row.contains("role != RowRole::Plain")
+            && row.contains("SECTION_MEMBER_INDENT")
+            && row.contains("role == RowRole::SectionSubtotal")
+            && row.contains(".border_t(px(1.0))"),
+        "members must continue the inset rail and a subtotal must visibly close the group"
+    );
+    assert!(
+        table.contains("let subtotal_tooltip = subtotal.then(|| name.clone())")
+            && table.contains("text_tooltip(label)"),
+        "a truncated subtotal must retain its complete localized label in a tooltip"
+    );
 }
 
 /// Profit Monitor control types and every persisted choice must stay coupled to their restore and

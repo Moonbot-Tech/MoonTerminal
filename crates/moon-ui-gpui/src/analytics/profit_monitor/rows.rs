@@ -255,8 +255,8 @@ enum RowKey {
 
 /// Fold a set of rows into the single row that states their combined values.
 ///
-/// One definition for the table's `Total` footer and for a group's subtotal, so the two can never
-/// answer the same question differently. Every field is additive except the newest trade, which is
+/// One definition for the table's grand-total footer and for a group's subtotal, so the two can
+/// never answer the same question differently. Every field is additive except the newest trade, which is
 /// the newest one AMONG the folded rows rather than a sum — the footer answers the same question
 /// its rows do rather than mixing values from different instants. The `(close, core)` pair breaks a
 /// tie deterministically: folding in list order would otherwise let the money change when the user

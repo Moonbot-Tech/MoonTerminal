@@ -47,10 +47,14 @@ profit_monitor.column.average_order:
   ru: "Ср. ордер"
   en: "Avg order"
   es: "Orden prom."
-profit_monitor.total:
-  ru: "Итого"
-  en: "Total"
-  es: "Total"
+profit_monitor.group.subtotal:
+  ru: "%{name}: итог"
+  en: "%{name}: total"
+  es: "%{name}: total"
+profit_monitor.grand_total:
+  ru: "Общий итог"
+  en: "Grand total"
+  es: "Total general"
 profit_monitor.core_fallback:
   ru: "Ядро"
   en: "Core"
@@ -229,21 +233,13 @@ analytics.cal.kpi_volume:
   en: "Volume"
   es: "Volumen"
 analytics.cal.kpi_fee:
-  ru: "Комиссия"
-  en: "Fees"
-  es: "Comisiones"
-analytics.cal.kpi_funding:
-  ru: "Фандинг"
-  en: "Funding"
-  es: "Funding"
-analytics.cal.funding_short:
-  ru: "фнд"
-  en: "fnd"
-  es: "fnd"
+  ru: "Издержки"
+  en: "Costs"
+  es: "Costes"
 analytics.cal.fee_short:
-  ru: "ком."
-  en: "fee"
-  es: "com."
+  ru: "изд."
+  en: "cost"
+  es: "coste"
 analytics.cal.dur_s:
   ru: "с"
   en: "s"
