@@ -189,15 +189,13 @@ impl Render for ReportPanel {
     ///     The complete Report surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_display_zone_fields(window, cx);
-        // Automatic report work is allowed only in the focused OS window. The main Report tab may
-        // remain the front dock tab behind a separate Analytics window; starting its five-second
-        // query there would compete with Strategy Tuning while nobody can see the Report result.
-        if window.is_window_active() {
-            if self.generation_refresh.take_due() {
-                self.needs_query = true;
-            }
-            self.schedule_requery(cx);
+        // MoonUI renders only the selected tab or a visible tile, so reaching this method is the
+        // visibility boundary. Hidden Report tabs retain their due edge, while a visible Report in
+        // an unfocused OS window still catches up without waiting for a click.
+        if self.generation_refresh.take_due() {
+            self.needs_query = true;
         }
+        self.schedule_requery(cx);
         self.flush_strategy_select_sync(window, cx);
         let p = MoonPalette::active(cx);
         let border = rgb(p.border);

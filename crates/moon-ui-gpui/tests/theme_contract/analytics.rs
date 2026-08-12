@@ -1217,18 +1217,24 @@ fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
     );
 }
 
-/// Automatic Report refresh must never start its heavy query from a generation callback, timer,
-/// constructor, or in-flight completion. Reintroducing `this.schedule_requery(cx)` in the timer or
-/// completion restores the exact five-second terminal freeze while a separate Analytics window is
-/// being scrolled. The focused OS-window render is the sole automatic query-start boundary.
+/// Automatic Report refresh must start only from a rendered panel, without requiring OS focus.
+/// Generation callbacks, timers, constructors, and in-flight completions may publish only a wake
+/// edge. Wrapping the render-boundary calls in `window.is_window_active()` leaves a visible Report
+/// in an unfocused window blank or stale until the user clicks it.
 #[test]
-fn hidden_report_never_starts_its_five_second_query() {
+fn report_refresh_stays_render_bounded_without_os_focus() {
     let query = read_src("panels/report/query.rs");
     let render = read_src("panels/report/render.rs");
     let state = read_src("panels/report/state.rs");
     let generation = braced_body(&query, "pub(super) fn requery_on_generation(");
     let schedule = braced_body(&query, "pub(super) fn schedule_requery(");
-    let report_render = braced_body(&render, "fn render(&mut self, window:");
+    let report_render = code_only(braced_body(&render, "fn render(&mut self, window:"));
+    let query_boundary = chain_between(
+        &report_render,
+        "self.sync_display_zone_fields(window, cx);",
+        "self.flush_strategy_select_sync(window, cx);",
+        "visible Report query boundary",
+    );
     let constructor = braced_body(&state, "pub(crate) fn new_with_scope(");
 
     assert!(
@@ -1247,13 +1253,13 @@ fn hidden_report_never_starts_its_five_second_query() {
     );
     assert!(
         !constructor.contains("schedule_requery(cx)"),
-        "a hidden Report constructor must defer its initial query to active render"
+        "a hidden Report constructor must defer its initial query to panel render"
     );
-    let active = braced_body(report_render, "if window.is_window_active()");
     assert!(
-        active.contains("self.generation_refresh.take_due()")
-            && active.contains("self.schedule_requery(cx);"),
-        "active Report render must consume one due edge and start pending work"
+        query_boundary.contains("self.generation_refresh.take_due()")
+            && query_boundary.contains("self.schedule_requery(cx);")
+            && !query_boundary.contains("window.is_window_active()"),
+        "a rendered Report must consume due work and start pending queries without OS focus"
     );
 }
 
