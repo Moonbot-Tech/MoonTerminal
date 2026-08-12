@@ -49,22 +49,28 @@ A SessionStart hook injects this file, and `CONTRIBUTING.md` beside it, into eve
     (→ `CONTRIBUTING.md` § Comments and strings).
 14. MoonUI first — never hand-roll a widget the stack already has
     (→ `CONTRIBUTING.md` § UI).
-15. Never silence a warning to get green — `#[allow(...)]`, an `unwrap()` over the error, a
+15. Treat UI/UX quality as a functional requirement for every new or materially changed
+    interface: establish a clear visual hierarchy, use consistent spacing, alignment and existing
+    design tokens, and define loading, empty, error, disabled, hover, focus and selected states.
+    Preserve keyboard accessibility and readable contrast, then verify the result in the running
+    app at narrow and wide sizes and in every supported theme; a compile or a happy-path screenshot
+    alone is not sufficient.
+16. Never silence a warning to get green — `#[allow(...)]`, an `unwrap()` over the error, a
     suppression comment. Fix the cause; if you genuinely must suppress, say why in the same line.
 
 ## Tests
 
-16. Never edit a test to make it pass — fix the code. A red test is information, and deleting the
+17. Never edit a test to make it pass — fix the code. A red test is information, and deleting the
     messenger costs you the message.
-17. A test must fail on a real regression — if you cannot name the edit that breaks it, drop it
+18. A test must fail on a real regression — if you cannot name the edit that breaks it, drop it
     (→ `CONTRIBUTING.md` § What makes a test worth keeping).
-18. Unit tests live in a sibling `tests.rs`, never in an inline `#[cfg(test)] mod tests { … }`
+19. Unit tests live in a sibling `tests.rs`, never in an inline `#[cfg(test)] mod tests { … }`
     block (→ `CONTRIBUTING.md` § Tests).
 
 ## Safety
 
-19. Never force-push and never reset a shared `main` — fix forward with a new commit or a revert.
-20. Never commit `servers.enc`, `cfg/`, `data/` or `backups/` — they hold keys and local state.
-21. A green compile is not a working change. Drive the affected flow in the built exe, or say
+20. Never force-push and never reset a shared `main` — fix forward with a new commit or a revert.
+21. Never commit `servers.enc`, `cfg/`, `data/` or `backups/` — they hold keys and local state.
+22. A green compile is not a working change. Drive the affected flow in the built exe, or say
     plainly that the behaviour is unverified. FireTest is the scripted way to do it
     (→ [`docs/FIRETEST.md`](FIRETEST.md)).
