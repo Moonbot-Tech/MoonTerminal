@@ -3,16 +3,66 @@
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode, WorkspaceMode,
 };
-use moon_core::feed::ClientSettingsEdit;
+use moon_core::feed::{ClientSettingsEdit, StrategyRow};
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 
 use super::{
-    Backend, OpenCompareRequest, OpenMainRequest, apply_group_exit_edit,
-    finalize_recent_warning_episodes, update_group_trade_pair, usd_to_base_amount,
+    Backend, MANUAL_STRATEGY_KIND, OpenCompareRequest, OpenMainRequest, apply_group_exit_edit,
+    effective_manual_strat_state, finalize_recent_warning_episodes, update_group_trade_pair,
+    usd_to_base_amount,
 };
 use crate::backend::core_warn::{WarnAxis, WarnEnabled, WarnEpisode, WarnSnapshot};
+
+/// Build a strategy row carrying only the kind used by manual-state validation.
+///
+/// Args:
+///     id: Stable strategy id.
+///     kind_ordinal: Strategy kind used by the effective-state filter.
+///
+/// Returns:
+///     Minimal retained strategy row.
+fn strategy(id: u64, kind_ordinal: u8) -> StrategyRow {
+    StrategyRow {
+        id,
+        name: "Test".to_string(),
+        kind: "Test".to_string(),
+        kind_ordinal,
+        folder_path: String::new(),
+        checked: false,
+        is_short: false,
+        fields: Vec::new(),
+    }
+}
+
+/// Treating revision zero as confirmed empty would expose TP/SL before the first snapshot arrives.
+#[test]
+fn pending_strategy_snapshot_keeps_raw_manual_state() {
+    assert_eq!(effective_manual_strat_state((true, 77), 0, &[]), (true, 77));
+}
+
+/// Preserving raw enabled state after a confirmed zero-Manual snapshot would strand TP/SL disabled.
+#[test]
+fn confirmed_snapshot_without_manual_strategies_disables_effective_mode() {
+    assert_eq!(
+        effective_manual_strat_state((true, 77), 1, &[]),
+        (false, 77)
+    );
+    assert_eq!(
+        effective_manual_strat_state((true, 77), 1, &[strategy(11, MANUAL_STRATEGY_KIND - 1)]),
+        (false, 77)
+    );
+}
+
+/// Requiring the selected id to resolve would erase the existing invalid-id warning and repair UI.
+#[test]
+fn any_manual_strategy_preserves_raw_state_and_selected_id() {
+    assert_eq!(
+        effective_manual_strat_state((true, 77), 1, &[strategy(11, MANUAL_STRATEGY_KIND)]),
+        (true, 77)
+    );
+}
 
 /// Build one warning episode for scope/ordering regressions.
 ///

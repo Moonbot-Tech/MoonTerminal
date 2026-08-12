@@ -73,8 +73,8 @@ pub fn header(
             })
             .filter(|(state, ..)| state.has_value())
     };
-    // The manual-strategy cluster is absent when the group has no active trade core; its
-    // preceding separator has to go with it rather than fence off empty space.
+    // The manual-strategy cluster is absent when the group has no active trade core or that core
+    // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
     let manual = crate::controls::manual_strategy_controls(group, &backend, p, cx);
     h_flex()
         .w_full()

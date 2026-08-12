@@ -20,10 +20,8 @@ use moon_ui::{
 use moon_core::feed::{ClientSettingsEdit, StrategyRow, StrategySchemaModel};
 use moon_core::session::CoreId;
 
+use crate::backend::MANUAL_STRATEGY_KIND;
 use crate::{Backend, design};
-
-/// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
-const MANUAL_KIND: u8 = 12;
 
 /// Pill height shared with the header's core selector; label width is capped separately.
 const PILL_H: f32 = 26.0;
@@ -31,9 +29,9 @@ const PILL_H: f32 = 26.0;
 /// Header "manual strategy" cluster: the MS toggle, the picker pill, and a summary of the
 /// selected strategy's parameters.
 ///
-/// `None` when the group has no active trade core — there is nothing to toggle. The caller owns
-/// the separator that precedes the cluster and must drop it on `None`, otherwise the header keeps
-/// a rule with nothing behind it.
+/// `None` when the group has no active trade core or that core has no Manual-kind strategies. The
+/// caller owns the separator that precedes the cluster and must drop it on `None`, otherwise the
+/// header keeps a rule with nothing behind it.
 pub fn manual_strategy_controls(
     group: &str,
     backend: &Entity<Backend>,
@@ -42,27 +40,18 @@ pub fn manual_strategy_controls(
 ) -> Option<AnyElement> {
     let b = backend.read(cx);
     let core = b.active_trade_core(group)?;
+    let core_data = b.session.store().core(core)?;
+    let manuals = manual_strategy_options(&core_data.strategies)?;
     let (on, id) = b.manual_strat_state(core);
-    let core_data = b.session.store().core(core);
-    // Populate the picker from the active core's manual strategies.
-    let manuals: Vec<(u64, String)> = core_data
-        .map(|cd| {
-            cd.strategies
-                .iter()
-                .filter(|s| s.kind_ordinal == MANUAL_KIND)
-                .map(|s| (s.id, s.name.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let sel_row = core_data.and_then(|cd| cd.strategies.iter().find(|s| s.id == id && id != 0));
-    let schema = core_data.and_then(|cd| cd.schema.as_ref());
+    let sel_row = core_data.strategies.iter().find(|s| s.id == id && id != 0);
+    let schema = core_data.schema.as_ref();
     // Show the Moonbot-style Buy/Sell/SL/TS summary only while the mode is enabled.
     let summary = (on && sel_row.is_some())
         .then(|| sel_row.map(|r| strat_summary(r, schema)))
         .flatten();
 
     // The pill shows the selected strategy, the localized none marker when no id is selected, or
-    // `?` when an id exists but the strategy was deleted or its snapshot has not arrived yet.
+    // `?` when an id exists but the selected strategy was deleted.
     // Capped like the core selector beside it: a strategy name is arbitrary user text and this
     // pill sizes to its content, so an uncapped one pushes the header's right cluster off-window.
     let display: String = match (sel_row, id) {
@@ -81,12 +70,7 @@ pub fn manual_strategy_controls(
         p.text_muted
     };
 
-    // Build picker items, using a non-clickable placeholder for an empty list.
-    let empty_label = t!("header.ms_empty").to_string();
-    let mut items = Vec::with_capacity(manuals.len().max(1));
-    if manuals.is_empty() {
-        items.push(MoonMenuItem::with_key("ms-empty", empty_label.clone()));
-    }
+    let mut items = Vec::with_capacity(manuals.len());
     for (sid, name) in &manuals {
         let sid = *sid;
         let backend = backend.clone();
@@ -171,6 +155,25 @@ pub fn manual_strategy_controls(
     Some(row.into_any_element())
 }
 
+/// Collect Manual-kind strategy ids and names in their snapshot order.
+///
+/// Args:
+///     strategies: Current strategy snapshot for the active trade core.
+///
+/// Returns:
+///     Ordered picker options, or `None` when the snapshot has no Manual-kind strategies.
+fn manual_strategy_options(strategies: &[StrategyRow]) -> Option<Vec<(u64, String)>> {
+    let options: Vec<_> = strategies
+        .iter()
+        .filter(|strategy| strategy.kind_ordinal == MANUAL_STRATEGY_KIND)
+        .map(|strategy| (strategy.id, strategy.name.clone()))
+        .collect();
+    (!options.is_empty()).then_some(options)
+}
+
+#[cfg(test)]
+mod tests;
+
 /// Select the zero-based `ix`th manual strategy in picker order and enable manual-strategy mode.
 ///
 /// This performs the same update as clicking the corresponding picker item.
@@ -186,7 +189,7 @@ pub(crate) fn select_manual_strategy(b: &mut Backend, core: CoreId, ix: usize) -
     let sid = b.session.store().core(core).and_then(|cd| {
         cd.strategies
             .iter()
-            .filter(|s| s.kind_ordinal == MANUAL_KIND)
+            .filter(|s| s.kind_ordinal == MANUAL_STRATEGY_KIND)
             .nth(ix)
             .map(|s| s.id)
     });

@@ -119,15 +119,11 @@ toolbar.screener:
   ru: "Скринер"
   en: "Screener"
   es: "Screener"
-# Manual strategy (MS toggle and header picker): the unselected pill and empty Manual-strategy list.
+# Manual strategy (MS toggle and header picker): the unselected pill.
 header.ms_none:
   ru: "— стратегия —"
   en: "— strategy —"
   es: "— estrategia —"
-header.ms_empty:
-  ru: "Нет ручных стратегий"
-  en: "No manual strategies"
-  es: "No hay estrategias manuales"
 # Trading-metric popup titles for the slider and input field.
 toolbar.tp_title:
   ru: "Тейк-профит"
