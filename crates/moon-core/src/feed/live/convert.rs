@@ -753,6 +753,18 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // showed neither lines nor PnL even though Moonbot displayed both.
     let filled = in_position;
     let create_time_ms = moon_time_to_unix_millis_f64(o.buy_order.create_time());
+    // Line starts that only the WIRE knows. The retained line store can otherwise date a line no
+    // earlier than the first snapshot this process received, which is the terminal's launch for
+    // every position that predates it. Both legs carry their own times in the canonical PLACEMENT
+    // sections, so they arrive with the very first snapshot after a restart.
+    //
+    // These are absolute UTC milliseconds off the wire (`i64` into `MoonTime::from_unix_millis`),
+    // which is why no `ServerTimeDelta` correction belongs here. That correction exists for the
+    // LEGACY side — an order trace point carries a Delphi `TDateTime` read off the core's own
+    // clock, and moonproto adjusts exactly those. Mixing the two conventions would shift a line
+    // against its own trace by the clock skew between the machines.
+    let sell_create_time_ms = moon_time_to_unix_millis_f64(o.sell_order.create_time());
+    let entry_fill_time_ms = moon_time_to_unix_millis_f64(o.buy_order.close_time());
     // EFFECTIVE stop flags: the order's own flag from the wire, plus — only while the order has no
     // position — the stop its strategy is going to give it.
     //
@@ -897,6 +909,8 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             o.sell_price
         },
         create_time_ms,
+        sell_create_time_ms,
+        entry_fill_time_ms,
         price: last,
         fill_pct,
         strat,
@@ -1001,8 +1015,12 @@ fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &
         matched.len()
     ));
     for r in matched {
+        // The three leg times decide where the chart STARTS each line. A zero here is the whole
+        // reason an exit or a stop would date itself to the terminal's launch instead of to the
+        // trade, so print them beside the state that produced them.
         crate::order_diag::line(&format!(
-            "core {} uid={} market={} status={} pending={} cond={:?} buy={} filled={} short={}",
+            "core {} uid={} market={} status={} pending={} cond={:?} buy={} filled={} short={} \
+             t_create={} t_sell_create={} t_entry_fill={}",
             crate::feed::core_label(server_id),
             r.uid,
             r.market,
@@ -1011,7 +1029,10 @@ fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &
             r.pending_cond,
             r.buy_price,
             r.filled,
-            r.is_short
+            r.is_short,
+            r.create_time_ms,
+            r.sell_create_time_ms,
+            r.entry_fill_time_ms
         ));
         diag_order_prices(server_id, snap, r);
     }

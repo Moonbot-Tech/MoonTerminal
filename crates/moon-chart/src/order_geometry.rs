@@ -78,10 +78,13 @@ pub fn build_order_geometry(
         let highlight_thickness_mul = if highlighted { 1.7 } else { 1.0 };
         let highlight_marker_mul = if highlighted { 1.25 } else { 1.0 };
         let order_end = ord.closed_ms.unwrap_or(now_ms);
-        // Cull by the time window (relative milliseconds).
+        // Cull by the time window (relative milliseconds). A line can begin BEFORE the order's own
+        // `create_ms` — the core dated the order itself not at all and it fell back to the local
+        // clock — so a right-side cull is confirmed against the true earliest time. That walk over
+        // the order's lines is paid only by the orders this test would otherwise drop.
         let start_rel = to_rel(ord.create_ms);
         let end_rel = to_rel(order_end);
-        if end_rel < left_rel || start_rel > right_rel {
+        if end_rel < left_rel || (start_rel > right_rel && to_rel(ord.earliest_ms()) > right_rel) {
             continue;
         }
         // A placed but NOT yet filled order (entry unfilled, fill=0) is dimmer; after filling,

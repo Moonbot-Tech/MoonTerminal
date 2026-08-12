@@ -21,6 +21,8 @@ fn test_order_with_buy_trace() -> OrderRow {
         buy_price: 60_000.0,
         sell_price: 0.0,
         create_time_ms: 1_000.0,
+        sell_create_time_ms: 0.0,
+        entry_fill_time_ms: 0.0,
         price: 61_000.0,
         fill_pct: 0.0,
         strat: "test".into(),
@@ -74,6 +76,54 @@ fn test_order_with_buy_trace() -> OrderRow {
 
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.001
+}
+
+/// An order the core dates not at all keeps the local clock as its own creation while its exit line
+/// still carries a real wire time from before that. Culling on the creation alone would drop the
+/// whole order out of a window its line demonstrably occupies.
+#[test]
+fn an_order_dated_only_by_its_exit_survives_a_window_before_its_creation() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock must be after the epoch")
+        .as_millis() as f64;
+    let mut row = test_order_with_buy_trace();
+    row.buy_trace = None;
+    row.create_time_ms = 0.0;
+    row.sell_create_time_ms = now - 600_000.0;
+    row.filled = true;
+    row.fill_pct = 100.0;
+    row.sell_price = 61_000.0;
+
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[row]));
+
+    let mut zones = Vec::new();
+    let mut hlines = Vec::new();
+    let mut segs = Vec::new();
+    let mut markers = Vec::new();
+    // A window that ends before the fallback creation but holds the exit line's start.
+    build_order_geometry(
+        &store,
+        "BTCUSDT",
+        &OrdersStyle::default(),
+        None,
+        None,
+        now - 900_000.0,
+        now,
+        0.0,
+        400_000.0,
+        400_000.0,
+        &mut zones,
+        &mut hlines,
+        &mut segs,
+        &mut markers,
+    );
+
+    assert!(
+        !segs.is_empty(),
+        "an order whose exit line reaches into the window must not be culled by its creation"
+    );
 }
 
 #[test]
