@@ -26,6 +26,7 @@ fn query(from: i64, to: i64) -> Query {
         strategies: Vec::new(),
         metric: Default::default(),
         valuation: Default::default(),
+        prefer_usdt: false,
     }
 }
 

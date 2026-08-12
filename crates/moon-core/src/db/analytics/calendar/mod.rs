@@ -10,20 +10,203 @@ use super::{
 };
 use crate::db::{ProfitScope, ProfitUnit};
 
-/// The per-cell aggregate shared by every calendar view: profit sum, trade count, and win
-/// count (`pnl > 0`). ONE definition so the daily grid, the hour grid, and the hour-of-day
-/// profile can never disagree about what counts as a winning trade.
-const CELL_AGG: &str = "COALESCE(SUM(o.pnl), 0), COUNT(*), COALESCE(SUM(o.pnl > 0), 0)";
+/// Rows that carry money but are not trades.
+///
+/// Funding is booked as a pseudo-order: `buydate == closedate`, entry price == exit price, and
+/// `spentbtc == boughtq`. Measured on a live replica the two populations coincide exactly — 1 910
+/// rows carry this reason and 1 910 rows carry that shape, with no row in one set and not the
+/// other. Its money is real and stays in `profit`; its presence in a trade COUNT is not, and it
+/// would also add the funded position to turnover and a zero-spread trade to the fee.
+const NOT_A_TRADE: &str = "COALESCE(o.sellreason,'') <> 'Funding'";
+
+/// Trade duration in seconds, falling back to zero when the open time is absent.
+///
+/// Mirrors the fallback [`hour_profile_one`] applies to the same pair of columns, so "when did it
+/// open" is answered identically wherever it is asked.
+const DURATION: &str = "MAX(o.closedate - COALESCE(NULLIF(o.buydate, 0), o.closedate), 0)";
+
+/// The per-cell aggregate shared by every calendar view. ONE definition so the daily grid, the
+/// hour grid, the hour-of-day profile and the comparison period can never disagree about what
+/// counts as a winning trade, as turnover, or as a trade at all.
+///
+/// Money notes, all of which are silent if got wrong:
+/// - `pnl` is the ACTIVE metric (quote money, or percent return); `profitbtc` and `spentbtc` are
+///   always money, already converted by the projection. Turnover and fee are therefore built from
+///   the latter pair, never from `pnl`.
+/// - the fee's gross leg comes from raw quantities and prices, which no projection converts, so it
+///   is multiplied by `quote_rate` to land in the same currency as `profitbtc`.
+/// - turnover multiplies spend by `factor` for the cores that book margin instead of notional.
+///
+/// Args:
+///     factor: Notional multiplier from [`super::basis::notional_factor_expr`].
+///     money: Whether absolute money figures are summable in this projection.
+///
+/// Returns:
+///     Comma-separated aggregate expressions.
+fn cell_agg(factor: &str, money: bool) -> String {
+    // A percent projection measures each trade against its own spend, so trades in different
+    // quotes share one scale. Turnover and fee have no such scale — summing them would add USDT to
+    // USDC to BTC — so they are withheld rather than silently mixed.
+    let (volume, fee, fee_rows) = if money {
+        (
+            format!("SUM(CASE WHEN {NOT_A_TRADE} THEN o.spentbtc * {factor} END)"),
+            format!("SUM(CASE WHEN {NOT_A_TRADE} THEN {FEE_ROW} END)"),
+            format!("SUM(CASE WHEN {NOT_A_TRADE} AND ({FEE_ROW}) IS NOT NULL THEN 1 END)"),
+        )
+    } else {
+        ("NULL".to_string(), "NULL".to_string(), "NULL".to_string())
+    };
+    format!(
+        "COALESCE(SUM(o.pnl), 0),
+         COALESCE(SUM({NOT_A_TRADE}), 0),
+         COALESCE(SUM({NOT_A_TRADE} AND o.pnl > 0), 0),
+         {volume},
+         {fee},
+         COALESCE({fee_rows}, 0),
+         COALESCE(SUM(CASE WHEN {NOT_A_TRADE} THEN {DURATION} END), 0)"
+    )
+}
+
+/// One trade's execution cost: the gross move its prices imply, minus the profit actually booked.
+///
+/// No core publishes a commission field — neither the protocol nor MoonBot's own report table has
+/// one — but the money columns are already net of it: `profitbtc == gainedbtc - spentbtc` holds
+/// exactly on 99.24% of a live replica, and the spend/gain pair sits a fee's width off the raw
+/// notional. The remainder recovered here matched the venue's published round-trip rate on every
+/// core measured (Binance futures 0.0402%, the same with BNB discount 0.0324%, Bybit 0.0803%,
+/// Hyperliquid 0.1199%, Bitget 0.1622%).
+///
+/// For a perpetual this also absorbs funding accrued INSIDE the position, which the report folds
+/// into profit without a separate column — so the figure is execution cost, not a venue invoice.
+///
+/// NULL — meaning "this trade has no recoverable cost" rather than "it cost nothing" — whenever
+/// the gross leg cannot be trusted:
+/// - `prices_in_money_quote` is false: an inverse COIN-M row counts contracts against USD prices
+///   while settling in coin, so quantity × price is off by the price of a bitcoin. Measured: 100
+///   such rows produced 12.8M of "cost" against a real monthly turnover of 2.3M.
+/// - a quantity or either price is missing: 12 live rows close with no exit price, and their gross
+///   leg alone subtracted 71.5 from the total.
+/// - the row is a LIQUIDATION: entry price equals exit price, so the gross leg is zero and the
+///   "cost" becomes the whole lost position. Pre-2024 COIN-M liquidations additionally escape the
+///   quote check above — their label is never rewritten — so contracts times USD prices would land
+///   in the tile while `fee_is_complete()` still called it exact.
+///
+/// Both cases leave the trade out of `fee_trades` as well, which is what makes the shortfall
+/// visible as an approximate figure instead of a confidently wrong one.
+const FEE_ROW: &str = "CASE WHEN o.prices_in_money_quote
+                             AND COALESCE(o.sellreason,'') <> 'LIQUIDATION'
+                             AND o.boughtq > 0 AND o.buyprice > 0 AND o.sellprice > 0
+                        THEN o.boughtq
+                             * (CASE WHEN COALESCE(o.isshort, 0) = 1 THEN o.buyprice - o.sellprice
+                                     ELSE o.sellprice - o.buyprice END)
+                             * o.quote_rate
+                           - o.profitbtc
+                        END";
+
+/// Everything one calendar cell or comparison period aggregates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CellTotals {
+    /// Sum of the ACTIVE profit metric: quote money, or percent return per trade.
+    pub profit: f64,
+    /// Trades in the cell, funding rows excluded.
+    pub trades: i64,
+    /// Winning trades in the cell; losses equal `trades - wins`.
+    pub wins: i64,
+    /// Traded notional in the projection's currency, or `None` when it cannot be summed.
+    pub volume: Option<f64>,
+    /// Execution cost over the same trades, or `None` when it cannot be summed.
+    pub fee: Option<f64>,
+    /// Trades that actually contributed to `fee`; below `trades` when a source lacks prices.
+    pub fee_trades: i64,
+    /// Summed trade duration in seconds, for the cell's average.
+    pub duration_secs: i64,
+}
+
+impl CellTotals {
+    /// Read one aggregate row written by [`cell_agg`].
+    ///
+    /// Args:
+    ///     row: Result row positioned at the first aggregate column.
+    ///     at: Index of that first column.
+    ///
+    /// Returns:
+    ///     The decoded totals, or the row's own conversion failure.
+    fn read(row: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Self> {
+        Ok(Self {
+            profit: row.get(at)?,
+            trades: row.get(at + 1)?,
+            wins: row.get(at + 2)?,
+            volume: row.get(at + 3)?,
+            fee: row.get(at + 4)?,
+            fee_trades: row.get(at + 5)?,
+            duration_secs: row.get(at + 6)?,
+        })
+    }
+
+    /// Average trade duration in seconds, or `None` without trades.
+    pub fn avg_duration_secs(&self) -> Option<f64> {
+        (self.trades > 0).then(|| self.duration_secs as f64 / self.trades as f64)
+    }
+
+    /// Win rate over counted trades, or `None` without any.
+    pub fn winrate(&self) -> Option<f64> {
+        (self.trades > 0).then(|| self.wins as f64 / self.trades as f64 * 100.0)
+    }
+
+    /// Fold one cell into a running period total.
+    ///
+    /// `None` money means "this cell contributed no summable money" — a percent projection, or a
+    /// day whose only rows were funding. It therefore adds nothing rather than poisoning the sum:
+    /// a month of ordinary days plus one funding-only day still has a turnover. The total stays
+    /// `None` only while EVERY folded cell was `None`, which is what a percent projection produces
+    /// and what the UI reads to hide the money tiles entirely.
+    ///
+    /// Args:
+    ///     other: Cell to add.
+    pub fn merge(&mut self, other: &Self) {
+        self.profit += other.profit;
+        self.trades += other.trades;
+        self.wins += other.wins;
+        self.fee_trades += other.fee_trades;
+        self.duration_secs += other.duration_secs;
+        self.volume = merge_money(self.volume, other.volume);
+        self.fee = merge_money(self.fee, other.fee);
+    }
+
+    /// Whether the fee covers every trade the cell counted.
+    ///
+    /// A source without execution prices contributes no fee, and a total that silently omits those
+    /// trades reads as complete. Callers label the figure approximate when this is false.
+    pub fn fee_is_complete(&self) -> bool {
+        self.fee.is_some() && self.fee_trades == self.trades
+    }
+}
+
+/// Add two optional money figures, keeping `None` only when neither side had one.
+fn merge_money(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+    }
+}
 
 /// A calendar heatmap cell containing one selected-zone civil day or hour aggregate.
 #[derive(Clone, Debug, Default)]
 pub struct DayCell {
     /// Cell start in UTC Unix seconds.
     pub start: i64,
-    pub profit: f64,
-    pub trades: i64,
-    /// Winning trades in the cell; losses equal `trades - wins`.
-    pub wins: i64,
+    /// Trade aggregates for this cell.
+    pub totals: CellTotals,
+}
+
+impl DayCell {
+    /// Whether the cell has anything to show: a trade, or money booked without one.
+    ///
+    /// A day whose only row is funding counts zero trades yet moved real money, so emptiness
+    /// cannot be decided on the trade count alone.
+    pub fn has_activity(&self) -> bool {
+        self.totals.trades > 0 || self.totals.profit != 0.0
+    }
 }
 
 /// Current Calendar cells and the optional previous-period aggregate from one SQLite snapshot.
@@ -31,8 +214,26 @@ pub struct DayCell {
 pub struct CalendarPeriod {
     /// Daily or hourly cells for the visible Calendar scope.
     pub current: Vec<DayCell>,
-    /// Previous-period `(profit, trades, wins)` used by the Month KPI.
-    pub previous: Option<(f64, i64, i64)>,
+    /// Previous-period totals used by the Month KPI deltas.
+    pub previous: Option<CellTotals>,
+}
+
+/// Build the cell aggregate for one projection over one connection.
+///
+/// The margin-basis probe is resolved HERE rather than inside each reader, so every aggregate of
+/// one Calendar read shares a single verdict: cells and their comparison period cannot end up
+/// multiplying the same core's turnover differently.
+///
+/// Args:
+///     conn: Existing SQLite connection or pinned snapshot.
+///     projection: Money projection resolved by the caller's quote preflight.
+///
+/// Returns:
+///     Aggregate SQL, or a classified read failure from the basis probe.
+fn agg_for(conn: &Connection, projection: ProjectionMode) -> ReadResult<String> {
+    let margin = super::basis::margin_cores(conn)?;
+    let factor = super::basis::notional_factor_expr("o", &margin);
+    Ok(cell_agg(&factor, projection != ProjectionMode::Percent))
 }
 
 /// Read a Calendar period over an existing connection or pinned compound snapshot.
@@ -87,23 +288,24 @@ pub(super) fn calendar_period_from(
 ///     projection: Money projection compatible with the current period.
 ///
 /// Returns:
-///     Period profit, trade count, and win count, or a classified read failure.
+///     Period totals, or a classified read failure.
 fn calendar_total_from(
     conn: &Connection,
     q: &Query,
     projection: ProjectionMode,
-) -> ReadResult<(f64, i64, i64)> {
+) -> ReadResult<CellTotals> {
     const CTX: &str = "analytics: calendar_total";
     let mut q = q.clone();
     if q.from < 0 {
         q.from = min_closedate(conn)?;
     }
     let Some(src) = unified_from_mode(conn, &q, projection)? else {
-        return Ok((0.0, 0, 0));
+        return Ok(CellTotals::default());
     };
-    let sql = format!("SELECT {CELL_AGG} FROM {src}");
+    let agg = agg_for(conn, projection)?;
+    let sql = format!("SELECT {agg} FROM {src}");
     conn.query_row(&sql, rusqlite::params![q.from, q.to], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        CellTotals::read(row, 0)
     })
     .map_err(|error| read_fail_on(conn, CTX, error))
 }
@@ -216,38 +418,29 @@ fn calendar_cells_from(
         return Ok(Vec::new());
     };
     super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
-    // Daily bucket: PnL, trade count, and wins for W/L and win rate.
+    // Daily bucket: profit, trades, wins, turnover, fee and duration for the card's four lines.
+    let agg = agg_for(conn, projection)?;
     let sql = format!(
         "SELECT mt_local_bucket(o.closedate, 86400) AS d,
-                {CELL_AGG}
+                {agg}
          FROM {src} GROUP BY d ORDER BY d"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, f64>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
+            Ok(DayCell {
+                start: r.get::<_, i64>(0)?,
+                totals: CellTotals::read(r, 1)?,
+            })
         })
         .map_err(|e| read_fail_on(conn, CTX, e))?;
     let mut map: std::collections::HashMap<i64, DayCell> = std::collections::HashMap::new();
     let (mut first, mut last) = (i64::MAX, i64::MIN);
     for row in rows {
-        let (d, profit, n, wins) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
-        first = first.min(d);
-        last = last.max(d);
-        map.insert(
-            d,
-            DayCell {
-                start: d,
-                profit,
-                trades: n,
-                wins,
-            },
-        );
+        let cell = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        first = first.min(cell.start);
+        last = last.max(cell.start);
+        map.insert(cell.start, cell);
     }
     if map.is_empty() {
         return Ok(Vec::new()); // A period without trades has an empty calendar.
@@ -329,9 +522,10 @@ fn calendar_hours_from(
         None => return Ok(Vec::new()), // The schema has not arrived yet.
     };
     super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
+    let agg = agg_for(conn, projection)?;
     let sql = format!(
         "SELECT mt_local_bucket(o.closedate, 3600) AS h,
-                {CELL_AGG}
+                {agg}
          FROM {src} GROUP BY h ORDER BY h"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -339,9 +533,7 @@ fn calendar_hours_from(
         .query_map(rusqlite::params![q.from, q.to], |r| {
             Ok(DayCell {
                 start: r.get(0)?,
-                profit: r.get(1)?,
-                trades: r.get(2)?,
-                wins: r.get(3)?,
+                totals: CellTotals::read(r, 1)?,
             })
         })
         .map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -425,29 +617,25 @@ fn hour_profile_one(
     // Hour of day comes from the trade OPEN time (`buydate`), matching the schedule and tuner
     // sliders that gate ENTRY. Fall back to `closedate` when the open time is absent (0/NULL).
     // The period itself still uses `closedate`, which defines the analysis window.
+    let agg = agg_for(conn, projection)?;
     let sql = format!(
         "SELECT (mt_minute_of_day(COALESCE(NULLIF(o.buydate, 0), o.closedate)) / 60) AS h,
-                {CELL_AGG}
+                {agg}
          FROM {src} GROUP BY h ORDER BY h"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
     let rows = stmt
         .query_map(rusqlite::params![q.from, q.to], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, f64>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
+            Ok((r.get::<_, i64>(0)?, CellTotals::read(r, 1)?))
         })
         .map_err(|e| read_fail_on(conn, CTX, e))?;
     for row in rows {
-        let (h, profit, trades, wins) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        let (h, totals) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
         if (0..24).contains(&h) {
             prof[h as usize] = HourStat {
-                profit,
-                trades,
-                wins,
+                profit: totals.profit,
+                trades: totals.trades,
+                wins: totals.wins,
             };
         }
     }

@@ -220,6 +220,38 @@ analytics.cal.kpi_profit_day:
   ru: "Прибыль дня"
   en: "Day profit"
   es: "Beneficio del día"
+analytics.metric.usdt:
+  ru: "В USDT"
+  en: "In USDT"
+  es: "En USDT"
+analytics.cal.kpi_volume:
+  ru: "Объём"
+  en: "Volume"
+  es: "Volumen"
+analytics.cal.kpi_fee:
+  ru: "Издержки"
+  en: "Costs"
+  es: "Costes"
+analytics.cal.fee_short:
+  ru: "изд."
+  en: "cost"
+  es: "coste"
+analytics.cal.dur_s:
+  ru: "с"
+  en: "s"
+  es: "s"
+analytics.cal.dur_m:
+  ru: "м"
+  en: "m"
+  es: "m"
+analytics.cal.dur_h:
+  ru: "ч"
+  en: "h"
+  es: "h"
+analytics.cal.dur_d:
+  ru: "д"
+  en: "d"
+  es: "d"
 analytics.cal.kpi_wins:
   ru: "Плюсовые ордера"
   en: "Winning orders"

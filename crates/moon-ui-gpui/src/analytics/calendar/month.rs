@@ -1,7 +1,11 @@
-//! Calendar "Month" mode: large day cards (date top-left, PnL + trades + W/L +
-//! winrate on the right), grey background + red/green overlay whose alpha
-//! tracks |PnL| (the month's top day = 30%). A KPI row with the delta to the
-//! previous month on top, a plus/minus-day bar below. Click a day → "Day".
+//! Calendar "Month" mode: large day cards (date top-left; PnL, win rate with its
+//! counts, turnover and execution cost, and average holding time on the right),
+//! grey background + red/green overlay whose alpha tracks |PnL| (the month's top
+//! day = 30%). A KPI row with the delta to the previous month on top, a
+//! plus/minus-day bar below. Click a day → "Day".
+//!
+//! Money figures are optional throughout: a percent projection has no currency to
+//! sum, so the turnover and cost tiles disappear rather than reading zero.
 
 use std::collections::HashMap;
 
@@ -12,10 +16,13 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::super::summary::{fmt_signed, fmt_signed_unit, sign_color};
-use super::{date_of, days_in_month, month_start, split_i18n, today_start};
+use super::{
+    date_of, days_in_month, fmt_amount, fmt_duration_short, fmt_volume, month_start, split_i18n,
+    today_start,
+};
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use moon_core::db::analytics::DayCell;
+use moon_core::db::analytics::{CellTotals, DayCell};
 
 impl AnalyticsView {
     /// Render the selected month with KPI, day grid, and active-day balance.
@@ -33,30 +40,28 @@ impl AnalyticsView {
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let profit: f64 = days.iter().map(|d| d.profit).sum();
-        let trades: i64 = days.iter().map(|d| d.trades).sum();
-        let wins: i64 = days.iter().map(|d| d.wins).sum();
-        let losses = trades - wins;
-        let wr = if trades > 0 {
-            wins as f64 / trades as f64 * 100.0
-        } else {
-            0.0
-        };
+        // One fold, so the KPI row and the grid below can never describe different months.
+        let mut month = CellTotals::default();
+        for day in days {
+            month.merge(&day.totals);
+        }
+        // Day tallies count what the user SEES on a card: a day whose only row was funding shows
+        // money and therefore belongs to the plus/minus split, exactly as it does to the profit.
         let pos_days = days
             .iter()
-            .filter(|d| d.trades > 0 && d.profit > 0.0)
+            .filter(|d| d.has_activity() && d.totals.profit > 0.0)
             .count();
         let neg_days = days
             .iter()
-            .filter(|d| d.trades > 0 && d.profit < 0.0)
+            .filter(|d| d.has_activity() && d.totals.profit < 0.0)
             .count();
-        let active = days.iter().filter(|d| d.trades > 0).count();
+        let active = days.iter().filter(|d| d.has_activity()).count();
         let neutral = active - pos_days - neg_days;
         // Fill scale — the month's largest daily |PnL| (top day = 30% alpha).
         let month_max = days
             .iter()
-            .filter(|d| d.trades > 0)
-            .map(|d| d.profit.abs())
+            .filter(|d| d.has_activity())
+            .map(|d| d.totals.profit.abs())
             .fold(0.0f64, f64::max);
         let today = today_start(self.display_zone);
 
@@ -67,7 +72,7 @@ impl AnalyticsView {
             .w_full()
             .p(design::ui_px(cx, 10.0))
             .gap(design::ui_px(cx, 8.0))
-            .child(self.cal_kpi(profit, trades, wins, losses, wr, p, cx))
+            .child(self.cal_kpi(&month, p, cx))
             .child(
                 div()
                     .flex_1()
@@ -82,89 +87,73 @@ impl AnalyticsView {
     /// Render Month KPI values and deltas against the loaded previous-month aggregate.
     ///
     /// Args:
-    ///     profit: Current-month profit.
-    ///     trades: Current-month trade count.
-    ///     wins: Current-month winning-trade count.
-    ///     losses: Current-month losing-trade count.
-    ///     wr: Current-month win rate in percent.
+    ///     month: Current-month totals folded from the visible cells.
     ///     p: Active MoonUI palette.
     ///     cx: GPUI view context used for sizing.
     ///
     /// Returns:
     ///     The Month KPI row.
-    #[allow(clippy::too_many_arguments)]
-    fn cal_kpi(
-        &self,
-        profit: f64,
-        trades: i64,
-        wins: i64,
-        losses: i64,
-        wr: f64,
-        p: MoonPalette,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    fn cal_kpi(&self, month: &CellTotals, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         // Deltas are against the PREVIOUS month (not 30 days); None when the
         // previous month is missing or zero.
         let previous = self.cal_prev.data().and_then(|value| **value);
-        let (pp, pt, pw) = previous.unwrap_or((0.0, 0, 0));
+        let base = previous.unwrap_or_default();
         let has = previous.is_some();
         let dp = move |c: f64, pr: f64| -> Option<f64> {
             (has && pr.abs() > f64::EPSILON).then(|| (c - pr) / pr.abs() * 100.0)
         };
-        let prev_wr = if pt > 0 {
-            pw as f64 / pt as f64 * 100.0
-        } else {
-            0.0
-        };
+        let wr = month.winrate().unwrap_or(0.0);
         h_flex()
             .w_full()
+            .flex_wrap()
             .gap(design::ui_px(cx, 8.0))
             .items_stretch()
             .child(kpi_tile(
                 p,
                 cx,
                 t!("analytics.cal.kpi_profit").to_string(),
-                moon(sign_color(p, profit)),
-                fmt_signed_unit(profit),
-                dp(profit, pp),
+                moon(sign_color(p, month.profit)),
+                fmt_signed_unit(month.profit),
+                dp(month.profit, base.profit),
                 false,
-            ))
-            .child(kpi_tile(
-                p,
-                cx,
-                t!("analytics.kpi.trades").to_string(),
-                moon(p.text),
-                trades.to_string(),
-                dp(trades as f64, pt as f64),
-                false,
-            ))
-            .child(kpi_tile(
-                p,
-                cx,
-                t!("analytics.cal.kpi_wins").to_string(),
-                moon(p.green),
-                wins.to_string(),
-                dp(wins as f64, pw as f64),
-                false,
-            ))
-            .child(kpi_tile(
-                p,
-                cx,
-                t!("analytics.cal.kpi_losses").to_string(),
-                moon(p.orange),
-                losses.to_string(),
-                dp(losses as f64, (pt - pw) as f64),
-                true,
             ))
             .child(kpi_tile(
                 p,
                 cx,
                 t!("analytics.kpi.winrate").to_string(),
                 moon(p.text),
-                format!("{wr:.1}%"),
-                dp(wr, prev_wr),
+                // The counts ride along, so the rate is readable without a separate trades tile:
+                // "68.7% (8299/12086)" states both the ratio and how much it rests on.
+                format!("{wr:.1}% ({}/{})", month.wins, month.trades),
+                dp(wr, base.winrate().unwrap_or(0.0)),
                 false,
             ))
+            // Each money tile appears only when THAT figure exists. A percent projection has
+            // neither; a legacy source without execution prices has a turnover but no cost, and
+            // rendering the absent one as "0" would state a cost that was never measured.
+            .children(month.volume.map(|volume| {
+                kpi_tile(
+                    p,
+                    cx,
+                    t!("analytics.cal.kpi_volume").to_string(),
+                    moon(p.text),
+                    fmt_volume(volume),
+                    base.volume.and_then(|prev| dp(volume, prev)),
+                    false,
+                )
+            }))
+            .children(month.fee.map(|fee| {
+                kpi_tile(
+                    p,
+                    cx,
+                    t!("analytics.cal.kpi_fee").to_string(),
+                    moon(p.orange),
+                    fmt_amount(fee, month.fee_is_complete()),
+                    // Growth in cost is bad, so the delta's good direction is inverted.
+                    base.fee.and_then(|prev| dp(fee, prev)),
+                    true,
+                )
+            }))
     }
 
     /// Render the displayed month as weekday headers and week rows.
@@ -339,8 +328,7 @@ fn cal_cell(
     let pad = design::ui_px(cx, 8.0);
     let r = design::ui_px(cx, 8.0);
     let date_only = !in_month || is_future || dsec.is_none();
-    let profit = day.map_or(0.0, |d| d.profit);
-    let trades = day.map_or(0, |d| d.trades);
+    let profit = day.map_or(0.0, |d| d.totals.profit);
     let date_el = div()
         .text_size(design::t_title(cx))
         .font_weight(FontWeight::SEMIBOLD)
@@ -355,22 +343,39 @@ fn cal_cell(
                 .text_color(moon(p.text_muted))
                 .child(txt)
         };
-        let right = if let Some(d) = day.filter(|d| d.trades > 0) {
-            let dwr = d.wins as f64 / d.trades as f64 * 100.0;
+        // A day is shown in full when it has ANY activity: a funding-only day counts no trades
+        // yet moved money, and blanking it would lose a figure the month total still carries.
+        let right = if let Some(d) = day.filter(|d| d.has_activity()) {
+            let t = &d.totals;
             v_flex()
                 .items_end()
                 .child(
                     div()
                         .text_size(design::t_title(cx))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(moon(sign_color(p, d.profit)))
-                        .child(fmt_signed(d.profit)),
+                        .text_color(moon(sign_color(p, t.profit)))
+                        .child(fmt_signed(t.profit)),
                 )
-                .child(muted(
-                    t!("analytics.heat.trades_full", n = d.trades).to_string(),
-                ))
-                .child(muted(format!("{}W {}L", d.wins, d.trades - d.wins)))
-                .child(muted(format!("WR {dwr:.1}%")))
+                // Rate first, with the counts it rests on — the shape the month KPI uses too.
+                .child(muted(match t.winrate() {
+                    Some(wr) => format!("{wr:.1}% ({}/{})", t.wins, t.trades),
+                    None => t!("analytics.heat.trades_full", n = 0).to_string(),
+                }))
+                .children(t.volume.map(|volume| {
+                    muted(match t.fee {
+                        Some(fee) => format!(
+                            "{} · {} {}",
+                            fmt_volume(volume),
+                            t!("analytics.cal.fee_short"),
+                            fmt_amount(fee, t.fee_is_complete())
+                        ),
+                        None => fmt_volume(volume),
+                    })
+                }))
+                .children(
+                    t.avg_duration_secs()
+                        .map(|secs| muted(format!("~{}", fmt_duration_short(secs)))),
+                )
         } else {
             v_flex()
                 .items_end()
@@ -381,8 +386,6 @@ fn cal_cell(
                         .child("—"),
                 )
                 .child(muted(t!("analytics.heat.trades_full", n = 0).to_string()))
-                .child(muted("0W 0L".to_string()))
-                .child(muted("WR —".to_string()))
         };
         h_flex()
             .w_full()
@@ -392,7 +395,8 @@ fn cal_cell(
             .child(right)
             .into_any_element()
     };
-    let tint = (!date_only && trades > 0 && profit != 0.0 && month_max > 0.0).then(|| {
+    let active = day.is_some_and(|d| d.has_activity());
+    let tint = (!date_only && active && profit != 0.0 && month_max > 0.0).then(|| {
         let a = (profit.abs() / month_max).min(1.0) as f32 * 0.30;
         moon_alpha(if profit > 0.0 { p.green } else { p.red }, a)
     });

@@ -145,6 +145,212 @@ const DENOMINATION_RULES: &[DenominationRule] = &[DenominationRule {
     denominated: QuoteCurrency::btc(),
 }];
 
+/// Cores proven to own COIN-M rows, so a nameless liquidation of theirs can be recognized.
+///
+/// A liquidation carries no market name on ANY core, which is what makes the market rule blind to
+/// it and this list necessary. It is probed once per reader connection rather than joined per
+/// query: the evidence is a scan over `fname`, which no index covers.
+static COIN_M_CORES: std::sync::OnceLock<std::sync::RwLock<std::collections::BTreeSet<i64>>> =
+    std::sync::OnceLock::new();
+
+/// Read the currently known COIN-M cores.
+fn coin_m_cores() -> std::collections::BTreeSet<i64> {
+    COIN_M_CORES
+        .get_or_init(Default::default)
+        .read()
+        .map(|cores| cores.clone())
+        .unwrap_or_default()
+}
+
+/// Learn which cores own COIN-M rows, from the sources a reader just opened.
+///
+/// Called where a connection exists, so the SQL builders below stay pure functions of the columns
+/// they are given. Failure is not fatal and not reported: an unprobed list corrects nothing, which
+/// is the same answer this module gave before the correction existed.
+///
+/// Args:
+///     conn: Open report reader.
+///     sources: Physical report sources with their discovered columns.
+pub(in crate::db) fn learn_coin_m_cores(
+    conn: &rusqlite::Connection,
+    sources: &[super::ReadSource],
+) {
+    let mut found = std::collections::BTreeSet::new();
+    for src in sources {
+        if !src.cols.contains("core_uid") {
+            continue;
+        }
+        for rule in DENOMINATION_RULES {
+            let Some(guard) = rule.guard_sql("d", &src.cols) else {
+                continue;
+            };
+            let sql = format!(
+                "SELECT DISTINCT d.core_uid FROM {} d WHERE {guard} AND typeof(d.core_uid)='integer'",
+                src.table
+            );
+            let Ok(mut stmt) = conn.prepare(&sql) else {
+                continue;
+            };
+            let Ok(rows) = stmt.query_map([], |row| row.get::<_, i64>(0)) else {
+                continue;
+            };
+            found.extend(rows.flatten());
+        }
+    }
+    if let Ok(mut slot) = COIN_M_CORES.get_or_init(Default::default).write() {
+        // Union rather than replace: one reader may see a source another cannot, and forgetting a
+        // core would silently stop correcting its rows mid-session.
+        slot.extend(found);
+    }
+}
+
+/// Instant separating the two ways the core has written a COIN-M liquidation.
+///
+/// Measured on the live replica: the last row of the old shape closed 2023-08-31 14:33, the first
+/// of the new one 2024-03-29 08:13, and no liquidation exists in the 211 days between them. The
+/// boundary is therefore placed inside that empty gap, where no row can be misclassified by it.
+const LIQUIDATION_ERA_SWITCH: i64 = 1_704_067_200; // 2024-01-01 00:00 UTC
+
+/// Recognize a COIN-M liquidation, which the core books without a market name.
+///
+/// Every one of the 72 liquidations on the three COIN-M cores carries an EMPTY `fname` — the
+/// column [`DENOMINATION_RULES`] keys on — so none of them is reachable by that rule, and they
+/// keep the USDT label the core wrote. Two independent facts identify them instead: the sell
+/// reason, and the dated/perpetual contract shape in `coin`. Measured: that pair selects 72 rows,
+/// all on the three COIN-M cores, and NOT ONE row anywhere else in the replica.
+///
+/// Args:
+///     alias: Report source alias the row is selected through.
+///     columns: Columns the source actually carries.
+///
+/// Returns:
+///     A predicate over existing columns, or `None` when the source cannot evidence it.
+fn coin_m_liquidation_guard(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+) -> Option<String> {
+    if !columns.contains("sellreason")
+        || !columns.contains("coin")
+        || !columns.contains("fname")
+        || !columns.contains("core_uid")
+    {
+        return None;
+    }
+    let shapes = DENOMINATION_RULES
+        .iter()
+        .flat_map(|rule| rule.contract_shapes)
+        .map(|shape| format!("{alias}.coin GLOB '{shape}'"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    // The shape and the missing name are NOT enough on their own. EVERY liquidation on every core
+    // is nameless — measured: 232 of them on one Bybit core alone — and a USD-M core trades the
+    // same dated contracts (106 live rows). Those two facts would therefore multiply an ordinary
+    // USD-M loss by its entry price. The third fact is the CORE: only one whose other rows the
+    // market rule already relabels can own a COIN-M liquidation.
+    let cores = coin_m_cores();
+    if cores.is_empty() {
+        // Not probed yet, or no COIN-M core is connected. Correcting nothing is the safe answer:
+        // it leaves the historical reading in place instead of rewriting a row on a guess.
+        return None;
+    }
+    let core_list = cores
+        .iter()
+        .map(|core| core.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!(
+        "({alias}.sellreason = 'LIQUIDATION'
+          AND COALESCE({alias}.fname, '') = ''
+          AND ({shapes})
+          AND {alias}.core_uid IN ({core_list}))"
+    ))
+}
+
+/// Rewrite a COIN-M liquidation's money into the currency it is actually settled in.
+///
+/// The core has booked these rows two different ways, and NEITHER stores plain money:
+///
+/// - **Before 2024** the amount is the posted margin in USD: `boughtq * buyprice / lev` reproduces
+///   it exactly on all 8 such rows. That already matches the USDT label the core wrote, so the
+///   amount passes through untouched.
+/// - **From 2024** the amount is the margin in BTC DIVIDED BY the coin's entry price — a quantity
+///   in no currency at all, which is why it reads as dust (`0.00001826`). Multiplying by that same
+///   price returns the margin in BTC, and [`effective_ordinal_expr`] labels the row BTC to match.
+///   Verified on 61 of the 64 rows against `boughtq * contract / lev` at the period's BTC rate.
+///
+/// The contract size cancels out of the correction: it appears on both sides of the identity that
+/// established the era, so restoring the amount needs only the row's own price. Nothing here
+/// assumes $10 or $100.
+///
+/// Left alone, era two is catastrophic in both directions: the terminal renders 33 750 USD of real
+/// liquidations as 19 cents, and MoonBot renders one 129-dollar era-one row as -8 261 862.
+///
+/// Args:
+///     alias: Report source alias the row is selected through.
+///     columns: Columns the source actually carries.
+///     column: Money column to read (`profitbtc` or `spentbtc`).
+///
+/// Returns:
+///     SQL yielding the settled amount, or the plain column when the source cannot evidence a
+///     liquidation.
+pub(crate) fn settled_amount_expr(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+    column: &str,
+) -> String {
+    let plain = format!("{alias}.\"{column}\"");
+    if !columns.contains(column) || !columns.contains("buyprice") || !columns.contains("closedate")
+    {
+        return plain;
+    }
+    let Some(guard) = coin_m_liquidation_guard(alias, columns) else {
+        return plain;
+    };
+    // A non-positive price cannot restore anything, so such a row keeps its stored amount rather
+    // than collapsing to zero and silently deleting a loss.
+    format!(
+        "(CASE WHEN {guard}
+                AND {alias}.closedate >= {LIQUIDATION_ERA_SWITCH}
+                AND {alias}.buyprice > 0
+           THEN {plain} * {alias}.buyprice
+           ELSE {plain} END)"
+    )
+}
+
+/// Build a predicate saying whether a row's PRICES are denominated in the same currency as its
+/// MONEY.
+///
+/// They usually are, and then a notional can be rebuilt as quantity × price. On the inverse
+/// contracts [`DENOMINATION_RULES`] corrects, they are not: the market quotes in USD, `boughtq`
+/// counts contracts, and the money columns settle in the base coin — so quantity × price is
+/// neither the notional nor even the right currency. Being relabeled by a rule IS that signal, so
+/// this compares the persisted label against the effective ordinal.
+///
+/// It lives here because the comparison needs the RAW column, which only this module may name; a
+/// caller reaching for `basecurrency` itself would bypass every correction the module applies.
+///
+/// Args:
+///     alias: Table alias carrying the report row.
+///     columns: Discovered physical source columns.
+///
+/// Returns:
+///     SQL predicate; the constant `1` for a source without a quote column, where nothing can have
+///     been relabeled.
+pub(crate) fn prices_share_money_quote_expr(
+    alias: &str,
+    columns: &std::collections::HashSet<String>,
+) -> String {
+    if !columns.contains("basecurrency") {
+        return "1".to_string();
+    }
+    // `IS` rather than `=`, so a NULL on either side compares as a value: an unknown quote was not
+    // relabeled either, and `=` would yield NULL and silently drop the row from a `WHEN` arm.
+    format!(
+        "COALESCE(({alias}.basecurrency) IS ({}), 0)",
+        effective_ordinal_expr(alias, columns)
+    )
+}
+
 /// Build the EFFECTIVE quote ordinal of one report row.
 ///
 /// THE one place a row's currency is decided. Two corrections ride on the persisted `basecurrency`,
@@ -175,7 +381,7 @@ pub(crate) fn effective_ordinal_expr(
     }
     let raw = format!("{alias}.basecurrency");
     let trusted = format!("CASE WHEN typeof({raw}) = 'integer' THEN {raw} END");
-    let arms = DENOMINATION_RULES
+    let mut arms = DENOMINATION_RULES
         .iter()
         .filter_map(|rule| {
             let guard = rule.guard_sql(alias, columns)?;
@@ -186,6 +392,25 @@ pub(crate) fn effective_ordinal_expr(
             ))
         })
         .collect::<String>();
+    // A COIN-M liquidation carries no market name, so no rule above can reach it. From 2024 its
+    // amount settles in BTC once `settled_amount_expr` restores it, and the label must follow the
+    // same era boundary — a row whose money is corrected but whose quote is not would be valued at
+    // the BTC amount with the USDT rate. Era one keeps the USDT label, which its USD margin fits.
+    // Same three facts, same era boundary and the same column guards as `settled_amount_expr`:
+    // a row whose money is corrected but whose quote is not would be valued at the BTC amount with
+    // the USDT rate. The persisted label must still be the one the rule expects, so a deliberately
+    // USDC- or ETH-labeled row is never silently reclassified.
+    if columns.contains("closedate") && columns.contains("buyprice") {
+        if let Some(guard) = coin_m_liquidation_guard(alias, columns) {
+            arms.push_str(&format!(
+                " WHEN ({trusted}) = {labeled} AND {guard}
+                   AND {alias}.closedate >= {LIQUIDATION_ERA_SWITCH} AND {alias}.buyprice > 0
+                   THEN {btc}",
+                labeled = QuoteCurrency::usdt().ordinal(),
+                btc = QuoteCurrency::btc().ordinal(),
+            ));
+        }
+    }
     if arms.is_empty() {
         return trusted;
     }

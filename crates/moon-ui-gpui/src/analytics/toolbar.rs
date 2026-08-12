@@ -21,6 +21,43 @@ use moon_core::db::integrity::Integrity;
 use moon_core::db::report_recovery::RecoveryNotice;
 use moon_core::db::{ProfitMetric, ReadFail, SideFilter};
 
+/// One entry of the money-scale selector.
+///
+/// The query stores two independent flags — the profit metric and the USDT preference — because
+/// they mean different things to it. A user picks ONE scale, so the menu is a single radio group
+/// and this type is where the two representations meet, rather than at each call site.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MetricChoice {
+    /// Report each scope in whatever quote its own trades used.
+    Native,
+    /// Convert every scope to USDT wherever the rows can be valued.
+    Usdt,
+    /// Return on spent capital, which has no currency at all.
+    Percent,
+}
+
+impl MetricChoice {
+    /// Fold the stored flags into the selected entry.
+    pub(super) fn of(metric: ProfitMetric, prefer_usdt: bool) -> Self {
+        match (metric, prefer_usdt) {
+            (ProfitMetric::Percent, _) => Self::Percent,
+            (ProfitMetric::Quote, true) => Self::Usdt,
+            (ProfitMetric::Quote, false) => Self::Native,
+        }
+    }
+
+    /// Expand the selected entry back into the flags the query carries.
+    pub(super) fn flags(self) -> (ProfitMetric, bool) {
+        match self {
+            Self::Native => (ProfitMetric::Quote, false),
+            Self::Usdt => (ProfitMetric::Quote, true),
+            // The USDT preference is meaningless without money, and keeping it set would make
+            // returning to quote money silently land on a different scale than the user left.
+            Self::Percent => (ProfitMetric::Percent, false),
+        }
+    }
+}
+
 /// Unscaled width of the Analytics side-selector trigger.
 const SIDE_TRIGGER_W: f32 = 69.0;
 /// Unscaled width of the Analytics trade-kind-selector trigger.
@@ -428,8 +465,12 @@ impl AnalyticsView {
         row.child(filters)
     }
 
-    /// Profit metric combo (quote money / Profit %): switches every figure and the tuner sweep
-    /// between absolute money and the report's `Profit` column (profit ÷ spent).
+    /// Profit metric combo: the scale every figure and the tuner sweep are computed in.
+    ///
+    /// Three choices, because two of them answer different questions about the SAME money. "Own
+    /// quote" lets the unit follow whatever the period holds — which is why a BTC-quoted core
+    /// reads in BTC for one range and in USDT for a wider one. "USDT" pins the scale so the two
+    /// ranges are finally comparable. "Profit %" leaves money behind entirely.
     ///
     /// Args:
     ///     cx: Analytics view context used for menu actions.
@@ -442,6 +483,9 @@ impl AnalyticsView {
             Tab::Strategies => self.strategy_data.unit(),
             Tab::Calendar => self.cal_days.unit(),
         };
+        // The trigger shows the unit the data ACTUALLY came back in, so a USDT choice that could
+        // not be valued reads as the native quote rather than claiming a conversion that did not
+        // happen.
         let cur = match self.metric {
             ProfitMetric::Quote => match active_unit {
                 Some(moon_core::db::ProfitUnit::Quote(currency)) => currency.ticker().to_string(),
@@ -452,23 +496,29 @@ impl AnalyticsView {
             ProfitMetric::Percent => t!("analytics.metric.pct").to_string(),
         };
         let view = cx.entity();
+        let choice = MetricChoice::of(self.metric, self.prefer_usdt);
         let items = crate::panels::radio_items(
             [
                 (
-                    ProfitMetric::Quote,
+                    MetricChoice::Native,
                     "am-quote".into(),
                     t!("analytics.metric.quote").to_string().into(),
                 ),
                 (
-                    ProfitMetric::Percent,
+                    MetricChoice::Usdt,
+                    "am-usdt".into(),
+                    t!("analytics.metric.usdt").to_string().into(),
+                ),
+                (
+                    MetricChoice::Percent,
                     "am-pct".into(),
                     t!("analytics.metric.pct").to_string().into(),
                 ),
             ],
-            self.metric,
+            choice,
             crate::panels::RadioMark::Highlight,
             move |app, m| {
-                view.update(app, |t, c| t.set_metric(m, c));
+                view.update(app, |t, c| t.set_metric_choice(m, c));
             },
         );
         MoonDropdown::new("an-metric")

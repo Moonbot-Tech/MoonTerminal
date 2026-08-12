@@ -9,8 +9,8 @@ use gpui::*;
 use moon_ui::{MoonPalette, MoonScrollableElement, h_flex, v_flex};
 use rust_i18n::t;
 
-use super::super::AnalyticsView;
 use super::super::summary::{fmt_signed, fmt_signed_unit, sign_color};
+use super::super::AnalyticsView;
 use super::{date_of, now_ym, split_i18n};
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -30,8 +30,8 @@ impl AnalyticsView {
             let dt = date_of(d.start, self.display_zone);
             min_year = min_year.min(dt.year());
             let e = agg.entry((dt.year(), dt.month())).or_insert((0.0, 0));
-            e.0 += d.profit;
-            e.1 += d.trades;
+            e.0 += d.totals.profit;
+            e.1 += d.totals.trades;
         }
         let (cy, cm) = now_ym(self.display_zone);
         if min_year == i32::MAX {
@@ -131,7 +131,9 @@ impl AnalyticsView {
         let h = design::ui_px(cx, 118.0);
         let pad = design::ui_px(cx, 10.0);
         let r = design::ui_px(cx, 8.0);
-        let empty = future || trades == 0;
+        // A month whose only rows were funding counts no trades yet moved money, and the year
+        // total above still carries that money — so emptiness follows the figures, not the count.
+        let empty = future || (trades == 0 && profit == 0.0);
         let bg = if future { moon(p.shell) } else { moon(p.panel) };
         let border = if empty {
             moon_alpha(p.border, 0.35)

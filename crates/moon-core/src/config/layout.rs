@@ -478,6 +478,12 @@ pub struct WindowLayout {
     /// lens, so it lives here rather than being reset each session.
     #[serde(default)]
     pub analytics_profit_percent: bool,
+    /// Analytics money scale: `true` reports every scope in USDT, converting a single-quote scope
+    /// too. `false` (default, every existing config) lets the unit follow the period's own quote,
+    /// which makes a BTC-quoted core read in BTC for one range and in USDT for another. Ignored in
+    /// percent mode, and inert when a scope cannot be fully valued.
+    #[serde(default)]
+    pub analytics_profit_usdt: bool,
     /// Analytics "Fact vs variants" KPI matrix: `true` collapses it to its two top rows
     /// (trades + profit), freeing vertical room on short screens where the fields grid below
     /// it would otherwise not fit. A display lens, so it persists rather than resetting each
