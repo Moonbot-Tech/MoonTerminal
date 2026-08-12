@@ -1,7 +1,8 @@
 // Explicit imports, NOT `use super::*`: the parent re-exports `gpui::*`, which carries its own
 // `test` and shadows the built-in attribute — `#[test]` then expands recursively.
 use crate::panels::assets::collect::AssetEntry;
-use crate::panels::assets::columns::{AssetCol, order_rows, pnl_display};
+use crate::panels::assets::columns::{AssetCol, order_rows, pnl_display, restore_sort};
+use moon_core::config::TableSortPreference;
 use moon_core::feed::AssetRow;
 
 /// One asset row carrying only what the PnL column reads.
@@ -125,4 +126,43 @@ fn coin_order_ignores_exchange_casing() {
     rows.sort_by(|a, b| AssetCol::Coin.compare(a, b));
     let order: Vec<&str> = rows.iter().map(|e| e.row.coin.as_str()).collect();
     assert_eq!(order, vec!["kPEPE", "ZRO"]);
+}
+
+/// `assets/columns.rs:restore_sort` must retain a valid visible column and its direction.
+///
+/// Mutation: force `ascending = true` while restoring. A Value-descending choice would reopen with
+/// the arrow and rows reversed, and the exact tuple assertion reddens.
+#[test]
+fn valid_asset_sort_restores_its_direction() {
+    assert_eq!(
+        restore_sort(
+            Some(TableSortPreference {
+                column: "value".to_string(),
+                ascending: false,
+            }),
+            &[AssetCol::Coin, AssetCol::Value],
+        ),
+        Some((AssetCol::Value, false))
+    );
+}
+
+/// `assets/columns.rs:restore_sort` must reject hidden, unknown, and action-only columns.
+///
+/// Mutation: omit the visibility/sortability filters. Assets could reopen ordered by an invisible
+/// key with no arrow the user can click, and one of these assertions reddens.
+#[test]
+fn unusable_asset_sort_keeps_the_historical_default() {
+    for column in ["value", "actions", "retired"] {
+        assert_eq!(
+            restore_sort(
+                Some(TableSortPreference {
+                    column: column.to_string(),
+                    ascending: true,
+                }),
+                &[AssetCol::Coin],
+            ),
+            None,
+            "{column} must not become an invisible active sort"
+        );
+    }
 }

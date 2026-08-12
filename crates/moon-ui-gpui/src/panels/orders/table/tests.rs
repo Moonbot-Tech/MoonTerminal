@@ -2,7 +2,22 @@
 
 // Named imports, never a glob: `table.rs` pulls in the GPUI prelude, whose own `test` attribute
 // macro would shadow the standard one and blow the expansion recursion limit.
-use super::{stop_look, MoonTone, OrderStopKind};
+use super::{MoonTone, OrdCol, OrderStopKind, column_def, stop_look};
+
+/// `orders/table.rs:column_def` must opt every substantive Orders column into header sorting.
+///
+/// Mutation: remove `.sortable(true)` from any descriptor, such as VStop. That header would stop
+/// reacting to clicks while its neighbours still sort, and the matching assertion reddens.
+#[test]
+fn every_order_column_descriptor_is_sortable() {
+    for column in OrdCol::ALL {
+        assert!(
+            column_def(column).sortable,
+            "Orders column {} must remain sortable",
+            column.key()
+        );
+    }
+}
 
 /// Every stop cell reads ON or OFF — a row must never show a stop's state as unknown.
 ///

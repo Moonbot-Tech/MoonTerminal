@@ -1,4 +1,5 @@
 use super::{CoinFilter, CoinLists, CoinsState, coin_token};
+use moon_core::config::TableSortPreference;
 use moon_core::db::ReadFail;
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::coin_lists::{CoinListEntries, CoinListRow, CoinListRows};
@@ -347,5 +348,39 @@ fn a_scope_change_adopts_the_new_baseline_whole() {
     assert!(
         !s.has_changes(),
         "a freshly adopted baseline is not an edit"
+    );
+}
+
+/// `coins/state.rs:CoinsState::load` must restore a valid key and translate ascending to `desc`.
+///
+/// Mutation: copy `ascending` directly or skip the saved value. The coin table would reopen with
+/// the wrong row direction/arrow, and the exact stored tuple assertion reddens.
+#[test]
+fn coin_sort_load_restores_valid_key_and_direction() {
+    let state = CoinsState::load(Some(TableSortPreference {
+        column: "analytics.col.profit".to_string(),
+        ascending: true,
+    }));
+    assert_eq!(
+        state.sort,
+        Some(("analytics.col.profit".to_string(), false))
+    );
+}
+
+/// `coins/state.rs:CoinsState::load` must retain Trades-descending for absent or unknown keys.
+///
+/// Mutation: accept a retired string. The header could show no matching arrow while rows sort on a
+/// key no longer rendered, and the second assertion reddens.
+#[test]
+fn coin_sort_load_keeps_historical_default_for_unknown_key() {
+    let expected = CoinsState::default().sort;
+    assert_eq!(CoinsState::load(None).sort, expected);
+    assert_eq!(
+        CoinsState::load(Some(TableSortPreference {
+            column: "retired".to_string(),
+            ascending: true,
+        }))
+        .sort,
+        expected
     );
 }

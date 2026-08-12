@@ -91,7 +91,7 @@ impl OrderKind {
 /// A column's position in [`OrdCol::ALL`] is its bit number in
 /// [`OrdersViewState::columns`]. [`OrdCol::key`] returns a stable `docks.json` persistence key
 /// independent of enum order.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OrdCol {
     Core,
     Side,
@@ -185,6 +185,8 @@ pub(crate) struct OrdersViewState {
     pub(super) only_current_market: bool,
     pub(super) primary: PrimarySort,
     pub(super) newest_first: bool,
+    /// Optional header-click override. `None` preserves the legacy primary/newest menu order.
+    pub(super) header_sort: Option<(OrdCol, bool)>,
     /// Whether to lift no Main rows, every matching market row, or only highlighted rows.
     pub(super) main_on_top: MainOnTop,
     /// Visible-column bit mask, where each bit comes from [`OrdCol::bit`]. Persisted as keys.
@@ -217,6 +219,7 @@ impl Default for OrdersViewState {
             only_current_market: false,
             primary: PrimarySort::SellFirst,
             newest_first: true,
+            header_sort: None,
             main_on_top: MainOnTop::Highlighted,
             columns: ALL_COLUMNS_MASK,
         }

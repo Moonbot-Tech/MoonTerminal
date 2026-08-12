@@ -284,6 +284,81 @@ fn active_trade_core_selection_survives_toml_round_trip() {
     );
 }
 
+/// `layout.rs:WindowLayout::table_sorts` must preserve every context and both directions.
+///
+/// Mutation: mark the field skipped or decode every direction as ascending. A table would appear
+/// sticky in one process but reopen on its default column or with the arrow reversed.
+#[test]
+fn table_sort_preferences_survive_toml_round_trip() {
+    let mut layout = WindowLayout::default();
+    layout.table_sorts.insert(
+        "orders-table:dock".to_string(),
+        TableSortPreference {
+            column: "pnl".to_string(),
+            ascending: false,
+        },
+    );
+    layout.table_sorts.insert(
+        "core-status-table:win".to_string(),
+        TableSortPreference {
+            column: "server".to_string(),
+            ascending: true,
+        },
+    );
+
+    let encoded = toml::to_string(&layout).expect("WindowLayout must serialize to TOML");
+    let decoded: WindowLayout =
+        toml::from_str(&encoded).expect("serialized WindowLayout must deserialize");
+
+    assert_eq!(decoded.table_sorts, layout.table_sorts);
+}
+
+/// `layout.rs:de_table_sort_map` must discard one malformed entry without losing valid siblings.
+///
+/// Mutation: deserialize the `HashMap<String, TableSortPreference>` as one all-or-nothing value.
+/// The malformed Assets entry would then empty the map, and Orders would also forget its saved
+/// descending PnL sort even though that neighbouring entry is valid.
+#[test]
+fn one_malformed_table_sort_does_not_erase_valid_siblings_or_layout() {
+    let doc = r#"
+analytics_period = "p-cur-month"
+
+[table_sorts."orders-table:dock"]
+column = "pnl"
+ascending = false
+
+[table_sorts."assets-table:win"]
+column = 7
+ascending = "up"
+"#;
+    let decoded: WindowLayout =
+        toml::from_str(doc).expect("one malformed table sort must not reject the layout");
+
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+    assert_eq!(
+        decoded.table_sorts.get("orders-table:dock"),
+        Some(&TableSortPreference {
+            column: "pnl".to_string(),
+            ascending: false,
+        })
+    );
+    assert!(!decoded.table_sorts.contains_key("assets-table:win"));
+}
+
+/// `layout.rs:de_table_sort_map` must tolerate a wrong outer value like every hand-edited map.
+///
+/// Mutation: remove the lenient outer `Stored::Other` arm. A typo on `table_sorts` would reject
+/// all window geometry and the neighbouring period instead of merely resetting table sorts.
+#[test]
+fn malformed_table_sort_map_cannot_reject_the_layout() {
+    let decoded: WindowLayout =
+        toml::from_str("analytics_period = \"p-cur-month\"\ntable_sorts = 5\n")
+            .expect("a malformed table_sorts value must not fail the complete document");
+
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+    assert!(decoded.table_sorts.is_empty());
+}
+
 /// Analytics notice state and liquidation attribution must not reach `layout.toml`.
 ///
 /// The round trip starts from a document carrying both stale keys because serializing a default

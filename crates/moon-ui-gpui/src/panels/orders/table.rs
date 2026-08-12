@@ -87,6 +87,7 @@ pub(super) fn orders_table(
     let empty = rows.is_empty();
     let row_count = rows.len();
     let view = cx.entity();
+    let sort_view = view.clone();
     let table_rows = rows.clone();
     let p = MoonPalette::active(cx);
     // Click selection is not needed. The fork frontend couples `select_row` to `selected_cell`, so
@@ -124,6 +125,19 @@ pub(super) fn orders_table(
         .state(state)
         .header_height(design::TABLE_HEAD_H)
         .row_height(design::TABLE_ROW_H)
+        .on_sort(move |key, ascending, _window, app| {
+            let key = key.to_string();
+            sort_view.update(app, |this, cx| {
+                let Some(column) = OrdCol::from_key(&key) else {
+                    return;
+                };
+                this.view.header_sort = Some((column, ascending));
+                this.save_ctx_sort(cx);
+                let backend = this.backend.clone();
+                this.rebuild_cache(backend.read(cx));
+                cx.notify();
+            });
+        })
         .on_select_row(move |_ix, _window, app| {
             state_reset.update(app, |s, c| {
                 s.selected_row = None;
@@ -168,7 +182,7 @@ pub(super) fn col_title(col: OrdCol) -> String {
 /// 40px column floor, so the declared value is not a strict minimum.
 fn column_def(col: OrdCol) -> MoonDataTableColumn {
     let title = col_title(col);
-    match col {
+    let column = match col {
         OrdCol::Core => MoonDataTableColumn::new("core", title, 90.0),
         OrdCol::Side => MoonDataTableColumn::new("side", title, 82.0),
         OrdCol::Token => numeric_column("token", title, 70.0),
@@ -187,7 +201,8 @@ fn column_def(col: OrdCol) -> MoonDataTableColumn {
         // A name is variable-length text, so left-align it like the Core column rather than the
         // right-aligned Strat kind column.
         OrdCol::StratName => MoonDataTableColumn::new("strat_name", title, 120.0),
-    }
+    };
+    column.sortable(true)
 }
 
 fn numeric_column(
@@ -240,11 +255,12 @@ fn cell_for(
 ) -> MoonDataCell {
     let r = &e.row;
     // Render a recent click optimistically for up to three seconds without waiting for feed rows.
-    let flag = |kind: OrderStopKind, baked: bool| -> bool {
-        stop_overlay
-            .get(&(e.core, r.uid, stop_tag(kind)))
-            .copied()
-            .unwrap_or(baked)
+    let flag = |kind: OrderStopKind| -> bool {
+        effective_stop_value(
+            e,
+            kind,
+            stop_overlay.get(&(e.core, r.uid, stop_tag(kind))).copied(),
+        )
     };
     match col {
         OrdCol::Core => MoonDataCell::element(core_cell(e, view, p)),
@@ -255,23 +271,19 @@ fn cell_for(
             e,
             view,
             OrderStopKind::StopLoss,
-            flag(OrderStopKind::StopLoss, r.sl_on),
+            flag(OrderStopKind::StopLoss),
             p,
         ),
         OrdCol::Ts => flag_toggle_cell(
             e,
             view,
             OrderStopKind::Trailing,
-            flag(OrderStopKind::Trailing, r.ts_on),
+            flag(OrderStopKind::Trailing),
             p,
         ),
-        OrdCol::Vstop => flag_toggle_cell(
-            e,
-            view,
-            OrderStopKind::VStop,
-            flag(OrderStopKind::VStop, r.vstop_on),
-            p,
-        ),
+        OrdCol::Vstop => {
+            flag_toggle_cell(e, view, OrderStopKind::VStop, flag(OrderStopKind::VStop), p)
+        }
         OrdCol::Buy => MoonDataCell::text(num(r.buy_price)),
         OrdCol::CurP => MoonDataCell::text(num(r.price as f64)),
         OrdCol::TpPrice => {
@@ -301,7 +313,7 @@ fn cell_for(
 /// - `Short-B`: short entry is executed and the buy-to-close exit leg is active.
 ///
 /// Emulated orders add the `(E)` suffix.
-fn side_label(r: &OrderRow) -> (String, MoonTone) {
+pub(super) fn side_label(r: &OrderRow) -> (String, MoonTone) {
     let (side, tone) = match (r.is_short, executed(r)) {
         (false, false) => ("BUY", MoonTone::Negative),
         (false, true) => ("SELL", MoonTone::Info),
@@ -363,7 +375,7 @@ pub(super) fn order_pnl(r: &OrderRow) -> Option<f64> {
 /// This uses the same formula as [`order_pnl`] with the take target in place of the current mark,
 /// which shows the expected profit from a split grid of sell orders. Return `None` without a
 /// position, entry price, or take-profit price.
-fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
+pub(super) fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
     let qty = position_qty(r)?;
     let entry = r.buy_price;
     let tp = r.sell_price;
@@ -419,7 +431,7 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
 ///
 /// Return `None` under the same conditions as [`order_pnl`]. `buy_price` is the entry for both
 /// directions.
-fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
+pub(super) fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
     position_qty(r)?; // Apply the same in-position gate as `order_pnl`.
     let entry = r.buy_price;
     let mark = r.price as f64;
@@ -531,13 +543,16 @@ fn flag_toggle_cell(
                     if !b.workspace_action_allows_core(Some(&group), core) {
                         return false;
                     }
-                    if let Err(err) = b.session.set_order_stop(core, uid, kind, !on) {
-                        log::warn!(
-                            "orders toggle stop failed core={} uid={uid} kind={kind:?}: {err:#}",
-                            moon_core::feed::core_label(core)
-                        );
+                    match b.session.set_order_stop(core, uid, kind, !on) {
+                        Ok(()) => true,
+                        Err(err) => {
+                            log::warn!(
+                                "orders toggle stop failed core={} uid={uid} kind={kind:?}: {err:#}",
+                                moon_core::feed::core_label(core)
+                            );
+                            false
+                        }
                     }
-                    true
                 });
                 if !authorized {
                     return;
@@ -545,14 +560,86 @@ fn flag_toggle_cell(
                 // Draw the target state only after live workspace authority admitted the command.
                 // Feed rows remain authoritative and replace a disagreeing overlay after its
                 // lifetime of at most three seconds.
-                this.stop_overlay.insert(
-                    (core, uid, stop_tag(kind)),
-                    (!on, std::time::Instant::now()),
-                );
+                let overlay_key = (core, uid, stop_tag(kind));
+                let inserted_at = std::time::Instant::now();
+                this.stop_overlay.insert(overlay_key, (!on, inserted_at));
+                this.arm_stop_overlay_expiry(overlay_key, inserted_at, kind, cx);
+                let backend = this.backend.clone();
+                this.rebuild_cache(backend.read(cx));
                 cx.notify();
             });
         });
     MoonDataCell::element(el)
+}
+
+impl OrdersPanel {
+    /// Remove one optimistic stop value at its deadline and refresh a matching active sort.
+    ///
+    /// Args:
+    ///     key: Core, order uid, and stop-kind identity of the overlay.
+    ///     inserted_at: Version timestamp preventing an older timer from removing a newer click.
+    ///     kind: Stop column whose active header sort may require a cache rebuild.
+    ///     cx: View context used to arm the one-shot timer and repaint on expiry.
+    ///
+    /// Returns:
+    ///     Nothing; stale or already-replaced timer callbacks are ignored.
+    fn arm_stop_overlay_expiry(
+        &mut self,
+        key: (CoreId, u64, u8),
+        inserted_at: std::time::Instant,
+        kind: OrderStopKind,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(std::time::Duration::from_secs(3)).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    let current_version = this.stop_overlay.get(&key).map(|(_, time)| *time);
+                    if current_version != Some(inserted_at) {
+                        return;
+                    }
+                    this.stop_overlay.remove(&key);
+                    let sorted_by_kind = this.view.header_sort.is_some_and(|(column, _)| {
+                        matches!(
+                            (column, kind),
+                            (OrdCol::Sl, OrderStopKind::StopLoss)
+                                | (OrdCol::Ts, OrderStopKind::Trailing)
+                                | (OrdCol::Vstop, OrderStopKind::VStop)
+                        )
+                    });
+                    if sorted_by_kind {
+                        let backend = this.backend.clone();
+                        this.rebuild_cache(backend.read(cx));
+                    }
+                    cx.notify();
+                })
+                .is_ok()
+            });
+        })
+        .detach();
+    }
+}
+
+/// Return the SL/TS/VStop value currently shown and used by header sorting.
+///
+/// Args:
+///     entry: Order row whose authoritative stop flags provide the fallback.
+///     kind: Stop column being rendered or compared.
+///     optimistic: Recent successfully dispatched target state, when present.
+///
+/// Returns:
+///     The optimistic value during its retained lifetime, otherwise the feed-owned flag.
+pub(super) fn effective_stop_value(
+    entry: &OrderEntry,
+    kind: OrderStopKind,
+    optimistic: Option<bool>,
+) -> bool {
+    optimistic.unwrap_or(match kind {
+        OrderStopKind::StopLoss => entry.row.sl_on,
+        OrderStopKind::Trailing => entry.row.ts_on,
+        OrderStopKind::VStop => entry.row.vstop_on,
+    })
 }
 
 #[cfg(test)]

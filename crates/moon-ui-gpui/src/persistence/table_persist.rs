@@ -9,8 +9,8 @@
 //!
 //! Widths live in `layout.table_column_widths`. Mutations set `layout_dirty`, and the shared
 //! debounced/quit save path writes the layout. Visible-column sets use the parallel [`visible`]
-//! and [`set_visible`] helpers. Supporting another table's columns requires no table-specific code
-//! here.
+//! and [`set_visible`] helpers; user-selected sorts use [`saved_sort`] and [`set_sort`]. Supporting
+//! another table's columns or sort requires no table-specific storage code here.
 //!
 //! The module also owns the SIBLING per-context preferences of those tables — [`report_filters`]
 //! and [`set_report_filters`] — because they are keyed by the same [`ctx_id`] and written under the
@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use gpui::{AnyElement, App, Entity, IntoElement, SharedString};
-use moon_core::config::ReportFilterPrefs;
+use moon_core::config::{ReportFilterPrefs, TableSortPreference};
 use moon_ui::{MoonButton, MoonButtonSize, MoonDataTableState};
 
 use crate::Backend;
@@ -112,6 +112,51 @@ pub fn set_visible(backend: &Entity<Backend>, id: &str, keys: Vec<String>, cx: &
     });
 }
 
+/// Return the stored sort preference for a context-qualified table id.
+///
+/// Panels validate the returned column key against their current descriptors before applying it.
+/// `None` means the table must retain its historical default.
+pub fn saved_sort(backend: &Backend, id: &str) -> Option<TableSortPreference> {
+    backend.layout.table_sorts.get(id).cloned()
+}
+
+/// Store or clear one table's sort preference under the compare-then-mark-dirty contract.
+///
+/// Passing `None` removes the entry so panels can represent their historical default without an
+/// unnecessary serialized value. Repeating the current value performs no write and does not arm
+/// the layout saver.
+pub fn set_sort(
+    backend: &Entity<Backend>,
+    id: &str,
+    preference: Option<TableSortPreference>,
+    cx: &mut App,
+) {
+    backend.update(cx, |b, _| {
+        if update_sort_preferences(&mut b.layout.table_sorts, id, preference) {
+            b.layout_dirty = true;
+        }
+    });
+}
+
+/// Apply one optional sort value to the shared map and report whether it changed.
+///
+/// Kept pure so insert, direction change, no-op, and reset semantics have a direct regression test
+/// without constructing a GPUI application context.
+fn update_sort_preferences(
+    preferences: &mut HashMap<String, TableSortPreference>,
+    id: &str,
+    next: Option<TableSortPreference>,
+) -> bool {
+    match next {
+        Some(next) if preferences.get(id) != Some(&next) => {
+            preferences.insert(id.to_string(), next);
+            true
+        }
+        Some(_) => false,
+        None => preferences.remove(id).is_some(),
+    }
+}
+
 /// Returns the stored Report toolbar filters for `id`, borrowed from the live layout.
 ///
 /// `None` means nothing was ever stored for that host context, which leaves the panel's own
@@ -165,3 +210,6 @@ pub fn persist(
         }
     });
 }
+
+#[cfg(test)]
+mod tests;

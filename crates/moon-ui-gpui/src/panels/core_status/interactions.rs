@@ -92,9 +92,25 @@ impl CoreStatusView {
     /// Returns:
     ///     Nothing; only the sort state and a repaint change.
     pub(super) fn set_flat_sort(&mut self, key: &str, ascending: bool, cx: &mut Context<Self>) {
-        let next = Some((key.to_string(), ascending));
+        let next =
+            super::ordering::restore_flat_sort(Some(moon_core::config::TableSortPreference {
+                column: key.to_string(),
+                ascending,
+            }));
         if self.flat_sort != next {
             self.flat_sort = next;
+            let preference = self.flat_sort.as_ref().map(|(column, ascending)| {
+                moon_core::config::TableSortPreference {
+                    column: column.clone(),
+                    ascending: *ascending,
+                }
+            });
+            crate::persistence::table_persist::set_sort(
+                &self.backend,
+                &self.widths_id,
+                preference,
+                cx,
+            );
             cx.notify();
         }
     }
@@ -119,6 +135,15 @@ impl CoreStatusView {
         } else {
             (field, true)
         };
+        let preference =
+            (self.group_sort != (super::ordering::GroupSortField::Name, true)).then(|| {
+                moon_core::config::TableSortPreference {
+                    column: self.group_sort.0.key().to_string(),
+                    ascending: self.group_sort.1,
+                }
+            });
+        let id = crate::persistence::table_persist::ctx_id("core-status-by-ip", self.detached);
+        crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
         self.rebuild_cache(cx);
         cx.notify();
     }

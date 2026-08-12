@@ -34,10 +34,135 @@ fn primary_key(p: PrimarySort, r: &OrderRow) -> u8 {
     }
 }
 
-/// Apply the base primary sort plus the newest/oldest UID tie-breaker.
+/// Compare optional displayed values while keeping unavailable cells last under either direction.
+fn optional_order<T: Ord>(
+    left: Option<T>,
+    right: Option<T>,
+    ascending: bool,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let order = left.cmp(&right);
+            if ascending { order } else { order.reverse() }
+        }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// Compare optional floating-point display values with the same missing-value rule.
+fn optional_f64_order(
+    left: Option<f64>,
+    right: Option<f64>,
+    ascending: bool,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (
+        left.filter(|value| value.is_finite()),
+        right.filter(|value| value.is_finite()),
+    ) {
+        (Some(left), Some(right)) => {
+            let order = left.total_cmp(&right);
+            if ascending { order } else { order.reverse() }
+        }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// Apply the selected header comparator or the legacy primary/newest menu order.
 ///
 /// [`OrdersPanel::rebuild_cache`] subsequently applies the stable Main lift over this order.
-pub(super) fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
+pub(super) fn sort_entries(
+    entries: &mut [OrderEntry],
+    view: &OrdersViewState,
+    stop_overlay: &std::collections::HashMap<(CoreId, u64, u8), (bool, std::time::Instant)>,
+) {
+    if let Some((column, ascending)) = view.header_sort {
+        entries.sort_by(|a, b| {
+            let primary = match column {
+                OrdCol::Core => optional_order(
+                    Some(a.core_name.as_str()),
+                    Some(b.core_name.as_str()),
+                    ascending,
+                ),
+                OrdCol::Side => optional_order(
+                    Some(side_sort_key(&a.row)),
+                    Some(side_sort_key(&b.row)),
+                    ascending,
+                ),
+                OrdCol::Token => optional_order(
+                    Some(a.row.coin.as_str()),
+                    Some(b.row.coin.as_str()),
+                    ascending,
+                ),
+                OrdCol::Size => numeric_order(a.row.size, b.row.size, ascending),
+                OrdCol::Buy => numeric_order(a.row.buy_price, b.row.buy_price, ascending),
+                OrdCol::CurP => numeric_order(a.row.price as f64, b.row.price as f64, ascending),
+                OrdCol::TpPrice => optional_f64_order(
+                    (a.row.sell_price > 0.0).then_some(a.row.sell_price),
+                    (b.row.sell_price > 0.0).then_some(b.row.sell_price),
+                    ascending,
+                ),
+                OrdCol::Fill => numeric_order(
+                    f64::from(a.row.fill_pct),
+                    f64::from(b.row.fill_pct),
+                    ascending,
+                ),
+                OrdCol::Pnl => optional_f64_order(
+                    table::order_pnl(&a.row),
+                    table::order_pnl(&b.row),
+                    ascending,
+                ),
+                OrdCol::PnlPct => optional_f64_order(
+                    table::order_pnl_pct(&a.row),
+                    table::order_pnl_pct(&b.row),
+                    ascending,
+                ),
+                OrdCol::PnlTp => optional_f64_order(
+                    table::order_pnl_at_tp(&a.row),
+                    table::order_pnl_at_tp(&b.row),
+                    ascending,
+                ),
+                OrdCol::Sl | OrdCol::Ts | OrdCol::Vstop => {
+                    let kind = match column {
+                        OrdCol::Sl => moon_core::feed::OrderStopKind::StopLoss,
+                        OrdCol::Ts => moon_core::feed::OrderStopKind::Trailing,
+                        OrdCol::Vstop => moon_core::feed::OrderStopKind::VStop,
+                        _ => unreachable!(),
+                    };
+                    let value = |entry: &OrderEntry| {
+                        table::effective_stop_value(
+                            entry,
+                            kind,
+                            stop_overlay
+                                .get(&(entry.core, entry.row.uid, table::stop_tag(kind)))
+                                .map(|(value, _)| *value),
+                        )
+                    };
+                    optional_order(Some(value(a)), Some(value(b)), ascending)
+                }
+                OrdCol::Strat => optional_order(
+                    Some(a.row.strat.as_str()),
+                    Some(b.row.strat.as_str()),
+                    ascending,
+                ),
+                OrdCol::StratName => optional_order(
+                    (a.row.strat_id != 0 && !a.row.strat_name.is_empty())
+                        .then_some(a.row.strat_name.as_str()),
+                    (b.row.strat_id != 0 && !b.row.strat_name.is_empty())
+                        .then_some(b.row.strat_name.as_str()),
+                    ascending,
+                ),
+            };
+            primary.then_with(|| a.core.cmp(&b.core).then_with(|| a.row.uid.cmp(&b.row.uid)))
+        });
+        return;
+    }
+
     // Profit-first sorting uses descending locally calculated PnL. Rows without a position sort
     // last, with UID as the newest/oldest tie-breaker just like the other modes.
     if view.primary == PrimarySort::ProfitFirst {
@@ -53,17 +178,37 @@ pub(super) fn sort_entries(entries: &mut [OrderEntry], view: &OrdersViewState) {
                     let c = a.row.uid.cmp(&b.row.uid);
                     if view.newest_first { c.reverse() } else { c }
                 })
+                .then_with(|| a.core.cmp(&b.core))
         });
         return;
     }
     entries.sort_by(|a, b| {
         let ka = primary_key(view.primary, &a.row);
         let kb = primary_key(view.primary, &b.row);
-        ka.cmp(&kb).then_with(|| {
-            let c = a.row.uid.cmp(&b.row.uid);
-            if view.newest_first { c.reverse() } else { c }
-        })
+        ka.cmp(&kb)
+            .then_with(|| {
+                let c = a.row.uid.cmp(&b.row.uid);
+                if view.newest_first { c.reverse() } else { c }
+            })
+            .then_with(|| a.core.cmp(&b.core))
     });
+}
+
+/// Return the allocation-free lexicographic rank of the exact displayed side label.
+fn side_sort_key(row: &OrderRow) -> u8 {
+    let base = match (row.is_short, executed(row)) {
+        (false, false) => 0, // BUY
+        (false, true) => 2,  // SELL
+        (true, true) => 4,   // Short-B
+        (true, false) => 6,  // Short-S
+    };
+    base + u8::from(row.emulator)
+}
+
+/// Compare two finite displayed numbers in the requested direction.
+fn numeric_order(left: f64, right: f64, ascending: bool) -> std::cmp::Ordering {
+    let order = left.total_cmp(&right);
+    if ascending { order } else { order.reverse() }
 }
 
 /// Return the effective scope's order-table signature from each core's table revision.
@@ -88,3 +233,6 @@ pub(super) fn orders_sig(b: &Backend, scope: &EffectiveCoreScope) -> u64 {
             .wrapping_add(store.core(*core).map_or(0, |data| data.orders_table_rev))
     })
 }
+
+#[cfg(test)]
+mod tests;

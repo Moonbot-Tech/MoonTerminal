@@ -8,6 +8,18 @@
 
 use super::*;
 
+/// Validate a stored Assets sort against current sortable and visible columns.
+fn restore_sort(
+    preference: Option<moon_core::config::TableSortPreference>,
+    visible: &[AssetCol],
+) -> Option<(AssetCol, bool)> {
+    preference.and_then(|preference| {
+        AssetCol::from_key(&preference.column)
+            .filter(|column| *column != AssetCol::Actions && visible.contains(column))
+            .map(|column| (column, preference.ascending))
+    })
+}
+
 /// One selectable column of the asset table, in canonical (left-to-right) order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum AssetCol {
@@ -91,11 +103,7 @@ impl AssetCol {
             return MoonDataTableColumn::new(self.key(), String::new(), self.width()).no_grow();
         }
         let col = MoonDataTableColumn::new(self.key(), self.title(), self.width()).sortable(true);
-        if self.numeric() {
-            col.right()
-        } else {
-            col
-        }
+        if self.numeric() { col.right() } else { col }
     }
 
     /// Whether this column's cell shows a dash for the row instead of a number to order by.
@@ -281,6 +289,18 @@ impl AssetsView {
             .collect();
     }
 
+    /// Restore this dock/window context's valid visible-column sort and MoonUI arrow.
+    pub(super) fn apply_ctx_sort(&mut self, cx: &mut Context<Self>) {
+        self.sort = restore_sort(
+            crate::persistence::table_persist::saved_sort(self.backend.read(cx), &self.widths_id),
+            &self.visible_cols(),
+        );
+        self.table_state.update(cx, |state, _| match self.sort {
+            Some((column, ascending)) => state.set_sort(column.key(), ascending),
+            None => state.sort_column = None,
+        });
+    }
+
     /// Persist the current field set under the context-qualified table ID.
     fn save_ctx_columns(&self, cx: &mut App) {
         let keys: Vec<String> = self
@@ -329,6 +349,7 @@ impl AssetsView {
         self.table_state.update(cx, |state, _| {
             state.sort_column = None;
         });
+        crate::persistence::table_persist::set_sort(&self.backend, &self.widths_id, None, cx);
     }
 
     /// Show every field, or — when all are already shown — leave only the first canonical one.
@@ -354,8 +375,9 @@ impl AssetsView {
     /// Apply a header-click sort and reorder the cached rows once.
     ///
     /// Sorting happens in the CACHE, not in `render`: the table is rebuilt on data changes only
-    /// (about once a second), so a repaint never re-sorts. The order is not persisted — reopening
-    /// the panel returns to the default largest-value-first order.
+    /// (about once a second), so a repaint never re-sorts. The selected column and direction are
+    /// persisted per dock/window context; no saved value retains the default largest-value-first
+    /// order.
     ///
     /// It reorders the EXISTING rows instead of calling `rebuild_cache`: that path also re-requests
     /// transfer assets from every core that has not answered yet, and a header click must not send
@@ -368,6 +390,19 @@ impl AssetsView {
             let mut rows = (*self.cached_entries).clone();
             self.sort_entries(&mut rows);
             self.cached_entries = Rc::new(rows);
+            let preference =
+                self.sort.map(
+                    |(column, ascending)| moon_core::config::TableSortPreference {
+                        column: column.key().to_string(),
+                        ascending,
+                    },
+                );
+            crate::persistence::table_persist::set_sort(
+                &self.backend,
+                &self.widths_id,
+                preference,
+                cx,
+            );
         }
         cx.notify();
     }

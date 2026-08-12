@@ -98,8 +98,22 @@ impl Render for OrdersPanel {
         let view = self.view;
         let auto_core = self.effective_scope(self.backend.read(cx)).is_auto_core();
         let cores = self.group_cores(self.backend.read(cx));
-        let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
+
+        // Expiring an optimistic stop changes the displayed SL/TS/VStop key back to the feed-owned
+        // value. Rebuild once when such a column is active so row order and cells change together.
+        let overlay_len = self.stop_overlay.len();
+        self.stop_overlay
+            .retain(|_, (_, t)| t.elapsed() < Duration::from_secs(3));
+        if self.stop_overlay.len() != overlay_len
+            && self.view.header_sort.is_some_and(|(column, _)| {
+                matches!(column, OrdCol::Sl | OrdCol::Ts | OrdCol::Vstop)
+            })
+        {
+            let backend = self.backend.clone();
+            self.rebuild_cache(backend.read(cx));
+        }
+        let entries = self.cached_entries.clone();
 
         // Control bar.
         let mut controls = h_flex()
@@ -141,8 +155,6 @@ impl Render for OrdersPanel {
         // Highlight one row per Main-open `(core, market)` pair; see `table::orders_table`.
         // Prune optimistic stop toggles aged three seconds or more, then snapshot the survivors for
         // SL/TS/Vstop cells.
-        self.stop_overlay
-            .retain(|_, (_, t)| t.elapsed() < Duration::from_secs(3));
         let stop_overlay: Rc<std::collections::HashMap<(CoreId, u64, u8), bool>> = Rc::new(
             self.stop_overlay
                 .iter()

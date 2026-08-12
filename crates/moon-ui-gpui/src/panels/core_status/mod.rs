@@ -223,10 +223,22 @@ impl CoreStatusView {
         .detach();
 
         let widths_id = crate::persistence::table_persist::ctx_id("core-status-table", detached);
+        let by_ip_sort_id =
+            crate::persistence::table_persist::ctx_id("core-status-by-ip", detached);
+        let flat_sort = ordering::restore_flat_sort(crate::persistence::table_persist::saved_sort(
+            backend.read(cx),
+            &widths_id,
+        ));
+        let group_sort = ordering::restore_group_sort(
+            crate::persistence::table_persist::saved_sort(backend.read(cx), &by_ip_sort_id),
+        );
         let saved_widths = crate::persistence::table_persist::saved(backend.read(cx), &widths_id);
         let table_state = cx.new(|_| {
             let mut s = MoonDataTableState::new();
             s.column_widths = saved_widths;
+            if let Some((key, ascending)) = &flat_sort {
+                s.set_sort(key.clone(), *ascending);
+            }
             s
         });
         cx.observe(&table_state, |this, state, cx| {
@@ -262,8 +274,8 @@ impl CoreStatusView {
             revealed_ips: HashSet::new(),
             editing: None,
             edit_input: None,
-            flat_sort: None,
-            group_sort: (ordering::GroupSortField::Name, true),
+            flat_sort,
+            group_sort,
             mode: CoreStatusMode::default(),
             tree_state,
             table_state,

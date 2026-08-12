@@ -272,6 +272,19 @@ pub struct ReportFilterPrefs {
     pub strategy_name_mask: Option<String>,
 }
 
+/// One user-selected table sort stored under a stable per-context table id.
+///
+/// Column vocabulary remains panel-owned: this core crate only preserves the stable key and the
+/// direction MoonUI reports. Panels validate the key against their current descriptors before
+/// adopting it, so a renamed or removed column cannot make a table unusable.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableSortPreference {
+    /// Stable column key defined by the owning table.
+    pub column: String,
+    /// Whether the selected column is ordered ascending.
+    pub ascending: bool,
+}
+
 /// Complete window layout.
 ///
 /// Every field is `Option` or carries `#[serde(default)]` on purpose, and prefers a type wider
@@ -572,6 +585,13 @@ pub struct WindowLayout {
     /// separate sets. No entry = table default (usually "all visible").
     #[serde(default)]
     pub table_visible_columns: HashMap<String, Vec<String>>,
+    /// Generic table-sort persistence: context-qualified table id to validated column/direction.
+    ///
+    /// Valid entries are salvaged independently, so a hand-edited value for one panel cannot erase
+    /// another panel's sort or reject the rest of `layout.toml`. No entry keeps the panel's exact
+    /// historical default.
+    #[serde(default, deserialize_with = "de_table_sort_map")]
+    pub table_sorts: HashMap<String, TableSortPreference>,
     /// Report toolbar filters per host context: `report-filters:dock` / `report-filters:win`.
     ///
     /// Keyed exactly like the column maps above, through `table_persist::ctx_id`, so a docked tab
@@ -960,6 +980,52 @@ where
     V: Deserialize<'de>,
 {
     Ok(de_lenient(d)?.unwrap_or_default())
+}
+
+/// Read table-sort preferences while discarding only the malformed entries.
+///
+/// Args:
+///     d: Serde deserializer positioned at the complete `table_sorts` value.
+///
+/// Returns:
+///     Every well-formed entry, or an empty map when the outer value is not a map.
+///
+/// Errors:
+///     Propagates only deserializer failures that cannot be consumed as ignored input.
+fn de_table_sort_map<'de, D>(d: D) -> Result<HashMap<String, TableSortPreference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// One usable preference or an ignored malformed entry.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        /// Exact table-sort shape.
+        Valid(TableSortPreference),
+        /// Any unsupported entry shape.
+        Other(serde::de::IgnoredAny),
+    }
+
+    /// The expected map or an ignored malformed outer value.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        /// Context ids mapped to independently recoverable entries.
+        Map(HashMap<String, Entry>),
+        /// Any unsupported outer shape.
+        Other(serde::de::IgnoredAny),
+    }
+
+    Ok(match Stored::deserialize(d)? {
+        Stored::Map(entries) => entries
+            .into_iter()
+            .filter_map(|(id, entry)| match entry {
+                Entry::Valid(preference) => Some((id, preference)),
+                Entry::Other(_) => None,
+            })
+            .collect(),
+        Stored::Other(_) => HashMap::new(),
+    })
 }
 
 /// Clamp a persisted or runtime Auto rail width to the globally usable range.
