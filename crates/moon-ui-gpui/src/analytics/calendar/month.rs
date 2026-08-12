@@ -165,6 +165,20 @@ impl AnalyticsView {
                     true,
                 )
             }))
+            // Funding is not a trading result — it accrues for holding a position, and a month can
+            // be green on trades while red on funding alone. It is signed, so it keeps profit's
+            // colouring, and it shows even at zero: "no funding this month" is an answer.
+            .children(month.funding.map(|funding| {
+                kpi_tile(
+                    p,
+                    cx,
+                    t!("analytics.cal.kpi_funding").to_string(),
+                    moon(sign_color(p, funding)),
+                    fmt_signed(funding),
+                    base.funding.and_then(|prev| dp(funding, prev)),
+                    false,
+                )
+            }))
     }
 
     /// Render the displayed month as weekday headers and week rows.
@@ -383,6 +397,20 @@ fn cal_cell(
                         None => fmt_volume(volume),
                     })
                 }))
+                .children(
+                    t.funding
+                        .filter(|funding| *funding != 0.0)
+                        .map(|funding| {
+                            div()
+                                .text_size(design::t_caption(cx))
+                                .text_color(moon(sign_color(p, funding)))
+                                .child(format!(
+                                    "{} {}",
+                                    t!("analytics.cal.funding_short"),
+                                    fmt_signed(funding)
+                                ))
+                        }),
+                )
                 .children(
                     t.avg_duration_secs()
                         .map(|secs| muted(format!("~{}", fmt_duration_short(secs)))),
