@@ -5,10 +5,117 @@
 //! separate scope and Auto-layout revision notifications. None of these helpers mutates a panel's
 //! retained Classic filter.
 
+use std::collections::HashMap;
+
 use gpui::Context;
 use moon_core::config::WorkspaceMode;
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
+
+/// Dock surface requested by the latest ordered Auto workspace navigation event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AutoWorkspaceSurface {
+    /// The group-owned Main chart host.
+    ChartTabs,
+    /// The group-owned report panel.
+    Report,
+}
+
+impl AutoWorkspaceSurface {
+    /// Return the stable MoonUI dock panel name for this surface.
+    ///
+    /// Returns:
+    ///     The name consumed by `DockArea::activate_panel_by_name`.
+    pub(crate) fn panel_name(self) -> &'static str {
+        match self {
+            Self::ChartTabs => "ChartTabs",
+            Self::Report => "Report",
+        }
+    }
+}
+
+/// Latest ordered Auto surface request retained independently for each group window.
+#[derive(Default)]
+pub(crate) struct AutoWorkspaceSurfaceRequests {
+    revision: u64,
+    by_group: HashMap<String, (u64, AutoWorkspaceSurface)>,
+}
+
+impl AutoWorkspaceSurfaceRequests {
+    /// Publish one surface request after every earlier request in the process.
+    ///
+    /// Args:
+    ///     group: Exact group window that owns the requested surface.
+    ///     surface: Dock surface that the latest user action should reveal.
+    ///
+    /// Returns:
+    ///     The new wrapping process-wide revision.
+    pub(crate) fn request(&mut self, group: &str, surface: AutoWorkspaceSurface) -> u64 {
+        self.revision = self.revision.wrapping_add(1);
+        self.by_group
+            .insert(group.to_string(), (self.revision, surface));
+        self.revision
+    }
+
+    /// Return one group's latest surface request without consuming another Shell's state.
+    ///
+    /// Args:
+    ///     group: Exact group whose transition is requested.
+    ///
+    /// Returns:
+    ///     The latest revision and surface for that group, or `None` before its first request.
+    pub(crate) fn current(&self, group: &str) -> Option<(u64, AutoWorkspaceSurface)> {
+        self.by_group.get(group).copied()
+    }
+}
+
+/// Resolve one unseen group surface request and advance the Shell cursor in every mode.
+///
+/// Advancing in Classic prevents an event observed there from replaying after a later Auto switch.
+/// A newly constructed Shell seeds its cursor from [`AutoWorkspaceSurfaceRequests::current`], so a
+/// retained request cannot replay after a Settings rebuild.
+///
+/// Args:
+///     mode: Workspace mode currently requested for the group.
+///     cursor: Last request revision observed by this Shell.
+///     current: Latest group-local request from the shared authority.
+///
+/// Returns:
+///     The unseen surface only in Auto mode; stale, absent, and Classic requests return `None`.
+pub(crate) fn resolve_auto_workspace_surface(
+    mode: WorkspaceMode,
+    cursor: &mut u64,
+    current: Option<(u64, AutoWorkspaceSurface)>,
+) -> Option<AutoWorkspaceSurface> {
+    let (revision, surface) = current?;
+    if revision == *cursor {
+        return None;
+    }
+    *cursor = revision;
+    (mode == WorkspaceMode::AutoTrading).then_some(surface)
+}
+
+/// Decide whether Escape emptied an Auto group's Main stack and should reveal Report.
+///
+/// Args:
+///     mode: Current workspace mode for the addressed group.
+///     closed: Whether the Escape close actually removed one Main chart.
+///     main_surface_active: Whether Main, rather than Add or Custom, was the visible chart tab.
+///     remaining_main_charts: Authoritative count published after that close.
+///
+/// Returns:
+///     `true` only after a successful last-Main-chart close in Auto mode.
+pub(crate) fn should_return_to_report_after_main_close(
+    mode: WorkspaceMode,
+    closed: bool,
+    main_surface_active: bool,
+    remaining_main_charts: usize,
+) -> bool {
+    mode == WorkspaceMode::AutoTrading
+        && closed
+        && main_surface_active
+        && remaining_main_charts == 0
+}
 
 /// Notification generation for changes that can invalidate an effective workspace scope.
 ///

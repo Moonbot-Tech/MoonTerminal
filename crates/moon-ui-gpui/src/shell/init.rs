@@ -140,13 +140,16 @@ impl Shell {
             dock.update(cx, |area, cx| area.set_center(center, window, cx));
         }
 
-        // Seed Shell's chart-reveal cursor from the latest existing request. A request produced
-        // before this group window existed must not steal the Auto tab after startup.
-        let (initial_workspace_mode, last_open_main_revision) = {
+        // Seed Shell's surface cursor from this group's latest existing request. A request produced
+        // before this group window existed must not steal the Auto tab after startup or rebuild.
+        let (initial_workspace_mode, last_auto_surface_revision) = {
             let backend = backend.read(cx);
             (
                 backend.workspace_mode(&group),
-                backend.open_main_request.revision(),
+                backend
+                    .auto_workspace_surface_request(&group)
+                    .map(|(revision, _)| revision)
+                    .unwrap_or(0),
             )
         };
         let workspace_resize_state = cx.new(|_| moon_ui::MoonResizableState::default());
@@ -614,7 +617,7 @@ impl Shell {
             workspace_resize_state,
             applied_auto_rail_width: initial_auto_rail_width,
             applied_workspace_mode: moon_core::config::WorkspaceMode::Classic,
-            last_open_main_revision,
+            last_auto_surface_revision,
             workspace_sync_pending: false,
             last_frame: None,
             fps: 0.0,

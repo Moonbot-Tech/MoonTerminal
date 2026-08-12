@@ -155,6 +155,8 @@ struct Backend {
     /// Atomic Main-open request identity: target, owning group, revision, activation, and pending
     /// state move together so no producer or consumer can observe mismatched parallel fields.
     open_main_request: backend::OpenMainRequest,
+    /// Latest causally ordered ChartTabs/Report reveal requested independently for each Auto group.
+    auto_workspace_surface_requests: workspace::AutoWorkspaceSurfaceRequests,
     /// Request to open a market in a new custom comparison tab from a detect context menu.
     /// The detect's market anchors the tab alongside that market from other group cores,
     /// deduplicated by exchange, with lock and clear controls. See `open_compare_tab`.

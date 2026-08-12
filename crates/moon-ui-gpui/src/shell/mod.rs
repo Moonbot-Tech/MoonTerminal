@@ -72,8 +72,8 @@ pub(crate) struct Shell {
     applied_auto_rail_width: f32,
     /// Workspace mode currently applied to `dock`, kept separate from persisted desired state.
     applied_workspace_mode: WorkspaceMode,
-    /// Latest Main-open revision already considered for Auto-only ChartTabs reveal.
-    last_open_main_revision: u64,
+    /// Latest ordered Auto surface revision observed for this exact group.
+    last_auto_surface_revision: u64,
     /// Coalesces backend and workspace-revision notifications into one window-aware dock update.
     workspace_sync_pending: bool,
     /// Previous-frame time and smoothed render FPS shown in the status bar, as in the egui host.
