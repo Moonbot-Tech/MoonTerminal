@@ -393,7 +393,9 @@ struct Backend {
     /// entry still names that same window, so code that tears a window down on purpose removes the
     /// entry first and the release stays silent — otherwise a window rebuild would return every
     /// detached panel to its dock and delete its `DetachedSpec`. Entries therefore disappear on two
-    /// edges, not one: a user-driven release, and a deliberate teardown.
+    /// edges, not one: a user-driven release, and a deliberate teardown. Application exit is such a
+    /// teardown: the close of the LAST group window unregisters every entry before requesting the
+    /// quit, so panels that were detached stay detached across a restart.
     ///
     /// Keyed by identity of the panel, not of the window: two live windows for one `(group,
     /// panel)` leave the map describing only the second, and the first is then inert — it can no

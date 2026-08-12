@@ -62,6 +62,14 @@ impl Shell {
     /// Auto suspends ordinary detached windows without consuming their specs, so a request already
     /// queued at the mode boundary waits until Classic owns the dock again.
     pub(super) fn drain_repin_requests(&mut self, cx: &mut Context<Self>) {
+        // Never repin while the application is quitting. A detached window dying with the process
+        // is not the user returning its panel to the dock, but a repin reads exactly like one: it
+        // docks the panel and CONSUMES its `DetachedSpec`, so the final save would persist the
+        // panel docked and the next launch would lose the detachment. Detached charts guard the
+        // same edge in `chart_tabs::windows::drain_chart_repin`.
+        if self.backend.read(cx).quitting {
+            return;
+        }
         if self.applied_workspace_mode == moon_core::config::WorkspaceMode::AutoTrading {
             return;
         }
@@ -87,6 +95,12 @@ impl Shell {
             let _ = handle.update(app, move |_, window, app| {
                 for panel_name in repins {
                     let _ = shell.update(app, |this, cx| {
+                        // Re-read the exit flag HERE too. Draining and restoring are separated by a
+                        // deferred turn, and the quit can land inside it — the drain-time check
+                        // alone would let a repin erase the `DetachedSpec` after the exit began.
+                        if this.backend.read(cx).quitting {
+                            return;
+                        }
                         this.restore_panel_in_workspace(&panel_name, true, true, window, cx);
                     });
                 }
