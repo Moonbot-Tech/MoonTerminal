@@ -57,6 +57,8 @@ fn order(strat_id: u64, job_is_done: bool, price: f32) -> OrderRow {
         buy_price: 60_000.0,
         sell_price: 0.0,
         create_time_ms: 1_000.0,
+        sell_create_time_ms: 0.0,
+        entry_fill_time_ms: 0.0,
         price,
         fill_pct: 0.0,
         strat: "test".into(),

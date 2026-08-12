@@ -188,6 +188,18 @@ pub struct OrderRow {
     pub sell_price: f64,
     /// Order creation time in Unix milliseconds, used as the line start; `0` means unknown.
     pub create_time_ms: f64,
+    /// Exit-leg creation time in Unix milliseconds, used as the SELL line's start; `0` means the
+    /// wire carries none.
+    ///
+    /// Without it the sell line can only start where this process first saw the order, so a
+    /// position opened before the terminal launched drew its exit from the launch moment. The core
+    /// anchors the same line to this field: an initial trace point opens the line at the leg's own
+    /// `create_time` (moonproto `state/orders/apply_helpers.rs`), and it arrives in the canonical
+    /// SELL_PLACEMENT section, so it survives a restart while the server trace does not.
+    pub sell_create_time_ms: f64,
+    /// Entry-leg close time in Unix milliseconds — the fill — used as the start of the protective
+    /// stop lines that exist only after it; `0` means the wire carries none.
+    pub entry_fill_time_ms: f64,
     /// Current market price from `p_last`.
     pub price: f32,
     /// Entry-leg fill percentage.

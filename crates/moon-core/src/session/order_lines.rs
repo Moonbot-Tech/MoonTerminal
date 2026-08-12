@@ -65,6 +65,39 @@ fn price_eps(p: f32) -> f32 {
     p.abs() * 1e-5 + 1e-9
 }
 
+/// Constrains a wire-supplied line start to the order's own lifetime, or reports it as absent.
+///
+/// A line cannot begin before the order that owns it, nor in the future: the core clock may lead
+/// the local one, and a start past the right edge degenerates the segment. `0.0` means the wire
+/// carries no usable time, which [`LineTrace::update`] turns back into "start here and now" — the
+/// behaviour every line had before these times were read.
+///
+/// The two bounds can invert only if the local clock steps BACK behind the order's own creation,
+/// and the lower one wins there: a line drawn before the order it belongs to would be a plain lie,
+/// while one drawn past a rewound right edge is a cosmetic artifact of the clock jump.
+///
+/// Args:
+///     wire_ms: Leg time from the core in Unix milliseconds; zero, negative, NaN, or infinite
+///         means absent.
+///     create_ms: Order creation, already clamped, as the earliest admissible start.
+///     now_ms: Local wall clock as the latest admissible start.
+///
+/// Returns:
+///     The clamped start, or `0.0` when `wire_ms` carries nothing usable.
+fn wire_line_start(wire_ms: f64, create_ms: f64, now_ms: f64) -> f64 {
+    if !wire_ms.is_finite() || wire_ms <= 1.0 {
+        return 0.0;
+    }
+    // Written as max-then-min rather than `clamp`, which panics when the local clock steps back
+    // far enough to put `now_ms` before `create_ms`.
+    let start = wire_ms.max(create_ms);
+    if start > now_ms {
+        now_ms.max(create_ms)
+    } else {
+        start
+    }
+}
+
 /// One order line represented as a staircase of price steps.
 #[derive(Clone, Default)]
 pub struct LineTrace {
@@ -215,11 +248,31 @@ pub struct RetainedOrder {
 }
 
 impl RetainedOrder {
+    /// Earliest time anything belonging to this order is drawn at.
+    ///
+    /// Usually the creation, but a line may legitimately begin before it: an order the core dates
+    /// not at all falls back to the local clock for `create_ms`, while its exit still carries a
+    /// real wire time from before that. Time-window culling has to consult this, or such an order
+    /// disappears from the very window its line occupies. Kept off the per-frame path — the
+    /// renderer only reaches for it when `create_ms` alone would cull the order away.
+    pub fn earliest_ms(&self) -> f64 {
+        self.lines
+            .iter()
+            .flat_map(|line| [line.steps.first(), line.server_points.first()])
+            .flatten()
+            .map(|(t, _)| *t)
+            .filter(|t| *t > 1.0)
+            .fold(self.create_ms, f64::min)
+    }
+
     fn new(r: &OrderRow, now_ms: f64, seq: u64) -> Self {
         // The start cannot be in the future because the core clock may lead the local clock;
-        // otherwise the line segment degenerates or moves beyond the right edge.
-        let create_ms = if r.create_time_ms > 1.0 {
-            r.create_time_ms.min(now_ms)
+        // otherwise the line segment degenerates or moves beyond the right edge. An order the core
+        // dates not at all — a sale from an already-held asset, which has no buy leg — begins here
+        // and now, and `update` knows not to treat that fallback as a floor for the other lines.
+        let wire_create_ms = wire_line_start(r.create_time_ms, 0.0, now_ms);
+        let create_ms = if wire_create_ms > 1.0 {
+            wire_create_ms
         } else {
             now_ms
         };
@@ -381,8 +434,30 @@ impl OrderLineStore {
             let f = r.filled;
             // The entry for both long and short orders is represented by the Buy line, visible from
             // order creation. The opposite-side Sell exit appears only after the entry fills and
-            // starts at fill time. Stops, take profit, VStop, and liquidation also appear only after
-            // fill.
+            // starts when the exit leg was created. Stops, take profit, VStop, and liquidation also
+            // appear only after fill and start at the fill itself.
+            //
+            // Both starts come from the WIRE, not from the local clock: a position older than this
+            // process would otherwise date its exit and its stops to the terminal's launch. When
+            // the wire carries neither — an exit leg the core never placed, a position inherited
+            // without a buy leg — they fall back to "now", where these lines began before.
+            //
+            // The floor is the order's own creation, but only as far as the wire gave one:
+            // `create_ms` itself falls back to the local clock, and that fallback must not pull a
+            // genuinely older exit time forward to the launch.
+            let floor_ms = wire_line_start(r.create_time_ms, 0.0, now_ms);
+            let sell_start_ms = wire_line_start(r.sell_create_time_ms, floor_ms, now_ms);
+            let fill_start_ms = {
+                // The fill is when a protective line came into existence, so it wins whenever the
+                // core supplies it. Taking the EARLIER of fill and exit-leg creation was rejected:
+                // it would cover one rare case (an entry filled in part whose remainder is
+                // cancelled later dates the leg's close to the cancellation) at the price of a
+                // common one — were the exit leg ever materialized at placement instead of at the
+                // fill, every stop would be drawn back across the pre-fill window, claiming a stop
+                // existed where none did. A late start says less than it could; an early one lies.
+                let fill = wire_line_start(r.entry_fill_time_ms, floor_ms, now_ms);
+                if fill > 1.0 { fill } else { sell_start_ms }
+            };
             let new_liq = if f { r.liq.map(|v| v as f32) } else { None };
             if order.liq != new_liq {
                 order.liq = new_liq;
@@ -398,14 +473,21 @@ impl OrderLineStore {
                 now_ms,
             );
             changed |= order.lines[LineKind::Sell as usize].update_server(r.sell_trace.as_ref());
-            changed |=
-                order.lines[LineKind::Sell as usize].update(g(f, r.sell_price), now_ms, now_ms);
+            changed |= order.lines[LineKind::Sell as usize].update(
+                g(f, r.sell_price),
+                sell_start_ms,
+                now_ms,
+            );
 
             let vals: [(Option<f32>, f64, usize); TRACED_KINDS - 2] = [
-                (go(f, r.stop_loss), now_ms, LineKind::Stop as usize),
-                (go(f, r.trailing), now_ms, LineKind::Trailing as usize),
-                (go(f, r.take_profit), now_ms, LineKind::TakeProfit as usize),
-                (go(f, r.vstop), now_ms, LineKind::VStop as usize),
+                (go(f, r.stop_loss), fill_start_ms, LineKind::Stop as usize),
+                (go(f, r.trailing), fill_start_ms, LineKind::Trailing as usize),
+                (
+                    go(f, r.take_profit),
+                    fill_start_ms,
+                    LineKind::TakeProfit as usize,
+                ),
+                (go(f, r.vstop), fill_start_ms, LineKind::VStop as usize),
                 // The pending condition applies only before fill and starts at order creation.
                 (
                     go(!f, r.pending_cond),
