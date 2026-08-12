@@ -17,6 +17,8 @@ use rusqlite::types::Value;
 
 use crate::util::fmt::{self, DeltaSign};
 
+pub(in crate::db) mod coin_m;
+
 /// Decode a SQLite report value into an integral persisted currency ordinal.
 ///
 /// Args:
@@ -145,28 +147,12 @@ const DENOMINATION_RULES: &[DenominationRule] = &[DenominationRule {
     denominated: QuoteCurrency::btc(),
 }];
 
-/// Cores proven to own COIN-M rows, so a nameless liquidation of theirs can be recognized.
-///
-/// A liquidation carries no market name on ANY core, which is what makes the market rule blind to
-/// it and this list necessary. It is probed once per reader connection rather than joined per
-/// query: the evidence is a scan over `fname`, which no index covers.
-static COIN_M_CORES: std::sync::OnceLock<std::sync::RwLock<std::collections::BTreeSet<i64>>> =
-    std::sync::OnceLock::new();
-
-/// Read the currently known COIN-M cores.
-fn coin_m_cores() -> std::collections::BTreeSet<i64> {
-    COIN_M_CORES
-        .get_or_init(Default::default)
-        .read()
-        .map(|cores| cores.clone())
-        .unwrap_or_default()
-}
-
 /// Learn which cores own COIN-M rows, from the sources a reader just opened.
 ///
 /// Called where a connection exists, so the SQL builders below stay pure functions of the columns
-/// they are given. Failure is not fatal and not reported: an unprobed list corrects nothing, which
-/// is the same answer this module gave before the correction existed.
+/// they are given. The evidence is a scan over `fname` that no index covers, and this sits on the
+/// discovery path of EVERY money query — so [`coin_m`] pays it per core rather than per call, and
+/// asks the replica nothing at all once every core present has been examined.
 ///
 /// Args:
 ///     conn: Open report reader.
@@ -175,33 +161,12 @@ pub(in crate::db) fn learn_coin_m_cores(
     conn: &rusqlite::Connection,
     sources: &[super::ReadSource],
 ) {
-    let mut found = std::collections::BTreeSet::new();
-    for src in sources {
-        if !src.cols.contains("core_uid") {
-            continue;
-        }
-        for rule in DENOMINATION_RULES {
-            let Some(guard) = rule.guard_sql("d", &src.cols) else {
-                continue;
-            };
-            let sql = format!(
-                "SELECT DISTINCT d.core_uid FROM {} d WHERE {guard} AND typeof(d.core_uid)='integer'",
-                src.table
-            );
-            let Ok(mut stmt) = conn.prepare(&sql) else {
-                continue;
-            };
-            let Ok(rows) = stmt.query_map([], |row| row.get::<_, i64>(0)) else {
-                continue;
-            };
-            found.extend(rows.flatten());
-        }
-    }
-    if let Ok(mut slot) = COIN_M_CORES.get_or_init(Default::default).write() {
-        // Union rather than replace: one reader may see a source another cannot, and forgetting a
-        // core would silently stop correcting its rows mid-session.
-        slot.extend(found);
-    }
+    coin_m::learn(conn, sources, |src| {
+        DENOMINATION_RULES
+            .iter()
+            .filter_map(|rule| rule.guard_sql("d", &src.cols))
+            .collect()
+    });
 }
 
 /// Instant separating the two ways the core has written a COIN-M liquidation.
@@ -247,7 +212,7 @@ fn coin_m_liquidation_guard(
     // same dated contracts (106 live rows). Those two facts would therefore multiply an ordinary
     // USD-M loss by its entry price. The third fact is the CORE: only one whose other rows the
     // market rule already relabels can own a COIN-M liquidation.
-    let cores = coin_m_cores();
+    let cores = coin_m::cores();
     if cores.is_empty() {
         // Not probed yet, or no COIN-M core is connected. Correcting nothing is the safe answer:
         // it leaves the historical reading in place instead of rewriting a row on a guess.

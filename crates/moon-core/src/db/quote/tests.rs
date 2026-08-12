@@ -374,7 +374,10 @@ fn settled_and_quote(
         "spentbtc",
     ]);
     // A nameless liquidation is only recognizable once the core is known to own COIN-M rows, so
-    // the fixture proves that the same way production does — from a NAMED row of that core.
+    // the fixture proves that the same way production does — from a NAMED row of that core. The
+    // knowledge is remembered per core, so this fixture must start from nothing or a sibling
+    // test's core ids would already count as examined.
+    super::coin_m::reset();
     learn_coin_m_cores(
         &conn,
         &[crate::db::ReadSource {

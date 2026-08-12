@@ -513,12 +513,19 @@ pub fn spawn_writer(_permit: report_recovery::ReportWritePermit) -> Option<Repor
                     match action {
                         PostCommit::SyncComplete { core_uid, done } => {
                             rep::commit_sync_complete(core_uid, &done);
+                            // A catch-up lands rows BETWEEN the ids already stored, which the
+                            // COIN-M knowledge cannot notice on its own — it tracks the ends of
+                            // what it examined. This commit is the authoritative "look again".
+                            quote::coin_m::reexamine_core(core_uid);
                         }
                         PostCommit::ReplicaReset {
                             core_uid,
                             redeclare_history,
                         } => {
                             rep::commit_replica_reset(&rep_state, core_uid, &writer_open_rows);
+                            // The core serves a different report database now, so everything
+                            // learned from the wiped rows — the span AND the verdict — is stale.
+                            quote::coin_m::forget_core(core_uid);
                             recreated_resyncs.push((core_uid, redeclare_history));
                         }
                         PostCommit::AliveMap {
