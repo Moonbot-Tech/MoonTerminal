@@ -541,7 +541,7 @@ pub struct ReportPanel {
     /// The writer advances its generation after writes; without coalescing, a large database could
     /// be rescanned at the same high event frequency.
     last_query_start: Option<std::time::Instant>,
-    /// Durable generation refresh state; only an active-window render consumes its due edge.
+    /// Durable generation refresh state; only a rendered Report panel consumes its due edge.
     generation_refresh: query::GenerationRefreshGate,
     /// Time when periodic selector metadata was last published.
     last_metadata_at: Option<std::time::Instant>,

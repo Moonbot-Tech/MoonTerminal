@@ -18,7 +18,7 @@ const GENERATION_QUERY_INTERVAL: std::time::Duration = std::time::Duration::from
 enum GenerationRefreshPlan {
     /// Existing pending or due work already owns the required wake.
     Idle,
-    /// The throttle has elapsed and an active Report render may start the query.
+    /// The throttle has elapsed and a rendered Report panel may start the query.
     NotifyNow,
     /// One versioned timer must release the due edge after the remaining throttle interval.
     NotifyAfter {
@@ -34,7 +34,7 @@ enum GenerationRefreshPlan {
 pub(super) struct GenerationRefreshGate {
     /// Whether a committed generation is not yet covered by a query start.
     pending: bool,
-    /// Whether the throttle elapsed and an active Report render may consume the refresh.
+    /// Whether the throttle elapsed and a rendered Report panel may consume the refresh.
     due: bool,
     /// Whether one timer already owns the remaining throttle wait.
     timer_armed: bool,
@@ -70,7 +70,7 @@ impl GenerationRefreshGate {
         }
     }
 
-    /// Release the matching timer slot and make still-pending work available to an active render.
+    /// Release the matching timer slot and make still-pending work available to a panel render.
     ///
     /// Args:
     ///     timer_token: Identity captured when this timer was armed.
@@ -89,7 +89,7 @@ impl GenerationRefreshGate {
         true
     }
 
-    /// Consume one due automatic refresh from an active Report render.
+    /// Consume one due automatic refresh from a rendered Report panel.
     ///
     /// Returns:
     ///     `true` exactly once for each due generation burst.
@@ -317,8 +317,8 @@ impl ReportPanel {
 
     /// Make a writer-generation refresh due at most once every five seconds.
     ///
-    /// A trailing timer publishes only a bounded due edge. The active-window render owns the heavy
-    /// query start, so a Report tab behind Analytics cannot consume resources every five seconds.
+    /// A trailing timer publishes only a bounded due edge. The selected-panel render owns the
+    /// heavy query start, so a Report tab hidden behind another tab cannot consume resources.
     /// User filter edits bypass this throttle through [`Self::request_requery`].
     pub(super) fn requery_on_generation(&mut self, cx: &mut Context<Self>) {
         let since = self
@@ -345,7 +345,7 @@ impl ReportPanel {
         }
     }
 
-    /// Start one pending Report query, whether manual or released by an active render.
+    /// Start one pending Report query, whether manual or released by a panel render.
     ///
     /// Args:
     ///     cx: Panel context used to spawn and publish the background read.
@@ -412,7 +412,7 @@ impl ReportPanel {
                     this.query_inflight = false;
                     if this.needs_query {
                         // A manual scope change must not publish the old query under new controls.
-                        // Preserve the stale snapshot and let the next active render catch up.
+                        // Preserve the stale snapshot and let the next panel render catch up.
                         cx.notify();
                         return;
                     }
