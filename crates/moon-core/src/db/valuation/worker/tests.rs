@@ -774,10 +774,12 @@ fn a_restart_covers_trades_that_arrived_above_the_previous_cursor() {
 struct CountingSource {
     /// Symbols that resolve, and the close they resolve to.
     prices: std::collections::HashMap<&'static str, f64>,
-    /// Every `(provider, symbol)` asked for, in request order.
-    calls: Mutex<Vec<(&'static str, String)>>,
+    /// Every `(provider, symbol, start minute, end minute)` asked for, in request order.
+    calls: Mutex<Vec<(&'static str, String, i64, i64)>>,
     /// When set, every request fails transiently with this reason instead of answering.
     transient: Option<&'static str>,
+    /// Optional fixed candle minute used to model a sparse provider response.
+    candle_minute: Option<i64>,
 }
 
 impl CountingSource {
@@ -793,6 +795,7 @@ impl CountingSource {
             prices: prices.iter().copied().collect(),
             calls: Mutex::new(Vec::new()),
             transient: None,
+            candle_minute: None,
         }
     }
 
@@ -805,7 +808,20 @@ impl CountingSource {
             prices: std::collections::HashMap::new(),
             calls: Mutex::new(Vec::new()),
             transient: Some("connection reset"),
+            candle_minute: None,
         }
+    }
+
+    /// Pin every scripted candle to one provider minute.
+    ///
+    /// Args:
+    ///     minute: Fixed UTC candle-open minute in Unix seconds.
+    ///
+    /// Returns:
+    ///     This source configured to return the candle only when the request contains that minute.
+    fn at_minute(mut self, minute: i64) -> Self {
+        self.candle_minute = Some(minute);
+        self
     }
 
     /// How many provider requests have been made so far.
@@ -824,7 +840,7 @@ impl SpotRateSource for CountingSource {
     ///     provider: Canonical provider identifier.
     ///     symbol: Provider-native market symbol.
     ///     start_minute_utc: First requested UTC minute.
-    ///     _end_minute_utc: Last requested UTC minute.
+    ///     end_minute_utc: Last requested UTC minute.
     ///
     /// Returns:
     ///     One candle for a scripted symbol, or a permanent or transient failure.
@@ -833,19 +849,25 @@ impl SpotRateSource for CountingSource {
         provider: &'static str,
         symbol: &str,
         start_minute_utc: i64,
-        _end_minute_utc: i64,
+        end_minute_utc: i64,
     ) -> Result<Vec<super::super::provider::SpotCandle>, FetchFailure> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((provider, symbol.to_string()));
+        self.calls.lock().expect("call log").push((
+            provider,
+            symbol.to_string(),
+            start_minute_utc,
+            end_minute_utc,
+        ));
         if let Some(reason) = self.transient {
             return Err(FetchFailure::Transient(reason.to_string()));
         }
+        let candle_minute = self.candle_minute.unwrap_or(start_minute_utc);
+        if !(start_minute_utc..=end_minute_utc).contains(&candle_minute) {
+            return Err(FetchFailure::Missing);
+        }
         match self.prices.get(symbol) {
             Some(&close) => Ok(vec![super::super::provider::SpotCandle {
-                open_ms: start_minute_utc * 1000,
-                close_ms: start_minute_utc * 1000 + 59_999,
+                open_ms: candle_minute * 1000,
+                close_ms: candle_minute * 1000 + 59_999,
                 close,
             }]),
             None => Err(FetchFailure::Missing),
@@ -949,6 +971,34 @@ fn a_refresh_pass_asks_one_provider_per_turn() {
         "the finished pass publishes exactly once, through the DATA generation"
     );
     assert!(dirty.load(Ordering::Relaxed));
+}
+
+/// Breakage: changing `worker.rs::resolve_next_rate` back to an exact `minute - 60` request would
+/// leave a sparse USDC rate unavailable, preventing Analytics from aggregating current PnL even
+/// though a closed candle still exists inside freshness.
+#[test]
+fn a_current_refresh_requests_the_full_closed_freshness_window() {
+    let _published = publish_guard();
+    let sparse_minute = RATE_MINUTE - 120;
+    let source = CountingSource::new(&[("USDCUSDT", 1.001)]).at_minute(sparse_minute);
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let mut state = scoped_pass(&[8]);
+
+    assert_eq!(
+        resolve_next_rate(&source, &generation, &dirty, &mut state, RATE_MINUTE),
+        Ok(StageTurn::Drained)
+    );
+    assert_eq!(state.rates.get(&8).map(|rate| rate.rate_usdt), Some(1.001));
+    assert_eq!(
+        source.calls.lock().expect("call log").as_slice(),
+        &[(
+            "binance_spot",
+            "USDCUSDT".to_string(),
+            RATE_MINUTE - super::super::FRESHNESS_MS / 1_000,
+            RATE_MINUTE - 60,
+        )],
+    );
 }
 
 /// A drained pass must issue no further requests until the refresh gate arms another one.
