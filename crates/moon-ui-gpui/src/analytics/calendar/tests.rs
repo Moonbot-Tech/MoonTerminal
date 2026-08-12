@@ -168,3 +168,13 @@ fn cost_marks_itself_approximate_when_trades_are_unpriced() {
     assert_eq!(fmt_amount(835.44, true), "835.44");
     assert_eq!(fmt_amount(835.44, false), "~835.44");
 }
+
+/// The commission stands beside the profit in the same KPI row, so it must be readable as the same
+/// kind of number. The SI form would render a month's commission as "1.36K" next to "+560.28".
+#[test]
+fn cost_is_formatted_like_profit_not_compacted() {
+    assert_eq!(fmt_amount(1355.41, true), "1355.41");
+    assert_eq!(fmt_amount(2015.8, true), "2015.8");
+    assert_eq!(fmt_amount(12.5, true), "12.5");
+    assert_eq!(fmt_amount(f64::NAN, true), "—");
+}

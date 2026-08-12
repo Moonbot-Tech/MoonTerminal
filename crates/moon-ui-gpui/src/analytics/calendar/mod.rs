@@ -348,23 +348,29 @@ pub(super) fn fmt_volume(v: f64) -> String {
     moon_core::util::fmt::compact_si(v)
 }
 
-/// Format an unsigned cost, marking it approximate when it does not cover every trade.
+/// Format an unsigned money amount the way profit is formatted, marking it approximate when it
+/// does not cover every trade.
 ///
-/// A source without execution prices contributes no fee, so a total can silently omit trades. The
-/// tilde is what separates "this is the cost" from "this is the cost of the trades we could
-/// price", which is otherwise indistinguishable.
+/// Deliberately NOT the SI-compact form the turnover uses: this figure stands in the same KPI row
+/// as the profit, and a commission rendered "1.4K" beside a profit of "+560.28" reads as another
+/// kind of number entirely. Same two decimals as profit; only the sign is dropped, because a cost
+/// has no direction.
+///
+/// The tilde separates "this is the commission" from "this is the commission of the trades that
+/// could be priced" — a liquidation has no recoverable one, and unmarked the shortfall would read
+/// as exact.
 ///
 /// Args:
 ///     v: Amount in the projection's currency.
 ///     complete: Whether every counted trade contributed.
 ///
 /// Returns:
-///     Compact amount, prefixed with a tilde when incomplete.
+///     Two-decimal amount, prefixed with a tilde when incomplete.
 pub(super) fn fmt_amount(v: f64, complete: bool) -> String {
     if !v.is_finite() {
         return "—".to_string();
     }
-    let s = moon_core::util::fmt::compact_si(v);
+    let s = moon_core::util::fmt::compact(v, 2);
     if complete {
         s
     } else {
