@@ -117,13 +117,24 @@ impl AnalyticsView {
                 dp(month.profit, base.profit),
                 false,
             ))
+            // One trade is one round trip: the core books an entry and its exit as a single closed
+            // order, so this counts orders, not fills. Funding rows are not among them.
+            .child(kpi_tile(
+                p,
+                cx,
+                t!("analytics.kpi.trades").to_string(),
+                moon(p.text),
+                month.trades.to_string(),
+                dp(month.trades as f64, base.trades as f64),
+                false,
+            ))
             .child(kpi_tile(
                 p,
                 cx,
                 t!("analytics.kpi.winrate").to_string(),
                 moon(p.text),
-                // The counts ride along, so the rate is readable without a separate trades tile:
-                // "68.7% (8299/12086)" states both the ratio and how much it rests on.
+                // The counts ride along so the rate states what it rests on — the tile beside it
+                // gives the total, this gives the split: "68.7% (8299/12086)".
                 format!("{wr:.1}% ({}/{})", month.wins, month.trades),
                 dp(wr, base.winrate().unwrap_or(0.0)),
                 false,

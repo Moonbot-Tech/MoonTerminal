@@ -229,13 +229,13 @@ analytics.cal.kpi_volume:
   en: "Volume"
   es: "Volumen"
 analytics.cal.kpi_fee:
-  ru: "Издержки"
-  en: "Costs"
-  es: "Costes"
+  ru: "Комиссия"
+  en: "Fees"
+  es: "Comisiones"
 analytics.cal.fee_short:
-  ru: "изд."
-  en: "cost"
-  es: "coste"
+  ru: "ком."
+  en: "fee"
+  es: "com."
 analytics.cal.dur_s:
   ru: "с"
   en: "s"
