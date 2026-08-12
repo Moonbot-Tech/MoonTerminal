@@ -1261,17 +1261,20 @@ fn load_trade(
         return Ok(None);
     }
     let spent = if columns.contains("spentbtc") {
-        "CASE WHEN typeof(spentbtc) IN ('integer','real') THEN spentbtc END"
+        "CASE WHEN typeof(r.spentbtc) IN ('integer','real') THEN r.spentbtc END"
     } else {
         "NULL"
     };
+    // The prepared value is keyed by the quote it was computed in, so this projection must yield
+    // the EFFECTIVE ordinal — the same one every reader joins the cache with.
+    let quote = super::super::quote::effective_ordinal_expr("r", &columns);
     let sql = format!(
-        "SELECT core_uid, {id_column}, closedate, basecurrency, profitbtc, {spent}
-         FROM {table}
-         WHERE core_uid=?1 AND {id_column}=?2
-           AND typeof(closedate)='integer' AND closedate>0
-           AND typeof(basecurrency)='integer' AND basecurrency BETWEEN 0 AND 20
-           AND typeof(profitbtc) IN ('integer','real')"
+        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), r.profitbtc, {spent}
+         FROM {table} r
+         WHERE r.core_uid=?1 AND r.{id_column}=?2
+           AND typeof(r.closedate)='integer' AND r.closedate>0
+           AND ({quote}) BETWEEN 0 AND 20
+           AND typeof(r.profitbtc) IN ('integer','real')"
     );
     conn.query_row(&sql, rusqlite::params![core_uid, row_id], |row| {
         Ok(TradeInput {
@@ -1345,23 +1348,26 @@ fn reconciliation_batch(
     // the `core_uid` and row-id comparisons — which is why narrowing this cursor to `closedate`
     // alone would drop it. The `closedate>0` guard below plays no part in any of this.
     let (after_close, after_core, after_row) = after.unwrap_or((i64::MAX, i64::MAX, i64::MAX));
+    // One expression for the projection, both joins and the guard: a batch that selected the raw
+    // ordinal while joining the effective one would re-prepare the same row on every pass.
+    let quote = super::super::quote::effective_ordinal_expr("r", &columns);
     let sql = format!(
-        "SELECT r.core_uid, r.{id_column}, r.closedate, r.basecurrency, r.profitbtc, {spent}
+        "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), r.profitbtc, {spent}
          FROM {table} r
          LEFT JOIN valuation.trade_values v
            ON v.source_kind={source_kind}
           AND v.core_uid=r.core_uid AND v.row_id=r.{id_column}
           AND v.algorithm_version={algorithm_version}
-          AND v.closedate=r.closedate AND v.quote_ordinal=r.basecurrency
+          AND v.closedate=r.closedate AND v.quote_ordinal=({quote})
           AND v.profit_quote=r.profitbtc AND {spent_match}
          LEFT JOIN valuation.rates mr
            ON mr.algorithm_version={algorithm_version}
-          AND mr.quote_ordinal=r.basecurrency
+          AND mr.quote_ordinal=({quote})
           AND mr.minute_utc=(r.closedate/60)*60
           AND mr.status=1
          WHERE typeof(r.core_uid)='integer' AND typeof(r.{id_column})='integer'
            AND typeof(r.closedate)='integer' AND r.closedate>0
-           AND typeof(r.basecurrency)='integer' AND r.basecurrency BETWEEN 0 AND 20
+           AND ({quote}) BETWEEN 0 AND 20
            AND typeof(r.profitbtc) IN ('integer','real')
            AND (r.closedate, r.core_uid, r.{id_column}) < (?1, ?2, ?3)
            AND v.row_id IS NULL AND mr.minute_utc IS NULL
@@ -1553,9 +1559,9 @@ impl CurrentRateState {
 /// thread against its own reader, never on the UI thread. Deliberately NOT worth an index: that
 /// would cost write amplification on every replicated trade to serve an opt-in feature.
 ///
-/// The storage-class filter is applied in Rust rather than as a `typeof()` predicate. Same result,
-/// but a `typeof()` in the WHERE clause defeats an index seek unconditionally — so if a covering
-/// index ever does appear, this query can use it.
+/// The scan reads the EFFECTIVE ordinal, so a COIN-M row contributes BTC and the worker fetches the
+/// rate that row is actually denominated in. That expression carries its own storage-class guard;
+/// the Rust-side decode below stays as the readers' own contract, not as a second filter.
 ///
 /// Args:
 ///     conn: Open report reader.
@@ -1572,7 +1578,11 @@ fn report_quote_ordinals(conn: &Connection) -> ReadResult<Vec<i64>> {
         if !src.cols.contains("basecurrency") {
             continue;
         }
-        let sql = format!("SELECT DISTINCT basecurrency FROM {}", src.table);
+        let sql = format!(
+            "SELECT DISTINCT ({quote}) FROM {} r",
+            src.table,
+            quote = crate::db::quote::effective_ordinal_expr("r", &src.cols)
+        );
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|error| crate::db::read_fail::read_fail(CTX, error))?;

@@ -262,8 +262,11 @@ pub(super) fn source_predicates(
     // absent column collapses to a constant rather than being named.
     SourcePredicates {
         quote_known: if columns.contains("basecurrency") {
+            // The effective expression already rejects every non-integer storage class, so the
+            // range check alone decides whether the identity is one this build knows.
             format!(
-                "typeof({alias}.basecurrency)='integer' AND {alias}.basecurrency BETWEEN 0 AND 20"
+                "({quote}) BETWEEN 0 AND 20",
+                quote = super::quote::effective_ordinal_expr(alias, columns)
             )
         } else {
             "0".to_string()
@@ -305,6 +308,10 @@ pub(crate) fn coverage_sql(
     let has_closedate = columns.contains("closedate");
     let has_quote = columns.contains("basecurrency");
     let has_profit = columns.contains("profitbtc");
+    // Every quote reference below goes through this ONE expression: the cache is keyed by quote
+    // ordinal, so a join that matched the raw column while the projection valued the effective one
+    // would look up the rate of a currency the row is not denominated in.
+    let quote = super::quote::effective_ordinal_expr(alias, columns);
     let SourcePredicates {
         quote_known,
         numeric_profit,
@@ -324,7 +331,7 @@ pub(crate) fn coverage_sql(
              AND typeof({alias}.{id_column})='integer'
              AND v.core_uid={alias}.core_uid AND v.row_id={alias}.{id_column}
              AND v.algorithm_version={algorithm_version}
-             AND v.closedate={alias}.closedate AND v.quote_ordinal={alias}.basecurrency
+             AND v.closedate={alias}.closedate AND v.quote_ordinal=({quote})
              AND v.profit_quote={alias}.profitbtc AND v.spent_quote IS {spent_value}",
             source_kind = source.code(),
             algorithm_version = ALGORITHM_VERSION,
@@ -335,7 +342,7 @@ pub(crate) fn coverage_sql(
     let rate_match = if has_closedate && has_quote {
         format!(
             "mr.algorithm_version={algorithm_version}
-             AND mr.quote_ordinal={alias}.basecurrency
+             AND mr.quote_ordinal=({quote})
              AND mr.minute_utc=({alias}.closedate/60)*60
              AND mr.status=1",
             algorithm_version = ALGORITHM_VERSION,
@@ -345,7 +352,10 @@ pub(crate) fn coverage_sql(
     };
     let eligible = format!("({quote_known})");
     let identity = if has_quote {
-        format!("({eligible} AND {numeric_profit} AND {alias}.basecurrency=1)")
+        format!(
+            "({eligible} AND {numeric_profit} AND ({quote})={usdt})",
+            usdt = super::QuoteCurrency::usdt().ordinal()
+        )
     } else {
         "0".to_string()
     };
@@ -381,7 +391,7 @@ pub(crate) fn coverage_sql(
             format!(
                 " LEFT JOIN valuation.rates ra
                     ON ra.algorithm_version={algorithm_version}
-                   AND ra.quote_ordinal={alias}.basecurrency
+                   AND ra.quote_ordinal=({quote})
                    AND ra.minute_utc=v.rate_minute_utc AND ra.status=0",
                 algorithm_version = ALGORITHM_VERSION,
             ),

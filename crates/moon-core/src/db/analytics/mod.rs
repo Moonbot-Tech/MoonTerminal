@@ -226,8 +226,7 @@ fn undated_closes_on(conn: &Connection, q: &Query) -> ReadResult<UndatedCloses> 
         // and which strategy they belong to changes nothing about that count. (The caller
         // passes no strategy scope either, so the expression is never consulted.)
         let sid = effective_sid_expr("r", &src.cols, false);
-        let (quote, group_by) =
-            super::quote::trusted_quote_group("r.basecurrency", src.cols.contains("basecurrency"));
+        let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
         let sql = q
             .where_branches(WHERE_UNDATED, &src.cols, &sid, Some("r"), false)
             .iter()

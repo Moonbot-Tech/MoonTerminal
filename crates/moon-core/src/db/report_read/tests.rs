@@ -1224,3 +1224,60 @@ fn legacy_rows_are_counted_and_never_returned() {
     );
     assert_eq!(rows.legacy_rows, 1);
 }
+
+/// Plausible regression: correcting a stored column in `source_select` while `source_sort_expression`
+/// keeps serving it raw. Nothing fails to compile and no query errors — but each source is
+/// `ORDER BY … LIMIT`-truncated in SQL BEFORE the Rust merge re-sorts by the projected value, so
+/// sorting the Report by that column would order rows by one number and display another, and the
+/// visible top-N would be missing rows that belong in it.
+///
+/// The assertion is deliberately generic over the corrected-column registry rather than naming
+/// `basecurrency`: the next column to need a correction is the one that would otherwise reintroduce
+/// exactly this bug.
+#[test]
+fn every_corrected_column_sorts_by_the_same_sql_it_projects() {
+    let columns: std::collections::HashSet<String> = [
+        "core_uid",
+        "newrecid",
+        "closedate",
+        "basecurrency",
+        "coin",
+        "fname",
+        "profitbtc",
+    ]
+    .iter()
+    .map(|name| (*name).to_string())
+    .collect();
+    let source = super::super::ReadSource {
+        table: "orders_rep",
+        cols: columns.clone(),
+        legacy: false,
+    };
+
+    let corrected: Vec<&str> = columns
+        .iter()
+        .map(String::as_str)
+        .filter(|column| super::corrected_column_expression(&source, column).is_some())
+        .collect();
+    assert!(
+        !corrected.is_empty(),
+        "the fixture must carry at least one corrected column, or this test asserts nothing"
+    );
+
+    for column in corrected {
+        let names = vec![column.to_string()];
+        let select = super::source_select(&source, &names, None);
+        let sort = super::source_sort_expression(&source, column, None)
+            .expect("a corrected column must remain sortable");
+        assert_eq!(
+            select,
+            format!("{sort} AS \"{column}\""),
+            "`{column}` is projected and sorted by different SQL"
+        );
+        assert_ne!(
+            sort,
+            format!("r.\"{column}\""),
+            "`{column}` must not sort by the raw stored value"
+        );
+    }
+}

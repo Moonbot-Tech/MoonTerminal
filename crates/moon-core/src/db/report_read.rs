@@ -324,6 +324,8 @@ fn source_select(
                 format!("{sql} AS \"{c}\"")
             } else if src.legacy && c == "id" && src.cols.contains("db_id") {
                 "r.\"db_id\" AS \"id\"".to_string()
+            } else if let Some(sql) = corrected_column_expression(src, c) {
+                format!("{sql} AS \"{c}\"")
             } else if src.cols.contains(c) {
                 format!("r.\"{c}\"")
             } else {
@@ -332,6 +334,26 @@ fn source_select(
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Return the corrected SQL for a stored column the reader must not serve raw, if `col` is one.
+///
+/// Both the projection and the `ORDER BY` go through here for the same reason synthetic columns do:
+/// every source is truncated by `LIMIT` before the Rust merge, so a column projected corrected and
+/// sorted raw would order the rows by one value and then show another — silently returning the
+/// wrong top rows when the user sorts by that column.
+///
+/// Args:
+///     src: Physical source whose schema decides availability.
+///     col: Runtime Report column key.
+///
+/// Returns:
+///     The expression, or `None` for every column this reader serves as stored.
+fn corrected_column_expression(src: &ReadSource, col: &str) -> Option<String> {
+    (col == "basecurrency" && src.cols.contains(col))
+        // The displayed ticker must name the currency the row's own profit column is in, or the
+        // table would print USDT beside a total the footer counted as BTC.
+        .then(|| super::quote::effective_ordinal_expr("r", &src.cols))
 }
 
 /// Compare values while merging sorted sources: numbers as `f64`, text
@@ -387,6 +409,9 @@ fn source_sort_expression(
 ) -> Option<String> {
     if let Some(entry) = synthetic(col) {
         return synthetic_expression(entry, src, valuation);
+    }
+    if let Some(sql) = corrected_column_expression(src, col) {
+        return Some(sql);
     }
     if src.cols.contains(col) {
         Some(format!("r.\"{col}\""))
@@ -749,8 +774,7 @@ fn query_totals_attempt(
         } else {
             "0.0"
         };
-        let (quote, group_by) =
-            super::quote::trusted_quote_group("r.basecurrency", src.cols.contains("basecurrency"));
+        let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
         let valuation = super::valuation::projection(
             f.valuation,
             include_valuation,

@@ -356,10 +356,7 @@ fn quote_breakdown_attempt(
         let attribution = liquidation_attribution_available(&src.cols, has_names);
         let period = "r.closedate >= ?1 AND r.closedate < ?2 AND r.closedate > 0";
         let where_branches = q.where_branches(period, &src.cols, &sid, Some("r"), attribution);
-        let (quote, group_by) = super::super::quote::trusted_quote_group(
-            "r.basecurrency",
-            src.cols.contains("basecurrency"),
-        );
+        let (quote, group_by) = super::super::quote::trusted_quote_group("r", &src.cols);
         let source = super::super::report_read::source_partition(src);
         let valuation = super::super::valuation::projection(
             q.valuation,
@@ -616,6 +613,14 @@ pub(in crate::db) fn unified_from_mode(
                     )
                 } else if mode.is_usdt() && *c == "basecurrency" {
                     "1 AS \"basecurrency\"".to_string()
+                } else if *c == "basecurrency" && src.cols.contains(*c) {
+                    // Published under the original name, like the attributed strategy id above, so
+                    // every consumer of this unified source — the group quote split, the summary
+                    // stream — reads the quote the row's money is actually in.
+                    format!(
+                        "({}) AS \"basecurrency\"",
+                        super::super::quote::effective_ordinal_expr("r", &src.cols)
+                    )
                 } else if src.cols.contains(*c) {
                     format!("r.\"{c}\"")
                 } else {
