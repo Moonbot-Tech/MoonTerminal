@@ -111,7 +111,9 @@ impl AnalyticsView {
             .child(kpi_tile(
                 p,
                 cx,
+                "cal-month-profit",
                 t!("analytics.cal.kpi_profit").to_string(),
+                None,
                 moon(sign_color(p, month.profit)),
                 fmt_signed_unit(month.profit),
                 dp(month.profit, base.profit),
@@ -122,7 +124,9 @@ impl AnalyticsView {
             .child(kpi_tile(
                 p,
                 cx,
+                "cal-month-trades",
                 t!("analytics.kpi.trades").to_string(),
+                None,
                 moon(p.text),
                 month.trades.to_string(),
                 dp(month.trades as f64, base.trades as f64),
@@ -131,7 +135,9 @@ impl AnalyticsView {
             .child(kpi_tile(
                 p,
                 cx,
+                "cal-month-winrate",
                 t!("analytics.kpi.winrate").to_string(),
+                None,
                 moon(p.text),
                 // The counts ride along so the rate states what it rests on — the tile beside it
                 // gives the total, this gives the split: "68.7% (8299/12086)".
@@ -146,7 +152,9 @@ impl AnalyticsView {
                 kpi_tile(
                     p,
                     cx,
+                    "cal-month-volume",
                     t!("analytics.cal.kpi_volume").to_string(),
+                    None,
                     moon(p.text),
                     fmt_volume(volume),
                     base.volume.and_then(|prev| dp(volume, prev)),
@@ -157,7 +165,9 @@ impl AnalyticsView {
                 kpi_tile(
                     p,
                     cx,
+                    "cal-month-costs",
                     t!("analytics.cal.kpi_fee").to_string(),
+                    Some(t!("analytics.cal.kpi_fee_tip").to_string()),
                     moon(p.orange),
                     fmt_amount(fee, month.fee_is_complete()),
                     // Growth in cost is bad, so the delta's good direction is inverted.
@@ -172,7 +182,9 @@ impl AnalyticsView {
                 kpi_tile(
                     p,
                     cx,
+                    "cal-month-funding",
                     t!("analytics.cal.kpi_funding").to_string(),
+                    Some(t!("analytics.cal.kpi_funding_tip").to_string()),
                     moon(sign_color(p, funding)),
                     fmt_signed(funding),
                     base.funding.and_then(|prev| dp(funding, prev)),
@@ -477,13 +489,27 @@ fn cal_cell(
         .into_any_element()
 }
 
-/// Calendar KPI tile: label + large value + delta to the previous period.
-/// `invert` — growth in this metric is bad (losing orders). Shared by
-/// Month/Day.
+/// Build a Calendar KPI tile shared by Month and Day views.
+///
+/// Args:
+///     p: Active MoonUI palette.
+///     cx: GPUI view context used for sizing.
+///     id: Stable element identity required by GPUI's tooltip state.
+///     label: Localized metric caption.
+///     tooltip: Optional localized explanation attached to the existing tile root.
+///     value_color: Colour applied to the primary value.
+///     value: Formatted primary value.
+///     delta: Percentage change from the previous period, when comparable.
+///     invert: Whether growth in the metric should use the adverse delta colour.
+///
+/// Returns:
+///     KPI tile with unchanged geometry and an optional standard MoonUI tooltip.
 pub(super) fn kpi_tile(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
+    id: &'static str,
     label: String,
+    tooltip: Option<String>,
     value_color: Hsla,
     value: String,
     delta: Option<f64>,
@@ -520,7 +546,8 @@ pub(super) fn kpi_tile(
             .child("—")
             .into_any_element(),
     };
-    v_flex()
+    let tile = v_flex()
+        .id(id)
         .flex_1()
         .min_w(design::font_w_px(cx, 108.0))
         .gap(design::ui_px(cx, 3.0))
@@ -543,5 +570,10 @@ pub(super) fn kpi_tile(
                 .text_color(value_color)
                 .child(value),
         )
-        .child(delta_el)
+        .child(delta_el);
+    if let Some(tooltip) = tooltip {
+        tile.tooltip(crate::panels::common::text_tooltip(tooltip))
+    } else {
+        tile
+    }
 }

@@ -107,7 +107,9 @@ impl AnalyticsView {
             .child(tile(
                 p,
                 cx,
+                "cal-day-profit",
                 t!("analytics.cal.kpi_profit_day").to_string(),
+                None,
                 moon(sign_color(p, profit)),
                 fmt_signed_unit(profit),
                 dp(profit, pp),
@@ -116,7 +118,9 @@ impl AnalyticsView {
             .child(tile(
                 p,
                 cx,
+                "cal-day-trades",
                 t!("analytics.kpi.trades").to_string(),
+                None,
                 moon(p.text),
                 trades.to_string(),
                 dp(trades as f64, pt as f64),
@@ -125,7 +129,9 @@ impl AnalyticsView {
             .child(tile(
                 p,
                 cx,
+                "cal-day-wins",
                 t!("analytics.cal.kpi_wins").to_string(),
+                None,
                 moon(p.green),
                 wins.to_string(),
                 dp(wins as f64, pw as f64),
@@ -134,7 +140,9 @@ impl AnalyticsView {
             .child(tile(
                 p,
                 cx,
+                "cal-day-losses",
                 t!("analytics.cal.kpi_losses").to_string(),
+                None,
                 moon(p.orange),
                 losses.to_string(),
                 dp(losses as f64, (pt - pw) as f64),
@@ -143,7 +151,9 @@ impl AnalyticsView {
             .child(tile(
                 p,
                 cx,
+                "cal-day-winrate",
                 t!("analytics.kpi.winrate").to_string(),
+                None,
                 moon(p.text),
                 format!("{wr:.1}%"),
                 dp(wr, prev_wr),

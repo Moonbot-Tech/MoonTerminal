@@ -236,6 +236,22 @@ analytics.cal.kpi_fee:
   ru: "Издержки"
   en: "Costs"
   es: "Costes"
+analytics.cal.kpi_funding:
+  ru: "Фандинг"
+  en: "Funding"
+  es: "Funding"
+analytics.cal.funding_short:
+  ru: "фнд"
+  en: "fnd"
+  es: "fnd"
+analytics.cal.kpi_fee_tip:
+  ru: "Оценка издержек исполнения по ценам и объёму сделки и прибыли, записанной MoonBot. Это не точная комиссия биржи."
+  en: "Estimated execution costs from the trade prices, quantity, and profit booked by MoonBot. This is not the exchange's exact commission."
+  es: "Costes de ejecución estimados a partir de los precios, el volumen y el beneficio registrado por MoonBot. No es la comisión exacta del exchange."
+analytics.cal.kpi_funding_tip:
+  ru: "Отдельные записи Funding из отчёта MoonBot. Календарь сопоставляет совпадающие записи от нескольких ботов и старается учитывать начисление один раз; это не издержки сделки."
+  en: "Separate Funding rows from the MoonBot report. Calendar matches duplicate-looking rows delivered to multiple bots and attempts to count each accrual once; this is separate from trade costs."
+  es: "Filas Funding separadas del informe de MoonBot. El calendario compara registros coincidentes enviados a varios bots e intenta contar cada abono o cargo una sola vez; no son costes de la operación."
 analytics.cal.fee_short:
   ru: "изд."
   en: "cost"
