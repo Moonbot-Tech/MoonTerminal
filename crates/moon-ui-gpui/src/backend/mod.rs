@@ -25,9 +25,12 @@ use moon_core::config::{
     WorkspaceMode,
 };
 use moon_core::db::valuation::ValuationMode;
-use moon_core::feed::ClientSettingsEdit;
+use moon_core::feed::{ClientSettingsEdit, StrategyRow};
 use moon_core::session::CoreId;
 use moon_ui::{DockAreaState, DockTopologyByName};
+
+/// Ordinal of the Manual kind in the Moonbot strategy schema; see `strat_kind_name`.
+pub(crate) const MANUAL_STRATEGY_KIND: u8 = 12;
 
 /// Milliseconds of history kept on each side of a warning start for its persisted graphs (±30 s, a
 /// 60 s window — enough context for analysis without bloating the per-core slices).
@@ -532,6 +535,32 @@ pub(crate) struct ManualOrderTerms {
     pub(crate) exit: GroupExitSettings,
 }
 
+/// Resolve whether a raw manual-strategy state is usable with the retained strategy snapshot.
+///
+/// Args:
+///     raw: State from the process-local override or retained ClientSettings.
+///     strategies_rev: Retained snapshot revision; zero means no snapshot has arrived yet.
+///     strategies: Rows in the retained strategy snapshot.
+///
+/// Returns:
+///     Raw state while the snapshot is pending or contains a Manual-kind row; otherwise an
+///     effective disabled state that preserves the selected id.
+fn effective_manual_strat_state(
+    raw: (bool, u64),
+    strategies_rev: u64,
+    strategies: &[StrategyRow],
+) -> (bool, u64) {
+    let confirmed_without_manual = strategies_rev != 0
+        && !strategies
+            .iter()
+            .any(|strategy| strategy.kind_ordinal == MANUAL_STRATEGY_KIND);
+    if confirmed_without_manual {
+        (false, raw.1)
+    } else {
+        raw
+    }
+}
+
 impl Backend {
     /// Return the six USD-equivalent presets and selected slot for one window group.
     pub(crate) fn manual_order_size_state(&self, group: &str) -> ([f64; 6], usize) {
@@ -757,18 +786,31 @@ impl Backend {
     /// Return the core's effective manual-strategy state as `(enabled, id)`.
     ///
     /// A local override takes precedence over the `ClientSettings` snapshot and remains until
-    /// replaced or process exit; core echoes and command failures do not reconcile it. If neither
-    /// source exists, this returns `(false, 0)`.
+    /// replaced or process exit; core echoes and command failures do not reconcile it. A confirmed
+    /// snapshot with no Manual-kind strategy makes the state effectively disabled while preserving
+    /// the selected id. Pending strategy data retains the raw state so TP/SL stay fail-safe. If
+    /// neither state source exists, this returns `(false, 0)`.
+    ///
+    /// Args:
+    ///     core: Core whose effective manual-strategy state is requested.
+    ///
+    /// Returns:
+    ///     Effective enabled state and retained selected id.
     pub(crate) fn manual_strat_state(&self, core: CoreId) -> (bool, u64) {
-        if let Some(v) = self.manual_strat_local.get(&core) {
-            return *v;
-        }
-        self.session
-            .store()
-            .core(core)
-            .and_then(|d| d.client_settings.as_ref())
-            .map(|s| (s.use_manual_strategy, s.manual_strategy_id))
-            .unwrap_or((false, 0))
+        let core_data = self.session.store().core(core);
+        let raw = self
+            .manual_strat_local
+            .get(&core)
+            .copied()
+            .or_else(|| {
+                core_data
+                    .and_then(|data| data.client_settings.as_ref())
+                    .map(|settings| (settings.use_manual_strategy, settings.manual_strategy_id))
+            })
+            .unwrap_or((false, 0));
+        core_data
+            .map(|data| effective_manual_strat_state(raw, data.strategies_rev, &data.strategies))
+            .unwrap_or(raw)
     }
 
     /// Return whether panic sell is armed for `(core, market)` to highlight the Panic Sell button.
