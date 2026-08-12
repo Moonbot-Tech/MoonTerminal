@@ -232,6 +232,14 @@ analytics.cal.kpi_fee:
   ru: "Комиссия"
   en: "Fees"
   es: "Comisiones"
+analytics.cal.kpi_funding:
+  ru: "Фандинг"
+  en: "Funding"
+  es: "Funding"
+analytics.cal.funding_short:
+  ru: "фнд"
+  en: "fnd"
+  es: "fnd"
 analytics.cal.fee_short:
   ru: "ком."
   en: "fee"

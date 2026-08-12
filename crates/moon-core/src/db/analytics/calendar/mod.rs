@@ -57,7 +57,7 @@ fn cell_agg(factor: &str, money: bool) -> String {
         ("NULL".to_string(), "NULL".to_string(), "NULL".to_string())
     };
     format!(
-        "COALESCE(SUM(o.pnl), 0),
+        "COALESCE(SUM(CASE WHEN {NOT_A_TRADE} THEN o.pnl END), 0),
          COALESCE(SUM({NOT_A_TRADE}), 0),
          COALESCE(SUM({NOT_A_TRADE} AND o.pnl > 0), 0),
          {volume},
@@ -103,6 +103,97 @@ const FEE_ROW: &str = "CASE WHEN o.prices_in_money_quote
                            - o.profitbtc
                         END";
 
+/// Funding rows, deduplicated across cores and bucketed like the cells they belong to.
+///
+/// MoonBot delivers a funding record to EVERY bot running on the account, and its own report
+/// warns about exactly that ("снимайте галку, чтобы записи не дублировались"). The replica keys
+/// rows by `(core_uid, newrecid)`, so two bots on one account store the same accrual twice and
+/// both copies would land in profit.
+///
+/// The duplicate is recognised by what a redelivery cannot change: the coin, the minute, the
+/// amount and the position size. Two DIFFERENT accounts are charged in the same second — funding
+/// fires on a fixed schedule — but for different positions, so their amounts differ: measured on
+/// the live replica, 82 same-coin-same-minute pairs across two venues produced ZERO amount
+/// matches. The account id the protocol carries (`AuthCheckResponse`) would make this exact
+/// rather than near-certain, but the terminal does not read it yet.
+///
+/// A minute bucket rather than a ±5 s window: funding accrues every eight hours, so no honest
+/// pair sits inside one minute of another, while a sliding window would need a self-join to
+/// express and this needs none.
+///
+/// Args:
+///     conn: Existing SQLite connection or pinned snapshot.
+///     q: Report scope and time range.
+///     projection: Money projection resolved by the caller's quote preflight.
+///     bucket_secs: Cell width, matching the grid being built.
+///
+/// Returns:
+///     Bucket start to funding sum, empty when the projection cannot sum money.
+fn funding_by_bucket(
+    conn: &Connection,
+    q: &Query,
+    projection: ProjectionMode,
+    bucket_secs: i64,
+) -> ReadResult<std::collections::HashMap<i64, f64>> {
+    const CTX: &str = "analytics: calendar_funding";
+    let mut out = std::collections::HashMap::new();
+    // Percent measures a return on spent capital; funding has no spend to measure against.
+    if projection == ProjectionMode::Percent {
+        return Ok(out);
+    }
+    let Some(src) = unified_from_mode(conn, q, projection)? else {
+        return Ok(out);
+    };
+    super::time_zone::install(conn, q.time_zone).map_err(|e| read_fail_on(conn, CTX, e))?;
+    // `profitbtc` rather than `pnl`: this is money, and the row is kept only when it is the first
+    // copy of its accrual. Ordering by core_uid makes the survivor stable across reads.
+    let sql = format!(
+        "SELECT bucket, COALESCE(SUM(amount), 0) FROM (
+             SELECT mt_local_bucket(o.closedate, {bucket_secs}) AS bucket,
+                    o.profitbtc AS amount,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY o.coin, o.closedate / 60,
+                                     ROUND(o.profitbtc, 12), ROUND(o.boughtq, 12)
+                        ORDER BY o.core_uid
+                    ) AS copy
+               FROM {src}
+              WHERE NOT ({NOT_A_TRADE})
+         ) WHERE copy = 1 GROUP BY bucket"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![q.from, q.to], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+        })
+        .map_err(|e| read_fail_on(conn, CTX, e))?;
+    for row in rows {
+        let (bucket, amount) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        out.insert(bucket, amount);
+    }
+    Ok(out)
+}
+
+/// Fold deduplicated funding into cells that were aggregated without it.
+///
+/// Profit stays the COMPLETE figure a report shows — trades plus funding — while the split stays
+/// visible in its own field. Cells without funding keep `Some(0.0)` rather than `None`, so a month
+/// that summed money reports "no funding" instead of "funding unknown".
+///
+/// Args:
+///     cells: Cells to enrich, in place.
+///     funding: Bucket sums from [`funding_by_bucket`].
+///     money: Whether this projection sums money at all.
+fn apply_funding(cells: &mut [DayCell], funding: &std::collections::HashMap<i64, f64>, money: bool) {
+    for cell in cells.iter_mut() {
+        if !money {
+            continue;
+        }
+        let amount = funding.get(&cell.start).copied().unwrap_or(0.0);
+        cell.totals.funding = Some(amount);
+        cell.totals.profit += amount;
+    }
+}
+
 /// Everything one calendar cell or comparison period aggregates.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CellTotals {
@@ -120,6 +211,13 @@ pub struct CellTotals {
     pub fee_trades: i64,
     /// Summed trade duration in seconds, for the cell's average.
     pub duration_secs: i64,
+    /// Funding booked in this cell, deduplicated across cores, or `None` when money cannot be
+    /// summed in this projection.
+    ///
+    /// Already included in [`Self::profit`]; the split exists because funding is not a trading
+    /// result — it accrues for holding a position, and a month can be green on trades and red on
+    /// funding alone.
+    pub funding: Option<f64>,
 }
 
 impl CellTotals {
@@ -140,6 +238,9 @@ impl CellTotals {
             fee: row.get(at + 4)?,
             fee_trades: row.get(at + 5)?,
             duration_secs: row.get(at + 6)?,
+            // Funding is not part of this aggregate: it needs a deduplicating pass of its own,
+            // and the caller folds it in afterwards.
+            funding: None,
         })
     }
 
@@ -171,6 +272,7 @@ impl CellTotals {
         self.duration_secs += other.duration_secs;
         self.volume = merge_money(self.volume, other.volume);
         self.fee = merge_money(self.fee, other.fee);
+        self.funding = merge_money(self.funding, other.funding);
     }
 
     /// Whether the fee covers every trade the cell counted.
@@ -304,10 +406,21 @@ fn calendar_total_from(
     };
     let agg = agg_for(conn, projection)?;
     let sql = format!("SELECT {agg} FROM {src}");
-    conn.query_row(&sql, rusqlite::params![q.from, q.to], |row| {
-        CellTotals::read(row, 0)
-    })
-    .map_err(|error| read_fail_on(conn, CTX, error))
+    let mut totals = conn
+        .query_row(&sql, rusqlite::params![q.from, q.to], |row| {
+            CellTotals::read(row, 0)
+        })
+        .map_err(|error| read_fail_on(conn, CTX, error))?;
+    // The comparison period is one bucket, so the whole range is its bucket: funding is summed
+    // over it deduplicated, exactly as the visible cells are, or the KPI delta would compare a
+    // deduplicated month against a doubled one.
+    if projection != ProjectionMode::Percent {
+        let span = (q.to - q.from).max(1);
+        let funding: f64 = funding_by_bucket(conn, &q, projection, span)?.values().sum();
+        totals.funding = Some(funding);
+        totals.profit += funding;
+    }
+    Ok(totals)
 }
 
 /// Decide whether a Calendar comparison period shares the current profit unit.
@@ -459,6 +572,7 @@ fn calendar_cells_from(
         .unwrap_or(q.to - 1)
         .min(today0)
         .max(last);
+    let funding = funding_by_bucket(conn, &q, projection, 86_400)?;
     let day0 = day0.min(last_grid);
     let mut out = Vec::with_capacity((((last_grid - day0) / 86_400) + 1).max(1) as usize);
     let mut t = day0;
@@ -472,6 +586,7 @@ fn calendar_cells_from(
         };
         t = next;
     }
+    apply_funding(&mut out, &funding, projection != ProjectionMode::Percent);
     Ok(out)
 }
 
@@ -541,6 +656,8 @@ fn calendar_hours_from(
     for row in rows {
         out.push(row.map_err(|e| read_fail_on(conn, CTX, e))?);
     }
+    let funding = funding_by_bucket(conn, q, projection, 3_600)?;
+    apply_funding(&mut out, &funding, projection != ProjectionMode::Percent);
     Ok(out)
 }
 

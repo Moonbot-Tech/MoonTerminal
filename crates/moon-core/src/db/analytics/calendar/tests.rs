@@ -975,6 +975,109 @@ fn a_trade_without_an_exit_price_contributes_no_cost() {
     );
 }
 
+/// MoonBot delivers one funding accrual to EVERY bot on the account, and its own report warns
+/// about the duplication. The replica keys rows per core, so both copies are stored — counting
+/// both would inflate the day's profit by the whole accrual.
+#[test]
+fn a_funding_accrual_delivered_to_two_bots_is_counted_once() {
+    let accrual = Exec {
+        profit: 2.5,
+        spent: 350.0,
+        qty: 350.0,
+        buy: 0.5,
+        sell: 0.5,
+        reason: "Funding",
+        coin: "BNB",
+        ..Default::default()
+    };
+    let c = seed_exec(&[
+        // The same accrual as two cores saw it, seconds apart, plus one ordinary trade.
+        Exec { core: 1, ..accrual.clone() },
+        Exec {
+            core: 2,
+            close: accrual.close + 3,
+            ..accrual.clone()
+        },
+        charged(100.0, 10.0, 11.0, 0.0004),
+    ]);
+    let totals = one_day(&c, ProjectionMode::Native);
+
+    assert_eq!(totals.funding, Some(2.5), "the redelivered copy is dropped");
+    let traded = charged(100.0, 10.0, 11.0, 0.0004).profit;
+    assert!(
+        (totals.profit - (traded + 2.5)).abs() < 1e-9,
+        "profit={} expected={}",
+        totals.profit,
+        traded + 2.5
+    );
+    assert_eq!(totals.trades, 1, "neither copy is a trade");
+}
+
+/// Two ACCOUNTS are charged in the same second — funding fires on a fixed schedule — but for
+/// different positions. Collapsing those would erase real money, so the amount is what separates
+/// a redelivery from a coincidence.
+#[test]
+fn two_accounts_charged_at_the_same_moment_both_count() {
+    let base = Exec {
+        spent: 350.0,
+        qty: 350.0,
+        buy: 0.5,
+        sell: 0.5,
+        reason: "Funding",
+        coin: "BNB",
+        ..Default::default()
+    };
+    let c = seed_exec(&[
+        Exec { core: 1, profit: -0.00024915, ..base.clone() },
+        Exec { core: 2, profit: -0.00049860, ..base.clone() },
+    ]);
+    let totals = one_day(&c, ProjectionMode::Native);
+
+    let both = -0.00024915 + -0.00049860;
+    let funding = totals.funding.expect("native money is summable");
+    assert!(
+        (funding - both).abs() < 1e-12,
+        "funding={funding} expected={both} — different amounts are different accruals"
+    );
+}
+
+/// The same accrual on the same core is one row, so a same-core repeat is a redelivery too; and a
+/// position of a different size is a different accrual even at the same price.
+#[test]
+fn dedup_keys_on_the_position_as_well_as_the_amount() {
+    let base = Exec {
+        profit: 2.5,
+        spent: 350.0,
+        buy: 0.5,
+        sell: 0.5,
+        reason: "Funding",
+        coin: "BNB",
+        ..Default::default()
+    };
+    let c = seed_exec(&[
+        Exec { core: 1, qty: 350.0, ..base.clone() },
+        // Same amount, DIFFERENT position: a second account that happens to owe the same.
+        Exec { core: 2, qty: 700.0, ..base.clone() },
+    ]);
+    let totals = one_day(&c, ProjectionMode::Native);
+    assert_eq!(totals.funding, Some(5.0), "different sizes are different accruals");
+}
+
+/// Percent measures a return on spent capital, and funding has no spend to measure against.
+#[test]
+fn percent_projection_reports_no_funding() {
+    let c = seed_exec(&[Exec {
+        profit: 2.5,
+        spent: 350.0,
+        qty: 350.0,
+        buy: 0.5,
+        sell: 0.5,
+        reason: "Funding",
+        ..Default::default()
+    }]);
+    assert!(one_day(&c, ProjectionMode::Percent).funding.is_none());
+}
+
 /// A day whose only row is funding still moved money, so the grid must not treat it as empty.
 #[test]
 fn a_funding_only_day_is_not_empty() {
