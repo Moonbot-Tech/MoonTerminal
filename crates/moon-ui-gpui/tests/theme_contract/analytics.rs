@@ -1463,6 +1463,63 @@ fn calendar_refresh_keeps_visible_metadata_in_one_snapshot() {
     );
 }
 
+/// `analytics/calendar/month.rs:AnalyticsView::cal_kpi` changing either localized tooltip
+/// argument to `None` must fail here, or the Costs/Funding explanation disappears on hover while
+/// the card still compiles and looks unchanged.
+#[test]
+fn calendar_cost_and_funding_tiles_keep_localized_tooltips() {
+    let month = read_src("analytics/calendar/month.rs");
+    let cal_kpi = code_only(braced_body(&month, "fn cal_kpi("));
+    for key in ["analytics.cal.kpi_fee_tip", "analytics.cal.kpi_funding_tip"] {
+        assert!(
+            cal_kpi.contains(&format!("Some(t!(\"{key}\").to_string())")),
+            "Calendar Month must attach the localized {key} explanation to its KPI tile"
+        );
+    }
+
+    let tile = code_only(braced_body(&month, "pub(super) fn kpi_tile("));
+    assert!(
+        tile.contains(".id(id)")
+            && tile.contains("tile.tooltip(crate::panels::common::text_tooltip(tooltip))"),
+        "the identified KPI root must delegate hover copy to the standard MoonUI tooltip adapter"
+    );
+
+    let locales = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/analytics.yml"),
+    )
+    .expect("failed to read locales/analytics.yml")
+    .replace("\r\n", "\n");
+    for (key, next) in [
+        ("analytics.cal.kpi_funding", "analytics.cal.funding_short:"),
+        ("analytics.cal.funding_short", "analytics.cal.kpi_fee_tip:"),
+        (
+            "analytics.cal.kpi_fee_tip",
+            "analytics.cal.kpi_funding_tip:",
+        ),
+        ("analytics.cal.kpi_funding_tip", "analytics.cal.fee_short:"),
+    ] {
+        let block = chain_between(
+            &locales,
+            &format!("{key}:\n"),
+            next,
+            "Calendar KPI locale block",
+        );
+        let members = block
+            .lines()
+            .filter(|line| line.starts_with("  "))
+            .collect::<Vec<_>>();
+        assert_eq!(members.len(), 3, "{key} must define exactly ru, en, and es");
+        for locale in ["ru", "en", "es"] {
+            assert!(
+                members
+                    .iter()
+                    .any(|line| line.starts_with(&format!("  {locale}: "))),
+                "{key} must define {locale}"
+            );
+        }
+    }
+}
+
 /// All tabs must share the one-minute core-selector cadence. Moving `distinct_cores`
 /// back into the unconditional Summary or Strategies payload restores a full-table
 /// grouping on every automatic refresh under continuous ingestion.
