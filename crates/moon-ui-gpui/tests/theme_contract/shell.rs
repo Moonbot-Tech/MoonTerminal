@@ -1218,6 +1218,55 @@ fn the_multi_select_hint_clips_instead_of_wrapping() {
     );
 }
 
+/// Protects one-server Auto search from repeating the same server on every result row.
+///
+/// The plausible edit is changing `when(show_server_per_row, ..)` to `when(true, ..)` while
+/// restyling the row. The popup would still show the correct Auto context above the list, but every
+/// row would regain the redundant `@server` suffix and recreate the clutter this context removes.
+#[test]
+fn single_server_auto_search_names_the_server_once() {
+    let coin_search = read_src("controls/coin_search.rs");
+    let context = code_only(braced_body(
+        &coin_search,
+        "pub(crate) fn single_server_context(",
+    ));
+    assert!(
+        context.contains("let [core] = cores.as_slice()"),
+        "the popup context must require the actual search scope to resolve to exactly one core"
+    );
+
+    let popup = code_only(braced_body(
+        &coin_search,
+        "pub(crate) fn render_popup<F, G, H>(",
+    ));
+    assert!(
+        popup.contains("let show_server_per_row = server_context.is_none()")
+            && popup.contains("chart.coin.server_context"),
+        "a popup-level server context must be the sole decision that suppresses row attribution"
+    );
+    let rows = code_only(braced_body(&coin_search, "fn push_section<F, G>("));
+    assert!(
+        rows.contains(".when(show_server_per_row, |row|"),
+        "single-server Auto rows must omit the repeated visible @server suffix"
+    );
+    assert!(
+        rows.contains("format!(\"{pair} @ {server}\")"),
+        "the full instrument/server identity must remain available in the row tooltip"
+    );
+
+    let strip = code_only(braced_body(
+        &read_src("chart_tabs/strip.rs"),
+        "fn render(&mut self, window: &mut Window",
+    ));
+    assert!(
+        strip.contains("auto_workspace_chart_core")
+            && strip.contains("coin_search_bucket")
+            && strip.contains("single_server_context")
+            && strip.contains("server_context,"),
+        "ChartTabs must Auto-gate the context and derive it from the active search bucket"
+    );
+}
+
 /// Protects the movers suggestion from offering one market once per core that can open it.
 ///
 /// The plausible edit is restoring the `flat_map` over every consumer core — it looks like the

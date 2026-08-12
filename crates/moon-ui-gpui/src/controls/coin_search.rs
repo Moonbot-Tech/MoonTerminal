@@ -1,7 +1,9 @@
 //! Shared market picker for typed search and cached empty-field suggestions.
 //!
-//! Rows group identical full instrument labels across cores and show the core as secondary
-//! `@server` context. The widget does not define selection behavior; its owner supplies `on_pick`.
+//! Rows group identical full instrument labels across cores. They show the core as secondary
+//! `@server` context unless one popup-level server context covers the whole list; the full pairing
+//! remains in each row's tooltip. The widget does not define selection behavior; its owner supplies
+//! `on_pick`.
 //! Chart tabs open a market and may show Recent and Top 24h volatility sections, while the header
 //! rate ticker and Report token filter remain query-only consumers.
 //!
@@ -14,13 +16,13 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
-    h_flex,
+    h_flex, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
+    MoonPalette,
 };
 use rust_i18n::t;
 
-use crate::Backend;
 use crate::design;
+use crate::Backend;
 use moon_core::config::ChartBucket;
 use moon_core::market::MarketLabel;
 use moon_core::session::CoreId;
@@ -66,6 +68,31 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
     };
     order.sort_by(&mut ids, |id| *id);
     ids
+}
+
+/// Return the server name when one live core owns the entire search scope.
+///
+/// Args:
+///     b: Backend holding the live sessions and server configuration.
+///     group: Window group whose market universe is being searched.
+///     bucket: The same bucket used by search and suggestion lookup.
+///
+/// Returns:
+///     The sole live core's current name, or `None` for an empty or multi-core scope.
+pub(crate) fn single_server_context(
+    b: &Backend,
+    group: &str,
+    bucket: Option<&ChartBucket>,
+) -> Option<String> {
+    let cores = cores_for(b, group, bucket);
+    let [core] = cores.as_slice() else {
+        return None;
+    };
+    b.session
+        .sessions()
+        .iter()
+        .find(|session| session.id == *core)
+        .map(|session| session.name.clone())
 }
 
 /// Maps a Russian-layout character to the Latin character on the same physical QWERTY key. Market
@@ -140,7 +167,7 @@ pub(crate) struct CoinHit {
     pub(crate) core: CoreId,
     /// Market key, used to open and to match the selection. Never displayed.
     pub(crate) market: String,
-    /// Core name shown beside the coin.
+    /// Core name shown beside the coin or in the popup-level context and row tooltip.
     pub(crate) server: String,
     /// Coin token and quote as the CORE names them; see `MarketDataSource::market_label`.
     pub(crate) label: MarketLabel,
@@ -687,6 +714,7 @@ pub(crate) enum CoinResults {
 ///     hits: Rows to group by instrument and append.
 ///     selected: Markets currently accumulated for multi-select.
 ///     multi_select: Whether rows include selection checkboxes.
+///     show_server_per_row: Whether each row displays its server beside the instrument.
 ///     p: Active palette used by row text and hover states.
 ///     cx: Application context used to resolve scaled design tokens.
 ///     on_pick: Callback for opening a row's market.
@@ -703,6 +731,7 @@ fn push_section<F, G>(
     hits: Vec<CoinHit>,
     selected: &HashSet<(CoreId, String)>,
     multi_select: bool,
+    show_server_per_row: bool,
     p: MoonPalette,
     cx: &App,
     on_pick: F,
@@ -762,7 +791,8 @@ where
                 .py(design::ui_px(cx, 4.0))
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
-                // The core name truncates, so the untruncated pairing is available on hover.
+                // Visible row attribution may truncate or move to the popup header, so the full
+                // pairing is always available on hover.
                 .tooltip(crate::panels::common::text_tooltip(tip))
                 .child(
                     h_flex()
@@ -798,7 +828,7 @@ where
                                     on_pick(core, market_pick.clone(), window, app);
                                     app.stop_propagation();
                                 })
-                                // The instrument never yields; only the core name does.
+                                // The instrument never yields; the optional core name does.
                                 .child(
                                     div()
                                         .flex_none()
@@ -806,17 +836,19 @@ where
                                         .text_color(pair_fg)
                                         .child(pair),
                                 )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(design::t_caption(cx))
-                                        .text_color(rgb(p.text_muted))
-                                        // `@core` distinguishes the server qualifier from the
-                                        // instrument symbol.
-                                        .child(format!("@{server}")),
-                                ),
+                                .when(show_server_per_row, |row| {
+                                    row.child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(design::t_caption(cx))
+                                            .text_color(rgb(p.text_muted))
+                                            // `@core` distinguishes the server qualifier from the
+                                            // instrument symbol.
+                                            .child(format!("@{server}")),
+                                    )
+                                }),
                         ),
                 ),
         );
@@ -835,6 +867,7 @@ where
 ///     results: Query matches or the two empty-field suggestion sections.
 ///     selected: Markets currently accumulated for multi-select.
 ///     multi_select: Whether checkboxes and the Open in New Tab footer are enabled.
+///     server_context: Sole server named once above the rows, or `None` to label every row.
 ///     p: Active palette used by the dropdown.
 ///     cx: Application context used to resolve scaled design tokens.
 ///     on_pick: Callback for opening a row's market.
@@ -849,6 +882,7 @@ pub(crate) fn render_popup<F, G, H>(
     results: CoinResults,
     selected: &HashSet<(CoreId, String)>,
     multi_select: bool,
+    server_context: Option<String>,
     p: MoonPalette,
     cx: &App,
     on_pick: F,
@@ -861,6 +895,7 @@ where
     H: Fn(&mut App) + Clone + 'static,
 {
     let selected_count = selected.len();
+    let show_server_per_row = server_context.is_none();
     // `.id(..)` makes the container stateful so `overflow_y_scroll` can let GPUI track wheel
     // scrolling by ID. Without it, max_h would simply clip a long list.
     let mut list = div()
@@ -874,6 +909,25 @@ where
         .max_h(px(340.0))
         .overflow_y_scroll()
         .py(design::ui_px(cx, 4.0));
+
+    if let Some(server) = server_context {
+        let context = t!("chart.coin.server_context", server = server).to_string();
+        let tooltip = context.clone();
+        list = list.child(
+            div()
+                .id(SharedString::from(format!("{id}-server-context")))
+                .w_full()
+                .px(design::ui_px(cx, 8.0))
+                .pb(design::ui_px(cx, 4.0))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .truncate()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .tooltip(crate::panels::common::text_tooltip(tooltip))
+                .child(context),
+        );
+    }
 
     // A one-line note on what the checkboxes accumulate toward, so the footer button is not the
     // first explanation of the mode — and only where checkboxes actually exist. It must stay ONE
@@ -918,6 +972,7 @@ where
                     hits,
                     selected,
                     multi_select,
+                    show_server_per_row,
                     p,
                     cx,
                     on_pick.clone(),
@@ -937,6 +992,7 @@ where
                     recent,
                     selected,
                     multi_select,
+                    show_server_per_row,
                     p,
                     cx,
                     on_pick.clone(),
@@ -950,6 +1006,7 @@ where
                     volatile,
                     selected,
                     multi_select,
+                    show_server_per_row,
                     p,
                     cx,
                     on_pick.clone(),

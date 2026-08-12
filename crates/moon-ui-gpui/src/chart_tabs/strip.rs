@@ -6,14 +6,14 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
-    MoonRect, MoonTabItem, MoonTabStrip, h_flex, v_flex,
+    h_flex, v_flex, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput,
+    MoonPalette, MoonRect, MoonTabItem, MoonTabStrip,
 };
 use rust_i18n::t;
 
 use super::candle_popup;
 use super::common;
-use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
+use super::{chart_tab_strip_h, coin_search, ChartTabs, Tab};
 use crate::design;
 
 impl Render for ChartTabs {
@@ -241,6 +241,20 @@ impl Render for ChartTabs {
         // Absolutely position matches below its wrapper and place the cluster outside the strip's
         // clipping layer so `overflow_hidden` cannot cut off the dropdown.
         let coin_popup = self.coin_popup_open.then(|| {
+            let server_context = {
+                let b = self.backend.read(cx);
+                let auto_core = super::auto_workspace_chart_core(b, &self.group);
+                let bucket = super::coin_search_bucket(&self.active, auto_core);
+                auto_core
+                    .and_then(|_| {
+                        crate::controls::coin_search::single_server_context(
+                            b,
+                            &self.group,
+                            bucket.as_ref(),
+                        )
+                    })
+                    .map(|name| crate::display_text::flatten_lines(&name))
+            };
             let results = self.coin_results(cx);
             let view_toggle = cx.entity();
             let view_open = cx.entity();
@@ -249,6 +263,7 @@ impl Render for ChartTabs {
                 results,
                 &self.coin_selected,
                 true,
+                server_context,
                 p_strip,
                 cx,
                 common::coin_pick_handler(cx, self.coin_input.clone()),

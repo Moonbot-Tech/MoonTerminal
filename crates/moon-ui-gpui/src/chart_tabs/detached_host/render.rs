@@ -6,8 +6,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
-    MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
+    h_flex, v_flex, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput,
+    MoonPalette, MoonWindowFrame, MoonWindowFrameControls,
 };
 use rust_i18n::t;
 
@@ -95,6 +95,7 @@ impl Render for DetachedChartHost {
                 results,
                 &std::collections::HashSet::new(),
                 false,
+                None,
                 p,
                 cx,
                 common::coin_pick_handler(cx, self.coin_input.clone()),

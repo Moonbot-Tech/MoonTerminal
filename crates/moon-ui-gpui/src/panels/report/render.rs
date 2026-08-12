@@ -1,6 +1,6 @@
 //! [ReportPanel] table element, sort handling, and the panel and render trait impls.
 
-use super::state::{ReportPreferenceWrite, schedule_report_preference};
+use super::state::{schedule_report_preference, ReportPreferenceWrite};
 use super::*;
 
 impl ReportPanel {
@@ -223,6 +223,7 @@ impl Render for ReportPanel {
                 crate::controls::coin_search::CoinResults::Query(results),
                 &HashSet::new(),
                 false,
+                None,
                 p,
                 cx,
                 move |core, market, window, app| {
