@@ -23,8 +23,8 @@ fn upsert_strategy_choice(
     }
 }
 
-/// One host context's four toolbar filters, in the order they are decoded and assigned.
-pub(super) type ReportFilterSet = (SideFilter, ReportKind, bool, Period);
+/// One host context's five toolbar filters, in the order they are decoded and assigned.
+pub(super) type ReportFilterSet = (SideFilter, ReportKind, bool, Period, String);
 
 /// Decode one stored filter set over the values a panel is currently showing.
 ///
@@ -48,7 +48,7 @@ pub(super) fn applied_filters(
     stored: &moon_core::config::ReportFilterPrefs,
     current: ReportFilterSet,
 ) -> ReportFilterSet {
-    let (side, kind, deleted_only, period) = current;
+    let (side, kind, deleted_only, period, strategy_name_mask) = current;
     (
         stored
             .side
@@ -66,6 +66,10 @@ pub(super) fn applied_filters(
             .as_deref()
             .and_then(Period::from_menu_key)
             .unwrap_or(period),
+        stored
+            .strategy_name_mask
+            .clone()
+            .unwrap_or(strategy_name_mask),
     )
 }
 
@@ -546,6 +550,12 @@ impl ReportPanel {
         })
         .detach();
 
+        let strategy_name_mask = String::new();
+        let strategy_name_mask_input = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .default_value(strategy_name_mask.clone())
+                .placeholder(t!("report.filter.strategy_mask_ph").to_string())
+        });
         let coin_query = String::new();
         // Both fields sit on the picker's whole-minute grid: the lower bound as picked, the upper
         // one floored into the range it came from.
@@ -637,6 +647,22 @@ impl ReportPanel {
                 }
             }
         })
+        .detach();
+        // The name mask is independent of the exact strategy selection. It is visible only in an
+        // AutoCore workspace, but retained here so switching through Classic does not discard it.
+        cx.subscribe(
+            &strategy_name_mask_input,
+            |panel, input, event: &MoonInputEvent, cx| {
+                if matches!(event, MoonInputEvent::Change) {
+                    let value = input.read(cx).value().to_string();
+                    if panel.strategy_name_mask != value {
+                        panel.strategy_name_mask = value;
+                        panel.persist_filters(None, cx);
+                        panel.request_requery(cx);
+                    }
+                }
+            },
+        )
         .detach();
         // A non-empty manual date switches to All so a preset cannot silently take precedence.
         cx.subscribe(&from, |t, picker, ev: &MoonDateTimePickerEvent, cx| {
@@ -778,6 +804,8 @@ impl ReportPanel {
             strategy_search,
             strategy_select_items_dirty: false,
             strategy_select_selection_dirty: false,
+            strategy_name_mask,
+            strategy_name_mask_input,
             coin,
             coin_query,
             coin_popup_open: false,
@@ -1092,11 +1120,11 @@ impl ReportPanel {
     /// first detach inherits and only an edit made in the window writes a `:win` entry of its own.
     ///
     /// Args:
-    ///     cx: Any context able to read the backend.
+    ///     cx: Mutable panel context used to read storage and synchronize the retained mask input.
     ///
     /// Returns:
     ///     Whether any filter actually changed, so the caller can decide about a requery.
-    pub(super) fn restore_persisted_filters(&mut self, cx: &App) -> bool {
+    pub(super) fn restore_persisted_filters(&mut self, cx: &mut Context<Self>) -> bool {
         if self.scoped {
             return false;
         }
@@ -1106,12 +1134,27 @@ impl ReportPanel {
         ) else {
             return false;
         };
-        let current = (self.side, self.kind, self.deleted_only, self.period);
-        let applied = applied_filters(stored, current);
-        // One tuple compare rather than four clauses, so a fifth filter added to the tuple cannot
+        let current = (
+            self.side,
+            self.kind,
+            self.deleted_only,
+            self.period,
+            self.strategy_name_mask.clone(),
+        );
+        let applied = applied_filters(stored, current.clone());
+        // One tuple compare rather than five clauses, so another filter added to the tuple cannot
         // be forgotten here and silently suppress the host-change requery.
         let changed = applied != current;
-        (self.side, self.kind, self.deleted_only, self.period) = applied;
+        (
+            self.side,
+            self.kind,
+            self.deleted_only,
+            self.period,
+            self.strategy_name_mask,
+        ) = applied;
+        let mask = self.strategy_name_mask.clone();
+        self.strategy_name_mask_input
+            .update(cx, |input, input_cx| input.sync_value(mask, input_cx));
         changed
     }
 

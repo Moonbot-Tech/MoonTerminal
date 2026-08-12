@@ -345,6 +345,86 @@ fn shared_core_selectors_batch_exchange_changes_once() {
     }
 }
 
+/// The pinned Orders Auto core must fit its live flattened name without widening Classic.
+///
+/// Plausible regression: removing the Auto-only wrap makes a fitted live name crowd the trailing
+/// controls in a narrow dock; applying it to every branch instead changes the interactive Classic
+/// toolbar. The live firetest independently verifies that the fitted cap shows the observed name.
+#[test]
+fn orders_auto_core_selector_fits_live_name_only_in_auto_core() {
+    let controls = read_src("panels/orders/controls.rs");
+    let render = read_src("panels/orders/render.rs");
+    let combo = braced_body(&controls, "pub(super) fn source_combo(");
+    let fitted_auto = combo
+        .split_once("combo.label(label).when(auto_core, |combo| {")
+        .and_then(|(_, rest)| rest.split_once("})"))
+        .map(|(body, _)| body)
+        .expect("Orders content fitting must stay inside the AutoCore guard");
+    let tooltip_auto = combo
+        .split_once("if auto_core {")
+        .map(|(_, rest)| rest)
+        .expect("Orders tooltip host must stay inside the AutoCore branch");
+
+    assert!(
+        combo.contains("let auto_core = scope.is_auto_core();")
+            && combo.contains("crate::display_text::flatten_lines(name)")
+            && fitted_auto.contains("combo.fit_trigger_width(")
+            && fitted_auto.contains("crate::controls::CORE_COMBO_TRIGGER_W,")
+            && fitted_auto.contains("AUTO_CORE_TRIGGER_MAX_W,")
+            && combo.contains("let tooltip = pinned_label.clone();")
+            && tooltip_auto.contains(".when_some(tooltip, |host, label|")
+            && tooltip_auto.contains("host.tooltip(crate::panels::common::text_tooltip(label))"),
+        "Orders AutoCore must fit and expose the complete live name within its bounded budget"
+    );
+    let max_width = controls
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("const AUTO_CORE_TRIGGER_MAX_W: f32 =")
+        })
+        .and_then(|line| line.split_once('=').map(|(_, value)| value))
+        .and_then(|value| value.trim().trim_end_matches(';').parse::<f32>().ok())
+        .expect("Orders Auto core maximum width must remain a numeric constant");
+    let max_font_scale = 16.5_f32 / 10.5;
+    let conservative_source_line_width = max_width * max_font_scale + 16.0;
+    assert!(
+        conservative_source_line_width <= 420.0,
+        "the fitted source needs {conservative_source_line_width}px at the maximum font scale"
+    );
+    let render_body = braced_body(&render, "fn render(");
+    let (auto_layout, classic_tail) = render_body
+        .split_once("let controls = if auto_core {")
+        .and_then(|(_, rest)| rest.split_once("} else {"))
+        .expect("Orders must isolate the wrapping AutoCore layout from Classic");
+    let classic_layout = classic_tail
+        .split_once("};")
+        .map(|(body, _)| body)
+        .expect("Orders Classic layout branch must end before the table");
+    assert!(
+        render_body.contains(
+            "let auto_core = self.effective_scope(self.backend.read(cx)).is_auto_core();"
+        ) && auto_layout.contains("controls.flex_wrap()")
+            && auto_layout.contains(".ml_auto()")
+            && auto_layout.contains(".child(self.columns_menu(cx))")
+            && auto_layout.contains(".child(self.sort_menu(cx))")
+            && classic_layout.contains(".child(div().flex_1())")
+            && !classic_layout.contains(".flex_wrap()")
+            && !classic_layout.contains(".ml_auto()")
+            && !render_body.contains("overflow_x_scroll"),
+        "only AutoCore may wrap its right-aligned Orders action group"
+    );
+    assert!(
+        combo.contains(".disabled(workspace_owned)")
+            && combo.contains("if workspace_owned {")
+            && combo.contains("&effective_selection")
+            && combo.contains("&self.sel_cores")
+            && combo.contains("view.update(app, |t, c| t.toggle_core(id, c));")
+            && combo.contains("t.toggle_exchange_cores(exchange_cores, c);")
+            && !combo.contains("overflow_x_scroll"),
+        "content fitting must not alter Orders scope, Classic callbacks, or narrow-row policy"
+    );
+}
+
 /// The Assets Wallets-section header caret must stay a passive `MoonDisclosure::glyph`.
 ///
 /// Plausible edit: swap `MoonDisclosure::glyph(!collapsed)` for `MoonDisclosure::button(id, ..)`

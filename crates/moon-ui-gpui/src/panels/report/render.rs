@@ -285,33 +285,38 @@ impl Render for ReportPanel {
             )
             .children(coin_popup);
 
-        // Filters.
-        let filters = h_flex()
-            .w_full()
-            .flex_wrap()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1()
-            .child(self.core_combo(cx))
-            .child(self.strategy_combo(cx))
-            // No caption beside the field: the placeholder says "coin" from inside it, which costs
-            // no row width and disappears the moment something is typed.
+        // Each divider travels with the section AFTER it, so wrapping can never strand a rule at
+        // the right edge. Sections stay atomic and move to the next line instead of introducing a
+        // horizontal scrollbar or splitting controls that describe one filter concept.
+        let separated = |section: Div| {
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(design::ui_px(cx, design::CHROME_GAP))
+                .child(design::chrome_divider(cx, p))
+                .child(section)
+        };
+        let core_filters = design::chrome_section(cx).child(self.core_combo(cx));
+        let strategy_filter = design::chrome_section(cx).child(self.strategy_combo(cx));
+        let strategy_mask = self
+            .strategy_name_mask_field(cx)
+            .map(|field| design::chrome_section(cx).child(field));
+        // No caption beside the coin field: its placeholder names it without consuming row width.
+        let trade_filters = design::chrome_section(cx)
             .child(coin_field)
-            .child(self.scope_control.clone())
-            .child(self.period_combo(cx))
-            // Show manual From/To dates only in detached windows. Docked tabs rely on period presets
-            // to keep the core, coin, scope (side/kind/deleted), period and column controls compact.
-            .when(self.detached, |f| {
-                f.child(
+            .child(self.scope_control.clone());
+        let period_filters = design::chrome_section(cx).child(self.period_combo(cx));
+        // Manual bounds exist only in detached windows. Each caption stays attached to its field,
+        // while From and To remain independent sections so a narrow host can wrap between them.
+        let date_filters = self.detached.then(|| {
+            let from = design::chrome_section(cx)
+                .child(
                     div()
                         .text_size(design::t_body(cx))
                         .text_color(rgb(p.text_soft))
                         .child(t!("report.filter.from").to_string()),
                 )
                 .child(
-                    // `whitespace_nowrap` inherits into the picker's label: its field clips but
-                    // wraps first, and a wrapped value hides the time half on a second line.
                     div()
                         .w(px(date_range::field_width(cx)))
                         .whitespace_nowrap()
@@ -321,7 +326,8 @@ impl Render for ReportPanel {
                                 .cleanable(true)
                                 .render(),
                         ),
-                )
+                );
+            let to = design::chrome_section(cx)
                 .child(
                     div()
                         .text_size(design::t_body(cx))
@@ -329,8 +335,6 @@ impl Render for ReportPanel {
                         .child(t!("report.filter.to").to_string()),
                 )
                 .child(
-                    // `whitespace_nowrap` inherits into the picker's label: its field clips but
-                    // wraps first, and a wrapped value hides the time half on a second line.
                     div()
                         .w(px(date_range::field_width(cx)))
                         .whitespace_nowrap()
@@ -340,21 +344,27 @@ impl Render for ReportPanel {
                                 .cleanable(true)
                                 .render(),
                         ),
-                )
-            })
-            // Export and the field selector sit at the RIGHT edge, away from the filters. The row
-            // wraps, so they ride in their own `ml_auto` group instead of behind a `flex_1` spacer:
-            // a flexible spacer inside a wrapping row would claim a whole line of its own once the
-            // filters wrap, pushing both buttons onto a second row.
-            .child(
-                h_flex()
-                    .ml_auto()
-                    .flex_none()
-                    .items_center()
-                    .gap_2()
-                    .child(self.export_menu(cx))
-                    .child(self.columns_menu(cx)),
-            );
+                );
+            [from, to]
+        });
+        let actions = design::chrome_section(cx)
+            .child(self.export_menu(cx))
+            .child(self.columns_menu(cx));
+        let filters = h_flex()
+            .w_full()
+            .flex_wrap()
+            .gap(design::ui_px(cx, design::CHROME_GAP))
+            .items_center()
+            .px_2()
+            .py_1()
+            .child(core_filters)
+            .child(separated(strategy_filter))
+            .children(strategy_mask.map(separated))
+            .child(separated(trade_filters))
+            .child(separated(period_filters))
+            .children(date_filters.into_iter().flatten().map(separated))
+            // Export and Columns retain the trailing edge without a flexible wrapping spacer.
+            .child(separated(actions).ml_auto());
 
         // Apply the host's display lens without changing the user's persisted visibility set.
         let hide_core_name = self.hide_core_name_column(self.backend.read(cx));

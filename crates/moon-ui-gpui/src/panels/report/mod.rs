@@ -1,8 +1,9 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
-//! It displays closed trades from the local SQLite database, with core, coin, strategy and date
-//! filters, one merged scope field (side, order kind, deleted trades, comment pane) plus column
-//! selection above the table, the current row's comment and exact period totals below it. The
+//! It displays closed trades from the local SQLite database, with core, coin, exact-strategy,
+//! Auto strategy-name, and date filters, one merged scope field (side, order kind, deleted trades,
+//! comment pane) plus column selection above the table, the current row's comment and exact period
+//! totals below it. The
 //! generic table supports every displayable database column and header-click sorting. A writer
 //! generation counter in `Backend.reports` triggers throttled automatic refreshes.
 //!
@@ -465,6 +466,10 @@ pub struct ReportPanel {
     strategy_select_items_dirty: bool,
     /// Whether filter changes require replacing the retained combobox selection on next render.
     strategy_select_selection_dirty: bool,
+    /// Literal strategy-name substring retained across Classic and Auto workspace switches.
+    strategy_name_mask: String,
+    /// Auto-only input whose value is mirrored in [`Self::strategy_name_mask`].
+    strategy_name_mask_input: Entity<MoonInputState>,
     coin: Entity<MoonInputState>,
     /// Mirror of the coin input, updated on `Change`.
     ///

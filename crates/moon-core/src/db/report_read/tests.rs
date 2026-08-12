@@ -179,7 +179,7 @@ fn strategy_fixture() -> Connection {
     let conn = Connection::open_in_memory().expect("open in-memory report database");
     super::super::init_db(&conn).expect("initialize report database");
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS orders_rep (
+        r#"CREATE TABLE IF NOT EXISTS orders_rep (
              core_uid INTEGER NOT NULL,
              core_name TEXT NOT NULL,
              newrecid INTEGER NOT NULL,
@@ -203,7 +203,7 @@ fn strategy_fixture() -> Connection {
              (2, 'CORE-B', 1, 200, 20.0, 'EXPECTED', -7, 0, 0, 0, '', '', 1),
              (2, 'CORE-B', 2, 300, 30.0, 'WRONG-STRATEGY', 8, 0, 0, 0, '', '', 1),
              (2, 'CORE-B', 3, 250, -5.0, 'ATTRIBUTED', 0, 0, 0, 0,
-              'LIQUIDATION', 'OWNER ( Kind )', 1),
+              'LIQUIDATION', 'EMA_01 ( Kind )', 1),
              (2, 'CORE-B', 4, 0, 90.0, 'UNDATED', -7, 0, 0, 0, '', '', 1),
              (2, 'CORE-B', 5, 350, -9.0, 'ONLY-ATTRIBUTED', 0, 0, 0, 0,
               'LIQUIDATION', 'ONLY-LIQ ( Kind )', 1),
@@ -216,7 +216,15 @@ fn strategy_fixture() -> Connection {
              (2, 'CORE-B', 106, 220, 1.0, 'MATCH', 106, 0, 1, 0, '', '', 1),
              (2, 'CORE-B', 107, 220, 1.0, 'MATCH', 107, 0, 0, 1, '', '', 1),
              (2, 'CORE-B', 108, 220, 1.0, 'MATCH', 108, 1, 0, 0, '', '', 1),
-             (2, 'CORE-B', 109, 0, 1.0, 'OPEN-MATCH', 109, 0, 0, 0, '', '', 1);
+             (2, 'CORE-B', 109, 0, 1.0, 'OPEN-MATCH', 109, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 110, 220, 11.0, 'MASK-LOWER', 110, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 111, 220, 12.0, 'MASK-UNDER', 111, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 112, 220, 13.0, 'MASK-PERCENT', 112, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 113, 220, 14.0, 'MASK-SLASH', 113, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 114, 220, 15.0, 'MASK-NO-UNDER', 114, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 116, 220, 17.0, 'MASK-UNICODE', 116, 0, 0, 0, '', '', 1),
+             (2, 'CORE-B', 117, 220, 18.0, 'MASK-FULL-FOLD', 117, 0, 0, 0, '', '', 1),
+             (1, 'CORE-A', 115, 220, 16.0, 'MASK-WRONG-CORE', 115, 0, 0, 0, '', '', 1);
          CREATE TABLE closed_sell_reports (
              core_uid INTEGER NOT NULL,
              core_name TEXT NOT NULL,
@@ -237,8 +245,16 @@ fn strategy_fixture() -> Connection {
              deleted INTEGER NOT NULL
          );
          INSERT INTO strat.strategies (core_uid, strategy_id, name, deleted)
-         VALUES (2, -7, 'OWNER', 0),
-                (2, -9, 'ONLY-LIQ', 0);",
+         VALUES (2, -7, 'EMA_01', 0),
+                (2, -9, 'ONLY-LIQ', 0),
+                (2, 110, 'ema_03', 0),
+                (2, 111, 'EMA_04', 0),
+                (2, 112, 'EMA%05', 0),
+                (2, 113, 'EMA\05', 0),
+                (2, 114, 'EMAX01', 0),
+                (2, 116, 'ЕМА_РУС', 0),
+                (2, 117, 'STRASSE_PLAN', 0),
+                (1, 115, 'EMA_07', 0);"#,
     )
     .expect("create exact-strategy fixture");
     super::super::test_support::rep_init(&conn);
@@ -289,7 +305,7 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
         .into_iter()
         .find(|strategy| strategy.key == filter.strategies.as_ref().expect("exact filter")[0])
         .expect("selected strategy choice");
-    assert_eq!(choice.name, "OWNER");
+    assert_eq!(choice.name, "EMA_01");
     assert!(
         distinct_strategies(&conn, &ReportFilter::default())
             .expect("load attributed-only strategy choice")
@@ -327,6 +343,154 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
     );
 }
 
+/// `report_read::append_strategy_name_mask` must keep user text literal, case-insensitive, and
+/// correlated to the current core plus effective strategy id.
+///
+/// Plausible breakages: replacing `instr` with an unescaped `LIKE` makes `_` or `%` a wildcard;
+/// dropping Unicode-aware folding loses lower-case or non-ASCII strategy names; matching raw
+/// `strategyid` loses attributed
+/// liquidations; dropping `core_uid` includes a same-pattern strategy from another core; treating
+/// missing strategy metadata as implicit All exposes unrelated rows; and leaving the mask in
+/// `distinct_strategies` makes the exact picker self-lock to the typed mask.
+///
+/// Consequence: Auto Report rows, totals, export, and its exact strategy picker disagree about
+/// which trades `EMA_` represents.
+#[test]
+fn strategy_name_mask_is_literal_scoped_and_shared_by_rows_totals() {
+    let conn = strategy_fixture();
+    let coins = |filter: &ReportFilter| {
+        let table = query_reports(&conn, filter, "closedate", false, 100)
+            .expect("query strategy-name mask");
+        let coin = table
+            .cols
+            .iter()
+            .position(|column| column == "coin")
+            .expect("coin column");
+        table
+            .rows
+            .iter()
+            .map(|row| match &row[coin] {
+                Value::Text(text) => text.clone(),
+                value => panic!("expected coin text, got {value:?}"),
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let filter = ReportFilter {
+        core_uids: vec![2],
+        closed_only: true,
+        strategy_name_mask: " eMa_ ".to_string(),
+        ..ReportFilter::default()
+    };
+
+    assert_eq!(
+        coins(&filter),
+        std::collections::BTreeSet::from([
+            "ATTRIBUTED".to_string(),
+            "EXPECTED".to_string(),
+            "MASK-LOWER".to_string(),
+            "MASK-UNDER".to_string(),
+        ])
+    );
+    let totals = query_totals(&conn, &filter).expect("query masked totals");
+    assert_eq!(totals.orders, 4);
+    assert_eq!(totals.totals.len(), 1);
+    assert_eq!(totals.totals[0].profit, 38.0);
+
+    let exact_and_mask = ReportFilter {
+        strategies: Some(vec![
+            ReportStrategyKey {
+                core_uid: 2,
+                strategy_id: -7,
+            },
+            ReportStrategyKey {
+                core_uid: 2,
+                strategy_id: 8,
+            },
+        ]),
+        ..filter.clone()
+    };
+    assert_eq!(
+        coins(&exact_and_mask),
+        std::collections::BTreeSet::from(["ATTRIBUTED".to_string(), "EXPECTED".to_string(),])
+    );
+
+    for (mask, expected) in [("%", "MASK-PERCENT"), ("\\", "MASK-SLASH")] {
+        let special = ReportFilter {
+            strategy_name_mask: mask.to_string(),
+            ..filter.clone()
+        };
+        assert_eq!(
+            coins(&special),
+            std::collections::BTreeSet::from([expected.to_string()]),
+            "{mask:?} must remain a literal substring"
+        );
+    }
+
+    let unicode = ReportFilter {
+        strategy_name_mask: "ема_".to_string(),
+        ..filter.clone()
+    };
+    assert_eq!(
+        coins(&unicode),
+        std::collections::BTreeSet::from(["MASK-UNICODE".to_string()]),
+        "strategy-name case folding must not stop at ASCII"
+    );
+
+    let full_fold = ReportFilter {
+        strategy_name_mask: "straße_".to_string(),
+        ..filter.clone()
+    };
+    assert_eq!(
+        coins(&full_fold),
+        std::collections::BTreeSet::from(["MASK-FULL-FOLD".to_string()]),
+        "full case folding must match multi-character Unicode equivalents"
+    );
+
+    let blank = ReportFilter {
+        strategy_name_mask: " \t ".to_string(),
+        ..filter.clone()
+    };
+    let no_mask = ReportFilter {
+        strategy_name_mask: String::new(),
+        ..filter.clone()
+    };
+    assert_eq!(coins(&blank), coins(&no_mask));
+
+    let catalog = distinct_strategies(&conn, &filter).expect("load mask-independent catalog");
+    assert!(catalog.iter().any(|strategy| {
+        strategy.key
+            == ReportStrategyKey {
+                core_uid: 2,
+                strategy_id: 8,
+            }
+    }));
+
+    let no_metadata = Connection::open_in_memory().expect("open report database without names");
+    super::super::init_db(&no_metadata).expect("initialize report metadata");
+    no_metadata
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER NOT NULL,
+                 core_name TEXT NOT NULL,
+                 newrecid INTEGER NOT NULL,
+                 closedate INTEGER,
+                 profitbtc REAL,
+                 strategyid INTEGER,
+                 basecurrency INTEGER,
+                 PRIMARY KEY (core_uid, newrecid)
+             );
+             INSERT INTO orders_rep VALUES (2, 'CORE-B', 1, 100, 99.0, 7, 1);",
+        )
+        .expect("seed report without strategy metadata");
+    assert!(
+        query_reports(&no_metadata, &filter, "closedate", false, 100)
+            .expect("a name mask without metadata must stay a valid empty query")
+            .rows
+            .is_empty(),
+        "missing strategy metadata must not broaden a non-empty mask"
+    );
+}
+
 /// Removing `build_where` from `report_read:distinct_strategies` must expose one of the core,
 /// date, coin, side, emulator, or deleted decoys. Applying `filter.strategies` there instead must
 /// hide strategy 101, even though it matches every non-strategy predicate. Ignoring `closed_only`
@@ -350,6 +514,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
             core_uid: 2,
             strategy_id: -7,
         }]),
+        strategy_name_mask: "ignored-catalog-mask".to_string(),
         valuation: Default::default(),
     };
     let keys = distinct_strategies(&conn, &scoped)

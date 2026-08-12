@@ -1,8 +1,39 @@
 // Explicit imports avoid pulling the parent's `gpui::*`, whose `test` shadows the built-in
 // attribute and recursively expands `#[test]`.
+use super::controls::selected_auto_core_name;
 use super::state::{ReportFilterSet, applied_filters};
 use super::{Period, ReportKind, SideFilter, side_id};
 use chrono::{TimeZone as _, Utc};
+
+/// `controls::selected_auto_core_name` must prefer the live group-session name over historical
+/// report metadata, while retaining that metadata as the offline fallback.
+///
+/// Plausible breakage: searching the DB-derived list first. A renamed core then keeps the old name
+/// in Auto Report; accepting an empty live label also hides a usable historical fallback; and a
+/// newly connected core with no report rows renders no server name at all.
+#[test]
+fn auto_core_label_prefers_live_name_and_keeps_history_as_fallback() {
+    let live = vec![(7, "LIVE\nCORE".to_string())];
+    let reports = vec![
+        (7, "STALE CORE".to_string()),
+        (8, "OFFLINE CORE".to_string()),
+    ];
+
+    assert_eq!(
+        selected_auto_core_name(7, &live, &reports).as_deref(),
+        Some("LIVE ¶ CORE")
+    );
+    assert_eq!(
+        selected_auto_core_name(8, &live, &reports).as_deref(),
+        Some("OFFLINE CORE")
+    );
+    assert_eq!(
+        selected_auto_core_name(8, &[(8, " \n ".to_string())], &reports).as_deref(),
+        Some("OFFLINE CORE"),
+        "an empty live label must not suppress the historical fallback"
+    );
+    assert_eq!(selected_auto_core_name(9, &live, &reports), None);
+}
 
 /// Return one brace-delimited function or method body, including its signature.
 ///
@@ -368,15 +399,13 @@ fn filter_ids_are_pinned_exact_strings() {
 ///
 /// Pins: each stored field winning when present and valid; each field falling back to CURRENT
 /// when its stored counterpart is absent, when the id is unknown to this build, and when the
-/// entry supplies only SOME of the four fields (the rest must still resolve independently, not as
+/// entry supplies only SOME of the five fields (the rest must still resolve independently, not as
 /// an all-or-nothing unit).
 ///
 /// Mutations:
 /// - Swapping `.unwrap_or(side)` for a hard-coded `SideFilter::All` inside `applied_filters`.
-/// - Swapping two fields in the returned tuple — since the four fields are four DIFFERENT types,
-///   the only way this compiles is cross-wiring which STORED field feeds which output (e.g. the
-///   side slot decoding `stored.kind` and the kind slot decoding `stored.side`), so that is the
-///   mutation actually run.
+/// - Cross-wiring which stored field feeds one of the first four typed outputs, or omitting the
+///   string mask from the returned tuple.
 ///
 /// `current` is deliberately built from NON-default, mutually distinct values for every field
 /// (never `SideFilter::All`/`ReportKind::All`/`Period::All`, the type each field's "natural"
@@ -384,7 +413,13 @@ fn filter_ids_are_pinned_exact_strings() {
 /// `current` would otherwise pass unnoticed.
 #[test]
 fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
-    let current: ReportFilterSet = (SideFilter::Long, ReportKind::Real, false, Period::Today);
+    let current: ReportFilterSet = (
+        SideFilter::Long,
+        ReportKind::Real,
+        false,
+        Period::Today,
+        "CURRENT".to_string(),
+    );
 
     // Every field stored, valid, and DIFFERENT from `current` on every position: every one must
     // win, and a fallback-to-current or cross-wired mutation both produce a visibly wrong value.
@@ -393,12 +428,28 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: Some("emu".to_string()),
         deleted_only: Some(true),
         period: Some("rp-cur-week".to_string()),
+        strategy_name_mask: Some("EMA_".to_string()),
     };
-    let (side, kind, deleted_only, period) = applied_filters(&full, current);
-    assert_eq!(side, SideFilter::Short, "a valid stored side must win over current");
-    assert!(kind == ReportKind::Emu, "a valid stored kind must win over current");
-    assert!(deleted_only, "a valid stored deleted_only must win over current");
-    assert!(period == Period::CurWeek, "a valid stored period must win over current");
+    let (side, kind, deleted_only, period, strategy_name_mask) =
+        applied_filters(&full, current.clone());
+    assert_eq!(
+        side,
+        SideFilter::Short,
+        "a valid stored side must win over current"
+    );
+    assert!(
+        kind == ReportKind::Emu,
+        "a valid stored kind must win over current"
+    );
+    assert!(
+        deleted_only,
+        "a valid stored deleted_only must win over current"
+    );
+    assert!(
+        period == Period::CurWeek,
+        "a valid stored period must win over current"
+    );
+    assert_eq!(strategy_name_mask, "EMA_", "a valid stored mask must win");
     // The leaf assembly a query actually reads, fed by the values applied_filters just resolved —
     // ReportKind::to_filter is exhaustive over all three variants so a swapped mapping reddens.
     assert_eq!(ReportKind::All.to_filter(), None);
@@ -412,14 +463,28 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
     // Nothing stored at all: every field must fall back to current — asserted per field, so a
     // swapped pair in the returned tuple cannot hide behind one combined comparison.
     let empty = moon_core::config::ReportFilterPrefs::default();
-    let (side, kind, deleted_only, period) = applied_filters(&empty, current);
-    assert_eq!(side, current.0, "an absent side must keep the current value");
-    assert!(kind == current.1, "an absent kind must keep the current value");
+    let (side, kind, deleted_only, period, strategy_name_mask) =
+        applied_filters(&empty, current.clone());
+    assert_eq!(
+        side, current.0,
+        "an absent side must keep the current value"
+    );
+    assert!(
+        kind == current.1,
+        "an absent kind must keep the current value"
+    );
     assert_eq!(
         deleted_only, current.2,
         "an absent deleted_only must keep the current value"
     );
-    assert!(period == current.3, "an absent period must keep the current value");
+    assert!(
+        period == current.3,
+        "an absent period must keep the current value"
+    );
+    assert_eq!(
+        strategy_name_mask, current.4,
+        "an absent mask must keep current"
+    );
 
     // Every id present but unknown to this build: the same fallback as absent.
     let unknown = moon_core::config::ReportFilterPrefs {
@@ -427,12 +492,24 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: Some("bogus".to_string()),
         deleted_only: None,
         period: Some("rp-nonexistent".to_string()),
+        strategy_name_mask: None,
     };
-    let (side, kind, deleted_only, period) = applied_filters(&unknown, current);
-    assert_eq!(side, current.0, "an unknown side id must keep the current value");
-    assert!(kind == current.1, "an unknown kind id must keep the current value");
+    let (side, kind, deleted_only, period, strategy_name_mask) =
+        applied_filters(&unknown, current.clone());
+    assert_eq!(
+        side, current.0,
+        "an unknown side id must keep the current value"
+    );
+    assert!(
+        kind == current.1,
+        "an unknown kind id must keep the current value"
+    );
     assert_eq!(deleted_only, current.2);
-    assert!(period == current.3, "an unknown period id must keep the current value");
+    assert!(
+        period == current.3,
+        "an unknown period id must keep the current value"
+    );
+    assert_eq!(strategy_name_mask, current.4);
 
     // A PARTIAL entry — only side and deleted_only stored, both DIFFERENT from current — must
     // resolve each field on its own: the fields that DID win must not drag the absent ones along.
@@ -441,8 +518,10 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: None,
         deleted_only: Some(true),
         period: None,
+        strategy_name_mask: Some(String::new()),
     };
-    let (side, kind, deleted_only, period) = applied_filters(&partial, current);
+    let (side, kind, deleted_only, period, strategy_name_mask) =
+        applied_filters(&partial, current.clone());
     assert_eq!(side, SideFilter::All, "the stored side must win");
     assert!(
         kind == current.1,
@@ -452,6 +531,10 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
     assert!(
         period == current.3,
         "an absent period must keep the current value even though side won"
+    );
+    assert_eq!(
+        strategy_name_mask, "",
+        "an explicitly cleared mask must beat the current value"
     );
 }
 
@@ -498,7 +581,7 @@ fn a_scoped_panel_neither_restores_nor_persists_stored_filters() {
     let state = code_only(include_str!("state.rs"));
     let restore_body = braced_body(
         &state,
-        "pub(super) fn restore_persisted_filters(&mut self, cx: &App) -> bool {",
+        "pub(super) fn restore_persisted_filters(&mut self, cx: &mut Context<Self>) -> bool {",
     );
     // `restore_persisted_filters` has a SECOND `return false;` (no stored entry for this host), so
     // the guard itself is isolated by brace-matching rather than a loose substring search.
@@ -509,10 +592,7 @@ fn a_scoped_panel_neither_restores_nor_persists_stored_filters() {
     );
 
     let actions = code_only(include_str!("actions.rs"));
-    let persist_body = braced_body(
-        &actions,
-        "fn persist_filters(&mut self, picked_period: Option<Period>, cx: &mut Context<Self>) {",
-    );
+    let persist_body = braced_body(&actions, "pub(super) fn persist_filters(");
     let scoped_guard = braced_body(persist_body, "if self.scoped {");
     assert!(
         scoped_guard.contains("return;"),
@@ -569,10 +649,7 @@ fn filters_ctx_id_call_sites_never_pass_a_literal_host_flag() {
 #[test]
 fn persist_filters_stores_the_picked_period_not_the_live_field() {
     let actions = code_only(include_str!("actions.rs"));
-    let body = braced_body(
-        &actions,
-        "fn persist_filters(&mut self, picked_period: Option<Period>, cx: &mut Context<Self>) {",
-    );
+    let body = braced_body(&actions, "pub(super) fn persist_filters(");
     assert!(
         body.contains("let period = picked_period"),
         "the stored period must be derived from the picked_period parameter"
@@ -584,11 +661,11 @@ fn persist_filters_stores_the_picked_period_not_the_live_field() {
 }
 
 /// `restore_persisted_filters`'s `changed` result must be exactly `applied != current` — a full
-/// FOUR-field tuple compare, not a narrowed one and not a literal — because `changed` is what
+/// FIVE-field tuple compare, not a narrowed one and not a literal — because `changed` is what
 /// `mark_table_detached` gates its requery on: a caller that always sees `true` requeries on every
 /// host-context switch even when nothing restored actually differs, and a caller narrowed to only
-/// `side` silently skips the requery when a restored kind, deleted_only, or period is the only
-/// thing that changed, showing rows for a filter the toolbar no longer displays.
+/// `side` silently skips the requery when a restored kind, deleted_only, period, or mask is the
+/// only thing that changed, showing rows for a filter the toolbar no longer displays.
 ///
 /// `ReportPanel` cannot be built in a unit test (needs a live GPUI window), and the comparison
 /// itself is a single trivial tuple `!=` with no decision left to re-derive dynamically without
@@ -603,7 +680,7 @@ fn restore_persisted_filters_changed_is_exactly_the_full_tuple_compare() {
     let state = code_only(include_str!("state.rs"));
     let body = braced_body(
         &state,
-        "pub(super) fn restore_persisted_filters(&mut self, cx: &App) -> bool {",
+        "pub(super) fn restore_persisted_filters(&mut self, cx: &mut Context<Self>) -> bool {",
     );
     assert!(
         body.contains("let changed = applied != current;"),
