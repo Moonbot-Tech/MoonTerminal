@@ -6,11 +6,15 @@
 
 use std::collections::HashSet;
 
+use moon_core::config::CoreGroup;
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteTotal, ReadFail};
 
 use super::super::AnalyticsSessionState;
-use super::{UndatedBanner, analytics_core_filter_ids, sole_core_name, undated_banner_state};
+use super::{
+    CoreSelectionCaption, UndatedBanner, analytics_core_filter_ids, sole_core_name,
+    undated_banner_state,
+};
 
 /// Some undated trades, with money attached.
 ///
@@ -156,6 +160,75 @@ fn a_stale_selected_id_names_no_core() {
         sole_core_name(&cores, &set),
         None,
         "an id no core answers to must not borrow another core's name"
+    );
+}
+
+/// Explicit saved-group provenance must name the group without being inferred from membership.
+///
+/// Named breakage (`toolbar.rs:CoreSelectionCaption::manual_selection_changed`): preserving the
+/// previous group instead of clearing it makes a manually rebuilt multi-select resurrect the old
+/// group caption, falsely claiming the user applied that group again.
+#[test]
+fn core_caption_tracks_explicit_group_application_without_surviving_manual_edits() {
+    let cores = vec![
+        (1u64, "alpha".to_string()),
+        (2u64, "beta".to_string()),
+        (3u64, "gamma".to_string()),
+    ];
+    let groups = vec![
+        CoreGroup {
+            name: "Shots".to_string(),
+            cores: vec![1, 2, 3],
+        },
+        CoreGroup {
+            name: "Solo".to_string(),
+            cores: vec![1],
+        },
+    ];
+    let mut caption = CoreSelectionCaption::default();
+
+    let mut selected = HashSet::from([1]);
+    assert_eq!(
+        caption.visible_name(&groups, &cores, &selected),
+        Some("alpha"),
+        "a manual sole-core selection keeps the existing core caption"
+    );
+
+    assert!(caption.set_applied_group(Some("Solo".to_string())));
+    assert_eq!(
+        caption.visible_name(&groups, &cores, &selected),
+        Some("Solo"),
+        "an explicitly applied one-member group outranks the incidental core name"
+    );
+
+    selected = HashSet::from([1, 2, 3]);
+    assert!(caption.set_applied_group(Some("Shots".to_string())));
+    assert_eq!(
+        caption.visible_name(&groups, &cores, &selected),
+        Some("Shots"),
+        "an explicitly applied exact group shows its user-supplied name"
+    );
+
+    selected.remove(&3);
+    assert!(caption.manual_selection_changed());
+    assert_eq!(
+        caption.visible_name(&groups, &cores, &selected),
+        None,
+        "an ordinary manual multi-select keeps only the numeric trigger"
+    );
+
+    selected.insert(3);
+    assert_eq!(
+        caption.visible_name(&groups, &cores, &selected),
+        None,
+        "manually rebuilding the membership must not resurrect group provenance"
+    );
+
+    assert!(caption.set_applied_group(Some("Shots".to_string())));
+    assert_eq!(
+        caption.visible_name(&groups, &cores, &selected),
+        Some("Shots"),
+        "applying the group again restores its caption"
     );
 }
 

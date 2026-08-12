@@ -15,6 +15,7 @@ use rust_i18n::t;
 use super::{AnalyticsView, Period, ProfitLoadState, Tab};
 use crate::design;
 use crate::design::moon;
+use moon_core::config::CoreGroup;
 use moon_core::db::analytics::UndatedCloses;
 use moon_core::db::integrity::Integrity;
 use moon_core::db::report_recovery::RecoveryNotice;
@@ -56,6 +57,70 @@ pub(super) enum UndatedBanner {
     Collapsed(String),
     /// The undated-close query failed, so absence cannot be claimed.
     Failed(String, String),
+}
+
+/// Presentation provenance for the caption beside the Analytics core selector.
+///
+/// Membership alone is insufficient: a manually rebuilt selection must remain an ordinary
+/// numeric multi-select even when it happens to equal a saved group. The retained name records
+/// the user's explicit group action, while [`Self::visible_name`] revalidates its live meaning.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct CoreSelectionCaption {
+    /// Last explicitly applied saved group, or none after an effective manual edit.
+    applied_group: Option<String>,
+}
+
+impl CoreSelectionCaption {
+    /// Replace the retained saved-group provenance.
+    ///
+    /// Args:
+    ///     group: Exact live group name after a saved-group action, or `None` when the resulting
+    ///         selection is not that group.
+    ///
+    /// Returns:
+    ///     Whether the presentation state changed.
+    pub(super) fn set_applied_group(&mut self, group: Option<String>) -> bool {
+        if self.applied_group == group {
+            return false;
+        }
+        self.applied_group = group;
+        true
+    }
+
+    /// Forget group provenance after an effective manual selection edit.
+    ///
+    /// Returns:
+    ///     Whether a saved-group caption was cleared.
+    pub(super) fn manual_selection_changed(&mut self) -> bool {
+        self.applied_group.take().is_some()
+    }
+
+    /// Resolve the meaningful live name shown beside the numeric selector trigger.
+    ///
+    /// Args:
+    ///     groups: Current saved-group definitions from configuration.
+    ///     cores: Cores currently presented by Analytics, with display names.
+    ///     selected: Effective explicit selection; empty represents All.
+    ///
+    /// Returns:
+    ///     The explicitly applied group's current name when it still exactly matches, otherwise
+    ///     the sole selected core name, or `None` for an ordinary multi-select/All state.
+    pub(super) fn visible_name<'a>(
+        &self,
+        groups: &'a [CoreGroup],
+        cores: &'a [(u64, String)],
+        selected: &HashSet<u64>,
+    ) -> Option<&'a str> {
+        if let Some(applied_name) = self.applied_group.as_deref() {
+            let selectable = cores.iter().map(|(core, _)| *core).collect();
+            if let Some(group) = groups.iter().find(|group| group.name == applied_name)
+                && crate::controls::group_is_applied(&group.cores, &selectable, selected)
+            {
+                return Some(group.name.as_str());
+            }
+        }
+        sole_core_name(cores, selected)
+    }
 }
 
 /// The single selected core's display name, or `None` when the tab bar must not name one.
@@ -198,6 +263,19 @@ impl AnalyticsView {
                 .cloned()
                 .collect(),
             None => self.cores.clone(),
+        };
+        let core_caption = if workspace_pinned {
+            sole_core_name(&presented_cores, &presented_selection)
+                .map(crate::display_text::flatten_lines)
+        } else {
+            let backend = self.backend.read(cx);
+            self.core_caption
+                .visible_name(
+                    &backend.config.core_groups,
+                    &presented_cores,
+                    &presented_selection,
+                )
+                .map(crate::display_text::flatten_lines)
         };
         let mut row = h_flex()
             .flex_none()
@@ -344,10 +422,7 @@ impl AnalyticsView {
                     .text_right()
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
-                    .children(
-                        sole_core_name(&presented_cores, &presented_selection)
-                            .map(crate::display_text::flatten_lines),
-                    ),
+                    .children(core_caption),
             )
             .child(selectors);
         row.child(filters)

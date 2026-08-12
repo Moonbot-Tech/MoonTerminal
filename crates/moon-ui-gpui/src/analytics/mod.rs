@@ -271,6 +271,8 @@ pub(crate) struct AnalyticsSessionState {
     tab: Tab,
     /// Explicit core filter, preserving empty, complete, and stale selections.
     sel_cores: HashSet<u64>,
+    /// Explicit saved-group provenance for the caption beside the numeric core trigger.
+    core_caption: toolbar::CoreSelectionCaption,
     /// Last Strategies axis selected while this process is running.
     strat_mode: tuner::StratMode,
     /// Whether the "closed trades the core never dated" notice is expanded.
@@ -339,6 +341,7 @@ impl Default for AnalyticsSessionState {
         Self {
             tab: Tab::Summary,
             sel_cores: HashSet::new(),
+            core_caption: toolbar::CoreSelectionCaption::default(),
             strat_mode: tuner::StratMode::Filters,
             undated_expanded: false,
         }
@@ -389,6 +392,8 @@ pub struct AnalyticsView {
     /// the retained read filter.
     workspace_scope: Option<AnalyticsWorkspaceScope>,
     sel_cores: HashSet<u64>,
+    /// Explicit saved-group provenance for the caption beside the numeric core trigger.
+    core_caption: toolbar::CoreSelectionCaption,
     side: SideFilter,
     /// `None` means all, `Some(false)` real, and `Some(true)` emulated.
     emu: Option<bool>,
@@ -564,6 +569,18 @@ impl crate::controls::CoreComboHost for AnalyticsView {
     /// Return the retained Analytics core filter for shared picker edits.
     fn core_selection_mut(&mut self) -> &mut HashSet<u64> {
         &mut self.sel_cores
+    }
+
+    /// Retain exact saved-group provenance without requerying unchanged Analytics data.
+    fn after_core_group_application(&mut self, group: Option<String>, cx: &mut Context<Self>) {
+        if !self.core_caption.set_applied_group(group) {
+            return;
+        }
+        let core_caption = self.core_caption.clone();
+        self.backend.update(cx, |b, _| {
+            b.ui_session.analytics.core_caption = core_caption;
+        });
+        cx.notify();
     }
 
     /// Requery every Analytics surface against the new core scope.
@@ -791,6 +808,7 @@ impl AnalyticsView {
             core_refresh_timer_armed: false,
             workspace_scope,
             sel_cores: session.sel_cores,
+            core_caption: session.core_caption,
             side: SideFilter::All,
             // Default to Real, as in Report, because emulated trades add noise to the statistics.
             emu: Some(false),
@@ -1674,6 +1692,7 @@ impl AnalyticsView {
             return;
         }
         if crate::controls::toggle_core_selection(&mut self.sel_cores, core) {
+            self.core_caption.manual_selection_changed();
             self.core_selection_changed(cx);
         }
     }
@@ -1701,6 +1720,7 @@ impl AnalyticsView {
         }
         let available = self.cores.iter().map(|(core, _)| *core).collect();
         if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
+            self.core_caption.manual_selection_changed();
             self.core_selection_changed(cx);
         }
     }
@@ -1714,8 +1734,10 @@ impl AnalyticsView {
     ///     Nothing; the current core selection is published and reloaded in place.
     fn core_selection_changed(&mut self, cx: &mut Context<Self>) {
         let selected = self.sel_cores.clone();
+        let core_caption = self.core_caption.clone();
         self.backend.update(cx, |b, _| {
             b.ui_session.analytics.sel_cores = selected;
+            b.ui_session.analytics.core_caption = core_caption;
         });
         self.reload(cx);
         cx.notify();
