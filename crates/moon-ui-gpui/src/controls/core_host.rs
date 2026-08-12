@@ -1,10 +1,10 @@
 //! The adapter every consumer of [`super::core_combo`] implements, and the wiring it gets for free.
 //!
-//! Six views host the shared core picker. Its saved-group actions need exactly three
-//! answers from each host: where the retained selection lives, whether an Auto workspace has
-//! pinned it, and the work the view owes after it changes. This adapter applies those actions
-//! against the three answers; the ordinary All, core, and exchange-row callbacks remain with each
-//! consumer.
+//! Six views host the shared core picker. Its saved-group actions need three mandatory answers
+//! from each host: where the retained selection lives, whether an Auto workspace has pinned it,
+//! and the work the view owes after it changes. One optional hook lets a host retain presentation
+//! provenance for an applied group. This adapter applies group actions against those answers; the
+//! ordinary All, core, and exchange-row callbacks remain with each consumer.
 //!
 //! View captures assembled here are always weak. Menu-row `on_click` handlers are stored in a
 //! refcounted menu level, so a strong `Entity<T>` capture closes a
@@ -18,7 +18,7 @@ use std::rc::Rc;
 use gpui::{App, Context, Entity, WeakEntity};
 
 use super::core_combo::CoreComboExtras;
-use super::core_groups::{GroupClick, apply_core_group, configured_uids};
+use super::core_groups::{GroupClick, apply_core_group, configured_uids, group_is_applied};
 use crate::Backend;
 
 /// A view that hosts the shared core picker.
@@ -35,6 +35,17 @@ pub(crate) trait CoreComboHost: Sized + 'static {
     /// empty means all cores.
     fn core_selection_mut(&mut self) -> &mut HashSet<u64>;
 
+    /// Retain or clear presentation provenance after a saved-group action.
+    ///
+    /// Args:
+    ///     group: Live saved-group name when the resulting selection exactly matches it, or
+    ///         `None` when an additive action produced a different set.
+    ///     cx: Hosting view context used to persist presentation state and repaint.
+    ///
+    /// Returns:
+    ///     Nothing; hosts without a group caption keep the default no-op behavior.
+    fn after_core_group_application(&mut self, _group: Option<String>, _cx: &mut Context<Self>) {}
+
     /// This view's mandatory work once the selection actually changed.
     ///
     /// A requery, a cache rebuild, a refresh — whatever this view owes. Not named
@@ -42,30 +53,6 @@ pub(crate) trait CoreComboHost: Sized + 'static {
     /// inherent method silently wins over a trait method of the same name at every call site,
     /// including inside the impl that meant to delegate to it.
     fn after_core_selection_change(&mut self, cx: &mut Context<Self>);
-}
-
-/// Apply one edit to a host's selection, honouring the pin and its post-change work.
-///
-/// Every picker action passes through this funnel, so no action can skip the pin guard or forget
-/// the host's required reload.
-///
-/// Args:
-///     view: Weak handle to the hosting view.
-///     app: Application context.
-///     edit: The pure decision, reporting whether it changed anything.
-fn edit_selection<T: CoreComboHost>(
-    view: &WeakEntity<T>,
-    app: &mut App,
-    edit: impl FnOnce(&mut HashSet<u64>) -> bool,
-) {
-    let _ = view.update(app, |this, cx| {
-        if this.core_selection_pinned(cx) {
-            return;
-        }
-        if edit(this.core_selection_mut()) {
-            this.after_core_selection_change(cx);
-        }
-    });
 }
 
 /// Apply one click on a saved-group row.
@@ -92,19 +79,35 @@ fn apply_group_click<T: CoreComboHost>(
     selectable: &[u64],
     app: &mut App,
 ) {
-    let Some(members) = backend
+    let Some(group) = backend
         .read(app)
         .config
         .core_groups
         .iter()
         .find(|group| group.name == name)
-        .map(|group| group.cores.clone())
+        .cloned()
     else {
         return;
     };
+    let selectable_set: HashSet<u64> = selectable.iter().copied().collect();
+    if !group.cores.iter().any(|core| selectable_set.contains(core)) {
+        return;
+    }
     let intent = GroupClick::from_secondary(secondary);
-    edit_selection(view, app, |selected| {
-        apply_core_group(selected, &members, selectable, intent)
+    let _ = view.update(app, |this, cx| {
+        if this.core_selection_pinned(cx) {
+            return;
+        }
+        let (changed, applied_group) = {
+            let selected = this.core_selection_mut();
+            let changed = apply_core_group(selected, &group.cores, selectable, intent);
+            let applied = group_is_applied(&group.cores, &selectable_set, selected);
+            (changed, applied.then(|| group.name.clone()))
+        };
+        this.after_core_group_application(applied_group, cx);
+        if changed {
+            this.after_core_selection_change(cx);
+        }
     });
 }
 

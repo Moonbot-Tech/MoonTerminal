@@ -48,6 +48,7 @@ pub(crate) use core_broadcast::{apply_core_broadcast, next_core_filter};
 pub(crate) use core_combo::{
     CoreAllRowMode, core_combo, core_menu_sections, toggle_exchange_cores,
 };
+pub(crate) use core_groups::group_is_applied;
 pub(crate) use core_host::{CoreComboHost, core_combo_extras};
 pub(crate) use core_quick::toggle_core_selection;
 pub use fmt::{fmt_adaptive, fmt_field2, fmt_field2_signed};

@@ -11,12 +11,13 @@
 //! group's job: saving the implicit-All selection materializes every live core, and applying that
 //! group yields the explicit set.
 //!
-//! `CoreComboHost` is a three-method adapter (`core_selection_pinned`, `core_selection_mut`,
-//! `after_core_selection_change`), with every picker action applied ONCE through the private
-//! `edit_selection` funnel in `core_host.rs`. The pure decisions behind a group click live in
-//! `controls/core_groups.rs` and are covered by its own `tests.rs`; what belongs HERE is the
-//! WIRING — that every consumer implements the adapter without reimplementing the funnel, and that
-//! the menu builds its group block and its bottom actions in the right places.
+//! `CoreComboHost` has three required methods (`core_selection_pinned`, `core_selection_mut`,
+//! `after_core_selection_change`) plus the optional `after_core_group_application` presentation
+//! hook. Every saved-group row is applied ONCE through `apply_group_click` in `core_host.rs`. The
+//! pure decisions behind a group click live in `controls/core_groups.rs` and are covered by its
+//! own `tests.rs`; what belongs HERE is the WIRING — that every consumer implements the adapter
+//! without reimplementing the funnel, and that the menu builds its group block and its bottom
+//! actions in the right places.
 
 use super::support::*;
 
@@ -26,13 +27,13 @@ use super::support::*;
 // `cores` parameter, with no filtering step in between — so there is no second list left that
 // could diverge from the first. Deliberately not restated here.
 
-/// Every consumer implements `CoreComboHost` via the shared three-method adapter, and none
-/// reimplements the pin guard or the apply logic itself.
+/// Every consumer implements `CoreComboHost` via the shared three-required-method adapter, and
+/// none reimplements the pin guard or the apply logic itself.
 ///
 /// Breakage this pins: a future author gives one consumer its own copy of the pin guard or the
-/// apply, bypassing the funnel in `core_host.rs::edit_selection` that every picker action must
-/// pass through so no action can forget the guard or the reload. Six near-copies of one decision
-/// is the shape this file's own history says the picker drifts back into.
+/// apply, bypassing the shared host contract that keeps the pin guard and reload obligations
+/// together. Six near-copies of one decision is the shape this file's own history says the picker
+/// drifts back into.
 #[test]
 fn every_consumer_implements_core_combo_host_without_reimplementing_the_funnel() {
     for (panel, module) in [
@@ -64,6 +65,71 @@ fn every_consumer_implements_core_combo_host_without_reimplementing_the_funnel()
         // name it something else, and a ban on the name would read as coverage while
         // discriminating nothing. The funnel invariant is carried by the three REQUIRED methods
         // above -- a consumer that stops routing through them stops compiling against the trait.
+    }
+}
+
+/// Analytics wires explicit group application, manual edits, and the visible caption sink.
+///
+/// Named breakage: deleting `core_host.rs:apply_group_click`'s
+/// `after_core_group_application` call leaves group membership working while its name never
+/// appears. The two manual assertions also prevent a core or exchange edit from retaining stale
+/// provenance that can resurrect when the same membership is rebuilt. The final branch checks
+/// keep unpinned Analytics on group-aware resolution while pinned Auto names only its sole core.
+#[test]
+fn analytics_group_caption_wiring_covers_group_and_manual_actions() {
+    let host = code_only(&read_src("controls/core_host.rs"));
+    let group_click = braced_body(&host, "fn apply_group_click<T: CoreComboHost>(");
+    assert!(
+        group_click.contains("this.after_core_group_application(applied_group, cx)"),
+        "a saved-group click must publish its exact applied-group provenance"
+    );
+
+    let analytics = code_only(&read_module("analytics"));
+    let group_hook = braced_body(&analytics, "fn after_core_group_application(");
+    assert!(
+        group_hook.contains("self.core_caption.set_applied_group(group)"),
+        "Analytics must retain provenance received from the shared group-click funnel"
+    );
+    assert!(
+        group_hook.contains("b.ui_session.analytics.core_caption = core_caption"),
+        "Analytics must retain the caption across a same-process window recreation"
+    );
+
+    let toolbar = code_only(&read_src("analytics/toolbar.rs"));
+    let tabs_bar = braced_body(&toolbar, "pub(super) fn tabs_bar(");
+    let caption_at = tabs_bar
+        .find("let core_caption = if workspace_pinned")
+        .expect("tabs_bar must choose its caption from the Auto pin state");
+    let caption_decision = &tabs_bar[caption_at..];
+    let pinned = braced_body(caption_decision, "let core_caption = if workspace_pinned");
+    assert!(
+        pinned.contains("sole_core_name(&presented_cores, &presented_selection)"),
+        "pinned Auto must describe only its effective sole core"
+    );
+    let unpinned = braced_body(caption_decision, "} else");
+    assert!(
+        unpinned.contains("self.core_caption") && unpinned.contains(".visible_name("),
+        "unpinned Analytics must resolve an explicitly applied saved-group caption"
+    );
+    assert!(
+        unpinned.contains("&backend.config.core_groups"),
+        "the visible group caption must be revalidated against current saved groups"
+    );
+
+    for (action, body) in [
+        (
+            "one core or All",
+            braced_body(&analytics, "fn toggle_core("),
+        ),
+        (
+            "an exchange row",
+            braced_body(&analytics, "fn toggle_exchange_cores("),
+        ),
+    ] {
+        assert!(
+            body.contains("self.core_caption.manual_selection_changed()"),
+            "manually changing {action} must clear saved-group caption provenance"
+        );
     }
 }
 
