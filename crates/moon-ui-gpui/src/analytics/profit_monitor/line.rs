@@ -1,4 +1,4 @@
-//! One drawn line of the Profit Monitor table: a data row, a group caption, or the total footer.
+//! One drawn line of the Profit Monitor table: a data row, a group caption, or a summary footer.
 //!
 //! Split from `table.rs`, which assembles the header, the virtualized body and the footer out of
 //! these. Everything here is about ONE line — its shared frame and height, its element identity,
@@ -22,6 +22,22 @@ use super::{
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
+
+/// Space between a group's boundary rail and its heading.
+const SECTION_LABEL_GAP: f32 = 8.0;
+/// Additional inset that makes member names subordinate to their group heading.
+const SECTION_MEMBER_INDENT: f32 = 14.0;
+
+/// Visual role of a numeric table row within the group hierarchy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RowRole {
+    /// A row in the unsectioned flat table.
+    Plain,
+    /// A core row nested under a visible group heading.
+    SectionMember,
+    /// The summary row that closes a multi-row group.
+    SectionSubtotal,
+}
 
 /// Attach the core-filter gesture one clickable line carries.
 ///
@@ -104,10 +120,8 @@ pub(super) fn row_id(occurrence: usize, index: usize, row: &MonitorRow) -> Eleme
 /// rows' height because the virtual list is built on ONE row height — a taller caption would
 /// misplace every row below it.
 ///
-/// The caption reads like the subtotal that closes its section, not like a column heading: same
-/// body text size, same full-strength colour, and the same left gutter the named rows keep — a
-/// caption starting left of every name beneath it looks like a stray label rather than the title of
-/// the block it opens.
+/// A quiet boundary rail and one-step-larger label make the caption the start of a nested block
+/// without competing with the fixed grand-total footer.
 ///
 /// Args:
 ///     head: The caption, the cores it stands for, and its stable position.
@@ -127,6 +141,12 @@ pub(super) fn section_header(
     palette: MoonPalette,
     cx: &App,
 ) -> AnyElement {
+    let label_gap = SECTION_LABEL_GAP
+        + if logo_gutter {
+            EXCHANGE_LOGO_SIZE + NAME_LOGO_GAP
+        } else {
+            0.0
+        };
     h_flex()
         .id(("profit-monitor-section", head.section as u64))
         .w_full()
@@ -135,29 +155,31 @@ pub(super) fn section_header(
         .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 0.7))
-        .bg(moon(palette.table_head))
+        .bg(moon_alpha(palette.table_head, 0.8))
         // The SAME blue the rows use, for the same reason: `table_selected` belongs to the arrival
         // tint here, and one colour for both would make a selected section swallow the new-trade
         // flash of the rows it introduces.
         .when(selected, |caption| {
             caption.bg(moon_alpha(palette.blue, 0.18))
         })
-        .text_size(design::t_body(cx))
+        .text_size(design::t_body_lg(cx))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(moon(palette.text))
         .when_some(select, attach_select)
+        .tooltip(crate::panels::common::text_tooltip(head.name.clone()))
         .child(
-            div()
+            h_flex()
+                .flex_1()
+                .h_full()
                 .min_w_0()
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap()
-                // Padding rather than a spacer sibling, exactly as the logo-less data rows and the
-                // sortable heading do it: a sibling would also collect the row's column gap and
-                // overshoot the logo by that much.
-                .when(logo_gutter, |text| {
-                    text.pl(design::ui_px(cx, EXCHANGE_LOGO_SIZE + NAME_LOGO_GAP))
-                })
+                .border_l(px(2.0))
+                .border_color(moon_alpha(palette.border_soft, 0.9))
+                // Padding rather than a spacer sibling keeps the caption inside the flexible Name
+                // column and cannot move any numeric column at the minimum window width.
+                .pl(design::ui_px(cx, label_gap))
                 .child(head.name.clone()),
         )
         .into_any_element()
@@ -165,8 +187,8 @@ pub(super) fn section_header(
 
 /// Per-row decoration that is not one of the row's own numbers.
 ///
-/// Bundled rather than passed as three more positional flags: every one of them is optional and
-/// two of them are only ever set for data rows, so a struct is what keeps the Total call honest.
+/// Bundled rather than passed as positional flags so plain, grouped, subtotal, and grand-total
+/// call sites cannot silently disagree about their hierarchy chrome.
 pub(super) struct RowChrome {
     /// Stable element identity of the row.
     ///
@@ -183,10 +205,12 @@ pub(super) struct RowChrome {
     pub(super) logo: Option<Arc<RenderImage>>,
     /// Whether to reserve the logo's width even without one.
     ///
-    /// With icons on, a row whose brand is unknown, the Total footer and the sortable heading all
-    /// have to start where the logo-bearing rows' text starts — otherwise the Name column no longer
+    /// With icons on, a row whose brand is unknown, the grand-total footer and the sortable heading
+    /// all have to start where the logo-bearing rows' text starts, or the Name column no longer
     /// lines up with its own header.
     pub(super) logo_gutter: bool,
+    /// Whether this row is flat data, a nested group member, or the group's closing subtotal.
+    pub(super) role: RowRole,
     /// Instant this row's core closed its newest trade, while the highlight is still live.
     pub(super) flash: Option<Instant>,
     /// Profit-column width selected by the current last-trade decision.
@@ -222,7 +246,7 @@ pub(super) struct RowSelect {
 ///     show_trades: Whether the current width retains trade count.
 ///     show_win: Whether the current width retains win rate.
 ///     show_average: Whether the current width retains average order.
-///     chrome: Logo, arrival highlight, and profit-column width.
+///     chrome: Hierarchy role, logo, arrival highlight, and profit-column width.
 ///     palette: Active MoonUI palette.
 ///     cx: Render context.
 ///
@@ -248,6 +272,7 @@ pub(super) fn table_row(
         design::danger_color(palette),
         palette.text,
     );
+    let role = chrome.role;
     let logo_size = design::ui_px(cx, EXCHANGE_LOGO_SIZE);
     // The arrival tint is the News feed's, from the one shared definition: a full-bleed layer
     // declared BEFORE the cells so it sits under the text, and driven by the owner's own stamp
@@ -268,15 +293,24 @@ pub(super) fn table_row(
     // The WHOLE row is the click target, not the name cell: the numbers belong to the same core,
     // and a row where four of five cells silently do nothing reads as a broken control.
     .id(chrome.id)
+    .when(role == RowRole::SectionSubtotal, |element| {
+        element.border_t(px(1.0))
+    })
     .when_some(chrome.select, attach_select);
     row.child(
         h_flex()
             .flex_1()
+            .h_full()
             .min_w(design::ui_px(cx, MIN_NAME_COLUMN_WIDTH))
             .gap(design::ui_px(cx, NAME_LOGO_GAP))
             .overflow_hidden()
             .text_ellipsis()
             .whitespace_nowrap()
+            .when(role != RowRole::Plain, |name| {
+                name.border_l(px(2.0))
+                    .border_color(moon_alpha(palette.border_soft, 0.9))
+                    .pl(design::ui_px(cx, SECTION_MEMBER_INDENT))
+            })
             .when_some(chrome.logo.clone(), |element, logo| {
                 element.child(
                     img(logo)

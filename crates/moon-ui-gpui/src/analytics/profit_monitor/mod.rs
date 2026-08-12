@@ -1358,16 +1358,17 @@ impl ProfitMonitorView {
                 let total = fold_total(&rows);
                 let entries = if self.prefs.group_sections && self.group == GroupMode::Core {
                     let ungrouped = t!("profit_monitor.group.ungrouped").to_string();
-                    // The footer's own word, not a second translation of it: a section total and
-                    // the window total are the same concept and must not drift per language.
-                    let total_word = t!("profit_monitor.total").to_string();
                     sections::sectioned(
                         rows,
                         &self.live,
                         self.sort,
                         SectionLabels {
                             ungrouped: &ungrouped,
-                            subtotal: &|name| format!("{total_word}: {name}"),
+                            // Keep the user-authored name first: at the minimum width, ellipsis may
+                            // hide the generic suffix but must not hide which group this closes.
+                            subtotal: &|name| {
+                                t!("profit_monitor.group.subtotal", name = name).to_string()
+                            },
                         },
                     )
                 } else {

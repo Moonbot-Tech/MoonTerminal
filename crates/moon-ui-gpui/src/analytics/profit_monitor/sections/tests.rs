@@ -15,7 +15,7 @@ use crate::analytics::profit_monitor::next_sort;
 fn labels() -> SectionLabels<'static> {
     SectionLabels {
         ungrouped: "Ungrouped",
-        subtotal: &|name| format!("Total: {name}"),
+        subtotal: &|name| format!("{name}: total"),
     }
 }
 
@@ -105,7 +105,7 @@ fn subtotals(entries: &[MonitorEntry]) -> Vec<(String, f64, i64)> {
 /// `sections.rs:sectioned` must leave a table with no saved group exactly as it found it.
 ///
 /// Breakage: wrapping everything in one "Ungrouped" section adds a caption and a subtotal that
-/// duplicate the window's own Total for every user who never saved a group.
+/// duplicate the window's grand-total footer for every user who never saved a group.
 #[test]
 fn without_saved_groups_the_table_keeps_its_plain_shape() {
     let live = context(&[1, 2], &[]);
@@ -130,8 +130,8 @@ fn without_saved_groups_the_table_keeps_its_plain_shape() {
 /// nothing that is on screen.
 ///
 /// Breakage: emitting the trailing remainder unconditionally wraps the whole table in one
-/// "Ungrouped" caption plus a subtotal that repeats the footer Total exactly — a shape that states
-/// nothing and costs two lines, hit whenever every saved group is quiet for the period.
+/// "Ungrouped" caption plus a subtotal that repeats the grand-total footer exactly — a shape that
+/// states nothing and costs two lines, hit whenever every saved group is quiet for the period.
 #[test]
 fn saved_groups_that_name_nothing_visible_leave_the_table_plain() {
     let live = context(&[1, 2], &[("Elsewhere", &[41, 42])]);
@@ -255,8 +255,31 @@ fn a_one_row_section_gets_no_subtotal() {
     assert_eq!(headers(&entries), ["Pair", "Solo"]);
     assert_eq!(
         subtotals(&entries),
-        [("Total: Pair".to_string(), 3.0, 2)],
+        [("Pair: total".to_string(), 3.0, 2)],
         "only the section with something to add up carries a fold"
+    );
+}
+
+/// `sections.rs:push_section` must fold hard breaks before building either visible group label.
+///
+/// Breakage: passing raw `name` into `SectionHead` or `labels.subtotal` lets a hand-edited saved
+/// name occupy several visual lines inside one fixed-height virtual-list slot, clipping the group
+/// label and shifting the apparent row boundary.
+#[test]
+fn hard_breaks_are_folded_in_both_group_labels() {
+    let live = context(&[1, 2, 3], &[("Desk\r\nAlpha", &[1, 2]), ("Other", &[3])]);
+    let entries = sectioned(
+        vec![row(1, 1.0, 1), row(2, 2.0, 1), row(3, 3.0, 1)],
+        &live,
+        None,
+        labels(),
+    );
+
+    assert_eq!(headers(&entries), ["Desk ¶ Alpha", "Other"]);
+    assert_eq!(
+        subtotals(&entries),
+        [("Desk ¶ Alpha: total".to_string(), 3.0, 2)],
+        "the header and subtotal must share one single-line display name"
     );
 }
 
@@ -343,7 +366,7 @@ fn sections_follow_their_names_and_the_remainder_stays_last() {
             .into_iter()
             .map(|(label, _, _)| label)
             .collect::<Vec<_>>(),
-        ["Total: alpha", "Total: Zulu", "Total: Ungrouped"]
+        ["alpha: total", "Zulu: total", "Ungrouped: total"]
     );
 }
 
@@ -366,8 +389,8 @@ fn a_core_in_two_groups_appears_and_counts_in_both() {
     assert_eq!(
         subtotals(&entries),
         [
-            ("Total: Alone".to_string(), 11.0, 3),
-            ("Total: Both".to_string(), 14.0, 3),
+            ("Alone: total".to_string(), 11.0, 3),
+            ("Both: total".to_string(), 14.0, 3),
         ],
         "the shared core counts inside both folds"
     );
@@ -406,11 +429,11 @@ fn an_explicit_sort_orders_rows_within_each_section() {
             "# First",
             "2",
             "1",
-            "= Total: First",
+            "= First: total",
             "# Second",
             "4",
             "3",
-            "= Total: Second",
+            "= Second: total",
         ],
         "each section sorts descending on its own, and the captions keep their name order"
     );

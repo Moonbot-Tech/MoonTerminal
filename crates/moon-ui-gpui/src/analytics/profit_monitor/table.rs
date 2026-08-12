@@ -23,7 +23,9 @@ use rust_i18n::t;
 use super::format::{
     format_amount, format_profit, format_trade_count, format_win_rate, profit_column_width,
 };
-use super::line::{RowChrome, RowSelect, row_h_px, row_h_value, row_id, section_header, table_row};
+use super::line::{
+    RowChrome, RowRole, RowSelect, row_h_px, row_h_value, row_id, section_header, table_row,
+};
 use super::rows::MonitorRow;
 use super::sections::MonitorEntry;
 use super::settings::MonitorPrefs;
@@ -183,6 +185,9 @@ pub(super) fn table(
     let show_trades = layout.trades;
     let show_win = layout.win_rate;
     let show_average = layout.average_order;
+    let sectioned = entries
+        .iter()
+        .any(|entry| matches!(entry, MonitorEntry::Header(_)));
     // Both halves have to agree: the preference asks for the suffix, the width decides whether the
     // column can hold it. Anything narrower would truncate a money value instead of dropping it.
     let show_last = prefs.last_trade && layout.last_trade;
@@ -314,6 +319,7 @@ pub(super) fn table(
                 ),
             };
             let subtotal = matches!(entry, MonitorEntry::Subtotal { .. });
+            let subtotal_tooltip = subtotal.then(|| name.clone());
             let (profit, profit_sign) =
                 format_profit(row.profit, row.last_profit.filter(|_| show_last), unit);
             table_row(
@@ -332,6 +338,13 @@ pub(super) fn table(
                     id,
                     logo: logos.get(index).cloned().flatten(),
                     logo_gutter: prefs.exchange_icons,
+                    role: if subtotal {
+                        RowRole::SectionSubtotal
+                    } else if sectioned {
+                        RowRole::SectionMember
+                    } else {
+                        RowRole::Plain
+                    },
                     flash: flashes.get(index).copied().flatten(),
                     profit_width,
                     select,
@@ -339,14 +352,16 @@ pub(super) fn table(
                 palette,
                 app,
             )
-            // Weaker than the window's own Total — same background, no accent border and the body
-            // text size — because a section total must read as belonging to the rows above it, not
-            // as a second answer competing with the footer.
+            .when_some(subtotal_tooltip, |element, label| {
+                element.tooltip(crate::panels::common::text_tooltip(label))
+            })
+            // Weaker than the grand-total footer: the muted surface, body text size and thin closing
+            // rule keep this summary inside its group instead of presenting a competing answer.
             .when(subtotal, |element| {
                 element
-                    .bg(moon(palette.table_head))
+                    .bg(moon_alpha(palette.table_head, 0.65))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(moon(palette.text))
+                    .text_color(moon(palette.text_soft))
             })
             // Selection outranks the zebra stripe: it is the answer to "which cores is the main
             // window showing", and a stripe drawn over it would make every other selected row look
@@ -370,7 +385,7 @@ pub(super) fn table(
     let (total_profit, total_profit_sign) =
         format_profit(total.profit, total.last_profit.filter(|_| show_last), unit);
     let footer = table_row(
-        t!("profit_monitor.total").to_string(),
+        t!("profit_monitor.grand_total").to_string(),
         total_profit,
         total_profit_sign,
         format_trade_count(total.trades),
@@ -390,6 +405,7 @@ pub(super) fn table(
             // with the names above it.
             logo: None,
             logo_gutter: prefs.exchange_icons,
+            role: RowRole::Plain,
             flash: None,
             profit_width,
             select: None,
