@@ -104,6 +104,7 @@ fn populated_filter() -> ReportFilter {
             core_uid: 7,
             strategy_id: -11,
         }]),
+        strategy_name_mask: "EMA_".to_string(),
         valuation: Default::default(),
     }
 }
@@ -125,11 +126,13 @@ fn equivalent_catalog_scopes_do_not_refresh() {
         core_uid: 3,
         strategy_id: 99,
     }]);
+    equivalent.strategy_name_mask = "different strategy predicate".to_string();
 
     let published = strategy_catalog_scope(&first);
     assert_eq!(published.core_uids, vec![3, 7]);
     assert_eq!(published.coin, "BTC");
     assert_eq!(published.strategies, None);
+    assert_eq!(published.strategy_name_mask, "");
     assert_eq!(strategy_catalog_scope(&equivalent), published);
     assert_eq!(
         strategy_metadata_request(&equivalent, Some(&published), false),
@@ -243,4 +246,13 @@ fn scope_change_rejects_pending_old_scope_result() {
     assert!(!report_query_result_is_current(
         4, 5, &requested, &requested
     ));
+
+    let mask_drift = ReportFilter {
+        strategy_name_mask: "EMA_".to_string(),
+        ..requested.clone()
+    };
+    assert!(
+        !report_query_result_is_current(4, 4, &requested, &mask_drift),
+        "a late result must not publish after the Auto strategy mask changes"
+    );
 }

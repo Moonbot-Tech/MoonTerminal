@@ -31,6 +31,16 @@ report.search_strategies:
   ru: "Поиск стратегии..."
   en: "Search strategies..."
   es: "Buscar estrategias..."
+# Separate Auto-only report filter. Unlike the exact picker search above, this value narrows the
+# report itself by a literal, case-insensitive strategy-name substring.
+report.filter.strategy_mask_ph:
+  ru: "Маска стратегии"
+  en: "Strategy mask"
+  es: "Máscara de estrategia"
+report.filter.strategy_mask_tip:
+  ru: "Фильтр отчёта по части названия стратегии без учёта регистра. Например, EMA_."
+  en: "Filter the report by a case-insensitive part of the strategy name. For example, EMA_."
+  es: "Filtra el informe por una parte del nombre de la estrategia, sin distinguir mayúsculas. Por ejemplo, EMA_."
 report.filter.core:
   ru: "Ядро:"
   en: "Core:"

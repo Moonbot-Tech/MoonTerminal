@@ -151,11 +151,12 @@ struct ReportRead {
 ///     filter: Complete Report filter, including the current strategy selection.
 ///
 /// Returns:
-///     An equality-stable filter with no strategy predicate, sorted core ids, and the same coin
+///     An equality-stable filter with no strategy predicates, sorted core ids, and the same coin
 ///     normalization used by the SQL read layer.
 fn strategy_catalog_scope(filter: &ReportFilter) -> ReportFilter {
     let mut scope = filter.clone();
     scope.strategies = None;
+    scope.strategy_name_mask.clear();
     scope.core_uids.sort_unstable();
     scope.core_uids.dedup();
     scope.coin = scope.coin.trim().to_uppercase();
@@ -291,8 +292,14 @@ impl ReportPanel {
         // minute's last second: "from 04.08 00:00 to 04.08 23:59" is the whole day, and an equal
         // pair is that one minute rather than an empty range.
         let date_to = pto.or_else(|| self.to_query.map(date_range::inclusive_end));
+        let backend = self.backend.read(cx);
+        let strategy_name_mask = self
+            .workspace_scope(backend)
+            .is_some_and(|scope| scope.is_auto_core())
+            .then(|| self.strategy_name_mask.trim().to_string())
+            .unwrap_or_default();
         ReportFilter {
-            core_uids: self.effective_core_ids(self.backend.read(cx)),
+            core_uids: self.effective_core_ids(backend),
             date_from,
             date_to,
             // Normalize Russian-layout keystrokes for the SQL filter as well as the search popup;
@@ -303,9 +310,10 @@ impl ReportPanel {
             deleted_only: self.deleted_only,
             closed_only: self.closed_only,
             strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
+            strategy_name_mask,
             // Read from the backend at build time rather than mirrored into the panel: the rows,
             // the totals and the export all derive from this ONE filter, so they convert alike.
-            valuation: self.backend.read(cx).valuation_mode(),
+            valuation: backend.valuation_mode(),
         }
     }
 

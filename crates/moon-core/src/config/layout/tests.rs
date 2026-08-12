@@ -771,7 +771,8 @@ hold = 3
 /// take the rest of the schema-less layout document down with it.
 ///
 /// Breakage this pins: replacing `deserialize_with = "de_lenient"` on any `ReportFilterPrefs`
-/// field (`side`/`kind`/`deleted_only`/`period`) with plain deserialization. Because
+/// field (`side`/`kind`/`deleted_only`/`period`/`strategy_name_mask`) with plain deserialization.
+/// Because
 /// `report_filters` itself is ALSO read leniently as a whole map, a plain field does not fail this
 /// call to `toml::from_str` — it instead collapses the WHOLE `report_filters` map to empty (every
 /// host context's stored filters, not just the malformed one), which the second assertion below
@@ -780,24 +781,28 @@ hold = 3
 #[test]
 fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() {
     let entry_id = "report-filters:dock";
-    // One member malformed per case; the other three stay well-typed and non-default so their
+    // One member malformed per case; the other four stay well-typed and non-default so their
     // survival is a real assertion, not a comparison against a value that defaults the same way.
-    let cases: [(&str, &str); 4] = [
+    let cases: [(&str, &str); 5] = [
         (
             "side",
-            "side = 5\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\n",
+            "side = 5\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "kind",
-            "side = \"long\"\nkind = [\"real\"]\ndeleted_only = true\nperiod = \"rp-cur-month\"\n",
+            "side = \"long\"\nkind = [\"real\"]\ndeleted_only = true\nperiod = \"rp-cur-month\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "deleted_only",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = \"not-a-bool\"\nperiod = \"rp-cur-month\"\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = \"not-a-bool\"\nperiod = \"rp-cur-month\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "period",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = 42\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = 42\nstrategy_name_mask = \"EMA_\"\n",
+        ),
+        (
+            "strategy_name_mask",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nstrategy_name_mask = [\"EMA_\"]\n",
         ),
     ];
 
@@ -820,8 +825,16 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
         match bad_field {
             "side" => {
                 assert_eq!(prefs.side, None, "malformed side must default to None");
-                assert_eq!(prefs.kind.as_deref(), Some("real"), "a well-typed neighbour must survive");
-                assert_eq!(prefs.deleted_only, Some(true), "a well-typed neighbour must survive");
+                assert_eq!(
+                    prefs.kind.as_deref(),
+                    Some("real"),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.deleted_only,
+                    Some(true),
+                    "a well-typed neighbour must survive"
+                );
                 assert_eq!(
                     prefs.period.as_deref(),
                     Some("rp-cur-month"),
@@ -829,9 +842,17 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
                 );
             }
             "kind" => {
-                assert_eq!(prefs.side.as_deref(), Some("long"), "a well-typed neighbour must survive");
+                assert_eq!(
+                    prefs.side.as_deref(),
+                    Some("long"),
+                    "a well-typed neighbour must survive"
+                );
                 assert_eq!(prefs.kind, None, "malformed kind must default to None");
-                assert_eq!(prefs.deleted_only, Some(true), "a well-typed neighbour must survive");
+                assert_eq!(
+                    prefs.deleted_only,
+                    Some(true),
+                    "a well-typed neighbour must survive"
+                );
                 assert_eq!(
                     prefs.period.as_deref(),
                     Some("rp-cur-month"),
@@ -839,9 +860,20 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
                 );
             }
             "deleted_only" => {
-                assert_eq!(prefs.side.as_deref(), Some("long"), "a well-typed neighbour must survive");
-                assert_eq!(prefs.kind.as_deref(), Some("real"), "a well-typed neighbour must survive");
-                assert_eq!(prefs.deleted_only, None, "malformed deleted_only must default to None");
+                assert_eq!(
+                    prefs.side.as_deref(),
+                    Some("long"),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.kind.as_deref(),
+                    Some("real"),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.deleted_only, None,
+                    "malformed deleted_only must default to None"
+                );
                 assert_eq!(
                     prefs.period.as_deref(),
                     Some("rp-cur-month"),
@@ -849,20 +881,79 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
                 );
             }
             "period" => {
-                assert_eq!(prefs.side.as_deref(), Some("long"), "a well-typed neighbour must survive");
-                assert_eq!(prefs.kind.as_deref(), Some("real"), "a well-typed neighbour must survive");
-                assert_eq!(prefs.deleted_only, Some(true), "a well-typed neighbour must survive");
+                assert_eq!(
+                    prefs.side.as_deref(),
+                    Some("long"),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.kind.as_deref(),
+                    Some("real"),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.deleted_only,
+                    Some(true),
+                    "a well-typed neighbour must survive"
+                );
                 assert_eq!(prefs.period, None, "malformed period must default to None");
+            }
+            "strategy_name_mask" => {
+                assert_eq!(
+                    prefs.side.as_deref(),
+                    Some("long"),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.kind.as_deref(),
+                    Some("real"),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.deleted_only,
+                    Some(true),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.period.as_deref(),
+                    Some("rp-cur-month"),
+                    "a well-typed neighbour must survive"
+                );
             }
             _ => unreachable!(),
         }
+        if bad_field == "strategy_name_mask" {
+            assert_eq!(
+                prefs.strategy_name_mask, None,
+                "a malformed mask must default alone"
+            );
+        } else {
+            assert_eq!(
+                prefs.strategy_name_mask.as_deref(),
+                Some("EMA_"),
+                "a well-typed mask must survive its malformed neighbour"
+            );
+        }
     }
+
+    let prefs = super::ReportFilterPrefs {
+        side: Some("short".to_string()),
+        kind: Some("emu".to_string()),
+        deleted_only: Some(true),
+        period: Some("rp-cur-week".to_string()),
+        strategy_name_mask: Some("EMA_%\\".to_string()),
+    };
+    let encoded = toml::to_string(&prefs).expect("serialize Report filters");
+    let decoded: super::ReportFilterPrefs =
+        toml::from_str(&encoded).expect("deserialize Report filters");
+    assert_eq!(decoded, prefs, "a literal non-empty mask must round-trip");
 
     // One level up, the salvage is coarser by design: an entry that is not a table at all takes
     // the whole `report_filters` map down to empty, never the rest of the layout document.
     let doc = "analytics_period = \"p-cur-month\"\nreport_filters = 5\n";
-    let decoded: WindowLayout = toml::from_str(doc)
-        .unwrap_or_else(|e| panic!("a malformed report_filters map must not fail the whole document: {e}"));
+    let decoded: WindowLayout = toml::from_str(doc).unwrap_or_else(|e| {
+        panic!("a malformed report_filters map must not fail the whole document: {e}")
+    });
     assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
     assert!(decoded.report_filters.is_empty());
 }

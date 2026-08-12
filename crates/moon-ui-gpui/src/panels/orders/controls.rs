@@ -1,7 +1,11 @@
 //! Source, order-kind, column, sorting, and filtering controls for the Orders panel.
 
 use super::*;
+use gpui::prelude::FluentBuilder;
 use rust_i18n::t;
+
+/// Maximum fitted width that keeps the pinned Auto core inside the narrow Orders panel by itself.
+const AUTO_CORE_TRIGGER_MAX_W: f32 = 250.0;
 
 impl OrdersPanel {
     /// Build the effective core dropdown shared with the Report and Assets panels through
@@ -16,13 +20,10 @@ impl OrdersPanel {
     ///
     /// Returns:
     ///     Interactive Classic selector or disabled Auto scope indicator.
-    pub(super) fn source_combo(
-        &self,
-        cores: &OrderedCores,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    pub(super) fn source_combo(&self, cores: &OrderedCores, cx: &Context<Self>) -> AnyElement {
         let scope = self.effective_scope(self.backend.read(cx));
         let workspace_owned = scope.is_workspace_owned();
+        let auto_core = scope.is_auto_core();
         let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
         let pinned_label = match scope.label() {
             crate::workspace::EffectiveScopeLabel::Overview => {
@@ -31,7 +32,7 @@ impl OrdersPanel {
             crate::workspace::EffectiveScopeLabel::Core(core) => cores
                 .iter()
                 .find(|(id, _)| *id == core)
-                .map(|(_, name)| name.clone()),
+                .map(|(_, name)| crate::display_text::flatten_lines(name)),
             crate::workspace::EffectiveScopeLabel::All
             | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
         };
@@ -63,10 +64,28 @@ impl OrdersPanel {
             },
         )
         .disabled(workspace_owned);
-        if let Some(label) = pinned_label {
-            combo.label(label)
+        let tooltip = pinned_label.clone();
+        let combo = if let Some(label) = pinned_label {
+            combo.label(label).when(auto_core, |combo| {
+                combo.fit_trigger_width(
+                    crate::controls::CORE_COMBO_TRIGGER_W,
+                    AUTO_CORE_TRIGGER_MAX_W,
+                )
+            })
         } else {
             combo
+        };
+        if auto_core {
+            div()
+                .id("orders-source-tip")
+                .flex_none()
+                .when_some(tooltip, |host, label| {
+                    host.tooltip(crate::panels::common::text_tooltip(label))
+                })
+                .child(combo)
+                .into_any_element()
+        } else {
+            combo.into_any_element()
         }
     }
 

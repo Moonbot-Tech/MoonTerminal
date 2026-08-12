@@ -1,7 +1,9 @@
 //! Read layer for the Reports window: filters, source projection, sort/merge, and aggregates.
 
+use rusqlite::functions::FunctionFlags;
 use rusqlite::types::Value;
 use rusqlite::Connection;
+use unicode_casefold::UnicodeCaseFold;
 
 use super::read_fail::read_fail;
 use super::rep;
@@ -194,6 +196,11 @@ pub struct ReportFilter {
     /// The core is part of every key because strategy ids repeat across cores. An explicit empty
     /// collection intentionally matches no rows so a lost/stale selection cannot broaden a query.
     pub strategies: Option<Vec<ReportStrategyKey>>,
+    /// Literal case-insensitive substring matched against the effective strategy name.
+    ///
+    /// Empty or whitespace-only text adds no predicate. This stays independent of the exact
+    /// strategy keys above, so using both filters narrows by their conjunction.
+    pub strategy_name_mask: String,
     /// Which conversion the three USDT columns and the totals row apply.
     ///
     /// Carried on the filter rather than passed as a parameter because rows, totals and export all
@@ -426,8 +433,8 @@ fn source_sort_expression(
 ///
 /// Before the core schema arrives, the replica may lack `closedate`, `coin`,
 /// `isshort`, or `emulator`; filtering on an absent column would fail the entire
-/// SELECT. An exact strategy is different: a source without either identity column
-/// cannot prove a match and therefore contributes zero rows.
+/// SELECT. A strategy predicate is different: a source without either identity column cannot
+/// prove a match and therefore contributes zero rows.
 ///
 /// Args:
 ///     f: Complete Report filter.
@@ -455,6 +462,7 @@ fn build_where(
         sql.push_str(&format!(" AND r.core_uid IN ({ids})"));
     }
     append_strategy_filter(&mut sql, f, cols, has_strategy_names);
+    append_strategy_name_mask(&mut sql, &mut params, f, cols, has_strategy_names);
     if f.closed_only {
         if has("closedate") {
             sql.push_str(" AND r.closedate > 0");
@@ -503,6 +511,24 @@ fn build_where(
         sql.push_str(" AND 1=0");
     }
     (sql, params)
+}
+
+/// Return whether one filter needs the attached strategy-name metadata.
+///
+/// Exact keys need it only when attribution may change a physical strategy id. A non-empty name
+/// mask always needs it because the report source stores ids rather than strategy names.
+///
+/// Args:
+///     filter: Complete Report filter.
+///
+/// Returns:
+///     Whether rows and totals should enable the shared strategy metadata path.
+fn strategy_metadata_required(filter: &ReportFilter) -> bool {
+    filter
+        .strategies
+        .as_ref()
+        .is_some_and(|strategies| !strategies.is_empty())
+        || !filter.strategy_name_mask.trim().is_empty()
 }
 
 /// Append the exact multi-strategy predicate without consuming SQLite bind-variable capacity.
@@ -558,6 +584,89 @@ fn append_strategy_filter(
         .collect::<Vec<_>>()
         .join(" OR ");
     sql.push_str(&format!(" AND ({groups})"));
+}
+
+/// Append a literal, case-insensitive strategy-name substring predicate.
+///
+/// `instr` gives `%`, `_`, and `\` no wildcard meaning, unlike `LIKE`, while the bound parameter
+/// keeps arbitrary user text outside SQL syntax. The name is joined by the same effective strategy
+/// id as the exact selector so liquidation attribution and physical strategy ids agree.
+///
+/// Args:
+///     sql: Mutable WHERE clause receiving the name predicate.
+///     params: Ordered SQL parameters paired with the WHERE clause.
+///     filter: Complete Report filter containing the optional name mask.
+///     columns: Columns available on the current report source.
+///     has_strategy_names: Whether the attached strategy metadata is readable.
+///
+/// Returns:
+///     Nothing; a non-empty mask fails closed when its identity or name metadata is unavailable.
+fn append_strategy_name_mask(
+    sql: &mut String,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    filter: &ReportFilter,
+    columns: &std::collections::HashSet<String>,
+    has_strategy_names: bool,
+) {
+    let mask = filter.strategy_name_mask.trim();
+    if mask.is_empty() {
+        return;
+    }
+    if !has_strategy_names || !columns.contains("core_uid") || !columns.contains("strategyid") {
+        sql.push_str(" AND 1=0");
+        return;
+    }
+
+    let sid = super::analytics::effective_sid_expr("r", columns, has_strategy_names);
+    sql.push_str(&format!(
+        " AND EXISTS (SELECT 1 FROM strat.strategies mask_strategy \
+         WHERE mask_strategy.core_uid = r.core_uid \
+         AND mask_strategy.strategy_id = COALESCE({sid}, 0) \
+         AND instr(mt_unicode_casefold(mask_strategy.name), ?) > 0)"
+    ));
+    params.push(Box::new(strategy_name_casefold(mask)));
+}
+
+/// Fold a strategy name for locale-independent Unicode caseless matching.
+///
+/// Full folding may expand one character into several, such as `ß` into `ss`, which ordinary
+/// lowercasing does not do.
+///
+/// Args:
+///     value: Strategy name or user mask to normalize.
+///
+/// Returns:
+///     Full non-Turkic Unicode case-folded text.
+fn strategy_name_casefold(value: &str) -> String {
+    value.case_fold().collect()
+}
+
+/// Install the Unicode case folding used by a non-empty strategy mask.
+///
+/// SQLite's built-in `lower` handles ASCII only, while strategy names and the Report UI are not
+/// restricted to ASCII. Full case folding also covers multi-character caseless equivalents.
+/// Registration is skipped when the query has no mask, keeping unrelated Report reads unchanged.
+///
+/// Args:
+///     conn: Open report reader or snapshot receiving the deterministic scalar function.
+///     filter: Complete Report filter whose mask decides whether registration is required.
+///
+/// Returns:
+///     Success after the function is installed or when no mask needs it.
+///
+/// Errors:
+///     Returns SQLite's registration error when the function cannot be installed.
+fn install_strategy_name_mask_function(
+    conn: &Connection,
+    filter: &ReportFilter,
+) -> rusqlite::Result<()> {
+    if filter.strategy_name_mask.trim().is_empty() {
+        return Ok(());
+    }
+    let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
+    conn.create_scalar_function("mt_unicode_casefold", 1, flags, |ctx| {
+        Ok(strategy_name_casefold(&ctx.get::<String>(0)?))
+    })
 }
 
 /// SQL projecting the rec id the soft-delete protocol addresses a row by.
@@ -674,6 +783,8 @@ pub fn strategy_purge_rows(
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<QuoteBreakdown> {
+    install_strategy_name_mask_function(conn, f)
+        .map_err(|error| read_fail("reports: install strategy mask", error))?;
     let sources = read_sources_res(conn)?;
     with_valuation_fallback(
         conn,
@@ -759,11 +870,8 @@ fn query_totals_attempt(
 ) -> rusqlite::Result<QuoteBreakdown> {
     let mut groups = Vec::new();
     let mut coverage = super::valuation::CoverageAggregate::default();
-    let has_strategy_names = f
-        .strategies
-        .as_ref()
-        .is_some_and(|strategies| !strategies.is_empty())
-        && super::analytics::strategies_attached(conn);
+    let has_strategy_names =
+        strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
     // Loop-invariant: `projection` yields a builder for the current-rate mode whatever the cache is
     // doing, and for the historical one exactly when the cache may be joined.
     let valuation_present = f.valuation == ValuationMode::Current || include_valuation;
@@ -957,14 +1065,13 @@ pub fn query_reports(
     desc: bool,
     limit: usize,
 ) -> ReadResult<ReportTable> {
+    install_strategy_name_mask_function(conn, f)
+        .map_err(|error| read_fail("reports: install strategy mask", error))?;
     let cols = display_columns(conn)?;
     let col = sort_column(&cols, sort_key);
     let sources = read_sources_res(conn)?;
-    let has_strategy_names = f
-        .strategies
-        .as_ref()
-        .is_some_and(|strategies| !strategies.is_empty())
-        && super::analytics::strategies_attached(conn);
+    let has_strategy_names =
+        strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
     // The column set is deliberately resolved ONCE, outside the retry: both attempts must project
     // the same `cols`, or a cache-free retry would desynchronise `cols` from `rows`.
     let merged = {
@@ -1131,13 +1238,13 @@ pub fn distinct_cores(conn: &Connection) -> ReadResult<Vec<(u64, String)>> {
 /// Identity uses the same liquidation attribution and NULL-to-Manual semantics as
 /// the exact filter, so every offered option can return the rows it represents.
 /// Legacy sources that cannot identify strategies are skipped. Names come from the
-/// attached strategy database when available and otherwise use the signed numeric id.
-/// The strategy predicate itself is deliberately removed so an active checkbox does not hide
+/// attached strategy database when available and otherwise use the signed numeric id. Both
+/// strategy predicates are deliberately removed so an active checkbox or name mask does not hide
 /// alternative strategies that match every other Report filter.
 ///
 /// Args:
 ///     conn: Open report reader or snapshot with optional strategy attachment.
-///     filter: Active Report filter; every predicate except `strategies` scopes discovery.
+///     filter: Active Report filter; every non-strategy predicate scopes discovery.
 ///
 /// Returns:
 ///     Sorted exact strategy choices present in report sources.
@@ -1151,6 +1258,7 @@ pub fn distinct_strategies(
     const CTX: &str = "reports: distinct_strategies";
     let mut scope = filter.clone();
     scope.strategies = None;
+    scope.strategy_name_mask.clear();
     let has_strategy_names = super::analytics::strategies_attached(conn);
     let mut names = std::collections::HashMap::new();
     if has_strategy_names {

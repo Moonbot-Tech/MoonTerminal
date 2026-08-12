@@ -21,6 +21,9 @@ toml = "0.8"
 anyhow = "1"
 log = "0.4"
 
+# Full non-Turkic Unicode case folding for literal strategy-name masks in Reports.
+unicode-casefold = "0.2"
+
 # Application-wide display-time conversion. Unix timestamps remain UTC at storage/protocol
 # boundaries; chrono-tz supplies historical IANA transitions for user-selected civil time.
 chrono = { version = "0.4", default-features = false, features = ["std"] }

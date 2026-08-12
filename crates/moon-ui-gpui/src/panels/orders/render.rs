@@ -96,6 +96,7 @@ impl Render for OrdersPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ORDERS_RENDER);
         let view = self.view;
+        let auto_core = self.effective_scope(self.backend.read(cx)).is_auto_core();
         let cores = self.group_cores(self.backend.read(cx));
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
@@ -121,10 +122,20 @@ impl Render for OrdersPanel {
         // Field selector and settings sit at the RIGHT edge of the bar, apart from the filters that
         // change what the table shows: view configuration is a different job from filtering, and the
         // same pairing sits on the right in the Screener and Assets bars.
-        let controls = controls
-            .child(div().flex_1())
-            .child(self.columns_menu(cx))
-            .child(self.sort_menu(cx));
+        let controls = if auto_core {
+            controls.flex_wrap().child(
+                h_flex()
+                    .ml_auto()
+                    .gap_2()
+                    .child(self.columns_menu(cx))
+                    .child(self.sort_menu(cx)),
+            )
+        } else {
+            controls
+                .child(div().flex_1())
+                .child(self.columns_menu(cx))
+                .child(self.sort_menu(cx))
+        };
 
         // Virtualized table using the reference HTML geometry.
         // Highlight one row per Main-open `(core, market)` pair; see `table::orders_table`.

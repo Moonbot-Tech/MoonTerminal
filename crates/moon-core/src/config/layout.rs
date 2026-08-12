@@ -230,10 +230,10 @@ pub struct DetachedLayout {
 
 /// One Report toolbar filter set, persisted per host context.
 ///
-/// Holds the four members of the Report scope control that decide WHICH TRADES the panel reads —
-/// direction, order kind, the deleted-only switch and the period preset. Its sibling in that same
-/// control, the comment pane, is a display choice and stays in `app_meta` beside the other view
-/// preferences; the split is deliberate, so do not "unify" the two stores. These four belong here
+/// Holds the five members of the Report toolbar that decide WHICH TRADES the panel reads —
+/// direction, order kind, the deleted-only switch, the period preset, and the Auto strategy-name
+/// mask. The comment pane is a display choice and stays in `app_meta` beside the other view
+/// preferences; the split is deliberate, so do not "unify" the two stores. These five belong here
 /// because a filter must survive a quit that a detached preference write would not: the whole
 /// layout rides the quit snapshot, and it outlives a report replica that integrity recovery
 /// retires.
@@ -264,6 +264,12 @@ pub struct ReportFilterPrefs {
     /// a consequence of the date rather than a chosen preset, so it never reaches this field.
     #[serde(default, deserialize_with = "de_lenient")]
     pub period: Option<String>,
+    /// Literal strategy-name substring retained for group Auto mode.
+    ///
+    /// `Some("")` is a deliberate clear. A missing or malformed value leaves the panel's current
+    /// value standing when it changes host context.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub strategy_name_mask: Option<String>,
 }
 
 /// Complete window layout.

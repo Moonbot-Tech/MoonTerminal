@@ -321,6 +321,17 @@ writing; sort key and direction use one SQLite statement. Natural-width cache id
 scale, live locale, and the exact resolved font, so language or font changes cannot reuse stale
 header widths.
 
+The group-owned `AutoCore` Report retains a separate strategy-name mask beside the exact strategy
+selector. It is applied only to the current effective Auto core, combines conjunctively with exact
+keys, and uses full Unicode case-folded literal substring matching through the shared
+`ReportFilter`, so rows,
+totals, stale-result identity, and export cannot diverge. Strategy catalog discovery clears both
+strategy predicates and therefore never self-locks under either filter. The Auto core trigger takes
+its current full name from the live group roster, falls back to report metadata only when offline,
+and exposes the complete text through a fitted trigger and tooltip. The toolbar consists of small
+semantic chrome sections whose dividers travel with the following section; exact strategy, mask,
+and detached range bounds wrap independently instead of forcing horizontal scrolling.
+
 For a group-owned `AutoCore` Report only, `core_name` is contextually unavailable because every row
 already belongs to the selected core. This is a display lens, not a persistence mutation: the raw
 visible set, `app_meta`/`layout.toml`, sort state, and widths remain untouched. The grid, Columns

@@ -233,9 +233,9 @@ impl ReportPanel {
         cx.notify();
     }
 
-    /// Store this host context's four toolbar filters.
+    /// Store this host context's five toolbar filters.
     ///
-    /// Replaces one complete map entry per mutation because the four values form one control. The
+    /// Replaces one complete map entry per mutation because the five values form one filter set. The
     /// replacement still merges one value deliberately: unless this call represents an explicit
     /// period-menu pick, it carries the already-stored period forward. An Analytics-scoped panel
     /// writes nothing — see [`ReportPanel::scoped`].
@@ -252,7 +252,11 @@ impl ReportPanel {
     ///
     /// Returns:
     ///     Nothing; the marked layout is flushed by the shared debounced and quit save path.
-    fn persist_filters(&mut self, picked_period: Option<Period>, cx: &mut Context<Self>) {
+    pub(super) fn persist_filters(
+        &mut self,
+        picked_period: Option<Period>,
+        cx: &mut Context<Self>,
+    ) {
         if self.scoped {
             return;
         }
@@ -268,6 +272,7 @@ impl ReportPanel {
             kind: Some(self.kind.id().to_string()),
             deleted_only: Some(self.deleted_only),
             period,
+            strategy_name_mask: Some(self.strategy_name_mask.clone()),
         };
         crate::persistence::table_persist::set_report_filters(&self.backend, &id, prefs, cx);
     }

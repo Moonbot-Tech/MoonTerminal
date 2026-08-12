@@ -248,6 +248,33 @@ impl Render for ReportScopeControl {
     }
 }
 
+/// Maximum design-reference width of the pinned AutoCore selector.
+const AUTO_CORE_TRIGGER_MAX_W: f32 = 360.0;
+
+/// Resolve one selected core's current display name, with report history only as a fallback.
+///
+/// Args:
+///     core: Selected effective workspace core.
+///     live_cores: Current group sessions and their authoritative names.
+///     report_cores: Historical report metadata, which may be stale or omit a new core.
+///
+/// Returns:
+///     Flattened current name, historical fallback, or `None` when neither source knows the core.
+pub(super) fn selected_auto_core_name(
+    core: CoreId,
+    live_cores: &[(CoreId, String)],
+    report_cores: &[(CoreId, String)],
+) -> Option<String> {
+    let usable_name = |cores: &[(CoreId, String)]| {
+        cores
+            .iter()
+            .find(|(id, _)| *id == core)
+            .filter(|(_, name)| !name.trim().is_empty())
+            .map(|(_, name)| crate::display_text::flatten_lines(name))
+    };
+    usable_name(live_cores).or_else(|| usable_name(report_cores))
+}
+
 impl ReportPanel {
     /// Render the shared core combo under the panel's current scope authority.
     ///
@@ -260,7 +287,7 @@ impl ReportPanel {
     ///
     /// Returns:
     ///     Interactive retained-scope selector or disabled Auto scope indicator.
-    pub(super) fn core_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn core_combo(&self, cx: &Context<Self>) -> AnyElement {
         let workspace_scope = self.workspace_scope(self.backend.read(cx));
         let workspace_owned = workspace_scope
             .as_ref()
@@ -273,23 +300,26 @@ impl ReportPanel {
         let exchange_view = view.clone();
         // Rank the raw DB result at render time; the query has no config and may include
         // deleted cores with database-owned names.
-        let (cores, venues) = {
+        let (cores, live_cores, venues) = {
             let backend = self.backend.read(cx);
             (
                 CoreOrder::new(&backend.config).from_db(self.cores.clone()),
+                backend.group_cores(&self.group),
                 backend.session.core_venues(),
             )
         };
+        let auto_core = workspace_scope
+            .as_ref()
+            .is_some_and(EffectiveCoreScope::is_auto_core);
         let pinned_label = workspace_scope
             .as_ref()
             .and_then(|scope| match scope.label() {
                 crate::workspace::EffectiveScopeLabel::Overview => {
                     Some(t!("workspace.overview").to_string())
                 }
-                crate::workspace::EffectiveScopeLabel::Core(core) => cores
-                    .iter()
-                    .find(|(id, _)| *id == core)
-                    .map(|(_, name)| name.clone()),
+                crate::workspace::EffectiveScopeLabel::Core(core) => {
+                    selected_auto_core_name(core, &live_cores, &cores)
+                }
                 crate::workspace::EffectiveScopeLabel::All
                 | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
             });
@@ -318,11 +348,53 @@ impl ReportPanel {
             },
         )
         .disabled(workspace_owned);
-        if let Some(label) = pinned_label {
-            combo.label(label)
+        let tooltip = pinned_label.clone();
+        let combo = if let Some(label) = pinned_label {
+            combo.label(label).when(auto_core, |combo| {
+                combo.fit_trigger_width(
+                    crate::controls::CORE_COMBO_TRIGGER_W,
+                    AUTO_CORE_TRIGGER_MAX_W,
+                )
+            })
         } else {
             combo
-        }
+        };
+        div()
+            .id("rep-core-tip")
+            .flex_none()
+            .when_some(tooltip.filter(|_| auto_core), |host, label| {
+                host.tooltip(crate::panels::common::text_tooltip(label))
+            })
+            .child(combo)
+            .into_any_element()
+    }
+
+    /// Render the separate AutoCore-only strategy-name mask field.
+    ///
+    /// Args:
+    ///     cx: Panel context used to resolve workspace scope, width, and localized tooltip.
+    ///
+    /// Returns:
+    ///     A retained MoonUI input for AutoCore, otherwise no element.
+    pub(super) fn strategy_name_mask_field(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        self.workspace_scope(self.backend.read(cx))
+            .is_some_and(|scope| scope.is_auto_core())
+            .then(|| {
+                div()
+                    .id("rep-strategy-mask-tip")
+                    .flex_none()
+                    .w(design::font_w_px(cx, 150.0))
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("report.filter.strategy_mask_tip").to_string(),
+                    ))
+                    .child(
+                        MoonInput::new("rep-strategy-mask")
+                            .state(&self.strategy_name_mask_input)
+                            .small()
+                            .cleanable(true),
+                    )
+                    .into_any_element()
+            })
     }
 
     /// Render the searchable, virtualized strategy selector grouped by core.

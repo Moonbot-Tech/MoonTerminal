@@ -684,14 +684,27 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     }
     let render = braced_body(&report, "fn render(");
     let strategy = render
-        .find(".child(self.strategy_combo(cx))")
-        .expect("Report controls must include the strategy selector");
+        .find("let strategy_filter = design::chrome_section(cx)")
+        .expect("Report controls must retain the exact strategy section");
+    let mask = render
+        .find("let strategy_mask = self")
+        .expect("Report controls must retain the independent Auto mask section");
     let wrapping = render
-        .find(".flex_wrap()")
+        .find("let filters = h_flex()")
         .expect("Report controls must retain narrow-width wrapping");
+    let exact_attached = render
+        .find(".child(separated(strategy_filter))")
+        .expect("the exact strategy section must enter the wrapping filter row");
+    let mask_attached = render
+        .find(".children(strategy_mask.map(separated))")
+        .expect("the Auto mask must enter as its own wrapping section");
     assert!(
-        wrapping < strategy && !render.contains(".overflow_x_scroll()"),
-        "the strategy selector must stay inside the wrapping filter row without horizontal scroll"
+        strategy < mask
+            && mask < wrapping
+            && wrapping < exact_attached
+            && exact_attached < mask_attached
+            && !render.contains(".overflow_x_scroll()"),
+        "the exact selector and Auto mask must wrap independently without horizontal scroll"
     );
     let strategy_combo = braced_body(&report_controls, "pub(super) fn strategy_combo(");
     for needle in [
@@ -829,6 +842,110 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
             && report_query.contains("db::distinct_strategies(&snap, &scope)")
             && report_query.contains("this.last_strategy_scope = Some(strategy_scope)"),
         "strategy choices must refresh from the active non-strategy Report scope and publish its matching snapshot"
+    );
+}
+
+/// Auto Report must keep its strategy-name mask scope-safe and its wrapping toolbar semantic.
+///
+/// Plausible breakages: rendering or applying the retained mask in Classic/Overview; dropping it
+/// from persistence or stale-query identity; restoring the shared fixed core-trigger width; using
+/// DB history before the live group name; or placing free dividers between wrapping controls so a
+/// separator can wrap alone. The binary view has no importable library target, so this contract
+/// pins that otherwise-unreachable GPUI wiring while unit tests cover the pure name/filter rules.
+#[test]
+fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
+    let render = read_src("panels/report/render.rs");
+    let controls = read_src("panels/report/controls.rs");
+    let query = read_src("panels/report/query.rs");
+    let state = read_src("panels/report/state.rs");
+    let actions = read_src("panels/report/actions.rs");
+
+    let mask_field = braced_body(&controls, "pub(super) fn strategy_name_mask_field(");
+    for needle in [
+        ".is_some_and(|scope| scope.is_auto_core())",
+        "MoonInput::new(\"rep-strategy-mask\")",
+        ".state(&self.strategy_name_mask_input)",
+        "report.filter.strategy_mask_tip",
+    ] {
+        assert!(
+            mask_field.contains(needle),
+            "the separate AutoCore mask field must retain {needle:?}"
+        );
+    }
+
+    let core_combo = braced_body(&controls, "pub(super) fn core_combo(");
+    for needle in [
+        "backend.group_cores(&self.group)",
+        "selected_auto_core_name(core, &live_cores, &cores)",
+        ".fit_trigger_width(",
+        "AUTO_CORE_TRIGGER_MAX_W",
+        "host.tooltip(crate::panels::common::text_tooltip(label))",
+    ] {
+        assert!(
+            core_combo.contains(needle),
+            "the pinned Auto core label must retain {needle:?}"
+        );
+    }
+
+    let filter = braced_body(&query, "pub(super) fn filter(");
+    assert!(
+        filter.contains(".is_some_and(|scope| scope.is_auto_core())")
+            && filter.contains("strategy_name_mask,")
+            && filter.contains("self.strategy_name_mask.trim().to_string()"),
+        "only AutoCore may copy the retained mask into the shared ReportFilter"
+    );
+    let catalog = braced_body(&query, "fn strategy_catalog_scope(");
+    assert!(
+        catalog.contains("scope.strategies = None;")
+            && catalog.contains("scope.strategy_name_mask.clear();"),
+        "the exact strategy catalog must remain independent of both strategy filters"
+    );
+
+    let body = braced_body(&render, "fn render(");
+    for needle in [
+        ".flex_wrap()",
+        "let separated = |section: Div|",
+        ".child(design::chrome_divider(cx, p))",
+        "design::chrome_section(cx)",
+        ".strategy_name_mask_field(cx)",
+        ".children(strategy_mask.map(separated))",
+        ".children(date_filters.into_iter().flatten().map(separated))",
+        ".child(separated(actions).ml_auto())",
+    ] {
+        assert!(
+            body.contains(needle),
+            "the wrapping semantic toolbar must retain {needle:?}"
+        );
+    }
+    assert!(
+        body.matches("design::chrome_section(cx)").count() >= 7
+            && !body.contains(".overflow_x_scroll()"),
+        "Report filter concepts must stay grouped and wrap without horizontal scrolling"
+    );
+
+    let construction = braced_body(&state, "pub(crate) fn new_with_scope(");
+    for needle in [
+        "report.filter.strategy_mask_ph",
+        "&strategy_name_mask_input",
+        "panel.strategy_name_mask = value;",
+        "panel.persist_filters(None, cx);",
+        "panel.request_requery(cx);",
+    ] {
+        assert!(
+            construction.contains(needle),
+            "the retained mask input must preserve {needle:?}"
+        );
+    }
+    let restore = braced_body(&state, "pub(super) fn restore_persisted_filters(");
+    assert!(
+        restore.contains("self.strategy_name_mask_input")
+            && restore.contains("input.sync_value(mask, input_cx)"),
+        "host restoration must synchronize the retained MoonUI input before querying"
+    );
+    let persist = braced_body(&actions, "pub(super) fn persist_filters(");
+    assert!(
+        persist.contains("strategy_name_mask: Some(self.strategy_name_mask.clone())"),
+        "every Report filter write must retain the Auto strategy-name mask"
     );
 }
 
