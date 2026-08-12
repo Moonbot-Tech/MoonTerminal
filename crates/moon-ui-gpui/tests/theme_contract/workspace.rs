@@ -3,13 +3,15 @@
 
 use super::support::*;
 
-/// Catches adding a second `DockArea` or deleting the addressed `ChartTabs` activation in
-/// `shell/workspace.rs`; either duplicates hidden panel work or makes chart requests stay hidden.
+/// Catches adding a second `DockArea` or breaking the ordered Auto surface route. Removing either
+/// `chart_tabs/mod.rs` publication leaves a report coin hidden on Report or leaves an emptied Main
+/// on Charts; bypassing the group cursor can replay another window's or a rebuilt window's event.
 #[test]
 fn auto_workspace_keeps_one_dock_and_the_chart_route() {
     let shell = code_only(&read_src("shell/mod.rs"));
     let init = code_only(&read_src("shell/init.rs"));
     let workspace = code_only(&read_src("shell/workspace.rs"));
+    let chart_tabs = code_only(&read_src("chart_tabs/mod.rs"));
 
     assert_eq!(
         shell.matches("dock: Entity<DockArea>").count(),
@@ -27,9 +29,22 @@ fn auto_workspace_keeps_one_dock_and_the_chart_route() {
     );
     let reconcile = code_only(braced_body(&workspace, "fn reconcile_workspace_window("));
     assert!(
-        reconcile.contains("activate_panel_by_name(\"ChartTabs\"")
-            && reconcile.contains("addressed_group.as_deref() == Some(self.group.as_str())"),
-        "only a Main-open revision addressed to this Auto group may reveal ChartTabs"
+        reconcile.contains("auto_workspace_surface_request(&self.group)")
+            && reconcile.contains("resolve_auto_workspace_surface(")
+            && reconcile.contains("activate_panel_by_name(surface.panel_name()")
+            && !reconcile.contains("open_main_request"),
+        "only this group's latest unseen Auto surface may reach named dock activation"
+    );
+    let open = code_only(braced_body(&chart_tabs, "fn handle_open_request("));
+    assert!(
+        open.contains("request_chart_tabs_after_main_open(&group)"),
+        "a successfully opened Main chart must publish the ordered ChartTabs surface"
+    );
+    let close = code_only(braced_body(&chart_tabs, "fn sync_close_active_chart("));
+    assert!(
+        close.contains("matches!(self.active, Tab::Main)")
+            && close.contains("request_report_after_main_close("),
+        "only Escape from visible Main may publish the ordered Report surface after close"
     );
 }
 

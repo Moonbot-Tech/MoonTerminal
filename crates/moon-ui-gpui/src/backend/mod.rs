@@ -86,9 +86,8 @@ fn finalize_recent_warning_episodes(
 
 /// Atomic identity of the most recent request to open a market on a group's Main chart.
 ///
-/// The target and group remain available after consumption so the Shell can reveal Auto's hidden
-/// ChartTabs for the same revision. Draining clears `pending` and the one-shot `activate` bit
-/// together; no parallel field can retain a stale group, activation bit, or revision.
+/// The target, routing authority, owning group, activation bit, and revision move together.
+/// Draining clears `pending` and `activate`; no parallel field can retain stale routing data.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OpenMainRequest {
     target: Option<(CoreId, String)>,
@@ -221,16 +220,17 @@ impl OpenMainRequest {
         }
     }
 
-    /// Return the group addressed by the latest revision, including after it was drained.
+    /// Return the group addressed by the latest revision for routing regressions.
     ///
     /// Returns:
     ///     Borrowed owning group, or `None` before the first valid request and after reconciliation
     ///     cancels a request whose core no longer has an owner.
+    #[cfg(test)]
     pub(crate) fn addressed_group(&self) -> Option<&str> {
         self.group.as_deref()
     }
 
-    /// Return the latest request revision for Shell reveal tracking.
+    /// Return the latest request revision for pending ChartTabs signatures and regressions.
     ///
     /// Returns:
     ///     Wrapping revision, zero before the first request.
@@ -966,7 +966,7 @@ impl Backend {
             .map(|session| session.group.as_str())
     }
 
-    /// Reconcile pending Main routing and Shell reveal metadata after session topology changes.
+    /// Reconcile pending Main routing after session topology changes.
     ///
     /// Returns:
     ///     `true` when a moved core retargeted the request or a removed core cancelled it.
@@ -1183,6 +1183,60 @@ impl Backend {
             .get(group)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// Return one group's latest ordered Auto dock-surface transition.
+    ///
+    /// Args:
+    ///     group: Exact group window whose navigation cursor is being reconciled.
+    ///
+    /// Returns:
+    ///     Latest revision and surface, or `None` before the group publishes its first transition.
+    pub(crate) fn auto_workspace_surface_request(
+        &self,
+        group: &str,
+    ) -> Option<(u64, crate::workspace::AutoWorkspaceSurface)> {
+        self.auto_workspace_surface_requests.current(group)
+    }
+
+    /// Publish ChartTabs after a group successfully consumes and opens a Main request.
+    ///
+    /// Args:
+    ///     group: Exact group whose `ChartTabs` accepted the request.
+    ///
+    /// Returns:
+    ///     Nothing; the shared sequence advances after every successful Main open.
+    pub(crate) fn request_chart_tabs_after_main_open(&mut self, group: &str) {
+        self.auto_workspace_surface_requests
+            .request(group, crate::workspace::AutoWorkspaceSurface::ChartTabs);
+    }
+
+    /// Publish Report only after Escape actually empties an Auto group's Main stack.
+    ///
+    /// Args:
+    ///     group: Exact group addressed by the Escape request.
+    ///     closed: Whether `MainChartStack::close_active` removed a chart.
+    ///     main_surface_active: Whether Main was visible instead of an Add or Custom chart tab.
+    ///
+    /// Returns:
+    ///     `true` when a new Report transition was published and observers need notification.
+    pub(crate) fn request_report_after_main_close(
+        &mut self,
+        group: &str,
+        closed: bool,
+        main_surface_active: bool,
+    ) -> bool {
+        if !crate::workspace::should_return_to_report_after_main_close(
+            self.workspace_mode(group),
+            closed,
+            main_surface_active,
+            self.main_open_markets(group).len(),
+        ) {
+            return false;
+        }
+        self.auto_workspace_surface_requests
+            .request(group, crate::workspace::AutoWorkspaceSurface::Report);
+        true
     }
 
     /// Record group-wide activity and reset Main's inactivity-close timer.

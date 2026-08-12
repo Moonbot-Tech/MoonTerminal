@@ -5,14 +5,130 @@ use moon_core::feed::ExchangeId;
 use moon_core::venue::CoreVenue;
 
 use super::{
-    EffectiveScopeLabel, RetainedCoreScope, WORKSPACE_RAIL_COMPACT_MIN_WIDTH,
-    WORKSPACE_RAIL_FULL_MIN_WIDTH, WorkspaceCoreAvailability, WorkspaceCoreStatus, WorkspaceFocus,
-    WorkspaceNavigationAction, WorkspaceRailDensity, WorkspaceRosterInput, WorkspaceWindowState,
-    changed_auto_workspace_rail_width, derive_workspace_roster, focus_workspace_owner,
-    plan_workspace_navigation, reconcile_workspace_focus, resolve_group_scope,
+    AutoWorkspaceSurface, AutoWorkspaceSurfaceRequests, EffectiveScopeLabel, RetainedCoreScope,
+    WORKSPACE_RAIL_COMPACT_MIN_WIDTH, WORKSPACE_RAIL_FULL_MIN_WIDTH, WorkspaceCoreAvailability,
+    WorkspaceCoreStatus, WorkspaceFocus, WorkspaceNavigationAction, WorkspaceRailDensity,
+    WorkspaceRosterInput, WorkspaceWindowState, changed_auto_workspace_rail_width,
+    derive_workspace_roster, focus_workspace_owner, plan_workspace_navigation,
+    reconcile_workspace_focus, resolve_auto_workspace_surface, resolve_group_scope,
     resolve_singleton_workspace, should_persist_normal_dock, should_remember_classic_trade_core,
-    workspace_rail_density,
+    should_return_to_report_after_main_close, workspace_rail_density,
 };
+
+/// `workspace.rs:should_return_to_report_after_main_close` must require an actually closed last
+/// Main chart; accepting one remaining chart would abandon the survivor, while accepting Classic,
+/// a no-op Escape, or a hidden Main beneath Add/Custom would change established navigation.
+#[test]
+fn escape_returns_to_report_only_after_auto_main_becomes_empty() {
+    assert!(should_return_to_report_after_main_close(
+        WorkspaceMode::AutoTrading,
+        true,
+        true,
+        0
+    ));
+    assert!(!should_return_to_report_after_main_close(
+        WorkspaceMode::AutoTrading,
+        true,
+        true,
+        1
+    ));
+    assert!(!should_return_to_report_after_main_close(
+        WorkspaceMode::Classic,
+        true,
+        true,
+        0
+    ));
+    assert!(!should_return_to_report_after_main_close(
+        WorkspaceMode::AutoTrading,
+        false,
+        true,
+        0
+    ));
+    assert!(!should_return_to_report_after_main_close(
+        WorkspaceMode::AutoTrading,
+        true,
+        false,
+        0
+    ));
+}
+
+/// `workspace.rs:AutoWorkspaceSurfaceRequests::request` must replace one group's prior event and
+/// `resolve_auto_workspace_surface` must consume its revision in every mode. Retaining the first
+/// event would invert coalesced open/close order; sharing group state or replaying a seen event
+/// would move an unrelated or rebuilt window to the wrong surface.
+#[test]
+fn auto_surface_requests_preserve_order_group_and_cursor() {
+    let mut requests = AutoWorkspaceSurfaceRequests::default();
+    requests.request("alpha", AutoWorkspaceSurface::ChartTabs);
+    requests.request("beta", AutoWorkspaceSurface::Report);
+    requests.request("alpha", AutoWorkspaceSurface::Report);
+
+    let mut alpha_cursor = 0;
+    assert_eq!(
+        resolve_auto_workspace_surface(
+            WorkspaceMode::AutoTrading,
+            &mut alpha_cursor,
+            requests.current("alpha")
+        ),
+        Some(AutoWorkspaceSurface::Report),
+        "a later Escape must win over the earlier chart open"
+    );
+    let mut beta_cursor = 0;
+    assert_eq!(
+        resolve_auto_workspace_surface(
+            WorkspaceMode::AutoTrading,
+            &mut beta_cursor,
+            requests.current("beta")
+        ),
+        Some(AutoWorkspaceSurface::Report),
+        "alpha events must not replace beta's latest surface"
+    );
+
+    requests.request("alpha", AutoWorkspaceSurface::ChartTabs);
+    assert_eq!(
+        resolve_auto_workspace_surface(
+            WorkspaceMode::AutoTrading,
+            &mut alpha_cursor,
+            requests.current("alpha")
+        ),
+        Some(AutoWorkspaceSurface::ChartTabs),
+        "a later chart open must win over the earlier Escape"
+    );
+    let current = requests
+        .current("alpha")
+        .expect("the literal request must exist");
+
+    let mut reconstructed_cursor = current.0;
+    assert_eq!(
+        resolve_auto_workspace_surface(
+            WorkspaceMode::AutoTrading,
+            &mut reconstructed_cursor,
+            Some(current)
+        ),
+        None
+    );
+
+    requests.request("alpha", AutoWorkspaceSurface::ChartTabs);
+    let classic_event = requests.current("alpha");
+    assert_eq!(
+        resolve_auto_workspace_surface(
+            WorkspaceMode::Classic,
+            &mut reconstructed_cursor,
+            classic_event
+        ),
+        None
+    );
+    assert_eq!(reconstructed_cursor, classic_event.unwrap().0);
+    assert_eq!(
+        resolve_auto_workspace_surface(
+            WorkspaceMode::AutoTrading,
+            &mut reconstructed_cursor,
+            classic_event
+        ),
+        None,
+        "an event already observed in Classic must not replay after switching to Auto"
+    );
+}
 
 /// Protects the shared rail-width setter from redundant revisions and unusable persisted bounds.
 ///

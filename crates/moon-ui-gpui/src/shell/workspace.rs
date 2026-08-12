@@ -385,39 +385,34 @@ impl Shell {
         });
     }
 
-    /// Apply the persisted workspace mode/layout and reveal an addressed Main chart when required.
+    /// Apply workspace state and reveal the latest ordered group-local Auto surface when required.
     ///
     /// Args:
     ///     window: Owning group window required by the live DockArea APIs.
     ///     cx: Shell context used to read Backend and update the dock.
     ///
     /// Returns:
-    ///     Nothing; Classic chart requests are recorded but never steal dock activation.
+    ///     Nothing; Classic observes surface revisions but never changes dock activation for them.
     fn reconcile_workspace_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (mode, revision, addressed_group) = {
+        let (mode, surface_request) = {
             let backend = self.backend.read(cx);
             (
                 backend.workspace_mode(&self.group),
-                backend.open_main_request.revision(),
-                backend
-                    .open_main_request
-                    .addressed_group()
-                    .map(str::to_string),
+                backend.auto_workspace_surface_request(&self.group),
             )
         };
+        let surface = crate::workspace::resolve_auto_workspace_surface(
+            mode,
+            &mut self.last_auto_surface_revision,
+            surface_request,
+        );
         self.apply_workspace_mode(mode, window, cx);
         self.sync_auto_dock_topology(window, cx);
         self.sync_auto_rail_width(window, cx);
 
-        if revision == self.last_open_main_revision {
-            return;
-        }
-        self.last_open_main_revision = revision;
-        if self.applied_workspace_mode == WorkspaceMode::AutoTrading
-            && addressed_group.as_deref() == Some(self.group.as_str())
-        {
+        if let Some(surface) = surface {
             self.dock.update(cx, |dock, cx| {
-                dock.activate_panel_by_name("ChartTabs", window, cx);
+                dock.activate_panel_by_name(surface.panel_name(), window, cx);
             });
         }
     }

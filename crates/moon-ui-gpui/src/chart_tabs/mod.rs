@@ -846,6 +846,11 @@ impl ChartTabs {
             self.sync_active_scale(cx);
             self.sync_main_chart_target(cx);
             self.persist_scales(cx);
+            let group = self.group.clone();
+            self.backend.update(cx, |backend, backend_cx| {
+                backend.request_chart_tabs_after_main_open(&group);
+                backend_cx.notify();
+            });
         }
     }
 
@@ -1127,7 +1132,8 @@ impl ChartTabs {
     }
 
     /// Close Main's active chart on a larger `close_active_chart_rev` for this group.
-    /// This works in fullscreen and tiled-stack presentation and does not alter drawing mode.
+    /// This works in fullscreen and tiled-stack presentation and does not alter drawing mode. When
+    /// Escape empties an Auto Main stack, publish an ordered request for Shell to reveal Report.
     ///
     /// Args:
     ///     cx: Tab context used to read the addressed revision and update Main.
@@ -1147,8 +1153,13 @@ impl ChartTabs {
         }
         self.last_close_active_chart_rev = rev;
         if ours {
-            self.main.update(cx, |s, scx| {
-                s.close_active(scx);
+            let main_surface_active = matches!(self.active, Tab::Main);
+            let closed = self.main.update(cx, |s, scx| s.close_active(scx));
+            let group = self.group.clone();
+            self.backend.update(cx, |backend, backend_cx| {
+                if backend.request_report_after_main_close(&group, closed, main_surface_active) {
+                    backend_cx.notify();
+                }
             });
         }
     }
