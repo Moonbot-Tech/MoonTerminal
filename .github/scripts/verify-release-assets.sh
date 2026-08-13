@@ -23,24 +23,45 @@ fail() {
 
 # Find exactly one draft by scanning a bounded authenticated release list.
 find_draft_release() {
-    local page page_json page_size matches match_count
-    matches='[]'
+    local page page_json page_record page_size page_match_count page_match_id
+    local match_count=0
+    local match_id=""
 
     for ((page = 1; page <= max_release_pages; page++)); do
-        page_json="$(gh api "${repository_api}/releases?per_page=${releases_per_page}&page=${page}")"
-        jq -e 'type == "array"' <<<"$page_json" >/dev/null \
+        if ! page_json="$(gh api "${repository_api}/releases?per_page=${releases_per_page}&page=${page}")"; then
+            fail "failed to read GitHub release-list metadata"
+        fi
+        if ! page_record="$(
+            jq -er --arg tag "$release_tag" '
+                if type == "array" then
+                    [.[] | select(.tag_name == $tag)] as $matches
+                    | [length, ($matches | length), ($matches[0].id // "")]
+                    | @tsv
+                else
+                    error("release list must be an array")
+                end
+            ' <<<"$page_json"
+        )"; then
+            fail "GitHub returned malformed release-list metadata"
+        fi
+        IFS=$'\t' read -r page_size page_match_count page_match_id <<<"$page_record" \
             || fail "GitHub returned malformed release-list metadata"
-        page_size="$(jq 'length' <<<"$page_json")"
+        if [[ ! "$page_size" =~ ^(0|[1-9][0-9]*)$ \
+            || ! "$page_match_count" =~ ^(0|[1-9][0-9]*)$ \
+            || "$page_match_count" -gt "$page_size" ]]; then
+            fail "GitHub returned malformed release-list metadata"
+        fi
         if (( page_size > releases_per_page )); then
             fail "GitHub returned an oversized release-list page"
         fi
-        matches="$(
-            jq -cn \
-                --argjson found "$matches" \
-                --argjson current "$page_json" \
-                --arg tag "$release_tag" \
-                '$found + [$current[] | select(.tag_name == $tag)]'
-        )"
+        if (( page_match_count == 1 )); then
+            [[ "$page_match_id" =~ ^[1-9][0-9]*$ ]] \
+                || fail "GitHub release is missing a numeric id"
+            if (( match_count == 0 )); then
+                match_id="$page_match_id"
+            fi
+        fi
+        match_count=$((match_count + page_match_count))
         if (( page_size < releases_per_page )); then
             break
         fi
@@ -49,11 +70,10 @@ find_draft_release() {
         fi
     done
 
-    match_count="$(jq 'length' <<<"$matches")"
     if [[ "$match_count" != "1" ]]; then
         fail "release list must contain exactly one release tagged $release_tag"
     fi
-    jq -c '.[0]' <<<"$matches"
+    printf '%s\n' "$match_id"
 }
 
 # Read one release by its already-verified numeric id.
@@ -149,8 +169,9 @@ local_size="$(wc -c < "$asset_path" | tr -d '[:space:]')"
 case "$verification_state" in
     draft)
         [[ -z "$expected_release_id" ]] || fail "draft mode does not accept a release id"
-        listed_release_json="$(find_draft_release)"
-        listed_release_id="$(jq -r '.id // empty' <<<"$listed_release_json")"
+        if ! listed_release_id="$(find_draft_release)"; then
+            exit 1
+        fi
         release_json="$(release_by_id "$listed_release_id")"
         expected_release_id="$listed_release_id"
         ;;
