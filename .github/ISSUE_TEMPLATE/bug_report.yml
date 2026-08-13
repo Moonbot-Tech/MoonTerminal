@@ -11,7 +11,7 @@ body:
     attributes:
       label: Version
       description: "Release tag, or the build stamp from the log line `build: moonterminal=<sha>`."
-      placeholder: "v0.10"
+      placeholder: "v0.24.1"
     validations:
       required: true
   - type: dropdown
