@@ -182,7 +182,7 @@ jobs:
           files: |
             dist/windows/MoonTerminal.exe
             dist/macos/MoonTerminal.dmg
-      - name: Verify the published Windows digest
+      - name: Verify the draft Windows digest
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

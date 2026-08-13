@@ -23,6 +23,7 @@
 //! - **A wholesale reindent of the YAML**, or renaming the job. Both fail loudly rather than
 //!   silently, which is the safe direction for a gate — fix [`TEST_JOB`] and move on.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -619,11 +620,9 @@ fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
         String::from_utf8_lossy(&patch.stderr)
     );
     assert!(!run_release_validator(&root, "v0.24").status.success());
-    assert!(
-        !run_release_validator(&root, "v18446744073709551616.0.0")
-            .status
-            .success()
-    );
+    assert!(!run_release_validator(&root, "v18446744073709551616.0.0")
+        .status
+        .success());
 
     commit_fixture(&root, "patch-nine");
     run_git(&root, &["tag", "v0.24.9"]);
@@ -641,18 +640,14 @@ fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
     run_git(&root, &["checkout", "--detach", "v0.24.9"]);
     let patch_nine = run_release_validator(&root, "v0.24.9");
     assert!(!patch_nine.status.success());
-    assert!(
-        String::from_utf8_lossy(&patch_nine.stderr)
-            .contains("only the greatest canonical stable tag")
-    );
+    assert!(String::from_utf8_lossy(&patch_nine.stderr)
+        .contains("only the greatest canonical stable tag"));
 
     run_git(&root, &["checkout", "--detach", "v0.21.0"]);
     let alias = run_release_validator(&root, "v0.21.0");
     assert!(!alias.status.success());
-    assert!(
-        String::from_utf8_lossy(&alias.stderr)
-            .contains("release tag aliases an existing stable version")
-    );
+    assert!(String::from_utf8_lossy(&alias.stderr)
+        .contains("release tag aliases an existing stable version"));
     std::fs::remove_dir_all(root).expect("remove release-policy fixture");
 }
 
@@ -684,7 +679,7 @@ fn run_release_validator(root: &Path, tag: &str) -> Output {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.'),
         "release-policy fixture tag must be shell-safe"
     );
-    Command::new(release_validator_bash())
+    Command::new(release_script_bash())
         .arg("validate-release-tag.sh")
         .arg(tag)
         .env("GITHUB_OUTPUT", "github-output.txt")
@@ -695,7 +690,7 @@ fn run_release_validator(root: &Path, tag: &str) -> Output {
 
 /// Resolve Git for Windows' Bash instead of the higher-priority WSL compatibility launcher.
 #[cfg(windows)]
-fn release_validator_bash() -> PathBuf {
+fn release_script_bash() -> PathBuf {
     let output = Command::new("where.exe")
         .arg("git.exe")
         .output()
@@ -717,15 +712,15 @@ fn release_validator_bash() -> PathBuf {
     bash
 }
 
-/// Resolve the ordinary Bash executable on non-Windows CI hosts.
+/// Resolve the ordinary Bash executable for release scripts on non-Windows CI hosts.
 #[cfg(not(windows))]
-fn release_validator_bash() -> PathBuf {
+fn release_script_bash() -> PathBuf {
     PathBuf::from("bash")
 }
 
-/// Breakage guarded: the release action uploads a corrupted or different Windows executable while
-/// the workflow reports success. The auto-updater would then trust GitHub metadata for bytes that
-/// were never compared with the artifact this workflow built.
+/// Breakage guarded: a draft-only release is looked up through the published-tag endpoint, or the
+/// publisher mutates a tag instead of the exact verified release id. The release would either stay
+/// permanently hidden after a 404 or publish different metadata than the updater was meant to trust.
 #[test]
 fn releases_verify_the_published_windows_digest() {
     let text = release_workflow_text();
@@ -764,12 +759,19 @@ fn releases_verify_the_published_windows_digest() {
         "release asset verification must accept only the three-component publication contract"
     );
     for required in [
+        "max_release_pages=10",
+        "/releases?per_page=${releases_per_page}&page=${page}",
+        "select(.tag_name == $tag)",
+        "release list must contain exactly one release tagged $release_tag",
+        "release_by_id",
+        "release_json=\"$(release_by_id \"$listed_release_id\")\"",
+        "'[\"MoonTerminal.dmg\",\"MoonTerminal.exe\"]'",
         "remote_digest=",
         "local_digest=",
-        "[[ \"${remote_digest,,}\" != \"$local_digest\" ]]",
+        "[[ \"${remote_digest,,}\" == \"$local_digest\" ]]",
         "remote_size=",
         "local_size=",
-        "[[ \"$remote_size\" != \"$local_size\" ]]",
+        "[[ \"$remote_size\" == \"$local_size\" ]]",
         "MoonTerminal.exe",
     ] {
         assert!(
@@ -779,30 +781,40 @@ fn releases_verify_the_published_windows_digest() {
     }
 
     let publisher = shell_code(&release_publisher_text());
-    for required in [
-        "git ls-remote origin \"$tag_ref\" \"$tag_ref^{}\"",
-        "[[ -z \"$remote_commit\" || \"$remote_commit\" != \"$release_commit\" ]]",
-        "gh release edit \"$release_tag\" --draft=false --latest --verify-tag",
-        "jq -r '.immutable'",
-        "[[ \"$remote_commit\" != \"$release_commit\" ]]",
-    ] {
-        assert!(
-            publisher.contains(required),
-            "release publisher must enforce `{required}`"
-        );
-    }
     let preflight = publisher
         .find("/immutable-releases\" --silent")
         .expect("publisher must preflight immutable releases");
+    assert!(
+        publisher.contains("gh api \"${repository_api}/releases/${release_id}\""),
+        "publication must PATCH the exact verified numeric release id"
+    );
     let publish_draft = publisher
-        .find("gh release edit \"$release_tag\" --draft=false")
-        .expect("publisher must make the verified draft public");
+        .find("--method PATCH")
+        .expect("publisher must patch the verified release id");
     let post_publish = publisher
-        .find("jq -r '.immutable'")
-        .expect("publisher must confirm the public release is immutable");
+        .find("published \"$release_id\"")
+        .expect("publisher must verify the same public immutable release id");
     assert!(
         preflight < publish_draft && publish_draft < post_publish,
         "immutable-release preflight must run before publication and confirmation after it"
+    );
+    assert!(
+        publisher.matches("require_remote_tag_commit \"").count() == 3,
+        "publisher must check the remote tag at all three publication boundaries"
+    );
+    let verified_draft = publisher
+        .find("release_id=\"$(bash .github/scripts/verify-release-assets.sh")
+        .expect("publisher must capture the verified draft id");
+    let pre_publish_tag = publisher
+        .find("require_remote_tag_commit \"remote release tag moved before publication\"")
+        .expect("publisher must recheck the remote tag before publication");
+    assert!(
+        verified_draft < pre_publish_tag && pre_publish_tag < publish_draft,
+        "publisher must recheck the remote tag between draft verification and numeric-id PATCH"
+    );
+    assert!(
+        !publisher.contains("gh release edit"),
+        "draft publication must never resolve its mutation target by tag"
     );
     assert!(
         text.matches("secrets.RELEASE_ADMIN_TOKEN").count() == 1
@@ -815,4 +827,255 @@ fn releases_verify_the_published_windows_digest() {
             && publisher.contains("RELEASE_ADMIN_TOKEN is required"),
         "only the publication step may use an explicit token with Administration read permission"
     );
+}
+
+/// Create an isolated tagged repository, exact release metadata, and a recording fake GitHub CLI.
+///
+/// Returns the fixture root and the tagged commit expected by both draft metadata and publication.
+fn create_release_script_fixture() -> (PathBuf, String) {
+    let root = std::env::temp_dir().join(format!(
+        "moonterminal-release-publish-{}",
+        std::process::id()
+    ));
+    if root.exists() {
+        std::fs::remove_dir_all(&root).expect("remove stale release-publish fixture");
+    }
+    std::fs::create_dir_all(root.join(".github/scripts")).expect("create release script directory");
+    std::fs::create_dir_all(root.join("bin")).expect("create fixture bin directory");
+    std::fs::write(
+        root.join(".github/scripts/verify-release-assets.sh"),
+        release_verifier_text(),
+    )
+    .expect("write release verifier into fixture");
+    std::fs::write(
+        root.join(".github/scripts/publish-verified-release.sh"),
+        release_publisher_text(),
+    )
+    .expect("write release publisher into fixture");
+    std::fs::write(root.join("MoonTerminal.exe"), b"abc")
+        .expect("write local Windows asset fixture");
+
+    run_git(&root, &["init", "-b", "main"]);
+    run_git(&root, &["config", "user.name", "MoonTerminal Test"]);
+    run_git(
+        &root,
+        &["config", "user.email", "moonterminal@example.invalid"],
+    );
+    commit_fixture(&root, "release-script-fixture");
+    run_git(&root, &["tag", "-a", "v0.24.2", "-m", "v0.24.2"]);
+    let commit = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&root)
+            .output()
+            .expect("read fixture commit")
+            .stdout,
+    )
+    .expect("fixture commit must be UTF-8")
+    .trim()
+    .to_owned();
+    run_git(&root, &["init", "--bare", "remote.git"]);
+    let remote = root.join("remote.git").to_string_lossy().into_owned();
+    run_git(&root, &["remote", "add", "origin", &remote]);
+    run_git(&root, &["push", "origin", "main", "--tags"]);
+
+    let unrelated = (0..100)
+        .map(|index| format!(r#"{{"id":{},"tag_name":"v0.0.{}"}}"#, 10_000 + index, index))
+        .collect::<Vec<_>>()
+        .join(",");
+    std::fs::write(root.join("page-1.json"), format!("[{unrelated}]"))
+        .expect("write full first release page");
+    let draft = release_fixture_json(&commit, true, false);
+    let published = release_fixture_json(&commit, false, true);
+    std::fs::write(root.join("page-2.json"), format!("[{draft}]"))
+        .expect("write second release page");
+    std::fs::write(root.join("draft.json"), draft).expect("write draft release fixture");
+    std::fs::write(root.join("published.json"), published)
+        .expect("write published release fixture");
+    std::fs::write(root.join("bin/gh"), fake_gh_script()).expect("write fake GitHub CLI");
+    make_fixture_executable(&root.join("bin/gh"));
+    (root, commit)
+}
+
+/// Render one independent GitHub release response for the three-byte `abc` Windows fixture.
+fn release_fixture_json(commit: &str, draft: bool, immutable: bool) -> String {
+    format!(
+        r#"{{"id":4242,"tag_name":"v0.24.2","target_commitish":"{commit}","draft":{draft},"prerelease":false,"immutable":{immutable},"assets":[{{"name":"MoonTerminal.dmg","size":7,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}]}}"#
+    )
+}
+
+/// Return a fake `gh api` implementation that models draft 404 and records exact PATCH fields.
+fn fake_gh_script() -> &'static str {
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == "api" ]] || { echo "[FAIL] fake gh accepts only api" >&2; exit 1; }
+shift
+endpoint="${1:?endpoint is required}"
+shift
+printf '%s\t%s\n' "$endpoint" "$*" >> "$GH_FIXTURE_DIR/requests.log"
+
+case "$endpoint" in
+    repos/Moonbot-Tech/MoonTerminal/immutable-releases)
+        exit 0
+        ;;
+    repos/Moonbot-Tech/MoonTerminal/releases\?per_page=100\&page=*)
+        page="${endpoint##*page=}"
+        file="$GH_FIXTURE_DIR/page-${page}.json"
+        [[ -f "$file" ]] && cat "$file" || printf '[]\n'
+        ;;
+    repos/Moonbot-Tech/MoonTerminal/releases/4242)
+        if [[ " $* " == *" --method PATCH "* ]]; then
+            [[ " $* " == *" -F draft=false "* ]]
+            [[ " $* " == *" -F prerelease=false "* ]]
+            [[ " $* " == *" -f make_latest=true "* ]]
+            [[ " $* " != *" -F make_latest=true "* ]]
+            : > "$GH_FIXTURE_DIR/published.state"
+            cat "$GH_FIXTURE_DIR/published.json"
+        elif [[ -f "$GH_FIXTURE_DIR/published.state" ]]; then
+            cat "$GH_FIXTURE_DIR/published.json"
+        else
+            cat "$GH_FIXTURE_DIR/draft.json"
+        fi
+        ;;
+    repos/Moonbot-Tech/MoonTerminal/releases/tags/v0.24.2)
+        if [[ -f "$GH_FIXTURE_DIR/published.state" ]]; then
+            cat "$GH_FIXTURE_DIR/published.json"
+        else
+            echo "gh: Not Found (HTTP 404)" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "[FAIL] unexpected fake gh endpoint: $endpoint" >&2
+        exit 1
+        ;;
+esac
+"#
+}
+
+/// Give a generated fixture command executable permissions where Unix requires them.
+fn make_fixture_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path)
+            .expect("read fixture command metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("make fixture command executable");
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+/// Run one release script with the recording fake GitHub CLI first on `PATH`.
+fn run_release_script(root: &Path, script: &str, args: &[&str]) -> Output {
+    let mut paths = vec![root.join("bin")];
+    if let Some(current) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&current));
+    }
+    let fixture_path: OsString = std::env::join_paths(paths).expect("join fixture PATH");
+    Command::new(release_script_bash())
+        .arg(script)
+        .args(args)
+        .current_dir(root)
+        .env("PATH", fixture_path)
+        .env("GH_FIXTURE_DIR", root)
+        .env("GITHUB_REPOSITORY", "Moonbot-Tech/MoonTerminal")
+        .env("GH_TOKEN", "fixture-token")
+        .output()
+        .expect("run release script fixture")
+}
+
+/// Breakage guarded: replacing draft-list discovery with the tag endpoint reproduces GitHub's 404,
+/// while publishing by a tag or wrong id can finalize metadata other than the verified draft.
+#[test]
+fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
+    let (root, commit) = create_release_script_fixture();
+    let verifier = ".github/scripts/verify-release-assets.sh";
+    let publisher = ".github/scripts/publish-verified-release.sh";
+
+    let draft = release_fixture_json(&commit, true, false);
+    std::fs::write(root.join("page-2.json"), format!("[{draft}]"))
+        .expect("restore exact draft release page");
+    std::fs::write(root.join("draft.json"), &draft).expect("restore exact draft release by id");
+    std::fs::write(root.join("requests.log"), "").expect("reset fake gh request log");
+    let verified = run_release_script(&root, verifier, &["v0.24.2", "MoonTerminal.exe"]);
+    assert!(
+        verified.status.success() && String::from_utf8_lossy(&verified.stdout).trim() == "4242",
+        "draft verification failed: status={} stdout={} stderr={}",
+        verified.status,
+        String::from_utf8_lossy(&verified.stdout),
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let verify_calls =
+        std::fs::read_to_string(root.join("requests.log")).expect("read draft verification calls");
+    assert!(
+        verify_calls.contains("releases?per_page=100&page=1")
+            && verify_calls.contains("releases?per_page=100&page=2")
+            && !verify_calls.contains("releases/tags/v0.24.2"),
+        "draft verification did not use bounded list discovery: {verify_calls}"
+    );
+
+    let wrong_target = release_fixture_json(&"0".repeat(40), true, false);
+    std::fs::write(root.join("page-2.json"), format!("[{wrong_target}]"))
+        .expect("write wrong-target release page");
+    std::fs::write(root.join("draft.json"), &wrong_target)
+        .expect("write wrong-target release by id");
+    let rejected = run_release_script(&root, verifier, &["v0.24.2", "MoonTerminal.exe"]);
+    assert!(
+        !rejected.status.success()
+            && String::from_utf8_lossy(&rejected.stderr)
+                .contains("release target does not match the tagged commit"),
+        "wrong release target was not rejected: status={} stdout={} stderr={}",
+        rejected.status,
+        String::from_utf8_lossy(&rejected.stdout),
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    std::fs::write(root.join("page-2.json"), format!("[{draft}]"))
+        .expect("restore exact draft release page after rejection");
+    std::fs::write(root.join("draft.json"), &draft)
+        .expect("restore exact draft release by id after rejection");
+
+    std::fs::write(root.join("requests.log"), "").expect("reset publication request log");
+    let published = run_release_script(&root, publisher, &["v0.24.2", &commit, "MoonTerminal.exe"]);
+    assert!(
+        published.status.success(),
+        "release publication failed: status={} stdout={} stderr={}",
+        published.status,
+        String::from_utf8_lossy(&published.stdout),
+        String::from_utf8_lossy(&published.stderr)
+    );
+    let calls =
+        std::fs::read_to_string(root.join("requests.log")).expect("read publication requests");
+    let patch = calls
+        .lines()
+        .position(|line| {
+            line.starts_with("repos/Moonbot-Tech/MoonTerminal/releases/4242\t")
+                && line.contains("--method PATCH")
+                && line.contains("-F draft=false")
+                && line.contains("-F prerelease=false")
+                && line.contains("-f make_latest=true")
+                && !line.contains("-F make_latest=true")
+        })
+        .expect("publication must PATCH the verified id with correctly typed fields");
+    let published_id_read = calls
+        .lines()
+        .enumerate()
+        .find(|(index, line)| {
+            *index > patch && *line == "repos/Moonbot-Tech/MoonTerminal/releases/4242\t"
+        })
+        .map(|(index, _)| index)
+        .expect("publication must re-read the same release id");
+    let published_tag_read = calls
+        .lines()
+        .position(|line| line == "repos/Moonbot-Tech/MoonTerminal/releases/tags/v0.24.2\t")
+        .expect("publication must confirm public tag discovery");
+    assert!(
+        patch < published_id_read && published_id_read < published_tag_read,
+        "publication did not preserve the verified release id through its postconditions: {calls}"
+    );
+
+    std::fs::remove_dir_all(root).expect("remove release-publish fixture");
 }
