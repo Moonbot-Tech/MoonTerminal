@@ -1,5 +1,5 @@
-//! Static contract on `.github/workflows/build.yml`: CI must actually RUN the whole test
-//! suite on pull requests, and must treat a failure as blocking.
+//! Static contracts for the build and release workflows: CI must run the whole test suite on pull
+//! requests, and releases must build one exact canonical tag and verify the published executable.
 //!
 //! This exists because the workflow built the binary and nothing else for the project's whole
 //! history, so a test suite that did not even compile sat on `main` unnoticed. The guard is
@@ -23,7 +23,8 @@
 //! - **A wholesale reindent of the YAML**, or renaming the job. Both fail loudly rather than
 //!   silently, which is the safe direction for a gate — fix [`TEST_JOB`] and move on.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 /// The job key this guard is pinned to.
 ///
@@ -57,13 +58,21 @@ const EXPECTED_SCHEDULE_EXCLUSION: &str = "github.event_name != 'schedule'";
 /// re-wrapping, incidental spacing) must not redden the guard that checks this — only an actual
 /// widening of the condition may.
 fn normalize_if_condition(line: &str) -> String {
-    let after_if = line.trim().strip_prefix("if:").unwrap_or_else(|| line.trim()).trim();
+    let after_if = line
+        .trim()
+        .strip_prefix("if:")
+        .unwrap_or_else(|| line.trim())
+        .trim();
     let unwrapped = after_if
         .strip_prefix("${{")
         .and_then(|s| s.strip_suffix("}}"))
         .map(str::trim)
         .unwrap_or(after_if);
-    unwrapped.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'")
+    unwrapped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('"', "'")
 }
 
 /// The third blocking gate CONTRIBUTING.md promises, alongside `TEST_JOB` and the Windows `.exe`
@@ -83,6 +92,57 @@ fn workflow_path() -> PathBuf {
 fn workflow_text() -> String {
     let path = workflow_path();
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn release_workflow_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("moon-core must live under workspace/crates")
+        .join(".github/workflows/release.yml")
+}
+
+fn release_workflow_text() -> String {
+    let path = release_workflow_path();
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn release_verifier_text() -> String {
+    let path = release_workflow_path()
+        .parent()
+        .expect("release workflow must have a parent")
+        .parent()
+        .expect("workflows must live under .github")
+        .join("scripts/verify-release-assets.sh");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn release_validator_text() -> String {
+    let path = release_workflow_path()
+        .parent()
+        .expect("release workflow must have a parent")
+        .parent()
+        .expect("workflows must live under .github")
+        .join("scripts/validate-release-tag.sh");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn release_publisher_text() -> String {
+    let path = release_workflow_path()
+        .parent()
+        .expect("release workflow must have a parent")
+        .parent()
+        .expect("workflows must live under .github")
+        .join("scripts/publish-verified-release.sh");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// Remove shell comment lines so disabled security checks cannot satisfy static contracts.
+fn shell_code(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Body lines of the named job, comments stripped.
@@ -349,23 +409,28 @@ fn the_audit_job_is_a_gate_that_actually_runs_cargo_deny() {
 fn the_lockfile_contracts_three_steps_run_in_order_in_every_compiling_job() {
     let text = workflow_text();
     for job in COMPILING_JOBS {
-        let body = job_body(&text, job)
-            .unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
+        let body =
+            job_body(&text, job).unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
 
         let fetch_idx = body
             .iter()
-            .position(|line| line.trim_start().starts_with("run:") && line.contains("cargo fetch --locked"))
+            .position(|line| {
+                line.trim_start().starts_with("run:") && line.contains("cargo fetch --locked")
+            })
             .unwrap_or_else(|| {
                 panic!("job `{job}` must verify the committed lockfile with `cargo fetch --locked`")
             });
         let update_idx = body
             .iter()
             .position(|line| line.trim_start().starts_with("run:") && line.contains("cargo update"))
-            .unwrap_or_else(|| panic!("job `{job}` must refresh MoonUI with a `cargo update` step"));
+            .unwrap_or_else(|| {
+                panic!("job `{job}` must refresh MoonUI with a `cargo update` step")
+            });
         let assert_idx = body
             .iter()
             .position(|line| {
-                line.trim_start().starts_with("run:") && line.contains("assert-only-moonui-moved.sh")
+                line.trim_start().starts_with("run:")
+                    && line.contains("assert-only-moonui-moved.sh")
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -417,8 +482,8 @@ fn the_moonui_refresh_stays_scoped_and_never_touches_moonproto() {
     expected.sort_unstable();
 
     for job in COMPILING_JOBS {
-        let body = job_body(&text, job)
-            .unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
+        let body =
+            job_body(&text, job).unwrap_or_else(|| panic!("build.yml must keep a `{job}:` job"));
 
         let update_lines: Vec<&str> = body
             .iter()
@@ -435,7 +500,8 @@ fn the_moonui_refresh_stays_scoped_and_never_touches_moonproto() {
             let mut named = dash_p_packages(line);
             named.sort_unstable();
             assert_eq!(
-                named, expected,
+                named,
+                expected,
                 "job `{job}` must refresh exactly the three MoonUI crates \
                  (moon-gpui, moon-gpui-platform, moon-ui) and nothing else — a bare `cargo \
                  update`, a dropped crate, an added one, or `-p moonproto` all defeat the \
@@ -444,4 +510,309 @@ fn the_moonui_refresh_stays_scoped_and_never_touches_moonproto() {
             );
         }
     }
+}
+
+/// Breakage guarded: manual release dispatch checks out the default branch while publishing under
+/// the requested tag, or a bare numeric/prerelease tag bypasses release validation. Either change
+/// can put bytes from the wrong commit behind a version the updater trusts.
+#[test]
+fn releases_build_the_exact_canonical_tag() {
+    let text = release_workflow_text();
+    let validator = release_validator_text();
+    let triggers = text
+        .split_once("\non:\n")
+        .and_then(|(_, rest)| rest.split_once("\npermissions:\n"))
+        .map(|(triggers, _)| triggers)
+        .expect("release.yml must declare triggers before permissions");
+
+    assert!(
+        triggers.contains("tags: [\"v*\"]") && !triggers.contains("[0-9]*"),
+        "release.yml must trigger only on v-prefixed tags"
+    );
+    assert!(
+        text.contains("validate-release-tag.sh \"$RELEASE_TAG\"")
+            && validator.contains(
+                "if [[ ! \"$release_tag\" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]"
+            )
+            && validator.contains("echo \"[FAIL] release tag must use canonical form"),
+        "release.yml must reject non-canonical and prerelease tag forms"
+    );
+    assert!(
+        text.contains("ref: ${{ inputs.tag || github.ref_name }}")
+            && text
+                .matches("ref: ${{ needs.validate.outputs.commit }}")
+                .count()
+                == 3
+            && text.matches("fetch-depth: 0").count() == 4,
+        "validation must resolve the tag and every release job must checkout the immutable commit with full tag history"
+    );
+    assert!(
+        text.contains("group: release-${{ inputs.tag || github.ref_name }}")
+            && text.contains("cancel-in-progress: false"),
+        "release runs for the same canonical tag must not overlap"
+    );
+    assert!(
+        validator.contains("git show-ref --verify --quiet \"$tag_ref\"")
+            && validator.contains("git rev-list -n 1 \"$tag_ref\"")
+            && validator.contains("git merge-base --is-ancestor \"$head_commit\" origin/main")
+            && validator.contains("release tag aliases an existing stable version")
+            && validator.contains("normalized_tag=\"${existing_tag}.0\"")
+            && validator.contains("if [[ \"$release_tag\" != \"$latest_tag\" ]]")
+            && validator.contains("echo \"[FAIL] only the greatest canonical stable tag"),
+        "release validation must bind a real tag to HEAD on main and reject historical versions"
+    );
+}
+
+/// Replacing semantic mixed-version selection with string-only validation would either reject
+/// patch releases or allow `v0.21.0` to alias the historical `v0.21` release.
+#[test]
+fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
+    let root = std::env::temp_dir().join(format!(
+        "moonterminal-release-policy-{}",
+        std::process::id()
+    ));
+    if root.exists() {
+        std::fs::remove_dir_all(&root).expect("remove stale release-policy fixture");
+    }
+    std::fs::create_dir(&root).expect("create release-policy fixture");
+    std::fs::copy(
+        release_workflow_path()
+            .parent()
+            .expect("release workflow has a parent")
+            .parent()
+            .expect("workflows directory has a parent")
+            .join("scripts/validate-release-tag.sh"),
+        root.join("validate-release-tag.sh"),
+    )
+    .expect("copy release validator into fixture");
+    run_git(&root, &["init", "-b", "main"]);
+    run_git(&root, &["config", "user.name", "MoonTerminal Test"]);
+    run_git(
+        &root,
+        &["config", "user.email", "moonterminal@example.invalid"],
+    );
+
+    commit_fixture(&root, "legacy");
+    run_git(&root, &["tag", "v0.21"]);
+    run_git(&root, &["tag", "v0.21.0"]);
+    commit_fixture(&root, "minor");
+    run_git(&root, &["tag", "v0.24.0"]);
+    run_git(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    let minor = run_release_validator(&root, "v0.24.0");
+    assert!(
+        minor.status.success(),
+        "minor release rejected: status={} stdout={} stderr={}",
+        minor.status,
+        String::from_utf8_lossy(&minor.stdout),
+        String::from_utf8_lossy(&minor.stderr)
+    );
+
+    commit_fixture(&root, "patch");
+    run_git(&root, &["tag", "v0.24.1"]);
+    run_git(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    let patch = run_release_validator(&root, "v0.24.1");
+    assert!(
+        patch.status.success(),
+        "patch release rejected: status={} stdout={} stderr={}",
+        patch.status,
+        String::from_utf8_lossy(&patch.stdout),
+        String::from_utf8_lossy(&patch.stderr)
+    );
+    assert!(!run_release_validator(&root, "v0.24").status.success());
+    assert!(
+        !run_release_validator(&root, "v18446744073709551616.0.0")
+            .status
+            .success()
+    );
+
+    commit_fixture(&root, "patch-nine");
+    run_git(&root, &["tag", "v0.24.9"]);
+    commit_fixture(&root, "patch-ten");
+    run_git(&root, &["tag", "v0.24.10"]);
+    run_git(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    let patch_ten = run_release_validator(&root, "v0.24.10");
+    assert!(
+        patch_ten.status.success(),
+        "multi-digit patch release rejected: status={} stdout={} stderr={}",
+        patch_ten.status,
+        String::from_utf8_lossy(&patch_ten.stdout),
+        String::from_utf8_lossy(&patch_ten.stderr)
+    );
+    run_git(&root, &["checkout", "--detach", "v0.24.9"]);
+    let patch_nine = run_release_validator(&root, "v0.24.9");
+    assert!(!patch_nine.status.success());
+    assert!(
+        String::from_utf8_lossy(&patch_nine.stderr)
+            .contains("only the greatest canonical stable tag")
+    );
+
+    run_git(&root, &["checkout", "--detach", "v0.21.0"]);
+    let alias = run_release_validator(&root, "v0.21.0");
+    assert!(!alias.status.success());
+    assert!(
+        String::from_utf8_lossy(&alias.stderr)
+            .contains("release tag aliases an existing stable version")
+    );
+    std::fs::remove_dir_all(root).expect("remove release-policy fixture");
+}
+
+/// Run Git inside the isolated release-policy fixture and require success.
+fn run_git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("run Git for release-policy fixture");
+    assert!(
+        output.status.success(),
+        "Git fixture command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Add one fixture commit so release tags can express strict semantic ordering.
+fn commit_fixture(root: &Path, label: &str) {
+    std::fs::write(root.join("release.txt"), label).expect("write release-policy fixture");
+    run_git(root, &["add", "release.txt"]);
+    run_git(root, &["commit", "-m", label]);
+}
+
+/// Execute the repository's release validator against one isolated fixture tag.
+fn run_release_validator(root: &Path, tag: &str) -> Output {
+    assert!(
+        tag.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.'),
+        "release-policy fixture tag must be shell-safe"
+    );
+    Command::new(release_validator_bash())
+        .arg("validate-release-tag.sh")
+        .arg(tag)
+        .env("GITHUB_OUTPUT", "github-output.txt")
+        .current_dir(root)
+        .output()
+        .expect("run release validator fixture")
+}
+
+/// Resolve Git for Windows' Bash instead of the higher-priority WSL compatibility launcher.
+#[cfg(windows)]
+fn release_validator_bash() -> PathBuf {
+    let output = Command::new("where.exe")
+        .arg("git.exe")
+        .output()
+        .expect("locate Git for Windows");
+    assert!(
+        output.status.success(),
+        "Git for Windows lookup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("Git path must be UTF-8");
+    let bash = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .flat_map(|git| Path::new(git).ancestors().skip(1).take(4))
+        .map(|root| root.join("bin/bash.exe"))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("Git for Windows Bash is missing below: {stdout}"));
+    bash
+}
+
+/// Resolve the ordinary Bash executable on non-Windows CI hosts.
+#[cfg(not(windows))]
+fn release_validator_bash() -> PathBuf {
+    PathBuf::from("bash")
+}
+
+/// Breakage guarded: the release action uploads a corrupted or different Windows executable while
+/// the workflow reports success. The auto-updater would then trust GitHub metadata for bytes that
+/// were never compared with the artifact this workflow built.
+#[test]
+fn releases_verify_the_published_windows_digest() {
+    let text = release_workflow_text();
+    let publish = job_body(&text, "publish").expect("release.yml must keep the publish job");
+    let upload = publish
+        .iter()
+        .position(|line| line.contains("softprops/action-gh-release"))
+        .expect("publish must upload a draft release");
+    let verify = publish
+        .iter()
+        .position(|line| line.contains("verify-release-assets.sh"))
+        .expect("publish must verify the uploaded release");
+    let finalize = publish
+        .iter()
+        .position(|line| line.contains("publish-verified-release.sh"))
+        .expect("publish must finalize the verified draft");
+    assert!(
+        upload < verify && verify < finalize,
+        "digest verification must happen between draft upload and publication"
+    );
+    assert!(
+        publish[upload..verify]
+            .iter()
+            .any(|line| line.trim() == "draft: true")
+            && publish[upload..verify]
+                .iter()
+                .any(|line| line.trim() == "make_latest: false"),
+        "the uploaded release must remain a non-latest draft until verification"
+    );
+
+    let verifier = shell_code(&release_verifier_text());
+    assert!(
+        verifier.contains(
+            "if [[ ! \"$release_tag\" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]"
+        ),
+        "release asset verification must accept only the three-component publication contract"
+    );
+    for required in [
+        "remote_digest=",
+        "local_digest=",
+        "[[ \"${remote_digest,,}\" != \"$local_digest\" ]]",
+        "remote_size=",
+        "local_size=",
+        "[[ \"$remote_size\" != \"$local_size\" ]]",
+        "MoonTerminal.exe",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "release verifier must check `{required}`"
+        );
+    }
+
+    let publisher = shell_code(&release_publisher_text());
+    for required in [
+        "git ls-remote origin \"$tag_ref\" \"$tag_ref^{}\"",
+        "[[ -z \"$remote_commit\" || \"$remote_commit\" != \"$release_commit\" ]]",
+        "gh release edit \"$release_tag\" --draft=false --latest --verify-tag",
+        "jq -r '.immutable'",
+        "[[ \"$remote_commit\" != \"$release_commit\" ]]",
+    ] {
+        assert!(
+            publisher.contains(required),
+            "release publisher must enforce `{required}`"
+        );
+    }
+    let preflight = publisher
+        .find("/immutable-releases\" --silent")
+        .expect("publisher must preflight immutable releases");
+    let publish_draft = publisher
+        .find("gh release edit \"$release_tag\" --draft=false")
+        .expect("publisher must make the verified draft public");
+    let post_publish = publisher
+        .find("jq -r '.immutable'")
+        .expect("publisher must confirm the public release is immutable");
+    assert!(
+        preflight < publish_draft && publish_draft < post_publish,
+        "immutable-release preflight must run before publication and confirmation after it"
+    );
+    assert!(
+        text.matches("secrets.RELEASE_ADMIN_TOKEN").count() == 1
+            && publish
+                .iter()
+                .filter(|line| line.contains("secrets.RELEASE_ADMIN_TOKEN"))
+                .count()
+                == 1
+            && text.contains("GH_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}")
+            && publisher.contains("RELEASE_ADMIN_TOKEN is required"),
+        "only the publication step may use an explicit token with Administration read permission"
+    );
 }

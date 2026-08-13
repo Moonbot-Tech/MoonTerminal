@@ -20,6 +20,17 @@ A SessionStart hook injects this file, and `CONTRIBUTING.md` beside it, into eve
 5. Delete the superseded old path in the same PR — a migration that leaves the old code behind is
    half-done, and the leftover sits outside the diff where review cannot see it.
 
+## Release versioning
+
+- Release tags use `vMAJOR.MINOR.PATCH` (for example, `v0.24.1`). Small fixes and maintenance
+  releases increment **PATCH** only: `v0.24.1` → `v0.24.2` → `v0.24.3`.
+- Increment **MINOR** only for a substantial feature or other major product change: after the
+  `v0.24.x` line, such a release starts at `v0.25.0`. Never increment MINOR merely because another
+  small fix is being published.
+- If the user requests a version that conflicts with this policy, stop before creating or
+  publishing the tag and explicitly clarify whether they intend an exception. Do not silently
+  follow either the conflicting request or this default rule.
+
 ## Before you push
 
 6. `cargo test --workspace` is green on your machine before the push, not just on CI afterwards.

@@ -1,8 +1,8 @@
 name: release
 
-# Publishes a GitHub Release with downloadable .exe + .dmg when a v* tag is
-# pushed. The build.yml workflow gates compilation and the test suite; THIS one
-# ships artifacts users can download from the Releases page.
+# Publishes a GitHub Release with downloadable .exe + .dmg from one exact canonical stable tag.
+# The build.yml workflow gates compilation and the test suite; THIS one ships the reviewed tagged
+# commit and verifies GitHub's published Windows digest against the local artifact.
 #
 # Note it does NOT re-run those gates: publishing trusts whatever build.yml
 # reported on the commit being tagged.
@@ -23,19 +23,14 @@ name: release
 # the same by construction, and a MoonUI commit landing in between reopens the gap. The THIRD-PARTY
 # set — what the freeze is actually about — is identical either way.
 #
-# Note also that a bare numeric tag does not trigger build.yml at all (it watches `v*`), so such a
-# release ships whatever that commit last reported, including an audit job that may never have run
-# on it. Prefer `v*` tags.
-#
 # The Rust toolchain is PINNED here for the same reason as in build.yml, and the stakes
 # are higher: this workflow does not re-run the gates, so an unpinned compiler could
 # first appear in a run that ships a binary to users. Keep the version in step with
 # build.yml.
 #
-# Every job here caches restore-only (`save-if: false`). A run's ref is a tag, and a
-# tag-scoped cache is readable only from that same tag, which never builds twice — so
-# anything saved here is written once and read never, at ~0.9 GiB against a 10 GB repo
-# quota. Nothing is lost by not writing it.
+# Every build job checks out an immutable validated commit and caches restore-only
+# (`save-if: false`). A release ref is not a reusable branch cache, so saving roughly 0.9 GiB per
+# job only fills the shared 10 GB quota. Nothing is lost by not writing it.
 #
 # What restores: the cache key includes the job id, so the `windows` job below shares a
 # key with build.yml's `windows` and warm-starts from what `main` wrote. The `macos` job
@@ -44,12 +39,13 @@ name: release
 # It always did compile cold; only the pointless write is gone.
 on:
   push:
-    tags: ["v*", "[0-9]*"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.0.1)"
+        description: "Existing canonical release tag (e.g. v0.24.1)"
         required: true
+        type: string
 
 permissions:
   contents: write # required to create the GitHub Release
@@ -58,12 +54,38 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    name: Validate exact release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - id: release
+        name: Require a canonical tag on main at this exact commit
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: bash .github/scripts/validate-release-tag.sh "$RELEASE_TAG"
+
   windows:
     name: Windows .exe
+    needs: validate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: x86_64-pc-windows-msvc
@@ -85,6 +107,7 @@ jobs:
 
   macos:
     name: macOS .dmg (universal)
+    needs: validate
     runs-on: macos-14
     # Ships ONE universal binary covering both Macs, not two downloads: the two slices are
     # built here and `lipo`-joined by make-dmg.sh into a single MoonTerminal.app.
@@ -102,6 +125,9 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -135,17 +161,37 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [windows, macos]
+    needs: [validate, windows, macos]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           path: dist
-      - name: Publish release
+      - name: Upload a draft release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.validate.outputs.tag }}
+          target_commitish: ${{ needs.validate.outputs.commit }}
           generate_release_notes: true
+          draft: true
+          make_latest: false
           files: |
             dist/windows/MoonTerminal.exe
             dist/macos/MoonTerminal.dmg
+      - name: Verify the published Windows digest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: bash .github/scripts/verify-release-assets.sh "$RELEASE_TAG" dist/windows/MoonTerminal.exe
+      - name: Publish the verified release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: bash .github/scripts/publish-verified-release.sh "$RELEASE_TAG" "$RELEASE_COMMIT" dist/windows/MoonTerminal.exe

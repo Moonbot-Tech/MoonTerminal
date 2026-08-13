@@ -322,7 +322,10 @@ fn observed_uid_floor(
 ///
 /// Errors:
 ///     Returns startup argument or configuration-loading failures before the event loop begins.
-pub(crate) fn run() -> anyhow::Result<()> {
+///
+/// Args:
+///     startup_update: Validated resume or recovery receipt dispatched before GPUI startup.
+pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyhow::Result<()> {
     // Build env_logger as a Logger (rather than calling .init()) and wrap it in TeeLogger, which
     // duplicates emitted records into the in-memory ring shown by the Log tab (ported from egui main).
     let env = env_logger::Builder::from_env(
@@ -334,10 +337,17 @@ pub(crate) fn run() -> anyhow::Result<()> {
         eprintln!("не удалось установить логгер: {e}");
     }
     log::info!(
-        "build: moonterminal={} moonui={}",
+        "build: moonterminal={} release_base={} moonui={}",
         option_env!("MOONTERMINAL_GIT_REV").unwrap_or("unknown"),
+        option_env!("MOONTERMINAL_RELEASE_BASE").unwrap_or("unknown"),
         option_env!("MOONUI_GIT_REV").unwrap_or("unknown")
     );
+    // A resumed update becomes accepted before any portable storage migration or open. Rolling
+    // the executable back after a newer schema touched cfg/data would be unsafe for the old build.
+    crate::update::acknowledge_healthy(startup_update.as_ref())?;
+    let update_recovered = startup_update
+        .as_ref()
+        .is_some_and(crate::update::StartupUpdate::recovered);
     let firetest_config = firetest::Config::from_args(std::env::args())?;
     if firetest_config.is_some() {
         diag::force_enable();
@@ -423,6 +433,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 epoch,
                 firetest: firetest_config,
                 report_write_permit,
+                update_recovered,
             },
             cx,
         );

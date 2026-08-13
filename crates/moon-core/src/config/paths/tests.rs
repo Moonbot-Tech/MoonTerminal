@@ -1,9 +1,11 @@
 //! Checks for one-time migration lists.
 
 use super::{
-    backups_dir, settings_backups_dir, strategies_backups_dir, BACKUPS_DIR_NAME, CFG_FILES,
-    DAMAGED_REPORTS_DIR_NAME, ROOT_FILES,
+    BACKUPS_DIR_NAME, CFG_FILES, DAMAGED_REPORTS_DIR_NAME, ROOT_FILES, backups_dir,
+    settings_backups_dir, strategies_backups_dir, update_root_for_executable,
+    validate_update_nonce,
 };
+use std::path::Path;
 
 /// No migration list may contain a protected snapshot DIRECTORY.
 ///
@@ -41,4 +43,36 @@ fn backup_subsystems_have_distinct_children_of_the_canonical_root() {
     assert_eq!(settings.parent(), Some(root.as_path()));
     assert_eq!(strategies.parent(), Some(root.as_path()));
     assert_ne!(settings, strategies);
+}
+
+/// Moving the update root into `cfg/`, `data/`, `logs/`, or `backups/` would let cleanup or a
+/// failed replacement mutate portable user data. The explicit executable fixture is independent
+/// of the process running this test.
+#[test]
+fn update_artifacts_have_a_dedicated_child_beside_the_executable() {
+    let executable = Path::new("C:/portable/MoonTerminal.exe");
+    let root = update_root_for_executable(executable);
+
+    assert_eq!(root, Path::new("C:/portable/.moonterminal-update"));
+    let name = root.file_name().and_then(|value| value.to_str());
+    assert!(!["cfg", "data", "logs", "backups"].contains(&name.unwrap_or_default()));
+}
+
+/// Accepting traversal, separators, or absolute syntax in a transaction identifier would let the
+/// staged executable escape the dedicated update root and overlap portable user data.
+#[test]
+fn update_nonce_accepts_only_fixed_lowercase_hex() {
+    assert!(validate_update_nonce("0123456789abcdef0123456789abcdef").is_ok());
+    for rejected in [
+        "../cfg",
+        "0123456789abcdef/123456789abcdef",
+        "C:\\portable\\cfg\\settings.toml",
+        "0123456789ABCDEF0123456789ABCDEF",
+        "abc",
+    ] {
+        assert!(
+            validate_update_nonce(rejected).is_err(),
+            "accepted {rejected}"
+        );
+    }
 }

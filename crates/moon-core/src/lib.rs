@@ -26,5 +26,6 @@ pub mod palette;
 pub mod session;
 pub mod strat_db;
 pub mod symbol;
+pub mod update;
 pub mod util;
 pub mod venue;

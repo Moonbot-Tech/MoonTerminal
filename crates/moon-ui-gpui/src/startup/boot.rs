@@ -29,6 +29,8 @@ use moon_core::session::{CoreId, SessionManager};
 
 /// Startup state gathered before the configuration was available.
 pub(super) struct BootInput {
+    /// Whether boot should show the one-time recovery notification.
+    pub update_recovered: bool,
     /// Window layout, read before the config so its core uids could raise the uid floor.
     pub layout: WindowLayout,
     /// Chart-tab state read alongside the layout.
@@ -56,6 +58,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         epoch,
         firetest: firetest_config,
         report_write_permit,
+        update_recovered,
     } = input;
 
     // FireTest drives production surfaces but must not create durable backups. Normal startup
@@ -130,8 +133,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // damage on pages reached by their query.
     moon_core::db::integrity::spawn_check();
     let (feed_wake_tx, feed_wake_rx) = std::sync::mpsc::channel::<()>();
+    let updater = cx.new(|_| crate::update::UpdateController::new());
 
     let backend = cx.new(|_| Backend {
+        updater: updater.clone(),
         session: SessionManager::start(
             &cfg,
             epoch,
@@ -678,6 +683,23 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             &layout,
             i as f32 * 40.0,
         );
+    }
+    if firetest_config.is_none() {
+        #[cfg(windows)]
+        crate::update::UpdateController::start_check(&updater, cx);
+    }
+    if update_recovered {
+        use moon_ui::{MoonNotification, MoonWindowExt as _};
+        cx.defer(move |cx| {
+            if let Some(window) = cx.active_window() {
+                let _ = window.update(cx, |_root, window, cx| {
+                    window.push_notification(
+                        MoonNotification::error(rust_i18n::t!("update.recovered").to_string()),
+                        cx,
+                    );
+                });
+            }
+        });
     }
 
     // Detached-panel WINDOWS are not opened here: each group window opened above reclaims its

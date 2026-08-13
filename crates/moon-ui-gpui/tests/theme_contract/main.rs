@@ -23,5 +23,6 @@ mod startup;
 mod strategies;
 mod theme;
 mod tuner;
+mod update;
 mod windowing;
 mod workspace;

@@ -47,6 +47,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let window_handle = window.window_handle();
+        let updater = backend.read(cx).updater.clone();
         // Use one DockArea per group window. Charts occupy center-left, Detects the right split,
         // and Orders plus the other utility panels the bottom tabs. No-fill background policies
         // let MoonPalette and the chart UnderScene control their own backgrounds.
@@ -199,6 +200,11 @@ impl Shell {
             }
         })
         .detach();
+
+        // Update availability and progress are rare process-wide edges and must repaint every
+        // group header immediately, without riding the backend's ordinary 4 Hz throttle.
+        cx.observe(&updater, |_this, _updater, cx| cx.notify())
+            .detach();
 
         // Workspace mode, selected core, singleton owner, and window lifecycle publish on a
         // dedicated channel so an otherwise idle Shell redraws and applies a cross-group switch.
@@ -605,6 +611,7 @@ impl Shell {
 
         let mut shell = Self {
             backend,
+            updater,
             group,
             dock,
             classic_dock_layout: None,
