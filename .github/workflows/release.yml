@@ -39,8 +39,9 @@ name: release
 #
 # What restores: the cache key includes the job id, so the `windows` job below shares a
 # key with build.yml's `windows` and warm-starts from what `main` wrote. The `macos` job
-# does not — build.yml's macOS job is `macos-probe` — so a macOS release compiles cold.
-# It always did; only the pointless write is gone.
+# does not — build.yml's macOS job is `macos-probe` — so a macOS release compiles cold,
+# and now twice over: one cold compile per architecture of the universal binary.
+# It always did compile cold; only the pointless write is gone.
 on:
   push:
     tags: ["v*", "[0-9]*"]
@@ -83,18 +84,47 @@ jobs:
           if-no-files-found: error
 
   macos:
-    name: macOS .dmg
+    name: macOS .dmg (universal)
     runs-on: macos-14
+    # Ships ONE universal binary covering both Macs, not two downloads: the two slices are
+    # built here and `lipo`-joined by make-dmg.sh into a single MoonTerminal.app.
+    #
+    # Both slices are cross-built on this arm64 runner. The macOS SDK carries both
+    # architectures, so `--target x86_64-apple-darwin` links natively — no Intel runner
+    # involved, which also keeps the release off the ageing `macos-13` image.
+    #
+    # What that costs: the Intel slice is compiled but never EXECUTED here (an arm64 runner
+    # has no Rosetta by default), so CI proves it links, not that it runs. Intel acceptance
+    # is a live machine.
+    env:
+      # Both slices, and the LSMinimumSystemVersion make-dmg.sh writes, name the same floor.
+      # Left at the default the Intel slice would claim 10.12 while the bundle says 11.0.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
-      - name: Build release binary
+      # Two steps rather than one multi-target invocation: a red job then names the arch
+      # that broke in its own step, instead of burying it in a combined log.
+      - name: Build release binary (Apple Silicon)
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target aarch64-apple-darwin
+      # The slice moves out and its target dir goes with it: this runner has 14 GB of disk, and
+      # two whole `--release` trees plus the cargo registry do not both fit. Only the per-triple
+      # dir is removed — host build-script and proc-macro artifacts live in `target/release`
+      # and are reused by the second build.
+      - name: Stage the Apple Silicon slice and free its target dir
+        run: |
+          mkdir -p stage
+          mv target/aarch64-apple-darwin/release/moonterminal stage/moonterminal-arm64
+          rm -rf target/aarch64-apple-darwin
+      - name: Build release binary (Intel)
+        run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-apple-darwin
+      - name: Stage the Intel slice
+        run: mv target/x86_64-apple-darwin/release/moonterminal stage/moonterminal-x86_64
       - name: Package .app + .dmg
         run: bash .github/scripts/make-dmg.sh
       - uses: actions/upload-artifact@v7

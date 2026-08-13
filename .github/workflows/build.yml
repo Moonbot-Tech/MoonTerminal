@@ -6,7 +6,9 @@ name: build
 #   Audit        — cargo-deny over the committed lockfile. Blocking.
 #   macOS probe  — diagnostic only (`continue-on-error`). Compiles the chartdx Metal
 #                  backend on a native runner, which Windows cannot do at all: no
-#                  macOS SDK and no Apple linker. Read its log; it never blocks.
+#                  macOS SDK and no Apple linker. Reaches both architectures the release
+#                  .dmg ships, unevenly: arm64 is compiled, the Intel slice only
+#                  type-checked. Read its log; it never blocks.
 #
 # THE LOCKFILE CONTRACT, which the three compiling jobs implement in the same three steps.
 # `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. Each job
@@ -137,9 +139,13 @@ jobs:
         run: cargo test --workspace --no-fail-fast --target x86_64-pc-windows-msvc
 
   macos-probe:
-    name: macOS probe (aarch64-darwin) — diagnostic
+    name: macOS probe (arm64 build, x86_64 check) — diagnostic
     runs-on: macos-14
     if: github.event_name != 'schedule'
+    env:
+      # The floor release.yml builds both slices against, so the probe type-checks the Intel
+      # slice under the same one the .dmg ships rather than rustc's 10.12 default.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     # Probe: Metal backend compilation errors are expected. Do not fail the entire pipeline —
     # read the job log to get a concrete list of what needs fixing.
     continue-on-error: true
@@ -147,7 +153,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -162,6 +168,17 @@ jobs:
         run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Probe-compile chartdx Metal backend
         run: cargo build -p moon-ui-gpui --target aarch64-apple-darwin
+      # The release .dmg is universal, so an Intel-only break must not first appear inside the
+      # release run, which does not carry `continue-on-error` and would block the tag. `check`
+      # rather than `build`: what differs between the two Apple architectures is source-level —
+      # ABI-dependent FFI types (`objc`'s BOOL is c_schar here and bool on arm64), `target_arch`
+      # cfg, integer widths — and that is exactly what a check catches, at a quarter of the time
+      # and disk of a second full codegen on a 3-core runner. Both slices link the same SDK and
+      # frameworks, and the arm64 build above already proves that half. What a check cannot see —
+      # x86_64 codegen under the release profile's LTO, and the link — still happens first in the
+      # release run; that is the deliberate remainder, not an oversight.
+      - name: Probe-check the Intel slice
+        run: cargo check -p moon-ui-gpui --target x86_64-apple-darwin
 
   audit:
     name: Dependency audit (cargo-deny)
