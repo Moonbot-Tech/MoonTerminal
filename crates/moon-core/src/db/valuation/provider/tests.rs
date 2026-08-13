@@ -275,6 +275,105 @@ fn binance_parser_reads_exact_close_and_times() {
     assert_eq!(candle.close, 42.5);
 }
 
+/// Breakage: returning a response-wide transient or accepting a non-one-minute row in
+/// `provider::parse_binance` would either stall historical reconciliation at the same batch or
+/// value a trade from the wrong candle; valid siblings must survive while the exact fallback wins.
+#[test]
+fn binance_duration_outlier_keeps_valid_siblings_and_exact_fallback() {
+    let first = 1_700_000_040;
+    let second = first + 60;
+    let value = serde_json::json!([
+        [
+            first * 1_000,
+            "10.0",
+            "11.0",
+            "9.0",
+            "42.0",
+            "123.0",
+            first * 1_000 + 59_999
+        ],
+        [
+            second * 1_000,
+            "10.0",
+            "11.0",
+            "9.0",
+            "99.0",
+            "123.0",
+            second * 1_000 + 60_999
+        ]
+    ]);
+    let binance = parse_binance(&value, first, second).expect("retain exact Binance sibling");
+    let source = FakeSource::new(vec![
+        Ok(binance),
+        Err(FetchFailure::Missing),
+        Ok(vec![SpotCandle {
+            open_ms: second * 1_000,
+            close_ms: second * 1_000 + 59_999,
+            close: 43.0,
+        }]),
+    ]);
+
+    let batch = resolve_rate_batch(&source, 0, "BTC", &[first, second]);
+
+    assert!(batch.missing.is_empty());
+    assert!(batch.transient.is_none());
+    assert_eq!(batch.ready.len(), 2);
+    let first_rate = batch
+        .ready
+        .iter()
+        .find(|rate| rate.minute_utc == first)
+        .expect("valid Binance minute");
+    assert_eq!(first_rate.provider, "binance_spot");
+    assert_eq!(first_rate.symbol, "BTCUSDT");
+    assert_eq!(first_rate.rate_usdt, 42.0);
+    let second_rate = batch
+        .ready
+        .iter()
+        .find(|rate| rate.minute_utc == second)
+        .expect("exact fallback minute");
+    assert_eq!(second_rate.provider, "bybit_spot");
+    assert_eq!(second_rate.symbol, "BTCUSDT");
+    assert_eq!(second_rate.rate_usdt, 43.0);
+    assert_eq!(
+        source.calls.into_inner().expect("take fake calls"),
+        vec![
+            (
+                "binance_spot".to_string(),
+                "BTCUSDT".to_string(),
+                first,
+                second,
+            ),
+            (
+                "binance_spot".to_string(),
+                "USDTBTC".to_string(),
+                first,
+                second,
+            ),
+            (
+                "bybit_spot".to_string(),
+                "BTCUSDT".to_string(),
+                first,
+                second,
+            ),
+        ]
+    );
+}
+
+/// Breakage: skipping a Binance row before proving an integer close time would hide structural
+/// response corruption as permanent absence, so reconciliation would stop retrying bad data.
+#[test]
+fn binance_missing_close_time_remains_transient() {
+    let minute = 1_700_000_040;
+    let value = serde_json::json!([[minute * 1_000, "10.0", "11.0", "9.0", "42.0", "123.0"]]);
+
+    assert_eq!(
+        parse_binance(&value, minute, minute),
+        Err(FetchFailure::Transient(
+            "binance candle has no integer close time".to_string()
+        ))
+    );
+}
+
 /// Bybit returns string fields under `result.list`; flattening it as a Binance array would mark a
 /// valid fallback candle missing and prevent mixed-quote coverage from completing.
 #[test]

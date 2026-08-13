@@ -539,7 +539,7 @@ fn classify_binance_status(status: u16, value: &Value) -> Result<(), FetchFailur
     }
 }
 
-/// Parse Binance kline rows and retain exact minutes inside the requested range.
+/// Parse Binance kline rows and retain exact one-minute candles inside the requested range.
 ///
 /// Args:
 ///     value: JSON response body.
@@ -547,7 +547,8 @@ fn classify_binance_status(status: u16, value: &Value) -> Result<(), FetchFailur
 ///     end_minute_utc: Last requested UTC minute start in Unix seconds.
 ///
 /// Returns:
-///     Validated candles or classified response failure.
+///     Validated candles, permanent absence when no exact candle remains, or a classified
+///     structural response failure.
 fn parse_binance(
     value: &Value,
     start_minute_utc: i64,
@@ -583,9 +584,9 @@ fn parse_binance(
             FetchFailure::Transient("binance candle has no integer close time".to_string())
         })?;
         if close_ms != open_ms.saturating_add(59_999) {
-            return Err(FetchFailure::Transient(
-                "binance candle does not cover one exact minute".to_string(),
-            ));
+            // A duration outlier cannot price this minute, but valid sibling rows and canonical
+            // fallback routes must remain usable instead of stalling the whole reconciliation.
+            continue;
         }
         candles.push(SpotCandle {
             open_ms,
