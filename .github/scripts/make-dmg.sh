@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Package the macOS release binary into MoonTerminal.app and a distributable .dmg.
-# Runs on the macos-14 runner (native tools: sips, iconutil, codesign, hdiutil).
+# Package the macOS release binaries into a UNIVERSAL MoonTerminal.app and a distributable .dmg.
+# Runs on the macos-14 runner (native tools: sips, iconutil, codesign, hdiutil, lipo).
+#
+# Expects BOTH slices to be staged already: release.yml builds them in two steps and moves each
+# out of its target dir, because the runner cannot hold two `--release` trees at once. They are
+# joined here so Apple Silicon and Intel Macs share one download.
 set -euo pipefail
 
-BIN="target/aarch64-apple-darwin/release/moonterminal"
+BIN_ARM64="stage/moonterminal-arm64"
+BIN_X86_64="stage/moonterminal-x86_64"
 APP="dist/MoonTerminal.app"
 DMG="dist/MoonTerminal.dmg"
 SRC_ICON="assets/icons/0.png"
@@ -15,8 +20,9 @@ VERSION="${VERSION#v}"
 rm -rf dist
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cp "$BIN" "$APP/Contents/MacOS/moonterminal"
-chmod +x "$APP/Contents/MacOS/moonterminal"
+EXE="$APP/Contents/MacOS/moonterminal"
+lipo -create "$BIN_ARM64" "$BIN_X86_64" -output "$EXE"
+chmod +x "$EXE"
 
 # Build a multi-resolution .icns from the single PNG app icon.
 ICONSET="dist/AppIcon.iconset"
@@ -47,10 +53,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature: not notarized, but seals the bundle so it launches after a
-# right-click -> Open (or `xattr -dr com.apple.quarantine`). Full Developer-ID
-# signing + notarization needs an Apple cert in secrets — out of scope for v0.0.1.
-codesign --force --deep --sign - "$APP" || true
+# Ad-hoc signature: not notarized, but seals the bundle so it launches once the user allows it
+# (see the README written below). Full Developer-ID signing + notarization needs an Apple cert in
+# secrets — still not set up.
+#
+# Deliberately NOT swallowed with `|| true` any more: Apple Silicon refuses to execute code whose
+# signature is missing or broken, while Intel does not care, so a silently failed codesign now
+# ships one download that starts on the Intel half of the audience and is killed on the other.
+codesign --force --deep --sign - "$APP"
 
 # Assemble a Finder-friendly DMG staging root instead of imaging the bare .app:
 # the app, a drag-to-install alias to /Applications, and a short RU readme. The
@@ -66,17 +76,39 @@ ln -s /Applications "$DMG_ROOT/Applications"
 cat > "$DMG_ROOT/README.txt" <<'README'
 MoonTerminal — Installation
 
+Universal build: one app for both Apple Silicon and Intel Macs.
+Requires macOS 11 or newer.
+
 1. Drag MoonTerminal.app into the Applications folder (alias next to it).
-2. First launch: right-click the app -> "Open" -> "Open".
-   macOS may warn about an unidentified developer — this is expected
+2. First launch: double-click the app, then open
+   System Settings -> Privacy & Security and press "Open Anyway".
+   macOS warns about an unidentified developer — this is expected
    (the build is ad-hoc signed, not notarized).
-   Alternative: System Settings -> Privacy & Security -> "Open Anyway".
+   On macOS 14 and older, right-click -> "Open" -> "Open" also works;
+   macOS 15 (Sequoia) removed that shortcut.
 
 Updating:
 Drag the new version into Applications and confirm the replacement.
 Your cores and settings are preserved — they live OUTSIDE the app, in
 ~/Library/Application Support/com.moonbot.moonterminal/.
 README
+
+# Check the bundle that actually gets imaged, not the one assembled further up — this one is a
+# copy. Both properties are the ones a user meets on first launch and neither has a second chance
+# once the .dmg is on the Releases page: every architecture present, and a signature that verifies.
+STAGED_APP="$DMG_ROOT/MoonTerminal.app"
+ARCHS="$(lipo -archs "$STAGED_APP/Contents/MacOS/moonterminal")"
+for want in arm64 x86_64; do
+  case " $ARCHS " in
+  *" $want "*) ;;
+  *)
+    echo "make-dmg: the imaged binary is missing the $want slice (has: $ARCHS)" >&2
+    exit 1
+    ;;
+  esac
+done
+codesign --verify --strict "$STAGED_APP"
+echo "Imaging a universal bundle: $ARCHS"
 
 hdiutil create -volname "MoonTerminal" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
 echo "Built $DMG (version $VERSION)"
