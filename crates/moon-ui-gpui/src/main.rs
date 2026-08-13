@@ -41,6 +41,7 @@ mod shell;
 mod startup;
 mod strategies;
 mod ui_session;
+mod update;
 mod valuation_health;
 mod window;
 mod workspace;
@@ -93,6 +94,8 @@ pub(crate) struct ChartApplyAll {
 
 /// Shared backend stored in one `Entity`, drained by coordination loops, and notifying UI observers.
 struct Backend {
+    /// Process-wide self-update state shared by every group window.
+    updater: Entity<update::UpdateController>,
     session: SessionManager,
     /// Shared time origin for sessions and chart views, expressed as epoch milliseconds.
     /// This is reused when sessions are recreated after settings are saved and restarted.
@@ -522,6 +525,13 @@ struct DisplayTimeRevision;
 /// Notification-only entity for a changed cross-window core filter.
 struct CoreFilterRevision;
 
+/// Dispatch hidden updater modes or run the ordinary GPUI application.
+///
+/// Returns:
+///     Success after the selected process role exits.
 fn main() -> anyhow::Result<()> {
-    startup::run()
+    match update::dispatch_process_mode()? {
+        update::ProcessDispatch::Run(receipt) => startup::run(receipt),
+        update::ProcessDispatch::Exit => Ok(()),
+    }
 }

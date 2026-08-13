@@ -78,6 +78,8 @@ rusqlite = "0.40.1"
 # Serialization of dock and detached-window layouts (-> docks.json / detached.json).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+getrandom = "0.2"
 # Excel (.xlsx) export from the Report panel's save menu (report/export.rs).
 rust_xlsxwriter = "0.96.0"
 
@@ -100,6 +102,8 @@ windows = { version = "0.61", features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Kernel",
     "Win32_System_LibraryLoader",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
     "Win32_UI_HiDpi",
     # GetDoubleClickTime, so the chart pairs its own presses on the same interval the platform
     # used to count them (panels/chart/click_series.rs).

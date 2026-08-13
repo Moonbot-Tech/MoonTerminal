@@ -50,6 +50,8 @@ use crate::{Backend, controls};
 /// `ChartTabs` manages detached chart windows through its own subsystem.
 pub(crate) struct Shell {
     backend: Entity<Backend>,
+    /// Process-wide updater observed separately from high-rate backend state.
+    updater: Entity<crate::update::UpdateController>,
     group: String,
     dock: Entity<DockArea>,
     /// Full local Classic layout retained while Auto applies the shared name-only topology.

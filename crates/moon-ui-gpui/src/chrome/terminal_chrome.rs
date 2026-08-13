@@ -29,6 +29,7 @@ use crate::{Backend, design};
 /// Args:
 ///     group: Group whose header is being rendered.
 ///     backend: Backend providing core, balance, and ticker state.
+///     updater: Process-wide stable update state.
 ///     shell: Shell owning controlled header popovers and window actions.
 ///     ticker_sel: Optional core and market selected for the ticker readout.
 ///     core_selector_open: Whether the active-core selector is open.
@@ -46,6 +47,7 @@ use crate::{Backend, design};
 pub fn header(
     group: &str,
     backend: Entity<Backend>,
+    updater: Entity<crate::update::UpdateController>,
     shell: Entity<Shell>,
     ticker_sel: Option<(moon_core::session::CoreId, String)>,
     core_selector_open: bool,
@@ -76,6 +78,7 @@ pub fn header(
     // The manual-strategy cluster is absent when the group has no active trade core or that core
     // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
     let manual = crate::controls::manual_strategy_controls(group, &backend, p, cx);
+    let update_state = updater.read(cx).state();
     h_flex()
         .w_full()
         .h(design::header_height_px(cx))
@@ -154,6 +157,47 @@ pub fn header(
                 .min_w_0()
                 .flex(),
         )
+        // The updater is a separate pre-ticker cluster: its coupled divider appears only with the
+        // button, preserving the right-edge ticker offset and leaving no empty separator.
+        .children(update_state.visible().then(|| {
+            let version = update_state
+                .version()
+                .map(|version| version.to_string())
+                .unwrap_or_default();
+            let label = if update_state.busy() {
+                t!("update.installing").to_string()
+            } else if matches!(update_state, crate::update::UpdateState::Failed { .. }) {
+                t!("update.retry").to_string()
+            } else {
+                t!("update.available", version = version).to_string()
+            };
+            let tooltip = match &update_state {
+                crate::update::UpdateState::Failed { message, .. } => {
+                    t!("update.failed", error = message).to_string()
+                }
+                _ => t!("update.tooltip").to_string(),
+            };
+            let busy = update_state.busy();
+            let updater = updater.clone();
+            design::chrome_section(cx)
+                .child(
+                    div()
+                        .id("terminal-update-tooltip")
+                        .tooltip(crate::panels::common::text_tooltip(tooltip))
+                        .child(
+                            MoonButton::new("terminal-update")
+                                .label(label)
+                                .size(MoonButtonSize::Micro)
+                                .variant(MoonButtonVariant::Panel)
+                                .loading(busy)
+                                .on_click(move |_, _window, cx| {
+                                    crate::update::UpdateController::start_install(&updater, cx);
+                                })
+                                .render(),
+                        ),
+                )
+                .child(design::chrome_divider(cx, p))
+        }))
         // Ambient readouts are right-aligned: rate ticker, then the clock, then the window controls.
         .child(
             design::chrome_section(cx)

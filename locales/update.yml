@@ -1,0 +1,27 @@
+# Windows self-update button and progress states.
+_version: 2
+
+update.available:
+  ru: "Обновить до %{version}"
+  en: "Update to %{version}"
+  es: "Actualizar a %{version}"
+update.tooltip:
+  ru: "Скачать, установить и перезапустить MoonTerminal"
+  en: "Download, install, and restart MoonTerminal"
+  es: "Descargar, instalar y reiniciar MoonTerminal"
+update.installing:
+  ru: "Установка обновления..."
+  en: "Installing update..."
+  es: "Instalando actualización..."
+update.retry:
+  ru: "Повторить обновление"
+  en: "Retry update"
+  es: "Reintentar actualización"
+update.failed:
+  ru: "Не удалось обновить: %{error}"
+  en: "Update failed: %{error}"
+  es: "Error de actualización: %{error}"
+update.recovered:
+  ru: "Обновление не запустилось. Предыдущая версия восстановлена и снова открыта."
+  en: "The update did not start. The previous version was restored and reopened."
+  es: "La actualización no se inició. La versión anterior fue restaurada y reabierta."

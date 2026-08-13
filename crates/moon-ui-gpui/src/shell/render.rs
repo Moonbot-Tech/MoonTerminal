@@ -164,6 +164,7 @@ impl Render for Shell {
             .child(terminal_chrome::header(
                 &self.group,
                 self.backend.clone(),
+                self.updater.clone(),
                 cx.entity(),
                 ticker_sel,
                 self.header_core_selector_open,

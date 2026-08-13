@@ -108,6 +108,18 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
   enforcement: with no branch protection nothing stops a red merge except you reading the checks.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
+- New releases use canonical three-component stable tags such as `v0.24.0` and `v0.24.1`.
+  Historical two-component tags such as `v0.21` remain readable as patch zero, but are not valid
+  inputs for a new release and block a semantically equivalent alias such as `v0.21.0`. Start a
+  new minor line at `vMAJOR.MINOR.0`, then increment PATCH for fixes. Tag an already-green `main`
+  commit and either push that exact tag or dispatch the workflow with that existing tag; never
+  create a new `vMAJOR.MINOR` release. The release workflow checks out that exact tag with full
+  tag history, requires its commit on `main`, and verifies GitHub's published
+  SHA-256 digest for the exact
+  `MoonTerminal.exe` asset while the release is a draft. Repository release immutability must be
+  enabled: publication then locks the verified tag and assets. The `RELEASE_ADMIN_TOKEN` Actions
+  secret must grant repository Administration read and Contents write for the immutable-release
+  preflight and final publication. Bare numeric and prerelease tags are not release inputs.
 
 ## Dependencies and the lockfile
 
