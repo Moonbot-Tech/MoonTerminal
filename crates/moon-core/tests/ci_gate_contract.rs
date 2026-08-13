@@ -601,7 +601,9 @@ fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
     let minor = run_release_validator(&root, "v0.24.0");
     assert!(
         minor.status.success(),
-        "minor release rejected: {}",
+        "minor release rejected: status={} stdout={} stderr={}",
+        minor.status,
+        String::from_utf8_lossy(&minor.stdout),
         String::from_utf8_lossy(&minor.stderr)
     );
 
@@ -611,7 +613,9 @@ fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
     let patch = run_release_validator(&root, "v0.24.1");
     assert!(
         patch.status.success(),
-        "patch release rejected: {}",
+        "patch release rejected: status={} stdout={} stderr={}",
+        patch.status,
+        String::from_utf8_lossy(&patch.stdout),
         String::from_utf8_lossy(&patch.stderr)
     );
     assert!(!run_release_validator(&root, "v0.24").status.success());
@@ -629,7 +633,9 @@ fn release_validator_orders_patch_tags_and_rejects_legacy_aliases() {
     let patch_ten = run_release_validator(&root, "v0.24.10");
     assert!(
         patch_ten.status.success(),
-        "multi-digit patch release rejected: {}",
+        "multi-digit patch release rejected: status={} stdout={} stderr={}",
+        patch_ten.status,
+        String::from_utf8_lossy(&patch_ten.stdout),
         String::from_utf8_lossy(&patch_ten.stderr)
     );
     run_git(&root, &["checkout", "--detach", "v0.24.9"]);
@@ -678,12 +684,43 @@ fn run_release_validator(root: &Path, tag: &str) -> Output {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.'),
         "release-policy fixture tag must be shell-safe"
     );
-    let command = format!("GITHUB_OUTPUT=github-output.txt bash validate-release-tag.sh {tag}");
-    Command::new("bash")
-        .args(["-c", &command])
+    Command::new(release_validator_bash())
+        .arg("validate-release-tag.sh")
+        .arg(tag)
+        .env("GITHUB_OUTPUT", "github-output.txt")
         .current_dir(root)
         .output()
         .expect("run release validator fixture")
+}
+
+/// Resolve Git for Windows' Bash instead of the higher-priority WSL compatibility launcher.
+#[cfg(windows)]
+fn release_validator_bash() -> PathBuf {
+    let output = Command::new("where.exe")
+        .arg("git.exe")
+        .output()
+        .expect("locate Git for Windows");
+    assert!(
+        output.status.success(),
+        "Git for Windows lookup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("Git path must be UTF-8");
+    let bash = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .flat_map(|git| Path::new(git).ancestors().skip(1).take(4))
+        .map(|root| root.join("bin/bash.exe"))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("Git for Windows Bash is missing below: {stdout}"));
+    bash
+}
+
+/// Resolve the ordinary Bash executable on non-Windows CI hosts.
+#[cfg(not(windows))]
+fn release_validator_bash() -> PathBuf {
+    PathBuf::from("bash")
 }
 
 /// Breakage guarded: the release action uploads a corrupted or different Windows executable while
