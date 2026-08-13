@@ -779,6 +779,10 @@ fn releases_verify_the_published_windows_digest() {
             "release verifier must check `{required}`"
         );
     }
+    assert!(
+        !verifier.contains("--argjson current") && !verifier.contains("--argjson found"),
+        "release pages and accumulated matches must never be passed through process arguments"
+    );
 
     let publisher = shell_code(&release_publisher_text());
     let preflight = publisher
@@ -831,10 +835,12 @@ fn releases_verify_the_published_windows_digest() {
 
 /// Create an isolated tagged repository, exact release metadata, and a recording fake GitHub CLI.
 ///
+/// `purpose` keeps fixture roots disjoint when Rust runs release-script tests in parallel.
+///
 /// Returns the fixture root and the tagged commit expected by both draft metadata and publication.
-fn create_release_script_fixture() -> (PathBuf, String) {
+fn create_release_script_fixture(purpose: &str) -> (PathBuf, String) {
     let root = std::env::temp_dir().join(format!(
-        "moonterminal-release-publish-{}",
+        "moonterminal-release-{purpose}-{}",
         std::process::id()
     ));
     if root.exists() {
@@ -902,6 +908,22 @@ fn release_fixture_json(commit: &str, draft: bool, immutable: bool) -> String {
     format!(
         r#"{{"id":4242,"tag_name":"v0.24.2","target_commitish":"{commit}","draft":{draft},"prerelease":false,"immutable":{immutable},"assets":[{{"name":"MoonTerminal.dmg","size":7,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}]}}"#
     )
+}
+
+/// Render a full release-list page whose ASCII representation exceeds one process argument.
+fn oversized_release_page_json() -> String {
+    let padding = "x".repeat(2_048);
+    let releases = (0..100)
+        .map(|index| {
+            format!(
+                r#"{{"id":{},"tag_name":"v0.0.{}","body":"{padding}"}}"#,
+                10_000 + index,
+                index
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{releases}]")
 }
 
 /// Return a fake `gh api` implementation that models draft 404 and records exact PATCH fields.
@@ -992,7 +1014,7 @@ fn run_release_script(root: &Path, script: &str, args: &[&str]) -> Output {
 /// while publishing by a tag or wrong id can finalize metadata other than the verified draft.
 #[test]
 fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
-    let (root, commit) = create_release_script_fixture();
+    let (root, commit) = create_release_script_fixture("publish");
     let verifier = ".github/scripts/verify-release-assets.sh";
     let publisher = ".github/scripts/publish-verified-release.sh";
 
@@ -1078,4 +1100,39 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
     );
 
     std::fs::remove_dir_all(root).expect("remove release-publish fixture");
+}
+
+/// Breakage guarded: passing a serialized release page through `--argjson` exceeds one argv
+/// element, stranding a healthy draft before its digest can be verified and published.
+#[test]
+fn release_verifier_streams_release_page_larger_than_one_argument() {
+    let (root, _) = create_release_script_fixture("large-page");
+    let verifier = ".github/scripts/verify-release-assets.sh";
+    let first_page = oversized_release_page_json();
+    assert!(
+        first_page.len() > 131_072,
+        "oversized release page fixture must cross the observed single-argument boundary"
+    );
+    std::fs::write(root.join("page-1.json"), first_page)
+        .expect("write oversized first release page");
+    std::fs::write(root.join("requests.log"), "").expect("reset large-page request log");
+
+    let verified = run_release_script(&root, verifier, &["v0.24.2", "MoonTerminal.exe"]);
+    assert!(
+        verified.status.success() && String::from_utf8_lossy(&verified.stdout).trim() == "4242",
+        "large-page draft verification failed: status={} stdout={} stderr={}",
+        verified.status,
+        String::from_utf8_lossy(&verified.stdout),
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let calls =
+        std::fs::read_to_string(root.join("requests.log")).expect("read large-page requests");
+    assert!(
+        calls.contains("releases?per_page=100&page=1")
+            && calls.contains("releases?per_page=100&page=2")
+            && calls.contains("repos/Moonbot-Tech/MoonTerminal/releases/4242\t"),
+        "large-page verification did not preserve bounded discovery and id re-read: {calls}"
+    );
+
+    std::fs::remove_dir_all(root).expect("remove large-page release fixture");
 }
