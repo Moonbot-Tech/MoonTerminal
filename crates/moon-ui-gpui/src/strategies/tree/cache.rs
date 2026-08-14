@@ -125,7 +125,6 @@ pub(crate) fn data_sig(
     view.filter.search.hash(&mut h);
     view.filter.kind.hash(&mut h);
     view.filter.dir.hash(&mut h);
-    view.filter.only_active.hash(&mut h);
 
     unordered(view.expanded_cores.iter()).hash(&mut h);
     unordered(view.expanded_folders.iter()).hash(&mut h);

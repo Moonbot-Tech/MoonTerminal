@@ -78,29 +78,18 @@ impl StrategiesView {
                             .w_full()
                             .gap(design::ui_px(cx, 7.0))
                             .items_center()
-                            .child(self.combo_kind(kind_text, kinds, cx))
-                            .child(self.combo_dir(dir_text, cx))
-                            .child({
-                                let (cc, ct) = self.default_target(store, cores);
-                                self.create_dropdown(cc, ct, cx)
-                            }),
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
                             .justify_between()
                             .child(
-                                MoonCheckbox::new("flt-active")
-                                    .label(t!("strat.only_active").to_string())
-                                    .checked(self.filter.only_active)
-                                    .size(MoonCheckboxSize::Compact)
-                                    .on_change(cx.listener(|this, ch: &bool, _, cx| {
-                                        if this.filter.only_active != *ch {
-                                            this.filter.only_active = *ch;
-                                            cx.notify();
-                                        }
-                                    })),
+                                h_flex()
+                                    .min_w_0()
+                                    .gap(design::ui_px(cx, 7.0))
+                                    .items_center()
+                                    .child(self.combo_kind(kind_text, kinds, cx))
+                                    .child(self.combo_dir(dir_text, cx))
+                                    .child({
+                                        let (cc, ct) = self.default_target(store, cores);
+                                        self.create_dropdown(cc, ct, cx)
+                                    }),
                             )
                             .child(
                                 MoonButton::new("expand-all")
@@ -227,8 +216,8 @@ impl StrategiesView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(80.0)
-            .menu_width_scaled(120.0)
+            .trigger_width_scaled(128.0)
+            .menu_width_scaled(140.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
             .into_any_element()

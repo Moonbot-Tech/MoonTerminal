@@ -679,7 +679,7 @@ fn side_cell(
 /// Open the Strategies window focused on this order's core and strategy.
 ///
 /// Shared by the `Strat` (kind) and `StratName` (name) cells, which both navigate to the same
-/// strategy. Clears active-only mode before expanding and selecting it.
+/// strategy before expanding and selecting it.
 ///
 /// Args:
 ///     view: Owning group Orders panel and its workspace authority.
@@ -746,8 +746,8 @@ fn strat_name_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -
 /// Build the order's strategy cell.
 ///
 /// A strategy order (`strat_id != 0`) is clickable and opens the Strategies window focused on that
-/// core and strategy, clearing active-only mode before expanding and selecting it. A manual order
-/// without a strategy renders as plain text.
+/// core and strategy before expanding and selecting it. A manual order without a strategy renders
+/// as plain text.
 fn strat_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -> MoonDataCell {
     let r = &e.row;
     if r.strat_id == 0 {

@@ -102,10 +102,10 @@ fn workspace_allows_reveal(backend: &Backend, workspace_group: Option<&str>, cor
 }
 
 /// Open or focus the Strategies window and navigate to `strat_id` on `core`.
-/// Render drains the request, disables the active-only filter, expands the target core and folders,
-/// and selects the strategy. Entry points include chart order-line context menus and the Orders
-/// table's Strat column. Group-owned callers pass their workspace group so a retained callback
-/// cannot switch or reveal a core hidden by a later rail selection; unscoped callers pass `None`.
+/// Render drains the request, expands the target core and folders, and selects the strategy. Entry
+/// points include chart order-line context menus and the Orders table's Strat column. Group-owned
+/// callers pass their workspace group so a retained callback cannot switch or reveal a core hidden
+/// by a later rail selection; unscoped callers pass `None`.
 ///
 /// Args:
 ///     backend: Shared state and singleton-window authority.

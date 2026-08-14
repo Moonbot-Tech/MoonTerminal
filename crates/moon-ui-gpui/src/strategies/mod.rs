@@ -62,7 +62,7 @@ pub struct StrategiesView {
     display_zone: chrono_tz::Tz,
     /// Search input whose value is synchronized into the filter.
     search: Entity<MoonInputState>,
-    /// Tree filters for kind, direction, active state, and search text synchronized from the input.
+    /// Tree filters for kind, direction, and search text synchronized from the input.
     filter: StrategyFilter,
     /// Concrete singleton Auto scope; `None` leaves the all-core Classic tree authoritative.
     workspace_cores: Option<Vec<CoreId>>,
@@ -150,8 +150,6 @@ pub struct StrategiesView {
     /// Only the SHAPE is cached. Row contents (`NodeData`: selection, staging, checkboxes, order
     /// counts, drag payloads) are rebuilt every frame regardless, so nothing here can render stale.
     last_tree_shape: Option<u64>,
-    /// Whether the parameters panel hides dependency-inactive fields.
-    only_active_params: bool,
     /// Previous frame's tree adapter, reused while its input signature is unchanged.
     /// See [`tree::cache`] for why a per-frame rebuild is the wrong cost and what keeps it honest.
     tree_cache: Option<tree::cache::TreeCache>,
