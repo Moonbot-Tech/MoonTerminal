@@ -727,9 +727,11 @@ fn mixed_quote_summary_becomes_usdt_only_after_complete_coverage() {
         "ATTACH ':memory:' AS valuation;
          CREATE TABLE valuation.rates (
              algorithm_version INTEGER, quote_ordinal INTEGER, minute_utc INTEGER,
-             status INTEGER, rate_usdt REAL, provider TEXT, symbol TEXT,
-             orientation INTEGER, candle_open_ms INTEGER, candle_close_ms INTEGER,
-             fetched_at_ms INTEGER,
+             resolved_minute_utc INTEGER, rate_usdt REAL, price_basis INTEGER,
+             provider TEXT, symbol TEXT, orientation INTEGER,
+             candle_open_ms INTEGER, candle_close_ms INTEGER, leg1_rate REAL,
+             leg2_provider TEXT, leg2_symbol TEXT, leg2_orientation INTEGER,
+             leg2_rate REAL, fetched_at_ms INTEGER,
              PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
          );
          CREATE TABLE valuation.trade_values (

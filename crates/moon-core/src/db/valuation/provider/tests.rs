@@ -99,7 +99,7 @@ impl SpotRateSource for RoutePrioritySource {
     ///     _end_minute_utc: Last requested UTC minute.
     ///
     /// Returns:
-    ///     Binance and Bybit direct candles, or permanent absence for every inverse route.
+    ///     Binance and Bybit direct candles, or route absence for every inverse route.
     fn candles(
         &self,
         provider: &'static str,
@@ -119,12 +119,13 @@ impl SpotRateSource for RoutePrioritySource {
         Ok(vec![SpotCandle {
             open_ms: minute * 1_000,
             close_ms: minute * 1_000 + 59_999,
+            open: close,
             close,
         }])
     }
 }
 
-/// Removing inverse routing from `provider::resolve_rate` would leave a quote that trades only as
+/// Removing inverse routing from `resolve_rate_batch` would leave a quote that trades only as
 /// `USDTQUOTE` uncovered; the second Binance route must invert its close.
 #[test]
 fn inverse_binance_route_is_used_after_direct_absence() {
@@ -134,10 +135,15 @@ fn inverse_binance_route_is_used_after_direct_absence() {
         Ok(vec![SpotCandle {
             open_ms: minute * 1_000,
             close_ms: minute * 1_000 + 59_999,
+            open: 0.000_025,
             close: 0.000_025,
         }]),
     ]);
-    let rate = resolve_rate(&source, 3, "BNB", minute).expect("resolve inverse quote");
+    let rate = resolve_rate_batch(&source, 3, "BNB", &[minute])
+        .ready
+        .into_iter()
+        .next()
+        .expect("resolve inverse quote");
     assert_eq!(rate.provider, "binance_spot");
     assert_eq!(rate.symbol, "USDTBNB");
     assert_eq!(rate.orientation, RateOrientation::Inverse);
@@ -162,17 +168,12 @@ fn inverse_binance_route_is_used_after_direct_absence() {
 }
 
 /// Treating a transient Binance outage as symbol absence would silently switch the benchmark and
-/// possibly cache a false permanent miss; transient errors must stop canonical fallback.
+/// possibly hide the preferred route; transient errors must stop canonical fallback.
 #[test]
 fn transient_primary_failure_does_not_fall_through() {
     let source = FakeSource::new(vec![Err(FetchFailure::Transient("timeout".to_string()))]);
-    let result = resolve_rate(&source, 0, "BTC", 1_700_000_040);
-    assert_eq!(
-        result,
-        Err(FetchFailure::Transient(
-            "binance_spot BTCUSDT: timeout".to_string()
-        ))
-    );
+    let result = resolve_rate_batch(&source, 0, "BTC", &[1_700_000_040]).transient;
+    assert_eq!(result, Some("binance_spot BTCUSDT: timeout".to_string()));
     assert_eq!(source.calls.into_inner().expect("take fake calls").len(), 1);
 }
 
@@ -187,11 +188,13 @@ fn current_resolution_uses_the_newest_candle_on_the_first_available_route() {
         SpotCandle {
             open_ms: newest * 1_000,
             close_ms: newest * 1_000 + 59_999,
+            open: 1.01,
             close: 1.01,
         },
         SpotCandle {
             open_ms: older * 1_000,
             close_ms: older * 1_000 + 59_999,
+            open: 0.99,
             close: 0.99,
         },
     ])]);
@@ -227,8 +230,8 @@ fn current_resolution_keeps_canonical_priority_over_cross_route_recency() {
     );
 }
 
-/// Breakage: routing historical `resolve_rate` through the current lookback resolver would borrow
-/// a neighboring candle, changing the USDT value of trades whose exact close minute had no price.
+/// Breakage: letting exact batch resolution accept a neighboring candle would change the USDT
+/// value before the successor resolver deliberately searches later minutes.
 #[test]
 fn historical_resolution_still_requires_the_exact_minute() {
     let requested = 1_700_000_040;
@@ -237,6 +240,7 @@ fn historical_resolution_still_requires_the_exact_minute() {
         Ok(vec![SpotCandle {
             open_ms: neighbor * 1_000,
             close_ms: neighbor * 1_000 + 59_999,
+            open: 1.01,
             close: 1.01,
         }]),
         Err(FetchFailure::Missing),
@@ -244,10 +248,9 @@ fn historical_resolution_still_requires_the_exact_minute() {
         Err(FetchFailure::Missing),
     ]);
 
-    assert_eq!(
-        resolve_rate(&source, 8, "USDC", requested),
-        Err(FetchFailure::Missing)
-    );
+    let batch = resolve_rate_batch(&source, 8, "USDC", &[requested]);
+    assert!(batch.ready.is_empty());
+    assert_eq!(batch.missing, vec![requested]);
 }
 
 /// Parsing the wrong Binance array slot would value every trade from volume or high price; the
@@ -309,6 +312,7 @@ fn binance_duration_outlier_keeps_valid_siblings_and_exact_fallback() {
         Ok(vec![SpotCandle {
             open_ms: second * 1_000,
             close_ms: second * 1_000 + 59_999,
+            open: 43.0,
             close: 43.0,
         }]),
     ]);
@@ -360,7 +364,7 @@ fn binance_duration_outlier_keeps_valid_siblings_and_exact_fallback() {
 }
 
 /// Breakage: skipping a Binance row before proving an integer close time would hide structural
-/// response corruption as permanent absence, so reconciliation would stop retrying bad data.
+/// response corruption as route absence, so reconciliation would stop retrying bad data.
 #[test]
 fn binance_missing_close_time_remains_transient() {
     let minute = 1_700_000_040;
@@ -397,6 +401,67 @@ fn bybit_parser_reads_enveloped_string_fields() {
     assert_eq!(candle.close, 11.25);
 }
 
+/// Hard-coding Hyperliquid's token or universe index would silently route a different asset after
+/// metadata changes. The neutral pair must be derived from token references and the market index.
+#[test]
+fn hyperliquid_spot_metadata_discovers_dynamic_pair_indexes() {
+    let value = serde_json::json!({
+        "tokens": [
+            {"name": "USDC", "index": 0},
+            {"name": "USDH", "index": 360},
+            {"name": "OTHER", "index": 9}
+        ],
+        "universe": [
+            {"tokens": [360, 0], "index": 230},
+            {"tokens": [9, 0], "index": 17}
+        ]
+    });
+
+    let markets = parse_hyperliquid_markets(&value).expect("parse spot metadata");
+
+    assert_eq!(markets.get("USDH/USDC").map(String::as_str), Some("@230"));
+    assert_eq!(markets.get("OTHER/USDC").map(String::as_str), Some("@17"));
+}
+
+/// A successor must use Hyperliquid's open field while an exact minute keeps using its close;
+/// conflating them makes the historical result depend on movement after the first available tick.
+#[test]
+fn hyperliquid_parser_retains_distinct_open_and_close_prices() {
+    let minute = 1_700_000_040;
+    let value = serde_json::json!([{
+        "t": minute * 1_000,
+        "T": minute * 1_000 + 59_999,
+        "o": "0.998",
+        "c": "1.004"
+    }]);
+
+    let candle = parse_hyperliquid(&value, minute, minute)
+        .expect("parse Hyperliquid candle")
+        .into_iter()
+        .next()
+        .expect("one candle");
+
+    assert_eq!(candle.open, 0.998);
+    assert_eq!(candle.close, 1.004);
+}
+
+/// Breakage: synthesizing a missing Hyperliquid close timestamp lets an incomplete provider row
+/// masquerade as a fully closed minute and enter the user's historical valuation.
+#[test]
+fn hyperliquid_parser_rejects_a_missing_close_timestamp() {
+    let minute = 1_700_000_040;
+    let value = serde_json::json!([{
+        "t": minute * 1_000,
+        "o": "0.998",
+        "c": "1.004"
+    }]);
+
+    assert!(matches!(
+        parse_hyperliquid(&value, minute, minute),
+        Err(FetchFailure::Transient(error)) if error.contains("close time")
+    ));
+}
+
 /// Replacing `resolve_rate_batch` with a per-trade loop would issue one request per historical
 /// order; two requested minutes in one provider window must share one canonical route call.
 #[test]
@@ -407,11 +472,13 @@ fn batch_resolution_fetches_a_minute_window_once() {
         SpotCandle {
             open_ms: first * 1_000,
             close_ms: first * 1_000 + 59_999,
+            open: 42_000.0,
             close: 42_000.0,
         },
         SpotCandle {
             open_ms: second * 1_000,
             close_ms: second * 1_000 + 59_999,
+            open: 42_100.0,
             close: 42_100.0,
         },
     ])]);
@@ -490,7 +557,7 @@ fn only_bybit_invalid_or_observed_unsupported_symbols_are_permanent() {
 
 /// Breakage: returning a parser's raw transient from `resolve_rate_batch` would again reduce the
 /// user-facing stall reason to `retCode 10001`, hiding which provider and symbol must be checked;
-/// falling through after it could also cache a false permanent miss.
+/// falling through after it would also hide the failed preferred route.
 #[test]
 fn transient_bybit_fault_names_the_route_code_and_message() {
     let minute = 1_700_000_040;
@@ -507,10 +574,8 @@ fn transient_bybit_fault_names_the_route_code_and_message() {
     ]);
 
     assert_eq!(
-        resolve_rate(&source, 8, "USDC", minute),
-        Err(FetchFailure::Transient(
-            "bybit_spot USDCUSDT: bybit retCode 10001: request parameter error".to_string()
-        ))
+        resolve_rate_batch(&source, 8, "USDC", &[minute]).transient,
+        Some("bybit_spot USDCUSDT: bybit retCode 10001: request parameter error".to_string())
     );
     assert_eq!(
         source.calls.into_inner().expect("take fake calls").len(),

@@ -56,9 +56,10 @@ fn corrupted_cache_is_quarantined_without_touching_reports() {
         transaction
             .execute(
                 "INSERT INTO rates (
-                     algorithm_version, quote_ordinal, minute_utc, status, rate_usdt,
-                     provider, symbol, orientation, candle_open_ms, candle_close_ms, fetched_at_ms
-                 ) VALUES (1, 8, ?1, 0, 1.0, 'fixture', 'USDCUSDT', 0, ?2, ?3, ?4)",
+                     algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc,
+                     rate_usdt, price_basis, provider, symbol, orientation, candle_open_ms,
+                     candle_close_ms, leg1_rate, fetched_at_ms
+                 ) VALUES (2, 8, ?1, ?1, 1.0, 0, 'fixture', 'USDCUSDT', 0, ?2, ?3, 1.0, ?4)",
                 params![
                     minute * 60,
                     minute * 60_000,
@@ -241,9 +242,10 @@ fn attach_time_cache_corruption_stays_outside_report_integrity() {
         transaction
             .execute(
                 "INSERT INTO rates (
-                     algorithm_version, quote_ordinal, minute_utc, status, rate_usdt,
-                     provider, symbol, orientation, candle_open_ms, candle_close_ms, fetched_at_ms
-                 ) VALUES (1, 8, ?1, 0, 1.0, 'fixture', 'USDCUSDT', 0, ?2, ?3, ?4)",
+                     algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc,
+                     rate_usdt, price_basis, provider, symbol, orientation, candle_open_ms,
+                     candle_close_ms, leg1_rate, fetched_at_ms
+                 ) VALUES (2, 8, ?1, ?1, 1.0, 0, 'fixture', 'USDCUSDT', 0, ?2, ?3, 1.0, ?4)",
                 params![
                     minute * 60,
                     minute * 60_000,
@@ -329,12 +331,19 @@ fn prepared_trade_retains_the_complete_input_fingerprint() {
     let rate = ResolvedRate {
         quote_ordinal: 0,
         minute_utc: 1_700_000_000 / 60 * 60,
+        resolved_minute_utc: 1_700_000_000 / 60 * 60,
         rate_usdt: 42_000.0,
         provider: "binance_spot".to_string(),
         symbol: "BTCUSDT".to_string(),
         orientation: RateOrientation::Direct,
+        price_basis: RatePriceBasis::ExactClose,
         candle_open_ms: 1_699_999_980_000,
         candle_close_ms: 1_700_000_039_999,
+        leg2_provider: None,
+        leg2_symbol: None,
+        leg2_orientation: None,
+        leg1_rate: 42_000.0,
+        leg2_rate: None,
     };
     let input = TradeInput {
         source: TradeSource::Typed,
@@ -377,8 +386,8 @@ fn prepared_trade_retains_the_complete_input_fingerprint() {
     std::fs::remove_dir_all(&dir).expect("remove valuation fixture directory");
 }
 
-/// Replacing `rates` with an in-memory cache would refetch history after reboot; reopening the
-/// SQLite file must return both successful and permanent-missing outcomes.
+/// Replacing either durable rate table with memory would lose successful results or retry pacing
+/// after reboot and make sparse history restart its provider traffic from scratch.
 #[test]
 fn rate_cache_survives_reopen_without_network_state() {
     let dir = std::env::temp_dir().join(format!(
@@ -391,27 +400,47 @@ fn rate_cache_survives_reopen_without_network_state() {
     {
         let conn = open_store(&path).expect("open rate-cache fixture");
         let rate = ResolvedRate {
-            quote_ordinal: 8,
+            quote_ordinal: 7,
             minute_utc: 1_700_000_040,
-            rate_usdt: 0.9997,
-            provider: "bybit_spot".to_string(),
-            symbol: "USDCUSDT".to_string(),
+            resolved_minute_utc: 1_700_172_840,
+            rate_usdt: 0.998 * 1.001,
+            provider: "hyperliquid_spot".to_string(),
+            symbol: "USDH/USDC".to_string(),
             orientation: RateOrientation::Direct,
-            candle_open_ms: 1_700_000_040_000,
-            candle_close_ms: 1_700_000_099_999,
+            price_basis: RatePriceBasis::SuccessorOpen,
+            candle_open_ms: 1_700_172_840_000,
+            candle_close_ms: 1_700_172_899_999,
+            leg2_provider: Some("binance_spot".to_string()),
+            leg2_symbol: Some("USDCUSDT".to_string()),
+            leg2_orientation: Some(RateOrientation::Direct),
+            leg1_rate: 0.998,
+            leg2_rate: Some(1.001),
         };
         store_rate(&conn, &rate, 1_700_000_200_000).expect("store successful rate");
-        store_permanent_missing(&conn, 7, 1_700_000_100, 1_700_000_200_000)
-            .expect("store missing rate");
+        store_rate_search(&conn, 7, 1_700_000_100, 1_700_000_160, 1_700_000_200_000)
+            .expect("store retryable search");
     }
     let reopened = open_store(&path).expect("reopen rate-cache fixture");
     assert!(matches!(
-        cached_rate(&reopened, 8, 1_700_000_040).expect("read successful rate"),
-        Some(CachedRate::Ready(rate)) if rate.rate_usdt == 0.9997
+        cached_rate(&reopened, 7, 1_700_000_040).expect("read successful rate"),
+        Some(rate)
+            if rate.resolved_minute_utc == 1_700_172_840
+                && rate.price_basis == RatePriceBasis::SuccessorOpen
+                && rate.leg2_symbol.as_deref() == Some("USDCUSDT")
     ));
+    let covering = covering_successor_rate(&reopened, 7, 1_700_000_100)
+        .expect("query covering successor")
+        .expect("successor gap is reusable");
+    assert_eq!(covering.minute_utc, 1_700_000_100);
+    assert_eq!(covering.resolved_minute_utc, 1_700_172_840);
     assert_eq!(
-        cached_rate(&reopened, 7, 1_700_000_100).expect("read missing rate"),
-        Some(CachedRate::PermanentMissing)
+        cached_rate(&reopened, 7, 1_700_000_100).expect("read unresolved rate"),
+        None
+    );
+    assert!(
+        rate_search_start(&reopened, 7, 1_700_000_100, 1_700_000_200_001)
+            .expect("read persisted retry boundary")
+            .is_none()
     );
     drop(reopened);
     std::fs::remove_dir_all(&dir).expect("remove rate-cache fixture directory");
@@ -486,14 +515,30 @@ fn duplicate_capable_schema_is_retired_before_reader_attachment() {
                  algorithm_version INTEGER NOT NULL,
                  quote_ordinal INTEGER NOT NULL,
                  minute_utc INTEGER NOT NULL,
-                 status INTEGER NOT NULL,
-                 rate_usdt REAL,
-                 provider TEXT,
-                 symbol TEXT,
-                 orientation INTEGER,
-                 candle_open_ms INTEGER,
-                 candle_close_ms INTEGER,
+                 resolved_minute_utc INTEGER NOT NULL,
+                 rate_usdt REAL NOT NULL,
+                 price_basis INTEGER NOT NULL,
+                 provider TEXT NOT NULL,
+                 symbol TEXT NOT NULL,
+                 orientation INTEGER NOT NULL,
+                 candle_open_ms INTEGER NOT NULL,
+                 candle_close_ms INTEGER NOT NULL,
+                 leg1_rate REAL NOT NULL,
+                 leg2_provider TEXT,
+                 leg2_symbol TEXT,
+                 leg2_orientation INTEGER,
+                 leg2_rate REAL,
                  fetched_at_ms INTEGER NOT NULL
+             );
+             CREATE TABLE rate_searches (
+                 algorithm_version INTEGER NOT NULL,
+                 quote_ordinal INTEGER NOT NULL,
+                 minute_utc INTEGER NOT NULL,
+                 searched_through_minute INTEGER NOT NULL,
+                 next_retry_at_ms INTEGER NOT NULL,
+                 attempts INTEGER NOT NULL,
+                 updated_at_ms INTEGER NOT NULL,
+                 PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
              );
              CREATE TABLE trade_values (
                  source_kind INTEGER NOT NULL,
@@ -508,11 +553,14 @@ fn duplicate_capable_schema_is_retired_before_reader_attachment() {
                  rate_usdt REAL NOT NULL,
                  profit_usdt REAL NOT NULL,
                  spent_usdt REAL,
-                 valued_at_ms INTEGER NOT NULL
+                 valued_at_ms INTEGER NOT NULL,
+                 PRIMARY KEY (source_kind, core_uid, row_id)
              );
              INSERT INTO rates VALUES
-                 (1, 8, 100, 0, 1.0, 'fixture', 'USDCUSDT', 0, 0, 59999, 1),
-                 (1, 8, 100, 0, 1.0, 'fixture', 'USDCUSDT', 0, 0, 59999, 2);",
+                 (2, 8, 100, 100, 1.0, 0, 'fixture', 'USDCUSDT', 0,
+                  0, 59999, 1.0, NULL, NULL, NULL, NULL, 1),
+                 (2, 8, 100, 100, 1.0, 0, 'fixture', 'USDCUSDT', 0,
+                  0, 59999, 1.0, NULL, NULL, NULL, NULL, 2);",
         )
         .expect("seed duplicate-capable valuation schema");
     drop(malformed);

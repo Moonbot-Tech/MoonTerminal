@@ -407,6 +407,14 @@ pub(crate) fn trusted_quote_group(
 pub struct QuoteCurrency(u8);
 
 impl QuoteCurrency {
+    /// Iterate every persisted quote currency in stable ordinal order.
+    ///
+    /// Returns:
+    ///     The complete known quote universe used by storage and conversion routing.
+    pub fn all() -> impl ExactSizeIterator<Item = Self> {
+        (0_u8..=20).map(Self)
+    }
+
     /// Exact USDT quote identity used for fully converted mixed scopes.
     ///
     /// Returns:
@@ -545,7 +553,7 @@ pub struct ValuationCoverage {
     pub eligible_orders: i64,
     /// Eligible rows whose current inputs have a matching prepared valuation.
     pub valued_orders: i64,
-    /// Eligible rows whose canonical direct/inverse routes are permanently absent.
+    /// Eligible rows proven unroutable by the active valuation mode.
     pub unavailable_orders: i64,
     /// Complete USDT aggregate; never contains a partial sum.
     pub usdt: Option<UsdtTotal>,

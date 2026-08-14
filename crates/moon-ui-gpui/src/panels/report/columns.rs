@@ -184,7 +184,7 @@ pub(super) fn report_data_row(
             } else if cname == "deleted" {
                 cells.push(deleted_cell(ri, val));
             } else {
-                cells.push(report_data_cell(cname, val, quote, p, zone));
+                cells.push(report_data_cell(ri, cname, val, quote, p, zone));
             }
         }
     }
@@ -471,6 +471,7 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
 /// Render one Report value with column-specific formatting and alignment.
 ///
 /// Args:
+///     row: Visible row index used to give the hover target a stable identity.
 ///     col: Runtime report column name.
 ///     val: SQLite value from the row.
 ///     quote: The row's quote currency, deciding money precision.
@@ -480,6 +481,7 @@ fn deleted_cell(ri: usize, val: &Value) -> MoonDataCell {
 /// Returns:
 ///     Clipped table cell ready for MoonDataTable.
 fn report_data_cell(
+    row: usize,
     col: &str,
     val: &Value,
     quote: Option<QuoteCurrency>,
@@ -492,7 +494,9 @@ fn report_data_cell(
     // font styling comes from the cell style through MoonUI cascading.
     let right = is_numeric_report_column(col);
     let color = color.unwrap_or_else(|| MoonTone::Default.color(p));
+    let tooltip = cell_tooltip(col, &text);
     let inner = div()
+        .id(SharedString::from(format!("report-cell-{row}-{col}")))
         .flex()
         .w_full()
         .min_w_0()
@@ -500,8 +504,23 @@ fn report_data_cell(
         .when(right, |d| d.justify_end())
         .text_color(rgb(color))
         .font_weight(cell_weight(col))
-        .child(text);
+        .child(text)
+        .when_some(tooltip, |cell, tip| {
+            cell.tooltip(crate::panels::common::text_tooltip(tip))
+        });
     MoonDataCell::element(inner)
+}
+
+/// Preserve complete historical-rate provenance when the compact source column clips it.
+///
+/// Args:
+///     col: Runtime report column name.
+///     text: Fully formatted cell text.
+///
+/// Returns:
+///     Full source text only for a non-empty valuation provenance cell.
+fn cell_tooltip(col: &str, text: &str) -> Option<String> {
+    (col == db::VALUATION_SOURCE_COLUMN && !text.is_empty()).then(|| text.to_string())
 }
 
 /// Return the font weight a GENERIC Report data cell's text is drawn — and MEASURED — with.

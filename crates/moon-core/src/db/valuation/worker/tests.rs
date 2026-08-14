@@ -1,7 +1,7 @@
 //! Valuation worker invalidation regression tests.
 
 use super::*;
-use crate::db::valuation::{RateOrientation, ResolvedRate};
+use crate::db::valuation::{RateOrientation, RatePriceBasis, ResolvedRate};
 
 /// Provider boundary that fails a test if an invalidation-only event touches the network.
 struct NoNetwork;
@@ -242,12 +242,19 @@ fn seed_value(store: &Connection, source: TradeSource, core_uid: i64, row_id: i6
     let rate = ResolvedRate {
         quote_ordinal: 8,
         minute_utc: minute,
+        resolved_minute_utc: minute,
         rate_usdt: 0.999,
         provider: "fixture".to_string(),
         symbol: "USDCUSDT".to_string(),
         orientation: RateOrientation::Direct,
+        price_basis: RatePriceBasis::ExactClose,
         candle_open_ms: minute * 1_000,
         candle_close_ms: minute * 1_000 + 59_999,
+        leg2_provider: None,
+        leg2_symbol: None,
+        leg2_orientation: None,
+        leg1_rate: 0.999,
+        leg2_rate: None,
     };
     let input = TradeInput {
         source,
@@ -312,6 +319,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
             action: OutboxAction::RescanCore,
         },
         &mut deferred,
+        &BTreeSet::new(),
     );
     assert!(matches!(reset, PrepareResult::Complete { changed: true }));
     assert!(!deferred.contains_key(&(TradeSource::Typed.code(), 1, 10)));
@@ -346,6 +354,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
             action: OutboxAction::PurgeLegacy,
         },
         &mut deferred,
+        &BTreeSet::new(),
     );
     assert!(matches!(purge, PrepareResult::Complete { changed: true }));
     assert_eq!(
@@ -380,6 +389,7 @@ fn hard_delete_removes_one_exact_prepared_identity() {
             action: OutboxAction::Delete,
         },
         &mut deferred,
+        &BTreeSet::new(),
     );
 
     assert!(matches!(deleted, PrepareResult::Complete { changed: true }));
@@ -391,11 +401,105 @@ fn hard_delete_removes_one_exact_prepared_identity() {
     assert_eq!(remaining, 11);
 }
 
-/// `worker.rs:prefetch_rates` must report a newly cached permanent miss as a visible coverage
-/// change; returning false leaves Report and Analytics showing an endless pending count until an
-/// unrelated report commit wakes them.
+/// Breakage: retaining an older deferred copy when a row event becomes immediately valueable lets
+/// the stale input retry later and overwrite the current prepared value.
 #[test]
-fn permanent_missing_rate_is_a_publishable_coverage_change() {
+fn row_event_replaces_a_stale_deferred_copy() {
+    let store =
+        super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
+    let reports = Connection::open_in_memory().expect("open report fixture");
+    let closedate = current_minute_utc() - 60;
+    reports
+        .execute_batch(&format!(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER, newrecid INTEGER, closedate INTEGER,
+                 basecurrency INTEGER, profitbtc REAL, spentbtc REAL
+             );
+             INSERT INTO orders_rep VALUES (1, 10, {closedate}, 1, 7.0, 3.0);"
+        ))
+        .expect("seed current report row");
+    let stale = TradeInput {
+        source: TradeSource::Typed,
+        core_uid: 1,
+        row_id: 10,
+        closedate: closedate - 600,
+        quote_ordinal: 8,
+        profit_quote: 999.0,
+        spent_quote: None,
+    };
+    let key = trade_key(&stale);
+    let mut deferred = BTreeMap::from([(key, stale)]);
+
+    let result = process_event(
+        &store,
+        &NoNetwork,
+        &reports,
+        OutboxEvent {
+            seq: 1,
+            source: TradeSource::Typed,
+            core_uid: 1,
+            row_id: 10,
+            action: OutboxAction::Row,
+        },
+        &mut deferred,
+        &BTreeSet::new(),
+    );
+
+    assert!(matches!(result, PrepareResult::Complete { changed: true }));
+    assert!(deferred.is_empty());
+    assert_eq!(
+        store
+            .query_row(
+                "SELECT closedate, quote_ordinal, profit_quote FROM trade_values",
+                [],
+                |row| Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, f64>(2)?
+                )),
+            )
+            .expect("read current prepared value"),
+        (closedate, 1, 7.0)
+    );
+}
+
+/// Breakage: removing `DEFERRED_BATCH` lets a large restored history monopolize one worker turn,
+/// delaying newly committed report events until every old row has been retried.
+#[test]
+fn deferred_processing_yields_after_one_bounded_batch() {
+    let store =
+        super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
+    let minute = current_minute_utc() - 60;
+    let mut deferred = (0..=DEFERRED_BATCH)
+        .map(|offset| {
+            let input = TradeInput {
+                source: TradeSource::Typed,
+                core_uid: 1,
+                row_id: offset as i64,
+                closedate: minute,
+                quote_ordinal: 1,
+                profit_quote: 1.0,
+                spent_quote: None,
+            };
+            (trade_key(&input), input)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+
+    let turn = process_deferred(&store, &NoNetwork, &generation, &dirty, &mut deferred)
+        .expect("process one deferred batch");
+
+    assert!(matches!(turn, StageTurn::Ran { more: true }));
+    assert_eq!(deferred.len(), 1);
+}
+
+/// A provider range with no candle must persist retry pacing without creating a terminal rate.
+///
+/// Breakage: restoring a permanent-miss row makes the trade disappear from pending coverage and
+/// prevents the later market observation from ever entering the user's historical total.
+#[test]
+fn unresolved_rate_remains_retryable_without_a_terminal_cache_entry() {
     let store =
         super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
     let minute = current_minute_utc() - 120;
@@ -409,18 +513,118 @@ fn permanent_missing_rate_is_a_publishable_coverage_change() {
         spent_quote: Some(100.0),
     };
 
-    let changed =
-        prefetch_rates(&store, &MissingSource, &[input]).expect("cache canonical permanent miss");
-
-    assert!(changed);
+    let result = prepare_trade(&store, &MissingSource, &input, false);
+    assert!(matches!(result, PrepareResult::Deferred { changed: false }));
     assert_eq!(
-        super::super::cached_rate(&store, 8, minute).expect("read cached miss"),
-        Some(CachedRate::PermanentMissing)
+        super::super::cached_rate(&store, 8, minute).expect("read unresolved rate"),
+        None
+    );
+    assert!(
+        super::super::rate_search_start(&store, 8, minute, now_unix_ms_i64())
+            .expect("read retry schedule")
+            .is_none()
     );
 }
 
-/// Removing the error-side publication from `worker.rs:settle_prefetch` would leave committed
-/// permanent misses or earlier prepared rows invisible while a later provider retry keeps failing.
+/// Breakage: dropping the canonical-exact miss set from `prefetch_rates` makes per-row preparation
+/// repeat the same Binance/Bybit exact requests that the batch already proved empty.
+#[test]
+fn exact_prefetch_misses_are_not_requested_again_per_row() {
+    let store =
+        super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
+    let minute = current_minute_utc() - 120;
+    let input = TradeInput {
+        source: TradeSource::Typed,
+        core_uid: 1,
+        row_id: 10,
+        closedate: minute,
+        quote_ordinal: 8,
+        profit_quote: 5.0,
+        spent_quote: None,
+    };
+    let source = CountingSource::new(&[]);
+
+    let prefetched = prefetch_rates(&store, &source, std::slice::from_ref(&input))
+        .expect("prefetch exact routes");
+    assert!(prefetched
+        .canonical_exact_missing
+        .contains(&(input.quote_ordinal, minute)));
+    source.calls.lock().expect("clear prefetch calls").clear();
+
+    assert!(matches!(
+        prepare_trade(&store, &source, &input, true),
+        PrepareResult::Deferred { .. }
+    ));
+    assert!(source
+        .calls
+        .lock()
+        .expect("read preparation calls")
+        .iter()
+        .all(|(provider, symbol, start, end)| {
+            !matches!(*provider, "binance_spot" | "bybit_spot")
+                || !matches!(symbol.as_str(), "USDCUSDT" | "USDTUSDC")
+                || *start != minute
+                || *end != minute
+        }));
+}
+
+/// A persisted retry that becomes due must consume a newly retained successor without any new
+/// report event. Breakage: dropping the deferred row after acknowledging its outbox event leaves
+/// the user's historical total pending forever on a long-running server.
+#[test]
+fn due_retry_values_the_row_when_a_successor_appears() {
+    let store =
+        super::super::open_store(std::path::Path::new(":memory:")).expect("open valuation fixture");
+    let requested = current_minute_utc() - 180;
+    let successor = requested + 60;
+    let input = TradeInput {
+        source: TradeSource::Typed,
+        core_uid: 1,
+        row_id: 10,
+        closedate: requested + 5,
+        quote_ordinal: 8,
+        profit_quote: 5.0,
+        spent_quote: Some(100.0),
+    };
+    assert!(matches!(
+        prepare_trade(&store, &MissingSource, &input, false),
+        PrepareResult::Deferred { changed: false }
+    ));
+    store
+        .execute(
+            "UPDATE rate_searches SET searched_through_minute=?1, next_retry_at_ms=0",
+            [requested],
+        )
+        .expect("make the next minute newly searchable");
+    let source = CountingSource::new(&[("USDCUSDT", 1.001)]).at_minute(successor);
+    let generation = AtomicU64::new(0);
+    let dirty = AtomicBool::new(false);
+    let key = trade_key(&input);
+    let mut deferred = BTreeMap::from([(key, input)]);
+
+    process_deferred(&store, &source, &generation, &dirty, &mut deferred)
+        .expect("process due successor");
+
+    assert!(deferred.is_empty());
+    let stored = store
+        .query_row(
+            "SELECT resolved_minute_utc, price_basis FROM rates WHERE quote_ordinal=8",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .expect("read successor provenance");
+    assert_eq!(stored, (successor, RatePriceBasis::SuccessorOpen.code()));
+    assert_eq!(
+        store
+            .query_row("SELECT COUNT(*) FROM trade_values", [], |row| row
+                .get::<_, i64>(0))
+            .expect("count prepared rows"),
+        1
+    );
+}
+
+/// Removing the error-side publication from `worker.rs:settle_prefetch` would leave earlier
+/// prepared rows invisible while a later provider retry keeps failing.
 #[test]
 fn partial_prefetch_failure_publishes_committed_progress() {
     let generation = AtomicU64::new(7);
@@ -446,10 +650,10 @@ fn partial_prefetch_failure_publishes_committed_progress() {
     assert!(dirty.load(Ordering::Acquire));
 }
 
-/// Removing the permanent-miss join from `worker.rs:reconciliation_batch` would rescan every
-/// unavailable historical trade on each restart instead of treating the persistent miss as done.
+/// Omitting unresolved rows from startup reconciliation loses their in-memory wake after restart;
+/// ignoring the persisted boundary then turns the restored row into a provider hot loop.
 #[test]
-fn reconciliation_skips_rows_with_a_cached_permanent_miss() {
+fn reconciliation_restores_pending_rows_without_bypassing_the_retry_boundary() {
     let _health = super::super::test_health_guard();
     let dir = std::env::temp_dir().join(format!(
         "moonterminal-reconcile-miss-{}-{}",
@@ -461,8 +665,8 @@ fn reconciliation_skips_rows_with_a_cached_permanent_miss() {
     let minute = 1_700_000_040;
     {
         let store = super::super::open_store(&path).expect("open valuation fixture");
-        super::super::store_permanent_missing(&store, 8, minute, minute * 1_000 + 120_000)
-            .expect("cache permanent miss");
+        super::super::store_rate_search(&store, 8, minute, minute + 60, now_unix_ms_i64())
+            .expect("persist retry boundary");
     }
     let reports = Connection::open_in_memory().expect("open report fixture");
     reports
@@ -487,7 +691,11 @@ fn reconciliation_skips_rows_with_a_cached_permanent_miss() {
     let pending = reconciliation_batch(&reports, TradeSource::Typed, None, 256)
         .expect("scan startup reconciliation");
 
-    assert!(pending.is_empty());
+    assert_eq!(pending.len(), 1);
+    let store = super::super::open_store(&path).expect("reopen valuation fixture");
+    let deferred = BTreeMap::from([(trade_key(&pending[0]), pending[0].clone())]);
+    assert!(!current_minute_closed_any(&store, &deferred));
+    drop(store);
     drop(reports);
     std::fs::remove_dir_all(&dir).expect("remove reconciliation fixture directory");
 }
@@ -843,7 +1051,7 @@ impl SpotRateSource for CountingSource {
     ///     end_minute_utc: Last requested UTC minute.
     ///
     /// Returns:
-    ///     One candle for a scripted symbol, or a permanent or transient failure.
+    ///     One candle for a scripted symbol, or a route/range or transient failure.
     fn candles(
         &self,
         provider: &'static str,
@@ -868,6 +1076,7 @@ impl SpotRateSource for CountingSource {
             Some(&close) => Ok(vec![super::super::provider::SpotCandle {
                 open_ms: candle_minute * 1000,
                 close_ms: candle_minute * 1000 + 59_999,
+                open: close,
                 close,
             }]),
             None => Err(FetchFailure::Missing),

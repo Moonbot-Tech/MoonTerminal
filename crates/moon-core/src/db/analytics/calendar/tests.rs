@@ -729,9 +729,11 @@ fn mixed_quotes_convert_turnover_and_cost_to_one_currency() {
         "ATTACH ':memory:' AS valuation;
          CREATE TABLE valuation.rates (
              algorithm_version INTEGER, quote_ordinal INTEGER, minute_utc INTEGER,
-             status INTEGER, rate_usdt REAL, provider TEXT, symbol TEXT,
-             orientation INTEGER, candle_open_ms INTEGER, candle_close_ms INTEGER,
-             fetched_at_ms INTEGER,
+             resolved_minute_utc INTEGER, rate_usdt REAL, price_basis INTEGER,
+             provider TEXT, symbol TEXT, orientation INTEGER,
+             candle_open_ms INTEGER, candle_close_ms INTEGER, leg1_rate REAL,
+             leg2_provider TEXT, leg2_symbol TEXT, leg2_orientation INTEGER,
+             leg2_rate REAL, fetched_at_ms INTEGER,
              PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
          );
          CREATE TABLE valuation.trade_values (
@@ -784,9 +786,11 @@ fn value_every_row(c: &Connection, rate: f64) {
         "ATTACH ':memory:' AS valuation;
          CREATE TABLE valuation.rates (
              algorithm_version INTEGER, quote_ordinal INTEGER, minute_utc INTEGER,
-             status INTEGER, rate_usdt REAL, provider TEXT, symbol TEXT,
-             orientation INTEGER, candle_open_ms INTEGER, candle_close_ms INTEGER,
-             fetched_at_ms INTEGER,
+             resolved_minute_utc INTEGER, rate_usdt REAL, price_basis INTEGER,
+             provider TEXT, symbol TEXT, orientation INTEGER,
+             candle_open_ms INTEGER, candle_close_ms INTEGER, leg1_rate REAL,
+             leg2_provider TEXT, leg2_symbol TEXT, leg2_orientation INTEGER,
+             leg2_rate REAL, fetched_at_ms INTEGER,
              PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
          );
          CREATE TABLE valuation.trade_values (
@@ -992,7 +996,10 @@ fn a_funding_accrual_delivered_to_two_bots_is_counted_once() {
     };
     let c = seed_exec(&[
         // The same accrual as two cores saw it, seconds apart, plus one ordinary trade.
-        Exec { core: 1, ..accrual.clone() },
+        Exec {
+            core: 1,
+            ..accrual.clone()
+        },
         Exec {
             core: 2,
             close: accrual.close + 3,
@@ -1028,8 +1035,16 @@ fn two_accounts_charged_at_the_same_moment_both_count() {
         ..Default::default()
     };
     let c = seed_exec(&[
-        Exec { core: 1, profit: -0.00024915, ..base.clone() },
-        Exec { core: 2, profit: -0.00049860, ..base.clone() },
+        Exec {
+            core: 1,
+            profit: -0.00024915,
+            ..base.clone()
+        },
+        Exec {
+            core: 2,
+            profit: -0.00049860,
+            ..base.clone()
+        },
     ]);
     let totals = one_day(&c, ProjectionMode::Native);
 
@@ -1055,12 +1070,24 @@ fn dedup_keys_on_the_position_as_well_as_the_amount() {
         ..Default::default()
     };
     let c = seed_exec(&[
-        Exec { core: 1, qty: 350.0, ..base.clone() },
+        Exec {
+            core: 1,
+            qty: 350.0,
+            ..base.clone()
+        },
         // Same amount, DIFFERENT position: a second account that happens to owe the same.
-        Exec { core: 2, qty: 700.0, ..base.clone() },
+        Exec {
+            core: 2,
+            qty: 700.0,
+            ..base.clone()
+        },
     ]);
     let totals = one_day(&c, ProjectionMode::Native);
-    assert_eq!(totals.funding, Some(5.0), "different sizes are different accruals");
+    assert_eq!(
+        totals.funding,
+        Some(5.0),
+        "different sizes are different accruals"
+    );
 }
 
 /// Percent measures a return on spent capital, and funding has no spend to measure against.

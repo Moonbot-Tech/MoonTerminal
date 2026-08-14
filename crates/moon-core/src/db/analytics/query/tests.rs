@@ -442,8 +442,10 @@ fn the_current_rate_mode_emits_its_own_projection() {
              quote_ordinal INTEGER, profit_quote REAL, spent_quote REAL,
              profit_usdt REAL, spent_usdt REAL, rate_usdt REAL, rate_minute_utc INTEGER);
          CREATE TABLE valuation.rates (algorithm_version INTEGER, quote_ordinal INTEGER,
-             minute_utc INTEGER, status INTEGER, provider TEXT, symbol TEXT,
-             orientation INTEGER);
+             minute_utc INTEGER, resolved_minute_utc INTEGER, rate_usdt REAL,
+             price_basis INTEGER, provider TEXT, symbol TEXT, orientation INTEGER,
+             candle_open_ms INTEGER, candle_close_ms INTEGER, leg1_rate REAL,
+             leg2_provider TEXT, leg2_symbol TEXT, leg2_orientation INTEGER, leg2_rate REAL);
          ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;
          ALTER TABLE orders_rep ADD COLUMN newrecid INTEGER;",
     )
