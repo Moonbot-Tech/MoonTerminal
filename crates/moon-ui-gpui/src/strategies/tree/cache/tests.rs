@@ -3,10 +3,12 @@
 //! Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 //! shadows the built-in attribute and makes `#[test]` expand recursively.
 
+use moon_core::feed::ExchangeId;
 use moon_core::feed::OrderRow;
 use moon_core::session::store::CoreData;
+use moon_core::venue::CoreVenue;
 
-use super::{open_orders_digest, unordered};
+use super::{open_orders_digest, unordered, venues_digest};
 
 /// A `HashSet` hands its elements over in whatever order it likes, and that order changes between
 /// runs of a program that inserted the same values. Folding it as a sequence would therefore
@@ -148,4 +150,49 @@ fn a_second_open_order_on_one_strategy_moves_the_digest() {
         order(7, false, 60_100.0),
     ]));
     assert_ne!(one, two);
+}
+
+/// Build a venue with independently controlled identity and display metadata.
+fn venue(code: u8, id_dex: u32, dex: &str, reported: &str) -> CoreVenue {
+    CoreVenue {
+        id: ExchangeId { code, dex: id_dex },
+        dex: dex.to_string(),
+        reported: reported.to_string(),
+    }
+}
+
+/// `tree/cache.rs:venues_digest`: unchanged ordered venue input must not invalidate the adapter on
+/// every hover repaint, or a large strategy tree returns to its previous per-frame rebuild cost.
+#[test]
+fn venue_digest_is_stable_for_unchanged_ordered_input() {
+    let venue = venue(9, 17, "alpha", "caption");
+    let before = venues_digest([(7, Some(&venue)), (8, None)]);
+    let after = venues_digest([(7, Some(&venue)), (8, None)]);
+    assert_eq!(before, after);
+}
+
+/// `tree/cache.rs:venues_digest`: omitting any grouping or caption input would leave an old
+/// exchange heading visible after venue discovery changes while no strategy row itself moved.
+#[test]
+fn venue_digest_moves_for_every_grouping_and_caption_input() {
+    let base = venue(9, 17, "alpha", "caption");
+    let baseline = venues_digest([(7, Some(&base))]);
+
+    assert_ne!(baseline, venues_digest([(7, None)]));
+    assert_ne!(
+        baseline,
+        venues_digest([(7, Some(&venue(10, 17, "alpha", "caption")))])
+    );
+    assert_ne!(
+        baseline,
+        venues_digest([(7, Some(&venue(9, 18, "alpha", "caption")))])
+    );
+    assert_ne!(
+        baseline,
+        venues_digest([(7, Some(&venue(9, 17, "beta", "caption")))])
+    );
+    assert_ne!(
+        baseline,
+        venues_digest([(7, Some(&venue(9, 17, "alpha", "renamed")))])
+    );
 }

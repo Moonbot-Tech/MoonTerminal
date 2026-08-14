@@ -12,8 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
-    MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta,
-    h_flex,
+    MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta, h_flex,
 };
 
 use super::super::filter::PreparedFilter;
@@ -25,11 +24,26 @@ use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
 use crate::design;
 use moon_core::feed::StrategyRow;
 use moon_core::session::{CoreId, CoreStore};
+use moon_core::venue::CoreVenue;
 
 #[cfg(test)]
 mod tests;
 
 // ── Node ID encoding: stable string IDs for MoonTree ─────────────────────────
+/// Build the stable tree ID for an exchange identity or the single unidentified section.
+///
+/// Args:
+///     venue: Nameable venue behind a section, or `None` for every unidentified core.
+///
+/// Returns:
+///     Identity-derived tree ID that is independent of localized or wire-reported captions.
+fn id_exchange(venue: Option<&CoreVenue>) -> SharedString {
+    match venue {
+        Some(venue) => SharedString::from(format!("x:{}:{}", venue.id.code, venue.id.dex)),
+        None => SharedString::from("x:unknown"),
+    }
+}
+
 fn id_core(core: CoreId) -> SharedString {
     SharedString::from(format!("c:{core}"))
 }
@@ -48,12 +62,15 @@ fn id_del_strat(core: CoreId, id: u64) -> SharedString {
 
 /// Data for one tree row, looked up by node ID from `render_row` and decorators.
 pub(crate) enum NodeData {
+    /// Always-expanded, non-interactive heading for one canonical exchange section.
+    Exchange { label: String },
     Core {
         core: CoreId,
         label: String,
         active: usize,
         total: usize,
         open_orders: usize,
+        selected: bool,
     },
     Folder {
         core: CoreId,
@@ -106,11 +123,21 @@ pub(crate) struct MoonTreeBuild {
 /// Builds the visible MoonTree forest and row data without exposing store borrows.
 ///
 /// Collapsed cores contribute only their root row and totals; open cores are each scanned once for
-/// visible rows and folder counts.
+/// visible rows and folder counts. Nonempty cores are wrapped in canonical exchange sections.
+///
+/// Args:
+///     view: Strategies state providing filters, expansion, and selection.
+///     store: Current per-core strategy and order snapshot.
+///     cores: Visible cores in canonical member order.
+///     venues: Session-owned venue identities used by the shared section partition.
+///
+/// Returns:
+///     Visible exchange forest, row data, expansion IDs, and flat strategy order.
 pub(crate) fn build(
     view: &StrategiesView,
     store: &CoreStore,
     cores: &crate::core_order::OrderedCores,
+    venues: &HashMap<CoreId, CoreVenue>,
 ) -> MoonTreeBuild {
     let filter = view.filter.prepare();
     let searching = filter.searching();
@@ -119,75 +146,106 @@ pub(crate) fn build(
     let mut expanded: Vec<SharedString> = Vec::new();
     let mut flat: Vec<Key> = Vec::new();
 
-    for (core_id, core_name) in cores.iter() {
-        let core = *core_id;
-        let Some(cd) = store.core(core) else { continue };
-        // Openness is decided before the strategies are walked: nothing below a collapsed core can
-        // be rendered and MoonTree never descends into one, so such a core needs only the two
-        // numbers in its own caption — no row list, no per-folder map. With dozens of cores
-        // collapsed this avoids the dominant per-frame work. A search force-expands every node, so
-        // it never prunes; a reveal expands its target's core and folder chain before this runs
-        // (`selection::drain_goto` and `sync_pending_select`), so navigation is never pruned away.
-        let core_open = searching || view.expanded_cores.contains(&core);
+    let sections = crate::core_order::exchange_sections(
+        cores
+            .iter()
+            .enumerate()
+            .map(|(index, (core, _))| (index, venues.get(core))),
+    );
+    for (venue, members) in sections {
+        let mut section_children = Vec::new();
+        for member in members {
+            let (core_id, core_name) = &cores[member];
+            let core = *core_id;
+            let Some(cd) = store.core(core) else { continue };
+            // Openness is decided before strategies are walked: nothing below a collapsed core can
+            // render, so it needs only the totals in its own caption. Search and reveal paths force
+            // their required core/folder chain open before this build runs.
+            let core_open = searching || view.expanded_cores.contains(&core);
 
-        // One pass feeds both the visible set and every folder count because this list is walked on
-        // every frame.
-        let mut counts = if core_open {
-            FolderCounts::default()
-        } else {
-            FolderCounts::totals_only()
-        };
-        let mut matched: Vec<&StrategyRow> = Vec::new();
-        let mut any_matched = false;
-        for r in &cd.strategies {
-            counts.add(r, &filter);
-            if filter.matches(r) {
-                any_matched = true;
-                if core_open {
-                    matched.push(r);
+            // One pass feeds both the visible set and every folder count.
+            let mut counts = if core_open {
+                FolderCounts::default()
+            } else {
+                FolderCounts::totals_only()
+            };
+            let mut matched: Vec<&StrategyRow> = Vec::new();
+            let mut any_matched = false;
+            for row in &cd.strategies {
+                counts.add(row, &filter);
+                if filter.matches(row) {
+                    any_matched = true;
+                    if core_open {
+                        matched.push(row);
+                    }
                 }
             }
-        }
-        // Cores without a visible strategy have no row to expose under the current filter.
-        if !any_matched {
-            continue;
-        }
-        let (active, total) = counts.root();
-        let open_orders_total = cd.orders.iter().filter(|o| !o.job_is_done).count();
+            // Build section children first so a filtered-out venue never leaves an empty heading.
+            if !any_matched {
+                continue;
+            }
+            let (active, total) = counts.root();
+            let open_orders_total = cd.orders.iter().filter(|order| !order.job_is_done).count();
 
-        let cid = id_core(core);
-        let mut children = Vec::new();
-        if core_open {
-            expanded.push(cid.clone());
-            build_core_subtree(
-                view,
-                cd,
-                core,
-                &filter,
-                searching,
-                &counts,
-                &matched,
-                &mut children,
-                &mut data,
-                &mut flat,
-                &mut expanded,
+            let cid = id_core(core);
+            let mut children = Vec::new();
+            if core_open {
+                expanded.push(cid.clone());
+                build_core_subtree(
+                    view,
+                    cd,
+                    core,
+                    &filter,
+                    searching,
+                    &counts,
+                    &matched,
+                    &mut children,
+                    &mut data,
+                    &mut flat,
+                    &mut expanded,
+                );
+            }
+
+            data.insert(
+                cid.clone(),
+                NodeData::Core {
+                    core,
+                    label: core_name.clone(),
+                    active,
+                    total,
+                    open_orders: open_orders_total,
+                    selected: view
+                        .selected_folder
+                        .as_ref()
+                        .is_some_and(|(selected_core, path)| {
+                            *selected_core == core && path.is_empty()
+                        }),
+                },
+            );
+            section_children.push(
+                MoonTreeItem::new(cid, core_name.clone())
+                    .folder(true)
+                    .children(children),
             );
         }
 
+        if section_children.is_empty() {
+            continue;
+        }
+        let exchange_id = id_exchange(venue);
+        let label = crate::controls::venue_section_label(venue);
+        expanded.push(exchange_id.clone());
         data.insert(
-            cid.clone(),
-            NodeData::Core {
-                core,
-                label: core_name.clone(),
-                active,
-                total,
-                open_orders: open_orders_total,
+            exchange_id.clone(),
+            NodeData::Exchange {
+                label: label.clone(),
             },
         );
         items.push(
-            MoonTreeItem::new(cid, core_name.clone())
-                .folder(true)
-                .children(children),
+            MoonTreeItem::new(exchange_id, label)
+                .folder(false)
+                .disabled(true)
+                .children(section_children),
         );
     }
 
@@ -552,6 +610,7 @@ fn drop_dest(
     entry: &MoonTreeEntry,
 ) -> Option<(CoreId, Vec<String>)> {
     match data.get(entry.item().id())? {
+        NodeData::Exchange { .. } => None,
         NodeData::Core { core, .. } => Some((*core, Vec::new())),
         NodeData::Folder { core, path, .. } => Some((*core, path.clone())),
         NodeData::Strategy { .. }
@@ -579,12 +638,14 @@ fn render_row(
     };
 
     match node {
+        NodeData::Exchange { label } => exchange_row(node_id, indent, label, app),
         NodeData::Core {
             core,
             label,
             active,
             total,
             open_orders,
+            selected,
         } => {
             let core = *core;
             let txt = if *open_orders > 0 {
@@ -596,7 +657,7 @@ fn render_row(
                 view,
                 node_id,
                 entry.is_expanded(),
-                false,
+                *selected,
                 indent,
                 txt,
                 p.blue,
@@ -690,6 +751,47 @@ fn render_row(
     }
 }
 
+/// Render a passive exchange section heading above its core children.
+///
+/// Args:
+///     row_id: Stable exchange identity used as the row element ID.
+///     indent: Tree-provided indentation for the heading depth.
+///     label: Localized shared venue-section caption.
+///     app: Application context providing palette and scaled geometry.
+///
+/// Returns:
+///     Non-interactive hierarchy row with no selection, hover, disclosure, drag, or drop behavior.
+fn exchange_row(row_id: SharedString, indent: Pixels, label: &str, app: &App) -> AnyElement {
+    let p = MoonPalette::active(app);
+    h_flex()
+        .id(row_id)
+        .w_full()
+        .h(design::fit_h_px(app, 23.0, 14.0, 4.5))
+        .pl(indent)
+        .pr(design::ui_px(app, 6.0))
+        .items_center()
+        .gap(design::ui_px(app, 6.0))
+        .child(
+            div()
+                .flex_none()
+                .w(design::ui_px(app, 6.0))
+                .h(design::ui_px(app, 6.0))
+                .rounded_full()
+                .bg(rgb(p.accent)),
+        )
+        .child(
+            div().flex_1().min_w_0().truncate().child(
+                MoonText::new(label.to_string())
+                    .mono(true)
+                    .uppercase(false)
+                    .color(p.text_soft)
+                    .weight(600.0)
+                    .render(),
+            ),
+        )
+        .into_any_element()
+}
+
 enum ToggleTarget {
     Core(CoreId),
     Folder(CoreId, Vec<String>),
@@ -754,7 +856,9 @@ fn core_folder_row(
         .cursor_pointer()
         .rounded(design::ui_px(app, 3.0))
         .when(selected, |s| s.bg(moon_alpha(p.amber, 0.14)))
-        .hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
+        .when(!selected, |s| {
+            s.hover(move |s| s.bg(moon_alpha(p.panel, 0.74)))
+        })
         // Passive: the whole row carries the click that expands or collapses this node, so the
         // marker stays hitbox-free and cannot swallow it.
         // Chrome, so it tracks the UI slider rather than the row's own text scale.
@@ -771,12 +875,13 @@ fn core_folder_row(
                 .weight(weight)
                 .render(),
         )
-        .on_click(move |_e, _window, app| {
+        .on_click(move |_e, window, app| {
             view_click.update(app, |this, cx| {
+                window.focus(&this.focus, cx);
                 match &target {
                     ToggleTarget::Core(c) => {
                         toggle(&mut this.expanded_cores, *c);
-                        this.selected_folder = None;
+                        this.selected_folder = Some((*c, String::new()));
                     }
                     ToggleTarget::Folder(c, path) => {
                         toggle(&mut this.expanded_folders, (*c, path.join("/")));

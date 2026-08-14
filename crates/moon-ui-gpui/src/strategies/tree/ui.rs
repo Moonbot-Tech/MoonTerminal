@@ -5,19 +5,36 @@
 
 use super::super::*;
 use super::ops;
+use moon_ui::MoonButtonIconSlot;
 use rust_i18n::t;
 
 #[cfg(test)]
 mod tests;
 
+/// Return whether one full set of footer labels fits beside its fixed Action-button chrome.
+///
+/// Args:
+///     available_width: Rendered width offered by the Strategies tree pane.
+///     fixed_width: Buttons, icons, padding, gaps, and divider that never disappear.
+///     measured_label_width: Current localized button and staged-label glyph widths.
+///
+/// Returns:
+///     `true` at and above the inclusive full-label boundary.
+pub(super) fn footer_labels_fit(
+    available_width: f32,
+    fixed_width: f32,
+    measured_label_width: f32,
+) -> bool {
+    available_width >= fixed_width + measured_label_width
+}
+
 /// Where a paste — or a Create — should land, given the tree's two kinds of selection.
 ///
 /// The folder outranks the strategy, and that is structural rather than a preference: making a
 /// strategy the primary selection goes through `selection::focus_strategy` (or
-/// `selection::apply_click` for a modified click), both of which clear `selected_folder`, while
-/// a folder click sets it and a core click clears it. So a value here can only mean the folder
-/// was the last thing the user pointed at — which is exactly when "paste it in there" is the
-/// answer.
+/// `selection::apply_click` for a modified click), both of which clear `selected_folder`, while a
+/// folder or core click sets its exact subtree target. So a value here means that subtree was the
+/// last thing the user pointed at — which is exactly when "paste it in there" is the answer.
 ///
 /// Both halves of the answer come from one source so the target path and core cannot describe
 /// different selections.
@@ -270,6 +287,18 @@ impl StrategiesView {
 
     // ── Keyboard: Ctrl+C, Ctrl+V, and Delete ──────────────────────────────────
 
+    /// Copy the last clicked visible folder/core root, otherwise the visible strategy selection.
+    ///
+    /// Args:
+    ///     cx: View context used by the existing folder and strategy clipboard writers.
+    fn copy_tree_target(&mut self, cx: &mut Context<Self>) {
+        if let Some((core, path)) = selected_folder(self) {
+            self.copy_folder(core, ops::split_path(&path), cx);
+        } else {
+            self.copy_selection(cx);
+        }
+    }
+
     /// Dispatch tree keyboard actions only through the current workspace-visible selection.
     ///
     /// Copy, Paste, and Delete resolve effective strategies, folders, and fallback cores at the
@@ -288,23 +317,13 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.focus.is_focused(window) {
+            return;
+        }
         let m = &ev.keystroke.modifiers;
         let key = ev.keystroke.key.as_str();
         if m.control && key == "c" {
-            // When no workspace-visible strategies are selected but a visible folder was clicked,
-            // match Moonbot by copying the entire folder and its contents.
-            let no_sel = {
-                let store = self.backend.read(cx).session.store();
-                !self.selection_summary(store).0
-            };
-            if no_sel {
-                if let Some((core, path)) = selected_folder(self) {
-                    let path = ops::split_path(&path);
-                    self.copy_folder(core, path, cx);
-                    return;
-                }
-            }
-            self.copy_selection(cx);
+            self.copy_tree_target(cx);
         } else if m.control && key == "v" {
             let (core, target) = {
                 let b = self.backend.read(cx);
@@ -321,67 +340,80 @@ impl StrategiesView {
 
     // ── Rendering: selection toolbar ──────────────────────────────────────────
 
-    /// Builds selection and clipboard action buttons for the lower action panel.
-    pub(super) fn selection_toolbar(&self, store: &CoreStore, cx: &Context<Self>) -> AnyElement {
+    /// Build the horizontal Copy, Paste, and Delete group for the responsive footer.
+    ///
+    /// Args:
+    ///     store: Current strategy snapshot used for action enablement.
+    ///     show_labels: Shared density decision for every footer button.
+    ///     cx: View context used to create callbacks and scaled button widths.
+    ///
+    /// Returns:
+    ///     One Action-size group whose callbacks reuse the canonical clipboard/delete paths.
+    pub(super) fn selection_toolbar(
+        &self,
+        store: &CoreStore,
+        show_labels: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let (has_sel, all_off) = self.selection_summary(store);
+        let can_copy = has_sel || selected_folder(self).is_some();
         let can_paste = self.clipboard.is_some()
             && !visible_strategy_cores(self, self.backend.read(cx)).is_empty();
-        // Use a fixed-width left group: Copy and Paste each fill half of the first row, while
-        // Delete spans the row below through `MoonButton::full_width()`.
-        v_flex()
-            .w(px(176.0))
-            .gap_1()
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_1()
-                    .child(
-                        div().flex_1().child(
-                            MoonButton::new("sel-copy")
-                                .outline()
-                                .size(MoonButtonSize::Micro)
-                                .full_width()
-                                .label(t!("strat.action_copy").to_string())
-                                .disabled(!has_sel)
-                                .on_click(cx.listener(|this, _, _, cx| this.copy_selection(cx)))
-                                .render(),
-                        ),
-                    )
-                    .child(
-                        div().flex_1().child(
-                            MoonButton::new("sel-paste")
-                                .outline()
-                                .size(MoonButtonSize::Micro)
-                                .full_width()
-                                .label(t!("strat.action_paste").to_string())
-                                .disabled(!can_paste)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    // Paste into the primary strategy's folder or the default root.
-                                    let (core, target) = {
-                                        let b = this.backend.read(cx);
-                                        let cores = visible_strategy_cores(this, b);
-                                        this.default_target(b.session.store(), &cores)
-                                    };
-                                    this.paste_into(core, target, cx);
-                                }))
-                                .render(),
-                        ),
-                    ),
-            )
-            .child(
-                MoonButton::new("sel-delete")
-                    .danger()
-                    .size(MoonButtonSize::Micro)
-                    .full_width()
-                    .label(t!("strat.action_delete").to_string())
-                    .disabled(!has_sel || !all_off)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.request_delete_selection(window, cx)
-                        }),
-                    )
-                    .render(),
-            )
+        let copy_label = t!("strat.action_copy").to_string();
+        let paste_label = t!("strat.action_paste").to_string();
+        let delete_label = t!("strat.action_delete").to_string();
+        let icon_width = design::glyph_btn_w(cx);
+
+        let mut copy = MoonButton::new("sel-copy")
+            .outline()
+            .size(MoonButtonSize::Action)
+            .leading_icon(MoonButtonIconSlot::new("icons/copy.svg"))
+            .tooltip(copy_label.clone())
+            .disabled(!can_copy)
+            .on_click(cx.listener(|this, _, _, cx| this.copy_tree_target(cx)));
+        let mut paste = MoonButton::new("sel-paste")
+            .outline()
+            .size(MoonButtonSize::Action)
+            .leading_icon(MoonButtonIconSlot::new("icons/inbox.svg"))
+            .tooltip(paste_label.clone())
+            .disabled(!can_paste)
+            .on_click(cx.listener(|this, _, _, cx| {
+                let (core, target) = {
+                    let backend = this.backend.read(cx);
+                    let cores = visible_strategy_cores(this, backend);
+                    this.default_target(backend.session.store(), &cores)
+                };
+                this.paste_into(core, target, cx);
+            }));
+        let mut delete = MoonButton::new("sel-delete")
+            .danger()
+            .size(MoonButtonSize::Action)
+            .leading_icon(MoonButtonIconSlot::new("icons/delete.svg"))
+            .tooltip(delete_label.clone())
+            .disabled(!has_sel || !all_off)
+            .on_click(cx.listener(|this, _, window, cx| this.request_delete_selection(window, cx)));
+        if show_labels {
+            copy = copy.padding_x(7.0).label(copy_label);
+            paste = paste.padding_x(7.0).label(paste_label);
+            delete = delete.padding_x(7.0).label(delete_label);
+        } else {
+            copy = copy.width(icon_width);
+            paste = paste.width(icon_width);
+            delete = delete.width(icon_width);
+        }
+
+        let group_gap = if show_labels {
+            design::CHROME_GAP
+        } else {
+            design::CHROME_GAP / 2.0
+        };
+        h_flex()
+            .flex_none()
+            .items_center()
+            .gap(design::ui_px(cx, group_gap))
+            .child(copy.render())
+            .child(paste.render())
+            .child(delete.render())
             .into_any_element()
     }
 
