@@ -686,7 +686,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     }
     if firetest_config.is_none() {
         #[cfg(windows)]
-        crate::update::UpdateController::start_check(&updater, cx);
+        crate::update::UpdateController::start_polling(&updater, cx);
     }
     if update_recovered {
         use moon_ui::{MoonNotification, MoonWindowExt as _};

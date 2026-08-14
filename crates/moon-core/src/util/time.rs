@@ -1,13 +1,20 @@
-//! Shared Unix-time helpers for feed/live, feed/synth, session/order_lines, applog, and db
-//! consumers. Before the refactor, those areas kept five copies of `now_ms` using the same
-//! `SystemTime::now() - UNIX_EPOCH` formula. Their common helpers were consolidated here: `f64`
-//! milliseconds for the chart tick timeline and `i64` milliseconds for logs and the database.
+//! Shared Unix-time helpers: whole seconds for network deadlines, `f64` milliseconds for the chart
+//! tick timeline, and `i64` milliseconds for logs and the database.
 //!
 //! This module also owns the crate's UTC Gregorian calendar implementation (`civil_from_days`),
 //! consumed by `db` report timestamps and config/strategy backup snapshot directory names.
 //! User-selected civil display belongs to `display_time` instead.
 
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Current Unix time in whole seconds (`u64`) for absolute network scheduling deadlines.
+/// Returns `0` if the system clock precedes the Unix epoch.
+pub fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 
 /// Current Unix time in milliseconds (`f64`), on the same scale as market tick `time_ms` values.
 /// Returns `0.0` if `duration_since(UNIX_EPOCH)` fails because the system time precedes the epoch.

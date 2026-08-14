@@ -115,18 +115,54 @@ fn update_button_and_divider_share_the_pre_ticker_header_cluster() {
     );
 }
 
-/// Constructing an updater per Shell would let separate windows download and replace concurrently.
+/// Constructing or starting an updater per Shell would let separate windows scan, download, and
+/// replace concurrently instead of observing the one process authority.
 #[test]
 fn every_shell_observes_the_one_backend_updater() {
     let main = code_only(&read_src("main.rs"));
     let boot = code_only(&read_src("startup/boot.rs"));
     let shell = code_only(&read_src("shell/init.rs"));
+    let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
     assert!(
         main.contains("updater: Entity<update::UpdateController>")
             && boot.matches("UpdateController::new()").count() == 1
+            && boot
+                .matches("UpdateController::start_polling(&updater, cx)")
+                .count()
+                == 1
             && shell.contains("let updater = backend.read(cx).updater.clone();")
-            && shell.contains("cx.observe(&updater"),
+            && shell.contains("cx.observe(&updater")
+            && !shell.contains("start_polling")
+            && !chrome.contains("start_polling"),
         "one backend-owned updater must repaint every group header"
+    );
+}
+
+/// Removing the Windows/FireTest gates would spend GitHub quota in unsupported or diagnostic
+/// processes; arming the timer before awaiting the scan would permit overlapping requests.
+#[test]
+fn recurring_update_scans_are_gated_idempotent_and_sequential() {
+    let boot = code_only(&read_src("startup/boot.rs"));
+    let update = code_only(&read_src("update.rs"));
+    let start = braced_body(
+        &update,
+        "pub(crate) fn start_polling(entity: &Entity<Self>, cx: &mut App)",
+    );
+    let discovery = start.find("ReleaseDiscovery::new(identity)").unwrap();
+    let scan_loop = start.find("loop {").unwrap();
+    let scan = start.find("discovery.scan()").unwrap();
+    let timer = start.find("executor.timer(wait).await").unwrap();
+    assert!(
+        boot.contains(
+            "if firetest_config.is_none() {\n        #[cfg(windows)]\n        crate::update::UpdateController::start_polling(&updater, cx);"
+        ) && start.contains("claim_polling(&mut this.polling_started)")
+            && start.contains("polling_continues_after(&this.state)")
+            && start.matches("ReleaseDiscovery::new(identity)").count() == 1
+            && discovery < scan_loop
+            && scan_loop < scan
+            && scan < timer
+            && !start.contains("install_generation"),
+        "one Windows-only non-FireTest loop must await every scan before arming its next timer"
     );
 }
 
