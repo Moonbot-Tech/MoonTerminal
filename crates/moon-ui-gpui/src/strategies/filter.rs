@@ -8,6 +8,7 @@
 use moon_core::feed::StrategyRow;
 
 /// Editable strategy-filter state retained by the Strategies window.
+#[derive(Default)]
 pub struct StrategyFilter {
     /// Case-insensitive substring filter over the strategy name.
     pub search: String,
@@ -15,19 +16,6 @@ pub struct StrategyFilter {
     pub kind: Option<u8>,
     /// Direction filter: `None` for both, `Some(true)` for short, and `Some(false)` for long.
     pub dir: Option<bool>,
-    /// Show only rows whose `checked` checkbox state is true; enabled by default.
-    pub only_active: bool,
-}
-
-impl Default for StrategyFilter {
-    fn default() -> Self {
-        Self {
-            search: String::new(),
-            kind: None,
-            dir: None,
-            only_active: true,
-        }
-    }
 }
 
 impl StrategyFilter {
@@ -37,7 +25,6 @@ impl StrategyFilter {
         PreparedFilter {
             kind: self.kind,
             dir: self.dir,
-            only_active: self.only_active,
             query: (!query.is_empty()).then(|| query.to_lowercase()),
         }
     }
@@ -54,7 +41,6 @@ impl StrategyFilter {
 pub struct PreparedFilter {
     kind: Option<u8>,
     dir: Option<bool>,
-    only_active: bool,
     /// Trimmed and lowercased search text, or `None` when the search is empty.
     query: Option<String>,
 }
@@ -72,13 +58,13 @@ impl PreparedFilter {
     }
 
     /// Apply the kind and direction filters used by active/total counters.
-    /// Search text and `only_active` are excluded so core and folder counts reflect kind and side.
+    /// Search text is excluded so core and folder counts reflect kind and side.
     pub fn counts(&self, row: &StrategyRow) -> bool {
         self.kind.is_none_or(|k| row.kind_ordinal == k)
             && self.dir.is_none_or(|s| row.is_short == s)
     }
 
-    /// Return row visibility after applying name, kind, direction, and checked-state filters.
+    /// Return row visibility after applying name, kind, and direction filters.
     /// The name is lowered only when a search is active; full-Unicode lowering supports the
     /// Cyrillic strategy names common in this product.
     pub fn matches(&self, row: &StrategyRow) -> bool {
@@ -86,8 +72,7 @@ impl PreparedFilter {
             .query
             .as_ref()
             .is_none_or(|q| row.name.to_lowercase().contains(q));
-        let by_active = !self.only_active || row.checked;
-        self.counts(row) && by_name && by_active
+        self.counts(row) && by_name
     }
 }
 

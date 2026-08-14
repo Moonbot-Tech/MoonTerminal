@@ -128,7 +128,6 @@ impl StrategiesView {
     ///
     /// `set_value` does not emit Change, so the filter is updated explicitly alongside the input.
     fn clear_filters_for_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filter.only_active = false;
         self.filter.kind = None;
         self.filter.dir = None;
         if !self.filter.search.trim().is_empty() {
@@ -139,9 +138,8 @@ impl StrategiesView {
     }
 
     /// Drain a `Backend::strategies_goto` request and reveal its strategy.
-    /// Disables the active-only filter, resets other filters when they still hide the target,
-    /// expands its core and folders, and selects it. Returns the key so render can scroll after
-    /// calling `set_items`.
+    /// Resets filters when they still hide the target, expands its core and folders, and selects it.
+    /// Returns the key so render can scroll after calling `set_items`.
     ///
     /// A NAME request whose row has not echoed back yet is handed to `pending_select`, which
     /// finishes the job the moment the core reports it — a just-created strategy has no id here
@@ -186,7 +184,6 @@ impl StrategiesView {
             }
             return None;
         };
-        self.filter.only_active = false;
         // Reset kind, direction, and search only if they still hide the target.
         if !self.filter.matches(&row) {
             self.clear_filters_for_reveal(window, cx);

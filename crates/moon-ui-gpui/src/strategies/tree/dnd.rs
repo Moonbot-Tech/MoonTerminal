@@ -118,9 +118,7 @@ impl StrategiesView {
         }
         self.pending_names
             .extend(new_names.into_iter().map(|n| (core, n)));
-        // New and pasted strategies are disabled. Clear the active-only filter and expand the
-        // target core so the result remains visible.
-        self.filter.only_active = false;
+        // New and pasted strategies are disabled. Expand the target core so the result is visible.
         self.expanded_cores.insert(core);
         if let Some(name) = first_name {
             self.queue_pending_name(core, name, cx);
@@ -200,7 +198,6 @@ impl StrategiesView {
                 log::warn!("copy strategies failed: {error}");
                 return;
             }
-            self.filter.only_active = false;
         }
         self.expanded_cores.insert(target_core);
         cx.notify();
@@ -261,7 +258,6 @@ impl StrategiesView {
                 log::warn!("copy strategy folder failed: {error}");
                 return;
             }
-            self.filter.only_active = false;
         }
         self.expanded_cores.insert(target_core);
         cx.notify();

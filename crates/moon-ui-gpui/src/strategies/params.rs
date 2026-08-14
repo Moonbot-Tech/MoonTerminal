@@ -238,18 +238,6 @@ impl StrategiesView {
         }
         col = col
             .child(header)
-            .child(
-                MoonCheckbox::new("params-only-active")
-                    .label(t!("strat.only_active").to_string())
-                    .checked(self.only_active_params)
-                    .size(MoonCheckboxSize::Compact)
-                    .on_change(cx.listener(|this, ch: &bool, _, cx| {
-                        if this.only_active_params != *ch {
-                            this.only_active_params = *ch;
-                            cx.notify();
-                        }
-                    })),
-            )
             .child(div().w_full().h(px(1.0)).bg(moon(p.border)));
 
         // Preserve schema field order and look up snapshot values by name.
@@ -268,11 +256,6 @@ impl StrategiesView {
                 continue;
             }
             let active = self.rules.field_active(&f.name, &values);
-            // Do not hide anything in changed-only mode: the list is already narrow, and a changed
-            // but inactive field is still a change.
-            if self.only_active_params && !active && self.version_changed_filter().is_none() {
-                continue;
-            }
             let merged = merged_value_for_owned(self, &row_pairs, f);
             list = list.child(self.field_row(f, &keys, merged, active, window, cx));
         }

@@ -269,8 +269,6 @@ impl StrategiesView {
             last_sig: initial_sig,
             last_tree_shape: None,
             tree_cache: None,
-            // Hide dependency-inactive parameters by default.
-            only_active_params: true,
             pending_scroll: None,
             focus: cx.focus_handle(),
         }

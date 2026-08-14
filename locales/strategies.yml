@@ -22,10 +22,6 @@ strat.clear:
   ru: "Очистить"
   en: "Clear"
   es: "Limpiar"
-strat.only_active:
-  ru: "только активные"
-  en: "active only"
-  es: "solo activos"
 strat.selected_count:
   ru: "выбрано: %{n}"
   en: "selected: %{n}"

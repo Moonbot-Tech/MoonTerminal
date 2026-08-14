@@ -105,12 +105,11 @@ fn accumulate(rows: &[StrategyRow], filter: &PreparedFilter) -> FolderCounts {
 }
 
 /// Builds a prepared filter with independently chosen values for each filter dimension.
-fn filter(search: &str, kind: Option<u8>, dir: Option<bool>, only_active: bool) -> PreparedFilter {
+fn filter(search: &str, kind: Option<u8>, dir: Option<bool>) -> PreparedFilter {
     StrategyFilter {
         search: search.to_string(),
         kind,
         dir,
-        only_active,
     }
     .prepare()
 }
@@ -130,7 +129,7 @@ fn the_accumulator_agrees_with_the_naive_scan_for_every_prefix() {
         (Some(1), Some(true)),
         (Some(7), None),
     ] {
-        let f = filter("", kind, dir, false);
+        let f = filter("", kind, dir);
         let counts = accumulate(&rows, &f);
         for prefix in prefixes() {
             let want = naive_folder_counts(&rows, &f, &prefix);
@@ -147,14 +146,14 @@ fn the_accumulator_agrees_with_the_naive_scan_for_every_prefix() {
     }
 }
 
-/// Applying search or active-only gates in `FolderCounts::add` would shrink captions while filtering.
+/// Applying the search gate in `FolderCounts::add` would shrink captions while filtering.
 #[test]
-fn counting_ignores_the_search_text_and_only_active() {
-    // The accumulator applies its own gate, so this pins which filters that gate honours: a
-    // search matching nothing, plus `only_active`, must leave every folder caption untouched.
+fn counting_ignores_the_search_text() {
+    // The accumulator applies its own gate, so a search matching nothing must leave every folder
+    // caption untouched.
     let rows = corpus();
-    let plain = accumulate(&rows, &filter("", None, None, false));
-    let noisy = accumulate(&rows, &filter("no-such-name", None, None, true));
+    let plain = accumulate(&rows, &filter("", None, None));
+    let noisy = accumulate(&rows, &filter("no-such-name", None, None));
     assert_eq!(plain.root(), noisy.root());
     for prefix in prefixes() {
         let key = prefix.join("/");
@@ -165,7 +164,7 @@ fn counting_ignores_the_search_text_and_only_active() {
 /// Returning a nonzero fallback from `FolderCounts::for_path` would mislabel empty UI folders.
 #[test]
 fn an_unoccupied_folder_counts_zero() {
-    let counts = accumulate(&corpus(), &filter("", None, None, false));
+    let counts = accumulate(&corpus(), &filter("", None, None));
     assert_eq!(counts.for_path("ghost"), (0, 0));
     assert_eq!(counts.for_path("a/ghost"), (0, 0));
 }
@@ -176,7 +175,7 @@ fn the_root_counts_every_filtered_strategy() {
     // The core's own caption reads `root()`, which must equal what the naive scan reports for the
     // empty prefix — the oracle, not a recount of the same predicate.
     let rows = corpus();
-    let f = filter("", Some(0), None, false);
+    let f = filter("", Some(0), None);
     assert_eq!(
         accumulate(&rows, &f).root(),
         naive_folder_counts(&rows, &f, &[])
@@ -191,7 +190,7 @@ fn a_strategy_at_a_folder_counts_in_that_folder_and_its_ancestors() {
         row(4, "a/b", 0, false, true),
         row(5, "a/b/c", 0, false, true),
     ];
-    let counts = accumulate(&rows, &filter("", None, None, false));
+    let counts = accumulate(&rows, &filter("", None, None));
     assert_eq!(counts.for_path("a/b"), (2, 2));
     assert_eq!(counts.for_path("a/b/c"), (1, 1));
     assert_eq!(counts.for_path("a"), (2, 2));

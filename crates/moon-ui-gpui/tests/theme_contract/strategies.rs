@@ -274,6 +274,61 @@ fn the_per_frame_row_pass_uses_the_prepared_filter() {
     );
 }
 
+/// In `tree::tree_panel` and `params::params_panel`, restoring either active-only control/state or
+/// an active-dependent `continue` would hide unchecked strategies or inactive fields again;
+/// deleting the whole tree control row would also remove the expand/collapse caret.
+#[test]
+fn tree_and_params_show_every_row_without_filter_controls() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("strategies");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+
+    let forbidden = [
+        ["only", "active"].join("_"),
+        ["flt", "active"].join("-"),
+        ["params", "only", "active"].join("-"),
+    ];
+    let mut leftovers = Vec::new();
+    for path in sources {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        for forbidden in &forbidden {
+            if text.contains(forbidden) {
+                leftovers.push(format!("{} contains {forbidden}", path.display()));
+            }
+        }
+    }
+    assert!(
+        leftovers.is_empty(),
+        "active-only controls and state must stay decommissioned:\n{}",
+        leftovers.join("\n")
+    );
+
+    let tree = read_src("strategies/tree/mod.rs");
+    let tree_panel = code_only(braced_body(&tree, "pub(super) fn tree_panel("));
+    assert!(
+        tree_panel.contains("MoonButton::new(\"expand-all\")")
+            && tree_panel.contains(".justify_end()"),
+        "the active-only row removal must keep its expand/collapse caret right-aligned"
+    );
+
+    let params = read_src("strategies/params.rs");
+    let params_panel = code_only(braced_body(&params, "pub(super) fn params_panel("));
+    let active_at = params_panel
+        .find("let active = self.rules.field_active")
+        .expect("the parameter pane must still compute dependency activity");
+    let field_row_at = params_panel[active_at..]
+        .find("self.field_row(")
+        .map(|offset| active_at + offset)
+        .expect("the dependency activity must still reach field_row");
+    assert!(
+        !params_panel[active_at..field_row_at].contains("continue;"),
+        "dependency-inactive fields must be rendered and disabled by field_row, never skipped"
+    );
+}
+
 /// MoonTree's keyboard expansion is reconciled with the window-owned expansion state.
 ///
 /// `MoonTreeState` expands and collapses entries from keyboard input without updating

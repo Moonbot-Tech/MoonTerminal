@@ -676,8 +676,7 @@ impl StrategiesView {
             .read(cx)
             .session
             .create_strategies(core, vec![spec])?;
-        // A new strategy is disabled, so clear the active-only filter and expand its core to show it.
-        self.filter.only_active = false;
+        // Expand the core so the created row is visible when it echoes back.
         self.expanded_cores.insert(core);
         // Select it after the core echoes it back.
         self.queue_pending_name(core, name, cx);

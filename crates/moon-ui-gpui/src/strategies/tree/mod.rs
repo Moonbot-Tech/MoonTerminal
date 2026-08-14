@@ -86,44 +86,28 @@ impl StrategiesView {
                             }),
                     )
                     .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                MoonCheckbox::new("flt-active")
-                                    .label(t!("strat.only_active").to_string())
-                                    .checked(self.filter.only_active)
-                                    .size(MoonCheckboxSize::Compact)
-                                    .on_change(cx.listener(|this, ch: &bool, _, cx| {
-                                        if this.filter.only_active != *ch {
-                                            this.filter.only_active = *ch;
-                                            cx.notify();
-                                        }
-                                    })),
-                            )
-                            .child(
-                                MoonButton::new("expand-all")
-                                    .ghost()
-                                    .size(MoonButtonSize::Micro)
-                                    .leading_icon(MoonButtonIconSlot::caret(
-                                        MoonDisclosureDirection::DownUp,
-                                        !collapsed,
-                                    ))
-                                    .on_click({
-                                        let cores = cores_owned.clone();
-                                        cx.listener(move |this, _, _, cx| {
-                                            let store = this.backend.read(cx).session.store();
-                                            let coll = this.expanded_cores.is_empty()
-                                                && this.expanded_folders.is_empty();
-                                            // store borrow tied to cx; clone cores for &-call.
-                                            let cores_v = cores.as_ref().clone();
-                                            this.expand_collapse_toggle(&cores_v, store, coll);
-                                            cx.notify();
-                                        })
+                        h_flex().w_full().items_center().justify_end().child(
+                            MoonButton::new("expand-all")
+                                .ghost()
+                                .size(MoonButtonSize::Micro)
+                                .leading_icon(MoonButtonIconSlot::caret(
+                                    MoonDisclosureDirection::DownUp,
+                                    !collapsed,
+                                ))
+                                .on_click({
+                                    let cores = cores_owned.clone();
+                                    cx.listener(move |this, _, _, cx| {
+                                        let store = this.backend.read(cx).session.store();
+                                        let coll = this.expanded_cores.is_empty()
+                                            && this.expanded_folders.is_empty();
+                                        // store borrow tied to cx; clone cores for &-call.
+                                        let cores_v = cores.as_ref().clone();
+                                        this.expand_collapse_toggle(&cores_v, store, coll);
+                                        cx.notify();
                                     })
-                                    .render(),
-                            ),
+                                })
+                                .render(),
+                        ),
                     ),
             )
             .child(div().w_full().h(px(1.0)).bg(border))
