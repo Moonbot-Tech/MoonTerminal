@@ -846,7 +846,8 @@ hold = 3
 /// take the rest of the schema-less layout document down with it.
 ///
 /// Breakage this pins: replacing `deserialize_with = "de_lenient"` on any `ReportFilterPrefs`
-/// field (`side`/`kind`/`deleted_only`/`period`/`strategy_name_mask`) with plain deserialization.
+/// field (`side`/`kind`/`deleted_only`/`period`/`period_overview`/`strategy_name_mask`) with plain
+/// deserialization.
 /// Because
 /// `report_filters` itself is ALSO read leniently as a whole map, a plain field does not fail this
 /// call to `toml::from_str` — it instead collapses the WHOLE `report_filters` map to empty (every
@@ -856,28 +857,32 @@ hold = 3
 #[test]
 fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() {
     let entry_id = "report-filters:dock";
-    // One member malformed per case; the other four stay well-typed and non-default so their
+    // One member malformed per case; the other five stay well-typed and non-default so their
     // survival is a real assertion, not a comparison against a value that defaults the same way.
-    let cases: [(&str, &str); 5] = [
+    let cases: [(&str, &str); 6] = [
         (
             "side",
-            "side = 5\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nstrategy_name_mask = \"EMA_\"\n",
+            "side = 5\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "kind",
-            "side = \"long\"\nkind = [\"real\"]\ndeleted_only = true\nperiod = \"rp-cur-month\"\nstrategy_name_mask = \"EMA_\"\n",
+            "side = \"long\"\nkind = [\"real\"]\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "deleted_only",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = \"not-a-bool\"\nperiod = \"rp-cur-month\"\nstrategy_name_mask = \"EMA_\"\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = \"not-a-bool\"\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "period",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = 42\nstrategy_name_mask = \"EMA_\"\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = 42\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
+        ),
+        (
+            "period_overview",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = 42\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "strategy_name_mask",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nstrategy_name_mask = [\"EMA_\"]\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = [\"EMA_\"]\n",
         ),
     ];
 
@@ -973,6 +978,17 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
                 );
                 assert_eq!(prefs.period, None, "malformed period must default to None");
             }
+            "period_overview" => {
+                assert_eq!(
+                    prefs.period.as_deref(),
+                    Some("rp-cur-month"),
+                    "a malformed overview period must not drop the legacy period"
+                );
+                assert_eq!(
+                    prefs.period_overview, None,
+                    "malformed period_overview must default to None"
+                );
+            }
             "strategy_name_mask" => {
                 assert_eq!(
                     prefs.side.as_deref(),
@@ -997,6 +1013,13 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
             }
             _ => unreachable!(),
         }
+        if bad_field != "period_overview" {
+            assert_eq!(
+                prefs.period_overview.as_deref(),
+                Some("rp-today"),
+                "a well-typed overview period must survive its malformed neighbour"
+            );
+        }
         if bad_field == "strategy_name_mask" {
             assert_eq!(
                 prefs.strategy_name_mask, None,
@@ -1016,12 +1039,20 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
         kind: Some("emu".to_string()),
         deleted_only: Some(true),
         period: Some("rp-cur-week".to_string()),
+        period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_%\\".to_string()),
     };
     let encoded = toml::to_string(&prefs).expect("serialize Report filters");
     let decoded: super::ReportFilterPrefs =
         toml::from_str(&encoded).expect("deserialize Report filters");
-    assert_eq!(decoded, prefs, "a literal non-empty mask must round-trip");
+    assert_eq!(decoded, prefs, "both period buckets must round-trip");
+
+    let legacy: super::ReportFilterPrefs = toml::from_str(
+        "side = \"long\"\nperiod = \"rp-cur-year\"\nstrategy_name_mask = \"EMA_\"\n",
+    )
+    .expect("deserialize legacy Report filters");
+    assert_eq!(legacy.period.as_deref(), Some("rp-cur-year"));
+    assert_eq!(legacy.period_overview, None);
 
     // One level up, the salvage is coarser by design: an entry that is not a table at all takes
     // the whole `report_filters` map down to empty, never the rest of the layout document.

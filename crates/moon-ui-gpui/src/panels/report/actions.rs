@@ -261,18 +261,19 @@ impl ReportPanel {
             return;
         }
         let id = filters_ctx_id(self.detached);
-        let period = picked_period
-            .map(|period| period.menu_key().to_string())
-            .or_else(|| {
-                crate::persistence::table_persist::report_filters(self.backend.read(cx), &id)
-                    .and_then(|stored| stored.period.clone())
-            });
-        let prefs = moon_core::config::ReportFilterPrefs {
-            side: Some(side_id(self.side).to_string()),
-            kind: Some(self.kind.id().to_string()),
-            deleted_only: Some(self.deleted_only),
-            period,
-            strategy_name_mask: Some(self.strategy_name_mask.clone()),
+        let period_bucket =
+            period_bucket_for_scope(self.workspace_scope(self.backend.read(cx)).as_ref());
+        let prefs = {
+            let backend = self.backend.read(cx);
+            next_prefs_for_period_pick(
+                crate::persistence::table_persist::report_filters(&backend, &id),
+                period_bucket,
+                picked_period,
+                self.side,
+                self.kind,
+                self.deleted_only,
+                &self.strategy_name_mask,
+            )
         };
         crate::persistence::table_persist::set_report_filters(&self.backend, &id, prefs, cx);
     }

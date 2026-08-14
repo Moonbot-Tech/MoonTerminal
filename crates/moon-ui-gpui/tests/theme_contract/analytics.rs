@@ -992,8 +992,15 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
     );
     let persist = braced_body(&actions, "pub(super) fn persist_filters(");
     assert!(
-        persist.contains("strategy_name_mask: Some(self.strategy_name_mask.clone())"),
-        "every Report filter write must retain the Auto strategy-name mask"
+        persist.contains("next_prefs_for_period_pick(")
+            && persist.contains("&self.strategy_name_mask"),
+        "every Report filter write must still pass the Auto strategy-name mask"
+    );
+    let report_mod = read_src("panels/report/mod.rs");
+    let persist_helper = braced_body(&report_mod, "pub(super) fn next_prefs_for_period_pick(");
+    assert!(
+        persist_helper.contains("prefs.strategy_name_mask = Some(strategy_name_mask.to_string())"),
+        "the persistence composer must still write the Auto strategy-name mask"
     );
 }
 
