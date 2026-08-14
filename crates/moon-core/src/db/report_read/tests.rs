@@ -849,14 +849,16 @@ fn seed_per_row_valuation(path: &std::path::Path) -> Connection {
                  profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt, spent_usdt,
                  valued_at_ms
              ) VALUES
-                 (0, 1, 1, 1, 1700000000, 8, 20.0, 100.0, 1699999980, 0.5, 10.0, 50.0, 1700000100000),
-                 (1, 1, 1, 1, 1700000600, 8, 400.0, 4000.0, 1699999980, 0.5, 200.0, 2000.0, 1700000100000),
-                 (1, 1, 2, 1, 1700000700, 8, 2.0, 20.0, 1699999980, 0.5, 1.0, 10.0, 1700000100000);
+                 (0, 1, 1, 2, 1700000000, 8, 20.0, 100.0, 1699999980, 0.5, 10.0, 50.0, 1700000100000),
+                 (1, 1, 1, 2, 1700000600, 8, 400.0, 4000.0, 1699999980, 0.5, 200.0, 2000.0, 1700000100000),
+                 (1, 1, 2, 2, 1700000700, 8, 2.0, 20.0, 1699999980, 0.5, 1.0, 10.0, 1700000100000);
              INSERT INTO rates (
-                 algorithm_version, quote_ordinal, minute_utc, status, rate_usdt,
-                 provider, symbol, orientation, candle_open_ms, candle_close_ms, fetched_at_ms
-             ) VALUES (1, 8, 1699999980, 0, 0.5, 'binance', 'USDCUSDT', 0,
-                       1699999980000, 1700000039999, 1700000100000);",
+                 algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc, rate_usdt,
+                 price_basis, provider, symbol, orientation, candle_open_ms, candle_close_ms,
+                 leg1_rate, leg2_provider, leg2_symbol, leg2_orientation, leg2_rate, fetched_at_ms
+             ) VALUES (2, 8, 1699999980, 1700000100, 0.5, 1, 'binance', 'USDCBTC', 0,
+                       1700000100000, 1700000159999, 0.00001,
+                       'bybit', 'BTCUSDT', 0, 50000.0, 1700000200000);",
         )
         .expect("seed prepared values and their rate provenance");
     store
@@ -904,16 +906,13 @@ fn text(table: &super::ReportTable, row: usize, column: &str) -> Option<String> 
 /// A prepared row reports its converted profit, the rate that produced it, and where that rate
 /// came from; an identity row answers from the trade itself; an unvalued row stays blank.
 ///
-/// The rate provenance is the part no existing join could supply: `coverage_sql`'s `mr` join
-/// matches `status=1`, the permanent-miss partition, which by construction holds no rate at all.
-///
-/// Breakage: reading provenance through `mr` instead of the added `status=0` join, which blanks
-/// the source column on every valued row. Breakage: dropping the identity arm from any of the three
+/// Breakage: reading provenance through an unresolved-search row instead of the ready-rate join
+/// blanks the source column on every valued row. Breakage: dropping the identity arm from any of the three
 /// expressions and treating a NULL provider as "not valued", which blanks that column for USDT
 /// trades — the majority. Breakage: emitting the projection unqualified once the valuation joins
 /// are in the `FROM`, which makes `status` ambiguous and fails the whole read. Breakage: handing
-/// the row query the AGGREGATE join set, whose `mr` alias serves the coverage counters and leaves
-/// the `ra` this projection names undefined.
+/// the row query the aggregate join set, which omits the `ra` provenance alias this projection
+/// names.
 #[test]
 fn per_row_columns_report_converted_profit_and_rate_provenance() {
     let _health = super::super::valuation::test_health_guard();
@@ -954,8 +953,8 @@ fn per_row_columns_report_converted_profit_and_rate_provenance() {
     );
     assert_eq!(
         text(&table, prepared, super::VALUATION_SOURCE_COLUMN).as_deref(),
-        Some("binance USDCUSDT"),
-        "provenance names the provider and market that produced the rate"
+        Some("binance USDCBTC -> bybit BTCUSDT +2m"),
+        "provenance names both markets and the successor delay that produced the rate"
     );
 
     let identity = row_of("BTCUSDT");

@@ -32,6 +32,25 @@ fn persisted_ordinals_keep_distinct_quote_identities() {
     );
 }
 
+/// The conversion resolver must not carry a private, incomplete copy of the quote universe.
+///
+/// Breakage: omitting a newly persisted ordinal from `QuoteCurrency::all`. The user-visible
+/// consequence is that a valid two-leg historical route can never be discovered for that quote.
+#[test]
+fn ordered_quote_iterator_covers_every_persisted_identity() {
+    let currencies = QuoteCurrency::all().collect::<Vec<_>>();
+    assert_eq!(currencies.len(), 21);
+    assert_eq!(currencies.first().copied(), Some(QuoteCurrency::btc()));
+    assert_eq!(currencies.get(1).copied(), Some(QuoteCurrency::usdt()));
+    assert_eq!(
+        currencies.last().map(|currency| currency.ordinal()),
+        Some(20)
+    );
+    assert!(currencies
+        .windows(2)
+        .all(|pair| pair[0].ordinal() + 1 == pair[1].ordinal()));
+}
+
 /// Plausible regression: removing the currency key from `QuoteBreakdown::from_groups` must fail
 /// the bucket assertions, otherwise USDT and USDC are silently added into one false total.
 #[test]

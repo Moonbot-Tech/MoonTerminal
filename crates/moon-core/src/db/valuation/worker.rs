@@ -10,10 +10,10 @@ use rusqlite::Connection;
 use super::health::{
     self, FailureKind, FaultCause, ValuationFault, ValuationStage, ValuationStatus,
 };
-use super::provider::{resolve_latest_rate, resolve_rate, resolve_rate_batch, FetchFailure};
+use super::provider::{resolve_latest_rate, resolve_rate_batch, FetchFailure};
+use super::resolver::resolve_historical_rate;
 use super::{
-    CachedRate, HttpSpotRateSource, OutboxAction, OutboxEvent, SpotRateSource, TradeInput,
-    TradeSource,
+    HttpSpotRateSource, OutboxAction, OutboxEvent, SpotRateSource, TradeInput, TradeSource,
 };
 use crate::db::{DbMsg, ReadFail, ReadResult, ReportTx};
 use crate::util::now_unix_ms_i64;
@@ -23,6 +23,9 @@ const RECONCILE_BATCH: usize = 256;
 
 /// Number of durable report changes handled in one ordered prefix.
 const OUTBOX_BATCH: usize = 512;
+
+/// Maximum deferred rows processed before yielding to reconciliation and durable outbox work.
+const DEFERRED_BATCH: usize = 64;
 
 /// Registered valuation thread used to interrupt a long park when corruption is detected.
 static WORKER_THREAD: OnceLock<Mutex<Option<std::thread::Thread>>> = OnceLock::new();
@@ -181,10 +184,10 @@ impl StatusSink {
 
 /// Result of preparing one current report row.
 enum PrepareResult {
-    /// The row is durably reflected, permanently unavailable, or no longer eligible.
+    /// The row is durably reflected, scheduled for retry, or no longer eligible.
     Complete { changed: bool },
-    /// The row belongs to the still-open current UTC minute.
-    Deferred,
+    /// The row awaits either its minute close or a persisted successor-search retry boundary.
+    Deferred { changed: bool },
     /// A classified provider, report-read, or cache failure requires a later retry.
     Retry(FaultCause),
 }
@@ -196,6 +199,15 @@ struct PrefetchError {
     fault: FaultCause,
     /// Whether an earlier operation in the same prefetch batch changed durable coverage.
     changed: bool,
+}
+
+/// Successful exact-rate prefetch state consumed by the following per-row preparation pass.
+#[derive(Debug, PartialEq)]
+struct PrefetchOutcome {
+    /// Whether prefetch changed durable rate coverage.
+    changed: bool,
+    /// Quote/minute keys whose canonical Binance/Bybit exact routes were all absent.
+    canonical_exact_missing: BTreeSet<(i64, i64)>,
 }
 
 /// Wait between polls while the report replica has not been created yet.
@@ -546,7 +558,7 @@ fn run_worker(
             Attempt::Done(StageTurn::Ran { more: true }) => continue,
             _ => {}
         }
-        if current_minute_closed_any(&deferred) {
+        if current_minute_closed_any(store_ref, &deferred) {
             match attempt(
                 &mut status,
                 &mut sink,
@@ -858,14 +870,26 @@ fn reconcile_step(
             state.after = None;
             continue;
         }
-        let mut changed =
+        let prefetched =
             settle_prefetch(prefetch_rates(store, source, &inputs), generation, dirty)?;
+        let mut changed = prefetched.changed;
         for input in &inputs {
-            match prepare_trade(store, source, input) {
+            let minute = input.closedate.div_euclid(60) * 60;
+            match prepare_trade(
+                store,
+                source,
+                input,
+                prefetched
+                    .canonical_exact_missing
+                    .contains(&(input.quote_ordinal, minute)),
+            ) {
                 PrepareResult::Complete {
                     changed: input_changed,
                 } => changed |= input_changed,
-                PrepareResult::Deferred => {
+                PrepareResult::Deferred {
+                    changed: input_changed,
+                } => {
+                    changed |= input_changed;
                     deferred.insert(trade_key(input), input.clone());
                 }
                 PrepareResult::Retry(error) => {
@@ -937,21 +961,32 @@ fn consume_outbox(
             }
         }
     }
-    let mut changed = settle_prefetch(
+    let prefetched = settle_prefetch(
         prefetch_rates(store, source, &row_inputs),
         generation,
         dirty,
     )?;
+    let mut changed = prefetched.changed;
     let mut acknowledged = None;
     for event in events {
-        match process_event(store, source, &conn, *event, deferred) {
+        match process_event(
+            store,
+            source,
+            &conn,
+            *event,
+            deferred,
+            &prefetched.canonical_exact_missing,
+        ) {
             PrepareResult::Complete {
                 changed: event_changed,
             } => {
                 changed |= event_changed;
                 acknowledged = Some(event.seq);
             }
-            PrepareResult::Deferred => {
+            PrepareResult::Deferred {
+                changed: event_changed,
+            } => {
+                changed |= event_changed;
                 acknowledged = Some(event.seq);
             }
             PrepareResult::Retry(error) => {
@@ -984,6 +1019,7 @@ fn consume_outbox(
 ///     reports: Report reader observing the committed event.
 ///     event: Ordered durable outbox event.
 ///     deferred: Current-minute rows retained until their candle closes.
+///     canonical_exact_missing: Keys already proven absent on canonical exact routes.
 ///
 /// Returns:
 ///     Completed, deferred, or transient-retry result.
@@ -993,17 +1029,28 @@ fn process_event(
     reports: &Connection,
     event: OutboxEvent,
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
+    canonical_exact_missing: &BTreeSet<(i64, i64)>,
 ) -> PrepareResult {
     match event.action {
         OutboxAction::Row => {
+            let key = (event.source.code(), event.core_uid, event.row_id);
+            deferred.remove(&key);
             match load_trade(reports, event.source, event.core_uid, event.row_id) {
-                Ok(Some(input)) => match prepare_trade(store, source, &input) {
-                    PrepareResult::Deferred => {
-                        deferred.insert(trade_key(&input), input);
-                        PrepareResult::Deferred
+                Ok(Some(input)) => {
+                    let minute = input.closedate.div_euclid(60) * 60;
+                    match prepare_trade(
+                        store,
+                        source,
+                        &input,
+                        canonical_exact_missing.contains(&(input.quote_ordinal, minute)),
+                    ) {
+                        PrepareResult::Deferred { changed } => {
+                            deferred.insert(trade_key(&input), input);
+                            PrepareResult::Deferred { changed }
+                        }
+                        result => result,
                     }
-                    result => result,
-                },
+                }
                 Ok(None) => delete_trade(store, event.source, event.core_uid, event.row_id),
                 Err(error) => PrepareResult::Retry(report_fault(error)),
             }
@@ -1027,6 +1074,7 @@ fn process_event(
 ///     store: Open valuation writer connection.
 ///     source: Historical closed-candle boundary.
 ///     input: Complete current report inputs.
+///     canonical_exact_prefetched: Whether canonical direct/inverse exact routes were absent.
 ///
 /// Returns:
 ///     Completed, current-minute deferred, or transient-retry result.
@@ -1034,48 +1082,85 @@ fn prepare_trade(
     store: &Connection,
     source: &dyn SpotRateSource,
     input: &TradeInput,
+    canonical_exact_prefetched: bool,
 ) -> PrepareResult {
     let minute_utc = input.closedate.div_euclid(60) * 60;
     if minute_utc >= current_minute_utc() {
-        return PrepareResult::Deferred;
+        return PrepareResult::Deferred { changed: false };
     }
     let Some(currency) = crate::db::QuoteCurrency::from_report_ordinal(input.quote_ordinal) else {
         return delete_trade(store, input.source, input.core_uid, input.row_id);
     };
     let rate = match super::cached_rate(store, input.quote_ordinal, minute_utc) {
-        Ok(Some(CachedRate::Ready(rate))) => rate,
-        Ok(Some(CachedRate::PermanentMissing)) => {
-            return delete_trade(store, input.source, input.core_uid, input.row_id);
-        }
+        Ok(Some(rate)) => rate,
         Ok(None) => {
-            match resolve_rate(source, input.quote_ordinal, currency.ticker(), minute_utc) {
-                Ok(rate) => {
-                    if rate.candle_close_ms >= now_unix_ms_i64() {
-                        return PrepareResult::Deferred;
-                    }
-                    if let Err(error) = super::store_rate(store, &rate, now_unix_ms_i64()) {
+            let now_ms = now_unix_ms_i64();
+            match super::covering_successor_rate(store, input.quote_ordinal, minute_utc) {
+                Ok(Some(rate)) => {
+                    if let Err(error) = super::store_rate(store, &rate, now_ms) {
                         return PrepareResult::Retry(super::store_fault(error));
                     }
                     rate
                 }
-                Err(FetchFailure::Missing) => {
-                    let rate_changed = match super::store_permanent_missing(
+                Ok(None) => {
+                    let search_start = match super::rate_search_start(
                         store,
                         input.quote_ordinal,
                         minute_utc,
-                        now_unix_ms_i64(),
+                        now_ms,
                     ) {
-                        Ok(changed) => changed > 0,
+                        Ok(None) => {
+                            return PrepareResult::Deferred { changed: false };
+                        }
+                        Ok(Some(search_start)) => search_start,
                         Err(error) => return PrepareResult::Retry(super::store_fault(error)),
                     };
-                    return merge_change(
-                        delete_trade(store, input.source, input.core_uid, input.row_id),
-                        rate_changed,
-                    );
+                    let latest_closed = current_minute_utc().saturating_sub(60);
+                    match resolve_historical_rate(
+                        source,
+                        currency,
+                        minute_utc,
+                        search_start,
+                        latest_closed,
+                        canonical_exact_prefetched,
+                    ) {
+                        Ok(rate) => {
+                            if rate.candle_close_ms >= now_ms {
+                                return PrepareResult::Deferred { changed: false };
+                            }
+                            if let Err(error) = super::store_rate(store, &rate, now_ms) {
+                                return PrepareResult::Retry(super::store_fault(error));
+                            }
+                            rate
+                        }
+                        Err(FetchFailure::Missing) => {
+                            if let Err(error) = super::store_rate_search(
+                                store,
+                                input.quote_ordinal,
+                                minute_utc,
+                                latest_closed,
+                                now_ms,
+                            ) {
+                                return PrepareResult::Retry(super::store_fault(error));
+                            }
+                            let scheduled =
+                                delete_trade(store, input.source, input.core_uid, input.row_id);
+                            return match scheduled {
+                                PrepareResult::Complete { changed } => {
+                                    PrepareResult::Deferred { changed }
+                                }
+                                result => result,
+                            };
+                        }
+                        Err(FetchFailure::Transient(error)) => {
+                            return PrepareResult::Retry(FaultCause::new(
+                                FailureKind::Provider,
+                                error,
+                            ));
+                        }
+                    }
                 }
-                Err(FetchFailure::Transient(error)) => {
-                    return PrepareResult::Retry(FaultCause::new(FailureKind::Provider, error));
-                }
+                Err(error) => return PrepareResult::Retry(super::store_fault(error)),
             }
         }
         Err(error) => return PrepareResult::Retry(super::store_fault(error)),
@@ -1100,18 +1185,21 @@ fn prepare_trade(
 ///     inputs: Current report inputs about to be prepared.
 ///
 /// Returns:
-///     Whether rate coverage changed after ready and permanent-missing outcomes became durable,
-///     or a transient reason.
+///     Durable change state plus canonical exact misses, or a transient reason.
 fn prefetch_rates(
     store: &Connection,
     source: &dyn SpotRateSource,
     inputs: &[TradeInput],
-) -> Result<bool, PrefetchError> {
+) -> Result<PrefetchOutcome, PrefetchError> {
     let current = current_minute_utc();
     let mut groups: BTreeMap<(i64, &'static str), BTreeSet<i64>> = BTreeMap::new();
+    let mut seen = BTreeSet::new();
     let mut changed = false;
     for input in inputs {
         let minute = input.closedate.div_euclid(60) * 60;
+        if !seen.insert((input.quote_ordinal, minute)) {
+            continue;
+        }
         if minute >= current {
             continue;
         }
@@ -1122,6 +1210,43 @@ fn prefetch_rates(
         match super::cached_rate(store, input.quote_ordinal, minute) {
             Ok(Some(_)) => continue,
             Ok(None) => {
+                match super::covering_successor_rate(store, input.quote_ordinal, minute) {
+                    Ok(Some(rate)) => {
+                        match super::store_rate(store, &rate, now_unix_ms_i64()) {
+                            Ok(stored) => changed |= stored > 0,
+                            Err(error) => {
+                                return Err(PrefetchError {
+                                    fault: super::store_fault(error),
+                                    changed,
+                                });
+                            }
+                        }
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        return Err(PrefetchError {
+                            fault: super::store_fault(error),
+                            changed,
+                        });
+                    }
+                }
+                match super::rate_search_start(
+                    store,
+                    input.quote_ordinal,
+                    minute,
+                    now_unix_ms_i64(),
+                ) {
+                    Ok(None) => continue,
+                    Ok(Some(search_start)) if search_start > minute => continue,
+                    Ok(Some(_)) => {}
+                    Err(error) => {
+                        return Err(PrefetchError {
+                            fault: super::store_fault(error),
+                            changed,
+                        });
+                    }
+                }
                 groups
                     .entry((input.quote_ordinal, currency.ticker()))
                     .or_default()
@@ -1135,6 +1260,7 @@ fn prefetch_rates(
             }
         }
     }
+    let mut canonical_exact_missing = BTreeSet::new();
     for ((quote_ordinal, ticker), minutes) in groups {
         let minutes = minutes.into_iter().collect::<Vec<_>>();
         let mut start = 0;
@@ -1148,7 +1274,12 @@ fn prefetch_rates(
                 end += 1;
             }
             let batch = resolve_rate_batch(source, quote_ordinal, ticker, &minutes[start..end]);
+            if batch.transient.is_none() {
+                debug_assert_eq!(batch.ready.len() + batch.missing.len(), end - start);
+            }
             let fetched_at = now_unix_ms_i64();
+            canonical_exact_missing
+                .extend(batch.missing.iter().map(|minute| (quote_ordinal, *minute)));
             for rate in &batch.ready {
                 if rate.candle_close_ms >= fetched_at {
                     return Err(PrefetchError {
@@ -1178,21 +1309,13 @@ fn prefetch_rates(
                     changed,
                 });
             }
-            for minute in batch.missing {
-                match super::store_permanent_missing(store, quote_ordinal, minute, fetched_at) {
-                    Ok(stored) => changed |= stored > 0,
-                    Err(error) => {
-                        return Err(PrefetchError {
-                            fault: super::store_fault(error),
-                            changed,
-                        });
-                    }
-                }
-            }
             start = end;
         }
     }
-    Ok(changed)
+    Ok(PrefetchOutcome {
+        changed,
+        canonical_exact_missing,
+    })
 }
 
 /// Publish durable prefetch progress even when a later request in the batch must retry.
@@ -1203,38 +1326,20 @@ fn prefetch_rates(
 ///     dirty: Coalescing UI wake edge.
 ///
 /// Returns:
-///     Completed change flag, or the classified cause after publishing earlier progress.
+///     Completed prefetch outcome, or the classified cause after publishing earlier progress.
 fn settle_prefetch(
-    result: Result<bool, PrefetchError>,
+    result: Result<PrefetchOutcome, PrefetchError>,
     generation: &AtomicU64,
     dirty: &AtomicBool,
-) -> Result<bool, FaultCause> {
+) -> Result<PrefetchOutcome, FaultCause> {
     match result {
-        Ok(changed) => Ok(changed),
+        Ok(outcome) => Ok(outcome),
         Err(error) => {
             if error.changed {
                 publish(generation, dirty);
             }
             Err(error.fault)
         }
-    }
-}
-
-/// Merge one already-durable cache change into a prepared-row result.
-///
-/// Args:
-///     result: Prepared-row completion or retry result.
-///     extra_changed: Whether rate coverage changed before the row operation.
-///
-/// Returns:
-///     Completion carrying both changes, or the original retry/deferred result.
-fn merge_change(result: PrepareResult, extra_changed: bool) -> PrepareResult {
-    match result {
-        PrepareResult::Complete { changed } => PrepareResult::Complete {
-            changed: changed || extra_changed,
-        },
-        PrepareResult::Deferred => PrepareResult::Deferred,
-        PrepareResult::Retry(error) => PrepareResult::Retry(error),
     }
 }
 
@@ -1375,17 +1480,12 @@ fn reconciliation_batch(
           AND v.algorithm_version={algorithm_version}
           AND v.closedate=r.closedate AND v.quote_ordinal=({quote})
           AND v.profit_quote={settled_profit} AND {spent_match}
-         LEFT JOIN valuation.rates mr
-           ON mr.algorithm_version={algorithm_version}
-          AND mr.quote_ordinal=({quote})
-          AND mr.minute_utc=(r.closedate/60)*60
-          AND mr.status=1
          WHERE typeof(r.core_uid)='integer' AND typeof(r.{id_column})='integer'
            AND typeof(r.closedate)='integer' AND r.closedate>0
            AND ({quote}) BETWEEN 0 AND 20
            AND typeof(r.profitbtc) IN ('integer','real')
            AND (r.closedate, r.core_uid, r.{id_column}) < (?1, ?2, ?3)
-           AND v.row_id IS NULL AND mr.minute_utc IS NULL
+           AND v.row_id IS NULL
          ORDER BY r.closedate DESC, r.core_uid DESC, r.{id_column} DESC LIMIT ?4",
         source_kind = source.code(),
         algorithm_version = super::ALGORITHM_VERSION,
@@ -1756,7 +1856,7 @@ fn resolve_next_rate(
         // Leave the currency queued: the stage's own backoff decides when to try it again, and the
         // published snapshot keeps serving whatever is still fresh meanwhile.
         Err(FetchFailure::Transient(message)) => {
-            return Err(FaultCause::new(FailureKind::Provider, message))
+            return Err(FaultCause::new(FailureKind::Provider, message));
         }
     }
     state.pending.pop();
@@ -1861,7 +1961,7 @@ fn delete_partition(store: &Connection, source: TradeSource, core_uid: i64) -> P
     }
 }
 
-/// Process every deferred row whose containing minute is now closed.
+/// Process one bounded batch of deferred rows whose containing minute is now closed.
 ///
 /// Args:
 ///     store: Open valuation writer connection.
@@ -1880,28 +1980,44 @@ fn process_deferred(
     deferred: &mut BTreeMap<(i64, i64, i64), TradeInput>,
 ) -> Result<StageTurn, FaultCause> {
     let current = current_minute_utc();
+    let blocked = super::blocked_rate_searches(store, now_unix_ms_i64()).unwrap_or_default();
     let keys = deferred
         .iter()
-        .filter(|(_, input)| input.closedate.div_euclid(60) * 60 < current)
+        .filter(|(_, input)| {
+            let minute = input.closedate.div_euclid(60) * 60;
+            minute < current && !blocked.contains(&(input.quote_ordinal, minute))
+        })
         .map(|(key, _)| *key)
+        .take(DEFERRED_BATCH)
         .collect::<Vec<_>>();
     let inputs = keys
         .iter()
         .filter_map(|key| deferred.get(key).cloned())
         .collect::<Vec<_>>();
-    let mut changed = settle_prefetch(prefetch_rates(store, source, &inputs), generation, dirty)?;
+    let prefetched = settle_prefetch(prefetch_rates(store, source, &inputs), generation, dirty)?;
+    let mut changed = prefetched.changed;
     for key in &keys {
         let Some(input) = deferred.get(key).cloned() else {
             continue;
         };
-        match prepare_trade(store, source, &input) {
+        let minute = input.closedate.div_euclid(60) * 60;
+        match prepare_trade(
+            store,
+            source,
+            &input,
+            prefetched
+                .canonical_exact_missing
+                .contains(&(input.quote_ordinal, minute)),
+        ) {
             PrepareResult::Complete {
                 changed: input_changed,
             } => {
                 changed |= input_changed;
                 deferred.remove(key);
             }
-            PrepareResult::Deferred => {}
+            PrepareResult::Deferred {
+                changed: input_changed,
+            } => changed |= input_changed,
             PrepareResult::Retry(error) => {
                 if changed {
                     publish(generation, dirty);
@@ -1914,22 +2030,28 @@ fn process_deferred(
         publish(generation, dirty);
     }
     Ok(StageTurn::Ran {
-        more: !keys.is_empty(),
+        more: current_minute_closed_any(store, deferred),
     })
 }
 
 /// Whether any retained row's candle minute has closed.
 ///
 /// Args:
-///     deferred: Current-minute rows retained by identity.
+///     store: Open valuation store carrying persisted retry boundaries.
+///     deferred: Current-minute and unresolved rows retained by identity.
 ///
 /// Returns:
 ///     `true` when at least one row can now be retried.
-fn current_minute_closed_any(deferred: &BTreeMap<(i64, i64, i64), TradeInput>) -> bool {
+fn current_minute_closed_any(
+    store: &Connection,
+    deferred: &BTreeMap<(i64, i64, i64), TradeInput>,
+) -> bool {
     let current = current_minute_utc();
-    deferred
-        .values()
-        .any(|input| input.closedate.div_euclid(60) * 60 < current)
+    let blocked = super::blocked_rate_searches(store, now_unix_ms_i64()).unwrap_or_default();
+    deferred.values().any(|input| {
+        let minute = input.closedate.div_euclid(60) * 60;
+        minute < current && !blocked.contains(&(input.quote_ordinal, minute))
+    })
 }
 
 /// Stable in-memory identity for one deferred prepared value.

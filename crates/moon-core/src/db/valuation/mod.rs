@@ -8,6 +8,7 @@
 mod current;
 mod health;
 mod provider;
+mod resolver;
 mod worker;
 
 #[cfg(test)]
@@ -39,7 +40,7 @@ use super::read_fail::{self, ReadResult};
 ///
 /// Incrementing this value invalidates old rows without destructive migration when provider
 /// routing or conversion semantics change.
-pub const ALGORITHM_VERSION: i64 = 1;
+pub const ALGORITHM_VERSION: i64 = 2;
 
 /// Attached SQLite schema name used by report and Analytics queries.
 pub(crate) const SCHEMA: &str = "valuation";
@@ -105,9 +106,8 @@ pub(super) fn test_health_guard() -> TestHealthGuard {
 pub(crate) struct PerRowSql {
     /// The `v` prepared-value join followed by the `ra` ready-rate provenance join.
     ///
-    /// The row reader needs provenance but never counts permanent misses, so it omits the `mr`
-    /// join used by [`CoverageSql::joins`]. The joins are complete and dependency-ordered because
-    /// `ra` reads `v.rate_minute_utc`.
+    /// The joins are complete and dependency-ordered because `ra` reads
+    /// `v.rate_minute_utc`; unresolved searches are not reader joins at all.
     pub joins: String,
     /// USDT paid for one quote unit, `1.0` on an identity row.
     pub rate: String,
@@ -117,16 +117,13 @@ pub(crate) struct PerRowSql {
 
 /// SQL fragments for aggregate valuation coverage and per-row Report values.
 pub(crate) struct CoverageSql {
-    /// The aggregate reader's `v` prepared-value and `mr` permanent-miss joins.
-    ///
-    /// The `mr` alias supplies the `unavailable` count; rate provenance is unused here and remains
-    /// exclusive to [`PerRowSql::joins`].
+    /// The aggregate reader's input-matching prepared-value join.
     pub joins: String,
     /// One for every row carrying a known quote identity.
     pub eligible: String,
     /// One only for identity-USDT or an input-matching prepared value.
     pub valued: String,
-    /// One only for a cached permanent route/candle miss without a prepared value.
+    /// Historical routing never exposes a terminal unavailable state, so this is always zero.
     pub unavailable: String,
     /// Complete-row USDT profit expression, NULL while uncovered.
     ///
@@ -179,7 +176,7 @@ impl CoverageAggregate {
     /// Args:
     ///     eligible: Known-quote rows.
     ///     valued: Identity or prepared rows.
-    ///     unavailable: Cached permanent misses.
+    ///     unavailable: Terminal unavailable rows; always zero for historical routing.
     ///     profit_usdt: Sum over valued rows only.
     ///     spent_usdt: Sum over valued rows carrying numeric spend.
     ///     spent_rows: Valued rows carrying numeric spend.
@@ -350,17 +347,6 @@ pub(crate) fn coverage_sql(
     } else {
         "0".to_string()
     };
-    let rate_match = if has_closedate && has_quote {
-        format!(
-            "mr.algorithm_version={algorithm_version}
-             AND mr.quote_ordinal=({quote})
-             AND mr.minute_utc=({alias}.closedate/60)*60
-             AND mr.status=1",
-            algorithm_version = ALGORITHM_VERSION,
-        )
-    } else {
-        "0".to_string()
-    };
     let eligible = format!("({quote_known})");
     let identity = if has_quote {
         format!(
@@ -373,10 +359,9 @@ pub(crate) fn coverage_sql(
     let prepared =
         format!("({eligible} AND {numeric_profit} AND {date_valid} AND v.row_id IS NOT NULL)");
     let valued = format!("({identity} OR {prepared})");
-    let unavailable = format!(
-        "({eligible} AND {numeric_profit} AND NOT {identity} AND {date_valid}
-          AND v.row_id IS NULL AND mr.minute_utc IS NOT NULL)"
-    );
+    // Known quotes remain pending until a market observation becomes available; historical
+    // routing no longer has a terminal unavailable state.
+    let unavailable = "0".to_string();
     let profit_usdt = if has_profit {
         format!(
             "CASE WHEN {identity} THEN {settled}
@@ -394,24 +379,29 @@ pub(crate) fn coverage_sql(
     // identity in memory — so every per-row expression must answer for it before consulting the
     // cache. Treating a NULL provider as "not valued" would blank the column on most trades.
     let rate = format!("CASE WHEN {identity} THEN 1.0 WHEN {prepared} THEN v.rate_usdt END");
-    // `status=0` is the ready-rate partition. The `mr` join above deliberately matches `status=1`,
-    // the permanent-miss partition, so it can never supply provenance for a valued row. Without a
-    // quote column there is nothing to join on, and the source expression must not name `ra` at
-    // all: SQLite resolves every column reference at prepare time, unreachable arms included.
+    // Without a quote column there is nothing to join on, and the source expression must not name
+    // `ra`: SQLite resolves every column reference at prepare time, unreachable arms included.
     let (rate_join, source) = if has_quote {
         (
             format!(
                 " LEFT JOIN valuation.rates ra
                     ON ra.algorithm_version={algorithm_version}
                    AND ra.quote_ordinal=({quote})
-                   AND ra.minute_utc=v.rate_minute_utc AND ra.status=0",
+                   AND ra.minute_utc=v.rate_minute_utc",
                 algorithm_version = ALGORITHM_VERSION,
             ),
             format!(
                 "CASE WHEN {identity} THEN 'identity'
                       WHEN {prepared} THEN COALESCE(
                           ra.provider || ' ' || ra.symbol
-                          || CASE ra.orientation WHEN {inverse} THEN ' inv' ELSE '' END,
+                          || CASE ra.orientation WHEN {inverse} THEN ' inv' ELSE '' END
+                          || CASE WHEN ra.leg2_provider IS NOT NULL THEN
+                              ' -> ' || ra.leg2_provider || ' ' || ra.leg2_symbol
+                              || CASE ra.leg2_orientation WHEN {inverse} THEN ' inv' ELSE '' END
+                             ELSE '' END
+                          || CASE WHEN ra.resolved_minute_utc>ra.minute_utc THEN
+                              ' +' || ((ra.resolved_minute_utc-ra.minute_utc)/60) || 'm'
+                             ELSE '' END,
                           'cached') END",
                 inverse = RateOrientation::Inverse.code(),
             ),
@@ -420,11 +410,8 @@ pub(crate) fn coverage_sql(
         (String::new(), "NULL".to_string())
     };
     let value_join = format!(" LEFT JOIN valuation.trade_values v ON {input_match}");
-    // `mr` serves `unavailable` and nothing else, so a row query that never counts must not pay a
-    // probe into it per matching row; `ra` serves provenance only, so an aggregate must not either.
-    let miss_join = format!(" LEFT JOIN valuation.rates mr ON {rate_match}");
     CoverageSql {
-        joins: format!("{value_join}{miss_join}"),
+        joins: value_join.clone(),
         eligible,
         valued,
         unavailable,
@@ -791,6 +778,28 @@ impl RateOrientation {
     }
 }
 
+/// Price within a closed candle used for historical conversion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RatePriceBasis {
+    /// The requested minute existed, so its close preserves the original exact-minute contract.
+    ExactClose,
+    /// The requested minute was absent, so the first later candle contributes its open.
+    SuccessorOpen,
+}
+
+impl RatePriceBasis {
+    /// Stable integer persisted with rate provenance.
+    ///
+    /// Returns:
+    ///     Database representation of the price basis.
+    const fn code(self) -> i64 {
+        match self {
+            Self::ExactClose => 0,
+            Self::SuccessorOpen => 1,
+        }
+    }
+}
+
 /// One validated closed-minute conversion result ready for persistence.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedRate {
@@ -798,6 +807,8 @@ pub(crate) struct ResolvedRate {
     pub quote_ordinal: i64,
     /// UTC minute start in Unix seconds.
     pub minute_utc: i64,
+    /// Actual closed market minute used by every conversion leg.
+    pub resolved_minute_utc: i64,
     /// USDT received for one quote unit.
     pub rate_usdt: f64,
     /// Canonical provider identifier.
@@ -806,19 +817,50 @@ pub(crate) struct ResolvedRate {
     pub symbol: String,
     /// Direct, inverse, or identity conversion.
     pub orientation: RateOrientation,
+    /// Exact close or later-candle open used to compute the conversion.
+    pub price_basis: RatePriceBasis,
     /// Provider candle open time in Unix milliseconds.
     pub candle_open_ms: i64,
     /// Provider candle close time in Unix milliseconds.
     pub candle_close_ms: i64,
+    /// Optional second provider for a common-minute two-leg conversion.
+    pub leg2_provider: Option<String>,
+    /// Optional second market for a common-minute two-leg conversion.
+    pub leg2_symbol: Option<String>,
+    /// Optional second market orientation.
+    pub leg2_orientation: Option<RateOrientation>,
+    /// Validated oriented rate contributed by the first leg.
+    pub leg1_rate: f64,
+    /// Validated oriented rate contributed by the optional second leg.
+    pub leg2_rate: Option<f64>,
 }
 
-/// Cached outcome for one algorithm-versioned quote minute.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum CachedRate {
-    /// A finite positive conversion rate with complete provenance.
-    Ready(ResolvedRate),
-    /// Every canonical direct/inverse route proved permanently unavailable for the minute.
-    PermanentMissing,
+/// Build a zero-request identity conversion for one USDT minute.
+///
+/// Args:
+///     quote_ordinal: Persisted USDT quote ordinal.
+///     minute_utc: Requested and resolved UTC minute.
+///
+/// Returns:
+///     Unit-rate result with explicit identity provenance.
+pub(super) fn identity_rate(quote_ordinal: i64, minute_utc: i64) -> ResolvedRate {
+    ResolvedRate {
+        quote_ordinal,
+        minute_utc,
+        resolved_minute_utc: minute_utc,
+        rate_usdt: 1.0,
+        provider: "identity".to_string(),
+        symbol: "USDT".to_string(),
+        orientation: RateOrientation::Identity,
+        price_basis: RatePriceBasis::ExactClose,
+        candle_open_ms: minute_utc.saturating_mul(1_000),
+        candle_close_ms: minute_utc.saturating_mul(1_000).saturating_add(59_999),
+        leg2_provider: None,
+        leg2_symbol: None,
+        leg2_orientation: None,
+        leg1_rate: 1.0,
+        leg2_rate: None,
+    }
 }
 
 /// Current report inputs used to guard a prepared valuation against same-key upserts.
@@ -1239,16 +1281,34 @@ pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
              algorithm_version INTEGER NOT NULL,
              quote_ordinal INTEGER NOT NULL,
              minute_utc INTEGER NOT NULL,
-             status INTEGER NOT NULL,
-             rate_usdt REAL,
-             provider TEXT,
-             symbol TEXT,
-             orientation INTEGER,
-             candle_open_ms INTEGER,
-             candle_close_ms INTEGER,
+             resolved_minute_utc INTEGER NOT NULL,
+             rate_usdt REAL NOT NULL,
+             price_basis INTEGER NOT NULL,
+             provider TEXT NOT NULL,
+             symbol TEXT NOT NULL,
+             orientation INTEGER NOT NULL,
+             candle_open_ms INTEGER NOT NULL,
+             candle_close_ms INTEGER NOT NULL,
+             leg1_rate REAL NOT NULL,
+             leg2_provider TEXT,
+             leg2_symbol TEXT,
+             leg2_orientation INTEGER,
+             leg2_rate REAL,
              fetched_at_ms INTEGER NOT NULL,
              PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
          );
+         CREATE TABLE IF NOT EXISTS rate_searches (
+             algorithm_version INTEGER NOT NULL,
+             quote_ordinal INTEGER NOT NULL,
+             minute_utc INTEGER NOT NULL,
+             searched_through_minute INTEGER NOT NULL,
+             next_retry_at_ms INTEGER NOT NULL,
+             attempts INTEGER NOT NULL,
+             updated_at_ms INTEGER NOT NULL,
+             PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
+         );
+         CREATE INDEX IF NOT EXISTS idx_rate_searches_retry
+             ON rate_searches (algorithm_version, next_retry_at_ms);
          CREATE TABLE IF NOT EXISTS trade_values (
              source_kind INTEGER NOT NULL,
              core_uid INTEGER NOT NULL,
@@ -1388,9 +1448,16 @@ fn validate_attachment(conn: &Connection) -> rusqlite::Result<()> {
 fn validate_schema_with_prefix(conn: &Connection, prefix: &str) -> rusqlite::Result<()> {
     let probes = [
         format!(
-            "SELECT algorithm_version, quote_ordinal, minute_utc, status, rate_usdt,
-                    provider, symbol, orientation, candle_open_ms, candle_close_ms
+            "SELECT algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc,
+                    rate_usdt, price_basis, provider, symbol, orientation, candle_open_ms,
+                    candle_close_ms, leg1_rate, leg2_provider, leg2_symbol,
+                    leg2_orientation, leg2_rate
              FROM {prefix}rates LIMIT 1"
+        ),
+        format!(
+            "SELECT algorithm_version, quote_ordinal, minute_utc, searched_through_minute,
+                    next_retry_at_ms, attempts, updated_at_ms
+             FROM {prefix}rate_searches LIMIT 1"
         ),
         format!(
             "SELECT source_kind, core_uid, row_id, algorithm_version, closedate,
@@ -1409,6 +1476,12 @@ fn validate_schema_with_prefix(conn: &Connection, prefix: &str) -> rusqlite::Res
         conn,
         prefix,
         "rates",
+        &["algorithm_version", "quote_ordinal", "minute_utc"],
+    )?;
+    validate_primary_key(
+        conn,
+        prefix,
+        "rate_searches",
         &["algorithm_version", "quote_ordinal", "minute_utc"],
     )?;
     validate_primary_key(
@@ -1504,44 +1577,172 @@ pub(crate) fn prove_derived_corruption(conn: &Connection, error: &rusqlite::Erro
 ///     minute_utc: UTC minute start in Unix seconds.
 ///
 /// Returns:
-///     Ready, permanently unavailable, or absent cache state.
+///     Cached conversion with provenance, or no cached rate.
 pub(crate) fn cached_rate(
     conn: &Connection,
     quote_ordinal: i64,
     minute_utc: i64,
-) -> rusqlite::Result<Option<CachedRate>> {
+) -> rusqlite::Result<Option<ResolvedRate>> {
     conn.query_row(
-        "SELECT status, rate_usdt, provider, symbol, orientation,
-                candle_open_ms, candle_close_ms
+        "SELECT resolved_minute_utc, rate_usdt, price_basis, provider, symbol, orientation,
+                candle_open_ms, candle_close_ms, leg1_rate, leg2_provider, leg2_symbol,
+                leg2_orientation, leg2_rate
          FROM rates
          WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
         params![ALGORITHM_VERSION, quote_ordinal, minute_utc],
-        |row| {
-            let status: i64 = row.get(0)?;
-            if status != 0 {
-                return Ok(CachedRate::PermanentMissing);
-            }
-            let orientation = match row.get::<_, i64>(4)? {
-                0 => RateOrientation::Direct,
-                1 => RateOrientation::Inverse,
-                2 => RateOrientation::Identity,
-                value => {
-                    return Err(rusqlite::Error::IntegralValueOutOfRange(4, value));
-                }
-            };
-            Ok(CachedRate::Ready(ResolvedRate {
-                quote_ordinal,
-                minute_utc,
-                rate_usdt: row.get(1)?,
-                provider: row.get(2)?,
-                symbol: row.get(3)?,
-                orientation,
-                candle_open_ms: row.get(5)?,
-                candle_close_ms: row.get(6)?,
-            }))
-        },
+        |row| decode_rate_row(row, quote_ordinal, minute_utc),
     )
     .optional()
+}
+
+/// Reuse a proven successor across another requested minute inside the same candle gap.
+///
+/// If an earlier request proved that its selected path had no observation until minute `R`, every
+/// later request before `R` has the same first available observation. This turns a sparse-history
+/// batch into one provider search per gap instead of one search per trade.
+///
+/// Args:
+///     conn: Open valuation store.
+///     quote_ordinal: Persisted MoonBot quote ordinal.
+///     minute_utc: New requested UTC trade minute.
+///
+/// Returns:
+///     Re-keyed successor provenance when a cached proof covers the requested minute.
+pub(crate) fn covering_successor_rate(
+    conn: &Connection,
+    quote_ordinal: i64,
+    minute_utc: i64,
+) -> rusqlite::Result<Option<ResolvedRate>> {
+    conn.query_row(
+        "SELECT resolved_minute_utc, rate_usdt, price_basis, provider, symbol, orientation,
+                candle_open_ms, candle_close_ms, leg1_rate, leg2_provider, leg2_symbol,
+                leg2_orientation, leg2_rate
+         FROM rates
+         WHERE algorithm_version=?1 AND quote_ordinal=?2 AND price_basis=?3
+           AND minute_utc<?4 AND resolved_minute_utc>?4
+         ORDER BY minute_utc DESC LIMIT 1",
+        params![
+            ALGORITHM_VERSION,
+            quote_ordinal,
+            RatePriceBasis::SuccessorOpen.code(),
+            minute_utc
+        ],
+        |row| decode_rate_row(row, quote_ordinal, minute_utc),
+    )
+    .optional()
+}
+
+/// Decode the shared persisted-rate projection into one provenance-rich result.
+///
+/// Args:
+///     row: SQLite row using the canonical 13-column rate projection.
+///     quote_ordinal: Persisted MoonBot quote ordinal supplied by the query key.
+///     minute_utc: Requested UTC minute supplied by the query key.
+///
+/// Returns:
+///     Decoded rate or a typed SQLite conversion failure.
+fn decode_rate_row(
+    row: &rusqlite::Row<'_>,
+    quote_ordinal: i64,
+    minute_utc: i64,
+) -> rusqlite::Result<ResolvedRate> {
+    let price_basis = match row.get::<_, i64>(2)? {
+        0 => RatePriceBasis::ExactClose,
+        1 => RatePriceBasis::SuccessorOpen,
+        value => return Err(rusqlite::Error::IntegralValueOutOfRange(2, value)),
+    };
+    let orientation = decode_orientation(row.get::<_, i64>(5)?, 5)?;
+    let leg2_orientation = row
+        .get::<_, Option<i64>>(11)?
+        .map(|value| decode_orientation(value, 11))
+        .transpose()?;
+    Ok(ResolvedRate {
+        quote_ordinal,
+        minute_utc,
+        resolved_minute_utc: row.get(0)?,
+        rate_usdt: row.get(1)?,
+        price_basis,
+        provider: row.get(3)?,
+        symbol: row.get(4)?,
+        orientation,
+        candle_open_ms: row.get(6)?,
+        candle_close_ms: row.get(7)?,
+        leg1_rate: row.get(8)?,
+        leg2_provider: row.get(9)?,
+        leg2_symbol: row.get(10)?,
+        leg2_orientation,
+        leg2_rate: row.get(12)?,
+    })
+}
+
+/// Decode one persisted rate orientation with a useful SQLite column index on failure.
+fn decode_orientation(value: i64, column: usize) -> rusqlite::Result<RateOrientation> {
+    match value {
+        0 => Ok(RateOrientation::Direct),
+        1 => Ok(RateOrientation::Inverse),
+        2 => Ok(RateOrientation::Identity),
+        value => Err(rusqlite::Error::IntegralValueOutOfRange(column, value)),
+    }
+}
+
+/// Return the first historical minute that still needs provider search now.
+///
+/// Args:
+///     conn: Open valuation store.
+///     quote_ordinal: Persisted MoonBot quote ordinal.
+///     minute_utc: Requested UTC trade minute.
+///     now_ms: Current wall-clock time in Unix milliseconds.
+///
+/// Returns:
+///     No minute while retry pacing is active; otherwise the requested minute for a new search or
+///     the minute immediately after the last proven-empty horizon.
+pub(crate) fn rate_search_start(
+    conn: &Connection,
+    quote_ordinal: i64,
+    minute_utc: i64,
+    now_ms: i64,
+) -> rusqlite::Result<Option<i64>> {
+    let state = conn
+        .query_row(
+            "SELECT searched_through_minute, next_retry_at_ms FROM rate_searches
+             WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
+            params![ALGORITHM_VERSION, quote_ordinal, minute_utc],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    Ok(match state {
+        None => Some(minute_utc),
+        Some((_, retry_at)) if retry_at > now_ms => None,
+        Some((searched_through, _)) => Some(
+            searched_through
+                .saturating_add(60)
+                .max(minute_utc.saturating_add(60)),
+        ),
+    })
+}
+
+/// Read every historical rate key whose retry boundary is still in the future.
+///
+/// Args:
+///     conn: Open valuation store.
+///     now_ms: Current wall-clock time in Unix milliseconds.
+///
+/// Returns:
+///     Quote/minute keys that the deferred worker must not request yet.
+pub(crate) fn blocked_rate_searches(
+    conn: &Connection,
+    now_ms: i64,
+) -> rusqlite::Result<std::collections::BTreeSet<(i64, i64)>> {
+    let mut statement = conn.prepare(
+        "SELECT quote_ordinal, minute_utc FROM rate_searches
+         WHERE algorithm_version=?1 AND next_retry_at_ms>?2",
+    )?;
+    let blocked = statement
+        .query_map(params![ALGORITHM_VERSION, now_ms], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect();
+    blocked
 }
 
 /// Persist one successful immutable closed-minute conversion.
@@ -1558,55 +1759,87 @@ pub(crate) fn store_rate(
     rate: &ResolvedRate,
     fetched_at_ms: i64,
 ) -> rusqlite::Result<usize> {
-    conn.execute(
+    let changed = conn.execute(
         "INSERT INTO rates (
-             algorithm_version, quote_ordinal, minute_utc, status, rate_usdt,
-             provider, symbol, orientation, candle_open_ms, candle_close_ms, fetched_at_ms
-         ) VALUES (?1,?2,?3,0,?4,?5,?6,?7,?8,?9,?10)
+             algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc, rate_usdt,
+             price_basis, provider, symbol, orientation, candle_open_ms, candle_close_ms,
+             leg1_rate, leg2_provider, leg2_symbol, leg2_orientation, leg2_rate, fetched_at_ms
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
          ON CONFLICT (algorithm_version, quote_ordinal, minute_utc) DO UPDATE SET
-             status=0, rate_usdt=excluded.rate_usdt, provider=excluded.provider,
-             symbol=excluded.symbol, orientation=excluded.orientation,
-             candle_open_ms=excluded.candle_open_ms,
-             candle_close_ms=excluded.candle_close_ms, fetched_at_ms=excluded.fetched_at_ms",
+             resolved_minute_utc=excluded.resolved_minute_utc,
+             rate_usdt=excluded.rate_usdt, price_basis=excluded.price_basis,
+             provider=excluded.provider, symbol=excluded.symbol,
+             orientation=excluded.orientation, candle_open_ms=excluded.candle_open_ms,
+             candle_close_ms=excluded.candle_close_ms, leg1_rate=excluded.leg1_rate,
+             leg2_provider=excluded.leg2_provider, leg2_symbol=excluded.leg2_symbol,
+             leg2_orientation=excluded.leg2_orientation, leg2_rate=excluded.leg2_rate,
+             fetched_at_ms=excluded.fetched_at_ms",
         params![
             ALGORITHM_VERSION,
             rate.quote_ordinal,
             rate.minute_utc,
+            rate.resolved_minute_utc,
             rate.rate_usdt,
+            rate.price_basis.code(),
             rate.provider,
             rate.symbol,
             rate.orientation.code(),
             rate.candle_open_ms,
             rate.candle_close_ms,
+            rate.leg1_rate,
+            rate.leg2_provider,
+            rate.leg2_symbol,
+            rate.leg2_orientation.map(RateOrientation::code),
+            rate.leg2_rate,
             fetched_at_ms,
         ],
-    )
+    )?;
+    conn.execute(
+        "DELETE FROM rate_searches
+         WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
+        params![ALGORITHM_VERSION, rate.quote_ordinal, rate.minute_utc],
+    )?;
+    Ok(changed)
 }
 
-/// Persist that every canonical route lacks one historical quote minute.
+/// Persist a retry boundary after every route lacks data through the current closed horizon.
 ///
 /// Args:
 ///     conn: Open valuation store.
 ///     quote_ordinal: Persisted MoonBot quote ordinal.
 ///     minute_utc: UTC minute start in Unix seconds.
-///     fetched_at_ms: Local verification time in Unix milliseconds.
+///     searched_through_minute: Latest fully closed minute checked by the resolver.
+///     now_ms: Local verification time in Unix milliseconds.
 ///
 /// Returns:
 ///     Number of inserted or replaced rows.
-pub(crate) fn store_permanent_missing(
+pub(crate) fn store_rate_search(
     conn: &Connection,
     quote_ordinal: i64,
     minute_utc: i64,
-    fetched_at_ms: i64,
+    searched_through_minute: i64,
+    now_ms: i64,
 ) -> rusqlite::Result<usize> {
+    const RETRY_MS: i64 = 5 * 60 * 1_000;
     conn.execute(
-        "INSERT INTO rates (
-             algorithm_version, quote_ordinal, minute_utc, status, fetched_at_ms
-         ) VALUES (?1,?2,?3,1,?4)
+        "INSERT INTO rate_searches (
+             algorithm_version, quote_ordinal, minute_utc, searched_through_minute,
+             next_retry_at_ms, attempts, updated_at_ms
+         ) VALUES (?1,?2,?3,?4,?5,1,?6)
          ON CONFLICT (algorithm_version, quote_ordinal, minute_utc) DO UPDATE SET
-             status=1, rate_usdt=NULL, provider=NULL, symbol=NULL, orientation=NULL,
-             candle_open_ms=NULL, candle_close_ms=NULL, fetched_at_ms=excluded.fetched_at_ms",
-        params![ALGORITHM_VERSION, quote_ordinal, minute_utc, fetched_at_ms],
+             searched_through_minute=MAX(rate_searches.searched_through_minute,
+                                         excluded.searched_through_minute),
+             next_retry_at_ms=excluded.next_retry_at_ms,
+             attempts=rate_searches.attempts+1,
+             updated_at_ms=excluded.updated_at_ms",
+        params![
+            ALGORITHM_VERSION,
+            quote_ordinal,
+            minute_utc,
+            searched_through_minute,
+            now_ms.saturating_add(RETRY_MS),
+            now_ms
+        ],
     )
 }
 

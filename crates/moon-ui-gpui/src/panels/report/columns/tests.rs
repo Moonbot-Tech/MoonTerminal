@@ -3,11 +3,27 @@
 // Explicit imports on purpose: the parent re-exports `gpui::*`, whose `test` would
 // shadow the built-in attribute and make `#[test]` expand recursively.
 use super::{
-    basecurrency_text, cell_display_text, effective_visible_columns, header_for,
+    basecurrency_text, cell_display_text, cell_tooltip, effective_visible_columns, header_for,
     is_numeric_report_column, toggled_all_columns, value_to_string,
 };
 use rusqlite::types::Value;
 use std::collections::HashSet;
+
+/// Breakage: changing `cell_tooltip` to return `None` for the valuation-source column hides the
+/// second conversion leg and successor delay even though the database retained both.
+#[test]
+fn valuation_source_tooltip_keeps_complete_provenance() {
+    let provenance = "hyperliquid_spot USDH/USDC -> binance_spot USDCUSDT +126720m";
+    assert_eq!(
+        cell_tooltip(moon_core::db::VALUATION_SOURCE_COLUMN, provenance).as_deref(),
+        Some(provenance)
+    );
+    assert_eq!(cell_tooltip("coin", provenance), None);
+    assert_eq!(
+        cell_tooltip(moon_core::db::VALUATION_SOURCE_COLUMN, ""),
+        None
+    );
+}
 
 /// A generic text cell uses the shared flattener and trims its edges.
 #[test]
