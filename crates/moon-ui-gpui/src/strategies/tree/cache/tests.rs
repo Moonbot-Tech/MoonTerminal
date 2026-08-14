@@ -191,8 +191,11 @@ fn venue_digest_moves_for_every_grouping_and_caption_input() {
         baseline,
         venues_digest([(7, Some(&venue(9, 17, "beta", "caption")))])
     );
+    // Known venues take their heading from the directory, so a reported rename is display-only
+    // there. An unknown ordinal is the one case whose heading IS the reported name.
+    let unknown = venue(250, 17, "alpha", "caption");
     assert_ne!(
-        baseline,
-        venues_digest([(7, Some(&venue(9, 17, "alpha", "renamed")))])
+        venues_digest([(7, Some(&unknown))]),
+        venues_digest([(7, Some(&venue(250, 17, "alpha", "renamed")))])
     );
 }
