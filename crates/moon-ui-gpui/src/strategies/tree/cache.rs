@@ -28,6 +28,7 @@ use moon_core::venue::CoreVenue;
 
 use super::super::StrategiesView;
 use super::moon::NodeData;
+use crate::controls::venue_section_label;
 
 /// The one thing a cache hit has to hand back: the row data the renderer and decorators read.
 ///
@@ -155,8 +156,9 @@ pub(crate) fn data_sig(
 /// Digest venue inputs in the same canonical core order used by the tree builder.
 ///
 /// Presence is explicit so a core whose venue has not arrived cannot collide structurally with an
-/// identified venue. Identity controls grouping, while the raw DEX and reported caption control
-/// the shared section label for the venue kinds that require them.
+/// identified venue. Identity controls grouping. The displayed section caption is hashed through
+/// [`venue_section_label`] so a heading change invalidates the tree without this module reading
+/// the raw reported name.
 ///
 /// Args:
 ///     rows: Ordered `(core id, optional venue)` pairs from the visible core list.
@@ -173,7 +175,7 @@ fn venues_digest<'a>(rows: impl IntoIterator<Item = (CoreId, Option<&'a CoreVenu
                 1u8.hash(&mut h);
                 venue.id.hash(&mut h);
                 venue.dex.hash(&mut h);
-                venue.reported.hash(&mut h);
+                venue_section_label(Some(venue)).hash(&mut h);
             }
         }
     }
