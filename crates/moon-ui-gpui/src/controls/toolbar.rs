@@ -5,8 +5,8 @@ use moon_core::session::CoreId;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
-    MoonInputState, MoonLabel, MoonPalette, h_flex,
+    h_flex, MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonSize, MoonButtonVariant,
+    MoonInputState, MoonLabel, MoonPalette,
 };
 
 use super::metric::{metric_button, sl_toggle};
@@ -90,12 +90,113 @@ const LIVE_W: f32 = 62.0;
 /// Raw width of each icon-only singleton-window button. Shared so the Report panel's trash
 /// button (`panels::report::controls`) matches the toolbar launchers from one source.
 pub(crate) const ICON_BTN_W: f32 = 30.0;
-/// Base width of the Settings button while its label is visible.
-const SETTINGS_BTN_W: f32 = 92.0;
+/// Base font size of a ToolbarCompact text segment in MoonUI.
+const TOOLBAR_LAUNCHER_TEXT_SIZE: f32 = 10.0;
+/// Font weight used by the toolbar launchers' localized text segments.
+const TOOLBAR_LAUNCHER_TEXT_WEIGHT: f32 = 500.0;
+/// Base font size from which MoonUI derives a ToolbarCompact leading-icon size.
+const TOOLBAR_LAUNCHER_ICON_FONT_SIZE: f32 = 10.5;
+/// UI-scaled gap between a ToolbarCompact leading icon and its label.
+const TOOLBAR_LAUNCHER_ICON_GAP: f32 = 6.0;
+/// Two raw one-pixel borders enclosing a labeled Soft button's horizontal content.
+const TOOLBAR_LAUNCHER_BORDER_W: f32 = 2.0;
+/// Horizontal inset on each side of a labeled launcher. Action/ToolbarCompact ship with
+/// `pad_x = 0` so icon-only targets stay square; labeled buttons must opt into the same
+/// 7-unit inset used by other Action labels (`core_settings_popup`, connections tab).
+const TOOLBAR_LAUNCHER_PAD_X: f32 = 7.0;
 /// Caption of the sell group — unlike `Size` it carries no unit, the cells already show percents.
 const SELL_CAPTION: &str = "Sell";
 /// Stable unit for group-local manual order-size equivalents.
 const SIZE_UNIT: &str = "USDT eq.";
+
+/// Measure one complete localized launcher button at ToolbarCompact geometry.
+///
+/// The Shell root supplies the monospaced family inherited by the text segment. MoonUI gives this
+/// size zero native padding so icon-only targets stay square; labeled launchers add
+/// [`TOOLBAR_LAUNCHER_PAD_X`] on each side via `MoonButton::padding_x`. The reserved width is the
+/// leading icon, its UI-scaled gap, both insets, and the two border pixels. The button is never
+/// allowed to become narrower than its stable icon-only target.
+///
+/// Args:
+///     cx: Application context supplying active font and UI scales.
+///     label: Localized launcher label rendered by the button.
+///
+/// Returns:
+///     Full icon-plus-label width in logical pixels.
+fn launcher_label_width(cx: &App, label: &str) -> f32 {
+    let text = design::ui_text_width(
+        cx,
+        label,
+        TOOLBAR_LAUNCHER_TEXT_SIZE,
+        TOOLBAR_LAUNCHER_TEXT_WEIGHT,
+        true,
+    );
+    let icon = (design::font_value(cx, TOOLBAR_LAUNCHER_ICON_FONT_SIZE) + 1.0).clamp(10.0, 14.0);
+    let chrome = icon
+        + design::ui_value(cx, TOOLBAR_LAUNCHER_ICON_GAP)
+        + design::ui_value(cx, TOOLBAR_LAUNCHER_PAD_X) * 2.0
+        + TOOLBAR_LAUNCHER_BORDER_W;
+    (text + chrome).max(ICON_BTN_W)
+}
+
+/// Incremental widths of the optional labels above the icon-only row.
+#[derive(Clone, Copy, Debug)]
+struct LabelWidths {
+    /// Complete row width with every optional label removed.
+    icon_only: f32,
+    /// Width of the compact size unit caption.
+    size_unit: f32,
+    /// Extra width that expands the unit caption to `Size, USDT eq.`.
+    size_noun: f32,
+    /// Extra width of the Settings launcher label.
+    settings: f32,
+    /// Extra width of the Strategies launcher label.
+    strategies: f32,
+    /// Extra width of the Analytics launcher label.
+    analytics: f32,
+    /// Width of the Sell caption.
+    sell: f32,
+}
+
+/// Visibility of every optional label at one available row width.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct LabelLadder {
+    size_unit: bool,
+    size_noun: bool,
+    settings: bool,
+    strategies: bool,
+    analytics: bool,
+    sell: bool,
+}
+
+/// Resolve the cumulative label ladder without any rendering or theme dependency.
+///
+/// Each threshold adds exactly the next label that survives when the toolbar grows. Inclusive
+/// comparisons make a label visible at the exact pixel where its complete width first fits.
+///
+/// Args:
+///     available: Toolbar width available to the complete row.
+///     widths: Icon-only base and incremental optional-label widths.
+///
+/// Returns:
+///     Visibility flags for the six ordered ladder rungs.
+fn label_ladder(available: f32, widths: LabelWidths) -> LabelLadder {
+    let size_unit = widths.icon_only + widths.size_unit;
+    let size_noun = size_unit + widths.size_noun;
+    let settings = size_noun + widths.settings;
+    let strategies = settings + widths.strategies;
+    let analytics = strategies + widths.analytics;
+    let sell = analytics + widths.sell;
+
+    LabelLadder {
+        size_unit: available >= size_unit,
+        size_noun: available >= size_noun,
+        settings: available >= settings,
+        strategies: available >= strategies,
+        analytics: available >= analytics,
+        sell: available >= sell,
+    }
+}
 
 /// Which of the row's optional LABELS fit a window of width `chrome_width`.
 ///
@@ -104,18 +205,18 @@ const SIZE_UNIT: &str = "USDT eq.";
 /// so nothing downstream can reach a different conclusion.
 ///
 /// The thresholds nest by construction: each rung adds one optional label to the unsheddable row
-/// budget. Four direct comparisons therefore decide the four-rung ladder without enumerating
+/// budget. Six direct comparisons therefore decide the six-rung ladder without enumerating
 /// combinations of visible labels.
 ///
 /// Yield order, most expendable first. Every rung sheds a LABEL; no control ever leaves the row.
 /// 1. **the `Sell` caption** — its strip stands against the `TP` button, which names the same
 ///    concept one control away;
-/// 2. **the Settings button's label** — it is the only label among five otherwise identical window
-///    launchers, so dropping it makes that cluster more uniform, not less legible, and the gear
-///    glyph keeps its tooltip;
-/// 3. **the `Size, ` noun** — six numeric presets at the head of a trading toolbar are recognisable
+/// 2. **the Analytics button's label** — its dashboard glyph keeps the full tooltip;
+/// 3. **the Strategies button's label** — its bot glyph keeps the full tooltip;
+/// 4. **the Settings button's label** — the gear glyph keeps the full tooltip;
+/// 5. **the `Size, ` noun** — six numeric presets at the head of a trading toolbar are recognisable
 ///    without being named;
-/// 4. **the unit** — last, because it is the one fact the digits cannot carry themselves. Even
+/// 6. **the unit** — last, because it is the one fact the digits cannot carry themselves. Even
 ///    then the cell tooltip still spells it out.
 ///
 /// Measured from the REAL cell widths, which depend on the preset values and the font size, rather
@@ -128,14 +229,20 @@ const SIZE_UNIT: &str = "USDT eq.";
 ///     chrome_width: Available toolbar width in logical pixels.
 ///     size: Pre-fitted manual-size cells.
 ///     sell: Pre-fitted sell-percentage cells.
+///     analytics_label: Localized Analytics launcher label.
+///     strategies_label: Localized Strategies launcher label.
+///     settings_label: Localized Settings launcher label.
 ///
 /// Returns:
-///     Optional-label visibility and Settings-button width for the current row.
+///     Optional captions and complete launcher widths for the current row.
 fn row_fit(
     cx: &App,
     chrome_width: f32,
     size: &strips::FittedCells,
     sell: &strips::FittedCells,
+    analytics_label: &str,
+    strategies_label: &str,
+    settings_label: &str,
 ) -> RowFit {
     let gap = design::ui_value(cx, design::CHROME_GAP);
     let fw = |v: f32| design::font_w(cx, v);
@@ -151,41 +258,50 @@ fn row_fit(
         + fw(SL_TOGGLE_LABEL_W)
         + fw(LIVE_W)
         + ICON_BTN_W * 5.0;
-    // Six 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
+    // Seven 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
     // against the row itself by `toolbar_row_budget_counts_every_rule_it_draws` in
     // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
     // until the trailing cluster clips off the edge of some narrow window.
-    let rules = 6.0;
-    // Row gaps: 13 between the 14 root children (both sides of the zero-width spacer included)
-    // plus 5 inside sections — one in Risk, one in Exit, one between the first two launchers, and
-    // two between the final three launchers.
+    let rules = 7.0;
+    // Row gaps: 15 between the 16 root children (both sides of the zero-width spacer included)
+    // plus 4 inside sections — one in Risk, one in Exit, one between Profit Monitor and Screener,
+    // and one between Analytics and Strategies. Settings is a one-child section and adds none.
     // Count them ALL: an undercount moves every threshold, so a label stays visible after the row's
     // fixed part has already outgrown the window — and the spacer cannot shrink past zero.
-    let gaps = gap * 18.0;
+    let gaps = gap * 19.0;
     let base = design::ui_value(cx, design::HEADER_PAD_X) * 2.0 + controls + rules + gaps;
     // A caption costs its own width plus the gap separating it from its strip.
     let caption_w = |text: &str| design::ui_text_width(cx, text, CAPTION_SIZE, 400.0, true) + gap;
-    // The label is what turns the icon-only button into the labelled one; only the difference is
-    // optional, because the button itself is not.
-    let settings_label_w = fw(SETTINGS_BTN_W) - ICON_BTN_W;
-
     let full_caption = size_caption_text();
-    let full = base + caption_w(&full_caption);
-    let with_settings = full + settings_label_w;
+    let unit_caption_width = caption_w(SIZE_UNIT);
+    let full_caption_width = caption_w(&full_caption);
+    let analytics_width = launcher_label_width(cx, analytics_label);
+    let strategies_width = launcher_label_width(cx, strategies_label);
+    let settings_width = launcher_label_width(cx, settings_label);
+    let ladder = label_ladder(
+        chrome_width,
+        LabelWidths {
+            icon_only: base,
+            size_unit: unit_caption_width,
+            size_noun: (full_caption_width - unit_caption_width).max(0.0),
+            settings: settings_width - ICON_BTN_W,
+            strategies: strategies_width - ICON_BTN_W,
+            analytics: analytics_width - ICON_BTN_W,
+            sell: caption_w(SELL_CAPTION),
+        },
+    );
 
-    let size_caption = if chrome_width >= full {
+    let size_caption = if ladder.size_noun {
         Some(full_caption)
     } else {
-        // Only the fixed unit survives. Measured lazily: at any width that fits the full caption
-        // this string is never needed, and measuring costs an uncached glyph layout per character
-        // on every frame.
-        (chrome_width >= base + caption_w(SIZE_UNIT)).then(|| SharedString::from(SIZE_UNIT))
+        ladder.size_unit.then(|| SharedString::from(SIZE_UNIT))
     };
     RowFit {
         size_caption,
-        sell_caption: (chrome_width >= with_settings + caption_w(SELL_CAPTION))
-            .then(|| SharedString::from(SELL_CAPTION)),
-        settings_width: (chrome_width >= with_settings).then(|| fw(SETTINGS_BTN_W)),
+        sell_caption: ladder.sell.then(|| SharedString::from(SELL_CAPTION)),
+        analytics_width: ladder.analytics.then_some(analytics_width),
+        strategies_width: ladder.strategies.then_some(strategies_width),
+        settings_width: ladder.settings.then_some(settings_width),
     }
 }
 
@@ -194,7 +310,11 @@ fn row_fit(
 struct RowFit {
     size_caption: Option<SharedString>,
     sell_caption: Option<SharedString>,
-    /// Fixed width of the settings button when it carries its label; `None` renders it icon-only.
+    /// Complete Analytics-button width when its label fits; `None` renders it icon-only.
+    analytics_width: Option<f32>,
+    /// Complete Strategies-button width when its label fits; `None` renders it icon-only.
+    strategies_width: Option<f32>,
+    /// Complete Settings-button width when its label fits; `None` renders it icon-only.
     settings_width: Option<f32>,
 }
 
@@ -369,7 +489,18 @@ pub fn toolbar(
     // labels' fate read them. One computation, one source.
     let size_cells = strips::FittedCells::fit(cx, strips::size_labels(size_values));
     let sell_cells = strips::FittedCells::fit(cx, strips::sell_labels(sell_pcts));
-    let fit = row_fit(cx, chrome_width, &size_cells, &sell_cells);
+    let analytics_label = t!("toolbar.analytics").to_string();
+    let strategies_label = t!("toolbar.strategies").to_string();
+    let settings_label = t!("shell.settings_btn").to_string();
+    let fit = row_fit(
+        cx,
+        chrome_width,
+        &size_cells,
+        &sell_cells,
+        &analytics_label,
+        &strategies_label,
+        &settings_label,
+    );
 
     // A section carries the gap INSIDE it; the boundary between two sections is drawn by the RULE
     // standing between them, not by a wider gap. Shared with the header — see
@@ -536,20 +667,19 @@ pub fn toolbar(
                 .render(),
         ),
     );
-    // Trailing edge: operational launchers stay together, while monitoring and configuration
-    // windows form a second section so the two categories are visually scannable.
+    // Trailing edge: Profit Monitor + Screener, then Strategies + Analytics, then Settings.
     row.child(div().flex_1())
         .child(design::chrome_divider(cx, p))
         .child(
             section()
                 .child(open_window_button(
-                    "toolbar-strategies",
-                    t!("toolbar.strategies").to_string(),
-                    "icons/bot.svg",
+                    "toolbar-profit-monitor",
+                    t!("toolbar.profit_monitor").to_string(),
+                    "icons/chart-candlestick.svg",
                     None,
-                    Some(group.to_string()),
+                    None,
                     backend.clone(),
-                    crate::strategies::open,
+                    crate::analytics::profit_monitor::open,
                     p,
                 ))
                 .child(open_window_button(
@@ -567,39 +697,37 @@ pub fn toolbar(
         .child(
             section()
                 .child(open_window_button(
-                    "toolbar-profit-monitor",
-                    t!("toolbar.profit_monitor").to_string(),
-                    "icons/chart-candlestick.svg",
-                    None,
-                    None,
+                    "toolbar-strategies",
+                    strategies_label,
+                    "icons/bot.svg",
+                    fit.strategies_width,
+                    Some(group.to_string()),
                     backend.clone(),
-                    crate::analytics::profit_monitor::open,
+                    crate::strategies::open,
                     p,
                 ))
                 .child(open_window_button(
                     "toolbar-analytics",
-                    t!("toolbar.analytics").to_string(),
+                    analytics_label,
                     "icons/layout-dashboard.svg",
-                    None,
+                    fit.analytics_width,
                     Some(group.to_string()),
                     backend.clone(),
                     crate::analytics::open,
                     p,
-                ))
-                .child(open_window_button(
-                    "toolbar-settings",
-                    t!("shell.settings_btn").to_string(),
-                    "icons/settings.svg",
-                    // Labelled while the row has room for it ([`row_fit`]), icon-only once it does
-                    // not. A fixed width rather than padding: `MoonButton` has pad_x = 0
-                    // (FORK_BUGS), and centres its content inside the width it is given.
-                    fit.settings_width,
-                    None,
-                    backend.clone(),
-                    crate::settings::open,
-                    p,
                 )),
         )
+        .child(design::chrome_divider(cx, p))
+        .child(section().child(open_window_button(
+            "toolbar-settings",
+            settings_label,
+            "icons/settings.svg",
+            fit.settings_width,
+            None,
+            backend.clone(),
+            crate::settings::open,
+            p,
+        )))
 }
 
 /// A toolbar button that opens a singleton window, styled like Live
@@ -637,7 +765,8 @@ fn open_window_button(
         .size(MoonButtonSize::ToolbarCompact)
         .leading_icon(MoonButtonIconSlot::new(icon).color(p.text_soft));
     btn = if labeled_width.is_some() {
-        btn.text_segment(label, p.text, 500.0)
+        btn.padding_x(TOOLBAR_LAUNCHER_PAD_X)
+            .text_segment(label, p.text, 500.0)
     } else {
         btn.tooltip(label)
     };
