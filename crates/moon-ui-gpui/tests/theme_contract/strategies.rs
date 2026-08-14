@@ -276,7 +276,8 @@ fn the_per_frame_row_pass_uses_the_prepared_filter() {
 
 /// In `tree::tree_panel` and `params::params_panel`, restoring either active-only control/state or
 /// an active-dependent `continue` would hide unchecked strategies or inactive fields again;
-/// deleting the whole tree control row would also remove the expand/collapse caret.
+/// dropping the expand/collapse caret, or parking it on its own empty row, would waste the
+/// header the active-only checkbox used to share.
 #[test]
 fn tree_and_params_show_every_row_without_filter_controls() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -310,8 +311,9 @@ fn tree_and_params_show_every_row_without_filter_controls() {
     let tree_panel = code_only(braced_body(&tree, "pub(super) fn tree_panel("));
     assert!(
         tree_panel.contains("MoonButton::new(\"expand-all\")")
-            && tree_panel.contains(".justify_end()"),
-        "the active-only row removal must keep its expand/collapse caret right-aligned"
+            && tree_panel.contains(".justify_between()")
+            && !tree_panel.contains(".justify_end()"),
+        "the expand/collapse caret must sit on the filter row, right-aligned, not on an empty row"
     );
 
     let params = read_src("strategies/params.rs");

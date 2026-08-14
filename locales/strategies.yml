@@ -14,10 +14,11 @@ strat.all_kinds:
   ru: "все типы"
   en: "all types"
   es: "todos los tipos"
+# Direction filter (LONG / SHORT). The trigger must name the axis, unlike a bare "all".
 strat.all_dirs:
-  ru: "все"
-  en: "all"
-  es: "todos"
+  ru: "все стороны"
+  en: "all sides"
+  es: "todos los lados"
 strat.clear:
   ru: "Очистить"
   en: "Clear"

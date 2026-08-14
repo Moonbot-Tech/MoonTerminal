@@ -78,36 +78,41 @@ impl StrategiesView {
                             .w_full()
                             .gap(design::ui_px(cx, 7.0))
                             .items_center()
-                            .child(self.combo_kind(kind_text, kinds, cx))
-                            .child(self.combo_dir(dir_text, cx))
-                            .child({
-                                let (cc, ct) = self.default_target(store, cores);
-                                self.create_dropdown(cc, ct, cx)
-                            }),
-                    )
-                    .child(
-                        h_flex().w_full().items_center().justify_end().child(
-                            MoonButton::new("expand-all")
-                                .ghost()
-                                .size(MoonButtonSize::Micro)
-                                .leading_icon(MoonButtonIconSlot::caret(
-                                    MoonDisclosureDirection::DownUp,
-                                    !collapsed,
-                                ))
-                                .on_click({
-                                    let cores = cores_owned.clone();
-                                    cx.listener(move |this, _, _, cx| {
-                                        let store = this.backend.read(cx).session.store();
-                                        let coll = this.expanded_cores.is_empty()
-                                            && this.expanded_folders.is_empty();
-                                        // store borrow tied to cx; clone cores for &-call.
-                                        let cores_v = cores.as_ref().clone();
-                                        this.expand_collapse_toggle(&cores_v, store, coll);
-                                        cx.notify();
+                            .justify_between()
+                            .child(
+                                h_flex()
+                                    .min_w_0()
+                                    .gap(design::ui_px(cx, 7.0))
+                                    .items_center()
+                                    .child(self.combo_kind(kind_text, kinds, cx))
+                                    .child(self.combo_dir(dir_text, cx))
+                                    .child({
+                                        let (cc, ct) = self.default_target(store, cores);
+                                        self.create_dropdown(cc, ct, cx)
+                                    }),
+                            )
+                            .child(
+                                MoonButton::new("expand-all")
+                                    .ghost()
+                                    .size(MoonButtonSize::Micro)
+                                    .leading_icon(MoonButtonIconSlot::caret(
+                                        MoonDisclosureDirection::DownUp,
+                                        !collapsed,
+                                    ))
+                                    .on_click({
+                                        let cores = cores_owned.clone();
+                                        cx.listener(move |this, _, _, cx| {
+                                            let store = this.backend.read(cx).session.store();
+                                            let coll = this.expanded_cores.is_empty()
+                                                && this.expanded_folders.is_empty();
+                                            // store borrow tied to cx; clone cores for &-call.
+                                            let cores_v = cores.as_ref().clone();
+                                            this.expand_collapse_toggle(&cores_v, store, coll);
+                                            cx.notify();
+                                        })
                                     })
-                                })
-                                .render(),
-                        ),
+                                    .render(),
+                            ),
                     ),
             )
             .child(div().w_full().h(px(1.0)).bg(border))
@@ -211,8 +216,8 @@ impl StrategiesView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(80.0)
-            .menu_width_scaled(120.0)
+            .trigger_width_scaled(128.0)
+            .menu_width_scaled(140.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
             .into_any_element()
