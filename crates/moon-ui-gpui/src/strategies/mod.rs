@@ -125,7 +125,8 @@ pub struct StrategiesView {
     /// Reserving them prevents rapid pastes from reading one store snapshot and generating the same
     /// name repeatedly. A reservation is cleared once the name appears in the store.
     pending_names: HashSet<(CoreId, String)>,
-    /// Click-selected folder used for highlighting and whole-folder Ctrl+C copying as in Moonbot.
+    /// Click-selected folder or core root used for highlighting and subtree Ctrl+C copying.
+    /// An empty path identifies the selected core root without erasing a stale strategy selection.
     selected_folder: Option<(CoreId, String)>,
     /// Empty UI folders before their first strategy is added, keyed by core and slash-separated path.
     ui_folders: HashSet<(CoreId, String)>,
@@ -175,7 +176,7 @@ impl Render for StrategiesView {
         let queued = self.pending_scroll.take();
         let goto = direct.or(queued);
 
-        // Root nodes are connected cores in canonical order.
+        // Exchange sections consume connected cores in canonical order.
         let cores = {
             let b = self.backend.read(cx);
             visible_strategy_cores(self, b)
@@ -188,8 +189,10 @@ impl Render for StrategiesView {
         // account. `tree::cache` owns the signature and the argument for why it is complete.
         let tree_timer = crate::diag::timer();
         let sig = {
-            let store = self.backend.read(cx).session.store();
-            tree::cache::data_sig(self, store, &cores)
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            let venues = backend.session.core_venues();
+            tree::cache::data_sig(self, store, &cores, venues)
         };
         let cached = self.tree_cache.as_ref().and_then(|c| c.get(sig));
         let node_data = match cached {
@@ -211,8 +214,10 @@ impl Render for StrategiesView {
                     }
                 }
                 let build = {
-                    let store = self.backend.read(cx).session.store();
-                    tree::moon::build(self, store, &cores)
+                    let backend = self.backend.read(cx);
+                    let store = backend.session.store();
+                    let venues = backend.session.core_venues();
+                    tree::moon::build(self, store, &cores, venues)
                 };
                 crate::diag::bump_by(&crate::diag::STRAT_TREE_NODES, build.node_data.len() as u64);
                 let searching = build.searching;

@@ -32,7 +32,6 @@ const AUTO_PANEL_ORDER: &[&str] = &[
     "Assets",
     "CoreStatus",
     "Log",
-    "Alerts",
     "Detects",
 ];
 
@@ -43,9 +42,19 @@ const AUTO_WORKSPACE_TAB_NAMES: &[&str] = &[
     "Assets",
     "CoreStatus",
     "Log",
-    "Alerts",
     "Detects",
 ];
+
+/// Stable panel names retained exclusively for the Classic workspace.
+const AUTO_CLASSIC_ONLY_PANEL_NAMES: &[&str] = &["News", "Alerts"];
+
+/// Return the complete stable-name policy for panels unavailable in Auto.
+///
+/// Returns:
+///     Classic-only panel names shared by dock extraction, detached exclusion, and tests.
+fn auto_classic_only_panel_names() -> &'static [&'static str] {
+    AUTO_CLASSIC_ONLY_PANEL_NAMES
+}
 
 /// Return whether a stable panel name is eligible for Auto top-tab persistence.
 ///
@@ -53,7 +62,7 @@ const AUTO_WORKSPACE_TAB_NAMES: &[&str] = &[
 ///     panel_name: Stable dock panel name emitted by MoonUI.
 ///
 /// Returns:
-///     `true` for top operational surfaces; Orders and Classic-only News are excluded.
+///     `true` for top operational surfaces; Orders and both Classic-only panels are excluded.
 pub(super) fn auto_workspace_tab_is_eligible(panel_name: &str) -> bool {
     AUTO_WORKSPACE_TAB_NAMES.contains(&panel_name)
 }
@@ -167,7 +176,9 @@ fn auto_only_detached_panel_names(
     detached
         .iter()
         .filter(|spec| {
-            spec.group == group && spec.panel != "News" && accounted.insert(spec.panel.clone())
+            spec.group == group
+                && !auto_classic_only_panel_names().contains(&spec.panel.as_str())
+                && accounted.insert(spec.panel.clone())
         })
         .map(|spec| spec.panel.clone())
         .collect()
@@ -510,8 +521,13 @@ impl Shell {
                     resolved_auto_workspace_tab(backend.auto_workspace_tab(&self.group)).to_string()
                 };
                 let guard_generation = self.begin_auto_topology_application();
-                let classic_news = self.dock.update(cx, |dock, dock_cx| {
-                    let classic_news = dock.take_panel_by_name("News", window, dock_cx);
+                let classic_only_panels = self.dock.update(cx, |dock, dock_cx| {
+                    let classic_only_panels = auto_classic_only_panel_names()
+                        .iter()
+                        .filter_map(|panel_name| {
+                            dock.take_panel_by_name(panel_name, window, dock_cx)
+                        })
+                        .collect::<Vec<_>>();
                     dock.set_layout_editable(true, dock_cx);
                     dock.set_detach_allowed(false, dock_cx);
                     dock.set_close_allowed(false, dock_cx);
@@ -526,7 +542,7 @@ impl Shell {
                     if let Some(fallback) = auto_workspace_activation_fallback(activated) {
                         dock.activate_panel_by_name(fallback, window, dock_cx);
                     }
-                    classic_news
+                    classic_only_panels
                 });
                 let actual = self.dock.read(cx).topology_by_name(cx);
                 self.backend.update(cx, |backend, backend_cx| {
@@ -538,7 +554,7 @@ impl Shell {
                 });
                 crate::window::windowing::close_all(suspended, cx);
                 self.classic_dock_layout = Some(classic);
-                self.classic_only_panels = classic_news.into_iter().collect();
+                self.classic_only_panels = classic_only_panels;
                 self.auto_only_panels = auto_only_panels;
                 self.header_core_selector_open = false;
                 self.applied_workspace_mode = WorkspaceMode::AutoTrading;
@@ -792,7 +808,14 @@ impl Shell {
                     .text_color(rgb(p.text_soft))
                     .border_b_1()
                     .border_color(rgb(p.border_soft))
-                    .child(div().flex_1().min_w_0().truncate().child(summary_text))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .flex()
+                            .justify_center()
+                            .child(div().min_w_0().truncate().text_center().child(summary_text)),
+                    )
                     .tooltip(move |_window, cx| {
                         cx.new(|_| MoonTooltipView::new(summary.clone())).into()
                     }),
@@ -871,8 +894,15 @@ fn render_rail_item(
                 .font_weight(FontWeight::SEMIBOLD)
                 .border_b_1()
                 .border_color(rgb(p.border_soft))
-                .child(design::status_dot_sized(p.accent, 7.0, cx))
-                .child(div().min_w_0().truncate().child(visible))
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .justify_center()
+                        .gap(design::ui_px(cx, 7.0))
+                        .child(design::status_dot_sized(p.accent, 7.0, cx))
+                        .child(div().min_w_0().truncate().child(visible)),
+                )
                 .tooltip(move |_window, cx| {
                     cx.new(|_| MoonTooltipView::new(tooltip.clone())).into()
                 })

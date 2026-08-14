@@ -3,7 +3,7 @@
 use moon_core::feed::StrategyRow;
 use moon_core::session::CoreId;
 
-use super::{keep_ui_folder, resolve_paste_target};
+use super::{footer_labels_fit, keep_ui_folder, resolve_paste_target};
 
 /// The source file, read at COMPILE time so the guard below cannot drift from it.
 const SRC: &str = include_str!("../ui.rs");
@@ -124,4 +124,28 @@ fn strategy_snapshot_changes_reconcile_ui_only_folders() {
         state_code.contains("this.reconcile_ui_folders(b.session.store());"),
         "the live snapshot observer must retire newly occupied UI-only folders"
     );
+}
+
+/// `tree/ui.rs:footer_labels_fit`: changing the inclusive threshold would either hide all labels
+/// at the exact fitting width or show a mixed/clipped footer one pixel below its full requirement.
+#[test]
+fn footer_labels_switch_atomically_at_the_inclusive_boundary() {
+    let fixed_chrome = 40.0;
+    let buttons_and_staged_label = 60.0;
+
+    assert!(!footer_labels_fit(
+        99.0,
+        fixed_chrome,
+        buttons_and_staged_label
+    ));
+    assert!(footer_labels_fit(
+        100.0,
+        fixed_chrome,
+        buttons_and_staged_label
+    ));
+    assert!(footer_labels_fit(
+        101.0,
+        fixed_chrome,
+        buttons_and_staged_label
+    ));
 }

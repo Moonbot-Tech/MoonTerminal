@@ -875,28 +875,95 @@ fn toolbar_budget_includes_every_singleton_launcher() {
     assert!(toolbar.contains("crate::analytics::profit_monitor::open"));
 }
 
-/// `controls/toolbar.rs:toolbar` must place a divider between Screener and Profit Monitor. Removing
-/// that one rule merges operational tools with the two analytics launchers even though all five
-/// buttons and their width budget remain present.
+/// `controls/toolbar.rs:toolbar` must retain the requested launcher order and the two
+/// semantic dividers: after Screener, then after Analytics. Moving any launcher or divider
+/// changes the operator's stable target sequence even though every destination still opens.
 #[test]
-fn toolbar_separates_operational_and_analytics_launchers() {
+fn toolbar_orders_launchers_around_one_semantic_divider() {
     let text = read_src("controls/toolbar.rs");
     let toolbar = code_only(fn_body(&text, "pub fn toolbar("));
-    let screener = toolbar
-        .find("\"toolbar-screener\"")
-        .expect("Screener launcher must remain present");
-    let monitor = toolbar
-        .find("\"toolbar-profit-monitor\"")
-        .expect("Profit Monitor launcher must remain present");
+    let ids = [
+        "toolbar-profit-monitor",
+        "toolbar-screener",
+        "toolbar-strategies",
+        "toolbar-analytics",
+        "toolbar-settings",
+    ];
+    let positions = ids.map(|id| {
+        toolbar
+            .find(&format!("\"{id}\""))
+            .unwrap_or_else(|| panic!("{id} launcher must remain present"))
+    });
 
     assert!(
-        screener < monitor,
-        "Screener must remain left of Profit Monitor"
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "launcher order must be Profit Monitor, Screener, Strategies, Analytics, Settings"
+    );
+    let between_first_and_last = &toolbar[positions[0]..positions[4]];
+    assert!(
+        !toolbar[positions[0]..positions[1]].contains(".child(design::chrome_divider(cx, p))"),
+        "Profit Monitor and Screener must share the leading launcher section"
     );
     assert!(
-        toolbar[screener..monitor].contains(".child(design::chrome_divider(cx, p))"),
-        "Screener and Profit Monitor must sit in separate chrome sections"
+        !toolbar[positions[2]..positions[3]].contains(".child(design::chrome_divider(cx, p))"),
+        "Strategies and Analytics must share one section"
     );
+    assert_eq!(
+        between_first_and_last
+            .matches(".child(design::chrome_divider(cx, p))")
+            .count(),
+        2,
+        "the trailing cluster must contain two internal dividers"
+    );
+    assert!(
+        toolbar[positions[1]..positions[2]].contains(".child(design::chrome_divider(cx, p))"),
+        "the first trailing divider must sit between Screener and Strategies"
+    );
+    assert!(
+        toolbar[positions[3]..positions[4]].contains(".child(design::chrome_divider(cx, p))"),
+        "the second trailing divider must sit between Analytics and Settings"
+    );
+}
+
+/// `controls/toolbar.rs:row_fit` must derive all three optional launcher widths from their live
+/// localized labels, while `open_window_button` must emit either the whole label or only a tooltip.
+/// Reintroducing a fixed width or an always-present text segment clips translations at font scale.
+#[test]
+fn toolbar_launcher_labels_are_measured_and_all_or_none() {
+    let text = read_src("controls/toolbar.rs");
+    let fit = fn_body(&text, "fn row_fit(");
+    let measure = fn_body(&text, "fn launcher_label_width(");
+    let toolbar = fn_body(&text, "pub fn toolbar(");
+    let button = fn_body(&text, "fn open_window_button(");
+
+    assert!(measure.contains("design::ui_text_width("));
+    assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_SIZE"));
+    assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_WEIGHT"));
+    assert!(
+        measure.contains("true,"),
+        "launcher widths must use the monospaced family inherited from the Shell root"
+    );
+    assert!(measure.contains(".max(ICON_BTN_W)"));
+    for (label, width) in [
+        ("analytics_label", "fit.analytics_width"),
+        ("strategies_label", "fit.strategies_width"),
+        ("settings_label", "fit.settings_width"),
+    ] {
+        assert!(
+            fit.contains(&format!("launcher_label_width(cx, {label})")),
+            "row_fit must measure {label}"
+        );
+        assert!(
+            toolbar.contains(width),
+            "toolbar must pass {width} to open_window_button"
+        );
+    }
+    assert!(!text.contains("SETTINGS_BTN_W"));
+    assert!(measure.contains("TOOLBAR_LAUNCHER_PAD_X"));
+    assert!(button.contains("if labeled_width.is_some()"));
+    assert!(button.contains("padding_x(TOOLBAR_LAUNCHER_PAD_X)"));
+    assert!(button.contains("btn.text_segment(label") || button.contains(".text_segment(label"));
+    assert!(button.contains("btn.tooltip(label)"));
 }
 
 /// `core_status/table.rs:core_status_row`, `server_view.rs:server_row` and `core_row` must keep

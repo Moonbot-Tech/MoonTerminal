@@ -189,8 +189,8 @@ fn invalid_auto_dock_waits_for_an_explicit_user_topology_change() {
     );
 }
 
-/// Removing the live Classic name set from Auto temporary-panel construction must fail: stale
-/// `docks.json` plus `detached.json` would resolve two local panel identities under one name.
+/// Removing the shared Classic-only helper from Auto temporary-panel construction must fail: stale
+/// detached News or Alerts state would recreate a second local identity inside Auto.
 #[test]
 fn live_classic_panel_names_outrank_stale_detached_records_in_auto() {
     let workspace = code_only(&read_src("shell/workspace.rs"));
@@ -200,9 +200,9 @@ fn live_classic_panel_names_outrank_stale_detached_records_in_auto() {
     assert!(
         names.contains("classic_panel_names.iter().cloned().collect::<HashSet<_>>()")
             && names.contains("spec.group == group")
-            && names.contains("spec.panel != \"News\"")
+            && names.contains("!auto_classic_only_panel_names().contains(&spec.panel.as_str())")
             && names.contains("accounted.insert(spec.panel.clone())"),
-        "temporary Auto panels must exclude names already owned by the live Classic dock"
+        "temporary Auto panels must exclude both shared Classic-only names and live dock names"
     );
     assert!(
         apply.contains("let classic_panel_names = classic.panel_names();")

@@ -112,8 +112,8 @@ fn auto_and_classic_persist_to_separate_layout_authorities() {
 }
 
 /// Catches relocking the Auto dock, allowing detach/close, or moving Charts back among the
-/// operational tabs in `shell/workspace.rs`; Auto must stay modular inside the main window while
-/// keeping every operational surface except Classic-only News and pinning Charts first.
+/// operational tabs in `shell/workspace.rs`; Auto must keep both Classic-only surfaces out while
+/// preserving their exact instances and pinning Charts first.
 #[test]
 fn auto_dock_is_modular_attached_and_charts_first() {
     let workspace = code_only(&read_src("shell/workspace.rs"));
@@ -132,9 +132,10 @@ fn auto_dock_is_modular_attached_and_charts_first() {
     assert!(
         mode.contains("dock.set_detach_allowed(true, dock_cx)")
             && mode.contains("dock.set_close_allowed(true, dock_cx)")
-            && mode.contains("dock.take_panel_by_name(\"News\", window, dock_cx)")
+            && mode.contains("auto_classic_only_panel_names()")
+            && mode.contains("dock.take_panel_by_name(panel_name, window, dock_cx)")
             && mode.contains("self.classic_only_panels.clone()"),
-        "Auto must suspend docked News while Classic restores that exact retained identity"
+        "Auto must suspend both Classic-only panels while Classic restores their exact identities"
     );
 
     let order = workspace
@@ -148,8 +149,20 @@ fn auto_dock_is_modular_attached_and_charts_first() {
         "Charts must be the strict first Auto tab before operational panels"
     );
     assert!(
-        !order.contains("\"News\"") && order.contains("\"Detects\""),
-        "every operational Auto surface except Classic-only News must remain available"
+        !order.contains("\"News\"")
+            && !order.contains("\"Alerts\"")
+            && order.contains("\"Detects\""),
+        "neither Classic-only surface may enter the first-run Auto seed"
+    );
+    let take = mode
+        .find("dock.take_panel_by_name(panel_name, window, dock_cx)")
+        .expect("Auto must extract every Classic-only live identity");
+    let apply = mode
+        .find("dock.apply_topology_by_name(")
+        .expect("Auto must apply its saved or default topology");
+    assert!(
+        take < apply,
+        "an old topology naming Alerts must not recreate Figures after exact identities are removed"
     );
     let preset = code_only(braced_body(
         &workspace,
@@ -390,6 +403,48 @@ fn workspace_navigation_uses_the_shared_virtual_rail_and_owner_action() {
             && execute.contains("backend.group_windows.get(&group).copied()")
             && execute.contains("window.activate_window()"),
         "rail dispatch must revalidate its captured owner before selecting or activating a window"
+    );
+}
+
+/// Removing the full-width centered summary wrapper or the Overview content group must fail: the
+/// two high-level choices would return to left alignment or lose symmetric truncation at narrow widths.
+#[test]
+fn auto_rail_centers_only_the_summary_and_overview_content() {
+    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let rail = braced_body(&workspace, "fn workspace_rail(")
+        .split_whitespace()
+        .collect::<String>();
+    let summary_group = rail
+        .find(".child(div().w_full().min_w_0().flex().justify_center()")
+        .expect("the summary must own a full-width centered group");
+    let summary_label = rail
+        .find("div().min_w_0().truncate().text_center().child(summary_text)")
+        .expect("the summary label must truncate symmetrically");
+    assert!(summary_group < summary_label);
+
+    let render = braced_body(&workspace, "fn render_rail_item(")
+        .split_whitespace()
+        .collect::<String>();
+    let overview = render
+        .split("RailItem::Overview{selected}=>")
+        .nth(1)
+        .and_then(|tail| tail.split("RailItem::Exchange").next())
+        .expect("Overview must remain a bounded rail-item arm");
+    let overview_group = overview
+        .find("h_flex().flex_1().min_w_0().justify_center().gap(design::ui_px(cx,7.0))")
+        .expect("Overview must own one centered flexing group");
+    let overview_dot = overview
+        .find("design::status_dot_sized(p.accent,7.0,cx)")
+        .expect("the centered Overview group must retain its status dot");
+    let overview_label = overview
+        .find("div().min_w_0().truncate().child(visible)")
+        .expect("the centered Overview group must retain its truncating density label");
+    assert!(overview_group < overview_dot && overview_dot < overview_label);
+    assert!(
+        overview.contains("rail_row_base(\"workspace-overview\",selected,true")
+            && overview.contains(".on_click(")
+            && !overview.contains(".justify_center().on_click("),
+        "selected background and click authority must stay on the full Overview row"
     );
 }
 

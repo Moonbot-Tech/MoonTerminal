@@ -402,12 +402,133 @@ fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
         "the subtree must be built inside the open-core branch"
     );
     assert!(
-        !open_only.contains("NodeData::Core") && !open_only.contains("items.push("),
+        !open_only.contains("NodeData::Core") && !open_only.contains("section_children.push("),
         "the core's own row must be emitted OUTSIDE that branch, or every collapsed core vanishes"
     );
     assert!(
-        body.contains("NodeData::Core") && body.contains("items.push("),
+        body.contains("NodeData::Core") && body.contains("section_children.push("),
         "every listed core must emit its own row, pruned or not"
+    );
+}
+
+/// Exchange headings must follow canonical venue identity and disappear when filtering removes
+/// their last core; grouping by reported captions would split one venue and stale cache input would
+/// keep an old heading until an unrelated tree action occurred.
+#[test]
+fn strategy_tree_groups_visible_cores_by_venue_identity() {
+    let window = read_src("strategies/mod.rs");
+    let render = code_only(braced_body(
+        &window,
+        "fn render(&mut self, window: &mut Window",
+    ));
+    assert!(render.contains("session.core_venues()"));
+    assert!(
+        render.contains("tree::cache::data_sig(self, store, &cores, venues)")
+            && render.contains("tree::moon::build(self, store, &cores, venues)"),
+        "render must pass the same canonical venue map into cache invalidation and tree building"
+    );
+
+    let tree = read_src("strategies/tree/moon.rs");
+    let build = code_only(braced_body(&tree, "pub(crate) fn build("));
+    assert!(build.contains("crate::core_order::exchange_sections("));
+    assert!(build.contains("crate::controls::venue_section_label("));
+    assert!(build.contains("section_children.is_empty()"));
+    assert!(
+        build.contains(".folder(false)") && build.contains(".disabled(true)"),
+        "exchange headings must expose children without becoming selectable/collapsible folders"
+    );
+    assert!(!build.contains(".reported ==") && !build.contains(".reported.cmp("));
+    let id = code_only(braced_body(&tree, "fn id_exchange("));
+    assert!(id.contains("venue.id.code") && id.contains("venue.id.dex"));
+    assert!(id.contains("x:unknown"));
+    let drop_dest = code_only(braced_body(&tree, "fn drop_dest("));
+    assert!(drop_dest.contains("NodeData::Exchange") && drop_dest.contains("=> None"));
+    let row = code_only(braced_body(&tree, "fn render_row("));
+    assert!(row.contains("NodeData::Exchange") && row.contains("exchange_row("));
+
+    let cache = read_src("strategies/tree/cache.rs");
+    let sig = code_only(braced_body(&cache, "pub(crate) fn data_sig("));
+    assert!(sig.contains("venues_digest("));
+}
+
+/// Raw shortcuts belong only to the focused Strategies tree, and both keyboard and footer Copy
+/// must prefer the last clicked folder/core over a stale strategy selection.
+#[test]
+fn strategy_tree_shortcuts_require_exact_focus_and_share_copy_dispatch() {
+    let window = read_src("strategies/mod.rs");
+    assert_eq!(window.matches(".on_key_down(").count(), 1);
+
+    let ui = read_src("strategies/tree/ui.rs");
+    let keys = code_only(braced_body(&ui, "pub(crate) fn handle_tree_key("));
+    let guard = keys
+        .find("!self.focus.is_focused(window)")
+        .expect("the tree shortcut handler must guard exact focus");
+    let dispatch = keys
+        .find("copy_tree_target(")
+        .expect("Ctrl+C must use the shared folder-first dispatcher");
+    assert!(guard < dispatch);
+    let copy = code_only(braced_body(&ui, "fn copy_tree_target("));
+    assert!(copy.find("selected_folder(self)") < copy.find("copy_selection(cx)"));
+    let toolbar = code_only(braced_body(&ui, "pub(super) fn selection_toolbar("));
+    assert!(toolbar.contains("copy_tree_target(") && toolbar.contains("disabled(!can_copy)"));
+    assert!(toolbar.contains("default_target(") && toolbar.contains("paste_into("));
+
+    let tree = read_src("strategies/tree/moon.rs");
+    let core_folder = code_only(braced_body(&tree, "fn core_folder_row("));
+    assert!(core_folder.contains("window.focus(&this.focus, cx)"));
+    assert!(core_folder.contains("Some((*c, String::new()))"));
+    let strategy = code_only(braced_body(&tree, "fn strategy_row("));
+    assert!(strategy.contains("window.focus(&this.focus, cx)"));
+}
+
+/// A selected folder must keep its amber surface under the pointer; restoring an unconditional
+/// neutral hover makes the row appear unselected until the pointer leaves.
+#[test]
+fn selected_folder_hover_does_not_replace_its_surface() {
+    let tree = read_src("strategies/tree/moon.rs");
+    let row = code_only(braced_body(&tree, "fn core_folder_row("));
+    assert!(row.contains(".when(selected,"));
+    assert!(
+        row.contains(".when(!selected,") && row.contains("s.hover("),
+        "neutral hover must be installed only for an unselected folder row"
+    );
+    assert!(!row.contains(".when(selected, |s| s.bg(") || !row.contains("\n.hover("));
+}
+
+/// The footer must be one Action-size row whose five labels collapse together after measuring the
+/// current locale and staged text; restoring either old v-flex stack recreates the cramped layout.
+#[test]
+fn strategy_footer_is_one_atomic_action_row() {
+    let tree = read_src("strategies/tree/mod.rs");
+    let action = code_only(braced_body(&tree, "fn action_bar("));
+    assert!(!action.contains("v_flex()") && !action.contains("MoonButtonSize::Micro"));
+    assert!(
+        action.contains("let show_labels") && action.contains("ui::footer_labels_fit("),
+        "action_bar must compute one shared footer-density decision"
+    );
+    assert!(action.contains("self.panels.tree_w") && action.contains("design::ui_text_width("));
+    assert!(action.contains("staged_label") && action.contains("design::chrome_divider("));
+    assert!(action.contains("selection_toolbar(store, show_labels, cx)"));
+    for icon in ["icons/play.svg", "icons/pause.svg"] {
+        assert!(action.contains(icon), "missing {icon}");
+    }
+    assert!(action.matches(".tooltip(").count() >= 2);
+    assert!(action.find("start-checked") < action.find("stop-checked"));
+
+    let ui = read_src("strategies/tree/ui.rs");
+    let selection = code_only(braced_body(&ui, "pub(super) fn selection_toolbar("));
+    assert!(!selection.contains("v_flex()"));
+    assert!(!selection.contains("176.0") && !selection.contains("MoonButtonSize::Micro"));
+    assert!(selection.matches("MoonButtonSize::Action").count() >= 3);
+    for icon in ["icons/copy.svg", "icons/inbox.svg", "icons/delete.svg"] {
+        assert!(selection.contains(icon), "missing {icon}");
+    }
+    assert!(selection.matches(".tooltip(").count() >= 3);
+    assert!(selection.find("sel-copy") < selection.find("sel-paste"));
+    assert!(selection.find("sel-paste") < selection.find("sel-delete"));
+    assert!(
+        action.contains(".padding_x(7.0)") && selection.contains(".padding_x(7.0)"),
+        "labeled Action footer buttons must keep text off the border"
     );
 }
 

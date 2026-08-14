@@ -73,11 +73,12 @@ Classic keeps a separate local `DockNamedLayout` containing stable-name topology
 zoom, and split-size metadata. It does not hold opaque panel `Rc` identities; ordinary exact
 identities remain in the live `DockArea` while the name-only layout changes. Auto's entry tab is
 instead the per-group `auto_workspace_tab_by_group` preference in `layout.toml`. Eligible names are
-`ChartTabs`, `Report`, `Assets`, `CoreStatus`, `Log`, `Alerts` (the Figures tab), and `Detects`;
-the lower `Orders` surface and Classic-only `News` are ineligible. Missing or stale values,
-including `News`, fall back to `Report` without rewriting the stored value merely because fallback
-was used. A real user activation, drag activation, or programmatic `ChartTabs` reveal updates the
-preference. Programmatic mode/topology application keeps its guard active through deferred
+`ChartTabs`, `Report`, `Assets`, `CoreStatus`, `Log`, and `Detects`; the lower `Orders` surface and
+Classic-only `News` and `Alerts` (the Figures tab) are ineligible. Missing or stale values,
+including either Classic-only name, fall back to `Report` without rewriting the stored value merely
+because fallback was used. A real user activation, drag activation, or programmatic `ChartTabs`
+reveal updates the preference. Programmatic mode/topology application keeps its guard active
+through deferred
 Dock-event delivery, preventing its `PanelActivated` and `LayoutChanged` events from becoming
 either a tab preference or a shared-topology edit.
 
@@ -104,22 +105,22 @@ of height. The saved eligible group tab is activated after the preset is install
 when no valid preference exists. The first user reorder/split/resize replaces the preset with the
 shared topology for every Auto window; Classic topology is neither read nor changed.
 
-On Auto entry, the full Classic named layout remains local Shell runtime state. Every docked `News`
-occurrence is removed before the shared topology is applied, so `News` stays absent even when an
-older valid `auto_dock.json` names it; Shell holds the first exact docked identity in
-`Shell::classic_only_panels`. Returning to Classic supplies that identity while applying the saved
-name-only `DockNamedLayout`, restoring active, zoom, sizes, placement, and local view state. Classic
-panels already detached are temporarily closed without deleting their specs/geometry and normally
-receive Auto-only dock instances, but detached `News` is excluded so Auto never creates a
-duplicate. Closing a previously detached owned panel first removes its exact live handle, then
-notifies Shell so Auto can restore the tab without a mode change. On Classic return, temporary
-instances are removed and detached windows respawn from their original specs after a real timer
-yield and renewed mode/ownership/shutdown checks.
+On Auto entry, the full Classic named layout remains local Shell runtime state. Each docked
+Classic-only `News` or `Alerts` panel is removed before the shared topology is applied, so neither
+name appears even when a stale valid `auto_dock.json` names it; Shell keeps the exact docked
+identities in `Shell::classic_only_panels`. Returning to Classic supplies those identities while
+applying the saved name-only `DockNamedLayout`, restoring active, zoom, sizes, placement, and local
+view state. Classic panels already detached are temporarily closed without deleting their
+specs/geometry and normally receive Auto-only dock instances, but detached `News` and `Alerts` are
+excluded so Auto never creates duplicates. Closing a previously detached owned panel first removes
+its exact live handle, then notifies Shell so Auto can restore the tab without a mode change. On
+Classic return, temporary instances are removed and detached windows respawn from their original
+specs after a real timer yield and renewed mode/ownership/shutdown checks.
 
-Auto dock panels have no close buttons; every operational surface except `News` remains available
-for reorder/split/resize. Existing detached chart windows remain open, but Auto cannot create new
-ones. `docks.json` and `detached.json` remain exclusively Classic authorities and Auto events never
-rewrite them.
+Auto dock panels have no close buttons; every operational surface except the Classic-only `News`
+and `Alerts` panels remains available for reorder/split/resize. Existing detached chart windows
+remain open, but Auto cannot create new ones. `docks.json` and `detached.json` remain exclusively
+Classic authorities and Auto events never rewrite them.
 
 Существующий detached chart может оставаться на другом мониторе как контекст, но каждое его
 торговое действие и переход на Main повторно проверяет актуальный rail-scope группы. График старого

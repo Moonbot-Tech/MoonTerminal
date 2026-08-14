@@ -236,9 +236,10 @@ IDs, panel payload, active tabs, zoom, or `Rc`s between windows.
 
 Auto entry selection is a third, deliberately narrow authority. `auto_workspace_tab_by_group` in
 `layout.toml` remembers the last activated eligible top surface per group: `ChartTabs`, `Report`,
-`Assets`, `CoreStatus`, `Log`, `Alerts`, or `Detects`. `Orders` is the separate lower surface and
-`News` is Classic-only. Missing, unknown, or stale `News` values resolve to `Report` without being
-rewritten merely because fallback was needed. Real Auto activations, including a programmatic
+`Assets`, `CoreStatus`, `Log`, or `Detects`. `Orders` is the separate lower surface; `News` and
+`Alerts` (the Figures tab) are Classic-only. Missing, unknown, or stale Classic-only values resolve
+to `Report` without rewriting the stored value merely because fallback was needed. Real Auto
+activations, including a programmatic
 `ChartTabs` reveal, update this preference; Classic activity remains in its retained
 `DockNamedLayout` and `docks.json`. During mode or shared-topology application, Shell holds its
 suppression guard until a deferred callback runs after queued Dock events, so programmatic
@@ -254,14 +255,15 @@ preset with the shared topology; the Classic layout never participates in that u
 Auto permits reorder, split, and resize. `ChartTabs` is pinned first, visually separated from the
 operational tabs, and cannot be moved or bypassed by a drop. Ordinary panel close/detach and chart
 detach remain disabled independently of structural editing. Auto contains every operational
-surface except `News`. Before applying even a stale topology that names `News`, Shell extracts every
-docked `News` occurrence and holds the first exact identity in `Shell::classic_only_panels`;
-therefore the name is absent from Auto and cannot be resurrected by the shared topology. Returning
-to Classic supplies that retained identity while applying the saved name-only `DockNamedLayout`,
-restoring its selection, zoom, split placement, and local view state. Classic detached panel specs
-and geometry are preserved while Auto is active, but detached `News` is specifically excluded from
-temporary Auto-only panel construction, so no dock clone appears. Existing detached chart windows
-remain open. Auto never writes any of this Classic state to `docks.json`.
+surface except the Classic-only `News` and `Alerts` panels. Before applying even a stale topology
+that names either panel, Shell extracts each docked Classic-only panel and retains its exact
+identity in `Shell::classic_only_panels`; neither name can therefore be recreated by shared Auto
+topology. Returning to Classic supplies those retained identities while applying the saved
+name-only `DockNamedLayout`, restoring selection, zoom, split placement, and local view state.
+Classic detached panel specs and geometry are preserved while Auto is active, but detached `News`
+and `Alerts` are excluded from temporary Auto-only panel construction, so no dock clone appears.
+Existing detached chart windows remain open. Auto never writes any of this Classic state to
+`docks.json`.
 
 The Auto rail and `DockArea` use the standard `MoonResizablePanelGroup`. Backend publishes and
 persists one draggable global rail width, while each window applies its own fit clamp without

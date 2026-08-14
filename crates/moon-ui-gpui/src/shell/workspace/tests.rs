@@ -16,10 +16,11 @@ use super::{
     auto_workspace_topology_is_persistable, defer_auto_topology_guard_release,
 };
 use super::{
-    RailItem, append_core_section_items, auto_only_detached_panel_names,
-    auto_workspace_activation_fallback, auto_workspace_tab_is_eligible, core_rail_metrics,
-    default_auto_workspace_topology, fitted_auto_rail_width, icon_workspace_summary,
-    resolved_auto_workspace_tab, workspace_status_label_visible,
+    RailItem, append_core_section_items, auto_classic_only_panel_names,
+    auto_only_detached_panel_names, auto_workspace_activation_fallback,
+    auto_workspace_tab_is_eligible, core_rail_metrics, default_auto_workspace_topology,
+    fitted_auto_rail_width, icon_workspace_summary, resolved_auto_workspace_tab,
+    workspace_status_label_visible,
 };
 use crate::window::detached::DetachedSpec;
 
@@ -208,34 +209,44 @@ fn saved_auto_topology_and_tab_preference_are_applied_independently() {
     assert!(!auto_branch.contains("is_default_topology"));
 }
 
-/// Accepting Orders or News in `auto_workspace_tab_is_eligible` must fail: Orders is the fixed
-/// lower surface and News belongs only to Classic, so either value would restore an unavailable
-/// or structurally unrelated Auto tab after restart.
+/// Removing Alerts from the Classic-only helper or accepting any excluded surface in
+/// `auto_workspace_tab_is_eligible` must fail: restart would restore an unavailable Auto tab.
 #[test]
 fn only_auto_top_strip_surfaces_are_persistable() {
+    let classic_only = auto_classic_only_panel_names()
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        classic_only,
+        std::collections::HashSet::from(["News", "Alerts"])
+    );
     for eligible in [
         "ChartTabs",
         "Report",
         "Assets",
         "CoreStatus",
         "Log",
-        "Alerts",
         "Detects",
     ] {
         assert!(auto_workspace_tab_is_eligible(eligible), "{eligible}");
     }
-    for ineligible in ["Orders", "News", "Unknown", ""] {
+    for ineligible in ["Orders", "Unknown", ""] {
+        assert!(!auto_workspace_tab_is_eligible(ineligible), "{ineligible}");
+    }
+    for ineligible in classic_only {
         assert!(!auto_workspace_tab_is_eligible(ineligible), "{ineligible}");
     }
 }
 
-/// Returning a stale saved News or unknown name from `resolved_auto_workspace_tab` must fail:
-/// Auto would attempt to reveal a suspended or missing panel instead of its deterministic Report
-/// fallback, while a valid saved choice must remain intact.
+/// Returning either stale Classic-only name from `resolved_auto_workspace_tab` must fail: Auto
+/// would reveal a suspended panel instead of Report, while a valid saved choice must remain intact.
 #[test]
 fn stale_auto_tab_values_fall_back_without_replacing_valid_choices() {
     assert_eq!(resolved_auto_workspace_tab(Some("Assets")), "Assets");
-    assert_eq!(resolved_auto_workspace_tab(Some("News")), "Report");
+    for panel_name in auto_classic_only_panel_names() {
+        assert_eq!(resolved_auto_workspace_tab(Some(panel_name)), "Report");
+    }
     assert_eq!(resolved_auto_workspace_tab(Some("future-panel")), "Report");
     assert_eq!(resolved_auto_workspace_tab(None), "Report");
 }
@@ -297,9 +308,12 @@ fn icon_summary_stays_bounded_for_two_hundred_cores() {
         .split("fn workspace_rail")
         .nth(1)
         .expect("workspace rail must retain a bounded implementation");
+    let rail = rail.split_whitespace().collect::<String>();
     assert!(
-        rail.contains("div().flex_1().min_w_0().truncate().child(summary_text)"),
-        "summary text must shrink and clip safely inside the 52 px rail"
+        rail.contains(
+            "div().w_full().min_w_0().flex().justify_center().child(div().min_w_0().truncate().text_center().child(summary_text)"
+        ),
+        "summary text must center across the rail and clip safely inside the 52 px density"
     );
 }
 
@@ -466,8 +480,8 @@ fn auto_panel_activation_has_a_narrow_guarded_persistence_path() {
     assert!(!setter.contains("publish_auto_workspace_layout_revision"));
 }
 
-/// Removing the Classic-name exclusion in `auto_only_detached_panel_names` must fail: independently
-/// debounced stale dock and detached records would create two Auto panel identities with one name.
+/// Removing either shared Classic-only exclusion in `auto_only_detached_panel_names` must fail:
+/// stale detached state would recreate News or Figures inside Auto with a second panel identity.
 #[test]
 fn live_classic_panel_name_outranks_a_stale_detached_record() {
     let classic = vec!["ChartTabs".to_string(), "Orders".to_string()];
@@ -476,6 +490,7 @@ fn live_classic_panel_name_outranks_a_stale_detached_record() {
         DetachedSpec::new("G1".to_string(), "Log".to_string()),
         DetachedSpec::new("G1".to_string(), "Log".to_string()),
         DetachedSpec::new("G1".to_string(), "News".to_string()),
+        DetachedSpec::new("G1".to_string(), "Alerts".to_string()),
         DetachedSpec::new("G2".to_string(), "Assets".to_string()),
     ];
 
@@ -486,33 +501,41 @@ fn live_classic_panel_name_outranks_a_stale_detached_record() {
     );
 }
 
-/// Rebuilding docked News or omitting `classic_only_panels` from Classic restoration must fail:
-/// the user's News selection, zoom, and local view state survive only when the exact `Rc` taken
-/// before Auto topology application is supplied back to the saved named layout.
+/// Rebuilding either docked Classic-only panel or omitting `classic_only_panels` from restoration
+/// must fail: selection, zoom, and local state survive only when each exact retained `Rc` returns.
 #[test]
-fn docked_news_is_taken_before_auto_and_the_same_retained_identity_restores_classic() {
+fn docked_classic_only_panels_are_taken_before_auto_and_restore_the_same_identities() {
     let source = include_str!("../workspace.rs");
     let mode = source
         .split("pub(super) fn apply_workspace_mode")
         .nth(1)
         .and_then(|tail| tail.split("fn sync_auto_dock_topology").next())
         .expect("workspace mode application must remain bounded");
+    let names = mode
+        .find("auto_classic_only_panel_names()")
+        .expect("Auto entry must iterate the shared Classic-only name helper");
     let take = mode
-        .find("dock.take_panel_by_name(\"News\"")
-        .expect("Auto entry must extract the exact docked News identity");
+        .find("dock.take_panel_by_name(panel_name, window, dock_cx)")
+        .expect("Auto entry must extract each exact docked Classic-only identity");
     let apply_auto = mode
         .find("dock.apply_topology_by_name(")
         .expect("Auto topology must still be applied");
     let retain = mode
-        .find("self.classic_only_panels = classic_news.into_iter().collect()")
-        .expect("the extracted identity must be retained by Shell");
+        .find("self.classic_only_panels = classic_only_panels")
+        .expect("the extracted identities must be retained by Shell");
     let restore = mode
         .find("self.classic_only_panels.clone()")
         .expect("Classic named-layout restoration must receive the retained identity");
     let clear = mode
         .rfind("self.classic_only_panels.clear()")
         .expect("retained identities must be released only after restoration");
-    assert!(take < apply_auto && apply_auto < retain && retain < restore && restore < clear);
+    assert!(
+        names < take
+            && take < apply_auto
+            && apply_auto < retain
+            && retain < restore
+            && restore < clear
+    );
 }
 
 /// Strip `//` line comments before a source-slicing assertion runs, so prose that merely NAMES a

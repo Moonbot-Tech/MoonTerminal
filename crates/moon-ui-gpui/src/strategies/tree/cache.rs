@@ -18,11 +18,13 @@
 //! sampled across the call site.
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use gpui::SharedString;
-use moon_core::session::CoreStore;
+use moon_core::session::{CoreId, CoreStore};
+use moon_core::venue::CoreVenue;
 
 use super::super::StrategiesView;
 use super::moon::NodeData;
@@ -82,9 +84,9 @@ impl TreeCache {
 ///
 /// The two halves are the store and the window's own state:
 ///
-///   * per core, in the order the window lists them: its id, its display name, `strategies_rev`
-///     (the strategy snapshot) and `orders_table_rev` (the open-order counts in core and strategy
-///     captions). A core appearing, disappearing or being renamed moves the core list itself.
+///   * per core, in the order the window lists them: its id, its display name, venue presence and
+///     identity/caption fields, `strategies_rev` (the strategy snapshot), and the rendered
+///     open-order digest. A core appearing, disappearing or being renamed moves the list itself.
 ///   * per window field: the filter, the three expansion sets, the UI-only folders, the selection,
 ///     the staged checkboxes, the selected folder, and the deleted-strategy revision.
 ///
@@ -99,6 +101,7 @@ impl TreeCache {
 ///     view: The window whose filter, expansion and selection state feeds the tree.
 ///     store: Per-core data behind the strategy rows.
 ///     cores: Connected cores in the canonical order the tree lists them.
+///     venues: Canonical session venue identities and captions used to group those cores.
 ///
 /// Returns:
 ///     A signature that changes whenever the rendered tree would.
@@ -106,9 +109,11 @@ pub(crate) fn data_sig(
     view: &StrategiesView,
     store: &CoreStore,
     cores: &crate::core_order::OrderedCores,
+    venues: &HashMap<CoreId, CoreVenue>,
 ) -> TreeSig {
     let mut h = DefaultHasher::new();
 
+    venues_digest(cores.iter().map(|(core, _)| (*core, venues.get(core)))).hash(&mut h);
     for (core_id, core_name) in cores.iter() {
         core_id.hash(&mut h);
         core_name.hash(&mut h);
@@ -145,6 +150,34 @@ pub(crate) fn data_sig(
         store: store_sig,
         view: h.finish(),
     }
+}
+
+/// Digest venue inputs in the same canonical core order used by the tree builder.
+///
+/// Presence is explicit so a core whose venue has not arrived cannot collide structurally with an
+/// identified venue. Identity controls grouping, while the raw DEX and reported caption control
+/// the shared section label for the venue kinds that require them.
+///
+/// Args:
+///     rows: Ordered `(core id, optional venue)` pairs from the visible core list.
+///
+/// Returns:
+///     Stable digest that moves whenever exchange grouping or its displayed caption can change.
+fn venues_digest<'a>(rows: impl IntoIterator<Item = (CoreId, Option<&'a CoreVenue>)>) -> u64 {
+    let mut h = DefaultHasher::new();
+    for (core, venue) in rows {
+        core.hash(&mut h);
+        match venue {
+            None => 0u8.hash(&mut h),
+            Some(venue) => {
+                1u8.hash(&mut h);
+                venue.id.hash(&mut h);
+                venue.dex.hash(&mut h);
+                venue.reported.hash(&mut h);
+            }
+        }
+    }
+    h.finish()
 }
 
 /// Digests exactly what the tree shows of a core's orders: how many are still open, and which

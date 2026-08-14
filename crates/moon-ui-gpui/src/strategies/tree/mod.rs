@@ -1,6 +1,6 @@
-//! Left pane of the Strategies window: a core -> folder -> strategy tree with search/kind/direction
-//! filters, staged checkboxes, and start/stop (Apply) buttons. These methods extend
-//! `StrategiesView`; state and pure helpers live in [`super`] and [`super::logic`].
+//! Left pane of the Strategies window: an exchange -> core -> folder -> strategy tree with
+//! search/kind/direction filters, staged checkboxes, and start/stop (Apply) buttons. These methods
+//! extend `StrategiesView`; state and pure helpers live in [`super`] and [`super::logic`].
 
 pub(crate) mod cache;
 pub(crate) mod dialogs;
@@ -225,8 +225,8 @@ impl StrategiesView {
 
     /// Render the bottom action bar.
     ///
-    /// The selection group is on the LEFT with copy/paste and a full-width delete button below;
-    /// stacked Start Checked/Stop Checked actions are on the RIGHT, with the staged count in the center.
+    /// Copy/Paste/Delete and Start/Stop stay on one row around a centered staged count. Every
+    /// localized label collapses atomically to its icon when the tree pane cannot fit the full set.
     ///
     /// Args:
     ///     cores: Canonical visible roots represented by the rendered Start/Stop buttons.
@@ -241,57 +241,106 @@ impl StrategiesView {
         store: &CoreStore,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let copy_label = t!("strat.action_copy").to_string();
+        let paste_label = t!("strat.action_paste").to_string();
+        let delete_label = t!("strat.action_delete").to_string();
+        let start_label = t!("strat.start_checked").to_string();
+        let stop_label = t!("strat.stop_checked").to_string();
+        let staged = staged_count(self);
+        let staged_label = (staged > 0).then(|| t!("strat.staged", n = staged).to_string());
+
+        let measured_label_width = [
+            copy_label.as_str(),
+            paste_label.as_str(),
+            delete_label.as_str(),
+            start_label.as_str(),
+            stop_label.as_str(),
+        ]
+        .into_iter()
+        .map(|label| design::ui_text_width(cx, label, 10.5, 400.0, true))
+        .sum::<f32>()
+            + staged_label.as_deref().map_or(0.0, |label| {
+                design::ui_text_width(cx, label, 10.5, 400.0, true)
+            });
+        // Five native leading icons remain in both densities. The full state additionally reserves
+        // their label gaps, six group gaps, outer padding, and the hairline divider.
+        let action_icon_width = (design::font_value(cx, 10.5) + 1.0).clamp(10.0, 14.0);
+        // Action size ships with pad_x = 0. Labeled footer buttons opt into the same 7-unit
+        // inset used by other Action labels so text does not sit on the border.
+        let labeled_pad = design::ui_value(cx, 7.0) * 2.0 * 5.0;
+        let fixed_width = 5.0 * action_icon_width
+            + design::ui_value(cx, 5.0 * 6.0 + 6.0 * design::CHROME_GAP + 16.0)
+            + 1.0
+            + labeled_pad;
+        let show_labels =
+            ui::footer_labels_fit(self.panels.tree_w, fixed_width, measured_label_width);
+
         // Each callback owns the exact plan this rendered button described. A workspace change
         // before dispatch cannot silently reduce that old multi-core action to a surviving subset.
         let plan = Arc::new(self.start_stop_plan(cores.as_ref(), store, cx));
-        // Right-align the stacked Start Checked/Stop Checked action group.
-        let right = v_flex()
-            .gap_1()
-            .items_end()
-            .child(
-                MoonButton::new("start-checked")
-                    .primary()
-                    .size(MoonButtonSize::Micro)
-                    .label(format!("▶ {}", t!("strat.start_checked")))
-                    .on_click({
-                        let plan = plan.clone();
-                        cx.listener(move |this, _, _, cx| {
-                            this.apply_start_stop(plan.as_ref(), true, cx);
-                        })
-                    })
-                    .render(),
-            )
-            .child(
-                MoonButton::new("stop-checked")
-                    .outline()
-                    .size(MoonButtonSize::Micro)
-                    .label(format!("■ {}", t!("strat.stop_checked")))
-                    .on_click({
-                        let plan = plan.clone();
-                        cx.listener(move |this, _, _, cx| {
-                            this.apply_start_stop(plan.as_ref(), false, cx);
-                        })
-                    })
-                    .render(),
-            );
-
-        let mut bar = h_flex()
-            .w_full()
-            .p_2()
-            .gap_2()
-            .items_start()
-            .justify_between()
-            .child(self.selection_toolbar(store, cx));
-        let staged = staged_count(self);
-        if staged > 0 {
-            bar = bar.child(
-                div()
-                    .text_size(design::t_body(cx))
-                    .text_color(rgb(MoonPalette::active(cx).amber))
-                    .child(t!("strat.staged", n = staged).to_string()),
-            );
+        let icon_width = design::glyph_btn_w(cx);
+        let mut start = MoonButton::new("start-checked")
+            .primary()
+            .size(MoonButtonSize::Action)
+            .leading_icon(MoonButtonIconSlot::new("icons/play.svg"))
+            .tooltip(format!("▶ {start_label}"))
+            .on_click({
+                let plan = plan.clone();
+                cx.listener(move |this, _, _, cx| {
+                    this.apply_start_stop(plan.as_ref(), true, cx);
+                })
+            });
+        let mut stop = MoonButton::new("stop-checked")
+            .outline()
+            .size(MoonButtonSize::Action)
+            .leading_icon(MoonButtonIconSlot::new("icons/pause.svg"))
+            .tooltip(format!("■ {stop_label}"))
+            .on_click({
+                let plan = plan.clone();
+                cx.listener(move |this, _, _, cx| {
+                    this.apply_start_stop(plan.as_ref(), false, cx);
+                })
+            });
+        if show_labels {
+            start = start.padding_x(7.0).label(start_label);
+            stop = stop.padding_x(7.0).label(stop_label);
+        } else {
+            start = start.width(icon_width);
+            stop = stop.width(icon_width);
         }
-        bar.child(right).into_any_element()
+
+        let group_gap = if show_labels {
+            design::CHROME_GAP
+        } else {
+            design::CHROME_GAP / 2.0
+        };
+        let right = h_flex()
+            .flex_none()
+            .items_center()
+            .gap(design::ui_px(cx, group_gap))
+            .child(start.render())
+            .child(stop.render());
+        let horizontal_pad = if show_labels { 8.0 } else { 4.0 };
+        let staged_slot = div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_center()
+            .text_size(design::t_body(cx))
+            .text_color(rgb(MoonPalette::active(cx).amber))
+            .child(staged_label.unwrap_or_default());
+
+        h_flex()
+            .w_full()
+            .px(design::ui_px(cx, horizontal_pad))
+            .py(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, group_gap))
+            .items_center()
+            .child(self.selection_toolbar(store, show_labels, cx))
+            .child(design::chrome_divider(cx, MoonPalette::active(cx)))
+            .child(staged_slot)
+            .child(right)
+            .into_any_element()
     }
 
     // Section-pane rendering remains in the parent module.
