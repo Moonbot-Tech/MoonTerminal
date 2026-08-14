@@ -4,22 +4,33 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, anyhow, bail};
 use gpui::*;
 use moon_core::config::paths;
 use moon_core::update::{
-    AvailableRelease, BuildIdentity, GitHubReleaseClient, ReleaseVersion, UpdateEligibility,
+    AvailableRelease, BuildIdentity, DiscoveryError, DiscoveryRetry, GitHubReleaseClient,
+    ReleaseDiscovery, ReleaseVersion, UpdateEligibility,
 };
+use moon_core::util::time::now_unix_secs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+#[cfg(test)]
+mod tests;
 
 const MANIFEST_VERSION: u32 = 2;
 const HELPER_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const HELPER_COMMIT_TIMEOUT: Duration = Duration::from_secs(15);
 const STARTED_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTHY_TIMEOUT: Duration = Duration::from_secs(90);
+const POLL_WINDOW_SECONDS: u64 = 30 * 60;
+const STARTUP_POLL_GAP_SECONDS: u64 = 5 * 60;
+const SERVER_DEADLINE_MARGIN_SECONDS: u64 = 60;
+const RATE_BACKOFF_SECONDS: [u64; 4] = [60 * 60, 2 * 60 * 60, 4 * 60 * 60, 8 * 60 * 60];
+const TRANSIENT_BACKOFF_SECONDS: [u64; 4] = [30 * 60, 60 * 60, 2 * 60 * 60, 4 * 60 * 60];
+const PROTOCOL_BACKOFF_SECONDS: u64 = 8 * 60 * 60;
 
 /// Result of parsing the hidden updater process modes before GPUI starts.
 pub(crate) enum ProcessDispatch {
@@ -90,11 +101,211 @@ impl UpdateState {
     }
 }
 
+/// Task-local wall-clock and failure state for the one process-wide discovery loop.
+struct PollSchedule {
+    phase_seconds: u64,
+    last_failure: Option<DiscoveryRetry>,
+    failure_streak: usize,
+}
+
+impl PollSchedule {
+    /// Create a schedule whose stable phase spreads processes across each UTC half-hour.
+    ///
+    /// Args:
+    ///     phase_seconds: Process-local offset within the half-hour window.
+    ///
+    /// Returns:
+    ///     A schedule with no recorded failures.
+    fn new(phase_seconds: u64) -> Self {
+        Self {
+            phase_seconds: phase_seconds % POLL_WINDOW_SECONDS,
+            last_failure: None,
+            failure_streak: 0,
+        }
+    }
+
+    /// Reset failures and choose the next anchored success deadline.
+    ///
+    /// Args:
+    ///     now_unix: Completion time of the successful scan.
+    ///     attempt_unix: Start time used to enforce the startup minimum gap.
+    ///     server_not_before: Optional GitHub reset deadline.
+    ///
+    /// Returns:
+    ///     The later safe UTC deadline for the next scan.
+    fn after_success(
+        &mut self,
+        now_unix: u64,
+        attempt_unix: u64,
+        server_not_before: Option<u64>,
+    ) -> u64 {
+        self.last_failure = None;
+        self.failure_streak = 0;
+        later_unix(
+            next_regular_poll(now_unix, attempt_unix, self.phase_seconds),
+            server_not_before.map(|deadline| self.server_deadline(deadline)),
+        )
+    }
+
+    /// Advance the exact local backoff class and preserve a later GitHub deadline.
+    ///
+    /// Args:
+    ///     now_unix: Completion time of the failed scan.
+    ///     error: Typed discovery failure with optional server authority.
+    ///
+    /// Returns:
+    ///     The later safe retry deadline.
+    fn after_failure(&mut self, now_unix: u64, error: &DiscoveryError) -> u64 {
+        self.after_failure_hint(now_unix, error.retry(), error.not_before_unix())
+    }
+
+    /// Advance a fixed failure hint without moving ahead of the regular UTC cadence.
+    ///
+    /// Args:
+    ///     now_unix: Completion time of the failed scan.
+    ///     retry: Local failure class.
+    ///     server_not_before: Optional GitHub retry deadline.
+    ///
+    /// Returns:
+    ///     The later regular, local-backoff, or server-authorized deadline.
+    fn after_failure_hint(
+        &mut self,
+        now_unix: u64,
+        retry: DiscoveryRetry,
+        server_not_before: Option<u64>,
+    ) -> u64 {
+        if self.last_failure == Some(retry) {
+            self.failure_streak = self.failure_streak.saturating_add(1);
+        } else {
+            self.last_failure = Some(retry);
+            self.failure_streak = 1;
+        }
+        let local = now_unix.saturating_add(failure_backoff(retry, self.failure_streak).as_secs());
+        let regular = next_regular_poll(now_unix, now_unix, self.phase_seconds);
+        later_unix(
+            local.max(regular),
+            server_not_before.map(|deadline| self.server_deadline(deadline)),
+        )
+    }
+
+    /// Add a safety minute and reuse the process phase to spread reset-time wakeups.
+    ///
+    /// Args:
+    ///     deadline: Raw absolute server deadline.
+    ///
+    /// Returns:
+    ///     Deadline plus the safety margin and stable sub-minute spread.
+    fn server_deadline(&self, deadline: u64) -> u64 {
+        deadline
+            .saturating_add(SERVER_DEADLINE_MARGIN_SECONDS)
+            .saturating_add(self.phase_seconds % 60)
+    }
+}
+
+/// Return the next stable UTC half-hour phase after both now and the startup minimum gap.
+///
+/// Args:
+///     now_unix: Current completion time.
+///     attempt_unix: Scan start time used for the minimum gap.
+///     phase_seconds: Process-local half-hour offset.
+///
+/// Returns:
+///     The first eligible anchored deadline.
+fn next_regular_poll(now_unix: u64, attempt_unix: u64, phase_seconds: u64) -> u64 {
+    let phase_seconds = phase_seconds % POLL_WINDOW_SECONDS;
+    let window = now_unix / POLL_WINDOW_SECONDS;
+    let mut deadline = window
+        .saturating_mul(POLL_WINDOW_SECONDS)
+        .saturating_add(phase_seconds);
+    if deadline <= now_unix {
+        deadline = deadline.saturating_add(POLL_WINDOW_SECONDS);
+    }
+    let minimum = attempt_unix.saturating_add(STARTUP_POLL_GAP_SECONDS);
+    if deadline < minimum {
+        deadline = deadline.saturating_add(POLL_WINDOW_SECONDS);
+    }
+    deadline
+}
+
+/// Return the documented bounded local delay for one failure streak.
+///
+/// Args:
+///     retry: Failure class selecting the policy table.
+///     streak: One-based consecutive failure count for that class.
+///
+/// Returns:
+///     The capped local delay.
+fn failure_backoff(retry: DiscoveryRetry, streak: usize) -> Duration {
+    let index = streak.saturating_sub(1);
+    let seconds = match retry {
+        DiscoveryRetry::RateLimited => {
+            RATE_BACKOFF_SECONDS[index.min(RATE_BACKOFF_SECONDS.len() - 1)]
+        }
+        DiscoveryRetry::Transient => {
+            TRANSIENT_BACKOFF_SECONDS[index.min(TRANSIENT_BACKOFF_SECONDS.len() - 1)]
+        }
+        DiscoveryRetry::Protocol => PROTOCOL_BACKOFF_SECONDS,
+    };
+    Duration::from_secs(seconds)
+}
+
+/// Claim a one-shot loop start without coupling it to GPUI entity mechanics.
+///
+/// Args:
+///     started: Process-wide loop-start flag.
+///
+/// Returns:
+///     `true` only for the first claim.
+fn claim_polling(started: &mut bool) -> bool {
+    if *started {
+        false
+    } else {
+        *started = true;
+        true
+    }
+}
+
+/// Keep discovery alive until the controller enters its terminal restart state.
+///
+/// Args:
+///     state: Current process-wide updater state.
+///
+/// Returns:
+///     `false` only after restart has been launched.
+fn polling_continues_after(state: &UpdateState) -> bool {
+    !matches!(state, UpdateState::Restarting(_))
+}
+
+/// Pick one stable process-local phase without adding a runtime dependency.
+///
+/// Returns:
+///     An offset inside one half-hour polling window.
+fn process_poll_phase() -> u64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    (u64::from(now.subsec_nanos()) ^ u64::from(std::process::id()).wrapping_mul(0x9e37_79b9))
+        % POLL_WINDOW_SECONDS
+}
+
+/// Return the later of a required local deadline and an optional server deadline.
+///
+/// Args:
+///     local: Required local deadline.
+///     server: Optional absolute server deadline.
+///
+/// Returns:
+///     The later applicable deadline.
+fn later_unix(local: u64, server: Option<u64>) -> u64 {
+    server.map_or(local, |server| local.max(server))
+}
+
 /// Single process-wide authority for discovery and one installation attempt.
 pub(crate) struct UpdateController {
     state: UpdateState,
     candidate: Option<AvailableRelease>,
-    generation: u64,
+    polling_started: bool,
+    install_generation: u64,
 }
 
 impl UpdateController {
@@ -103,7 +314,8 @@ impl UpdateController {
         Self {
             state: UpdateState::Hidden,
             candidate: None,
-            generation: 0,
+            polling_started: false,
+            install_generation: 0,
         }
     }
 
@@ -112,41 +324,84 @@ impl UpdateController {
         self.state.clone()
     }
 
-    /// Start one silent background eligibility check.
-    pub(crate) fn start_check(entity: &Entity<Self>, cx: &mut App) {
+    /// Start the idempotent process-wide release discovery loop.
+    ///
+    /// Args:
+    ///     entity: Sole Backend-owned updater controller.
+    ///     cx: GPUI application context used to spawn and publish state.
+    pub(crate) fn start_polling(entity: &Entity<Self>, cx: &mut App) {
         let baseline = option_env!("MOONTERMINAL_RELEASE_BASE").unwrap_or("unknown");
         let identity = BuildIdentity::from_release_base(baseline);
         if identity.baseline().is_none() {
             return;
         }
-        let generation = entity.update(cx, |this, _| {
-            this.generation = this.generation.wrapping_add(1);
-            this.generation
-        });
+        if !entity.update(cx, |this, _| claim_polling(&mut this.polling_started)) {
+            return;
+        }
         let controller = entity.clone();
         let executor = cx.background_executor().clone();
         cx.spawn(async move |cx| {
-            let result = executor
-                .spawn(async move { GitHubReleaseClient::new().latest_stable(identity) })
-                .await;
-            cx.update(|cx| {
-                controller.update(cx, |this, cx| {
-                    if this.generation != generation {
-                        return;
-                    }
-                    match result {
-                        Ok(UpdateEligibility::Available(release)) => {
-                            this.state = UpdateState::Available(release.version());
-                            this.candidate = Some(release);
-                            cx.notify();
+            let mut discovery = ReleaseDiscovery::new(identity);
+            let mut schedule = PollSchedule::new(process_poll_phase());
+            loop {
+                let attempt_unix = now_unix_secs();
+                let (returned, result) = executor
+                    .spawn(async move {
+                        let result = discovery.scan();
+                        (discovery, result)
+                    })
+                    .await;
+                discovery = returned;
+                let completed_unix = now_unix_secs();
+                let next_unix = match &result {
+                    Ok(result) => schedule.after_success(
+                        completed_unix,
+                        attempt_unix,
+                        result.defer_until_unix,
+                    ),
+                    Err(error) => schedule.after_failure(completed_unix, error),
+                };
+                let keep_polling = cx.update(|cx| {
+                    controller.update(cx, |this, cx| {
+                        match result {
+                            Ok(result) => this.adopt_discovery(result.eligibility, cx),
+                            Err(error) => log::warn!("update check failed: {error}"),
                         }
-                        Ok(UpdateEligibility::Unsupported | UpdateEligibility::Current) => {}
-                        Err(error) => log::warn!("update check failed: {error}"),
-                    }
+                        polling_continues_after(&this.state)
+                    })
                 });
-            });
+                if !keep_polling {
+                    break;
+                }
+                let wait = Duration::from_secs(next_unix.saturating_sub(now_unix_secs()).max(1));
+                executor.timer(wait).await;
+            }
         })
         .detach();
+    }
+
+    /// Adopt only a strictly newer candidate without stealing installation authority.
+    ///
+    /// Args:
+    ///     eligibility: Complete discovery result for the current executable baseline.
+    ///     cx: Entity context used to notify observers after a visible state change.
+    fn adopt_discovery(&mut self, eligibility: UpdateEligibility, cx: &mut Context<Self>) {
+        if self.state.busy() {
+            return;
+        }
+        let UpdateEligibility::Available(release) = eligibility else {
+            return;
+        };
+        let is_newer = self
+            .candidate
+            .as_ref()
+            .is_none_or(|current| release.version() > current.version());
+        if !is_newer {
+            return;
+        }
+        self.state = UpdateState::Available(release.version());
+        self.candidate = Some(release);
+        cx.notify();
     }
 
     /// Start or retry the single installation attempt from an explicit user click.
@@ -157,10 +412,10 @@ impl UpdateController {
             }
             let candidate = this.candidate.clone()?;
             let version = candidate.version();
-            this.generation = this.generation.wrapping_add(1);
+            this.install_generation = this.install_generation.wrapping_add(1);
             this.state = UpdateState::Installing(version);
             cx.notify();
-            Some((candidate, version, this.generation))
+            Some((candidate, version, this.install_generation))
         }) else {
             return;
         };
@@ -172,7 +427,7 @@ impl UpdateController {
                 .await;
             cx.update(|cx| {
                 controller.update(cx, |this, cx| {
-                    if this.generation != generation {
+                    if this.install_generation != generation {
                         return;
                     }
                     match result {
