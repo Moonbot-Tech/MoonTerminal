@@ -238,6 +238,92 @@ impl Period {
     }
 }
 
+/// Durable period slot selected by the live Report workspace scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReportPeriodBucket {
+    /// Auto Overview, which owns its dedicated stored period.
+    Overview,
+    /// Classic and every Auto single-server scope, which share the legacy stored period.
+    Single,
+}
+
+/// Resolve the durable period slot for one effective workspace scope.
+///
+/// Args:
+///     scope: Current group scope, or `None` for a standalone Report.
+///
+/// Returns:
+///     Overview only for workspace-owned non-core scope; every other scope is Single.
+pub(super) fn period_bucket_for_scope(scope: Option<&EffectiveCoreScope>) -> ReportPeriodBucket {
+    if scope.is_some_and(|scope| scope.is_workspace_owned() && !scope.is_auto_core()) {
+        ReportPeriodBucket::Overview
+    } else {
+        ReportPeriodBucket::Single
+    }
+}
+
+/// Decode the period stored for one live bucket over the panel's current value.
+///
+/// Args:
+///     prefs: Persisted toolbar filters for the current host context.
+///     bucket: Live period bucket.
+///     current: Period currently displayed by the panel.
+///
+/// Returns:
+///     The valid bucket value, the legacy Single value for an absent or unknown Overview value,
+///     or `current` when neither applicable stored id is known.
+pub(super) fn apply_period_from_prefs(
+    prefs: &moon_core::config::ReportFilterPrefs,
+    bucket: ReportPeriodBucket,
+    current: Period,
+) -> Period {
+    let decode = |value: Option<&String>| value.map(String::as_str).and_then(Period::from_menu_key);
+    match bucket {
+        ReportPeriodBucket::Overview => decode(prefs.period_overview.as_ref())
+            .or_else(|| decode(prefs.period.as_ref()))
+            .unwrap_or(current),
+        ReportPeriodBucket::Single => decode(prefs.period.as_ref()).unwrap_or(current),
+    }
+}
+
+/// Compose the next persisted toolbar entry while changing only the live period bucket.
+///
+/// Args:
+///     existing: Current host entry, retained so the inactive period bucket survives.
+///     bucket: Live period bucket receiving an explicit pick.
+///     picked_period: Explicit menu pick, or `None` to preserve both stored period values.
+///     side: Live direction filter.
+///     kind: Live order-kind filter.
+///     deleted_only: Live deleted-only filter.
+///     strategy_name_mask: Live Auto strategy-name mask.
+///
+/// Returns:
+///     A complete host entry with shared filters refreshed and only the selected period slot
+///     changed.
+pub(super) fn next_prefs_for_period_pick(
+    existing: Option<&moon_core::config::ReportFilterPrefs>,
+    bucket: ReportPeriodBucket,
+    picked_period: Option<Period>,
+    side: SideFilter,
+    kind: ReportKind,
+    deleted_only: bool,
+    strategy_name_mask: &str,
+) -> moon_core::config::ReportFilterPrefs {
+    let mut prefs = existing.cloned().unwrap_or_default();
+    prefs.side = Some(side_id(side).to_string());
+    prefs.kind = Some(kind.id().to_string());
+    prefs.deleted_only = Some(deleted_only);
+    prefs.strategy_name_mask = Some(strategy_name_mask.to_string());
+    if let Some(period) = picked_period {
+        let key = Some(period.menu_key().to_string());
+        match bucket {
+            ReportPeriodBucket::Overview => prefs.period_overview = key,
+            ReportPeriodBucket::Single => prefs.period = key,
+        }
+    }
+    prefs
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -505,6 +591,8 @@ pub struct ReportPanel {
     /// Editing a non-empty manual date switches to All. Under other presets, the preset lower bound
     /// overrides From, while only Yesterday supplies an upper bound that overrides To.
     pub(super) period: Period,
+    /// Last resolved workspace period bucket, used to distinguish cross-bucket rail switches.
+    last_period_bucket: ReportPeriodBucket,
     /// All, real, or emulated order kind, defaulting to real as in Orders. Persisted beside
     /// [`Self::side`].
     pub(super) kind: ReportKind,

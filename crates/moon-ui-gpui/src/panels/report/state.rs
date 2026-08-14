@@ -23,7 +23,7 @@ fn upsert_strategy_choice(
     }
 }
 
-/// One host context's five toolbar filters, in the order they are decoded and assigned.
+/// One host context's five live toolbar filters, in the order they are decoded and assigned.
 pub(super) type ReportFilterSet = (SideFilter, ReportKind, bool, Period, String);
 
 /// Decode one stored filter set over the values a panel is currently showing.
@@ -40,12 +40,14 @@ pub(super) type ReportFilterSet = (SideFilter, ReportKind, bool, Period, String)
 ///
 /// Args:
 ///     stored: The persisted entry for this host context.
+///     period_bucket: Live workspace bucket used to choose the stored period.
 ///     current: What the panel is showing now, used for every field the entry cannot supply.
 ///
 /// Returns:
 ///     The set to apply.
 pub(super) fn applied_filters(
     stored: &moon_core::config::ReportFilterPrefs,
+    period_bucket: ReportPeriodBucket,
     current: ReportFilterSet,
 ) -> ReportFilterSet {
     let (side, kind, deleted_only, period, strategy_name_mask) = current;
@@ -61,11 +63,7 @@ pub(super) fn applied_filters(
             .and_then(ReportKind::from_id)
             .unwrap_or(kind),
         stored.deleted_only.unwrap_or(deleted_only),
-        stored
-            .period
-            .as_deref()
-            .and_then(Period::from_menu_key)
-            .unwrap_or(period),
+        apply_period_from_prefs(stored, period_bucket, period),
         stored
             .strategy_name_mask
             .clone()
@@ -737,6 +735,17 @@ impl ReportPanel {
             if this.standalone {
                 return;
             }
+            let period_bucket =
+                period_bucket_for_scope(this.workspace_scope(this.backend.read(cx)).as_ref());
+            if period_bucket != this.last_period_bucket {
+                this.last_period_bucket = period_bucket;
+                if let Some(stored) = crate::persistence::table_persist::report_filters(
+                    this.backend.read(cx),
+                    &filters_ctx_id(this.detached),
+                ) {
+                    this.period = apply_period_from_prefs(stored, period_bucket, this.period);
+                }
+            }
             // Never label already-published rows from another core with the new pinned selector.
             this.data = LoadState::default();
             this.selection.clear();
@@ -824,6 +833,7 @@ impl ReportPanel {
             } else {
                 Period::Today
             },
+            last_period_bucket: ReportPeriodBucket::Single,
             kind: scope
                 .as_ref()
                 .map(|scope| ReportKind::from_filter(scope.emulator))
@@ -1128,6 +1138,9 @@ impl ReportPanel {
         if self.scoped {
             return false;
         }
+        let period_bucket =
+            period_bucket_for_scope(self.workspace_scope(self.backend.read(cx)).as_ref());
+        self.last_period_bucket = period_bucket;
         let Some(stored) = crate::persistence::table_persist::report_filters(
             self.backend.read(cx),
             &filters_ctx_id(self.detached),
@@ -1141,7 +1154,7 @@ impl ReportPanel {
             self.period,
             self.strategy_name_mask.clone(),
         );
-        let applied = applied_filters(stored, current.clone());
+        let applied = applied_filters(stored, period_bucket, current.clone());
         // One tuple compare rather than five clauses, so another filter added to the tuple cannot
         // be forgotten here and silently suppress the host-change requery.
         let changed = applied != current;

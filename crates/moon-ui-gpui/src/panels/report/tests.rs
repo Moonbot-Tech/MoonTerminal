@@ -2,8 +2,13 @@
 // attribute and recursively expands `#[test]`.
 use super::controls::selected_auto_core_name;
 use super::state::{ReportFilterSet, applied_filters};
-use super::{Period, ReportKind, SideFilter, side_id};
+use super::{
+    Period, ReportKind, ReportPeriodBucket, SideFilter, apply_period_from_prefs,
+    next_prefs_for_period_pick, period_bucket_for_scope, side_id,
+};
+use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
+use moon_core::config::WorkspaceMode;
 
 /// `controls::selected_auto_core_name` must prefer the live group-session name over historical
 /// report metadata, while retaining that metadata as the offline fallback.
@@ -428,10 +433,11 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: Some("emu".to_string()),
         deleted_only: Some(true),
         period: Some("rp-cur-week".to_string()),
+        period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_".to_string()),
     };
     let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&full, current.clone());
+        applied_filters(&full, ReportPeriodBucket::Single, current.clone());
     assert_eq!(
         side,
         SideFilter::Short,
@@ -449,6 +455,11 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         period == Period::CurWeek,
         "a valid stored period must win over current"
     );
+    let overview_applied = applied_filters(&full, ReportPeriodBucket::Overview, current.clone());
+    assert!(
+        overview_applied.3 == Period::Today,
+        "applied_filters must forward the live Overview bucket to the period decoder"
+    );
     assert_eq!(strategy_name_mask, "EMA_", "a valid stored mask must win");
     // The leaf assembly a query actually reads, fed by the values applied_filters just resolved —
     // ReportKind::to_filter is exhaustive over all three variants so a swapped mapping reddens.
@@ -464,7 +475,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
     // swapped pair in the returned tuple cannot hide behind one combined comparison.
     let empty = moon_core::config::ReportFilterPrefs::default();
     let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&empty, current.clone());
+        applied_filters(&empty, ReportPeriodBucket::Single, current.clone());
     assert_eq!(
         side, current.0,
         "an absent side must keep the current value"
@@ -492,10 +503,11 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: Some("bogus".to_string()),
         deleted_only: None,
         period: Some("rp-nonexistent".to_string()),
+        period_overview: Some("rp-overview-nonexistent".to_string()),
         strategy_name_mask: None,
     };
     let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&unknown, current.clone());
+        applied_filters(&unknown, ReportPeriodBucket::Overview, current.clone());
     assert_eq!(
         side, current.0,
         "an unknown side id must keep the current value"
@@ -518,10 +530,11 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: None,
         deleted_only: Some(true),
         period: None,
+        period_overview: None,
         strategy_name_mask: Some(String::new()),
     };
     let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&partial, current.clone());
+        applied_filters(&partial, ReportPeriodBucket::Overview, current.clone());
     assert_eq!(side, SideFilter::All, "the stored side must win");
     assert!(
         kind == current.1,
@@ -535,6 +548,185 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
     assert_eq!(
         strategy_name_mask, "",
         "an explicitly cleared mask must beat the current value"
+    );
+}
+
+/// `apply_period_from_prefs` must keep Overview independent while preserving the legacy fallback.
+///
+/// Mutation: reading only `period`, stopping after an unknown `period_overview`, or consulting the
+/// Overview field for a single-server scope returns a different value in at least one assertion.
+#[test]
+fn period_bucket_decode_uses_overview_then_legacy_then_current() {
+    let both = moon_core::config::ReportFilterPrefs {
+        period: Some("rp-cur-year".to_string()),
+        period_overview: Some("rp-today".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        apply_period_from_prefs(&both, ReportPeriodBucket::Overview, Period::Yesterday)
+            == Period::Today
+    );
+    assert!(
+        apply_period_from_prefs(&both, ReportPeriodBucket::Single, Period::Yesterday)
+            == Period::CurYear,
+        "a single-server scope must ignore period_overview"
+    );
+
+    let missing_overview = moon_core::config::ReportFilterPrefs {
+        period: Some("rp-cur-year".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        apply_period_from_prefs(
+            &missing_overview,
+            ReportPeriodBucket::Overview,
+            Period::Yesterday,
+        ) == Period::CurYear,
+        "an absent Overview value must fall back to the legacy period"
+    );
+
+    let unknown_overview = moon_core::config::ReportFilterPrefs {
+        period: Some("rp-cur-year".to_string()),
+        period_overview: Some("rp-unknown".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        apply_period_from_prefs(
+            &unknown_overview,
+            ReportPeriodBucket::Overview,
+            Period::Yesterday,
+        ) == Period::CurYear,
+        "an unknown Overview id must still try the valid legacy period"
+    );
+
+    let unknown_both = moon_core::config::ReportFilterPrefs {
+        period: Some("rp-legacy-unknown".to_string()),
+        period_overview: Some("rp-overview-unknown".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        apply_period_from_prefs(
+            &unknown_both,
+            ReportPeriodBucket::Overview,
+            Period::Yesterday,
+        ) == Period::Yesterday,
+        "unknown ids in both slots must preserve the panel's current period"
+    );
+}
+
+/// `next_prefs_for_period_pick` must update only the period slot owned by the live scope.
+///
+/// Mutation: rebuilding from defaults or assigning both period fields loses or overwrites the
+/// inactive bucket and reddens the exact before/after assertions below.
+#[test]
+fn period_bucket_pick_writes_only_the_live_bucket() {
+    let existing = moon_core::config::ReportFilterPrefs {
+        period: Some("rp-cur-year".to_string()),
+        period_overview: Some("rp-yesterday".to_string()),
+        ..Default::default()
+    };
+    let overview = next_prefs_for_period_pick(
+        Some(&existing),
+        ReportPeriodBucket::Overview,
+        Some(Period::Today),
+        SideFilter::Long,
+        ReportKind::Real,
+        false,
+        "EMA_",
+    );
+    assert_eq!(overview.period.as_deref(), Some("rp-cur-year"));
+    assert_eq!(overview.period_overview.as_deref(), Some("rp-today"));
+
+    let before_single = moon_core::config::ReportFilterPrefs {
+        period: Some("rp-cur-month".to_string()),
+        period_overview: overview.period_overview.clone(),
+        ..overview
+    };
+    let single = next_prefs_for_period_pick(
+        Some(&before_single),
+        ReportPeriodBucket::Single,
+        Some(Period::CurYear),
+        SideFilter::Short,
+        ReportKind::Emu,
+        true,
+        "SINGLE",
+    );
+    assert_eq!(single.period.as_deref(), Some("rp-cur-year"));
+    assert_eq!(single.period_overview.as_deref(), Some("rp-today"));
+    assert_eq!(single.side.as_deref(), Some("short"));
+    assert_eq!(single.kind.as_deref(), Some("emu"));
+    assert_eq!(single.deleted_only, Some(true));
+    assert_eq!(single.strategy_name_mask.as_deref(), Some("SINGLE"));
+
+    let shared_only = next_prefs_for_period_pick(
+        Some(&single),
+        ReportPeriodBucket::Overview,
+        None,
+        SideFilter::All,
+        ReportKind::Real,
+        false,
+        "SHARED",
+    );
+    assert_eq!(shared_only.period, single.period);
+    assert_eq!(shared_only.period_overview, single.period_overview);
+    assert_eq!(shared_only.side.as_deref(), Some("all"));
+    assert_eq!(shared_only.strategy_name_mask.as_deref(), Some("SHARED"));
+}
+
+/// Workspace scope changes cross the period boundary only when entering or leaving Auto Overview.
+///
+/// Mutation: classifying by core identity or workspace ownership alone makes AutoCore A/B differ,
+/// or incorrectly gives Classic a separate bucket.
+#[test]
+fn period_bucket_changes_only_across_auto_overview() {
+    let cores = [11, 22];
+    let overview = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        None,
+        &cores,
+        RetainedCoreScope::All,
+    );
+    let auto_a = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        Some(11),
+        &cores,
+        RetainedCoreScope::All,
+    );
+    let auto_b = resolve_group_scope(
+        WorkspaceMode::AutoTrading,
+        Some(22),
+        &cores,
+        RetainedCoreScope::All,
+    );
+    let classic_all =
+        resolve_group_scope(WorkspaceMode::Classic, None, &cores, RetainedCoreScope::All);
+    let classic_selection = resolve_group_scope(
+        WorkspaceMode::Classic,
+        None,
+        &cores,
+        RetainedCoreScope::Explicit(&[11]),
+    );
+
+    assert_eq!(
+        period_bucket_for_scope(Some(&overview)),
+        ReportPeriodBucket::Overview
+    );
+    for scope in [&auto_a, &auto_b, &classic_all, &classic_selection] {
+        assert_eq!(
+            period_bucket_for_scope(Some(scope)),
+            ReportPeriodBucket::Single
+        );
+    }
+    assert_eq!(period_bucket_for_scope(None), ReportPeriodBucket::Single);
+    assert_eq!(
+        period_bucket_for_scope(Some(&auto_a)),
+        period_bucket_for_scope(Some(&auto_b)),
+        "switching single servers must stay in one bucket"
+    );
+    assert_ne!(
+        period_bucket_for_scope(Some(&overview)),
+        period_bucket_for_scope(Some(&auto_a)),
+        "Overview to a server must cross buckets"
     );
 }
 
@@ -651,12 +843,43 @@ fn persist_filters_stores_the_picked_period_not_the_live_field() {
     let actions = code_only(include_str!("actions.rs"));
     let body = braced_body(&actions, "pub(super) fn persist_filters(");
     assert!(
-        body.contains("let period = picked_period"),
-        "the stored period must be derived from the picked_period parameter"
+        body.contains("period_bucket_for_scope(")
+            && body.contains("next_prefs_for_period_pick(")
+            && body.contains("period_bucket,")
+            && body.contains("picked_period,"),
+        "the live bucket and picked_period parameter must reach the persistence composer"
     );
     assert!(
         !body.contains("self.period.menu_key()"),
         "persist_filters must never read the live self.period field when computing the stored id"
+    );
+}
+
+/// The workspace observer must apply a changed bucket before clearing and requerying its rows.
+///
+/// Mutation: deleting the conditional restore leaves the existing clear + requery path green at
+/// runtime source shape while the toolbar and query retain the previous bucket's period.
+#[test]
+fn workspace_observer_applies_period_bucket_before_requery() {
+    let state = code_only(include_str!("state.rs"));
+    let observer = braced_body(&state, "cx.observe(&workspace_revision,");
+    let bucket_at = observer
+        .find("period_bucket_for_scope(")
+        .expect("workspace observer must resolve the live period bucket");
+    let restore_at = observer
+        .find("apply_period_from_prefs(")
+        .expect("workspace observer must restore a changed period bucket");
+    let clear_at = observer
+        .find("this.data = LoadState::default();")
+        .expect("workspace observer must still clear rows from the previous scope");
+    let requery_at = observer
+        .find("this.request_requery(cx);")
+        .expect("workspace observer must still requery every scope change");
+    assert!(bucket_at < restore_at && restore_at < clear_at && clear_at < requery_at);
+    let changed = braced_body(observer, "if period_bucket != this.last_period_bucket {");
+    assert!(
+        changed.contains("apply_period_from_prefs(stored, period_bucket, this.period)"),
+        "period restore must conditionally apply the resolved live bucket"
     );
 }
 
