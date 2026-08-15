@@ -14,6 +14,72 @@ use super::shared::{card, collapse_caret};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::VarStats;
+use moon_core::util::fmt::compact_si;
+
+/// Numeric presentation contract for one KPI matrix row.
+#[derive(Clone, Copy)]
+enum CellFormat {
+    /// Whole-number trade count without a forced sign.
+    Integer,
+    /// Signed profit carrying the active percent suffix when applicable.
+    Profit,
+    /// Signed dimensionless value that never carries a profit suffix.
+    Ratio,
+}
+
+/// Fixed-width KPI text plus the optional unabridged value shown on hover.
+#[derive(Debug, PartialEq, Eq)]
+struct KpiCellText {
+    /// Text painted inside the matrix cell.
+    display: String,
+    /// Original formatter output when `display` uses SI notation.
+    tooltip: Option<String>,
+}
+
+/// Format one KPI value for a fixed-width cell without losing access to its full value.
+///
+/// Values below the SI threshold retain the existing formatter exactly. Larger finite values use
+/// the shared K/M/B/T formatter, while the former full text becomes the hover tooltip. The active
+/// percent suffix remains exclusive to profit rows.
+///
+/// Args:
+///     format: Count, profit, or dimensionless-ratio presentation contract.
+///     value: Raw KPI value; comparisons and colors continue to use this unrounded value.
+///
+/// Returns:
+///     Contained display text and an optional exact-value tooltip.
+fn format_kpi_cell(format: CellFormat, value: f64) -> KpiCellText {
+    let exact = match format {
+        CellFormat::Integer => format!("{}", value as i64),
+        CellFormat::Profit => fmt_signed(value),
+        CellFormat::Ratio => fmt_signed_plain(value),
+    };
+    let (display, tooltip) = if value.is_finite() && value.abs() >= 1_000.0 {
+        let compact = compact_si(value);
+        let display = match format {
+            CellFormat::Integer => compact,
+            CellFormat::Profit => {
+                let signed = if value > 0.0 {
+                    format!("+{compact}")
+                } else {
+                    compact
+                };
+                format!("{signed}{}", crate::analytics::pnl_suffix())
+            }
+            CellFormat::Ratio => {
+                if value > 0.0 {
+                    format!("+{compact}")
+                } else {
+                    compact
+                }
+            }
+        };
+        (display, Some(exact))
+    } else {
+        (exact, None)
+    };
+    KpiCellText { display, tooltip }
+}
 
 /// A KPI column heading: its name, plus an optional second line saying what the variant is
 /// made of. Two fields rather than one long string — see [`kpi_matrix_card`].
@@ -97,14 +163,8 @@ pub(super) fn kpi_matrix_card(
     // How a cell's number reads: an integer count, a profit value (carries the active
     // exact quote/percent unit), or a dimensionless ratio (profit factor, winrate) that must NOT
     // pick up the "%" suffix in percent mode.
-    #[derive(Clone, Copy)]
-    enum Cell {
-        Int,
-        Pnl,
-        Ratio,
-    }
     // (label, value, higher=better; None — no comparison against the fact; cell format)
-    type Row = (String, fn(&VarStats) -> f64, Option<bool>, Cell);
+    type Row = (String, fn(&VarStats) -> f64, Option<bool>, CellFormat);
     // The first two entries are the headline pair (trades + profit); collapsed mode shows
     // exactly these via `COLLAPSED_ROWS`. Keep them first if this vec is ever reordered.
     const COLLAPSED_ROWS: usize = 2;
@@ -113,7 +173,7 @@ pub(super) fn kpi_matrix_card(
             t!("analytics.kpi.trades").to_string(),
             |s| s.n as f64,
             None,
-            Cell::Int,
+            CellFormat::Integer,
         ),
         (
             t!(
@@ -123,7 +183,7 @@ pub(super) fn kpi_matrix_card(
             .to_string(),
             |s| s.profit,
             Some(true),
-            Cell::Pnl,
+            CellFormat::Profit,
         ),
         // Order mirrors the strategy table on the left of this screen; kept by hand, since
         // these rows carry comparison flags the table's descriptors have no notion of.
@@ -131,37 +191,37 @@ pub(super) fn kpi_matrix_card(
             t!("analytics.kpi.avg_short").to_string(),
             |s| s.avg,
             Some(true),
-            Cell::Pnl,
+            CellFormat::Profit,
         ),
         (
             t!("analytics.kpi.winrate").to_string(),
             |s| s.winrate(),
             Some(true),
-            Cell::Ratio,
+            CellFormat::Ratio,
         ),
         (
             t!("analytics.col.pf").to_string(),
             |s| s.pf,
             Some(true),
-            Cell::Ratio,
+            CellFormat::Ratio,
         ),
         (
             t!("analytics.tuner.avg_win").to_string(),
             |s| s.avg_win,
             Some(true),
-            Cell::Pnl,
+            CellFormat::Profit,
         ),
         (
             t!("analytics.tuner.avg_loss").to_string(),
             |s| s.avg_loss,
             Some(false),
-            Cell::Pnl,
+            CellFormat::Profit,
         ),
         (
             t!("analytics.kpi.maxdd").to_string(),
             |s| s.max_dd,
             Some(false),
-            Cell::Pnl,
+            CellFormat::Profit,
         ),
     ];
     let col_w = 92.0;
@@ -215,7 +275,7 @@ pub(super) fn kpi_matrix_card(
         rows.len()
     };
     let mut body = v_flex().w_full().child(head);
-    for (label, get, better, cell) in rows.into_iter().take(shown) {
+    for (row_index, (label, get, better, cell)) in rows.into_iter().take(shown).enumerate() {
         let fact = get(&stats[0]);
         let mut row = h_flex()
             .w_full()
@@ -228,11 +288,7 @@ pub(super) fn kpi_matrix_card(
             .child(div().flex_1().text_color(moon(p.text_soft)).child(label));
         for (i, s) in stats.iter().enumerate() {
             let v = get(s);
-            let text = match cell {
-                Cell::Int => format!("{}", v as i64),
-                Cell::Pnl => fmt_signed(v),
-                Cell::Ratio => fmt_signed_plain(v),
-            };
+            let text = format_kpi_cell(cell, v);
             let color = match better {
                 // A variant is coloured against the fact; the fact itself by sign.
                 Some(hb) if i > 0 => {
@@ -247,14 +303,23 @@ pub(super) fn kpi_matrix_card(
                 Some(_) => sign_color(p, v),
                 None => p.text,
             };
-            row = row.child(
-                div()
-                    .w(design::font_w_px(cx, col_w))
-                    .flex_none()
-                    .text_right()
-                    .text_color(moon(color))
-                    .child(text),
-            );
+            // Screen readers receive the exact value while static cells stay out of the tab order.
+            let accessibility_label = text.tooltip.clone().unwrap_or_else(|| text.display.clone());
+            let mut value = div()
+                .id(("an-tuner-kpi-value", row_index * stats.len() + i))
+                .role(Role::Label)
+                .aria_label(accessibility_label)
+                .w(design::font_w_px(cx, col_w))
+                .min_w_0()
+                .flex_none()
+                .truncate()
+                .text_right()
+                .text_color(moon(color))
+                .child(text.display);
+            if let Some(tooltip) = text.tooltip {
+                value = value.tooltip(crate::panels::common::text_tooltip(tooltip));
+            }
+            row = row.child(value);
         }
         body = body.child(row);
     }
@@ -267,3 +332,6 @@ pub(super) fn kpi_matrix_card(
         cx,
     )
 }
+
+#[cfg(test)]
+mod tests;
