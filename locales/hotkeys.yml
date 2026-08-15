@@ -10,9 +10,9 @@ hotkeys.recording:
   en: "Press shortcut..."
   es: "Pulsa el atajo..."
 hotkeys.todo:
-  ru: "не подключено"
-  en: "not wired"
-  es: "sin conectar"
+  ru: "нет команды в протоколе"
+  en: "no protocol command"
+  es: "sin comando en el protocolo"
 
 hotkeys.group.builtin:
   ru: "Встроенные хоткеи"
@@ -93,17 +93,17 @@ hotkeys.panic_sell_one:
   en: "Panic Sell One"
   es: "Panic Sell One"
 hotkeys.panic_sell_one_hint:
-  ru: "Moonbot-дефолт: Ctrl+F1."
-  en: "Moonbot default: Ctrl+F1."
-  es: "Valor por defecto de Moonbot: Ctrl+F1."
+  ru: "Закрыть позицию рынка по рынку. Moonbot-дефолт: Alt+5."
+  en: "Close the market's position at market. Moonbot default: Alt+5."
+  es: "Cierra a mercado la posición del mercado. Valor por defecto de Moonbot: Alt+5."
 hotkeys.cancel_all_buys:
   ru: "Cancel All Buys"
   en: "Cancel All Buys"
   es: "Cancel All Buys"
 hotkeys.cancel_all_buys_hint:
-  ru: "Moonbot-дефолт: Ctrl+Del."
-  en: "Moonbot default: Ctrl+Del."
-  es: "Valor por defecto de Moonbot: Ctrl+Del."
+  ru: "Снять все buy активного ядра по всем рынкам. Moonbot-дефолт: Alt+A."
+  en: "Cancel every buy of the active core across all markets. Moonbot default: Alt+A."
+  es: "Cancela todas las compras del núcleo activo en todos los mercados. Valor por defecto de Moonbot: Alt+A."
 hotkeys.join_sells:
   ru: "Join Sells"
   en: "Join Sells"
@@ -133,17 +133,33 @@ hotkeys.split_order:
   en: "Split Order"
   es: "Split Order"
 hotkeys.split_order_hint:
-  ru: "Разбить ордер на части."
-  en: "Split an order into parts."
-  es: "Divide una orden en partes."
+  ru: "Разбить ордер под курсором на %{n} части. Курсор не на ордере — берётся единственный активный sell рынка."
+  en: "Split the order under the cursor into %{n} parts. With the cursor off any order, the market's only active sell is used."
+  es: "Divide en %{n} partes la orden bajo el cursor. Sin orden bajo el cursor, se usa la única venta activa del mercado."
 hotkeys.split_order_x:
   ru: "Split Order X"
   en: "Split Order X"
   es: "Split Order X"
 hotkeys.split_order_x_hint:
-  ru: "Пока действует как обычный Split Order (на 2 части)."
-  en: "Currently acts as plain Split Order (2 parts)."
-  es: "Por ahora actúa como Split Order normal (2 partes)."
+  ru: "То же самое, но на число частей из поля ниже (Moonbot SplitParts)."
+  en: "The same, but into the part count from the field below (Moonbot SplitParts)."
+  es: "Lo mismo, pero con el número de partes del campo inferior (Moonbot SplitParts)."
+hotkeys.sells_to_rect:
+  ru: "Sells to rectangle"
+  en: "Sells to rectangle"
+  es: "Sells to rectangle"
+hotkeys.sells_to_rect_hint:
+  ru: "Растянуть селы рынка по нарисованной Зоне или прямоугольнику на графике под курсором: берётся выделенная фигура, иначе единственная на графике. Раскладывает ядро."
+  en: "Stretch the market's sells across a drawn Zone or rectangle on the chart under the cursor: the selected figure, or the only one on that chart. The core does the spreading."
+  es: "Extiende las ventas del mercado sobre una Zona o rectángulo dibujado en el gráfico bajo el cursor: la figura seleccionada, o la única del gráfico. El núcleo hace el reparto."
+hotkeys.split_parts:
+  ru: "Частей для Split Order X"
+  en: "Parts for Split Order X"
+  es: "Partes para Split Order X"
+hotkeys.split_parts_hint:
+  ru: "Moonbot SplitParts. В меню ордера с этим числом появляется второй пункт Split order рядом с обычным на 3."
+  en: "Moonbot SplitParts. The order menu shows a second Split order entry with this count next to the plain 3."
+  es: "Moonbot SplitParts. El menú de la orden muestra una segunda entrada Split order con este número junto a la de 3."
 
 hotkeys.group.chart:
   ru: "График"
@@ -166,9 +182,9 @@ hotkeys.switch_figure:
   en: "Switch Figure"
   es: "Switch Figure"
 hotkeys.switch_figure_hint:
-  ru: "Moonbot-дефолт: Ctrl+F."
-  en: "Moonbot default: Ctrl+F."
-  es: "Valor por defecto de Moonbot: Ctrl+F."
+  ru: "Следующий инструмент рисования, режим остаётся включённым. Moonbot-дефолт: Alt+D."
+  en: "Next drawing tool, leaving drawing mode on. Moonbot default: Alt+D."
+  es: "Siguiente herramienta de dibujo, manteniendo el modo activo. Valor por defecto de Moonbot: Alt+D."
 hotkeys.scale_plus:
   ru: "Scale +"
   en: "Scale +"
@@ -232,9 +248,9 @@ hotkeys.group.mouse:
   en: "Order book mouse"
   es: "Ratón en libro"
 hotkeys.group.mouse_hint:
-  ru: "Живой Moonbot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Перенос линий сейчас — перетаскивание ЛКМ за линию; Move-жесты ниже пока не применяются."
-  en: "Live Moonbot ChartFrameUnit path: place orders by clicking inside the book area. Moving lines is currently plain LMB drag on the line; the Move gestures below are not applied yet."
-  es: "Ruta viva de Moonbot ChartFrameUnit: crear órdenes con clics en el libro. Mover líneas es por ahora arrastre con botón izquierdo; los gestos Move de abajo aún no se aplican."
+  ru: "Живой Moonbot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Move-жесты тянут линию своей стороны (вход/выход, long/short) и добавляются к обычному перетаскиванию ЛКМ за линию, которое работает всегда. Средняя и правая кнопки и дабл-клики доступны только через жесты."
+  en: "Live Moonbot ChartFrameUnit path: place orders by clicking inside the book area. Move gestures drag the line of their own side (entry/exit, long/short) and are added on top of the plain left-button drag, which always works. The middle and right buttons and double clicks are available through gestures only."
+  es: "Ruta viva de Moonbot ChartFrameUnit: crear órdenes con clics en el libro. Los gestos Move arrastran la línea de su lado (entrada/salida, long/short) y se suman al arrastre normal con el botón izquierdo, que siempre funciona. Los botones central y derecho y los dobles clics solo están disponibles mediante gestos."
 hotkeys.mouse.buy_set:
   ru: "Поставить Long"
   en: "Place Long"
@@ -256,17 +272,17 @@ hotkeys.mouse.pending_long:
   en: "Pending Long"
   es: "Pending Long"
 hotkeys.mouse.pending_long_hint:
-  ru: "PendingOrderSetClick. Moonbot-дефолт: None_Click."
-  en: "PendingOrderSetClick. Moonbot default: None_Click."
-  es: "PendingOrderSetClick. Valor por defecto: None_Click."
+  ru: "PendingOrderSetClick. Moonbot-дефолт: None_Click. Отложенных ордеров нет в moonproto — слать нечего, жест сохраняется на будущее."
+  en: "PendingOrderSetClick. Moonbot default: None_Click. moonproto has no pending order, so there is nothing to send; the gesture is stored for later."
+  es: "PendingOrderSetClick. Valor por defecto: None_Click. moonproto no tiene órdenes pendientes, así que no hay nada que enviar; el gesto se guarda para más adelante."
 hotkeys.mouse.pending_short:
   ru: "Pending Short"
   en: "Pending Short"
   es: "Pending Short"
 hotkeys.mouse.pending_short_hint:
-  ru: "MultiOrders.PendingShortSetClick. Moonbot-дефолт: None_Click."
-  en: "MultiOrders.PendingShortSetClick. Moonbot default: None_Click."
-  es: "MultiOrders.PendingShortSetClick. Valor por defecto: None_Click."
+  ru: "MultiOrders.PendingShortSetClick. Moonbot-дефолт: None_Click. Отложенных ордеров нет в moonproto — слать нечего, жест сохраняется на будущее."
+  en: "MultiOrders.PendingShortSetClick. Moonbot default: None_Click. moonproto has no pending order, so there is nothing to send; the gesture is stored for later."
+  es: "MultiOrders.PendingShortSetClick. Valor por defecto: None_Click. moonproto no tiene órdenes pendientes, así que no hay nada que enviar; el gesto se guarda para más adelante."
 hotkeys.mouse.buy_move:
   ru: "Move Open Long"
   en: "Move Open Long"
@@ -280,9 +296,9 @@ hotkeys.mouse.sell_move:
   en: "Move TP Long"
   es: "Mover TP Long"
 hotkeys.mouse.sell_move_hint:
-  ru: "MultiOrders.SellMoveClick. Moonbot-дефолт: CTRL_Click."
-  en: "MultiOrders.SellMoveClick. Moonbot default: CTRL_Click."
-  es: "MultiOrders.SellMoveClick. Valor por defecto: CTRL_Click."
+  ru: "MultiOrders.SellMoveClick. Тянет линии выхода: TP, стоп и трейлинг. Moonbot-дефолт: CTRL_Click."
+  en: "MultiOrders.SellMoveClick. Drags the exit lines: TP, stop and trailing. Moonbot default: CTRL_Click."
+  es: "MultiOrders.SellMoveClick. Arrastra las líneas de salida: TP, stop y trailing. Valor por defecto: CTRL_Click."
 hotkeys.mouse.buy_move2:
   ru: "Move Open Long #2"
   en: "Move Open Long #2"

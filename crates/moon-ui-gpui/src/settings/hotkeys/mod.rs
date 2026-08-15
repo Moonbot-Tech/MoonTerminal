@@ -25,6 +25,7 @@ enum HotkeySlot {
     NewShort,
     SplitOrder,
     SplitOrderX,
+    SellsToRect,
     ShiftBuyUp,
     ShiftBuyDown,
     ShiftSellUp,
@@ -110,10 +111,12 @@ enum MouseSlot {
 
 /// Returns whether runtime does not yet consume this mouse gesture.
 ///
-/// Order placement checks only BuySet/ShortSet in `ChartPanel::try_place_order_click`; line
-/// movement uses direct left-button dragging and does not inspect the Move gestures.
+/// Placement reads BuySet/ShortSet in `ChartPanel::try_place_order_click`, and the eight Move
+/// gestures are read by `ChartPanel::try_start_order_drag`. Only the two pending slots remain
+/// unconsumed, and not for want of wiring: moonproto's `NewOrderParams` carries no pending
+/// condition, so there is no command to send (see `moonbot_import` and the order-line notes).
 fn mouse_slot_wip(slot: MouseSlot) -> bool {
-    !matches!(slot, MouseSlot::BuySet | MouseSlot::ShortSet)
+    matches!(slot, MouseSlot::PendingLong | MouseSlot::PendingShort)
 }
 
 fn parse_hotkey(raw: &str) -> Option<Keystroke> {
@@ -143,6 +146,7 @@ macro_rules! hotkey_field {
             HotkeySlot::NewShort => $($brw)+ $hotkeys.new_short,
             HotkeySlot::SplitOrder => $($brw)+ $hotkeys.split_order,
             HotkeySlot::SplitOrderX => $($brw)+ $hotkeys.split_order_x,
+            HotkeySlot::SellsToRect => $($brw)+ $hotkeys.sells_to_rect,
             HotkeySlot::ShiftBuyUp => $($brw)+ $hotkeys.shift_buy_up,
             HotkeySlot::ShiftBuyDown => $($brw)+ $hotkeys.shift_buy_down,
             HotkeySlot::ShiftSellUp => $($brw)+ $hotkeys.shift_sell_up,
@@ -287,6 +291,7 @@ fn slot_id(slot: HotkeySlot) -> String {
         HotkeySlot::NewShort => "new-short".into(),
         HotkeySlot::SplitOrder => "split-order".into(),
         HotkeySlot::SplitOrderX => "split-order-x".into(),
+        HotkeySlot::SellsToRect => "sells-to-rect".into(),
         HotkeySlot::ShiftBuyUp => "shift-buy-up".into(),
         HotkeySlot::ShiftBuyDown => "shift-buy-down".into(),
         HotkeySlot::ShiftSellUp => "shift-sell-up".into(),

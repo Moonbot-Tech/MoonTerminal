@@ -6,6 +6,7 @@
 use gpui::*;
 use moon_core::config::{
     HotkeysConfig, MANUAL_STRATEGY_KEYS, MouseGestureBinding, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
+    SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
@@ -199,7 +200,7 @@ impl SettingsView {
                 ),
                 self.hotkey_row(
                     t!("hotkeys.split_order").to_string(),
-                    t!("hotkeys.split_order_hint").to_string(),
+                    t!("hotkeys.split_order_hint", n = SPLIT_ORDER_PARTS).to_string(),
                     HotkeySlot::SplitOrder,
                     &hotkeys,
                     cx,
@@ -208,6 +209,14 @@ impl SettingsView {
                     t!("hotkeys.split_order_x").to_string(),
                     t!("hotkeys.split_order_x_hint").to_string(),
                     HotkeySlot::SplitOrderX,
+                    &hotkeys,
+                    cx,
+                ),
+                self.split_parts_row(&hotkeys, cx),
+                self.hotkey_row(
+                    t!("hotkeys.sells_to_rect").to_string(),
+                    t!("hotkeys.sells_to_rect_hint").to_string(),
+                    HotkeySlot::SellsToRect,
                     &hotkeys,
                     cx,
                 ),
@@ -462,6 +471,15 @@ impl SettingsView {
         let raw = slot_value(hotkeys, slot);
         let parsed = parse_hotkey(raw);
         let invalid = !raw.trim().is_empty() && parsed.is_none();
+        // A key held by two slots resolves by branch order in the dispatcher, so one of the two
+        // silently never fires. Show it here rather than letting the user hunt for it.
+        let conflict = !raw.trim().is_empty()
+            && hotkeys
+                .bound_keys()
+                .iter()
+                .filter(|held| held.as_str() == raw.trim())
+                .count()
+                > 1;
         let id = format!("hotkey-{}", slot_id(slot));
 
         h_flex()
@@ -497,12 +515,16 @@ impl SettingsView {
                     .placeholder(t!("hotkeys.unassigned").to_string())
                     .recording_placeholder(t!("hotkeys.recording").to_string())
                     .invalid(invalid)
-                    .conflict(false)
+                    .conflict(conflict)
                     .compact()
                     .width(176.0)
                     .on_change(
                         cx.processor(move |this, value: Option<Keystroke>, _window, cx| {
-                            let value = value.map(|k| k.unparse()).unwrap_or_default();
+                            // Store the PHYSICAL key: a letter recorded under a Cyrillic layout
+                            // would otherwise be saved as that layout's character.
+                            let value = value
+                                .map(|k| crate::hotkeys::recorded_keystroke(k).unparse())
+                                .unwrap_or_default();
                             this.set_hotkey(slot, value, cx);
                         }),
                     ),
@@ -542,13 +564,43 @@ impl SettingsView {
             })
         });
 
-        let mut row = h_flex()
+        let mut row = self.row_head(title.into(), desc.into(), disabled, cx);
+        if wip {
+            row = row.child(self.wip_tag(&p, cx));
+        }
+        row.child(
+            Self::row_dropdown(id, current.label())
+                .trigger_variant(if current == MouseGestureBinding::None {
+                    MoonButtonVariant::Neutral
+                } else {
+                    MoonButtonVariant::Blue
+                })
+                .menu_width_scaled(228.0)
+                .disabled(disabled)
+                .items(items),
+        )
+        .into_any_element()
+    }
+
+    /// Builds the shared leading half of an editor row: title, then the wrapping description.
+    ///
+    /// Every row on this tab is that pair plus one control, and the sizes are deliberately equal —
+    /// a description one step smaller was tried and read as a different font.
+    fn row_head(
+        &self,
+        title: String,
+        desc: String,
+        disabled: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let p = MoonPalette::active(cx);
+        h_flex()
             .w_full()
             .min_h(design::fit_h_px(cx, 24.0, 12.0, 6.0))
             .gap(design::ui_px(cx, 10.0))
             .items_center()
             .child(
-                MoonText::new(title.into())
+                MoonText::new(title)
                     .uppercase(false)
                     .mono(true)
                     .font_size(11.0)
@@ -559,7 +611,7 @@ impl SettingsView {
             .child(
                 // Match title sizing, use muted text, and wrap within the window.
                 div().flex_1().min_w_0().child(
-                    MoonText::new(desc.into())
+                    MoonText::new(desc)
                         .uppercase(false)
                         .mono(true)
                         .wrap()
@@ -568,24 +620,51 @@ impl SettingsView {
                         .color(p.text_muted)
                         .render(),
                 ),
-            );
-        if wip {
-            row = row.child(self.wip_tag(&p, cx));
-        }
-        row.child(
-            MoonDropdown::new(SharedString::from(id))
-                .label(current.label())
-                .trigger_caret(true)
-                .trigger_size(MoonButtonSize::Micro)
-                .trigger_variant(if current == MouseGestureBinding::None {
-                    MoonButtonVariant::Neutral
-                } else {
-                    MoonButtonVariant::Blue
+            )
+    }
+
+    /// Builds a row's trailing dropdown with the trigger geometry shared by this tab.
+    fn row_dropdown(id: String, label: impl Into<SharedString>) -> MoonDropdown {
+        MoonDropdown::new(SharedString::from(id))
+            .label(label)
+            .trigger_caret(true)
+            .trigger_size(MoonButtonSize::Micro)
+            .trigger_width_scaled(176.0)
+            .menu_size(MoonMenuSize::Compact)
+    }
+
+    /// Builds the part-count selector for `Split N` (Moonbot `Hotkeys.SplitParts`).
+    ///
+    /// A dropdown over the allowed range rather than a text field: the value goes straight into a
+    /// live split command, and a picker cannot leave a half-typed number in the draft.
+    fn split_parts_row(&self, hotkeys: &HotkeysConfig, cx: &Context<Self>) -> AnyElement {
+        let current = hotkeys.split_n_parts();
+        let items = (SPLIT_PARTS_MIN..=SPLIT_PARTS_MAX).map(|parts| {
+            let backend = self.backend.clone();
+            MoonMenuItem::with_key(format!("split-parts-{parts}"), parts.to_string())
+                .checked(i32::from(parts) == current)
+                .on_click(move |_, _, cx| {
+                    backend.update(cx, |b, bcx| {
+                        if let Some(preview) = b.preview.as_mut()
+                            && preview.hotkeys.split_parts != parts
+                        {
+                            preview.hotkeys.split_parts = parts;
+                            bcx.notify();
+                        }
+                    });
                 })
-                .trigger_width_scaled(176.0)
-                .menu_width_scaled(228.0)
-                .menu_size(MoonMenuSize::Compact)
-                .disabled(disabled)
+        });
+
+        self.row_head(
+            t!("hotkeys.split_parts").to_string(),
+            t!("hotkeys.split_parts_hint").to_string(),
+            false,
+            cx,
+        )
+        .child(
+            Self::row_dropdown("hotkey-split-parts".into(), current.to_string())
+                .trigger_variant(MoonButtonVariant::Blue)
+                .menu_width_scaled(120.0)
                 .items(items),
         )
         .into_any_element()

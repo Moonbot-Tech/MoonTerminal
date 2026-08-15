@@ -142,6 +142,12 @@ impl Shell {
         let Some(action) = action else {
             return;
         };
+        // Action-owned policies run before this window's routing: auto-repeat suppression, and the
+        // cursor-addressed target that makes Split act on the order under the pointer.
+        if crate::hotkeys::pre_dispatch(action, ev, &self.backend, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let group = self.group.clone();
         let handled = match action {
             // Step the active tab's Y scale and address the revision to this group. Its ChartTabs

@@ -397,6 +397,12 @@ impl DetachedChartHost {
         let Some(action) = action else {
             return;
         };
+        // Action-owned policies first, exactly as in the group window: auto-repeat suppression and
+        // the cursor-addressed Split target, whose market-level fallback lives in `apply`.
+        if crate::hotkeys::pre_dispatch(action, ev, &self.backend, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let handled = match action {
             // Built-in Ctrl+Shift+F10 resets every window position.
             HotkeyAction::ResetWindows => {

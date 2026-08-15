@@ -46,6 +46,10 @@ pub(super) struct OrderDrag {
     uid: u64,
     kind: LineKind,
     pane: usize,
+    /// Button that started the drag, so only ITS release commits the move. Every button has its
+    /// own release handler, and a right or middle click during a left-button drag would otherwise
+    /// send `move_order` at whatever intermediate price the line had reached.
+    button: TradeMouseButton,
     start_price: f64,
     current_price: f64,
 }
@@ -93,6 +97,12 @@ impl ChartPanel {
     ) -> bool {
         let dbl = click_count >= 2;
         let clear = !modifiers.modified();
+        // Ctrl+Left needs no macOS special case: the mac backend derives the button from
+        // `NSEvent.buttonNumber` (`moon-gpui-macos/src/events.rs`), which stays 0 for a
+        // Control-click, so the press arrives as Left carrying Control exactly as on Windows.
+        // Matching a Ctrl+RIGHT press against a Ctrl+Left binding there was tried and removed: this
+        // same matcher decides order PLACEMENT, where it would let one press satisfy both the
+        // buy-set and short-set bindings and open the wrong side.
         match binding {
             MouseGestureBinding::None => false,
             MouseGestureBinding::LeftDouble => button == TradeMouseButton::Left && dbl && clear,
@@ -548,6 +558,68 @@ impl ChartPanel {
         true
     }
 
+    /// Spread this chart's sells across the band drawn on it, for the Sells-to-rectangle hotkey.
+    ///
+    /// The band belongs to a specific chart, so the pointer picks the chart — the window's own
+    /// target would send a zone drawn on one pane to the market of another, and in a multi-pane
+    /// detached window without an anchor it would send nothing at all. `false` means the pointer is
+    /// over no pane, leaving the caller its window-target fallback.
+    pub fn sells_to_rect_at_cursor(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((core, market)) = self.target_at_cursor() else {
+            return false;
+        };
+        // Same authority check its two siblings make: this panel may be showing a core the group's
+        // Auto rail no longer trades, and the command below is a live bulk move.
+        if !self.workspace_action_allowed(self.backend.read(cx), core) {
+            return true;
+        }
+        self.backend
+            .update(cx, |b, _| crate::hotkeys::sells_to_rect(b, core, &market));
+        // Handled because the pointer NAMED this market, whether or not it had a band to spread
+        // into. Reporting the miss as unhandled would let the caller fall back to the window's own
+        // chart and spread sells on a market the user was not pointing at.
+        true
+    }
+
+    /// Split the order under this panel's cursor into `parts` for the Split Order hotkeys.
+    ///
+    /// The hotkey has no click of its own, so it addresses what the pointer addresses, exactly as
+    /// the built-in Tab/Delete cancellation does. Only an order that HAS a live sell leg qualifies:
+    /// the core splits the sell, and the pointer can equally rest on an entry, stop or trailing line
+    /// of an order that has none. Anything else returns `false`, leaving the caller its market-level
+    /// fallback rather than sending a command the core would discard.
+    pub fn split_hovered_order(&mut self, parts: i32, cx: &mut Context<Self>) -> bool {
+        let Some(hover) = self.order_hover else {
+            return false;
+        };
+        let (core, uid) = (hover.core, hover.uid);
+        {
+            let b = self.backend.read(cx);
+            let Some(lines) = b.session.store().core(core).map(|data| &data.order_lines) else {
+                return false;
+            };
+            let active = lines.order_state(uid).is_some_and(|state| state.active);
+            let has_sell = lines
+                .current_line_price(uid, LineKind::Sell)
+                .is_some_and(|price| price.is_finite() && price > 0.0);
+            if !(active && has_sell) {
+                return false;
+            }
+        }
+        let workspace_group = self.workspace_group.clone();
+        self.backend.update(cx, |b, _| {
+            if b.workspace_action_allows_core(workspace_group.as_deref(), core)
+                && let Err(error) = b.session.split_order(core, uid, parts)
+            {
+                log::warn!("hotkey split hovered order failed: {error}");
+            }
+        });
+        // Handled either way once a target was found. A refusal or a failed send must NOT report
+        // "nothing hovered": the caller's fallback would then split a different order — the one on
+        // its Main chart — which is the opposite of doing nothing.
+        true
+    }
+
     pub(super) fn set_order_interaction(
         &mut self,
         next: Option<OrderHoverKey>,
@@ -646,7 +718,52 @@ impl ChartPanel {
         self.set_order_interaction(next, cx)
     }
 
-    pub(super) fn try_start_order_drag(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
+    /// Start dragging an order line when the press is allowed to grab it.
+    ///
+    /// Two ways in, and the configured gestures only ADD to what already worked:
+    /// - the built-in single LEFT press, whatever modifiers it carries, exactly as before this
+    ///   became configurable — a config with no usable move gesture never leaves a line immovable;
+    /// - a configured Moonbot move gesture for that line's own side and direction, which is the
+    ///   only route for the middle and right buttons and for the double-click bindings.
+    ///
+    /// `native_single` is the window's own "this is not the second press of a pair" answer, kept
+    /// separate from `click_count`: the built-in grab requires both, while a double-click gesture
+    /// deliberately wants the pair-second press this panel counted.
+    pub(super) fn try_start_order_drag(
+        &mut self,
+        button: TradeMouseButton,
+        modifiers: Modifiers,
+        click_count: usize,
+        native_single: bool,
+        pos: (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // A live drag owns the line until ITS button is released. A second button pressed mid-drag
+        // would otherwise replace the drag, and the first button's release would then find a drag
+        // it does not own, drop the move on the floor and spring the line back.
+        if self.order_drag.is_some() {
+            return false;
+        }
+        // The built-in grab needs no configuration at all, so it never reads one: the copy below is
+        // taken only for a press that has to be matched against the gestures, which is every press
+        // EXCEPT the ordinary left click this path exists to keep cheap.
+        let plain_left = button == TradeMouseButton::Left && click_count <= 1 && native_single;
+        let hotkeys = (!plain_left).then(|| {
+            let b = self.backend.read(cx);
+            b.preview.as_ref().unwrap_or(&b.config).hotkeys.clone()
+        });
+        // Answer the cheap question first: unless this press can grab SOMETHING, the hit test below
+        // is wasted. It runs on every press over the chart, and with the shipped defaults no gesture
+        // names the middle or right button at all, so a plain right-drag zoom would otherwise pay
+        // for a scan of the market's orders on every press.
+        if let Some(hotkeys) = &hotkeys
+            && !hotkeys
+                .all_move_gestures()
+                .into_iter()
+                .any(|g| Self::gesture_matches(g, button, modifiers, click_count))
+        {
+            return false;
+        }
         // Separate-zone mode permits order-line dragging only inside the order book.
         if self.separate_zones(cx) && self.glass_pane_at(pos).is_none() {
             return false;
@@ -659,6 +776,18 @@ impl ChartPanel {
         if hit.on_start_cross {
             return false;
         }
+        // Now that the line is known, narrow a GESTURE-driven grab to the pair that owns its side: a
+        // TP gesture must not move the entry, and a long gesture must not move a short's line. The
+        // built-in left grab is deliberately not narrowed — it is the "any line, as before" route
+        // and has no side of its own.
+        if let Some(hotkeys) = &hotkeys
+            && !hotkeys
+                .move_gestures(hit.kind == LineKind::Buy, hit.short)
+                .into_iter()
+                .any(|g| Self::gesture_matches(g, button, modifiers, click_count))
+        {
+            return false;
+        }
         if !self.workspace_action_allowed(&self.backend.read(cx), hit.core) {
             return false;
         }
@@ -668,6 +797,7 @@ impl ChartPanel {
             uid: hit.uid,
             kind: hit.kind,
             pane: hit.pane,
+            button,
             start_price: price,
             current_price: price,
         });
@@ -705,7 +835,18 @@ impl ChartPanel {
         self.sync_native_cursor()
     }
 
-    pub(super) fn finish_order_drag(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Finish a drag on the release of the button that started it.
+    ///
+    /// A release from any OTHER button leaves the drag live and returns `false`, so its handler
+    /// keeps its normal behavior instead of committing someone else's gesture.
+    pub(super) fn finish_order_drag(
+        &mut self,
+        button: TradeMouseButton,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.order_drag.as_ref().is_some_and(|d| d.button != button) {
+            return false;
+        }
         let Some(drag) = self.order_drag.take() else {
             return false;
         };

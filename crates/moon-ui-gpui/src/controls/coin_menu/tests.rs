@@ -39,6 +39,7 @@ fn shared_menu_mutations_revalidate_before_their_first_side_effect() {
         ("\"coin-order-edit\"", "crate::panels::open_order_edit("),
         ("\"coin-order-join\"", "b.session.join_sells("),
         ("\"coin-order-split\"", "b.session.split_order("),
+        ("\"coin-order-split-n\"", "b.session.split_order("),
         ("\"coin-order-cancel\"", "b.session.cancel_order("),
     ];
 

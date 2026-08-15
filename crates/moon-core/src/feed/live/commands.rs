@@ -816,6 +816,14 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::SplitOrderForMarket { market, parts }) => {
                 trade::split_order_for_market(client, server.id, market, parts);
             }
+            Ok(CoreCmd::SellsToZone {
+                market,
+                min_price,
+                max_price,
+                short,
+            }) => {
+                trade::sells_to_zone(client, server.id, market, min_price, max_price, short);
+            }
             Ok(CoreCmd::EditClientSettings(edit)) => {
                 client_settings_sequence.enqueue_edit(edit);
             }

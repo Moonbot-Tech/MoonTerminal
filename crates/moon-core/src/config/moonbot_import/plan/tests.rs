@@ -102,14 +102,17 @@ fn theme_mode_and_hotkeys_mapped() {
     assert_eq!(theme.value, PlannedValue::UiThemeLight(false));
     assert!(!theme.same);
 
-    // Cancel Buy = Alt+Z → keystroke alt-z; the current value is empty. "Hotkeys" group.
+    // Cancel Buy = Alt+Z → keystroke alt-z, which is ALSO the shipped default now that the
+    // Terminal's keyboard defaults are Moonbot's own: the item exists for completeness with
+    // `same` set. "Hotkeys" group.
     let cb = find(&plan.hotkeys, "hotkey.cancel_buy").unwrap();
     assert_eq!(cb.value, PlannedValue::Keystroke("alt-z".into()));
-    assert_eq!(cb.current, "—");
-    assert!(!cb.same);
+    assert_eq!(cb.current, "alt-z");
+    assert!(cb.same);
 
-    // CancelAllBuys Ctrl+Delete matches the local default, so the item EXISTS with same set.
-    assert!(find(&plan.hotkeys, "hotkey.cancel_all_buys").unwrap().same);
+    // The fixture's CancelAllBuys is Ctrl+Delete, which is NOT Moonbot's own Alt+A default that
+    // this build ships, so that item is a real change.
+    assert!(!find(&plan.hotkeys, "hotkey.cancel_all_buys").unwrap().same);
 
     // OKeys F1..F6 match the order_size defaults, so the items EXIST with same set.
     assert!(find(&plan.hotkeys, "hotkey.order_size.0").unwrap().same);
@@ -232,6 +235,47 @@ fn tcolor_hex_and_decimal() {
 fn fmt_nums_compact() {
     assert_eq!(super::fmt_nums(&[70.0f64, 80.5, 2500.0]), "70, 80.5, 2500");
     assert_eq!(super::fmt_nums(&[1.0f32, 5.0, 100.0]), "1, 5, 100");
+}
+
+/// Pins how `Hotkeys.SplitParts` reaches the Split Order X count.
+///
+/// Plausible breakage: reporting an unset (zero) value as out of range floods every import with a
+/// false "not imported" row, dropping an above-maximum value loses a real user setting, and
+/// comparing `same` against the clamped reading hides a hand-edited invalid file from repair.
+#[test]
+fn split_parts_import_skips_unset_clamps_high_and_diffs_the_raw_value() {
+    let (t, o) = (ChartThemeSet::default(), OrdersStyleSet::default());
+    let h = HotkeysConfig::default();
+    let plan = build_plan(&mb_config(), &ctx(&h, &t, &o));
+    let item = find(&plan.hotkeys, "hotkey.split_parts").expect("SplitParts must be importable");
+    assert_eq!(item.new, "2");
+    assert!(item.same, "the fixture matches the shipped default");
+
+    // An unfilled Hotkeys block, and a never-configured zero, are silent rather than "out of range".
+    let mut unset = mb_config();
+    unset.ui.hotkeys.split_parts = 0;
+    let plan = build_plan(&unset, &ctx(&h, &t, &o));
+    assert!(find(&plan.hotkeys, "hotkey.split_parts").is_none());
+    assert!(!plan.unsupported.iter().any(|u| u.name == "SplitParts"));
+    let mut unfilled = mb_config();
+    unfilled.ui.hotkeys.filled = false;
+    let plan = build_plan(&unfilled, &ctx(&h, &t, &o));
+    assert!(find(&plan.hotkeys, "hotkey.split_parts").is_none());
+
+    // Above the maximum the value still arrives, capped, and the cap is stated.
+    let mut high = mb_config();
+    high.ui.hotkeys.split_parts = 12;
+    let plan = build_plan(&high, &ctx(&h, &t, &o));
+    assert_eq!(find(&plan.hotkeys, "hotkey.split_parts").unwrap().new, "10");
+    assert!(plan.warnings.iter().any(|w| w.contains("SplitParts = 12")));
+
+    // A raw out-of-range local value differs from the import even when its clamped reading matches.
+    let broken = HotkeysConfig {
+        split_parts: 0,
+        ..HotkeysConfig::default()
+    };
+    let plan = build_plan(&mb_config(), &ctx(&broken, &t, &o));
+    assert!(!find(&plan.hotkeys, "hotkey.split_parts").unwrap().same);
 }
 
 #[test]

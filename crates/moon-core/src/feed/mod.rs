@@ -470,6 +470,15 @@ pub enum CoreCmd {
     /// The feed sends this live trading action only when exactly one active sell
     /// order can be resolved; zero or multiple candidates are a no-op.
     SplitOrderForMarket { market: String, parts: i32 },
+    /// Spread a market's sell orders across a price zone — Moonbot's "sells to rectangle".
+    /// The core performs the spreading; this live action carries only the market, the two prices
+    /// already ordered low to high, and the position side whose exits are addressed.
+    SellsToZone {
+        market: String,
+        min_price: f64,
+        max_price: f64,
+        short: bool,
+    },
     /// Start or restart the core runtime from the core-settings popup through moonproto
     /// `settings().restart_now()`. It starts the market runtime, leaves passive mode, and starts
     /// checked strategies. The protocol has no stop operation.

@@ -94,7 +94,11 @@ fn selection_filter_and_unknown_ids() {
     assert_eq!(out.applied, 1);
     assert_eq!(out.unknown_ids, vec!["bogus.id".to_string()]);
     assert_eq!(cfg.hotkeys.cancel_buy, "alt-z");
-    assert!(cfg.hotkeys.panic_sell.is_empty()); // Not selected, so it remains unchanged.
+    // Not selected, so it keeps whatever the config held — the shipped default, not the plan's value.
+    assert_eq!(
+        cfg.hotkeys.panic_sell,
+        crate::config::HotkeysConfig::default().panic_sell
+    );
 }
 
 /// Regression target: applying only the first selected core's group leaves another selected

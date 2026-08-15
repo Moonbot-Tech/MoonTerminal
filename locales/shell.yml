@@ -313,9 +313,9 @@ chart.order_menu.join_sells:
   en: "Join all sells"
   es: "Join all sells"
 chart.order_menu.split:
-  ru: "Split order"
-  en: "Split order"
-  es: "Split order"
+  ru: "Split order (%{n})"
+  en: "Split order (%{n})"
+  es: "Split order (%{n})"
 coin_menu.open:
   ru: "Открыть на графике"
   en: "Open on chart"

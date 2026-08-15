@@ -60,6 +60,7 @@ pub use groups::{
 };
 pub use hotkeys::{
     HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
+    SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
 pub use lang::Language;
 pub use layout::{
@@ -326,7 +327,11 @@ impl AppConfig {
             // hotkeys.toml takes precedence. If absent, migrate the legacy settings.toml
             // section (or its default) once into the new file.
             let hotkeys = hotkeys_file.unwrap_or_else(|| {
-                let h = merged.hotkeys.clone();
+                let mut h = merged.hotkeys.clone();
+                // The legacy section predates the shipped keys, so it goes through the same
+                // one-time fill the new file gets on load — otherwise an upgrader would see the
+                // unbound slots on this launch and the keys only on the next one.
+                h.fill_unbound_slots();
                 if let Err(e) = h.save() {
                     log::warn!("не записал hotkeys.toml при миграции: {e:#}");
                 }

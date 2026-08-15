@@ -564,6 +564,10 @@ impl Render for ChartPanel {
                 MouseButton::Middle,
                 cx.listener(render_input::mouse_down_middle),
             )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(render_input::mouse_up_middle),
+            )
             .on_mouse_move(cx.listener(render_input::mouse_move))
             .on_hover(cx.listener(render_input::hover))
             // Ctrl gates the news-mark card. Without this the card would only appear after the

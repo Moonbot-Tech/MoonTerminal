@@ -12,6 +12,7 @@ use gpui::*;
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowExt as _};
 use rust_i18n::t;
 
+use moon_core::config::SPLIT_ORDER_PARTS;
 use moon_core::session::CoreId;
 
 use crate::Backend;
@@ -323,23 +324,46 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                         });
                     }),
                 );
-                let backend_sp = backend.clone();
-                let workspace_group = ctx.workspace_group.clone();
-                items.push(
-                    MoonMenuItem::with_key(
-                        "coin-order-split",
-                        t!("chart.order_menu.split").to_string(),
-                    )
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        backend_sp.update(app, |b, _| {
-                            if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
-                            {
-                                let _ = b.session.split_order(core, uid, SPLIT_PARTS);
-                            }
-                        });
-                    }),
-                );
+                // Two Split entries, as in Moonbot: the fixed three and the configurable Split
+                // Order X count. The second is dropped when both would send the same number. The
+                // count comes from the settings DRAFT for the same reason the hotkey reads it —
+                // with the settings window open, the draft is the number the user is looking at —
+                // and each entry SENDS the number its own label showed, rather than re-reading a
+                // value that an edit made meanwhile would have changed under the click.
+                let split_n = b
+                    .preview
+                    .as_ref()
+                    .unwrap_or(&b.config)
+                    .hotkeys
+                    .split_n_parts();
+                for (key, parts) in [
+                    ("coin-order-split", SPLIT_ORDER_PARTS),
+                    ("coin-order-split-n", split_n),
+                ] {
+                    if key.ends_with("-n") && split_n == SPLIT_ORDER_PARTS {
+                        continue;
+                    }
+                    let backend_sp = backend.clone();
+                    let workspace_group = ctx.workspace_group.clone();
+                    items.push(
+                        MoonMenuItem::with_key(
+                            key,
+                            t!("chart.order_menu.split", n = parts).to_string(),
+                        )
+                        .on_click(move |_, window, app| {
+                            window.close_context_menu(app);
+                            backend_sp.update(app, |b, _| {
+                                if workspace_action_allows_cores(
+                                    b,
+                                    workspace_group.as_deref(),
+                                    &[core],
+                                ) {
+                                    let _ = b.session.split_order(core, uid, parts);
+                                }
+                            });
+                        }),
+                    );
+                }
             }
             // A chart Buy line or a table row with side=None cancels the entire order by UID.
             Some(OrderSide::Buy) | None => {
@@ -375,9 +399,6 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
 
     items
 }
-
-/// Number of parts produced by Split Order, matching the chart-line action and Moonbot's default.
-const SPLIT_PARTS: i32 = 2;
 
 /// Validate every captured mutation target against one current workspace authority snapshot.
 ///
