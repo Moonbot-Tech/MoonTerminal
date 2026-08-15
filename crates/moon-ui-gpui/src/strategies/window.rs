@@ -102,10 +102,11 @@ fn workspace_allows_reveal(backend: &Backend, workspace_group: Option<&str>, cor
 }
 
 /// Open or focus the Strategies window and navigate to `strat_id` on `core`.
-/// Render drains the request, expands the target core and folders, and selects the strategy. Entry
-/// points include chart order-line context menus and the Orders table's Strat column. Group-owned
-/// callers pass their workspace group so a retained callback cannot switch or reveal a core hidden
-/// by a later rail selection; unscoped callers pass `None`.
+/// Render drains the request, clears any tree filter that hides the target, persists active-only as
+/// disabled when it was hiding the target, expands the target core and folders, and selects the
+/// strategy. Entry points include chart order-line context menus and the Orders table's Strat
+/// column. Group-owned callers pass their workspace group so a retained callback cannot switch or
+/// reveal a core hidden by a later rail selection; unscoped callers pass `None`.
 ///
 /// Args:
 ///     backend: Shared state and singleton-window authority.
@@ -149,7 +150,8 @@ pub fn open_goto(
 /// Ask an ALREADY-OPEN Strategies window to reveal a strategy by name.
 ///
 /// By name because the caller cannot know the id: a created strategy's id is assigned core-side
-/// and only arrives with the snapshot echo.
+/// and only arrives with the snapshot echo. Render clears any hiding tree filter, persisting
+/// active-only as disabled when required, before selecting the echoed row.
 ///
 /// Deliberately does NOT open the window. A dialog in another window that spawns a second window
 /// is a surprise, and a request parked on `Backend` for a window that is never opened would fire

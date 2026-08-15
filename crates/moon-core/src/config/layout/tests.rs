@@ -749,6 +749,44 @@ fn profit_monitor_preferences_round_trip_without_endangering_layout() {
     }
 }
 
+/// `layout.rs:WindowLayout::strategies_*` must preserve explicit choices and ignore malformed
+/// hand edits; replacing either optional lenient field with a bare boolean would lose the
+/// absent-versus-disabled distinction or discard neighboring layout preferences on restart.
+#[test]
+fn strategies_preferences_round_trip_without_endangering_layout() {
+    let saved = WindowLayout {
+        strategies_group_by_venue: Some(false),
+        strategies_active_only: Some(true),
+        analytics_period: Some("p-cur-month".to_string()),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load");
+    assert_eq!(decoded.strategies_group_by_venue, Some(false));
+    assert_eq!(decoded.strategies_active_only, Some(true));
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+
+    let absent: WindowLayout = toml::from_str("analytics_period = \"p-cur-month\"\n")
+        .expect("a layout written before Strategies preferences must remain readable");
+    assert_eq!(absent.strategies_group_by_venue, None);
+    assert_eq!(absent.strategies_active_only, None);
+
+    for written in ["17", "\"maybe\"", "[true]", "{ enabled = true }"] {
+        let doc = format!(
+            "analytics_period = \"p-cur-month\"\nstrategies_group_by_venue = {written}\nstrategies_active_only = {written}\n"
+        );
+        let decoded: WindowLayout = toml::from_str(&doc)
+            .unwrap_or_else(|error| panic!("{written} must not reject the layout: {error}"));
+        assert_eq!(
+            decoded.analytics_period.as_deref(),
+            Some("p-cur-month"),
+            "{written}: a malformed Strategies preference discarded a neighboring setting"
+        );
+        assert_eq!(decoded.strategies_group_by_venue, None);
+        assert_eq!(decoded.strategies_active_only, None);
+    }
+}
+
 /// The header clock's compatibility offset must survive as the seed city migration reads.
 ///
 /// Breakage this pins: deleting `layout.rs:header_clock_offset_min` as dead code once

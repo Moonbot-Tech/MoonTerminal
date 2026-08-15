@@ -19,6 +19,22 @@ strat.all_dirs:
   ru: "все стороны"
   en: "all sides"
   es: "todos los lados"
+strat.settings.title:
+  ru: "Настройки стратегий"
+  en: "Strategies settings"
+  es: "Ajustes de estrategias"
+strat.settings.display:
+  ru: "Отображение"
+  en: "Display"
+  es: "Visualización"
+strat.settings.group_by_venue:
+  ru: "Группировать ядра по биржам"
+  en: "Group cores by exchange"
+  es: "Agrupar núcleos por exchange"
+strat.settings.active_only:
+  ru: "Показывать только активные"
+  en: "Show active strategies only"
+  es: "Mostrar solo las activas"
 strat.clear:
   ru: "Очистить"
   en: "Clear"

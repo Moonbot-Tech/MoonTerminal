@@ -274,12 +274,11 @@ fn the_per_frame_row_pass_uses_the_prepared_filter() {
     );
 }
 
-/// In `tree::tree_panel` and `params::params_panel`, restoring either active-only control/state or
-/// an active-dependent `continue` would hide unchecked strategies or inactive fields again;
-/// dropping the expand/collapse caret, or parking it on its own empty row, would waste the
-/// header the active-only checkbox used to share.
+/// Strategies may own a persisted `active_only` filter, but the retired toolbar/parameter controls
+/// and active-dependent parameter skipping must stay gone. Reintroducing any retired symbol would
+/// duplicate the settings-popup authority or hide dependency-inactive fields again.
 #[test]
-fn tree_and_params_show_every_row_without_filter_controls() {
+fn persisted_active_filter_does_not_restore_retired_controls_or_hide_params() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("strategies");
@@ -288,6 +287,7 @@ fn tree_and_params_show_every_row_without_filter_controls() {
 
     let forbidden = [
         ["only", "active"].join("_"),
+        ["only", "active", "params"].join("_"),
         ["flt", "active"].join("-"),
         ["params", "only", "active"].join("-"),
     ];
@@ -303,7 +303,7 @@ fn tree_and_params_show_every_row_without_filter_controls() {
     }
     assert!(
         leftovers.is_empty(),
-        "active-only controls and state must stay decommissioned:\n{}",
+        "retired active-only toolbar and parameter controls must stay decommissioned:\n{}",
         leftovers.join("\n")
     );
 
@@ -311,9 +311,13 @@ fn tree_and_params_show_every_row_without_filter_controls() {
     let tree_panel = code_only(braced_body(&tree, "pub(super) fn tree_panel("));
     assert!(
         tree_panel.contains("MoonButton::new(\"expand-all\")")
-            && tree_panel.contains(".justify_between()")
-            && !tree_panel.contains(".justify_end()"),
-        "the expand/collapse caret must sit on the filter row, right-aligned, not on an empty row"
+            && tree_panel.contains("settings_popover(")
+            && tree_panel.contains(".ml_auto()"),
+        "the gear and expand/collapse caret must share the right-aligned filter-row cluster"
+    );
+    assert!(
+        !tree_panel.contains("MoonCheckbox::new"),
+        "preference checkboxes belong inside strategies/settings.rs, never directly on tree_panel"
     );
 
     let params = read_src("strategies/params.rs");
@@ -383,7 +387,7 @@ fn tree_state_events_reassert_the_windows_own_expansion() {
 #[test]
 fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
     let src = read_src("strategies/tree/moon.rs");
-    let body = braced_body(&src, "pub(crate) fn build(");
+    let body = braced_body(&src, "fn build_core_root(");
     assert!(
         body.contains("searching || view.expanded_cores.contains(&core)"),
         "an open core must include the search-forced case"
@@ -402,18 +406,18 @@ fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
         "the subtree must be built inside the open-core branch"
     );
     assert!(
-        !open_only.contains("NodeData::Core") && !open_only.contains("section_children.push("),
+        !open_only.contains("NodeData::Core") && !open_only.contains("MoonTreeItem::new(cid"),
         "the core's own row must be emitted OUTSIDE that branch, or every collapsed core vanishes"
     );
     assert!(
-        body.contains("NodeData::Core") && body.contains("section_children.push("),
+        body.contains("NodeData::Core") && body.contains("MoonTreeItem::new(cid"),
         "every listed core must emit its own row, pruned or not"
     );
 }
 
-/// Exchange headings must follow canonical venue identity and disappear when filtering removes
-/// their last core; grouping by reported captions would split one venue and stale cache input would
-/// keep an old heading until an unrelated tree action occurred.
+/// Grouping ON must preserve canonical venue headings, while grouping OFF emits the same canonical
+/// core roots directly. Reusing reported captions would split one venue, and retaining an exchange
+/// wrapper in the flat branch would leave grouping visually enabled after the checkbox is cleared.
 #[test]
 fn strategy_tree_groups_visible_cores_by_venue_identity() {
     let window = read_src("strategies/mod.rs");
@@ -430,13 +434,21 @@ fn strategy_tree_groups_visible_cores_by_venue_identity() {
 
     let tree = read_src("strategies/tree/moon.rs");
     let build = code_only(braced_body(&tree, "pub(crate) fn build("));
-    assert!(build.contains("crate::core_order::exchange_sections("));
-    assert!(build.contains("crate::controls::venue_section_label("));
-    assert!(build.contains("section_children.is_empty()"));
+    let grouped = braced_body(&build, "if view.prefs.group_by_venue {");
+    assert!(grouped.contains("crate::core_order::exchange_sections("));
+    assert!(grouped.contains("crate::controls::venue_section_label("));
+    assert!(grouped.contains("section_children.is_empty()"));
     assert!(
-        build.contains(".folder(false)") && build.contains(".disabled(true)"),
+        grouped.contains(".folder(false)") && grouped.contains(".disabled(true)"),
         "exchange headings must expose children without becoming selectable/collapsible folders"
     );
+    assert!(
+        build.contains("} else {")
+            && build.contains("for (core, core_name) in cores.iter()")
+            && build.contains("items.push(root)"),
+        "grouping OFF must emit canonical core roots directly without an Exchange wrapper"
+    );
+    assert!(!grouped.contains("items.push(root)"));
     assert!(!build.contains(".reported ==") && !build.contains(".reported.cmp("));
     let id = code_only(braced_body(&tree, "fn id_exchange("));
     assert!(id.contains("venue.id.code") && id.contains("venue.id.dex"));
@@ -495,13 +507,188 @@ fn selected_folder_hover_does_not_replace_its_surface() {
     assert!(!row.contains(".when(selected, |s| s.bg(") || !row.contains("\n.hover("));
 }
 
+/// The top filter row must wrap fitted triggers while keeping the gear and caret in one atomic
+/// right-aligned cluster. Restoring fixed trigger widths or letting the cluster split recreates
+/// horizontal overflow in a narrow Strategies pane.
+#[test]
+fn strategy_filter_row_wraps_fitted_controls_with_an_atomic_settings_cluster() {
+    let tree = read_src("strategies/tree/mod.rs");
+    let panel = code_only(braced_body(&tree, "pub(super) fn tree_panel("));
+    assert!(
+        panel.contains(".flex_wrap()"),
+        "the top filter row must wrap"
+    );
+    let cluster = panel
+        .find(".ml_auto()")
+        .map(|at| &panel[at..])
+        .expect("the settings/caret cluster must be right-aligned");
+    assert!(cluster.contains(".flex_none()"));
+    let gear_at = cluster
+        .find(".child(settings)")
+        .expect("the settings popover must be inside the atomic cluster");
+    let caret_at = cluster
+        .find("MoonButton::new(\"expand-all\")")
+        .expect("the expand/collapse caret must be inside the atomic cluster");
+    assert!(gear_at < caret_at);
+
+    let kind = braced_body(&tree, "fn combo_kind(");
+    let direction = braced_body(&tree, "fn combo_dir(");
+    let ui = read_src("strategies/tree/ui.rs");
+    let create = braced_body(&ui, "pub(super) fn create_dropdown(");
+    for (body, bounds) in [
+        (kind, ".fit_trigger_width(96.0, 116.0)"),
+        (direction, ".fit_trigger_width(96.0, 128.0)"),
+        (create, ".fit_trigger_width(96.0, 110.0)"),
+    ] {
+        assert!(
+            body.contains(bounds),
+            "missing fitted trigger bounds {bounds}"
+        );
+        assert!(!body.contains(".trigger_width_scaled("));
+    }
+}
+
+/// Strategies settings must own exactly two optional layout preferences and one dirty/write path;
+/// bypassing `write_pref` would make popup edits or explicit reveals diverge across restart.
+#[test]
+fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
+    let settings = read_src("strategies/settings.rs");
+    let state = read_src("strategies/state.rs");
+    let layout = read_src("../../moon-core/src/config/layout.rs");
+    let selection = read_src("strategies/selection.rs");
+    let dialogs = read_src("strategies/tree/dialogs.rs");
+    let dnd = read_src("strategies/tree/dnd.rs");
+    let locales = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("locales")
+            .join("strategies.yml"),
+    )
+    .expect("read Strategies locales");
+
+    for id in ["group-by-venue", "active-only"] {
+        assert!(
+            settings.contains(&format!("id: \"{id}\"")),
+            "missing row id {id}"
+        );
+    }
+    for key in [
+        "strat.settings.title",
+        "strat.settings.display",
+        "strat.settings.group_by_venue",
+        "strat.settings.active_only",
+    ] {
+        assert!(settings.contains(key), "settings UI does not consume {key}");
+        assert!(
+            locales.contains(&format!("{key}:")),
+            "locales do not define {key}"
+        );
+    }
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut production_sources = Vec::new();
+    rust_sources(&src_root, &mut production_sources);
+    for field in ["strategies_group_by_venue", "strategies_active_only"] {
+        let declaration = format!("pub {field}: Option<bool>");
+        assert!(
+            layout.contains(&declaration),
+            "{field} must remain an optional layout preference"
+        );
+        let at = layout
+            .find(&declaration)
+            .unwrap_or_else(|| panic!("missing {field} declaration"));
+        let attrs = &layout[at.saturating_sub(120)..at];
+        assert!(
+            attrs.contains("#[serde(default, deserialize_with = \"de_lenient\")]"),
+            "{field} must use optional generic lenient decoding"
+        );
+        assert_eq!(
+            settings
+                .matches(&format!("layout.{field} = Some(value)"))
+                .count(),
+            1,
+            "{field} must have one Strategies-owned store closure"
+        );
+        let assignments = production_sources
+            .iter()
+            .map(|path| {
+                fs::read_to_string(path)
+                    .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+                    .matches(&format!(".{field} = Some("))
+                    .count()
+            })
+            .sum::<usize>();
+        assert_eq!(
+            assignments, 1,
+            "{field} must have exactly one production writer"
+        );
+    }
+    assert!(!settings.contains("de_lenient_bool"));
+
+    let write = code_only(braced_body(&settings, "fn write_pref("));
+    assert!(write.contains("if (row.read)(&self.prefs) == value"));
+    assert!(write.contains("store(&mut backend.layout, value)"));
+    assert!(write.contains("backend.layout_dirty = true"));
+    assert!(write.contains("self.filter.active_only = self.prefs.active_only"));
+    assert!(!settings.contains("strategies_open"));
+
+    let restore = code_only(braced_body(&state, "pub(super) fn new("));
+    assert!(restore.contains("StrategiesPrefs::restore(&backend.read(cx).layout)"));
+    assert!(restore.contains("active_only: prefs.active_only"));
+    assert!(restore.contains("settings_open: false"));
+
+    let disable = code_only(braced_body(
+        &settings,
+        "pub(super) fn disable_active_only_for_reveal(",
+    ));
+    assert!(disable.contains("self.write_pref(&PREF_ROWS[1], false, cx)"));
+    for function in ["fn clear_filters_for_reveal(", "fn queue_pending_name("] {
+        assert!(
+            braced_body(&selection, function).contains("disable_active_only_for_reveal(cx)"),
+            "{function} must clear active-only through the persisted setter"
+        );
+    }
+    assert!(dialogs.contains("queue_pending_name(core, name, cx)"));
+    assert!(dnd.contains("queue_pending_name(core, name, cx)"));
+
+    let panel = code_only(braced_body(
+        &read_src("strategies/tree/mod.rs"),
+        "pub(super) fn tree_panel(",
+    ));
+    assert!(panel.contains("settings_popover(") && panel.contains("settings_trigger("));
+    assert!(!panel.contains("MoonCheckbox::new"));
+    assert!(settings.contains("MoonCheckbox::new"));
+    assert!(settings.contains(".close_on_content_click(false)"));
+    assert!(settings.contains("fn settings_content_width("));
+    assert!(settings.contains(".content_width(settings_content_width(cx))"));
+    let measured_width = code_only(braced_body(&settings, "fn settings_content_width("));
+    assert!(measured_width.contains("design::ui_text_width("));
+    assert!(measured_width.contains("COMPACT_CHECKBOX_MARK + COMPACT_CHECKBOX_GAP"));
+    assert!(measured_width.contains("popup_group_inset_px(cx)"));
+    assert!(!settings.contains("const CONTENT_WIDTH"));
+    for tuner_symbol in [
+        "strat_active_only",
+        "an-strat-active",
+        "analytics.strat.active_only",
+    ] {
+        assert!(
+            !settings.contains(tuner_symbol),
+            "Strategies settings must not reuse Analytics Tuner symbol {tuner_symbol}"
+        );
+    }
+}
+
 /// The footer must be one Action-size row whose five labels collapse together after measuring the
 /// current locale and staged text; restoring either old v-flex stack recreates the cramped layout.
 #[test]
 fn strategy_footer_is_one_atomic_action_row() {
     let tree = read_src("strategies/tree/mod.rs");
     let action = code_only(braced_body(&tree, "fn action_bar("));
-    assert!(!action.contains("v_flex()") && !action.contains("MoonButtonSize::Micro"));
+    assert!(
+        !action.contains("v_flex()")
+            && !action.contains(".flex_wrap()")
+            && !action.contains("MoonButtonSize::Micro")
+    );
     assert!(
         action.contains("let show_labels") && action.contains("ui::footer_labels_fit("),
         "action_bar must compute one shared footer-density decision"
@@ -517,7 +704,7 @@ fn strategy_footer_is_one_atomic_action_row() {
 
     let ui = read_src("strategies/tree/ui.rs");
     let selection = code_only(braced_body(&ui, "pub(super) fn selection_toolbar("));
-    assert!(!selection.contains("v_flex()"));
+    assert!(!selection.contains("v_flex()") && !selection.contains(".flex_wrap()"));
     assert!(!selection.contains("176.0") && !selection.contains("MoonButtonSize::Micro"));
     assert!(selection.matches("MoonButtonSize::Action").count() >= 3);
     for icon in ["icons/copy.svg", "icons/inbox.svg", "icons/delete.svg"] {
@@ -554,6 +741,7 @@ fn the_tree_cache_signature_covers_every_input_the_build_reads() {
     // the same way as one written inline — the formatter decides which of the two it is.
     let scanned: String = [
         "pub(crate) fn build(",
+        "fn build_core_root(",
         "fn build_core_subtree(",
         "fn convert_node(",
     ]
@@ -609,6 +797,16 @@ fn the_tree_cache_signature_covers_every_input_the_build_reads() {
     // as CODE, not as any occurrence: the prose here names the counters it rejects, so a substring
     // search over the whole file would go green on a comment.
     let sig_body = code_only(braced_body(&cache, "pub(crate) fn data_sig("));
+    for read in [
+        "view.prefs.group_by_venue",
+        "view.filter.active_only",
+        "venues_digest(",
+    ] {
+        assert!(
+            sig_body.contains(read),
+            "the tree cache must retain preference/venue input {read}"
+        );
+    }
     for read in ["cd.strategies_rev", "open_orders_digest(cd)"] {
         assert!(
             sig_body.contains(read),

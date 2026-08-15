@@ -349,6 +349,18 @@ pub struct WindowLayout {
     /// and "Versions" column collapsed state, persisted like table-column widths.
     #[serde(default)]
     pub strategies_panels: StrategiesPanels,
+    /// Strategies: whether core roots are grouped under exchange headings.
+    ///
+    /// `None` keeps the Strategies-owned default. Read leniently so a malformed hand edit cannot
+    /// discard the complete window layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub strategies_group_by_venue: Option<bool>,
+    /// Strategies: whether unchecked live strategies are hidden from the tree.
+    ///
+    /// `None` keeps the Strategies-owned default. Explicit reveals persist this preference as
+    /// disabled so the requested row remains visible after restart.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub strategies_active_only: Option<bool>,
     /// Global "Assets" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub assets_window: Option<GeomRect>,
