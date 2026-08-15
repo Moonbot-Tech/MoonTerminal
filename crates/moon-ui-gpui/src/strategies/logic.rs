@@ -405,21 +405,6 @@ pub(super) fn toggle<T: std::cmp::Eq + std::hash::Hash>(set: &mut HashSet<T>, ke
     }
 }
 
-/// Return strategy kinds present in the tree as ordinal/name pairs sorted by name.
-pub(super) fn kinds_present(cores: &[(CoreId, String)], store: &CoreStore) -> Vec<(u8, String)> {
-    let mut map: std::collections::BTreeMap<u8, String> = std::collections::BTreeMap::new();
-    for (c, _) in cores {
-        if let Some(cd) = store.core(*c) {
-            for r in &cd.strategies {
-                map.entry(r.kind_ordinal).or_insert_with(|| r.kind.clone());
-            }
-        }
-    }
-    let mut v: Vec<(u8, String)> = map.into_iter().collect();
-    v.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
-    v
-}
-
 /// Folder-tree node containing named child folders and strategies directly in this folder.
 #[derive(Default)]
 pub(super) struct FolderNode<'a> {

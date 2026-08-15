@@ -13,9 +13,11 @@
 //!
 //! The signature is the whole correctness argument. Anything `build` reads and the signature omits
 //! becomes a tree that renders stale — a strategy that stays checked after the core said otherwise,
-//! a folder count frozen mid-session. [`super::tests`] holds the contract that keeps the two in
-//! step; the guarantee it rests on is that every field is listed HERE, in one function, rather than
-//! sampled across the call site.
+//! a folder count frozen mid-session. The contract that keeps the two in step is
+//! `the_tree_cache_signature_covers_every_input_the_build_reads` in
+//! `tests/theme_contract/strategies.rs`: it scans the build's own source for `view.<field>` reads
+//! and demands each one appear below. The guarantee it rests on is that every field is listed HERE,
+//! in one function, rather than sampled across the call site.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -56,6 +58,13 @@ pub(crate) struct TreeSig {
     pub(crate) store: u64,
     /// Filter, expansion, selection, staging and the rest of the window's own state.
     pub(crate) view: u64,
+    /// The staged checkboxes alone, already folded into `view` above.
+    ///
+    /// Carried out separately for a consumer that reads staging WITHOUT reading the rest of the
+    /// window — the Start/Stop plan, which must not be rebuilt because the user typed a letter in
+    /// the search box. Computed inside [`data_sig`], which walks that map anyway, so this field is
+    /// the walk being reused rather than a second one.
+    pub(crate) staged: u64,
 }
 
 impl TreeCache {
@@ -140,7 +149,8 @@ pub(crate) fn data_sig(
     unordered(view.expanded_deleted.iter()).hash(&mut h);
     unordered(view.ui_folders.iter()).hash(&mut h);
     unordered(view.sel.iter()).hash(&mut h);
-    unordered(view.staged.iter()).hash(&mut h);
+    let staged = unordered(view.staged.iter());
+    staged.hash(&mut h);
     view.selected.hash(&mut h);
     view.selected_folder.hash(&mut h);
     view.deleted_rev.hash(&mut h);
@@ -153,6 +163,7 @@ pub(crate) fn data_sig(
     TreeSig {
         store: store_sig,
         view: h.finish(),
+        staged,
     }
 }
 

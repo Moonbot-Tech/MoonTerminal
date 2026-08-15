@@ -121,6 +121,10 @@ impl StrategiesView {
         // NOTHING the tree signature hashes, so a surviving cache entry would send the next frame
         // straight past the push that reasserts the window's own expansion — and the tree would
         // stay wherever the keyboard left it.
+        //
+        // `pane_cache` deliberately survives this: expansion is not an input to any of its three
+        // entries — the kinds list, the Start/Stop plan and the label widths all read data the
+        // keyboard did not touch.
         cx.subscribe(&tree_state, |this, _state, _ev: &MoonTreeEvent, cx| {
             this.last_tree_shape = None;
             this.tree_cache = None;
@@ -168,6 +172,9 @@ impl StrategiesView {
             this.last_sig = strategies_sig(this.backend.read(cx), this.workspace_cores.as_deref());
             this.tree_cache = None;
             this.last_tree_shape = None;
+            // `pane_cache` needs no explicit reset here either: a scope move changes the visible
+            // core list, which the store half of the signature hashes, and the workspace generation
+            // it carries has already advanced.
             // In-flight version results compare against `versions.key`; retiring it prevents an
             // old hidden core from publishing after the owner changes.
             this.versions.key = None;
@@ -275,6 +282,7 @@ impl StrategiesView {
             last_sig: initial_sig,
             last_tree_shape: None,
             tree_cache: None,
+            pane_cache: PaneCache::default(),
             pending_scroll: None,
             focus: cx.focus_handle(),
         }

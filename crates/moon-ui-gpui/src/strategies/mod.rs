@@ -26,6 +26,7 @@ mod versions;
 mod window;
 
 use split::{PanelResizeDrag, PanelSplit};
+use tree::pane_cache::{LeftPaneFrame, PaneCache};
 pub(crate) use window::StrategyRevealRequest;
 pub use window::{RevealTarget, open, open_goto, reveal_name};
 use window::{STRATEGIES_HEADER_H, strategies_header};
@@ -161,6 +162,9 @@ pub struct StrategiesView {
     /// Previous frame's tree adapter, reused while its input signature is unchanged.
     /// See [`tree::cache`] for why a per-frame rebuild is the wrong cost and what keeps it honest.
     tree_cache: Option<tree::cache::TreeCache>,
+    /// Previous frame's left-pane derivations: the kinds list, the Start/Stop plan and the footer
+    /// label width. Same argument as `tree_cache`, for the rest of the pane — see [`pane_cache`].
+    pane_cache: PaneCache,
     /// A key `sync_pending_select` resolved off-frame, waiting for render to scroll to it.
     ///
     /// Selection alone does not bring a row on screen: only `MoonTreeState::scroll_to_item`
@@ -248,6 +252,12 @@ impl Render for StrategiesView {
             }
         };
         crate::diag::record_us(&crate::diag::STRAT_TREE_US, tree_timer);
+        // The rest of the left pane, on the same terms as the adapter above. Timed into the pane's
+        // counter together with its element tree below — see `strat_pane_build` in `diag.rs` for
+        // how the two are told apart.
+        let pane_timer = crate::diag::timer();
+        let pane = self.left_pane_frame(sig, &cores, cx);
+        crate::diag::record_us(&crate::diag::STRAT_TREEPANE_US, pane_timer);
         // Navigate by temporarily selecting the MoonTree item to obtain its index and scroll to
         // it, then clear that selection because `sel` renders the highlight. Independent of the
         // push above: an unchanged shape means MoonTree already holds the forest to resolve
@@ -275,7 +285,7 @@ impl Render for StrategiesView {
         let (tree, sections, params_model) = {
             let store = self.backend.read(cx).session.store();
             let t = crate::diag::timer();
-            let tree = self.tree_panel(store, &cores, node_data, cx);
+            let tree = self.tree_panel(store, &cores, node_data, &pane, cx);
             crate::diag::record_us(&crate::diag::STRAT_TREEPANE_US, t);
             // Both panels read the same dependency values; build them once. The computed halves are
             // timed apart from the element trees because only they could be cached the way the tree

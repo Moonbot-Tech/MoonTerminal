@@ -575,6 +575,50 @@ impl<'a> MonoBodyTextMeasurer<'a> {
     }
 }
 
+/// Unscaled base size an Action-size button renders its label at.
+///
+/// MIRRORS MoonUI, like [`glyph_btn_w`]: the text size inside `MoonButtonMetrics` for the Small
+/// metrics that `MoonButtonSize::Action` resolves to. Those metrics are private there, so nothing
+/// checks this automatically; if they move, this must follow by hand.
+pub const ACTION_LABEL_BASE: f32 = 10.5;
+
+/// Resolve the exact font and rendered size one measurement will use.
+///
+/// The single place [`ui_text_width`] and [`text_metrics_key`] agree on how a request becomes a
+/// font: a key derived from a hand-copied version of these three lines would keep validating stale
+/// widths the day the resolution changes.
+fn measure_font(cx: &App, base_font_size: f32, weight: f32, mono: bool) -> (FontId, Pixels) {
+    let tokens = MoonTheme::active_tokens(cx);
+    let font = Font {
+        weight: FontWeight(weight),
+        ..font(tokens.font_family(mono))
+    };
+    (
+        cx.text_system().resolve_font(&font),
+        px(tokens.font(base_font_size)),
+    )
+}
+
+/// Identity of the typography a text measurement was taken under.
+///
+/// [`ui_text_width`] has no cache of its own, so a caller retaining a measured width needs to know
+/// when to throw it away. Keyed on the RESOLVED font rather than the requested family, like
+/// [`MonoBodyFontSignature`]: the family is a theme token rather than the constant [`mono`], and a
+/// fallback or font-availability change moves the resolution without moving the request.
+///
+/// Args:
+///     cx: Application context providing theme tokens and the text system.
+///     base_font_size: Unscaled base size the measurement was taken at.
+///     weight: Numeric GPUI weight the measurement was taken at.
+///     mono: Whether the measurement used the monospaced family.
+///
+/// Returns:
+///     A digest that changes whenever a width measured under it would.
+pub fn text_metrics_key(cx: &App, base_font_size: f32, weight: f32, mono: bool) -> u64 {
+    let (font_id, size) = measure_font(cx, base_font_size, weight, mono);
+    (font_id.0 as u64) << 32 | u64::from(size.as_f32().to_bits())
+}
+
 /// Estimate text width at an unscaled base size using the active theme font.
 ///
 /// Font scaling is applied internally, matching `MoonText`. The estimate sums per-character glyph
@@ -593,14 +637,8 @@ impl<'a> MonoBodyTextMeasurer<'a> {
 /// Returns:
 ///     The summed glyph-advance estimate in pixels.
 pub fn ui_text_width(cx: &App, text: &str, base_font_size: f32, weight: f32, mono: bool) -> f32 {
-    let tokens = MoonTheme::active_tokens(cx);
-    let size = px(tokens.font(base_font_size));
-    let font = Font {
-        weight: FontWeight(weight),
-        ..font(tokens.font_family(mono))
-    };
+    let (font_id, size) = measure_font(cx, base_font_size, weight, mono);
     let ts = cx.text_system();
-    let font_id = ts.resolve_font(&font);
     text.chars()
         .map(|ch| f32::from(ts.layout_width(font_id, size, ch)))
         .sum()
@@ -644,6 +682,10 @@ pub fn fit_text(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> (Strin
 }
 
 /// [`fit_text`] at the size a selector pill draws its label.
+///
+/// The literal is deliberately NOT [`ACTION_LABEL_BASE`]: a pill is not an Action-size button, and
+/// tying its truncation budget to that constant would move this text the day MoonUI moves the
+/// button metric.
 pub fn fit_label(cx: &App, text: &str, max_w: f32) -> String {
     fit_text(text, max_w, |s| ui_text_width(cx, s, 10.5, 400.0, true)).0
 }

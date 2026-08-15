@@ -345,6 +345,7 @@ impl StrategiesView {
     /// Args:
     ///     store: Current strategy snapshot used for action enablement.
     ///     show_labels: Shared density decision for every footer button.
+    ///     has_visible_cores: Whether the caller's canonical core list has anywhere to paste into.
     ///     cx: View context used to create callbacks and scaled button widths.
     ///
     /// Returns:
@@ -353,12 +354,14 @@ impl StrategiesView {
         &self,
         store: &CoreStore,
         show_labels: bool,
+        has_visible_cores: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
         let (has_sel, all_off) = self.selection_summary(store);
         let can_copy = has_sel || selected_folder(self).is_some();
-        let can_paste = self.clipboard.is_some()
-            && !visible_strategy_cores(self, self.backend.read(cx)).is_empty();
+        // Enablement takes the caller's already-resolved list; the click handler below still
+        // resolves its own target, because the workspace can move between frame and click.
+        let can_paste = self.clipboard.is_some() && has_visible_cores;
         let copy_label = t!("strat.action_copy").to_string();
         let paste_label = t!("strat.action_paste").to_string();
         let delete_label = t!("strat.action_delete").to_string();

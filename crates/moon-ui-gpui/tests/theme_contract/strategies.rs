@@ -693,9 +693,21 @@ fn strategy_footer_is_one_atomic_action_row() {
         action.contains("let show_labels") && action.contains("ui::footer_labels_fit("),
         "action_bar must compute one shared footer-density decision"
     );
-    assert!(action.contains("self.panels.tree_w") && action.contains("design::ui_text_width("));
+    assert!(action.contains("self.panels.tree_w") && action.contains("pane.footer_label_width"));
+    // The measurement moved behind the pane cache — a hover repaint rebuilds this row 34-58 times a
+    // second and one full label set is ~40 uncached glyph advances — but the density decision must
+    // still come from measuring the CURRENT locale and staged text, never from a stored constant.
+    let pane_cache = read_src("strategies/tree/pane_cache.rs");
+    let measured = code_only(braced_body(&pane_cache, "fn footer_label_width("));
+    assert!(measured.contains("design::ui_text_width("));
+    assert!(
+        measured.contains("t!(\"strat.staged\""),
+        "the staged label is part of the width the footer collapses against"
+    );
     assert!(action.contains("staged_label") && action.contains("design::chrome_divider("));
-    assert!(action.contains("selection_toolbar(store, show_labels, cx)"));
+    // Substrings rather than the whole call: rustfmt decides where this one breaks, and a contract
+    // that pins the line layout fails on formatting instead of on behaviour.
+    assert!(action.contains("selection_toolbar(") && action.contains("!cores.is_empty()"));
     for icon in ["icons/play.svg", "icons/pause.svg"] {
         assert!(action.contains(icon), "missing {icon}");
     }
