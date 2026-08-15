@@ -60,7 +60,7 @@ pub use groups::{
 };
 pub use hotkeys::{
     HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
-    SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
+    SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
 pub use lang::Language;
 pub use layout::{

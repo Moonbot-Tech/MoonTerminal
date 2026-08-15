@@ -378,6 +378,32 @@ impl SessionManager {
         )
     }
 
+    /// Shift a market's live orders of one side by `percent` of their price.
+    ///
+    /// `percent` is WHOLE percent and signed: positive moves up, negative down. Zero, a non-finite
+    /// value, an empty market or a magnitude no sane hotkey can mean sends nothing — this is a bulk
+    /// move of live orders, and the number reaches the core unchecked otherwise.
+    pub fn shift_orders_percent(
+        &self,
+        core: CoreId,
+        market: String,
+        sell: bool,
+        percent: f64,
+    ) -> Result<()> {
+        if market.is_empty() || !percent.is_finite() || percent == 0.0 || percent.abs() > 100.0 {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::ShiftOrdersPercent {
+                market,
+                sell,
+                percent,
+            },
+            "shift orders percent",
+        )
+    }
+
     /// Spread a market's sell orders across a price zone — Moonbot's "sells to rectangle".
     ///
     /// The two prices arrive in whatever order the rectangle was drawn and are ordered here, so the

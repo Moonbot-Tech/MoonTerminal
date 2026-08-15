@@ -22,6 +22,16 @@ const SCHEMA: u8 = 1;
 /// Parts produced by the plain Split Order action, matching Moonbot, where that action always
 /// splits a sell order into three. The configurable count belongs to `Split N` instead.
 pub const SPLIT_ORDER_PARTS: i32 = 3;
+
+/// Percent one press of the order-shift hotkeys moves a market's orders by, as WHOLE percent.
+///
+/// Moonbot names the actions "Shift buys +1%" / "-1%", and whole percent is what the command takes:
+/// moonproto's own wire test for this payload builds it with `percent: 3.5`
+/// (`commands/trade/order_v2.rs::move_all_percent_has_no_side_byte_on_protocol_v4_wire`), a value
+/// that as a fraction would be 350%. The SIGN is inferred rather than documented — the payload
+/// carries a raw signed f64 and moonproto states no convention, so positive-is-up comes from
+/// Moonbot's own +/- pair of actions.
+pub const SHIFT_PERCENT: f64 = 1.0;
 /// Bounds for the configurable `Split N` count (Moonbot `Hotkeys.SplitParts`). Fewer than two
 /// parts is not a split, and the upper bound keeps a mistyped import from shredding a position.
 pub const SPLIT_PARTS_MIN: u8 = 2;
@@ -208,8 +218,8 @@ pub struct HotkeysConfig {
     /// [`HotkeysConfig::split_n_parts`] so a hand-edited or imported value cannot leave its range.
     #[serde(default = "default_split_parts")]
     pub split_parts: u8,
-    /// Shifts orders for the active chart's market by one price step (`move_order`): entry
-    /// (buy, while unfilled) / exit (sell) up or down.
+    /// Shifts the active chart market's orders by [`SHIFT_PERCENT`], as Moonbot's ±1% does: the
+    /// buy phase or the sell phase, up or down.
     #[serde(default = "default_shift_buy_up")]
     pub shift_buy_up: String,
     #[serde(default = "default_shift_buy_down")]
@@ -223,8 +233,9 @@ pub struct HotkeysConfig {
     // charts, fit sells, broadcast, sell +/-) were removed completely on 2026-07-10 (configuration
     // + tab + dispatcher); serde silently ignores their keys in old hotkeys.toml files. Restore
     // them from git history as commands turn up: `Sells to rectangle` came back that way on
-    // 2026-08-15, on `move_all_sells`, whose `percent` and `replace_kind` forms are still unused —
-    // so "no command" now means "not this list, check moonproto first".
+    // 2026-08-15, on `move_all_sells`, whose `percent` form now also drives the order shifts and
+    // whose `replace_kind` form is still unused — so "no command" means "not on this list, check
+    // moonproto first".
     #[serde(default = "default_scale_plus")]
     pub scale_plus: String,
     #[serde(default = "default_scale_minus")]

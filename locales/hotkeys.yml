@@ -207,41 +207,41 @@ hotkeys.group.order_move:
   en: "Order shift"
   es: "Desplazamiento de órdenes"
 hotkeys.group.order_move_hint:
-  ru: "Сдвиг живых ордеров рынка активного чарта на один шаг цены (move_order, как перетаскивание линии). Вход двигается только пока не залит."
-  en: "Shift live orders of the active chart's market by one price step (move_order, same as dragging the line). Entry moves only while unfilled."
-  es: "Desplaza las órdenes vivas del mercado del gráfico activo un paso de precio (move_order, como arrastrar la línea). La entrada solo mientras no esté ejecutada."
+  ru: "Сдвиг живых ордеров рынка активного чарта на 1%, как в Moonbot: одна команда на сторону, ордера отбирает и считает ядро."
+  en: "Shift the active chart market's live orders by 1%, as Moonbot does: one command per side, with the core selecting the orders and doing the arithmetic."
+  es: "Desplaza un 1% las órdenes vivas del mercado del gráfico activo, como en Moonbot: un comando por lado; el núcleo elige las órdenes y hace el cálculo."
 hotkeys.shift_buy_up:
   ru: "Shift Buy Up"
   en: "Shift Buy Up"
   es: "Shift Buy Up"
 hotkeys.shift_buy_up_hint:
-  ru: "Сдвинуть вход (buy) на шаг цены вверх."
-  en: "Move the entry (buy) one price step up."
-  es: "Mueve la entrada (buy) un paso de precio arriba."
+  ru: "Сдвинуть входы рынка (buy-фаза) на 1% вверх. Moonbot-дефолт: Shift+Up."
+  en: "Shift the market's entries (buy phase) 1% up. Moonbot default: Shift+Up."
+  es: "Desplaza las entradas del mercado (fase buy) un 1% arriba. Valor por defecto de Moonbot: Shift+Up."
 hotkeys.shift_buy_down:
   ru: "Shift Buy Down"
   en: "Shift Buy Down"
   es: "Shift Buy Down"
 hotkeys.shift_buy_down_hint:
-  ru: "Сдвинуть вход (buy) на шаг цены вниз."
-  en: "Move the entry (buy) one price step down."
-  es: "Mueve la entrada (buy) un paso de precio abajo."
+  ru: "Сдвинуть входы рынка (buy-фаза) на 1% вниз. Moonbot-дефолт: Shift+Down."
+  en: "Shift the market's entries (buy phase) 1% down. Moonbot default: Shift+Down."
+  es: "Desplaza las entradas del mercado (fase buy) un 1% abajo. Valor por defecto de Moonbot: Shift+Down."
 hotkeys.shift_sell_up:
   ru: "Shift Sell Up"
   en: "Shift Sell Up"
   es: "Shift Sell Up"
 hotkeys.shift_sell_up_hint:
-  ru: "Сдвинуть выход (sell) на шаг цены вверх."
-  en: "Move the exit (sell) one price step up."
-  es: "Mueve la salida (sell) un paso de precio arriba."
+  ru: "Сдвинуть выходы рынка (sell-фаза, у шорта это покупки) на 1% вверх. Moonbot-дефолт: Alt+Up."
+  en: "Shift the market's exits (sell phase; on a short these are buys) 1% up. Moonbot default: Alt+Up."
+  es: "Desplaza las salidas del mercado (fase sell; en un short son compras) un 1% arriba. Valor por defecto de Moonbot: Alt+Up."
 hotkeys.shift_sell_down:
   ru: "Shift Sell Down"
   en: "Shift Sell Down"
   es: "Shift Sell Down"
 hotkeys.shift_sell_down_hint:
-  ru: "Сдвинуть выход (sell) на шаг цены вниз."
-  en: "Move the exit (sell) one price step down."
-  es: "Mueve la salida (sell) un paso de precio abajo."
+  ru: "Сдвинуть выходы рынка (sell-фаза, у шорта это покупки) на 1% вниз. Moonbot-дефолт: Alt+Down."
+  en: "Shift the market's exits (sell phase; on a short these are buys) 1% down. Moonbot default: Alt+Down."
+  es: "Desplaza las salidas del mercado (fase sell; en un short son compras) un 1% abajo. Valor por defecto de Moonbot: Alt+Down."
 
 hotkeys.group.mouse:
   ru: "Мышь на стакане"

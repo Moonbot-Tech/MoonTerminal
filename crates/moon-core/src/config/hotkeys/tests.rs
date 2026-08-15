@@ -62,6 +62,16 @@ fn keyboard_defaults_match_moonbot() {
     }
 }
 
+/// Pins the order-shift step as WHOLE percent, which is the unit the protocol takes everywhere.
+///
+/// Plausible breakage: reading Moonbot's "±1%" as a fraction and shipping 0.01 would move live
+/// orders by a hundredth of a percent, which looks like the hotkey doing nothing; shipping 100.0
+/// would move them by a factor of two. Neither is visible in a type.
+#[test]
+fn order_shift_is_one_whole_percent() {
+    assert_eq!(SHIFT_PERCENT, 1.0);
+}
+
 /// Pins the `Split N` count against a hand-edited or imported file.
 ///
 /// Plausible breakage: reading the raw field sends a live split into one part, or into 200.

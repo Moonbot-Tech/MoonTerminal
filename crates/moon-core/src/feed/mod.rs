@@ -470,6 +470,14 @@ pub enum CoreCmd {
     /// The feed sends this live trading action only when exactly one active sell
     /// order can be resolved; zero or multiple candidates are a no-op.
     SplitOrderForMarket { market: String, parts: i32 },
+    /// Shift every live order of one market side by a percent of its price — Moonbot's
+    /// "Shift buys/sells ±1%". The core selects the orders (buy phase or sell phase) and does the
+    /// arithmetic; this live action carries the market, the side and a WHOLE percent.
+    ShiftOrdersPercent {
+        market: String,
+        sell: bool,
+        percent: f64,
+    },
     /// Spread a market's sell orders across a price zone — Moonbot's "sells to rectangle".
     /// The core performs the spreading; this live action carries only the market, the two prices
     /// already ordered low to high, and the position side whose exits are addressed.
