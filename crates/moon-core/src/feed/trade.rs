@@ -10,8 +10,8 @@
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
 use moonproto::{
-    ClosePositionParams, MoonClient, NewOrderParams, OrderSide, OrderWorkerStatus, SellOrderParams,
-    SplitOrderParams, VStopParams,
+    ClosePositionParams, MoonClient, MoveAllSellsParams, NewOrderParams, OrderSide,
+    OrderWorkerStatus, PositionFilter, SellOrderParams, SplitOrderParams, VStopParams,
 };
 
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
@@ -208,6 +208,41 @@ pub(super) fn join_sells(client: &MoonClient, server_id: u64, market: String, sh
         server_id,
         format!("join sells {market} short={short}"),
         client.trade().join_orders(market, side),
+    );
+}
+
+/// Spread a market's sell orders evenly across a price zone — Moonbot's "sells to rectangle".
+///
+/// The core does the spreading; this only names the market and the two prices.
+///
+/// The log line says the intent was QUEUED, not that the core acted: `move_all_sells` returns as
+/// soon as the intent is in, and moonproto drops it later and silently when the domain is not ready
+/// or the market holds no non-immune `SellSet` order (`client/domain_trade.rs`). An empty market is
+/// therefore harmless but still logs a send.
+pub(super) fn sells_to_zone(
+    client: &MoonClient,
+    server_id: u64,
+    market: String,
+    min_price: f64,
+    max_price: f64,
+    short: bool,
+) {
+    // The side comes from the market's own position, exactly as `join_sells` above takes it: a zone
+    // drawn on a short's chart addresses that short's exits, not a long's that happens to share the
+    // market. moonproto's PriceZone candidate check ignores the side, but the wire carries it and
+    // the core reads it.
+    let side = if short {
+        PositionFilter::Short
+    } else {
+        PositionFilter::Long
+    };
+    report(
+        server_id,
+        format!("sells to zone {market} {min_price:.8}..{max_price:.8} short={short}"),
+        client.trade().move_all_sells(
+            market,
+            MoveAllSellsParams::price_zone(min_price, max_price, side),
+        ),
     );
 }
 

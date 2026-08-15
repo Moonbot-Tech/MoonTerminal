@@ -70,6 +70,45 @@ fn press_count(
     Some(count)
 }
 
+/// Offers a press to the order-line grab, one call per button.
+///
+/// Both counts come from the same event here rather than from three call sites: the panel's own
+/// count decides a gesture, the window's native one answers "is this the second press of a pair",
+/// and a site that passed one where the other belonged would not be caught by anything.
+fn grab_order_line(
+    this: &mut ChartPanel,
+    button: TradeMouseButton,
+    e: &MouseDownEvent,
+    clicks: Option<usize>,
+    pos: (f32, f32),
+    cx: &mut Context<ChartPanel>,
+) -> bool {
+    let grabbed = clicks.is_some_and(|count| {
+        this.try_start_order_drag(button, e.modifiers, count, e.click_count <= 1, pos, cx)
+    });
+    if grabbed {
+        this.sync_native_cursor();
+        cx.notify();
+        cx.stop_propagation();
+    }
+    grabbed
+}
+
+/// Ends a drag on the release of the button that owns it, one call per button.
+fn release_order_drag(
+    this: &mut ChartPanel,
+    button: TradeMouseButton,
+    cx: &mut Context<ChartPanel>,
+) -> bool {
+    let released = this.finish_order_drag(button, cx);
+    if released {
+        this.sync_native_cursor();
+        cx.notify();
+        cx.stop_propagation();
+    }
+    released
+}
+
 /// Routes a wheel event to chart zoom/pan or the surrounding stack scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
@@ -144,7 +183,9 @@ pub(super) fn mouse_down_left(
     // of a pair", which holds however the pair split between charts. The two that change live
     // state — cancelling an entry, grabbing an order line — additionally require a press this
     // panel is allowed to act on at all, because a press left over from a × is none of its
-    // business either, however the window happens to count it.
+    // business either, however the window happens to count it. The grab carries its native answer
+    // as an argument rather than a condition: its built-in half needs the gate, its configured
+    // double-click gestures are exactly the presses the gate rejects.
     let clicks = press_count(
         this,
         MouseButton::Left,
@@ -211,10 +252,10 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
-    if within && clicks.is_some() && e.click_count <= 1 && this.try_start_order_drag(pos, cx) {
-        this.sync_native_cursor();
-        cx.notify();
-        cx.stop_propagation();
+    // Not gated on `click_count <= 1` like the branches above: a move gesture may be bound to a
+    // double click (`CTRL_Dbl` and friends). The native gate is not dropped, it is passed along —
+    // the built-in plain-left grab still requires it, and only double-click gestures pass it.
+    if within && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx) {
         return;
     }
     // With separate zones, left clicks in the control area (book/reserved strip) are trading-only.
@@ -280,10 +321,7 @@ pub(super) fn mouse_up_left(
         cx.stop_propagation();
         return;
     }
-    if this.finish_order_drag(cx) {
-        this.sync_native_cursor();
-        cx.notify();
-        cx.stop_propagation();
+    if release_order_drag(this, TradeMouseButton::Left, cx) {
         return;
     }
     let sf = window.scale_factor();
@@ -317,6 +355,11 @@ pub(super) fn mouse_down_right(
         window,
         cx,
     );
+    // The flag means "swallow the release paired with THIS press", so a new press starts without
+    // one. It is cleared here rather than where a gesture is abandoned: a drag dropped by the
+    // pointer leaving the slot gets no release at all, and clearing it there would have to trust
+    // the fork's non-client mouse moves, which report no pressed button DURING a live drag.
+    this.suppress_rmb_up = false;
     let sf = window.scale_factor();
     let Some((pos, within)) = this.chart_local(e.position) else {
         return;
@@ -334,6 +377,15 @@ pub(super) fn mouse_down_right(
     if within && this.try_open_figure_menu(pos, e.position, window, cx) {
         this.suppress_rmb_up = true;
         cx.stop_propagation();
+        return;
+    }
+    // A move gesture bound to the right button grabs the line BEFORE the order menu, which would
+    // otherwise swallow every right press over a line. Nothing is bound to the right button by
+    // default, so the menu keeps the plain right click. A right DOUBLE-click move gesture stays out
+    // of reach over a line: press one opens the menu, whose overlay consumes press two — the menu
+    // is the older contract and a gesture nobody has bound is not worth deferring it for.
+    if within && grab_order_line(this, TradeMouseButton::Right, e, clicks, pos, cx) {
+        this.suppress_rmb_up = true;
         return;
     }
     // Right-clicking a Buy or Sell order line opens its side-specific menu before placement or
@@ -381,6 +433,15 @@ pub(super) fn mouse_up_right(
     // A right-button drag zooms Y and is paced like any other, but `mouse_button(Right, false, ..)`
     // always reports unchanged, so this release would otherwise never settle what the pacer owed.
     settle_paced_drag(this, cx);
+    // A right-button move gesture ends on this release, so finishing comes BEFORE the suppression
+    // check below — that branch returns early for exactly the press that started this drag. It
+    // clears the flag itself, because the release it was armed for is this one. A drag owned by
+    // another button is left alone: `finish_order_drag` reports `false` and this release keeps its
+    // ordinary behavior.
+    if release_order_drag(this, TradeMouseButton::Right, cx) {
+        this.suppress_rmb_up = false;
+        return;
+    }
     // When right-button down opened a figure/order menu or handled a trading gesture, consume its
     // paired release instead of letting a parent exit the Main stack's fullscreen mode.
     if this.suppress_rmb_up {
@@ -441,11 +502,32 @@ pub(super) fn mouse_down_middle(
         cx.stop_propagation();
         return;
     }
+    // A move gesture bound to the middle button, before the X-scale synchronization below claims
+    // Shift+middle for itself.
+    if within && grab_order_line(this, TradeMouseButton::Middle, e, clicks, pos, cx) {
+        return;
+    }
     // Shift+middle-click on the graph synchronizes the time X scale across charts in THIS window,
     // matching Moonbot. A trading gesture bound to Shift+middle-click takes priority above.
     if within && e.modifiers.shift && this.sync_x_scale_window(window, cx) {
         cx.stop_propagation();
     }
+}
+
+/// Finishes a middle-button order drag.
+///
+/// The middle button has no other release behavior, and without this handler a drag started by a
+/// middle-button move gesture would reach no release path at all: the next pointer move with no
+/// button held DROPS the drag silently, so the moved line would spring back and no `move_order`
+/// would ever be sent.
+pub(super) fn mouse_up_middle(
+    this: &mut ChartPanel,
+    _e: &MouseUpEvent,
+    _window: &mut Window,
+    cx: &mut Context<ChartPanel>,
+) {
+    settle_paced_drag(this, cx);
+    release_order_drag(this, TradeMouseButton::Middle, cx);
 }
 
 /// Routes pointer motion through retained cursor/hover updates and active drags.

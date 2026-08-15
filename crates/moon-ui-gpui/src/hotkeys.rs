@@ -10,12 +10,18 @@
 //!   window; cursor placement and cancellation follow the globally tracked hovered chart;
 //!   switching and active-chart closing are group-local; reset and close-all are application-global.
 //!
-//! Configured shortcuts use GPUI's `Keystroke::parse` syntax. Shipped keyboard defaults deliberately
-//! use literal `ctrl-` on both Windows and macOS to match Moonbot; bindings that need no modifier
-//! retain their bare function-key or Delete forms.
+//! Configured shortcuts use GPUI's `Keystroke::parse` syntax. Shipped keyboard defaults are
+//! Moonbot's own keys, read off its Hotkeys page — mostly `alt-`, with `ctrl-` where Moonbot uses it
+//! and for the Terminal's own drawing tools, which Moonbot has no equivalent of. The literal
+//! modifier is used on both Windows and macOS, as Moonbot does; bindings that need no modifier keep
+//! their bare function-key or Delete forms.
+
+mod layout;
+#[cfg(test)]
+mod tests;
 
 use gpui::{App, Context, Entity, KeyDownEvent, Keystroke, Modifiers};
-use moon_core::config::HotkeysConfig;
+use moon_core::config::{HotkeysConfig, SPLIT_ORDER_PARTS};
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
 use moon_core::session::CoreId;
@@ -54,8 +60,14 @@ pub enum HotkeyAction {
         /// Add one price step when true, or subtract one when false.
         up: bool,
     },
-    /// Split a sell order for the active chart's market into parts.
-    SplitOrder,
+    /// Spread the active market's sell orders across the drawn rectangle — Moonbot's
+    /// "sells to rectangle", the take-profit grid stretched over a box.
+    SellsToRect,
+    /// Split a sell order for the active chart's market into `parts`.
+    ///
+    /// The count comes from the binding that matched: plain Split Order always splits into
+    /// [`SPLIT_ORDER_PARTS`], as Moonbot does, while `Split N` uses the configured `split_parts`.
+    SplitOrder { parts: i32 },
     /// Place a manual long order at the hovered chart price.
     ///
     /// The caller routes this through `Backend::hovered_chart`, because only the chart can map the
@@ -105,13 +117,55 @@ pub enum HotkeyAction {
 /// Empty or invalid strings do not match. Comparison uses only `modifiers` and `key`: Windows
 /// events also carry `key_char`, while a parsed `Keystroke` does not, so full equality previously
 /// prevented Ctrl-plus-letter bindings from matching.
+///
+/// A letter is compared against the PHYSICAL key as well as the name the platform gave it, so a
+/// binding does not die when the keyboard layout changes — see [`layout::us_letter`].
 fn pressed(raw: &str, ev: &KeyDownEvent) -> bool {
     let raw = raw.trim();
-    !raw.is_empty()
-        && matches!(
-            Keystroke::parse(raw),
-            Ok(k) if k.modifiers == ev.keystroke.modifiers && k.key == ev.keystroke.key
+    if raw.is_empty() {
+        return false;
+    }
+    let Ok(k) = Keystroke::parse(raw) else {
+        return false;
+    };
+    k.modifiers == ev.keystroke.modifiers
+        && (k.key == ev.keystroke.key
+            || layout::us_letter(&ev.keystroke.key).is_some_and(|physical| k.key == physical))
+}
+
+/// Resolve a key-down event to the action bound to it.
+pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+    resolve_binding(ev, hk)
+}
+
+impl HotkeyAction {
+    /// Whether a held key's repeats must NOT re-run this action.
+    ///
+    /// The line is what one repeat COSTS. Everything that creates, multiplies or closes something
+    /// pays per press and nothing downstream deduplicates it — moonproto gives these commands no
+    /// unique key — so a key left held would queue one order, one split or one market sell per OS
+    /// repeat. A TOGGLE is worse than useless repeated: it flaps at the repeat rate, and a figure
+    /// alert flaps on the wire, upserting and deleting a core-side object tens of times a second.
+    /// Cycling through the drawing tools at that rate is the same kind of nonsense.
+    ///
+    /// The ones deliberately left repeating: cancels (the second press finds nothing left to
+    /// cancel), the presets (setting a value twice sets it once) and the order SHIFTS, whose whole
+    /// point is to nudge a line while the key is held.
+    fn suppress_on_repeat(self) -> bool {
+        matches!(
+            self,
+            Self::SplitOrder { .. }
+                | Self::SellsToRect
+                | Self::NewLong
+                | Self::NewShort
+                | Self::JoinSells
+                | Self::PanicSell
+                | Self::PanicSellOne
+                | Self::FigAlert
+                | Self::FigTool(_)
+                | Self::SwitchFigure
         )
+    }
 }
 
 /// Resolve a key-down event to the first matching configured or built-in action.
@@ -120,7 +174,7 @@ fn pressed(raw: &str, ev: &KeyDownEvent) -> bool {
 /// Escape, reset, and Tab/Delete; configured scale actions; order-size and fixed-sell presets;
 /// active-market and active-core trading actions; configured `switch_charts`; then manual
 /// strategies. Returns `None` when no binding matches.
-pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+fn resolve_binding(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     use HotkeyAction as A;
     let p = |raw: &str| pressed(raw, ev);
 
@@ -200,8 +254,20 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     if p(&hk.join_sells) {
         return Some(A::JoinSells);
     }
-    if p(&hk.split_order) || p(&hk.split_order_x) {
-        return Some(A::SplitOrder);
+    // Split Order splits into a fixed three, as Moonbot does; Split Order X into the configured
+    // count. Repeats of a held key are dropped for both by `pre_dispatch`.
+    if p(&hk.split_order) {
+        return Some(A::SplitOrder {
+            parts: SPLIT_ORDER_PARTS,
+        });
+    }
+    if p(&hk.split_order_x) {
+        return Some(A::SplitOrder {
+            parts: hk.split_n_parts(),
+        });
+    }
+    if p(&hk.sells_to_rect) {
+        return Some(A::SellsToRect);
     }
     if p(&hk.new_long) {
         return Some(A::NewLong);
@@ -243,6 +309,19 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     None
 }
 
+/// Rewrite a recorded keystroke onto the physical key, so the settings file is layout-independent.
+///
+/// A key recorded under a Cyrillic layout arrives named `"ф"`; stored as such it would work only in
+/// that layout, and the file could not be shared with anyone using another one. Recording is where
+/// this belongs: matching accepts both forms anyway, and the user sees the Latin letter they
+/// physically pressed.
+pub fn recorded_keystroke(mut keystroke: Keystroke) -> Keystroke {
+    if let Some(physical) = layout::us_letter(&keystroke.key) {
+        keystroke.key = physical;
+    }
+    keystroke
+}
+
 /// Cancel the order under the cursor through `Backend::hovered_chart`.
 ///
 /// This is shared by the built-in Tab/Delete route and the caller's `FigDelete` fallback when no
@@ -250,14 +329,63 @@ pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
 /// would otherwise shadow hovered-order cancellation. Returns `false` when no hovered chart or
 /// order exists, allowing the key event to continue propagating.
 pub fn cancel_hovered_order(backend: &Entity<Backend>, cx: &mut App) -> bool {
+    with_hovered_chart(backend, cx, |panel, pcx| panel.cancel_hovered_order(pcx))
+}
+
+/// Run `f` against the globally hovered chart panel, if there is one.
+///
+/// Cursor-addressed actions all need the same lookup: the chart under the pointer, whichever window
+/// holds it, upgraded from the weak handle the backend keeps. `false` means no chart is hovered.
+fn with_hovered_chart(
+    backend: &Entity<Backend>,
+    cx: &mut App,
+    f: impl FnOnce(&mut crate::panels::ChartPanel, &mut Context<crate::panels::ChartPanel>) -> bool,
+) -> bool {
     let chart = backend
         .read(cx)
         .hovered_chart
         .clone()
         .and_then(|w| w.upgrade());
     match chart {
-        Some(chart) => chart.update(cx, |p, pcx| p.cancel_hovered_order(pcx)),
+        Some(chart) => chart.update(cx, f),
         None => false,
+    }
+}
+
+/// Apply the policies that belong to the action itself, before a window's own routing.
+///
+/// Every window's `on_hotkey` calls this once, ahead of its own match, so a third window inherits
+/// both rules instead of restating them. `true` means the event is spent and the caller stops.
+///
+/// - **Auto-repeat**: a held key repeats at the system rate. That is harmless for a toggle and
+///   multiplies anything that creates orders, so a repeat of such an action is consumed and does
+///   nothing — consumed rather than merely ignored, or the repeats of a bound key would sail on to
+///   whatever else that key means in the window.
+/// - **Cursor-addressed target**: a hotkey has no click, so the order the pointer rests on is the
+///   one the user means, the rule the built-in Tab/Delete cancellation already follows. Split needs
+///   it; with nothing hovered it falls through to [`apply`]'s market-level split, which the core
+///   performs only when the market has exactly one active sell order.
+pub fn pre_dispatch(
+    action: HotkeyAction,
+    ev: &KeyDownEvent,
+    backend: &Entity<Backend>,
+    cx: &mut App,
+) -> bool {
+    if ev.is_held && action.suppress_on_repeat() {
+        return true;
+    }
+    match action {
+        HotkeyAction::SplitOrder { parts } => {
+            with_hovered_chart(backend, cx, |panel, pcx| {
+                panel.split_hovered_order(parts, pcx)
+            })
+        }
+        // The drawn band belongs to the chart it was drawn on, so the pointer picks the chart. With
+        // the pointer elsewhere this falls through to the window's own active market.
+        HotkeyAction::SellsToRect => {
+            with_hovered_chart(backend, cx, |panel, pcx| panel.sells_to_rect_at_cursor(pcx))
+        }
+        _ => false,
     }
 }
 
@@ -387,9 +515,9 @@ pub fn apply(
             }
             None => false,
         },
-        A::SplitOrder => match target {
+        A::SplitOrder { parts } => match target {
             Some((core, market)) => {
-                if let Err(error) = b.session.split_order_for_market(core, market, 2) {
+                if let Err(error) = b.session.split_order_for_market(core, market, parts) {
                     log::warn!("hotkey split order failed: {error}");
                 }
                 true
@@ -398,6 +526,10 @@ pub fn apply(
         },
         A::ShiftOrder { sell, up } => match target {
             Some((core, market)) => shift_orders(b, core, &market, sell, up),
+            None => false,
+        },
+        A::SellsToRect => match target {
+            Some((core, market)) => sells_to_rect(b, core, &market),
             None => false,
         },
         // Caller-routed actions have mixed scope: scale is window-specific; cursor placement and
@@ -412,6 +544,86 @@ pub fn apply(
         | A::CancelHoveredOrder
         | A::CloseAllCharts
         | A::CloseActiveChart => false,
+    }
+}
+
+/// Spread the market's sell orders across the price band drawn on its chart.
+///
+/// Two tools draw a band and both count: the **Zone** (`Channel`), which is Moonbot's own
+/// chart-object type 5 and therefore the band a core can also send us, and the local **Rect**.
+/// Every other tool is a single line or level and would only let this guess at a band the user did
+/// not draw. The band is the SELECTED figure when the selection is one of those two on this chart,
+/// and otherwise the most recently drawn one. Returns `false` when there is none, leaving the key
+/// unhandled rather than sending a zone nobody asked for.
+pub(crate) fn sells_to_rect(b: &mut Backend, core: CoreId, market: &str) -> bool {
+    let zone = {
+        let store = b.figures.borrow();
+        let selected = b
+            .fig_selected
+            .as_ref()
+            .filter(|(fig_core, fig_market, _)| *fig_core == core && fig_market == market)
+            .and_then(|(_, _, id)| store.get(core, market, *id))
+            .and_then(figure_zone);
+        selected.or_else(|| {
+            // With nothing selected, only an UNAMBIGUOUS band is taken: exactly one on this chart.
+            // "The newest of several" reads well and behaves badly — a forgotten box from last week,
+            // scrolled far off screen, would quietly decide where live sells land. Several bands is
+            // a question only the user can answer, by selecting one.
+            //
+            // `figures`, not `visible`: the latter also yields bands another core merely SHARES
+            // onto this market, and a box drawn elsewhere is not this chart's answer either.
+            let mut bands = store.figures(core, market).iter().filter_map(figure_zone);
+            let only = bands.next()?;
+            bands.next().is_none().then_some(only)
+        })
+    };
+    let Some((a, z)) = zone else {
+        log::warn!(
+            "hotkey sells to rectangle: core={} market={market} has no single Zone/Rect to spread into — draw one or select it",
+            moon_core::feed::core_label(core)
+        );
+        return false;
+    };
+    // Refuse a band no thinner than one price STEP of this market — the authoritative number, not a
+    // constant picked here: below it every sell rounds onto the same level, which is the opposite of
+    // spreading them. An unknown step falls back to demanding two distinct prices. Logged, like the
+    // other refusals, because the ways this key can legitimately do nothing — no band, a flat one,
+    // no sell order, a core that is not connected — are otherwise indistinguishable from a command
+    // that went out, and this one moves live money.
+    let thin = match b.session.market_source().price_step(core, market) {
+        Some(step) => (a - z).abs() < step,
+        None => a == z,
+    };
+    if thin || !(a.is_finite() && z.is_finite()) || a <= 0.0 || z <= 0.0 {
+        log::warn!(
+            "hotkey sells to rectangle: core={} market={market} zone {a:.8}..{z:.8} is thinner than one price step or out of range, nothing sent",
+            moon_core::feed::core_label(core)
+        );
+        return true;
+    }
+    let short = b.market_position_short(core, market);
+    log::info!(
+        "hotkey sells to rectangle: core={} market={market} zone={:.8}..{:.8} short={short}",
+        moon_core::feed::core_label(core),
+        a.min(z),
+        a.max(z),
+    );
+    if let Err(error) = b.session.sells_to_zone(core, market.to_string(), a, z, short) {
+        log::warn!("hotkey sells to rectangle failed: {error}");
+    }
+    true
+}
+
+/// Return a figure's two band prices, or `None` for a tool that draws no band.
+///
+/// `Channel` is shown to the user as **Zone** and is Moonbot's own two-price object; `Rect` is the
+/// local box. Both describe exactly the pair of prices this command needs.
+fn figure_zone(fig: &moon_core::figures::Figure) -> Option<(f64, f64)> {
+    use moon_core::figures::FigureKind;
+    match &fig.kind {
+        FigureKind::Rect(rect) => Some((rect.a.price, rect.b.price)),
+        FigureKind::Channel(channel) => Some((channel.price1, channel.price2)),
+        _ => None,
     }
 }
 

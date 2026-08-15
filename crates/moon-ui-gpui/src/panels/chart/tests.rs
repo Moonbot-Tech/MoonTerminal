@@ -10,6 +10,7 @@ fn every_chart_command_and_navigation_path_revalidates_auto_authority() {
         "manual chart order blocked",
         "chart start-cross cancel",
         "hotkey cancel hovered order failed",
+        "hotkey split hovered order failed",
         "manual chart move line:",
     ] {
         let command_at = trade

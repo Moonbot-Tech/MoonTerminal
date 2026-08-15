@@ -66,6 +66,10 @@ fn apply_item(cfg: &mut AppConfig, item: &SettingChange) -> bool {
             };
             true
         }
+        (PlannedValue::SplitParts(parts), "hotkey.split_parts") => {
+            cfg.hotkeys.split_parts = *parts;
+            true
+        }
         (PlannedValue::Keystroke(ks), id) => apply_hotkey(cfg, id, ks),
         (PlannedValue::Rgb(rgb), id) => apply_color(cfg, id, *rgb),
         _ => false,

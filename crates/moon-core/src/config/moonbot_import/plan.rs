@@ -15,7 +15,7 @@
 
 use super::schema_v7::{MoonBotConfig, ShortcutAction, SHORTCUT_ACTIONS};
 use super::shortcut::{self, DecodedShortcut};
-use crate::config::hotkeys::HotkeysConfig;
+use crate::config::hotkeys::{HotkeysConfig, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN};
 use crate::config::orders::OrdersStyleSet;
 use crate::config::theme::ChartThemeSet;
 
@@ -34,6 +34,8 @@ pub enum PlannedValue {
     FixedSellPrices([f32; 6]),
     /// Selected fixed-sell slot (core-owned).
     FixedSellSel(u8),
+    /// Part count for the `Split N` action (Moonbot `Hotkeys.SplitParts`).
+    SplitParts(u8),
 }
 
 /// One mapped preview item: a stable `id` used to locate its setter, a label, and
@@ -125,7 +127,7 @@ pub fn build_plan(mb: &MoonBotConfig, cur: &PlanContext) -> MoonBotImportPlan {
     map_hotkeys(mb, cur, &mut plan);
     map_colors(mb, cur, &mut plan);
     map_core(mb, &mut plan);
-    collect_static_unsupported(mb, &mut plan);
+    collect_static_unsupported(&mut plan);
     plan
 }
 
@@ -148,8 +150,10 @@ fn map_ui_theme(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportP
 
 /// Returns the local destination field for a MoonBot shortcut slot.
 ///
-/// `None` means Terminal has no such action. These actions were removed on 2026-07-10 because
-/// moonproto provides no send commands for them.
+/// `None` means Terminal has no such action; those were removed on 2026-07-10 for want of a send
+/// command. `FitSells` stays unmapped for a different reason: moonproto's own shared config calls
+/// that slot "Fit sells to orderbook", which is not the price-band spread the Terminal's
+/// `sells_to_rect` performs, and Moonbot's "Sells to rectangle" has no slot among the 27 at all.
 fn action_target(action: ShortcutAction) -> Option<&'static str> {
     use ShortcutAction::*;
     Some(match action {
@@ -311,6 +315,36 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
             }
         }
     }
+    map_split_parts(h.filled, h.split_parts, cur, plan);
+}
+
+/// Maps `Hotkeys.SplitParts` to the Split Order X part count.
+///
+/// An unfilled Hotkeys block reads as zeros, and MoonBot itself never configures fewer than two
+/// parts, so anything below the minimum means "not set" and is passed over in silence, exactly as
+/// an unassigned shortcut is. A value ABOVE the Terminal maximum is imported at the maximum with a
+/// warning rather than dropped: the number is a real user setting, and only its magnitude is
+/// bounded here.
+fn map_split_parts(filled: bool, parts: u8, cur: &PlanContext, plan: &mut MoonBotImportPlan) {
+    if !filled || parts < SPLIT_PARTS_MIN {
+        return;
+    }
+    let value = parts.min(SPLIT_PARTS_MAX);
+    if value != parts {
+        plan.warnings.push(format!(
+            "SplitParts = {parts} больше максимума {SPLIT_PARTS_MAX} — перенесём {value}"
+        ));
+    }
+    plan.hotkeys.push(SettingChange {
+        id: "hotkey.split_parts".into(),
+        label: "Split Order X: число частей".into(),
+        current: cur.hotkeys.split_n_parts().to_string(),
+        new: value.to_string(),
+        // Compared against the RAW stored field, not the clamped reading: a hand-edited
+        // out-of-range value must show up as a change so applying the import repairs the file.
+        same: value == cur.hotkeys.split_parts,
+        value: PlannedValue::SplitParts(value),
+    });
 }
 
 // ── Colors (Theme block: ColorsLight → light, ColorsDark → dark) ─────────────
@@ -545,7 +579,7 @@ fn map_core(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
 // ── Static "not imported" items ──────────────────────────────────────────────
 
 /// Adds UI-block fields without a working Terminal equivalent (spec section 2, group 4).
-fn collect_static_unsupported(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
+fn collect_static_unsupported(plan: &mut MoonBotImportPlan) {
     let none = "в Terminal нет эквивалентной настройки";
     for name in [
         "HideDemoButton",
@@ -569,13 +603,6 @@ fn collect_static_unsupported(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) 
         name: "Мышиные жесты".into(),
         reason: "недоступны в этой версии экспорта (появятся с блоком Interop)".into(),
     });
-    // SplitParts from HotkeysPublic: Terminal has no part-count setting for Split Order.
-    if mb.ui.hotkeys.split_parts > 0 {
-        plan.unsupported.push(Unsupported {
-            name: "SplitParts".into(),
-            reason: "число частей Split Order в Terminal не настраивается".into(),
-        });
-    }
 }
 
 #[cfg(test)]

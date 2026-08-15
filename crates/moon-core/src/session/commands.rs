@@ -378,6 +378,40 @@ impl SessionManager {
         )
     }
 
+    /// Spread a market's sell orders across a price zone — Moonbot's "sells to rectangle".
+    ///
+    /// The two prices arrive in whatever order the rectangle was drawn and are ordered here, so the
+    /// wire always carries min then max. A degenerate zone — one price, a non-finite or
+    /// non-positive bound, or an empty market — sends nothing: the core would spread every sell
+    /// onto a single level, which no drag of a rectangle can have meant.
+    pub fn sells_to_zone(
+        &self,
+        core: CoreId,
+        market: String,
+        a: f64,
+        b: f64,
+        short: bool,
+    ) -> Result<()> {
+        let (min_price, max_price) = if a <= b { (a, b) } else { (b, a) };
+        if market.is_empty()
+            || !(min_price.is_finite() && max_price.is_finite())
+            || min_price <= 0.0
+            || max_price <= min_price
+        {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::SellsToZone {
+                market,
+                min_price,
+                max_price,
+                short,
+            },
+            "sells to zone",
+        )
+    }
+
     /// Toggle the SL, TS, or VStop flag of one core order by `uid`, as triggered by a cell click in
     /// the Orders table. The feed preserves the configured stop level when re-enabling it.
     pub fn set_order_stop(
