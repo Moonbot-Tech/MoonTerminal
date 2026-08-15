@@ -1,6 +1,7 @@
-//! Left pane of the Strategies window: an exchange -> core -> folder -> strategy tree with
-//! search/kind/direction filters, staged checkboxes, and start/stop (Apply) buttons. These methods
-//! extend `StrategiesView`; state and pure helpers live in [`super`] and [`super::logic`].
+//! Left pane of the Strategies window: an optionally grouped core -> folder -> strategy tree with
+//! search/kind/direction filters, persisted display settings, staged checkboxes, and start/stop
+//! (Apply) buttons. These methods extend `StrategiesView`; state and pure helpers live in [`super`]
+//! and [`super::logic`].
 
 pub(crate) mod cache;
 pub(crate) mod dialogs;
@@ -16,6 +17,16 @@ use moon_ui::{MoonButtonIconSlot, MoonDisclosureDirection};
 use rust_i18n::t;
 
 impl StrategiesView {
+    /// Render the Strategies tree pane, its responsive filter row, and atomic action footer.
+    ///
+    /// Args:
+    ///     store: Current strategy and order snapshot.
+    ///     cores: Visible cores in canonical order.
+    ///     node_data: Row data keyed by the tree adapter's stable ids.
+    ///     cx: View context used by the settings popover and callbacks.
+    ///
+    /// Returns:
+    ///     Complete left pane as one type-erased element.
     pub(super) fn tree_panel(
         &self,
         store: &CoreStore,
@@ -46,6 +57,8 @@ impl StrategiesView {
 
         let collapsed = self.expanded_cores.is_empty() && self.expanded_folders.is_empty();
         let cores_owned: Arc<Vec<(CoreId, String)>> = Arc::new(cores.to_vec());
+        let settings =
+            self.settings_popover(super::settings::settings_trigger(self.settings_open), p, cx);
 
         v_flex()
             // The splitter resizes this width, persisted in layout.strategies_panels.
@@ -76,42 +89,49 @@ impl StrategiesView {
                     .child(
                         h_flex()
                             .w_full()
-                            .gap(design::ui_px(cx, 7.0))
+                            .flex_wrap()
+                            .gap_x(design::ui_px(cx, 7.0))
+                            .gap_y(design::ui_px(cx, 5.0))
                             .items_center()
-                            .justify_between()
+                            .child(self.combo_kind(kind_text, kinds, cx))
+                            .child(self.combo_dir(dir_text, cx))
+                            .child({
+                                let (cc, ct) = self.default_target(store, cores);
+                                self.create_dropdown(cc, ct, cx)
+                            })
                             .child(
                                 h_flex()
-                                    .min_w_0()
+                                    .ml_auto()
+                                    .flex_none()
                                     .gap(design::ui_px(cx, 7.0))
                                     .items_center()
-                                    .child(self.combo_kind(kind_text, kinds, cx))
-                                    .child(self.combo_dir(dir_text, cx))
-                                    .child({
-                                        let (cc, ct) = self.default_target(store, cores);
-                                        self.create_dropdown(cc, ct, cx)
-                                    }),
-                            )
-                            .child(
-                                MoonButton::new("expand-all")
-                                    .ghost()
-                                    .size(MoonButtonSize::Micro)
-                                    .leading_icon(MoonButtonIconSlot::caret(
-                                        MoonDisclosureDirection::DownUp,
-                                        !collapsed,
-                                    ))
-                                    .on_click({
-                                        let cores = cores_owned.clone();
-                                        cx.listener(move |this, _, _, cx| {
-                                            let store = this.backend.read(cx).session.store();
-                                            let coll = this.expanded_cores.is_empty()
-                                                && this.expanded_folders.is_empty();
-                                            // store borrow tied to cx; clone cores for &-call.
-                                            let cores_v = cores.as_ref().clone();
-                                            this.expand_collapse_toggle(&cores_v, store, coll);
-                                            cx.notify();
-                                        })
-                                    })
-                                    .render(),
+                                    .child(settings)
+                                    .child(
+                                        MoonButton::new("expand-all")
+                                            .ghost()
+                                            .size(MoonButtonSize::Micro)
+                                            .leading_icon(MoonButtonIconSlot::caret(
+                                                MoonDisclosureDirection::DownUp,
+                                                !collapsed,
+                                            ))
+                                            .on_click({
+                                                let cores = cores_owned.clone();
+                                                cx.listener(move |this, _, _, cx| {
+                                                    let store =
+                                                        this.backend.read(cx).session.store();
+                                                    let coll = this.expanded_cores.is_empty()
+                                                        && this.expanded_folders.is_empty();
+                                                    // The callback owns canonical roots because the
+                                                    // store borrow remains tied to this context.
+                                                    let cores_v = cores.as_ref().clone();
+                                                    this.expand_collapse_toggle(
+                                                        &cores_v, store, coll,
+                                                    );
+                                                    cx.notify();
+                                                })
+                                            })
+                                            .render(),
+                                    ),
                             ),
                     ),
             )
@@ -179,7 +199,7 @@ impl StrategiesView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(116.0)
+            .fit_trigger_width(96.0, 116.0)
             .menu_width_scaled(180.0)
             .menu_size(MoonMenuSize::Compact)
             .menu_max_height_ui(240.0)
@@ -216,7 +236,7 @@ impl StrategiesView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Action)
-            .trigger_width_scaled(128.0)
+            .fit_trigger_width(96.0, 128.0)
             .menu_width_scaled(140.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)

@@ -1,9 +1,10 @@
 //! Strategies window for inspecting and editing each connected core's strategies.
 //! The separate OS window contains tree, versions, schema-section, and parameter panels. Its
-//! core/folder/strategy tree supports search, filters, staged checkboxes, and start/stop Apply;
-//! schema sections dim inactive entries, while parameter rows support read-only, YES/NO, and long
-//! values. Field and section dependencies load from `assets/param_deps.toml` through [`rules`] and
-//! hot-reload only when `MOON_STRATEGY_RULES_HOT_RELOAD` is set.
+//! core/folder/strategy tree optionally groups cores by venue and supports search, an active-only
+//! display preference, staged checkboxes, and start/stop Apply; schema sections dim inactive
+//! entries, while parameter rows support read-only, YES/NO, and long values. Field and section
+//! dependencies load from `assets/param_deps.toml` through [`rules`] and hot-reload only when
+//! `MOON_STRATEGY_RULES_HOT_RELOAD` is set.
 //! The view reads the live per-core Backend store, and Apply sends checkbox changes plus start/stop
 //! through `session.apply_strategies`.
 
@@ -15,6 +16,7 @@ mod params;
 mod rules;
 mod sections;
 mod selection;
+mod settings;
 mod split;
 mod state;
 // `pub(crate)` exposes `unique_name`, `set_field`, and `STRATEGY_NAME_FIELD` to the Analytics
@@ -51,6 +53,7 @@ use rust_i18n::t;
 use filter::StrategyFilter;
 use logic::*;
 use rules::{Rules, Values};
+use settings::StrategiesPrefs;
 
 pub type Key = (CoreId, u64);
 type FieldEditKey = (CoreId, u64, String);
@@ -64,6 +67,10 @@ pub struct StrategiesView {
     search: Entity<MoonInputState>,
     /// Tree filters for kind, direction, and search text synchronized from the input.
     filter: StrategyFilter,
+    /// Resolved persisted display preferences for grouping and active-row visibility.
+    prefs: StrategiesPrefs,
+    /// Whether the settings popover is open in this process.
+    settings_open: bool,
     /// Concrete singleton Auto scope; `None` leaves the all-core Classic tree authoritative.
     workspace_cores: Option<Vec<CoreId>>,
     /// Primary strategy key supplying the schema and sections.
@@ -176,7 +183,7 @@ impl Render for StrategiesView {
         let queued = self.pending_scroll.take();
         let goto = direct.or(queued);
 
-        // Exchange sections consume connected cores in canonical order.
+        // The grouped and flat tree modes consume the same connected cores in canonical order.
         let cores = {
             let b = self.backend.read(cx);
             visible_strategy_cores(self, b)

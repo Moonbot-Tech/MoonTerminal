@@ -12,7 +12,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonCheckbox, MoonCheckboxSize, MoonDisclosure,
-    MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta, h_flex,
+    MoonPalette, MoonText, MoonTone, MoonTree, MoonTreeEntry, MoonTreeItem, MoonTreeRowMeta,
+    h_flex,
 };
 
 use super::super::filter::PreparedFilter;
@@ -123,7 +124,8 @@ pub(crate) struct MoonTreeBuild {
 /// Builds the visible MoonTree forest and row data without exposing store borrows.
 ///
 /// Collapsed cores contribute only their root row and totals; open cores are each scanned once for
-/// visible rows and folder counts. Nonempty cores are wrapped in canonical exchange sections.
+/// visible rows and folder counts. The resolved display preference either wraps nonempty cores in
+/// canonical exchange sections or emits those same core roots directly.
 ///
 /// Args:
 ///     view: Strategies state providing filters, expansion, and selection.
@@ -132,7 +134,7 @@ pub(crate) struct MoonTreeBuild {
 ///     venues: Session-owned venue identities used by the shared section partition.
 ///
 /// Returns:
-///     Visible exchange forest, row data, expansion IDs, and flat strategy order.
+///     Visible grouped or flat forest, row data, expansion IDs, and flat strategy order.
 pub(crate) fn build(
     view: &StrategiesView,
     store: &CoreStore,
@@ -146,107 +148,63 @@ pub(crate) fn build(
     let mut expanded: Vec<SharedString> = Vec::new();
     let mut flat: Vec<Key> = Vec::new();
 
-    let sections = crate::core_order::exchange_sections(
-        cores
-            .iter()
-            .enumerate()
-            .map(|(index, (core, _))| (index, venues.get(core))),
-    );
-    for (venue, members) in sections {
-        let mut section_children = Vec::new();
-        for member in members {
-            let (core_id, core_name) = &cores[member];
-            let core = *core_id;
-            let Some(cd) = store.core(core) else { continue };
-            // Openness is decided before strategies are walked: nothing below a collapsed core can
-            // render, so it needs only the totals in its own caption. Search and reveal paths force
-            // their required core/folder chain open before this build runs.
-            let core_open = searching || view.expanded_cores.contains(&core);
-
-            // One pass feeds both the visible set and every folder count.
-            let mut counts = if core_open {
-                FolderCounts::default()
-            } else {
-                FolderCounts::totals_only()
-            };
-            let mut matched: Vec<&StrategyRow> = Vec::new();
-            let mut any_matched = false;
-            for row in &cd.strategies {
-                counts.add(row, &filter);
-                if filter.matches(row) {
-                    any_matched = true;
-                    if core_open {
-                        matched.push(row);
-                    }
-                }
-            }
-            // Build section children first so a filtered-out venue never leaves an empty heading.
-            if !any_matched {
-                continue;
-            }
-            let (active, total) = counts.root();
-            let open_orders_total = cd.orders.iter().filter(|order| !order.job_is_done).count();
-
-            let cid = id_core(core);
-            let mut children = Vec::new();
-            if core_open {
-                expanded.push(cid.clone());
-                build_core_subtree(
+    if view.prefs.group_by_venue {
+        let sections = crate::core_order::exchange_sections(
+            cores
+                .iter()
+                .enumerate()
+                .map(|(index, (core, _))| (index, venues.get(core))),
+        );
+        for (venue, members) in sections {
+            let mut section_children = Vec::new();
+            for member in members {
+                let (core, core_name) = &cores[member];
+                if let Some(root) = build_core_root(
                     view,
-                    cd,
-                    core,
+                    store,
+                    *core,
+                    core_name,
                     &filter,
                     searching,
-                    &counts,
-                    &matched,
-                    &mut children,
-                    &mut data,
-                    &mut flat,
-                    &mut expanded,
-                );
+                    (&mut data, &mut flat, &mut expanded),
+                ) {
+                    section_children.push(root);
+                }
             }
 
+            if section_children.is_empty() {
+                continue;
+            }
+            let exchange_id = id_exchange(venue);
+            let label = crate::controls::venue_section_label(venue);
+            expanded.push(exchange_id.clone());
             data.insert(
-                cid.clone(),
-                NodeData::Core {
-                    core,
-                    label: core_name.clone(),
-                    active,
-                    total,
-                    open_orders: open_orders_total,
-                    selected: view
-                        .selected_folder
-                        .as_ref()
-                        .is_some_and(|(selected_core, path)| {
-                            *selected_core == core && path.is_empty()
-                        }),
+                exchange_id.clone(),
+                NodeData::Exchange {
+                    label: label.clone(),
                 },
             );
-            section_children.push(
-                MoonTreeItem::new(cid, core_name.clone())
-                    .folder(true)
-                    .children(children),
+            items.push(
+                MoonTreeItem::new(exchange_id, label)
+                    .folder(false)
+                    .disabled(true)
+                    .children(section_children),
             );
         }
-
-        if section_children.is_empty() {
-            continue;
+    } else {
+        for (core, core_name) in cores.iter() {
+            if let Some(root) = build_core_root(
+                view,
+                store,
+                *core,
+                core_name,
+                &filter,
+                searching,
+                (&mut data, &mut flat, &mut expanded),
+            ) {
+                items.push(root);
+            }
         }
-        let exchange_id = id_exchange(venue);
-        let label = crate::controls::venue_section_label(venue);
-        expanded.push(exchange_id.clone());
-        data.insert(
-            exchange_id.clone(),
-            NodeData::Exchange {
-                label: label.clone(),
-            },
-        );
-        items.push(
-            MoonTreeItem::new(exchange_id, label)
-                .folder(false)
-                .disabled(true)
-                .children(section_children),
-        );
     }
 
     MoonTreeBuild {
@@ -256,6 +214,101 @@ pub(crate) fn build(
         flat,
         searching,
     }
+}
+
+/// Build one visible core root with identical contents in grouped and flat tree modes.
+///
+/// Args:
+///     view: Strategies state providing expansion, selection, and retained folders.
+///     store: Current per-core strategy and order snapshot.
+///     core: Core whose root is being built.
+///     core_name: Canonical display name for the root row.
+///     filter: Prepared row predicate shared by the complete build.
+///     searching: Whether search forces the core and its folders open.
+///     outputs: Side map, visible strategy order, and expanded ids receiving this root's output.
+///
+/// Returns:
+///     The core root, or `None` when no live strategy matches the visibility predicate.
+fn build_core_root(
+    view: &StrategiesView,
+    store: &CoreStore,
+    core: CoreId,
+    core_name: &str,
+    filter: &PreparedFilter,
+    searching: bool,
+    outputs: (
+        &mut HashMap<SharedString, NodeData>,
+        &mut Vec<Key>,
+        &mut Vec<SharedString>,
+    ),
+) -> Option<MoonTreeItem> {
+    let (data, flat, expanded) = outputs;
+    let cd = store.core(core)?;
+    // Nothing below a collapsed core can render, so it needs only the totals in its own caption.
+    // Search and reveal paths force their required core/folder chain open before this build runs.
+    let core_open = searching || view.expanded_cores.contains(&core);
+
+    // One pass feeds both the visible set and every folder count.
+    let mut counts = if core_open {
+        FolderCounts::default()
+    } else {
+        FolderCounts::totals_only()
+    };
+    let mut matched: Vec<&StrategyRow> = Vec::new();
+    let mut any_matched = false;
+    for row in &cd.strategies {
+        counts.add(row, filter);
+        if filter.matches(row) {
+            any_matched = true;
+            if core_open {
+                matched.push(row);
+            }
+        }
+    }
+    if !any_matched {
+        return None;
+    }
+    let (active, total) = counts.root();
+    let open_orders_total = cd.orders.iter().filter(|order| !order.job_is_done).count();
+
+    let cid = id_core(core);
+    let mut children = Vec::new();
+    if core_open {
+        expanded.push(cid.clone());
+        build_core_subtree(
+            view,
+            cd,
+            core,
+            filter,
+            searching,
+            &counts,
+            &matched,
+            &mut children,
+            data,
+            flat,
+            expanded,
+        );
+    }
+
+    data.insert(
+        cid.clone(),
+        NodeData::Core {
+            core,
+            label: core_name.to_string(),
+            active,
+            total,
+            open_orders: open_orders_total,
+            selected: view
+                .selected_folder
+                .as_ref()
+                .is_some_and(|(selected_core, path)| *selected_core == core && path.is_empty()),
+        },
+    );
+    Some(
+        MoonTreeItem::new(cid, core_name.to_string())
+            .folder(true)
+            .children(children),
+    )
 }
 
 /// Builds the folder and strategy rows of one open core, followed by its Deleted folder.

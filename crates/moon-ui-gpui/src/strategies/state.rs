@@ -88,6 +88,7 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) -> Self {
         let panels = backend.read(cx).layout.strategies_panels;
+        let prefs = StrategiesPrefs::restore(&backend.read(cx).layout);
         let display_zone =
             crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
         let search = cx
@@ -231,7 +232,12 @@ impl StrategiesView {
             backend,
             display_zone,
             search,
-            filter: StrategyFilter::default(),
+            filter: StrategyFilter {
+                active_only: prefs.active_only,
+                ..StrategyFilter::default()
+            },
+            prefs,
+            settings_open: false,
             workspace_cores,
             selected: None,
             sel: HashSet::new(),

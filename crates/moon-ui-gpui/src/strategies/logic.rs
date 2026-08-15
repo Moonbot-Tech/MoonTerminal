@@ -477,8 +477,15 @@ impl FolderCounts {
     /// Adds one strategy to its own folder and to every ancestor folder.
     ///
     /// The filter gate lives here rather than at the call site so a caller cannot accidentally
-    /// count rows the captions must exclude. Only kind and direction gate a count; search text hides
-    /// rows from the tree without changing any folder's `active/total`.
+    /// count rows the captions must exclude. Only kind and direction gate a count; search text and
+    /// active-only visibility hide rows from the tree without changing any folder's `active/total`.
+    ///
+    /// Args:
+    ///     row: Strategy contributing to its folder chain when it passes the count predicate.
+    ///     filter: Prepared kind/direction count predicate.
+    ///
+    /// Returns:
+    ///     Nothing; matching counters are updated in place.
     pub(super) fn add(&mut self, row: &StrategyRow, filter: &PreparedFilter) {
         if !filter.counts(row) {
             return;

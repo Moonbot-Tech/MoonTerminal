@@ -314,6 +314,11 @@ surface but the formatter.
 финальный полный snapshot за уже выполняющейся записью, join'ит worker и использует синхронный
 fallback только для классов, которые worker не смог подтвердить.
 
+The Strategies gear popup resolves two optional `layout.toml` booleans: venue grouping defaults
+ON and active-only visibility defaults OFF. Explicit strategy reveals clear active-only through the
+same preference setter and persist that choice through the shared layout coordinator; the popup's
+open state remains process-only.
+
 Интерактивные таблицы без собственного хранилища сохраняют выбранную колонку и направление в
 `WindowLayout.table_sorts` через `persistence/table_persist.rs`. Ключ включает устойчивый id
 таблицы и host-контекст (`:dock` / `:win`); каждое сохранённое имя валидирует сам panel по своим
