@@ -208,7 +208,7 @@ impl MainChartStack {
             scroll: MoonVirtualListScrollHandle::new(),
         };
         if let Some((core, market)) = focus_open {
-            this.open_or_focus(core, market, cx);
+            this.open_or_focus(core, market, crate::backend::ChartHistoryScope::Default, cx);
         }
         this
     }
@@ -359,13 +359,23 @@ impl MainChartStack {
     /// Args:
     ///     core: Live core that owns the market.
     ///     market: Canonical market name.
+    ///     history: Default or published Report durable-history scope for this exact target.
     ///     cx: Stack context used to create panels and publish open markets.
     ///
     /// Returns:
     ///     Nothing; the requested chart becomes the fullscreen active entry.
-    pub(super) fn open_or_focus(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
+    pub(super) fn open_or_focus(
+        &mut self,
+        core: CoreId,
+        market: String,
+        history: crate::backend::ChartHistoryScope,
+        cx: &mut Context<Self>,
+    ) {
         let key = (core, market.clone());
-        if self.index_of(&key).is_some() {
+        if let Some(index) = self.index_of(&key) {
+            self.charts[index].panel.update(cx, |panel, panel_cx| {
+                panel.apply_history_scope(core, market.clone(), history.clone(), panel_cx);
+            });
             // Already open: this is the same selection the tab row performs, plus the idle timer
             // an explicit open restarts.
             self.select_market(&key, true, cx);
@@ -374,6 +384,9 @@ impl MainChartStack {
         }
 
         let panel = self.create_panel(core, &market, cx);
+        panel.update(cx, |panel, panel_cx| {
+            panel.apply_history_scope(core, market.clone(), history, panel_cx);
+        });
         self.charts.push(ChartStackEntry::new(core, market, panel));
         self.active = Some(self.charts.len() - 1);
         self.show_stack = false;
@@ -411,11 +424,19 @@ impl MainChartStack {
             return;
         }
         let Some(active) = self.active.filter(|index| *index < self.charts.len()) else {
-            self.open_or_focus(core, market, cx);
+            self.open_or_focus(core, market, crate::backend::ChartHistoryScope::Default, cx);
             return;
         };
         self.remove_chart_at(active, cx);
         let panel = self.create_panel(core, &market, cx);
+        panel.update(cx, |panel, panel_cx| {
+            panel.apply_history_scope(
+                core,
+                market.clone(),
+                crate::backend::ChartHistoryScope::Default,
+                panel_cx,
+            );
+        });
         self.charts
             .insert(active, ChartStackEntry::new(core, market, panel));
         self.active = Some(active);

@@ -4,11 +4,16 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonRect, rgba_from};
+use moon_ui::{
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonButtonVariant,
+    MoonPalette, MoonRect, rgba_from,
+};
+use rust_i18n::t;
 
 use moon_chart::paint::now_unix_ms;
 
 use super::render_input;
+use super::report_trades::ReportTradesStatus;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
 use crate::persistence::chart_persist::ChartBtnPos;
 
@@ -520,6 +525,28 @@ impl Render for ChartPanel {
         });
 
         let show_empty_logo = axis_panes.is_empty();
+        let trade_status = match self.report_trades.status {
+            ReportTradesStatus::Idle => None,
+            ReportTradesStatus::Loading => Some(t!("chart.trade_history.loading").to_string()),
+            ReportTradesStatus::Ready { count, truncated } => Some(
+                t!(
+                    if truncated {
+                        "chart.trade_history.ready_truncated"
+                    } else {
+                        "chart.trade_history.ready"
+                    },
+                    count = count
+                )
+                .to_string(),
+            ),
+            ReportTradesStatus::Empty => Some(t!("chart.trade_history.empty").to_string()),
+            ReportTradesStatus::NotReady => Some(t!("chart.trade_history.not_ready").to_string()),
+            ReportTradesStatus::Failed => Some(t!("chart.trade_history.failed").to_string()),
+        };
+        let trade_retry = matches!(
+            self.report_trades.status,
+            ReportTradesStatus::NotReady | ReportTradesStatus::Failed
+        );
         let (slot_w, _) = self.chart.slot_dev_size();
         let logo_w = ((slot_w as f32 / ppp) * 0.28).clamp(180.0, 280.0);
         div()
@@ -582,6 +609,34 @@ impl Render for ChartPanel {
             // in `frame()`; see data_state::apply_slot_geometry. The first present therefore uses
             // the real slot, without expanding to a default size or lagging during reflow.
             .child(self.chart.canvas().text_under().absolute().size_full())
+            .children(trade_status.map(|status| {
+                let entity = cx.entity();
+                div()
+                    .absolute()
+                    .top(px(6.0))
+                    .left(px(92.0))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        MoonBadge::new(status)
+                            .variant(MoonBadgeVariant::Soft)
+                            .size(MoonBadgeSize::Tiny)
+                            .render(),
+                    )
+                    .when(trade_retry, |this| {
+                        this.child(
+                            MoonButton::new("chart-trade-history-retry")
+                                .label(t!("chart.trade_history.retry").to_string())
+                                .size(MoonButtonSize::Micro)
+                                .variant(MoonButtonVariant::Ghost)
+                                .on_click(move |_, _window, app| {
+                                    entity.update(app, |this, cx| this.retry_trade_history(cx));
+                                })
+                                .render(),
+                        )
+                    })
+            }))
             .when(show_empty_logo, |this| {
                 // Cover the own pass with an opaque chart background in an empty slot so its logo
                 // does not reveal a stale graph rendered beneath the GPUI scene.

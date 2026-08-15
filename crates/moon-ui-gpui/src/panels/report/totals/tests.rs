@@ -21,6 +21,7 @@ const FAULT_DETAIL: &str = "route unreachable at 09:41";
 /// Build a snapshot with the given `(quote ordinal, profit, orders)` groups and row count.
 fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
     ReportData {
+        filter: Default::default(),
         rows: vec![Vec::new(); shown_rows],
         core_uids: Vec::new(),
         row_keys: Vec::new(),

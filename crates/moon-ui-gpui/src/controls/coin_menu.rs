@@ -69,6 +69,8 @@ pub struct CoinMenuCtx {
     /// Order position direction used by `join_sells`.
     pub short: bool,
     pub origin: CoinMenuOrigin,
+    /// Report-only durable-history scope. Other producers use the default exact-target history.
+    pub history: Option<crate::backend::ChartHistoryScope>,
     /// Entries the caller appends after everything this menu builds, behind their own separator.
     ///
     /// This is how a panel adds an action that only IT can express — the Report's trade log needs a
@@ -120,25 +122,52 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
     // Navigation requires a market. Do not duplicate Open when already on the chart, and skip
     // balance rows that have no market.
     let has_market = !ctx.market.is_empty();
+    if !has_market && ctx.history.is_some() {
+        items.push(
+            MoonMenuItem::with_key(
+                "coin-open-not-ready",
+                t!("coin_menu.view_trades_not_ready").to_string(),
+            )
+            .disabled(true),
+        );
+    }
     if has_market && ctx.origin != CoinMenuOrigin::ChartLine {
         let backend_open = backend.clone();
         let market = ctx.market.clone();
         let workspace_group = ctx.workspace_group.clone();
+        let history = ctx.history.clone();
         items.push(
-            MoonMenuItem::with_key("coin-open", t!("coin_menu.open").to_string()).on_click(
-                move |_, window, app| {
-                    window.close_context_menu(app);
-                    backend_open.update(app, |b, bcx| {
-                        if b.open_on_main_if_authorized(
+            MoonMenuItem::with_key(
+                "coin-open",
+                t!(if history.is_some() {
+                    "coin_menu.view_trades"
+                } else {
+                    "coin_menu.open"
+                })
+                .to_string(),
+            )
+            .on_click(move |_, window, app| {
+                window.close_context_menu(app);
+                backend_open.update(app, |b, bcx| {
+                    let opened = if let Some(history) = history.clone() {
+                        b.open_report_on_main_if_authorized(
+                            workspace_group.as_deref(),
+                            (core, market.clone()),
+                            history,
+                            false,
+                        )
+                    } else {
+                        b.open_on_main_if_authorized(
                             workspace_group.as_deref(),
                             (core, market.clone()),
                             false,
-                        ) {
-                            bcx.notify();
-                        }
-                    });
-                },
-            ),
+                        )
+                    };
+                    if opened {
+                        bcx.notify();
+                    }
+                });
+            }),
         );
     }
     if has_market {

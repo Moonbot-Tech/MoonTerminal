@@ -96,6 +96,7 @@ fn populated_filter() -> ReportFilter {
         date_from: Some(100),
         date_to: Some(200),
         coin: " BTC ".to_string(),
+        exact_coins: None,
         side: SideFilter::Long,
         emulator: Some(false),
         deleted_only: false,

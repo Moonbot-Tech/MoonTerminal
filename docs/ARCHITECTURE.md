@@ -32,6 +32,14 @@ Legacy UI/runtime packages не являются активными зависи
 
 ## Data Path
 
+Every Main coin-chart request carries its exact `(core, canonical market)` atomically. The chart
+composes that core's current/open/retained order lines with durable closed trades read from
+`reports.sqlite`; the durable query re-enforces the exact core and exact market aliases and never
+consults a global active core. Entry and exit markers share the existing userdata layer with order
+lines, figures, news, and warnings. Loading, ready, empty, not-ready, and failed history remain
+visible without blocking live market data, and the first successful load focuses the selected or
+newest closed-trade interval once.
+
 Текущий live-path ушёл от старого постоянного polling и top-down переноса chart data:
 
 - MoonProto события приходят через event sink с waker.
@@ -265,6 +273,11 @@ and `Alerts` are excluded from temporary Auto-only panel construction, so no doc
 Existing detached chart windows remain open. Auto never writes any of this Classic state to
 `docks.json`.
 
+Auto and Classic use the same exact-core chart-history request and Main-tab identity
+`(core, market)`. Auto may reshape or reveal its Main stack, while Classic retains its navigation
+state; neither path may replace the producer-captured core with another selected or globally active
+core. Main history scope is runtime-only and is not persisted into detached Add/Custom chart state.
+
 The Auto rail and `DockArea` use the standard `MoonResizablePanelGroup`. Backend publishes and
 persists one draggable global rail width, while each window applies its own fit clamp without
 rewriting that preference. The virtualized rail is a tree: Overview is the root, exchanges are
@@ -368,6 +381,12 @@ visible set, `app_meta`/`layout.toml`, sort state, and widths remain untouched. 
 menu and its All action, selection copy, and visible-columns export all use the same effective lens;
 the explicit all-columns export still uses the full runtime schema. Auto Overview, Classic, and
 standalone Report expose `core_name` according to the unchanged saved preference.
+
+The published `ReportData` snapshot carries the exact `ReportFilter` that produced its visible
+rows. A Report coin action therefore queues View trades with that published date/side/emulator/
+deleted/strategy scope, the clicked row identity, and the row's catalog-verified exact core and
+market. The chart query forces closed-only history and replaces core/coin predicates with exact
+values; editing controls while an older result remains visible cannot silently retarget that row.
 
 ## Репликация отчётов: чекпойнт и карта живых строк
 

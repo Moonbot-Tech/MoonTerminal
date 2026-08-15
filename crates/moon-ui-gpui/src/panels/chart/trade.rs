@@ -530,6 +530,7 @@ impl ChartPanel {
             side: Some(side),
             short,
             origin: crate::controls::CoinMenuOrigin::ChartLine,
+            history: None,
             trailing: Vec::new(),
         };
         crate::controls::open_coin_menu(ctx, self.backend.clone(), menu_pos, window, cx);

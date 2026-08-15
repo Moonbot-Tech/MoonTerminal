@@ -44,6 +44,7 @@ fn fixture() -> (Vec<String>, ReportData) {
     (
         cols,
         ReportData {
+            filter: Default::default(),
             rows,
             core_uids,
             row_keys: keys,

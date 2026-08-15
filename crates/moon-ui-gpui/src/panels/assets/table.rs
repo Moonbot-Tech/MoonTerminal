@@ -77,6 +77,7 @@ fn open_asset_coin_menu(
         side: None,
         short: false,
         origin: CoinMenuOrigin::OrderTable,
+        history: None,
         trailing: Vec::new(),
     };
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);

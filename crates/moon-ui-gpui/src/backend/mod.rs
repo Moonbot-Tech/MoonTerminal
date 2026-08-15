@@ -91,6 +91,7 @@ fn finalize_recent_warning_episodes(
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OpenMainRequest {
     target: Option<(CoreId, String)>,
+    history: ChartHistoryScope,
     group: Option<String>,
     authority_group: Option<String>,
     revision: u64,
@@ -98,11 +99,30 @@ pub(crate) struct OpenMainRequest {
     pending: bool,
 }
 
+/// Durable history policy applied to one exact Main-chart target.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ChartHistoryScope {
+    /// Load all durable closed trades for the exact target core and market aliases.
+    #[default]
+    Default,
+    /// Refine durable history with the published Report query that produced the clicked row.
+    Report {
+        /// Published filter snapshot; core, coin, and closed-only predicates are enforced again by
+        /// the durable chart query boundary.
+        filter: moon_core::db::ReportFilter,
+        /// Exact historical coin identity stored on the clicked Report row.
+        exact_coin: String,
+        /// Stable row identity used to choose the initial time focus when present.
+        focus_record_id: Option<i64>,
+    },
+}
+
 impl OpenMainRequest {
     /// Replace the current request with one internally consistent identity.
     ///
     /// Args:
     ///     target: Live core and canonical market to open.
+    ///     history: Default or published Report durable-history scope for that same target.
     ///     group: Owning group resolved from that same live core.
     ///     authority_group: Immutable group that owned the producer, or `None` for an unscoped
     ///         global/internal request that may follow a core moved by Settings.
@@ -113,11 +133,13 @@ impl OpenMainRequest {
     fn request(
         &mut self,
         target: (CoreId, String),
+        history: ChartHistoryScope,
         group: String,
         authority_group: Option<String>,
         activate: bool,
     ) {
         self.target = Some(target);
+        self.history = history;
         self.group = Some(group);
         self.authority_group = authority_group;
         self.revision = self.revision.wrapping_add(1);
@@ -245,12 +267,13 @@ impl OpenMainRequest {
     ///     expected: Target copied during the preceding read phase.
     ///
     /// Returns:
-    ///     Owned core, market, and activation bit, or `None` if another producer replaced it.
+    ///     Owned core, market, history scope, and activation bit, or `None` if another producer
+    ///     replaced it.
     pub(crate) fn take_if_matches(
         &mut self,
         group: &str,
         expected: &(CoreId, String),
-    ) -> Option<(CoreId, String, bool)> {
+    ) -> Option<(CoreId, String, ChartHistoryScope, bool)> {
         if !self.pending
             || self.group.as_deref() != Some(group)
             || self.target.as_ref() != Some(expected)
@@ -261,7 +284,7 @@ impl OpenMainRequest {
         let activate = std::mem::take(&mut self.activate);
         self.target
             .as_ref()
-            .map(|(core, market)| (*core, market.clone(), activate))
+            .map(|(core, market)| (*core, market.clone(), self.history.clone(), activate))
     }
 }
 
@@ -1026,13 +1049,14 @@ impl Backend {
     ///     cx: Backend context used to wake the request's newly resolved owner.
     ///
     /// Returns:
-    ///     Owned target and activation bit only when current session ownership still matches.
+    ///     Owned target, history scope, and activation bit only when current session ownership
+    ///     still matches.
     pub(crate) fn take_open_main_request_if_matches(
         &mut self,
         group: &str,
         expected: &(CoreId, String),
         cx: &mut Context<Self>,
-    ) -> Option<(CoreId, String, bool)> {
+    ) -> Option<(CoreId, String, ChartHistoryScope, bool)> {
         if self.reconcile_open_main_request_group() {
             cx.notify();
         }
@@ -1502,7 +1526,36 @@ impl Backend {
         if !self.workspace_action_allows_core(group, target.0) {
             return false;
         }
-        self.queue_open_on_main(target, group.map(str::to_string), activate);
+        self.queue_open_on_main(
+            target,
+            ChartHistoryScope::Default,
+            group.map(str::to_string),
+            activate,
+        );
+        true
+    }
+
+    /// Queue a Report-refined Main-chart navigation while preserving its exact captured core.
+    ///
+    /// Args:
+    ///     group: Group that owned the published Report row, or `None` for standalone Report.
+    ///     target: Captured core and catalog-verified market.
+    ///     history: Published Report scope and clicked-row identity.
+    ///     activate: Whether the receiving group window may be raised.
+    ///
+    /// Returns:
+    ///     `true` when current workspace authority accepted the exact core.
+    pub(crate) fn open_report_on_main_if_authorized(
+        &mut self,
+        group: Option<&str>,
+        target: (CoreId, String),
+        history: ChartHistoryScope,
+        activate: bool,
+    ) -> bool {
+        if !self.workspace_action_allows_core(group, target.0) {
+            return false;
+        }
+        self.queue_open_on_main(target, history, group.map(str::to_string), activate);
         true
     }
 
@@ -2947,13 +3000,14 @@ impl Backend {
     /// Returns:
     ///     Nothing; a target without a live session is ignored.
     pub(crate) fn open_on_main(&mut self, target: (CoreId, String), activate: bool) {
-        self.queue_open_on_main(target, None, activate);
+        self.queue_open_on_main(target, ChartHistoryScope::Default, None, activate);
     }
 
     /// Resolve and queue one Main request with immutable optional producer authority.
     fn queue_open_on_main(
         &mut self,
         target: (CoreId, String),
+        history: ChartHistoryScope,
         authority_group: Option<String>,
         activate: bool,
     ) {
@@ -2967,7 +3021,7 @@ impl Backend {
             return;
         };
         self.open_main_request
-            .request(target, group, authority_group, activate);
+            .request(target, history, group, authority_group, activate);
     }
 
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]

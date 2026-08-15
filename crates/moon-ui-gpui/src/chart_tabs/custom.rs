@@ -97,9 +97,9 @@ impl ChartTabs {
         cx: &mut Context<Self>,
     ) {
         match self.active.clone() {
-            Tab::Main => self
-                .main
-                .update(cx, |m, c| m.open_or_focus(core, market, c)),
+            Tab::Main => self.main.update(cx, |m, c| {
+                m.open_or_focus(core, market, crate::backend::ChartHistoryScope::Default, c)
+            }),
             Tab::Add(..) | Tab::Custom(..) => {
                 if let Some(panel) = self.active_stack() {
                     panel.update(cx, |p, c| {

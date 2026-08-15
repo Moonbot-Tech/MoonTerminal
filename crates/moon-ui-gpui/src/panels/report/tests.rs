@@ -101,8 +101,9 @@ fn yesterday_uses_the_previous_existing_day_across_a_dateline_skip() {
 
 /// Group Report keeps its Core shortcut passive in Auto and scopes delayed coin navigation.
 ///
-/// Mutation: restore the Auto writer in `actions.rs` or use unconditional Main navigation in
-/// `columns.rs`. A retained transaction row could then select or reveal its previous core.
+/// Mutation: restore the Auto writer in `actions.rs` or replace the authorized Report request in
+/// `columns.rs` with unconditional Main navigation. A retained transaction row could then select
+/// or reveal its previous core, or lose the exact published trade-history scope.
 #[test]
 fn report_navigation_cannot_override_current_auto_scope() {
     let actions = include_str!("actions.rs");
@@ -110,7 +111,7 @@ fn report_navigation_cannot_override_current_auto_scope() {
 
     assert!(!actions.contains("select_auto_workspace_core"));
     assert!(columns.contains("(!panel.standalone).then(|| panel.group.clone())"));
-    assert!(columns.contains("b.open_on_main_if_authorized("));
+    assert!(columns.contains("b.open_report_on_main_if_authorized("));
 }
 
 /// `Period::CurWeek` is a CALENDAR preset: mid-week it must resolve to that week's own Monday, not

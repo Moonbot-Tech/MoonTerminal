@@ -27,6 +27,7 @@ mod data_state;
 mod engine;
 mod figures_sync;
 mod news_sync;
+mod trade_history_sync;
 mod warn_sync;
 pub use engine::ChartGhostCursor;
 pub(crate) use figures_sync::FigureVisual;
@@ -345,6 +346,8 @@ struct PaneRender {
     last_figures_sig: u64,
     /// News-mark signature encoded into userdata; `u64::MAX` means dirty.
     last_news_sig: u64,
+    /// Durable closed-trade marker signature encoded into userdata.
+    last_trade_history_sig: u64,
     /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
     last_warn_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
@@ -475,6 +478,7 @@ impl PaneRender {
             last_order_drag_preview: None,
             last_figures_sig: u64::MAX,
             last_news_sig: u64::MAX,
+            last_trade_history_sig: u64::MAX,
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
@@ -739,6 +743,58 @@ impl ChartDataHandle {
     }
 }
 
+/// Resolve the horizontal plot and order-book widths shared by data preparation and navigation.
+///
+/// Args:
+///     rect_w: Full pane width in device pixels.
+///     orderbook_only: Whether the plot collapses behind the order book.
+///     orderbook_enabled: Whether the normal order-book zone is visible.
+///     price_axis_pos: Configured per-tab price-axis position.
+///     pixel_scale: Device pixels per logical pixel.
+///
+/// Returns:
+///     Effective axis position, axis width, order-book width, and plot width.
+fn horizontal_chart_layout(
+    rect_w: f32,
+    orderbook_only: bool,
+    orderbook_enabled: bool,
+    price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
+    pixel_scale: f32,
+) -> (
+    crate::persistence::chart_persist::PriceAxisPos,
+    f32,
+    f32,
+    f32,
+) {
+    let axis_pos = if orderbook_only {
+        crate::persistence::chart_persist::PriceAxisPos::Hide
+    } else {
+        price_axis_pos
+    };
+    let price_axis_w = if matches!(
+        axis_pos,
+        crate::persistence::chart_persist::PriceAxisPos::Hide
+    ) {
+        0.0
+    } else {
+        moon_chart::PRICE_AXIS_W * pixel_scale
+    };
+    let glass_cap = rect_w * 0.5;
+    let glass_base = moon_chart::GLASS_ZONE_PX.min(glass_cap);
+    let chart_w_base = rect_w - price_axis_w - glass_base;
+    let glass_w = if orderbook_only {
+        (rect_w - price_axis_w).max(1.0)
+    } else if !orderbook_enabled {
+        0.0
+    } else if chart_w_base < glass_base * 2.0 {
+        (moon_chart::GLASS_ZONE_PX * 0.8).min(glass_cap)
+    } else {
+        glass_base
+    };
+    let chart_w = (rect_w - price_axis_w - glass_w).max(1.0);
+    (axis_pos, price_axis_w, glass_w, chart_w)
+}
+
 struct ChartDataState {
     container: Rc<RefCell<Container>>,
     render: Rc<RefCell<RenderState>>,
@@ -789,6 +845,10 @@ struct ChartDataState {
     news_marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,
     /// Index of the mark under the cursor, drawn grown from the axis.
     news_hovered: Option<usize>,
+    /// Durable closed trades for this exact Main chart target.
+    trade_history: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
+    /// Revision incremented whenever the durable history set changes.
+    trade_history_revision: u64,
     /// This panel's warning badges (amber gems on the plot's bottom edge); see `warn_sync`. Shared
     /// with the panel, which hit-tests the same list.
     warn_marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,

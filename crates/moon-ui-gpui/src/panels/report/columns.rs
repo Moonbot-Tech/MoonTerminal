@@ -9,6 +9,27 @@ use rust_i18n::t;
 /// Report column that is redundant when a group-owned Auto workspace selects one core.
 const CORE_NAME_COLUMN: &str = "core_name";
 
+/// Exact Report row identity needed to open its chart and durable history.
+#[derive(Clone)]
+pub(super) struct ReportCoinTarget {
+    /// Core that recorded the displayed row.
+    pub(super) core_uid: u64,
+    /// Shared published filter snapshot, copied into an owned request only on activation.
+    pub(super) published_filter: Arc<ReportFilter>,
+    /// Stable clicked-row identity used for the initial chart focus.
+    pub(super) focus_record_id: Option<i64>,
+}
+
+/// Report-only context surrounding one row's shared coin menu.
+pub(super) struct ReportCoinMenuScope {
+    /// Exact row target and published query identity.
+    pub(super) target: ReportCoinTarget,
+    /// Cores represented by bulk menu actions in the current panel scope.
+    pub(super) selected_cores: Vec<u64>,
+    /// Group that owns workspace navigation, or `None` for standalone Report.
+    pub(super) workspace_group: Option<String>,
+}
+
 /// Return whether one runtime column is available in the current display context.
 ///
 /// Args:
@@ -178,7 +199,23 @@ pub(super) fn report_data_row(
             let cname = cols[i].as_str();
             let val = r.get(i).unwrap_or(&Value::Null);
             if cname == "coin" {
-                cells.push(coin_cell(ri, val, core_uid, backend, view, p));
+                let focus_record_id = data.row_keys.get(ri).and_then(|key| match key {
+                    Some(selection::ReportRowKey::Replicated { rec_id, .. })
+                    | Some(selection::ReportRowKey::Legacy { db_id: rec_id, .. }) => Some(*rec_id),
+                    None => None,
+                });
+                cells.push(coin_cell(
+                    ri,
+                    val,
+                    ReportCoinTarget {
+                        core_uid,
+                        published_filter: data.filter.clone(),
+                        focus_record_id,
+                    },
+                    backend,
+                    view,
+                    p,
+                ));
             } else if cname == "core_name" {
                 cells.push(core_cell(ri, val, core_uid, view, p));
             } else if cname == "deleted" {
@@ -201,9 +238,7 @@ pub(super) fn report_data_row(
 /// Args:
 ///     values: The row's cell values, parallel to `cols`.
 ///     cols: Runtime report schema in source order.
-///     core_uid: Core that recorded the row.
-///     selected_cores: Cores the panel's filter currently scopes to.
-///     workspace_group: Group owning mutating menu actions, or `None` for standalone Report.
+///     scope: Exact row target plus menu selection and workspace authority.
 ///     trailing: Entries only the Report can build, appended after the shared ones.
 ///     backend: Shared backend read for market, core, and strategy names.
 ///     cx: Application context.
@@ -213,13 +248,17 @@ pub(super) fn report_data_row(
 pub(super) fn row_coin_menu_ctx(
     values: &[Value],
     cols: &[String],
-    core_uid: u64,
-    selected_cores: Vec<u64>,
-    workspace_group: Option<String>,
+    scope: ReportCoinMenuScope,
     trailing: Vec<MoonMenuItem>,
     backend: &Entity<Backend>,
     cx: &App,
 ) -> CoinMenuCtx {
+    let ReportCoinMenuScope {
+        target,
+        selected_cores,
+        workspace_group,
+    } = scope;
+    let core_uid = target.core_uid;
     let column = |name: &str| {
         cols.iter()
             .position(|col| col == name)
@@ -238,7 +277,7 @@ pub(super) fn row_coin_menu_ctx(
     let market = if coin.is_empty() {
         String::new()
     } else {
-        resolve_market(b, core_uid, &coin)
+        resolve_market(b, core_uid, &coin).unwrap_or_default()
     };
     let coin_base = if market.is_empty() {
         String::new()
@@ -275,6 +314,11 @@ pub(super) fn row_coin_menu_ctx(
         side: None,
         short: false,
         origin: CoinMenuOrigin::OrderTable,
+        history: Some(report_chart_history(
+            (*target.published_filter).clone(),
+            coin,
+            target.focus_record_id,
+        )),
         trailing,
     }
 }
@@ -287,7 +331,7 @@ pub(super) fn row_coin_menu_ctx(
 /// Args:
 ///     ri: Visible row index used to make the cell identity stable.
 ///     val: Report coin value rendered by this cell.
-///     core_uid: Core that recorded the transaction.
+///     target: Exact core, published filter, and stable row identity.
 ///     backend: Shared backend used to resolve and queue the market.
 ///     view: Owning Report panel used to distinguish group and standalone authority.
 ///     p: Active Moon palette.
@@ -297,11 +341,14 @@ pub(super) fn row_coin_menu_ctx(
 fn coin_cell(
     ri: usize,
     val: &Value,
-    core_uid: u64,
+    target: ReportCoinTarget,
     backend: &Entity<Backend>,
     view: &Entity<ReportPanel>,
     p: MoonPalette,
 ) -> MoonDataCell {
+    let core_uid = target.core_uid;
+    let published_filter = target.published_filter;
+    let focus_record_id = target.focus_record_id;
     let coin = value_to_string(val);
     let backend = backend.clone();
     let view = view.clone();
@@ -333,15 +380,26 @@ fn coin_cell(
             // The chart expects an exact full key, so resolve it using the core quote and
             // market universe.
             let market = backend.read(app);
-            let market = resolve_market(market, core_uid, &coin);
+            let Some(market) = resolve_market(market, core_uid, &coin) else {
+                window.push_notification(
+                    MoonNotification::warning(t!("coin_menu.view_trades_not_ready").to_string()),
+                    app,
+                );
+                return;
+            };
             let workspace_group = {
                 let panel = view.read(app);
                 (!panel.standalone).then(|| panel.group.clone())
             };
             backend.update(app, |b, bcx| {
-                if b.open_on_main_if_authorized(
+                if b.open_report_on_main_if_authorized(
                     workspace_group.as_deref(),
                     (core_uid, market.clone()),
+                    report_chart_history(
+                        (*published_filter).clone(),
+                        coin.clone(),
+                        focus_record_id,
+                    ),
                     false,
                 ) {
                     bcx.notify();
@@ -351,15 +409,43 @@ fn coin_cell(
     MoonDataCell::element(el)
 }
 
+/// Build the Report-only history intent shared by direct coin clicks and row context menus.
+///
+/// Args:
+///     filter: Published filter that produced the displayed row.
+///     exact_coin: Raw historical coin identity from that row.
+///     focus_record_id: Stable row identity for initial viewport focus.
+///
+/// Returns:
+///     Report-refined history scope for the shared atomic Main request.
+fn report_chart_history(
+    filter: ReportFilter,
+    exact_coin: String,
+    focus_record_id: Option<i64>,
+) -> crate::backend::ChartHistoryScope {
+    crate::backend::ChartHistoryScope::Report {
+        filter,
+        exact_coin,
+        focus_record_id,
+    }
+}
+
 /// Build a market candidate for the core from the DB `coin` value.
 ///
 /// Supports both historical formats: a base (`M`) and an already complete market (`MUSDT`).
 /// A base is spelled into a market by `symbol::parse::market_names_for`, which knows each
 /// exchange's form; this used to concatenate coin and quote by hand and therefore proposed a
-/// market that exists on no Gate, OKX or Hyperliquid core. When the market universe is nonempty,
-/// the candidate is validated and may be replaced by a market with the same base; an empty
-/// universe leaves the candidate unverified.
-fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
+/// market that exists on no Gate, OKX or Hyperliquid core. The selected core's catalog must verify
+/// the result; an empty universe returns `None` instead of opening a clean chart for a guessed key.
+///
+/// Args:
+///     b: Backend containing the exact core's configuration and market catalog.
+///     core: Core that recorded the Report row.
+///     coin: Historical base coin or full market value from that row.
+///
+/// Returns:
+///     Catalog-verified market, or `None` while the selected core cannot resolve it.
+fn resolve_market(b: &Backend, core: u64, coin: &str) -> Option<String> {
     let exchange = b.session.market_source().exchange_of(core);
     let quote = b
         .config
@@ -381,11 +467,11 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
             .next()
             .unwrap_or_else(|| coin.to_string())
     };
-    // An empty universe returns the candidate without verification.
+    // An empty universe is catalog-not-ready, never permission to open an unverified key.
     let ms = b.session.market_source();
     let universe = ms.search_markets(core, coin, 32);
     if universe.is_empty() {
-        return candidate;
+        return None;
     }
     // Ask the CATALOG which of these markets is this coin. The report stores the core's own
     // token, and for a folded one — `1kRATS` for the market `1000RATSUSDT` — no reading of the
@@ -398,10 +484,13 @@ fn resolve_market(b: &Backend, core: u64, coin: &str) -> String {
         .zip(ms.market_labels(core, &refs))
         .collect();
     if let Some(name) = moon_core::market::pick_market_for_coin(&labelled, coin) {
-        return name.to_string();
+        return Some(name.to_string());
     }
     // The historical format where the stored value is already a full market name.
-    candidate
+    universe
+        .iter()
+        .find(|market| market.eq_ignore_ascii_case(&candidate))
+        .cloned()
 }
 
 /// Build a full-cell core cell with the shared muted tone.

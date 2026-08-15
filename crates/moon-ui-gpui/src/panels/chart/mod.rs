@@ -20,6 +20,7 @@ mod news;
 mod refs;
 mod render;
 mod render_input;
+mod report_trades;
 #[cfg(test)]
 mod tests;
 mod trade;
@@ -210,6 +211,8 @@ pub struct ChartPanel {
     /// News marks for this chart's coin plus their hover state; see [`news`].
     news: news::NewsState,
     warn: warn::WarnState,
+    /// Runtime-only durable history for this exact Main core and market.
+    report_trades: report_trades::ReportTradesState,
     /// Figure-drawing state for this panel: draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
     /// Screen point where the latest draft node was placed. Releasing sufficiently far away
@@ -327,6 +330,11 @@ impl ChartPanel {
             cx.notify();
         })
         .detach();
+        let report_revision = backend.read(cx).report_revision.clone();
+        cx.observe(&report_revision, |this, _revision, cx| {
+            this.requery_trade_history_on_generation(cx);
+        })
+        .detach();
         // Notify for setting changes and infrequent axis text. Frequent market data bypasses GPUI
         // notification because `gpu_canvas.frame()` reads MarketDataSource directly. A local
         // one-shot timer handles time-based pane TTL independently of backend observations.
@@ -429,6 +437,7 @@ impl ChartPanel {
             fig_draft_probe: None,
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
+            report_trades: report_trades::ReportTradesState::default(),
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,
@@ -578,6 +587,7 @@ impl ChartPanel {
             fig_draft_probe: None,
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
+            report_trades: report_trades::ReportTradesState::default(),
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,

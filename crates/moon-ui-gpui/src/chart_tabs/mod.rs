@@ -828,9 +828,9 @@ impl ChartTabs {
                 bcx,
             )
         });
-        if let Some((core, market, activate)) = req {
+        if let Some((core, market, history, activate)) = req {
             self.main
-                .update(cx, |p, pcx| p.open_or_focus(core, market, pcx));
+                .update(cx, |p, pcx| p.open_or_focus(core, market, history, pcx));
             self.active = Tab::Main;
             self.last_sig = chart_tabs_sig(self.backend.read(cx), self.group.as_str());
             // Raise and focus Main for a live activating request from a chart double-click or

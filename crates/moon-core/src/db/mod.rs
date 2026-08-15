@@ -44,11 +44,11 @@ pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
-    display_columns, distinct_cores, distinct_strategies, max_core_uid, query_reports,
-    query_totals, strategy_purge_rows, ProfitMetric, ReportFilter, ReportStrategy,
-    ReportStrategyKey, ReportTable, SideFilter, StrategyPurgeRows, COLUMNS_ADDED_SINCE_V2,
-    DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN, VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN,
-    VALUATION_SOURCE_COLUMN,
+    display_columns, distinct_cores, distinct_strategies, max_core_uid, query_chart_trade_history,
+    query_reports, query_totals, strategy_purge_rows, ChartTradeHistory, ChartTradeRecord,
+    ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable, SideFilter,
+    StrategyPurgeRows, COLUMNS_ADDED_SINCE_V2, DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN,
+    VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN,
 };
 
 use read_fail::read_fail;

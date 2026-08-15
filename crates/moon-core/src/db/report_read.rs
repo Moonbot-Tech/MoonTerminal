@@ -149,6 +149,38 @@ pub struct ReportTable {
     pub rec_ids: Vec<i64>,
 }
 
+/// One durable closed trade projected for an exact chart core and market.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartTradeRecord {
+    /// Stable report-replica record identity.
+    pub record_id: i64,
+    /// Runtime core identity that owns this trade.
+    pub core_uid: u64,
+    /// Coin identity stored by the originating core.
+    pub coin: String,
+    /// Entry timestamp in Unix seconds.
+    pub buy_date: i64,
+    /// Close timestamp in Unix seconds.
+    pub close_date: i64,
+    /// Entry price.
+    pub buy_price: f64,
+    /// Exit price.
+    pub sell_price: f64,
+    /// Filled quantity reported by the core.
+    pub quantity: f64,
+    /// Whether the trade is short.
+    pub is_short: bool,
+}
+
+/// Bounded durable chart-history result with explicit truncation state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartTradeHistory {
+    /// Newest-first records in the exact requested scope.
+    pub records: Vec<ChartTradeRecord>,
+    /// Whether at least one older matching record was omitted by the cap.
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SideFilter {
     #[default]
@@ -181,6 +213,11 @@ pub struct ReportFilter {
     pub date_from: Option<i64>,
     pub date_to: Option<i64>,
     pub coin: String,
+    /// Exact case-insensitive coin identities used by chart history.
+    ///
+    /// `None` keeps the Report substring filter above. `Some` replaces it with an exact set;
+    /// an explicit empty set matches no rows so a lost market identity cannot widen the query.
+    pub exact_coins: Option<Vec<String>>,
     pub side: SideFilter,
     /// Emulator orders: `None` selects all, `Some(false)` only real orders, and
     /// `Some(true)` only emulator orders. A NULL column value counts as real.
@@ -494,7 +531,21 @@ fn build_where(
         }
     }
     let coin = f.coin.trim();
-    if !coin.is_empty() && has("coin") {
+    if let Some(coins) = &f.exact_coins {
+        if coins.is_empty() || !has("coin") {
+            sql.push_str(" AND 1=0");
+        } else {
+            sql.push_str(" AND (");
+            for (index, exact) in coins.iter().enumerate() {
+                if index > 0 {
+                    sql.push_str(" OR ");
+                }
+                sql.push_str("r.coin COLLATE NOCASE = ?");
+                params.push(Box::new(exact.clone()));
+            }
+            sql.push(')');
+        }
+    } else if !coin.is_empty() && has("coin") {
         sql.push_str(" AND r.coin LIKE ?");
         params.push(Box::new(format!("%{}%", coin.to_uppercase())));
     }
@@ -1227,6 +1278,211 @@ pub fn query_reports(
         core_uids,
         rec_ids,
     })
+}
+
+/// Read a bounded newest-first closed-trade history for one exact chart core and coin identity set.
+///
+/// The caller may provide a published Report filter to retain its date, side, emulator, deletion,
+/// and strategy predicates. This boundary always overwrites the core, substring coin, exact coin,
+/// and closed-only fields so a stale or global filter cannot widen the chart scope.
+///
+/// Args:
+///     conn: Open report reader or pinned snapshot.
+///     core_uid: Exact runtime core that owns the chart.
+///     exact_coins: Case-insensitive stored coin identities accepted for the canonical market.
+///     filter: Optional published Report scope; `None` selects all durable closed trades.
+///     limit: Maximum returned records; one additional row detects truncation.
+///
+/// Returns:
+///     Parsed chart records and whether older matches were truncated.
+///
+/// Errors:
+///     Propagates replica readiness, schema, SQL, and row-conversion failures.
+pub fn query_chart_trade_history(
+    conn: &Connection,
+    core_uid: u64,
+    exact_coins: &[String],
+    filter: Option<&ReportFilter>,
+    limit: usize,
+) -> ReadResult<ChartTradeHistory> {
+    const CONTEXT: &str = "reports: chart trade history";
+    const REQUIRED_COLUMNS: &[&str] = &[
+        "core_uid",
+        "coin",
+        "buydate",
+        "closedate",
+        "buyprice",
+        "sellprice",
+        "quantity",
+        "isshort",
+    ];
+    let mut scope = filter.cloned().unwrap_or_default();
+    scope.core_uids = vec![core_uid];
+    scope.coin.clear();
+    scope.exact_coins = Some(exact_coins.to_vec());
+    scope.closed_only = true;
+
+    let requested = limit.saturating_add(1);
+    install_strategy_name_mask_function(conn, &scope).map_err(|error| read_fail(CONTEXT, error))?;
+    let has_strategy_names =
+        strategy_metadata_required(&scope) && super::analytics::strategies_attached(conn);
+    let mut compatible_source = false;
+    let mut records = Vec::new();
+    for source in read_sources_res(conn)? {
+        if !REQUIRED_COLUMNS
+            .iter()
+            .all(|column| source.cols.contains(*column))
+        {
+            continue;
+        }
+        compatible_source = true;
+        let (where_sql, mut params) = build_where(&scope, &source.cols, has_strategy_names);
+        let fallback_id = if source.cols.contains("id") {
+            "r.id"
+        } else if source.legacy && source.cols.contains("db_id") {
+            "r.db_id"
+        } else {
+            "0"
+        };
+        let record_id = format!(
+            "COALESCE(NULLIF({}, 0), {fallback_id}, 0)",
+            rec_id_expr(&source)
+        );
+        let sql = format!(
+            "SELECT {record_id}, r.core_uid, r.coin, r.buydate, r.closedate, \
+             r.buyprice, r.sellprice, r.quantity, r.isshort \
+             FROM {} r{where_sql} \
+             ORDER BY r.closedate DESC, {record_id} DESC LIMIT ?",
+            source.table
+        );
+        params.push(Box::new(requested as i64));
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|value| value.as_ref()).collect();
+        let mut statement = conn
+            .prepare(&sql)
+            .map_err(|error| read_fail(CONTEXT, error))?;
+        let rows = statement
+            .query_map(refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, Value>(0)?,
+                    row.get::<_, Value>(1)?,
+                    row.get::<_, Value>(2)?,
+                    row.get::<_, Value>(3)?,
+                    row.get::<_, Value>(4)?,
+                    row.get::<_, Value>(5)?,
+                    row.get::<_, Value>(6)?,
+                    row.get::<_, Value>(7)?,
+                    row.get::<_, Value>(8)?,
+                ))
+            })
+            .map_err(|error| read_fail(CONTEXT, error))?;
+        for row in rows {
+            let (
+                record_id,
+                row_core,
+                coin,
+                buy_date,
+                close_date,
+                buy_price,
+                sell_price,
+                quantity,
+                is_short,
+            ) = row.map_err(|error| read_fail(CONTEXT, error))?;
+            let Some(buy_date) = report_value_i64(&buy_date) else {
+                continue;
+            };
+            let Some(close_date) = report_value_i64(&close_date) else {
+                continue;
+            };
+            let Some(buy_price) = report_value_f64(&buy_price) else {
+                continue;
+            };
+            let Some(sell_price) = report_value_f64(&sell_price) else {
+                continue;
+            };
+            if buy_date <= 0
+                || close_date <= 0
+                || !buy_price.is_finite()
+                || buy_price <= 0.0
+                || !sell_price.is_finite()
+                || sell_price <= 0.0
+            {
+                continue;
+            }
+            records.push(ChartTradeRecord {
+                record_id: report_value_i64(&record_id).unwrap_or_default(),
+                core_uid: report_value_i64(&row_core).unwrap_or_default() as u64,
+                coin: report_value_text(&coin).unwrap_or_default(),
+                buy_date,
+                close_date,
+                buy_price,
+                sell_price,
+                quantity: report_value_f64(&quantity).unwrap_or_default(),
+                is_short: report_value_i64(&is_short).unwrap_or_default() != 0,
+            });
+        }
+    }
+    if !compatible_source {
+        return Err(super::ReadFail::NotReady);
+    }
+    records.sort_by(|left, right| {
+        right
+            .close_date
+            .cmp(&left.close_date)
+            .then_with(|| right.record_id.cmp(&left.record_id))
+            .then_with(|| right.buy_date.cmp(&left.buy_date))
+            .then_with(|| right.coin.cmp(&left.coin))
+    });
+    let truncated = records.len() > limit;
+    records.truncate(limit);
+    Ok(ChartTradeHistory { records, truncated })
+}
+
+/// Convert one generic Report value to an integer without accepting lossy non-integral reals.
+///
+/// Args:
+///     value: SQLite value returned by the dynamic Report projection.
+///
+/// Returns:
+///     Parsed integer, or `None` for NULL, blobs, malformed text, and non-integral reals.
+fn report_value_i64(value: &Value) -> Option<i64> {
+    match value {
+        Value::Integer(value) => Some(*value),
+        Value::Real(value) if value.is_finite() && value.fract() == 0.0 => Some(*value as i64),
+        Value::Text(value) => value.parse().ok(),
+        Value::Null | Value::Blob(_) | Value::Real(_) => None,
+    }
+}
+
+/// Convert one generic Report value to a finite floating-point number.
+///
+/// Args:
+///     value: SQLite value returned by the dynamic Report projection.
+///
+/// Returns:
+///     Parsed finite number, or `None` for NULL, blobs, malformed text, and non-finite values.
+fn report_value_f64(value: &Value) -> Option<f64> {
+    let value = match value {
+        Value::Integer(value) => *value as f64,
+        Value::Real(value) => *value,
+        Value::Text(value) => value.parse().ok()?,
+        Value::Null | Value::Blob(_) => return None,
+    };
+    value.is_finite().then_some(value)
+}
+
+/// Convert one generic Report value to its stored text identity.
+///
+/// Args:
+///     value: SQLite value returned by the dynamic Report projection.
+///
+/// Returns:
+///     Cloned text, or `None` for every non-text storage class.
+fn report_value_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Text(value) => Some(value.clone()),
+        Value::Null | Value::Integer(_) | Value::Real(_) | Value::Blob(_) => None,
+    }
 }
 
 /// Highest `core_uid` in one table, or `Ok(None)` when it is absent or holds no rows.

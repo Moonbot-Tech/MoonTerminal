@@ -4,8 +4,117 @@ use rusqlite::types::Value;
 use rusqlite::Connection;
 
 use super::{
-    distinct_strategies, query_reports, query_totals, ReportFilter, ReportStrategyKey, SideFilter,
+    distinct_strategies, query_chart_trade_history, query_reports, query_totals, ReportFilter,
+    ReportStrategyKey, SideFilter,
 };
+
+/// Removing the exact core, exact coin, or inclusive close-date predicate from
+/// `query_chart_trade_history` admits one of the independently seeded decoys, while filtering on
+/// buy date drops record 11 even though its close date is inside the selected Report interval.
+#[test]
+fn chart_history_keeps_the_exact_core_coin_and_report_close_window() {
+    let conn = Connection::open_in_memory().expect("open chart-history fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL,
+             core_name TEXT,
+             newrecid INTEGER NOT NULL,
+             coin TEXT,
+             buydate INTEGER,
+             closedate INTEGER,
+             buyprice REAL,
+             sellprice REAL,
+             quantity REAL,
+             isshort INTEGER,
+             isemulator INTEGER,
+             isdeleted INTEGER
+         );
+         INSERT INTO orders_rep VALUES
+             (7, 'A', 11, 'BTCUSDT', 50, 100, 10.0, 12.0, 2.0, 0, 0, 0),
+             (7, 'A', 12, 'BTCUSDT', 100, 200, 20.0, 18.0, 3.0, 1, 0, 0),
+             (8, 'B', 13, 'BTCUSDT', 110, 150, 30.0, 31.0, 4.0, 0, 0, 0),
+             (7, 'A', 14, 'BTCUSDT-PERP', 120, 160, 40.0, 41.0, 5.0, 0, 0, 0),
+             (7, 'A', 15, 'BTCUSDT', 130, 201, 50.0, 51.0, 6.0, 0, 0, 0);",
+    )
+    .expect("seed chart-history fixture");
+
+    let filter = ReportFilter {
+        date_from: Some(100),
+        date_to: Some(200),
+        ..ReportFilter::default()
+    };
+    let result = query_chart_trade_history(&conn, 7, &["btcusdt".to_string()], Some(&filter), 10)
+        .expect("query exact chart history");
+
+    assert_eq!(
+        result
+            .records
+            .iter()
+            .map(|record| (record.record_id, record.buy_date, record.close_date))
+            .collect::<Vec<_>>(),
+        vec![(12, 100, 200), (11, 50, 100)]
+    );
+    assert!(!result.truncated);
+}
+
+/// Removing the limit-plus-one read or stable newest-first order makes the independently seeded
+/// record 22 disappear from the first page or hides the fact that record 21 was omitted.
+#[test]
+fn chart_history_reports_a_deterministic_newest_first_cap() {
+    let conn = Connection::open_in_memory().expect("open chart-history cap fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, coin TEXT,
+             buydate INTEGER, closedate INTEGER, buyprice REAL, sellprice REAL,
+             quantity REAL, isshort INTEGER
+         );
+         INSERT INTO orders_rep VALUES
+             (9, 21, 'ETHUSDT', 10, 20, 1.0, 2.0, 3.0, 0),
+             (9, 22, 'ETHUSDT', 11, 30, 2.0, 3.0, 4.0, 1);",
+    )
+    .expect("seed chart-history cap fixture");
+
+    let result = query_chart_trade_history(&conn, 9, &["ETHUSDT".to_string()], None, 1)
+        .expect("query capped chart history");
+    assert_eq!(
+        result
+            .records
+            .iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>(),
+        vec![22]
+    );
+    assert!(result.truncated);
+}
+
+/// Keeping the legacy source's synthetic zero rec-id instead of its projected `db_id` makes a
+/// Report click unable to focus the independently seeded legacy trade 77.
+#[test]
+fn chart_history_preserves_legacy_identity_for_clicked_trade_focus() {
+    let conn = Connection::open_in_memory().expect("open legacy chart-history fixture");
+    conn.execute_batch(
+        "CREATE TABLE closed_sell_reports (
+             core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL, coin TEXT,
+             buydate INTEGER, closedate INTEGER, buyprice REAL, sellprice REAL,
+             quantity REAL, isshort INTEGER
+         );
+         CREATE TABLE orders_rep (core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL);
+         INSERT INTO closed_sell_reports VALUES
+             (5, 77, 'SOLUSDT', 100, 200, 9.0, 11.0, 4.0, 0);",
+    )
+    .expect("seed legacy chart-history fixture");
+
+    let result = query_chart_trade_history(&conn, 5, &["SOLUSDT".to_string()], None, 10)
+        .expect("query legacy chart history");
+    assert_eq!(
+        result
+            .records
+            .iter()
+            .map(|record| record.record_id)
+            .collect::<Vec<_>>(),
+        vec![77]
+    );
+}
 
 /// Removing mandatory-column gating from `valuation::coverage_sql` would make this query refer to
 /// absent `closedate`, `basecurrency`, and `profitbtc` columns while a core schema is still loading.
@@ -695,6 +804,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
         date_from: Some(190),
         date_to: Some(310),
         coin: " match ".to_string(),
+        exact_coins: None,
         side: SideFilter::Long,
         emulator: Some(false),
         deleted_only: false,
