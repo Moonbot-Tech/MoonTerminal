@@ -239,9 +239,15 @@ diag_counters!(
     //     describes actually changes — a signature defect, not a data one.
     //   * `strat_versions_us` — the versions pane plus the gated deleted/version cache checks that
     //     run just before it.
-    //   * `strat_treepane_us` — the LEFT pane's own element tree: search box, kind and direction
-    //     combos, the create dropdown and the action bar. It contains `kinds_present`, a second full
-    //     walk over every core's strategies, so it is not the cheap half it looks like.
+    //   * `strat_treepane_us` — the LEFT pane: its own element tree (search box, kind and direction
+    //     combos, the create dropdown and the action bar) PLUS the cache lookup that now feeds it.
+    //     Read it with `strat_pane_build` beside it, or a rise is unattributable — the two costs
+    //     inside this one number move for opposite reasons.
+    //   * `strat_pane_build` — left-pane derivations actually rebuilt, i.e. cache misses: the kinds
+    //     list, the Start/Stop plan and the footer label measurement, so at most three per frame.
+    //     Read against `strat_render`: a hover sweep should hold this near zero while renders run at
+    //     monitor rate. The two climbing together means a key churns per frame, and the cost above
+    //     is the old per-frame walk back under a new name.
     //   * `strat_sections_us` / `strat_params_us` — the schema-section list and the parameter rows.
     //   * `strat_model_us` — the COMPUTED half of those two: dependency values and the parameter
     //     model, both of which are pure functions of the selection and could be cached the way the
@@ -259,6 +265,7 @@ diag_counters!(
     STRAT_SIG_VIEW => "strat_sig_view",
     STRAT_VERSIONS_US => "strat_versions_us",
     STRAT_TREEPANE_US => "strat_treepane_us",
+    STRAT_PANE_BUILD => "strat_pane_build",
     STRAT_SECTIONS_US => "strat_sections_us",
     STRAT_PARAMS_US => "strat_params_us",
     STRAT_MODEL_US => "strat_model_us",

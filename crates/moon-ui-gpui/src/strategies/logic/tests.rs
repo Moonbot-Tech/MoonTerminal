@@ -254,5 +254,9 @@ fn hidden_classic_selection_cannot_drive_auto_actions() {
     assert!(actions.contains("strategy_action_authorized"));
     assert!(actions.contains("pub(super) fn start_stop_plan"));
     assert!(actions.contains("field_edit_plan_authorized"));
-    assert!(include_str!("../tree/mod.rs").contains("self.start_stop_plan"));
+    // The buttons still dispatch a plan built during the frame that rendered them, rather than one
+    // resolved at click time — it now comes from the pane cache. Only that link is asserted here;
+    // `tree::pane_cache::tests` owns the rest of the chain, and this test is about authority.
+    assert!(include_str!("../tree/mod.rs").contains("pane.plan.clone()"));
+    assert!(actions.contains("fn apply_start_stop("));
 }

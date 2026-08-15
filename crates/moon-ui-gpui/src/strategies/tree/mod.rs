@@ -9,6 +9,7 @@ pub(crate) mod dnd;
 pub(crate) mod menu;
 pub(crate) mod moon;
 pub(crate) mod ops;
+pub(in crate::strategies) mod pane_cache;
 pub(crate) mod ui;
 
 use super::*;
@@ -23,6 +24,7 @@ impl StrategiesView {
     ///     store: Current strategy and order snapshot.
     ///     cores: Visible cores in canonical order.
     ///     node_data: Row data keyed by the tree adapter's stable ids.
+    ///     pane: This frame's cached kinds list, Start/Stop plan and footer label width.
     ///     cx: View context used by the settings popover and callbacks.
     ///
     /// Returns:
@@ -32,6 +34,7 @@ impl StrategiesView {
         store: &CoreStore,
         cores: &crate::core_order::OrderedCores,
         node_data: std::rc::Rc<std::collections::HashMap<SharedString, moon::NodeData>>,
+        pane: &LeftPaneFrame,
         cx: &Context<Self>,
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
@@ -42,11 +45,10 @@ impl StrategiesView {
         let tree_el = self.moon_tree_el(node_data, cx);
 
         // Search, strategy-kind filter, and direction filter.
-        let kinds = kinds_present(cores, store);
         let kind_text = self
             .filter
             .kind
-            .and_then(|k| kinds.iter().find(|(o, _)| *o == k))
+            .and_then(|k| pane.kinds.iter().find(|(o, _)| *o == k))
             .map(|(_, n)| n.clone())
             .unwrap_or_else(|| t!("strat.all_kinds").to_string());
         let dir_text = match self.filter.dir {
@@ -56,7 +58,6 @@ impl StrategiesView {
         };
 
         let collapsed = self.expanded_cores.is_empty() && self.expanded_folders.is_empty();
-        let cores_owned: Arc<Vec<(CoreId, String)>> = Arc::new(cores.to_vec());
         let settings =
             self.settings_popover(super::settings::settings_trigger(self.settings_open), p, cx);
 
@@ -93,7 +94,7 @@ impl StrategiesView {
                             .gap_x(design::ui_px(cx, 7.0))
                             .gap_y(design::ui_px(cx, 5.0))
                             .items_center()
-                            .child(self.combo_kind(kind_text, kinds, cx))
+                            .child(self.combo_kind(kind_text, &pane.kinds, cx))
                             .child(self.combo_dir(dir_text, cx))
                             .child({
                                 let (cc, ct) = self.default_target(store, cores);
@@ -114,22 +115,18 @@ impl StrategiesView {
                                                 MoonDisclosureDirection::DownUp,
                                                 !collapsed,
                                             ))
-                                            .on_click({
-                                                let cores = cores_owned.clone();
-                                                cx.listener(move |this, _, _, cx| {
-                                                    let store =
-                                                        this.backend.read(cx).session.store();
-                                                    let coll = this.expanded_cores.is_empty()
-                                                        && this.expanded_folders.is_empty();
-                                                    // The callback owns canonical roots because the
-                                                    // store borrow remains tied to this context.
-                                                    let cores_v = cores.as_ref().clone();
-                                                    this.expand_collapse_toggle(
-                                                        &cores_v, store, coll,
-                                                    );
-                                                    cx.notify();
-                                                })
-                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                // Resolved at click time, like the paste handler in
+                                                // `ui.rs`: capturing the frame's list instead cost
+                                                // a deep copy of every core name on every repaint.
+                                                let backend = this.backend.read(cx);
+                                                let cores = visible_strategy_cores(this, backend);
+                                                let store = backend.session.store();
+                                                let coll = this.expanded_cores.is_empty()
+                                                    && this.expanded_folders.is_empty();
+                                                this.expand_collapse_toggle(&cores, store, coll);
+                                                cx.notify();
+                                            }))
                                             .render(),
                                     ),
                             ),
@@ -148,7 +145,7 @@ impl StrategiesView {
             )
             // Bottom action bar.
             .child(div().w_full().h(px(1.0)).bg(border))
-            .child(self.action_bar(cores_owned, store, cx))
+            .child(self.action_bar(cores, store, pane, cx))
             .into_any_element()
     }
 
@@ -156,7 +153,7 @@ impl StrategiesView {
     fn combo_kind(
         &self,
         current: String,
-        kinds: Vec<(u8, String)>,
+        kinds: &[(u8, String)],
         cx: &Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
@@ -177,6 +174,7 @@ impl StrategiesView {
                 }),
         ];
         for (ord, name) in kinds {
+            let ord = *ord;
             let view = view.clone();
             items.push(
                 MoonMenuItem::with_key(format!("kind-{ord}"), name.clone())
@@ -249,42 +247,34 @@ impl StrategiesView {
     /// localized label collapses atomically to its icon when the tree pane cannot fit the full set.
     ///
     /// Args:
-    ///     cores: Canonical visible roots represented by the rendered Start/Stop buttons.
-    ///     store: Strategy snapshot used to capture their exact target plan.
-    ///     cx: View context used to build callbacks and capture workspace authority.
+    ///     cores: Canonical visible roots the paste target resolves against.
+    ///     store: Strategy snapshot used for selection-dependent enablement.
+    ///     pane: This frame's cached Start/Stop plan and measured footer label width.
+    ///     cx: View context used to build callbacks and scaled widths.
     ///
     /// Returns:
     ///     Bottom action bar whose delayed callbacks refuse stale target plans atomically.
     fn action_bar(
         &self,
-        cores: Arc<Vec<(CoreId, String)>>,
+        cores: &crate::core_order::OrderedCores,
         store: &CoreStore,
+        pane: &LeftPaneFrame,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let copy_label = t!("strat.action_copy").to_string();
-        let paste_label = t!("strat.action_paste").to_string();
-        let delete_label = t!("strat.action_delete").to_string();
         let start_label = t!("strat.start_checked").to_string();
         let stop_label = t!("strat.stop_checked").to_string();
-        let staged = staged_count(self);
+        // The same count the cached width was measured against, so the rendered label and the
+        // density decision cannot describe different states.
+        let staged = pane.staged;
         let staged_label = (staged > 0).then(|| t!("strat.staged", n = staged).to_string());
 
-        let measured_label_width = [
-            copy_label.as_str(),
-            paste_label.as_str(),
-            delete_label.as_str(),
-            start_label.as_str(),
-            stop_label.as_str(),
-        ]
-        .into_iter()
-        .map(|label| design::ui_text_width(cx, label, 10.5, 400.0, true))
-        .sum::<f32>()
-            + staged_label.as_deref().map_or(0.0, |label| {
-                design::ui_text_width(cx, label, 10.5, 400.0, true)
-            });
+        // Measured behind the pane cache: one full set of labels is ~40 uncached per-glyph
+        // advances, and this row is rebuilt on every hover repaint.
+        let measured_label_width = pane.footer_label_width;
         // Five native leading icons remain in both densities. The full state additionally reserves
         // their label gaps, six group gaps, outer padding, and the hairline divider.
-        let action_icon_width = (design::font_value(cx, 10.5) + 1.0).clamp(10.0, 14.0);
+        let action_icon_width =
+            (design::font_value(cx, design::ACTION_LABEL_BASE) + 1.0).clamp(10.0, 14.0);
         // Action size ships with pad_x = 0. Labeled footer buttons opt into the same 7-unit
         // inset used by other Action labels so text does not sit on the border.
         let labeled_pad = design::ui_value(cx, 7.0) * 2.0 * 5.0;
@@ -297,7 +287,9 @@ impl StrategiesView {
 
         // Each callback owns the exact plan this rendered button described. A workspace change
         // before dispatch cannot silently reduce that old multi-core action to a surviving subset.
-        let plan = Arc::new(self.start_stop_plan(cores.as_ref(), store, cx));
+        // The plan comes from the pane cache, which keys it on the workspace generation among the
+        // rest — so a captured plan still describes the frame it was rendered on.
+        let plan = pane.plan.clone();
         let icon_width = design::glyph_btn_w(cx);
         let mut start = MoonButton::new("start-checked")
             .primary()
@@ -356,7 +348,7 @@ impl StrategiesView {
             .py(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, group_gap))
             .items_center()
-            .child(self.selection_toolbar(store, show_labels, cx))
+            .child(self.selection_toolbar(store, show_labels, !cores.is_empty(), cx))
             .child(design::chrome_divider(cx, MoonPalette::active(cx)))
             .child(staged_slot)
             .child(right)
