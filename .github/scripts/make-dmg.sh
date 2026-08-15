@@ -13,9 +13,15 @@ APP="dist/MoonTerminal.app"
 DMG="dist/MoonTerminal.dmg"
 SRC_ICON="assets/icons/0.png"
 
-# Version from the tag (v0.0.1 -> 0.0.1); fall back to 0.0.0 for manual runs.
-VERSION="${GITHUB_REF_NAME:-0.0.0}"
+# Version from the validated release tag (v0.0.1 -> 0.0.1), passed in positionally like every
+# other release script takes it. GITHUB_REF_NAME is only the fallback: on workflow_dispatch it is
+# the branch, and "main" is not a CFBundleVersion — which is why the result is validated.
+VERSION="${1:-${GITHUB_REF_NAME:-0.0.0}}"
 VERSION="${VERSION#v}"
+if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$ ]]; then
+  echo "refusing to bundle a non-numeric CFBundleVersion: $VERSION" >&2
+  exit 1
+fi
 
 rm -rf dist
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

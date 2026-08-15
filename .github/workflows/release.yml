@@ -152,7 +152,9 @@ jobs:
       - name: Stage the Intel slice
         run: mv target/x86_64-apple-darwin/release/moonterminal stage/moonterminal-x86_64
       - name: Package .app + .dmg
-        run: bash .github/scripts/make-dmg.sh
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: bash .github/scripts/make-dmg.sh "$RELEASE_TAG"
       - uses: actions/upload-artifact@v7
         with:
           name: macos

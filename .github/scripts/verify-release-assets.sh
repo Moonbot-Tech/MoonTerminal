@@ -21,6 +21,21 @@ fail() {
     exit 1
 }
 
+# Hash one file where GNU coreutils exist and where only the BSD/perl userland does.
+#
+# The publisher runs on Ubuntu, but `cargo test` executes this script on every developer machine,
+# and macOS ships neither `sha256sum` nor bash 4. Both tools print the lowercase hex digest first.
+sha256_hex() {
+    local path="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$path" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$path" | awk '{print $1}'
+    else
+        fail "no SHA-256 utility is available: install coreutils or shasum"
+    fi
+}
+
 # Find exactly one draft by scanning a bounded authenticated release list.
 find_draft_release() {
     local page page_json page_record page_size page_match_count page_match_id
@@ -89,7 +104,7 @@ verify_release() {
     local expected_state="$2"
     local expected_release_id="${3:-}"
     local actual_id actual_tag actual_target actual_draft actual_prerelease actual_immutable
-    local asset_names remote_digest remote_size tag_json tag_release_id
+    local asset_names remote_digest remote_digest_lower remote_size tag_json tag_release_id
 
     jq -e 'type == "object" and (.assets | type == "array")' <<<"$release_json" >/dev/null \
         || fail "GitHub returned malformed release metadata"
@@ -130,7 +145,8 @@ verify_release() {
     remote_size="$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .size' <<<"$release_json")"
     [[ "$remote_digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]] \
         || fail "GitHub did not publish a valid SHA-256 digest for $asset_name"
-    [[ "${remote_digest,,}" == "$local_digest" ]] \
+    remote_digest_lower="$(printf '%s' "$remote_digest" | tr '[:upper:]' '[:lower:]')"
+    [[ "$remote_digest_lower" == "$local_digest" ]] \
         || fail "published digest does not match the local Windows asset"
     [[ "$remote_size" == "$local_size" ]] \
         || fail "published size does not match the local Windows asset"
@@ -163,7 +179,10 @@ if ! valid_u64_component "$release_major" \
 fi
 [[ -f "$asset_path" ]] || fail "local Windows asset is missing: $asset_path"
 expected_commit="$(git rev-parse "${release_tag}^{commit}")"
-local_digest="sha256:$(sha256sum "$asset_path" | awk '{print $1}')"
+local_digest_hex="$(sha256_hex "$asset_path")"
+[[ "$local_digest_hex" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "local SHA-256 digest is malformed: $asset_path"
+local_digest="sha256:$local_digest_hex"
 local_size="$(wc -c < "$asset_path" | tr -d '[:space:]')"
 
 case "$verification_state" in

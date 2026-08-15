@@ -14,9 +14,12 @@ if [[ -z "${GH_TOKEN:-}" ]]; then
 fi
 
 # Resolve annotated and lightweight remote tags to the commit they identify.
+#
+# The END block spells the peeled-over-direct choice as if/else: a ternary inside `print` is a
+# GNU awk extension that the BSD awk on macOS rejects outright.
 remote_tag_commit() {
     git ls-remote origin "$tag_ref" "$tag_ref^{}" \
-        | awk '$2 ~ /\^\{\}$/ { peeled=$1 } $2 !~ /\^\{\}$/ { direct=$1 } END { print peeled != "" ? peeled : direct }'
+        | awk '$2 ~ /\^\{\}$/ { peeled=$1 } $2 !~ /\^\{\}$/ { direct=$1 } END { if (peeled != "") print peeled; else print direct }'
 }
 
 # Require the remote tag to remain bound to the exact build at each publication boundary.
