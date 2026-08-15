@@ -24,8 +24,10 @@
 //!   silently, which is the safe direction for a gate — fix [`TEST_JOB`] and move on.
 
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 /// The job key this guard is pinned to.
 ///
@@ -82,12 +84,16 @@ fn normalize_if_condition(line: &str) -> String {
 /// `COMPILING_JOBS` skip that trigger instead.
 const AUDIT_JOB: &str = "audit";
 
-fn workflow_path() -> PathBuf {
+fn workspace_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
         .expect("moon-core must live under workspace/crates")
-        .join(".github/workflows/build.yml")
+        .to_path_buf()
+}
+
+fn workflow_path() -> PathBuf {
+    workspace_dir().join(".github/workflows/build.yml")
 }
 
 fn workflow_text() -> String {
@@ -96,11 +102,7 @@ fn workflow_text() -> String {
 }
 
 fn release_workflow_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("moon-core must live under workspace/crates")
-        .join(".github/workflows/release.yml")
+    workspace_dir().join(".github/workflows/release.yml")
 }
 
 fn release_workflow_text() -> String {
@@ -552,6 +554,17 @@ fn releases_build_the_exact_canonical_tag() {
             && text.contains("cancel-in-progress: false"),
         "release runs for the same canonical tag must not overlap"
     );
+    let macos = job_body(&text, "macos").expect("release.yml must keep the macOS job");
+    assert!(
+        macos
+            .iter()
+            .any(|line| line.trim() == "RELEASE_TAG: ${{ needs.validate.outputs.tag }}")
+            && macos
+                .iter()
+                .any(|line| line.contains("make-dmg.sh \"$RELEASE_TAG\"")),
+        "the .dmg must be stamped with the validated tag, not GITHUB_REF_NAME — on \
+         workflow_dispatch that is the branch name"
+    );
     assert!(
         validator.contains("git show-ref --verify --quiet \"$tag_ref\"")
             && validator.contains("git rev-list -n 1 \"$tag_ref\"")
@@ -718,6 +731,34 @@ fn release_script_bash() -> PathBuf {
     PathBuf::from("bash")
 }
 
+/// Report whether the release scripts can run here, asking the same shell they run under.
+///
+/// They parse GitHub's JSON with `jq`, which neither macOS nor a stock Windows box installs. A
+/// developer without it gets an announced skip instead of a red suite; CI never does, because
+/// every hosted runner ships `jq` — a missing tool there is a broken image, not a local gap.
+fn release_scripts_can_run() -> bool {
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        let present = Command::new(release_script_bash())
+            .arg("-c")
+            .arg("command -v jq >/dev/null")
+            .output()
+            .is_ok_and(|probe| probe.status.success());
+        assert!(
+            present || std::env::var_os("CI").is_none(),
+            "CI must provide jq to the tests that execute the release scripts"
+        );
+        if !present {
+            // Written straight to the handle: libtest captures the `eprintln!` macro and swallows
+            // it for a passing test, which would report a green suite with no hint that two tests
+            // did nothing at all.
+            let notice = b"[skip] jq is not installed, so the release scripts were not executed\n";
+            let _ = std::io::stderr().write_all(notice);
+        }
+        present
+    })
+}
+
 /// Breakage guarded: a draft-only release is looked up through the published-tag endpoint, or the
 /// publisher mutates a tag instead of the exact verified release id. The release would either stay
 /// permanently hidden after a 404 or publish different metadata than the updater was meant to trust.
@@ -768,7 +809,8 @@ fn releases_verify_the_published_windows_digest() {
         "'[\"MoonTerminal.dmg\",\"MoonTerminal.exe\"]'",
         "remote_digest=",
         "local_digest=",
-        "[[ \"${remote_digest,,}\" == \"$local_digest\" ]]",
+        "remote_digest_lower=\"$(printf '%s' \"$remote_digest\" | tr '[:upper:]' '[:lower:]')\"",
+        "[[ \"$remote_digest_lower\" == \"$local_digest\" ]]",
         "remote_size=",
         "local_size=",
         "[[ \"$remote_size\" == \"$local_size\" ]]",
@@ -833,6 +875,109 @@ fn releases_verify_the_published_windows_digest() {
     );
 }
 
+/// Collect every shell script at or below one directory, so moving one into a subdirectory cannot
+/// quietly take it out of the portability gate.
+fn shell_scripts_below(directory: &Path) -> Vec<PathBuf> {
+    let mut pending = vec![directory.to_path_buf()];
+    let mut scripts = Vec::new();
+    while let Some(current) = pending.pop() {
+        let entries = std::fs::read_dir(&current)
+            .unwrap_or_else(|err| panic!("read {}: {err}", current.display()));
+        for entry in entries {
+            let path = entry.expect("read one shell-script entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("sh") {
+                scripts.push(path);
+            }
+        }
+    }
+    scripts.sort();
+    scripts
+}
+
+/// Breakage guarded: a repository shell script grows a GNU- or bash-4-only construct. Every hosted
+/// runner that executes these scripts is Ubuntu, so CI stays green while `cargo test` fails on each
+/// macOS checkout — `/bin/bash` there is 3.2 and the userland is BSD, not coreutils.
+#[test]
+fn repository_shell_scripts_stay_portable_to_bsd_userlands() {
+    // (fragment, why it cannot survive a BSD userland or bash 3.2)
+    const BANNED: [(&str, &str); 17] = [
+        (",,}", "bash 4 lowercase expansion; pipe through tr instead"),
+        ("^^}", "bash 4 uppercase expansion; pipe through tr instead"),
+        ("mapfile", "bash 4 builtin; read in a while loop instead"),
+        ("readarray", "bash 4 builtin; read in a while loop instead"),
+        ("declare -A", "bash 4 associative array"),
+        ("typeset -A", "bash 4 associative array"),
+        ("local -n", "bash 4 nameref"),
+        ("readlink -f", "GNU flag; BSD readlink has no -f"),
+        ("sed -r", "GNU flag; POSIX spells it sed -E"),
+        ("sed -i ", "GNU form; BSD sed -i demands a backup suffix"),
+        ("grep -P", "GNU flag; BSD grep has no PCRE mode"),
+        ("stat -c", "GNU flag; BSD stat spells it -f"),
+        ("date -d", "GNU flag; BSD date spells it -v or -j"),
+        ("base64 -w", "GNU flag; BSD base64 has no -w"),
+        ("xargs -r", "GNU flag; BSD xargs skips an empty run anyway"),
+        (" -printf", "GNU find action; BSD find has no -printf"),
+        ("timeout ", "GNU coreutils command; macOS ships no timeout"),
+    ];
+
+    let workspace = workspace_dir();
+    for directory in [workspace.join(".github/scripts"), workspace.join("scripts")] {
+        let scripts = shell_scripts_below(&directory);
+        assert!(
+            !scripts.is_empty(),
+            "shell-script discovery found nothing under {}",
+            directory.display()
+        );
+        for path in scripts {
+            let name = path
+                .strip_prefix(&workspace)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            let code = shell_code(
+                &std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {name}: {err}")),
+            );
+
+            for (fragment, reason) in BANNED {
+                assert!(
+                    !code.contains(fragment),
+                    "{name} uses `{fragment}`, which macOS cannot run: {reason}"
+                );
+            }
+            assert!(
+                !code.contains("sha256sum")
+                    || (code.contains("command -v sha256sum") && code.contains("shasum -a 256")),
+                "{name} reaches for sha256sum without probing for it and falling back to the \
+                 shasum every macOS ships"
+            );
+            // A ternary is scanned file-wide rather than on the `awk` line itself: an awk program
+            // long enough to hold one is exactly the program spread across continuation lines.
+            let holds_awk = code.contains("awk");
+            for line in code.lines() {
+                let ternary = holds_awk && line.contains(" ? ") && line.contains(" : ");
+                assert!(
+                    !ternary,
+                    "{name} uses an awk ternary, which BSD awk rejects: {}",
+                    line.trim()
+                );
+                // `-E` unanchored on purpose: the flag is as often bundled (`grep -qE`) as it is
+                // separate, and an extended regex spells alternation with a bare pipe anyway.
+                let gnu_alternation = (line.contains("grep ") || line.contains("sed "))
+                    && line.contains("\\|")
+                    && !line.contains("-E");
+                assert!(
+                    !gnu_alternation,
+                    "{name} uses GNU basic-regex alternation, which BSD reads as a literal pipe \
+                     and silently never matches: {}",
+                    line.trim()
+                );
+            }
+        }
+    }
+}
+
 /// Create an isolated tagged repository, exact release metadata, and a recording fake GitHub CLI.
 ///
 /// `purpose` keeps fixture roots disjoint when Rust runs release-script tests in parallel.
@@ -891,11 +1036,8 @@ fn create_release_script_fixture(purpose: &str) -> (PathBuf, String) {
         .join(",");
     std::fs::write(root.join("page-1.json"), format!("[{unrelated}]"))
         .expect("write full first release page");
-    let draft = release_fixture_json(&commit, true, false);
+    write_draft_fixture(&root, &release_fixture_json(&commit, true, false));
     let published = release_fixture_json(&commit, false, true);
-    std::fs::write(root.join("page-2.json"), format!("[{draft}]"))
-        .expect("write second release page");
-    std::fs::write(root.join("draft.json"), draft).expect("write draft release fixture");
     std::fs::write(root.join("published.json"), published)
         .expect("write published release fixture");
     std::fs::write(root.join("bin/gh"), fake_gh_script()).expect("write fake GitHub CLI");
@@ -903,11 +1045,59 @@ fn create_release_script_fixture(purpose: &str) -> (PathBuf, String) {
     (root, commit)
 }
 
+/// SHA-256 of the three-byte `abc` Windows asset the fixture writes, in GitHub's lowercase hex.
+const WINDOWS_ASSET_SHA256: &str =
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
 /// Render one independent GitHub release response for the three-byte `abc` Windows fixture.
 fn release_fixture_json(commit: &str, draft: bool, immutable: bool) -> String {
+    release_fixture_json_with_digest(commit, draft, immutable, WINDOWS_ASSET_SHA256)
+}
+
+/// Render the same release response while choosing the published Windows digest.
+///
+/// GitHub documents the digest as hex without fixing its case, so verification must normalize it
+/// rather than compare the bytes it happens to receive.
+fn release_fixture_json_with_digest(
+    commit: &str,
+    draft: bool,
+    immutable: bool,
+    exe_sha256: &str,
+) -> String {
     format!(
-        r#"{{"id":4242,"tag_name":"v0.24.2","target_commitish":"{commit}","draft":{draft},"prerelease":false,"immutable":{immutable},"assets":[{{"name":"MoonTerminal.dmg","size":7,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}]}}"#
+        r#"{{"id":4242,"tag_name":"v0.24.2","target_commitish":"{commit}","draft":{draft},"prerelease":false,"immutable":{immutable},"assets":[{{"name":"MoonTerminal.dmg","size":7,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:{exe_sha256}"}}]}}"#
     )
+}
+
+/// Point the fixture's release page and its by-id response at one release body.
+///
+/// Both files answer for the same release, so every scenario rewrites them together; splitting
+/// them is how a fixture starts proving that list discovery and the by-id read disagree.
+fn write_draft_fixture(root: &Path, release_json: &str) {
+    std::fs::write(root.join("page-2.json"), format!("[{release_json}]"))
+        .expect("write the release list page");
+    std::fs::write(root.join("draft.json"), release_json).expect("write the release by id");
+}
+
+/// Run the verifier against whatever draft the fixture currently answers with, and require one
+/// outcome: `Ok(release_id)` on stdout, or `Err(fragment)` in the refusal on stderr.
+fn assert_verifier(root: &Path, expected: Result<&str, &str>) {
+    let run = run_release_script(
+        root,
+        ".github/scripts/verify-release-assets.sh",
+        &["v0.24.2", "MoonTerminal.exe"],
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let held = match expected {
+        Ok(release_id) => run.status.success() && stdout.trim() == release_id,
+        Err(refusal) => !run.status.success() && stderr.contains(refusal),
+    };
+    assert!(
+        held,
+        "verifier did not {expected:?}: status={} stdout={stdout} stderr={stderr}",
+        run.status
+    );
 }
 
 /// Render a full release-list page whose ASCII representation exceeds one process argument.
@@ -1014,23 +1204,16 @@ fn run_release_script(root: &Path, script: &str, args: &[&str]) -> Output {
 /// while publishing by a tag or wrong id can finalize metadata other than the verified draft.
 #[test]
 fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
+    if !release_scripts_can_run() {
+        return;
+    }
     let (root, commit) = create_release_script_fixture("publish");
-    let verifier = ".github/scripts/verify-release-assets.sh";
     let publisher = ".github/scripts/publish-verified-release.sh";
 
     let draft = release_fixture_json(&commit, true, false);
-    std::fs::write(root.join("page-2.json"), format!("[{draft}]"))
-        .expect("restore exact draft release page");
-    std::fs::write(root.join("draft.json"), &draft).expect("restore exact draft release by id");
+    write_draft_fixture(&root, &draft);
     std::fs::write(root.join("requests.log"), "").expect("reset fake gh request log");
-    let verified = run_release_script(&root, verifier, &["v0.24.2", "MoonTerminal.exe"]);
-    assert!(
-        verified.status.success() && String::from_utf8_lossy(&verified.stdout).trim() == "4242",
-        "draft verification failed: status={} stdout={} stderr={}",
-        verified.status,
-        String::from_utf8_lossy(&verified.stdout),
-        String::from_utf8_lossy(&verified.stderr)
-    );
+    assert_verifier(&root, Ok("4242"));
     let verify_calls =
         std::fs::read_to_string(root.join("requests.log")).expect("read draft verification calls");
     assert!(
@@ -1040,26 +1223,31 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
         "draft verification did not use bounded list discovery: {verify_calls}"
     );
 
-    let wrong_target = release_fixture_json(&"0".repeat(40), true, false);
-    std::fs::write(root.join("page-2.json"), format!("[{wrong_target}]"))
-        .expect("write wrong-target release page");
-    std::fs::write(root.join("draft.json"), &wrong_target)
-        .expect("write wrong-target release by id");
-    let rejected = run_release_script(&root, verifier, &["v0.24.2", "MoonTerminal.exe"]);
-    assert!(
-        !rejected.status.success()
-            && String::from_utf8_lossy(&rejected.stderr)
-                .contains("release target does not match the tagged commit"),
-        "wrong release target was not rejected: status={} stdout={} stderr={}",
-        rejected.status,
-        String::from_utf8_lossy(&rejected.stdout),
-        String::from_utf8_lossy(&rejected.stderr)
+    write_draft_fixture(&root, &release_fixture_json(&"0".repeat(40), true, false));
+    assert_verifier(
+        &root,
+        Err("release target does not match the tagged commit"),
     );
-    std::fs::write(root.join("page-2.json"), format!("[{draft}]"))
-        .expect("restore exact draft release page after rejection");
-    std::fs::write(root.join("draft.json"), &draft)
-        .expect("restore exact draft release by id after rejection");
 
+    // GitHub documents the asset digest as hex without fixing its case, so the comparison must
+    // normalize what it receives — and must still refuse bytes that are not the local ones.
+    let uppercase = WINDOWS_ASSET_SHA256.to_uppercase();
+    write_draft_fixture(
+        &root,
+        &release_fixture_json_with_digest(&commit, true, false, &uppercase),
+    );
+    assert_verifier(&root, Ok("4242"));
+
+    write_draft_fixture(
+        &root,
+        &release_fixture_json_with_digest(&commit, true, false, &"f".repeat(64)),
+    );
+    assert_verifier(
+        &root,
+        Err("published digest does not match the local Windows asset"),
+    );
+
+    write_draft_fixture(&root, &draft);
     std::fs::write(root.join("requests.log"), "").expect("reset publication request log");
     let published = run_release_script(&root, publisher, &["v0.24.2", &commit, "MoonTerminal.exe"]);
     assert!(
@@ -1106,6 +1294,9 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
 /// element, stranding a healthy draft before its digest can be verified and published.
 #[test]
 fn release_verifier_streams_release_page_larger_than_one_argument() {
+    if !release_scripts_can_run() {
+        return;
+    }
     let (root, _) = create_release_script_fixture("large-page");
     let verifier = ".github/scripts/verify-release-assets.sh";
     let first_page = oversized_release_page_json();

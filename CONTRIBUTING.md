@@ -180,6 +180,14 @@ make build | run | release | check | fmt
 - Tests: `cargo test -p moon-core` / `-p moon-ui-gpui`. A single test:
   `cargo test -p <crate> <name> -- --exact --nocapture`. CI runs the whole workspace, so a
   crate you did not build locally still has to compile and pass.
+- The release-script tests shell out to **`jq`** (the scripts parse GitHub's JSON with it). A local
+  box without it prints `[skip]` and runs the rest; under `CI` the same tests fail hard instead,
+  because every hosted runner ships `jq`. Install it if you touch `.github/scripts`.
+- Every `.sh` in the repo must run on **bash 3.2 with a BSD userland** — that is what a macOS
+  checkout executes them under, while CI only ever sees Ubuntu, so nothing else catches the
+  difference. `ci_gate_contract.rs` denies the constructs that have actually bitten (`${v,,}`, an
+  awk ternary, GNU `\|` alternation, bare `sha256sum`); it is a denylist, not a substitute for
+  running them on a Mac.
 - Live behaviour check is FireTest: `moonterminal --debug-script chart-smoke`
   (see [`docs/FIRETEST.md`](docs/FIRETEST.md)).
 - Unit tests inside a `moon-ui-gpui` panel module need **explicit imports**, never `use super::*`:

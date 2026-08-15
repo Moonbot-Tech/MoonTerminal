@@ -63,7 +63,9 @@ fi
 # 2) Make the certificate TRUSTED for code signing if it is not already. Note:
 #    `find-identity -v` shows the certificate EVEN when it is untrusted, with the
 #    "CSSMERR_TP_NOT_TRUSTED" string. Therefore, "trusted" means the line exists AND lacks this marker.
-if security find-identity -v -p codesigning | grep -F "$IDENTITY" | grep -qv "CSSMERR\|NOT_TRUSTED"; then
+#    The alternation needs -E: as a basic regex `\|` is a GNU extension that BSD grep reads as a
+#    literal pipe, so the marker never matched and every certificate looked trusted.
+if security find-identity -v -p codesigning | grep -F "$IDENTITY" | grep -qvE "CSSMERR|NOT_TRUSTED"; then
   echo ">> Сертификат '$IDENTITY' уже доверен для code signing — готово."
 else
   echo ">> Делаю сертификат доверенным для code signing."
