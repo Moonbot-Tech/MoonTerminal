@@ -6,7 +6,7 @@
 use moon_core::db::valuation::{
     FailureKind, ValuationFault, ValuationMode, ValuationStage, ValuationStatus,
 };
-use moon_core::db::{QuoteBreakdown, ValuationCoverage};
+use moon_core::db::{QuoteBreakdown, QuoteCurrency, QuoteVolume, TradedVolume, ValuationCoverage};
 
 use super::{FactTone, FooterFacts, footer_facts, footer_tooltip};
 use crate::panels::report::query::ReportData;
@@ -27,6 +27,19 @@ fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
         totals: QuoteBreakdown::from_groups(groups),
         valuation: ValuationMode::Historical,
     }
+}
+
+/// Attach an independently assembled traded-volume carrier to a Report snapshot.
+///
+/// Args:
+///     snapshot: Loaded Report result whose profit/count behavior stays intact.
+///     volume: Complete-only volume state to render.
+///
+/// Returns:
+///     The same snapshot carrying the supplied volume state.
+fn with_volume(mut snapshot: ReportData, volume: TradedVolume) -> ReportData {
+    snapshot.totals.traded_volume = volume;
+    snapshot
 }
 
 /// A worker that has been failing long enough and often enough to report as stuck.
@@ -474,4 +487,146 @@ fn a_loaded_empty_result_promotes_no_figure() {
         !facts.tail.iter().any(|fact| fact.text == "—"),
         "and the dash does not reappear in the tail either"
     );
+}
+
+/// Breakage 1: `totals.rs:native_volume` replaces `compact_si` with the exact decimal formatter,
+/// leaving a seven-digit raw amount unreadable in the fixed-height footer. Breakage 2: the same
+/// helper reuses `compact_si` for the recovery representation, so hover can no longer reveal the
+/// exact full numeric amount. The remaining assertions keep unsigned accounting, complete mixed
+/// scopes, the separator and clipping-tooltip reachability pinned alongside those representations.
+#[test]
+fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
+    let single = with_volume(
+        data(vec![(Some(1), 12.5, 2)], 2),
+        TradedVolume {
+            totals: vec![QuoteVolume {
+                currency: usdt,
+                amount: Some(1_617_960.71),
+                orders: 2,
+            }],
+            eligible_orders: 2,
+            reconstructed_orders: 2,
+            valued_orders: 2,
+            usdt: Some(1_617_960.71),
+            ..Default::default()
+        },
+    );
+    let facts = historical_facts(Some(&single), false, &ValuationStatus::default(), T0);
+    let volume = facts.tail.last().expect("volume closes the clipping tail");
+    assert_eq!(volume.text, "Volume: 1.62M USDT");
+    assert_eq!(volume.tone, FactTone::Soft);
+    assert!(!volume.bold, "volume must not borrow profit emphasis");
+    assert!(
+        volume.section_start,
+        "the first volume fact owns the separator"
+    );
+    assert!(
+        !volume.text.contains('+') && !volume.text.contains('-'),
+        "traded volume is unsigned"
+    );
+    let spelled = volume
+        .spelled
+        .as_deref()
+        .expect("clipped compact volume carries recovery text");
+    assert_eq!(spelled, "Total traded volume: 1617960.71 USDT");
+    let tooltip = footer_tooltip(&facts);
+    assert!(tooltip.contains(spelled));
+    assert!(
+        !tooltip.contains("1.62M USDT"),
+        "the recovery tooltip must retain the exact amount, got {tooltip:?}"
+    );
+
+    let mut mixed = with_volume(
+        data(vec![(Some(1), 12.5, 1), (Some(8), 2.0, 1)], 2),
+        TradedVolume {
+            totals: vec![
+                QuoteVolume {
+                    currency: usdt,
+                    amount: Some(12_345.67),
+                    orders: 1,
+                },
+                QuoteVolume {
+                    currency: usdc,
+                    amount: Some(2_345_678_901.23),
+                    orders: 1,
+                },
+            ],
+            eligible_orders: 2,
+            reconstructed_orders: 2,
+            valued_orders: 2,
+            usdt: Some(1_617_960.71),
+            ..Default::default()
+        },
+    );
+    let facts = historical_facts(Some(&mixed), false, &ValuationStatus::default(), T0);
+    assert_eq!(
+        facts.tail.last().expect("unified volume").text,
+        "Volume: 1.62M USDT",
+        "mixed scopes prefer their complete active-mode USDT amount"
+    );
+    mixed.valuation = ValuationMode::Current;
+    let facts = footer_facts(Some(&mixed), false, &ValuationStatus::default(), T0);
+    assert_eq!(
+        facts.tail.last().expect("current unified volume").text,
+        "Volume at the current rate: 1.62M USDT",
+        "the loaded current-rate mode must remain visible on a unified conversion"
+    );
+
+    let mut native_mixed = mixed;
+    native_mixed.totals.traded_volume.usdt = None;
+    native_mixed.totals.traded_volume.valued_orders = 0;
+    let facts = historical_facts(Some(&native_mixed), false, &ValuationStatus::default(), T0);
+    assert_eq!(
+        facts.tail.last().expect("native mixed volume").text,
+        "Volume: 12.3K USDT + 2.35B USDC",
+        "every native bucket remains explicit and SI-compacted when unified valuation is unavailable"
+    );
+    assert_eq!(
+        facts.tail.last().and_then(|fact| fact.spelled.as_deref()),
+        Some("Total traded volume: 12345.67 USDT + 2345678901.23 USDC"),
+        "the mixed-native recovery text retains every exact full amount"
+    );
+}
+
+/// Publishing one reconstructed bucket when another is incomplete would make a partial amount
+/// look like the exact total, while empty/loading/failed states must never fabricate zero volume.
+#[test]
+fn traded_volume_is_absent_when_the_loaded_scope_is_incomplete_or_absent() {
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
+    let incomplete = with_volume(
+        data(vec![(Some(1), 12.5, 1), (Some(8), 2.0, 1)], 2),
+        TradedVolume {
+            totals: vec![
+                QuoteVolume {
+                    currency: usdt,
+                    amount: Some(420.0),
+                    orders: 1,
+                },
+                QuoteVolume {
+                    currency: usdc,
+                    amount: None,
+                    orders: 1,
+                },
+            ],
+            eligible_orders: 2,
+            reconstructed_orders: 1,
+            ..Default::default()
+        },
+    );
+    let facts = historical_facts(Some(&incomplete), false, &ValuationStatus::default(), T0);
+    assert!(
+        facts.tail.iter().all(|fact| !fact.section_start),
+        "no partial volume fact or orphan separator may render"
+    );
+
+    for (snapshot, failed) in [(None, false), (None, true)] {
+        let facts = historical_facts(snapshot, failed, &ValuationStatus::default(), T0);
+        assert!(facts.tail.iter().all(|fact| !fact.section_start));
+    }
+    let empty = data(Vec::new(), 0);
+    let facts = historical_facts(Some(&empty), false, &ValuationStatus::default(), T0);
+    assert!(facts.tail.iter().all(|fact| !fact.section_start));
 }

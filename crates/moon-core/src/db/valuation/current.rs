@@ -473,6 +473,7 @@ pub(crate) fn current_rate_sql(
         per_row: PerRowSql {
             joins: String::new(),
             rate: format!("CASE WHEN {valued} THEN {rate_case} END"),
+            quote_rate: format!("CASE WHEN {eligible} THEN {rate_case} END"),
             source: format!("CASE WHEN {valued} THEN {source_case} END"),
         },
         eligible,

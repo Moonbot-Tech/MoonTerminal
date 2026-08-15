@@ -421,6 +421,10 @@ impl Render for ReportPanel {
                 .flex_none()
                 .text_size(body)
                 .text_color(rgb(color))
+                // A theme-token border creates hierarchy without becoming localized/spoken text.
+                .when(fact.section_start, |chip| {
+                    chip.pl_2().border_l_1().border_color(rgb(p.border))
+                })
                 .when(fact.bold, |chip| chip.font_bold())
                 .child(fact.text);
             match fact.tip {

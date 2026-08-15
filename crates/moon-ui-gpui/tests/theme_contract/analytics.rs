@@ -1709,6 +1709,7 @@ fn calendar_hover_is_element_state_not_view_state() {
 fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
     let render = read_src("panels/report/render.rs");
     let body = braced_body(&render, "fn render(");
+    let totals = read_src("panels/report/totals.rs");
 
     for anchor in [
         "totals::footer_facts(",
@@ -1734,6 +1735,7 @@ fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
         "report.shown_top",
         "report.valuation_total",
         "report.unknown_quote_orders",
+        "report.traded_volume",
     ] {
         assert!(
             !body.contains(inline),
@@ -1750,6 +1752,54 @@ fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
         1,
         "the only wrapping row left in Report's render is the filters row"
     );
+    assert!(
+        totals.contains("volume.section_start = true;")
+            && totals.contains("\"report.traded_volume\"")
+            && totals.contains("\"report.traded_volume_tip\"")
+            && totals.contains("\"report.traded_volume_current\"")
+            && totals.contains("\"report.traded_volume_current_tip\"")
+            && body.contains(".when(fact.section_start")
+            && body.contains(".border_l_1()")
+            && body.contains(".border_color(rgb(p.border))"),
+        "volume must originate in footer_facts and render one palette-token separator"
+    );
+
+    let locales = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/report.yml"),
+    )
+    .expect("read Report locales")
+    .replace("\r\n", "\n");
+    for (key, next) in [
+        ("report.traded_volume", "report.traded_volume_tip:"),
+        ("report.traded_volume_tip", "report.traded_volume_current:"),
+        (
+            "report.traded_volume_current",
+            "report.traded_volume_current_tip:",
+        ),
+        (
+            "report.traded_volume_current_tip",
+            "report.unknown_quote_orders:",
+        ),
+    ] {
+        let block = chain_between(
+            &locales,
+            &format!("{key}:\n"),
+            next,
+            "Report traded-volume locale block",
+        );
+        for locale in ["ru", "en", "es"] {
+            assert!(
+                block
+                    .lines()
+                    .any(|line| line.starts_with(&format!("  {locale}: "))),
+                "{key} must define {locale}"
+            );
+        }
+        assert!(
+            !block.contains('|'),
+            "the visual separator belongs to render code, not {key} locale text"
+        );
+    }
     // (`.overflow_x_scroll()` is already banned across this file by
     // `report_table_uses_scrollable_preserved_widths`; repeating it here would pin nothing new.)
 

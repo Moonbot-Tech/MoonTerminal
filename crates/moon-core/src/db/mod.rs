@@ -35,8 +35,8 @@ pub mod valuation;
 
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
 pub use quote::{
-    ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal, UsdtTotal,
-    ValuationCoverage,
+    ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal, QuoteVolume,
+    TradedVolume, UsdtTotal, ValuationCoverage,
 };
 pub use read_cancel::{with_read_cancellation, ReadCancellation};
 pub use read_fail::{FailKind, ReadFail, ReadResult};

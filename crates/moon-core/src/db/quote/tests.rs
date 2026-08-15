@@ -72,6 +72,34 @@ fn breakdown_merges_only_identical_known_quotes() {
     assert_eq!(totals.totals[1].currency.ticker(), "USDC");
     assert_eq!(totals.totals[1].profit, 3.0);
     assert_eq!(totals.scope(), QuoteScope::Unknown);
+    assert_eq!(totals.traded_volume, TradedVolume::default());
+}
+
+/// Dropping per-quote completeness while merging physical sources would publish a partial money
+/// total; reusing profit coverage would also suppress the complete USDC bucket in this fixture.
+#[test]
+fn traded_volume_merges_quotes_without_publishing_partial_money() {
+    let volume = TradedVolume::from_groups([
+        (Some(1), 2, 2, 420.0, 2, 840.0),
+        (Some(1), 1, 0, 0.0, 0, 0.0),
+        (Some(8), 1, 1, 75.0, 1, 75.0),
+        (None, 2, 0, 0.0, 0, 0.0),
+        // A source group with no eligible closed trade must not create a zero-valued bucket.
+        (Some(0), 0, 0, 0.0, 0, 0.0),
+    ]);
+
+    assert_eq!(volume.eligible_orders, 6);
+    assert_eq!(volume.reconstructed_orders, 3);
+    assert_eq!(volume.valued_orders, 3);
+    assert_eq!(volume.unknown_orders, 2);
+    assert_eq!(volume.scope(), QuoteScope::Unknown);
+    assert_eq!(volume.totals.len(), 2);
+    assert_eq!(volume.totals[0].currency.ticker(), "USDT");
+    assert_eq!(volume.totals[0].orders, 3);
+    assert_eq!(volume.totals[0].amount, None);
+    assert_eq!(volume.totals[1].currency.ticker(), "USDC");
+    assert_eq!(volume.totals[1].amount, Some(75.0));
+    assert_eq!(volume.usdt, None);
 }
 
 /// Columns a report source carries, as the SQL builders discover them.

@@ -69,6 +69,28 @@ struct DenominationRule {
 }
 
 impl DenominationRule {
+    /// Build the positive predicate proving this rule's explicitly excluded direct market.
+    ///
+    /// Args:
+    ///     alias: Report source alias the row is selected through.
+    ///     columns: Columns the source actually carries.
+    ///
+    /// Returns:
+    ///     An OR of the rule-owned veto markers, or `None` when the row cannot carry that proof.
+    fn excluded_market_sql(
+        &self,
+        alias: &str,
+        columns: &std::collections::HashSet<String>,
+    ) -> Option<String> {
+        (columns.contains("fname") && !self.excluded_markers.is_empty()).then(|| {
+            self.excluded_markers
+                .iter()
+                .map(|marker| format!("{alias}.fname LIKE '{marker}'"))
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        })
+    }
+
     /// Build this rule's guard over one source, or `None` when the source cannot evidence it.
     ///
     /// Args:
@@ -104,13 +126,10 @@ impl DenominationRule {
                 .collect(),
             " OR ",
         );
-        let vetoes = joined(
-            self.excluded_markers
-                .iter()
-                .map(|marker| format!("{alias}.fname NOT LIKE '{marker}'"))
-                .collect(),
-            " AND ",
-        );
+        let vetoes = self
+            .excluded_market_sql(alias, columns)
+            .map(|matches| format!("NOT ({matches})"))
+            .unwrap_or_else(|| "1".to_string());
         let shapes = joined(
             self.contract_shapes
                 .iter()
@@ -300,7 +319,9 @@ pub(crate) fn settled_amount_expr(
 ///
 /// Returns:
 ///     SQL predicate; the constant `1` for a source without a quote column, where nothing can have
-///     been relabeled.
+///     been relabeled. On a core already proven to own a denomination mismatch, a still-raw
+///     labeled quote is accepted only when the row carries the rule's explicit direct-market veto;
+///     missing market facts therefore fail closed without rejecting a proven ordinary USDT row.
 pub(crate) fn prices_share_money_quote_expr(
     alias: &str,
     columns: &std::collections::HashSet<String>,
@@ -310,9 +331,39 @@ pub(crate) fn prices_share_money_quote_expr(
     }
     // `IS` rather than `=`, so a NULL on either side compares as a value: an unknown quote was not
     // relabeled either, and `=` would yield NULL and silently drop the row from a `WHEN` arm.
-    format!(
+    let labels_match = format!(
         "COALESCE(({alias}.basecurrency) IS ({}), 0)",
         effective_ordinal_expr(alias, columns)
+    );
+    let known_mismatched = coin_m::cores();
+    if !columns.contains("core_uid") || known_mismatched.is_empty() {
+        return labels_match;
+    }
+    let cores = known_mismatched
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let ambiguous_labels = DENOMINATION_RULES
+        .iter()
+        .map(|rule| {
+            let direct = rule
+                .excluded_market_sql(alias, columns)
+                .unwrap_or_else(|| "0".to_string());
+            format!(
+                "(typeof({alias}.basecurrency)='integer'
+                  AND {alias}.basecurrency={}
+                  AND NOT COALESCE(({direct}), 0))",
+                rule.labeled.ordinal()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!(
+        "({labels_match}) AND NOT (
+            typeof({alias}.core_uid)='integer' AND {alias}.core_uid IN ({cores})
+            AND ({ambiguous_labels})
+         )"
     )
 }
 
@@ -546,6 +597,103 @@ pub struct UsdtTotal {
     pub spent: Option<f64>,
 }
 
+/// One known-currency traded-volume bucket over an exact Report scope.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuoteVolume {
+    /// Currency shared by every eligible trade in this bucket.
+    pub currency: QuoteCurrency,
+    /// Unsigned entry-plus-exit notional, withheld when any eligible row is unprovable.
+    pub amount: Option<f64>,
+    /// Closed non-Funding trades assigned to this currency.
+    pub orders: i64,
+}
+
+/// Complete-only two-sided traded volume for one exact Report filter.
+///
+/// This carrier is deliberately independent of [`ValuationCoverage`]: open and Funding rows are
+/// valid Report/profit rows but are not eligible volume rows, so profit coverage cannot decide
+/// whether a volume total is complete.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TradedVolume {
+    /// Known quote buckets sorted by persisted currency ordinal.
+    pub totals: Vec<QuoteVolume>,
+    /// Eligible trades whose quote identity is unknown.
+    pub unknown_orders: i64,
+    /// Closed non-Funding trades in the exact Report scope.
+    pub eligible_orders: i64,
+    /// Eligible trades whose two price legs can be reconstructed in native money.
+    pub reconstructed_orders: i64,
+    /// Reconstructed trades carrying an active-mode USDT rate.
+    pub valued_orders: i64,
+    /// Unified unsigned USDT notional, available only for a completely valued known scope.
+    pub usdt: Option<f64>,
+}
+
+impl TradedVolume {
+    /// Build complete-only volume from physical-source quote groups.
+    ///
+    /// Args:
+    ///     groups: `(ordinal, eligible, reconstructed, native sum, valued, USDT sum)` aggregates.
+    ///
+    /// Returns:
+    ///     Per-quote native buckets plus independently complete unified USDT coverage.
+    pub(crate) fn from_groups(
+        groups: impl IntoIterator<Item = (Option<i64>, i64, i64, f64, i64, f64)>,
+    ) -> Self {
+        let mut known: BTreeMap<QuoteCurrency, (i64, i64, f64)> = BTreeMap::new();
+        let mut out = Self::default();
+        let mut usdt_sum = 0.0;
+        for (ordinal, eligible, reconstructed, native, valued, usdt) in groups {
+            if eligible == 0 {
+                continue;
+            }
+            out.eligible_orders += eligible;
+            out.reconstructed_orders += reconstructed;
+            out.valued_orders += valued;
+            usdt_sum += usdt;
+            match ordinal.and_then(QuoteCurrency::from_report_ordinal) {
+                Some(currency) => {
+                    let bucket = known.entry(currency).or_default();
+                    bucket.0 += eligible;
+                    bucket.1 += reconstructed;
+                    bucket.2 += native;
+                }
+                None => out.unknown_orders += eligible,
+            }
+        }
+        out.totals = known
+            .into_iter()
+            .map(|(currency, (orders, reconstructed, native))| QuoteVolume {
+                currency,
+                amount: (orders == reconstructed).then_some(native),
+                orders,
+            })
+            .collect();
+        out.usdt = (out.eligible_orders > 0
+            && out.unknown_orders == 0
+            && out.reconstructed_orders == out.eligible_orders
+            && out.valued_orders == out.eligible_orders)
+            .then_some(usdt_sum);
+        out
+    }
+
+    /// Classify whether native volume is comparable as one scalar.
+    ///
+    /// Returns:
+    ///     Empty, one exact currency, mixed known currencies, or unknown identity.
+    pub fn scope(&self) -> QuoteScope {
+        if self.eligible_orders == 0 {
+            QuoteScope::Empty
+        } else if self.unknown_orders > 0 {
+            QuoteScope::Unknown
+        } else if self.totals.len() == 1 {
+            QuoteScope::Single(self.totals[0].currency)
+        } else {
+            QuoteScope::Mixed
+        }
+    }
+}
+
 /// Historical valuation progress for one exact report filter.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ValuationCoverage {
@@ -573,6 +721,8 @@ pub struct QuoteBreakdown {
     pub orders: i64,
     /// Optional historical USDT coverage from the attached valuation cache.
     pub valuation: Option<ValuationCoverage>,
+    /// Complete-only two-sided volume computed over this same filter and snapshot.
+    pub traded_volume: TradedVolume,
 }
 
 impl QuoteBreakdown {
@@ -617,6 +767,18 @@ impl QuoteBreakdown {
     ///     This native breakdown carrying the supplied coverage.
     pub fn with_valuation(mut self, coverage: ValuationCoverage) -> Self {
         self.valuation = Some(coverage);
+        self
+    }
+
+    /// Attach two-sided traded volume computed over the same filter and read snapshot.
+    ///
+    /// Args:
+    ///     volume: Independent closed non-Funding native and active-mode valuation totals.
+    ///
+    /// Returns:
+    ///     This profit breakdown carrying the supplied traded volume.
+    pub(crate) fn with_traded_volume(mut self, volume: TradedVolume) -> Self {
+        self.traded_volume = volume;
         self
     }
 

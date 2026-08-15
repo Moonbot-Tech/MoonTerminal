@@ -56,6 +56,8 @@ pub(super) struct FooterFact {
     pub(super) bold: bool,
     /// Diagnostic detail shown on this fact and repeated in the shared recovery tooltip.
     pub(super) tip: Option<String>,
+    /// Begin a visually separated section without putting punctuation into localized text.
+    pub(super) section_start: bool,
 }
 
 /// The totals row split by what may disappear on a narrow dock.
@@ -87,6 +89,92 @@ fn fact(text: String, tone: FactTone, bold: bool) -> FooterFact {
         tone,
         bold,
         tip: None,
+        section_start: false,
+    }
+}
+
+/// Visible and recovery representations of one complete traded-volume amount.
+struct VolumeAmountText {
+    /// SI-compacted text used by the fixed-height footer row.
+    visible: String,
+    /// Full quote-precision text used by the shared recovery tooltip.
+    exact: String,
+    /// Whether the amount is a unified active-mode USDT conversion.
+    unified: bool,
+}
+
+/// Format an unsigned volume amount in compact and exact native quote forms.
+///
+/// Args:
+///     amount: Complete two-sided notional in `currency`.
+///     currency: Exact persisted quote identity.
+///
+/// Returns:
+///     SI-compacted footer text and full quote-precision tooltip text, both unsigned and followed
+///     by the ticker.
+fn native_volume(amount: f64, currency: db::QuoteCurrency) -> (String, String) {
+    (
+        format!("{} {}", fmt::compact_si(amount), currency.ticker()),
+        format!(
+            "{} {}",
+            fmt::compact(amount, currency.display_decimals()),
+            currency.ticker()
+        ),
+    )
+}
+
+/// Select the one complete amount the volume footer may state.
+///
+/// A single known quote stays native. Mixed known quotes prefer complete active-mode USDT and
+/// otherwise remain an explicit per-quote breakdown. Unknown identity or any incomplete native
+/// bucket yields nothing rather than a confident partial sum.
+///
+/// Args:
+///     volume: Independently complete volume carrier from the Report snapshot.
+///
+/// Returns:
+///     Compact visible text, exact tooltip text and unified-conversion identity, or `None` when
+///     the scope cannot be stated completely.
+fn traded_volume_amount(volume: &db::TradedVolume) -> Option<VolumeAmountText> {
+    match volume.scope() {
+        db::QuoteScope::Empty | db::QuoteScope::Unknown => None,
+        db::QuoteScope::Single(currency) => volume
+            .totals
+            .first()
+            .and_then(|bucket| bucket.amount)
+            .map(|amount| {
+                let (visible, exact) = native_volume(amount, currency);
+                VolumeAmountText {
+                    visible,
+                    exact,
+                    unified: false,
+                }
+            }),
+        db::QuoteScope::Mixed => {
+            if let Some(usdt) = volume.usdt {
+                let (visible, exact) = native_volume(usdt, db::QuoteCurrency::usdt());
+                return Some(VolumeAmountText {
+                    visible,
+                    exact,
+                    unified: true,
+                });
+            }
+            let amounts = volume
+                .totals
+                .iter()
+                .map(|bucket| {
+                    bucket
+                        .amount
+                        .map(|amount| native_volume(amount, bucket.currency))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let (visible, exact): (Vec<_>, Vec<_>) = amounts.into_iter().unzip();
+            Some(VolumeAmountText {
+                visible: visible.join(" + "),
+                exact: exact.join(" + "),
+                unified: false,
+            })
+        }
     }
 }
 
@@ -311,6 +399,30 @@ pub(super) fn footer_facts(
                 ));
             }
         }
+    }
+    if let Some(amount) = traded_volume_amount(&totals.traded_volume) {
+        let VolumeAmountText {
+            visible,
+            exact,
+            unified,
+        } = amount;
+        let current = unified && mode == db::valuation::ValuationMode::Current;
+        let (label, tip) = if current {
+            (
+                "report.traded_volume_current",
+                "report.traded_volume_current_tip",
+            )
+        } else {
+            ("report.traded_volume", "report.traded_volume_tip")
+        };
+        let mut volume = fact(
+            t!(label, amount = visible).to_string(),
+            FactTone::Soft,
+            false,
+        );
+        volume.spelled = Some(t!(tip, amount = exact).to_string());
+        volume.section_start = true;
+        tail.push(volume);
     }
     let trailing = vec![fact(
         t!("report.shown_top", n = data.rows.len()).to_string(),

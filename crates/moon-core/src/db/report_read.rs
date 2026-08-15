@@ -779,7 +779,8 @@ pub fn strategy_purge_rows(
     Ok(out)
 }
 
-/// Aggregate profit and order count over the complete filter, not only the top N.
+/// Aggregate profit, order count, and two-sided traded volume over the complete filter, not only
+/// the top N.
 ///
 /// Returns `Failed` when source discovery or any aggregate query fails; only a
 /// successful empty result returns an empty breakdown. The open connection means this
@@ -790,8 +791,8 @@ pub fn strategy_purge_rows(
 ///     f: Complete Report filter.
 ///
 /// Returns:
-///     Exact known-currency buckets, unknown and complete row counts, and optional complete USDT
-///     valuation coverage.
+///     Exact known-currency profit buckets, unknown and complete row counts, complete-only closed
+///     non-Funding traded volume, and optional complete active-mode USDT coverage.
 ///
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
@@ -861,6 +862,91 @@ pub(in crate::db) fn source_partition(src: &ReadSource) -> super::valuation::Tra
     }
 }
 
+/// Per-source SQL for complete-only two-sided Report volume.
+struct TradedVolumeSql {
+    /// Closed non-Funding row predicate, independent of the Report's profit/count scope.
+    eligible: String,
+    /// Eligible row whose native entry and exit notionals are dimensionally trustworthy.
+    reconstructed: String,
+    /// Unsigned native entry-plus-exit notional for a reconstructed row.
+    native: String,
+    /// Active-mode USDT rate, or SQL NULL when no valuation projection exists.
+    rate: String,
+}
+
+impl TradedVolumeSql {
+    /// Build the five grouped columns consumed by [`super::TradedVolume::from_groups`].
+    ///
+    /// Returns:
+    ///     Eligible/reconstructed counts, native sum, valued count, and USDT sum in that order.
+    fn aggregate_columns(&self) -> String {
+        format!(
+            "COALESCE(SUM(CASE WHEN {eligible} THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN {reconstructed} THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN {reconstructed} THEN {native} ELSE 0.0 END),0.0),
+             COALESCE(SUM(CASE WHEN {reconstructed} AND ({rate}) IS NOT NULL
+                               THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN {reconstructed} AND ({rate}) IS NOT NULL
+                               THEN ({native}) * ({rate}) ELSE 0.0 END),0.0)",
+            eligible = self.eligible,
+            reconstructed = self.reconstructed,
+            native = self.native,
+            rate = self.rate,
+        )
+    }
+}
+
+/// Build two-sided volume SQL without changing the Report's row/profit filter.
+///
+/// Args:
+///     src: Physical Report source and its discovered columns.
+///     rate: Active-mode quote-to-USDT expression when a projection is available.
+///
+/// Returns:
+///     Fail-closed eligibility, reconstruction, native-notional, and valuation expressions.
+fn traded_volume_sql(src: &ReadSource, rate: Option<&str>) -> TradedVolumeSql {
+    let has = |column: &str| src.cols.contains(column);
+    let eligible = if has("closedate") {
+        let funding = if has("sellreason") {
+            " AND COALESCE(r.\"sellreason\", '') <> 'Funding'"
+        } else {
+            ""
+        };
+        format!("(typeof(r.\"closedate\") IN ('integer','real') AND r.\"closedate\" > 0{funding})")
+    } else {
+        "0".to_string()
+    };
+    let has_price_legs = has("boughtq") && has("buyprice") && has("sellprice");
+    let native = if has_price_legs {
+        "(ABS(r.\"boughtq\" * r.\"buyprice\") + ABS(r.\"boughtq\" * r.\"sellprice\"))".to_string()
+    } else {
+        "0.0".to_string()
+    };
+    let inputs = if has_price_legs {
+        "typeof(r.\"boughtq\") IN ('integer','real') AND r.\"boughtq\" > 0
+         AND typeof(r.\"buyprice\") IN ('integer','real') AND r.\"buyprice\" > 0
+         AND typeof(r.\"sellprice\") IN ('integer','real') AND r.\"sellprice\" > 0"
+            .to_string()
+    } else {
+        "0".to_string()
+    };
+    let ordinary = if has("sellreason") {
+        "typeof(r.\"sellreason\")='text'
+         AND TRIM(r.\"sellreason\") <> ''
+         AND UPPER(r.\"sellreason\") <> 'LIQUIDATION'"
+    } else {
+        // Without the reason, a closed row cannot prove that it is a trade rather than Funding.
+        "0"
+    };
+    let quote_matches = super::quote::prices_share_money_quote_expr("r", &src.cols);
+    TradedVolumeSql {
+        reconstructed: format!("({eligible} AND {inputs} AND {ordinary} AND ({quote_matches}))"),
+        eligible,
+        native,
+        rate: rate.unwrap_or("NULL").to_string(),
+    }
+}
+
 /// Execute one complete Report totals pass with fresh accumulators.
 ///
 /// Args:
@@ -871,7 +957,8 @@ pub(in crate::db) fn source_partition(src: &ReadSource) -> super::valuation::Tra
 ///         current-rate mode does not depend on it.
 ///
 /// Returns:
-///     Exact quote totals, optionally carrying complete USDT coverage.
+///     Exact quote profit totals and complete-only two-sided traded volume, optionally carrying
+///     active-mode USDT coverage for each metric.
 ///
 /// Errors:
 ///     Returns the underlying SQLite error from any physical-source aggregate.
@@ -882,6 +969,7 @@ fn query_totals_attempt(
     include_valuation: bool,
 ) -> rusqlite::Result<QuoteBreakdown> {
     let mut groups = Vec::new();
+    let mut volume_groups = Vec::new();
     let mut coverage = super::valuation::CoverageAggregate::default();
     let has_strategy_names =
         strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
@@ -914,14 +1002,22 @@ fn query_totals_attempt(
             .as_ref()
             .map(|parts| format!(", {}", parts.aggregate_columns()))
             .unwrap_or_default();
+        let volume_sql = traded_volume_sql(
+            src,
+            valuation
+                .as_ref()
+                .map(|parts| parts.per_row.quote_rate.as_str()),
+        );
+        let volume_columns = volume_sql.aggregate_columns();
         let sql = format!(
-            "SELECT {quote}, {profit}, COUNT(*){coverage_columns}
+            "SELECT {quote}, {profit}, COUNT(*){coverage_columns}, {volume_columns}
              FROM {} r{joins}{where_sql}{group_by}",
             src.table,
         );
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(refs.as_slice())?;
+        let volume_offset = 3 + usize::from(valuation.is_some()) * 6;
         while let Some(row) = rows.next()? {
             let raw = row.get::<_, Value>(0)?;
             let ordinal = super::quote::report_ordinal_from_value(&raw);
@@ -931,9 +1027,18 @@ fn query_totals_attempt(
             if valuation.is_some() {
                 coverage.add_row(row, 3)?;
             }
+            volume_groups.push((
+                ordinal,
+                row.get::<_, i64>(volume_offset)?,
+                row.get::<_, i64>(volume_offset + 1)?,
+                row.get::<_, f64>(volume_offset + 2)?,
+                row.get::<_, i64>(volume_offset + 3)?,
+                row.get::<_, f64>(volume_offset + 4)?,
+            ));
         }
     }
-    let totals = QuoteBreakdown::from_groups(groups);
+    let totals = QuoteBreakdown::from_groups(groups)
+        .with_traded_volume(super::TradedVolume::from_groups(volume_groups));
     // Publish coverage whenever the selected mode can build a projection: always for current rates,
     // and only with an attached cache for historical rates.
     Ok(if valuation_present {
