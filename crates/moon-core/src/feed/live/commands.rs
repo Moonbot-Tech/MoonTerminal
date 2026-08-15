@@ -816,6 +816,13 @@ pub(super) fn drain_commands(
             Ok(CoreCmd::SplitOrderForMarket { market, parts }) => {
                 trade::split_order_for_market(client, server.id, market, parts);
             }
+            Ok(CoreCmd::ShiftOrdersPercent {
+                market,
+                sell,
+                percent,
+            }) => {
+                trade::shift_orders_percent(client, server.id, market, sell, percent);
+            }
             Ok(CoreCmd::SellsToZone {
                 market,
                 min_price,

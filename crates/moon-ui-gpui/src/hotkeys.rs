@@ -21,11 +21,10 @@ mod layout;
 mod tests;
 
 use gpui::{App, Context, Entity, KeyDownEvent, Keystroke, Modifiers};
-use moon_core::config::{HotkeysConfig, SPLIT_ORDER_PARTS};
+use moon_core::config::{HotkeysConfig, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
 use moon_core::session::CoreId;
-use moon_core::session::order_lines::LineKind;
 
 use crate::Backend;
 
@@ -50,14 +49,14 @@ pub enum HotkeyAction {
     PanicSellOne,
     /// Join sell orders for the active chart's market using its current position side.
     JoinSells,
-    /// Move active-chart orders by one market price step through `move_order`.
+    /// Shift the active market's orders of one side by a percent, as Moonbot's ±1% does.
     ///
-    /// `sell = false` selects unfilled entry buy lines, using the same guard as line dragging;
-    /// `sell = true` selects exit sell lines. `up` chooses the direction.
+    /// `sell = false` addresses the buy phase, `sell = true` the sell phase; the core selects the
+    /// orders by their own status. `up` chooses the sign.
     ShiftOrder {
-        /// Select exit sell lines when true, or entry buy lines when false.
+        /// Address sell-phase orders when true, or buy-phase orders when false.
         sell: bool,
-        /// Add one price step when true, or subtract one when false.
+        /// Move up when true, down when false.
         up: bool,
     },
     /// Spread the active market's sell orders across the drawn rectangle — Moonbot's
@@ -148,13 +147,18 @@ impl HotkeyAction {
     /// alert flaps on the wire, upserting and deleting a core-side object tens of times a second.
     /// Cycling through the drawing tools at that rate is the same kind of nonsense.
     ///
-    /// The ones deliberately left repeating: cancels (the second press finds nothing left to
-    /// cancel), the presets (setting a value twice sets it once) and the order SHIFTS, whose whole
-    /// point is to nudge a line while the key is held.
+    /// The order SHIFTS used to be the exception — a held key nudged a line by one price step and
+    /// the per-order `move_order` behind it was coalesced last-writer-wins by moonproto. They moved
+    /// to a bulk percent command, which is sent with no unique key and coalesced nowhere, so a held
+    /// key would now compound a ±1% move on the whole market tens of times a second.
+    ///
+    /// The ones still repeating: cancels (the second press finds nothing left to cancel) and the
+    /// presets (setting a value twice sets it once).
     fn suppress_on_repeat(self) -> bool {
         matches!(
             self,
             Self::SplitOrder { .. }
+                | Self::ShiftOrder { .. }
                 | Self::SellsToRect
                 | Self::NewLong
                 | Self::NewShort
@@ -627,47 +631,49 @@ fn figure_zone(fig: &moon_core::figures::Figure) -> Option<(f64, f64)> {
     }
 }
 
-/// Move eligible active-market order lines by one configured market price step.
+/// Shift the active market's orders of one side by [`SHIFT_PERCENT`], as Moonbot's ±1% does.
 ///
-/// The function uses `move_order`, matching line dragging. Buy entries are eligible only while
-/// unfilled; open sell exits remain eligible. It returns `false` when the price step is unavailable
-/// or no eligible line has a finite positive current price. Once at least one eligible line is
-/// found it returns `true`; non-positive destination prices are skipped and send errors are logged.
+/// One command per press, not one per order: the core selects the orders by their own phase and
+/// does the arithmetic, which is both what Moonbot's action means and the only way the two sides
+/// stay consistent — the previous local loop replaced each order individually by one price STEP,
+/// a different action wearing the same name.
+///
+/// That hands the selection to the core, and it does not draw the same line the chart's own drag
+/// does: a partially filled entry is still in its buy phase and moves here, while dragging its line
+/// refuses it. The core's phase is the authoritative answer, and matching Moonbot is the point.
 fn shift_orders(b: &mut Backend, core: CoreId, market: &str, sell: bool, up: bool) -> bool {
-    let Some(step) = b.session.market_source().price_step(core, market) else {
-        return false;
-    };
-    let kind = if sell { LineKind::Sell } else { LineKind::Buy };
-    let mut moves: Vec<(u64, f64)> = Vec::new();
-    if let Some(core_data) = b.session.store().core(core) {
-        for order in core_data
-            .order_lines
-            .iter_market(market)
-            .filter(|order| order.closed_ms.is_none())
-        {
-            // A filled entry is historical and cannot be replaced; this matches dragging in trade.rs.
-            if !sell && order.fill_pct > 0.0 {
-                continue;
-            }
-            if let Some(price) = order.lines[kind as usize]
-                .current_price()
-                .filter(|p| p.is_finite() && *p > 0.0)
-            {
-                moves.push((order.uid, f64::from(price)));
-            }
-        }
-    }
-    if moves.is_empty() {
+    // Local pre-check so the ways this press can do nothing — no order of that phase, a market this
+    // core does not hold, a core that is not connected — are not all logged as a sent command;
+    // moonproto drops a candidate-less bulk move silently and tells nobody.
+    //
+    // It asks the SAME question the core's gate asks — `OrderWorkerStatus`, the authoritative
+    // lifecycle phase — rather than inferring one from the lines. A Buy line exists for an order's
+    // whole life, including long after the entry filled, so "the line is there" would answer yes on
+    // every market that ever bought.
+    let phase = if sell { "SellSet" } else { "BuySet" };
+    let has_phase = b.session.store().core(core).is_some_and(|data| {
+        data.orders
+            .iter()
+            .any(|order| order.market == market && order.status == phase)
+    });
+    if !has_phase {
+        log::warn!(
+            "hotkey shift orders: core={} market={market} has no order in {phase}, nothing sent",
+            moon_core::feed::core_label(core),
+        );
         return false;
     }
-    for (uid, price) in moves {
-        let next = if up { price + step } else { price - step };
-        if next <= 0.0 {
-            continue;
-        }
-        if let Err(error) = b.session.move_order(core, uid, next) {
-            log::warn!("hotkey shift order failed: uid={uid} price={next:.8}: {error}");
-        }
+    let percent = if up { SHIFT_PERCENT } else { -SHIFT_PERCENT };
+    log::info!(
+        "hotkey shift orders: core={} market={market} side={} percent={percent:+}",
+        moon_core::feed::core_label(core),
+        if sell { "sell" } else { "buy" },
+    );
+    if let Err(error) = b
+        .session
+        .shift_orders_percent(core, market.to_string(), sell, percent)
+    {
+        log::warn!("hotkey shift orders failed: {error}");
     }
     true
 }

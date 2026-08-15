@@ -10,8 +10,8 @@
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
 use moonproto::{
-    ClosePositionParams, MoonClient, MoveAllSellsParams, NewOrderParams, OrderSide,
-    OrderWorkerStatus, PositionFilter, SellOrderParams, SplitOrderParams, VStopParams,
+    ClosePositionParams, MoonClient, MoveAllBuysParams, MoveAllSellsParams, NewOrderParams,
+    OrderSide, OrderWorkerStatus, PositionFilter, SellOrderParams, SplitOrderParams, VStopParams,
 };
 
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
@@ -209,6 +209,49 @@ pub(super) fn join_sells(client: &MoonClient, server_id: u64, market: String, sh
         format!("join sells {market} short={short}"),
         client.trade().join_orders(market, side),
     );
+}
+
+/// Shift a market's live orders of one side by a percent of their price.
+///
+/// The core picks the orders by their own phase — `SellSet` for sells, `BuySet` for buys, checked
+/// in moonproto before the send — so no local "is it filled yet" guess is involved, and it does the
+/// arithmetic. `percent` is whole percent, signed. Three consequences worth knowing:
+///
+/// - the percent variant deliberately INCLUDES click-immune orders, unlike the replace-kind and
+///   price-zone ones (moonproto `docs/trade_actions.md`), matching the core;
+/// - the phase is not the exchange side: on a short position the sell phase holds exchange buys;
+/// - nothing moves locally on the press. Per-order `move_order` used to rewrite the retained price
+///   on its way out, so the line jumped at once; a bulk move waits for the core's echo, like every
+///   other market-level command here.
+///
+/// As with the other bulk actions, the log line means the intent was QUEUED: moonproto drops it
+/// later and silently when the market holds no order of that phase.
+pub(super) fn shift_orders_percent(
+    client: &MoonClient,
+    server_id: u64,
+    market: String,
+    sell: bool,
+    percent: f64,
+) {
+    let side = if sell { "sells" } else { "buys" };
+    let ctx = format!("shift {side} {market} by {percent:+}%");
+    if sell {
+        report(
+            server_id,
+            ctx,
+            client
+                .trade()
+                .move_all_sells(market, MoveAllSellsParams::percent(percent)),
+        );
+    } else {
+        report(
+            server_id,
+            ctx,
+            client
+                .trade()
+                .move_all_buys(market, MoveAllBuysParams::percent(percent)),
+        );
+    }
 }
 
 /// Spread a market's sell orders evenly across a price zone — Moonbot's "sells to rectangle".

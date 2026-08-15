@@ -313,9 +313,10 @@ impl MarketDataSource {
 
     /// Return the market price step from MoonProto's `chart_price_step`.
     ///
-    /// This is the keyboard increment for `shift_buy/sell_up/down`. `None` means the provider,
-    /// snapshot, or market is unavailable, or the step is non-positive. In that case orders are not
-    /// shifted because the terminal must not invent an increment.
+    /// It is the market's own tick, used where a price difference has to be judged against what the
+    /// exchange can actually express — the sells-to-rectangle band, for one. `None` means the
+    /// provider, snapshot, or market is unavailable, or the step is non-positive; callers then fall
+    /// back to their own rule rather than inventing a step.
     pub fn price_step(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
