@@ -504,9 +504,21 @@ impl ReportPanel {
         let ctx = columns::row_coin_menu_ctx(
             values,
             &self.cols,
-            data.core_uids.get(row).copied().unwrap_or(0),
-            selected_cores,
-            workspace_group,
+            columns::ReportCoinMenuScope {
+                target: columns::ReportCoinTarget {
+                    core_uid: data.core_uids.get(row).copied().unwrap_or(0),
+                    published_filter: data.filter.clone(),
+                    focus_record_id: data.row_keys.get(row).and_then(|key| match key {
+                        Some(selection::ReportRowKey::Replicated { rec_id, .. })
+                        | Some(selection::ReportRowKey::Legacy { db_id: rec_id, .. }) => {
+                            Some(*rec_id)
+                        }
+                        None => None,
+                    }),
+                },
+                selected_cores,
+                workspace_group,
+            },
             trade_log,
             &self.backend,
             cx,

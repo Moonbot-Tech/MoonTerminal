@@ -120,6 +120,8 @@ impl GenerationRefreshGate {
 /// column controls. Rows and totals are discarded because retaining them under
 /// a changed filter would present stale figures as current.
 pub(super) struct ReportData {
+    /// Exact published filter that produced these rows.
+    pub(super) filter: Arc<ReportFilter>,
     pub(super) rows: Vec<Vec<Value>>,
     pub(super) core_uids: Vec<u64>,
     /// Stable semantic identity parallel to `rows`; malformed legacy rows without `id` are `None`
@@ -265,6 +267,7 @@ fn run_report_query(
         strategy_metadata,
         cols: table.cols,
         data: ReportData {
+            filter: Arc::new(filter.clone()),
             rows: table.rows,
             core_uids: table.core_uids,
             row_keys,
@@ -305,6 +308,7 @@ impl ReportPanel {
             // Normalize Russian-layout keystrokes for the SQL filter as well as the search popup;
             // otherwise Cyrillic input would reach `coin LIKE` unchanged and return no matches.
             coin: crate::controls::coin_search::normalize_layout(&self.coin_query).into_owned(),
+            exact_coins: None,
             side: self.side,
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,

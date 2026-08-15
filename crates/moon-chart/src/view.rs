@@ -482,6 +482,49 @@ impl ChartView {
         (right_rel - window_ms, window_ms)
     }
 
+    /// Fit an absolute time interval into a persistent manual X window with symmetric padding.
+    ///
+    /// Args:
+    ///     start_ms: Inclusive absolute Unix-millisecond interval start.
+    ///     end_ms: Inclusive absolute Unix-millisecond interval end.
+    ///     area_w: Current chart plot width in pixels.
+    ///     padding_fraction: Fraction reserved on each side, clamped below one half.
+    ///
+    /// Returns:
+    ///     `true` when the interval and geometry were valid and the view changed.
+    pub fn show_time_range(
+        &mut self,
+        start_ms: f64,
+        end_ms: f64,
+        area_w: f32,
+        padding_fraction: f32,
+    ) -> bool {
+        if !start_ms.is_finite()
+            || !end_ms.is_finite()
+            || end_ms < start_ms
+            || !area_w.is_finite()
+            || area_w <= 0.0
+        {
+            return false;
+        }
+        let padding = padding_fraction.clamp(0.0, 0.45) as f64;
+        let span = (end_ms - start_ms).max(MIN_WINDOW_MS as f64 * 0.1);
+        let window_ms =
+            (span / (1.0 - 2.0 * padding)).clamp(MIN_WINDOW_MS as f64, MAX_WINDOW_MS as f64);
+        let left_ms = start_ms - window_ms * padding;
+        let ppm = (area_w as f64 / window_ms) as f32;
+        let right_time_ms = left_ms + window_ms * (1.0 - self.right_margin_frac as f64);
+        let changed = self.follow
+            || (self.px_per_ms - ppm).abs() > f32::EPSILON
+            || (self.right_time_ms - right_time_ms).abs() > 0.5;
+        self.px_per_ms = ppm.max(MIN_PX_PER_MS);
+        self.right_time_ms = right_time_ms;
+        self.x_default_scale = false;
+        self.x_init_pending = false;
+        self.set_manual_persistent();
+        changed
+    }
+
     // ── Y scale (toolbar buttons) ─────────────────────────────────────────────
 
     /// The "Auto" button: dynamically fits the visible range.

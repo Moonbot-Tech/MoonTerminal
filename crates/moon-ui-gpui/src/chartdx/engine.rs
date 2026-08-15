@@ -444,6 +444,20 @@ impl ChartEngine {
         self.data.borrow_mut().set_warn_marks(marks, hovered)
     }
 
+    /// Replace durable closed-trade markers for this exact chart target.
+    ///
+    /// Args:
+    ///     records: Exact-core durable records to compose into userdata.
+    ///
+    /// Returns:
+    ///     Whether the record set changed.
+    pub(crate) fn set_trade_history(
+        &mut self,
+        records: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
+    ) -> bool {
+        self.data.borrow_mut().set_trade_history(records)
+    }
+
     /// Applies a price-axis scale to every pane and stores it in the container. None selects Auto.
     pub fn set_scale(&mut self, pct: Option<f32>) -> bool {
         if self.scale == pct {
@@ -647,6 +661,45 @@ impl ChartEngine {
 
     pub fn follow(&self) -> bool {
         self.follow
+    }
+
+    /// Focus the first pane on one historical interval and persist manual X navigation.
+    ///
+    /// Args:
+    ///     start_ms: Absolute Unix-millisecond entry timestamp.
+    ///     end_ms: Absolute Unix-millisecond close timestamp.
+    ///
+    /// Returns:
+    ///     Whether a valid interval changed the view.
+    pub(crate) fn show_time_range(&mut self, start_ms: f64, end_ms: f64) -> bool {
+        let rect_w = self
+            .pane_rects()
+            .first()
+            .map(|(_, rect)| rect.w)
+            .unwrap_or_else(|| self.slot_dev_width());
+        let width = {
+            let data = self.data.borrow();
+            horizontal_chart_layout(
+                rect_w,
+                data.orderbook_only,
+                data.orderbook_enabled,
+                data.price_axis_pos,
+                data.last_ppp,
+            )
+            .3
+        };
+        let changed = self
+            .container
+            .borrow_mut()
+            .view_mut(0)
+            .is_some_and(|view| view.show_time_range(start_ms, end_ms, width, 0.15));
+        if changed {
+            self.follow = false;
+            let mut data = self.data.borrow_mut();
+            data.follow = false;
+            data.mark_view_dirty();
+        }
+        changed
     }
 
     /// Returns the nearest pane deadline for automatically rejoining live, used to arm the timer.

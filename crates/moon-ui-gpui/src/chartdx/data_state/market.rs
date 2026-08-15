@@ -79,21 +79,13 @@ impl ChartDataState {
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
-            // Price-axis position is per window. Order-book-only mode forcibly hides the axis,
-            // overriding the per-tab setting. Hide removes the gutter and returns its space to the plot.
-            let axis_pos = if self.orderbook_only {
-                crate::persistence::chart_persist::PriceAxisPos::Hide
-            } else {
-                self.price_axis_pos
-            };
-            let price_axis_w = if matches!(
-                axis_pos,
-                crate::persistence::chart_persist::PriceAxisPos::Hide
-            ) {
-                0.0
-            } else {
-                moon_chart::PRICE_AXIS_W * self.last_ppp
-            };
+            let (axis_pos, price_axis_w, glass_w, chart_w) = horizontal_chart_layout(
+                rect.w,
+                self.orderbook_only,
+                self.orderbook_enabled,
+                self.price_axis_pos,
+                self.last_ppp,
+            );
             // A hidden time axis reserves no label gutter, allowing the plot to use the full height.
             let time_axis_h = if self.time_axis_visible {
                 moon_chart::TIME_AXIS_H * self.last_ppp
@@ -101,23 +93,6 @@ impl ChartDataState {
                 0.0
             };
             let plot_h = (rect.h - time_axis_h).max(1.0);
-            // On a narrow plot, the order book must not consume half the width. Start from
-            // GLASS_ZONE_PX, capped at half the slot. If the remaining plot would be narrower than
-            // twice the base order-book width, shrink the book to 80% of the zone and return space
-            // to the plot. Wide layouts keep the normal order-book width.
-            let glass_cap = rect.w * 0.5;
-            let glass_base = moon_chart::GLASS_ZONE_PX.min(glass_cap);
-            let chart_w_base = rect.w - price_axis_w - glass_base;
-            // Book-only mode uses the full width, disabled mode uses zero, otherwise adapt the zone.
-            let glass_w = if self.orderbook_only {
-                (rect.w - price_axis_w).max(1.0)
-            } else if !self.orderbook_enabled {
-                0.0
-            } else if chart_w_base < glass_base * 2.0 {
-                (moon_chart::GLASS_ZONE_PX * 0.8).min(glass_cap)
-            } else {
-                glass_base
-            };
             // Left places the axis gutter on the left, shifts the plot right, and keeps the book at
             // the right edge. Right starts the plot at the left edge, then places the book and the
             // axis gutter to its right. Hide removes the axis, starts the plot at the left edge,
@@ -131,7 +106,6 @@ impl ChartDataState {
             } else {
                 rect.x
             };
-            let chart_w = (rect.w - price_axis_w - glass_w).max(1.0);
             let glass_x = if matches!(
                 axis_pos,
                 crate::persistence::chart_persist::PriceAxisPos::Right

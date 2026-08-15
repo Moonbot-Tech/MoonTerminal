@@ -43,6 +43,28 @@ fn default_live_window_keeps_at_least_six_hours_of_history() {
     }
 }
 
+/// Removing padding or computing the right anchor as the visible edge rather than the chart's
+/// internal live anchor must place at least one independently chosen endpoint outside the window.
+#[test]
+fn historical_trade_interval_is_visible_with_padding() {
+    let epoch = 1_700_000_000_000.0;
+    let start = epoch + 3_600_000.0;
+    let end = start + 900_000.0;
+    let width = 1_200.0;
+    let mut view = ChartView::new(epoch);
+
+    assert!(view.show_time_range(start, end, width, 0.15));
+    let (left_rel, window_ms) = view.visible_x(width);
+    let left = epoch + left_rel as f64;
+    let right = left + window_ms as f64;
+    assert!(left < start, "left padding must precede the entry");
+    assert!(right > end, "right padding must follow the exit");
+    assert!(
+        !view.follow,
+        "history focus must remain stable until user navigation"
+    );
+}
+
 /// Restoring the half-pixel shrink threshold in `view.rs:ensure_default_window` must fail;
 /// otherwise a default-mode resize can silently reduce live history below six hours.
 #[test]

@@ -9,9 +9,9 @@ use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 
 use super::{
-    Backend, MANUAL_STRATEGY_KIND, OpenCompareRequest, OpenMainRequest, apply_group_exit_edit,
-    effective_manual_strat_state, finalize_recent_warning_episodes, update_group_trade_pair,
-    usd_to_base_amount,
+    Backend, ChartHistoryScope, MANUAL_STRATEGY_KIND, OpenCompareRequest, OpenMainRequest,
+    apply_group_exit_edit, effective_manual_strat_state, finalize_recent_warning_episodes,
+    update_group_trade_pair, usd_to_base_amount,
 };
 use crate::backend::core_warn::{WarnAxis, WarnEnabled, WarnEpisode, WarnSnapshot};
 
@@ -135,6 +135,7 @@ fn auto_chart_open_preserves_classic_trade_core() {
     let mut request = OpenMainRequest::default();
     request.request(
         (22, "BTCUSDT".to_string()),
+        ChartHistoryScope::Default,
         "desk".to_string(),
         Some("desk".to_string()),
         true,
@@ -143,7 +144,7 @@ fn auto_chart_open_preserves_classic_trade_core() {
         .pending_for_group("desk")
         .cloned()
         .expect("the owning group must see its atomic chart-open request");
-    let (opened_core, opened_market, activate) = request
+    let (opened_core, opened_market, history, activate) = request
         .take_if_matches("desk", &pending)
         .expect("the unchanged request must drain exactly once");
 
@@ -157,6 +158,7 @@ fn auto_chart_open_preserves_classic_trade_core() {
     }
 
     assert_eq!(opened_market, "BTCUSDT");
+    assert_eq!(history, ChartHistoryScope::Default);
     assert!(activate);
     assert_eq!(request.addressed_group(), Some("desk"));
     assert_eq!(request.revision(), 1);
@@ -167,6 +169,40 @@ fn auto_chart_open_preserves_classic_trade_core() {
     );
 }
 
+/// Dropping history from `OpenMainRequest`, or draining it from a parallel field, must fail the
+/// independently constructed Report scope after one atomic request round trip.
+#[test]
+fn main_request_round_trips_exact_target_and_published_report_scope_atomically() {
+    let history = ChartHistoryScope::Report {
+        filter: moon_core::db::ReportFilter {
+            core_uids: vec![91, 92],
+            date_from: Some(1_700_000_000),
+            date_to: Some(1_700_086_399),
+            side: moon_core::db::SideFilter::Short,
+            ..Default::default()
+        },
+        exact_coin: "BTCUSDT".to_string(),
+        focus_record_id: Some(401),
+    };
+    let mut request = OpenMainRequest::default();
+    request.request(
+        (91, "BTCUSDT".to_string()),
+        history.clone(),
+        "alpha".to_string(),
+        Some("alpha".to_string()),
+        false,
+    );
+    let pending = request
+        .pending_for_group("alpha")
+        .cloned()
+        .expect("the exact owning group must observe the request");
+
+    assert_eq!(
+        request.take_if_matches("alpha", &pending),
+        Some((91, "BTCUSDT".to_string(), history, false))
+    );
+}
+
 /// Protects a pending chart-open request when settings move its target core between groups.
 ///
 /// Plausible breakage: omitting `OpenMainRequest::reconcile_group` leaves the request addressed to
@@ -174,7 +210,13 @@ fn auto_chart_open_preserves_classic_trade_core() {
 #[test]
 fn pending_main_request_retargets_when_its_core_moves_groups() {
     let mut request = OpenMainRequest::default();
-    request.request((22, "BTCUSDT".to_string()), "alpha".to_string(), None, true);
+    request.request(
+        (22, "BTCUSDT".to_string()),
+        ChartHistoryScope::Default,
+        "alpha".to_string(),
+        None,
+        true,
+    );
 
     assert!(request.reconcile_group(Some("beta".to_string())));
     assert_eq!(request.addressed_group(), Some("beta"));
@@ -187,7 +229,7 @@ fn pending_main_request_retargets_when_its_core_moves_groups() {
     assert!(request.take_if_matches("alpha", &pending).is_none());
     assert_eq!(
         request.take_if_matches("beta", &pending),
-        Some((22, "BTCUSDT".to_string(), true))
+        Some((22, "BTCUSDT".to_string(), ChartHistoryScope::Default, true,))
     );
 }
 
@@ -200,6 +242,7 @@ fn scoped_main_request_cancels_instead_of_following_a_moved_core() {
     let mut request = OpenMainRequest::default();
     request.request(
         (22, "BTCUSDT".to_string()),
+        ChartHistoryScope::Default,
         "alpha".to_string(),
         Some("alpha".to_string()),
         true,
@@ -234,6 +277,7 @@ fn pending_main_request_cancels_when_its_core_is_removed() {
     let mut request = OpenMainRequest::default();
     request.request(
         (22, "BTCUSDT".to_string()),
+        ChartHistoryScope::Default,
         "alpha".to_string(),
         Some("alpha".to_string()),
         true,
