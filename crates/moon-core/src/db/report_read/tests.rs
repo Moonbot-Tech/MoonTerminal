@@ -171,6 +171,195 @@ fn totals_split_known_quotes_and_quarantine_unknown_money() {
     assert_eq!(totals.totals[2].profit, 3.5);
 }
 
+/// Seed long, short, open, Funding, and out-of-filter trades for the volume oracle.
+///
+/// Args:
+///     quote: Persisted quote ordinal assigned to every fixture row.
+///
+/// Returns:
+///     An in-memory report replica whose stored spend is deliberately unrelated to notional.
+fn traded_volume_report(quote: i64) -> Connection {
+    let conn = Connection::open_in_memory().expect("open traded-volume report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, spentbtc REAL, boughtq REAL,
+             buyprice REAL, sellprice REAL, sellreason TEXT, isshort INTEGER
+         );",
+    )
+    .expect("create traded-volume report schema");
+    let rows = [
+        // Long: 2 * 100 entry + 2 * 110 exit = 420.
+        (
+            1,
+            1,
+            1_700_000_000,
+            20.0,
+            1.0,
+            2.0,
+            100.0,
+            110.0,
+            "Sell Price",
+            0,
+        ),
+        // Short: 3 * 80 entry + 3 * 70 exit = 450, still unsigned.
+        (
+            1,
+            2,
+            1_700_000_060,
+            30.0,
+            2.0,
+            3.0,
+            80.0,
+            70.0,
+            "Buy Price",
+            1,
+        ),
+        // Report profit/count include these two rows; volume eligibility does not.
+        (1, 3, 0, 40.0, 3.0, 5.0, 10.0, 20.0, "Sell Price", 0),
+        (1, 4, 1_700_000_120, 50.0, 4.0, 4.0, 5.0, 6.0, "Funding", 0),
+        // The Report filter excludes this otherwise valid closed trade from every aggregate.
+        (
+            2,
+            5,
+            1_700_000_180,
+            60.0,
+            5.0,
+            10.0,
+            1.0,
+            2.0,
+            "Sell Price",
+            0,
+        ),
+    ];
+    for (core, id, closedate, profit, spent, qty, buy, sell, reason, short) in rows {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES
+             (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                core, id, closedate, quote, profit, spent, qty, buy, sell, reason, short
+            ],
+        )
+        .expect("seed traded-volume row");
+    }
+    conn
+}
+
+/// Removing the exit leg, signing short quantity, reusing `spentbtc`, moving the closed/Funding
+/// predicates into `build_where`, or coupling volume completeness to profit coverage turns one of
+/// these exact assertions red and would misstate the current filtered Report footer.
+#[test]
+fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() {
+    let filter = |valuation| ReportFilter {
+        core_uids: vec![1],
+        valuation,
+        ..ReportFilter::default()
+    };
+
+    let current_conn = traded_volume_report(1);
+    current_conn
+        .execute("UPDATE orders_rep SET profitbtc=NULL WHERE newrecid=2", [])
+        .expect("remove profit without changing the short trade's price legs");
+    let current = query_totals(&current_conn, &filter(super::ValuationMode::Current))
+        .expect("query current-rate traded volume");
+    assert_eq!(
+        current.orders, 4,
+        "volume eligibility must not change Report count"
+    );
+    assert_eq!(
+        current.totals[0].profit, 110.0,
+        "profit behavior stays unchanged"
+    );
+    assert_eq!(current.traded_volume.eligible_orders, 2);
+    assert_eq!(current.traded_volume.reconstructed_orders, 2);
+    assert_eq!(current.traded_volume.totals[0].amount, Some(870.0));
+    assert_eq!(
+        current.traded_volume.usdt,
+        Some(870.0),
+        "current USDT identity rate is 1.0"
+    );
+
+    let _health = super::super::valuation::test_health_guard();
+    let dir = per_row_dir("traded-volume");
+    let valuation_path = dir.join("valuation.sqlite");
+    let store = super::super::valuation::open_store(&valuation_path)
+        .expect("initialize traded-volume valuation fixture");
+    store
+        .execute_batch(
+            "INSERT INTO trade_values (
+                 source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
+                 profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt, spent_usdt,
+                 valued_at_ms
+             ) VALUES
+                 (0, 1, 1, 2, 1700000000, 8, 20.0, 1.0, 1699999980, 0.5, 10.0, 0.5, 1700000100000),
+                 (0, 1, 2, 2, 1700000060, 8, 30.0, 2.0, 1700000040, 0.5, 15.0, 1.0, 1700000160000);",
+        )
+        .expect("seed historical traded-volume rates");
+    drop(store);
+    let historical_conn = traded_volume_report(8);
+    attach_valuation(&historical_conn, &valuation_path);
+    let historical = query_totals(&historical_conn, &filter(super::ValuationMode::Historical))
+        .expect("query historical traded volume");
+    assert_eq!(historical.orders, 4);
+    assert_eq!(historical.totals[0].profit, 140.0);
+    assert_eq!(historical.traded_volume.totals[0].amount, Some(870.0));
+    assert_eq!(
+        historical.traded_volume.usdt,
+        Some(435.0),
+        "historical fixture rate is deliberately 0.5 rather than current identity 1.0"
+    );
+
+    drop(historical_conn);
+    std::fs::remove_dir_all(dir).expect("remove traded-volume fixture directory");
+}
+
+/// Publishing a SUM when one eligible row is inverse-denominated or an explicit liquidation
+/// would present a confident partial or dimensionally invalid amount as the whole filter total.
+#[test]
+fn traded_volume_withholds_unprovable_rows_instead_of_publishing_a_partial_sum() {
+    let conn = Connection::open_in_memory().expect("open incomplete-volume fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, spentbtc REAL, boughtq REAL,
+             buyprice REAL, sellprice REAL, sellreason TEXT, coin TEXT, fname TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (2, 1, 1700000000, 1, 1.0, 9.0, 2.0, 100.0, 110.0,
+              'Sell Price', 'BTC', NULL),
+             (2, 2, 1700000060, 1, 2.0, 8.0, 3.0, 80.0, 70.0,
+              'LIQUIDATION', 'ETH', NULL),
+             (1, 3, 1700000120, 1, 3.0, 7.0, 5.0, 3000.0, 3100.0,
+              'Sell Price', 'ETH_0927', 'Pump_USD-ETH_0927_x'),
+             (1, 4, 1700000180, 1, 4.0, 6.0, 7.0, 2000.0, 2100.0,
+              'Sell Price', NULL, NULL),
+             (2, 6, 1700000300, 1, 6.0, 4.0, 2.0, 40.0, 50.0,
+              NULL, 'SOL', NULL);
+         CREATE TABLE closed_sell_reports (
+             core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, spentbtc REAL, boughtq REAL,
+             buyprice REAL, sellprice REAL
+         );
+         INSERT INTO closed_sell_reports VALUES
+             (3, 5, 1700000240, 1, 5.0, 5.0, 8.0, 10.0, 11.0);",
+    )
+    .expect("seed incomplete-volume rows");
+
+    let totals = query_totals(&conn, &ReportFilter::default()).expect("query incomplete volume");
+    assert_eq!(totals.orders, 6);
+    assert_eq!(totals.traded_volume.eligible_orders, 6);
+    assert_eq!(totals.traded_volume.reconstructed_orders, 1);
+    assert_eq!(totals.traded_volume.usdt, None);
+    assert!(
+        totals
+            .traded_volume
+            .totals
+            .iter()
+            .all(|bucket| bucket.amount.is_none()),
+        "neither the ordinary-row subtotal nor contract quantity times USD prices is publishable"
+    );
+}
+
 /// Build two typed cores with the same signed strategy id plus an unidentifiable legacy row.
 ///
 /// Returns:

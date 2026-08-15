@@ -34,6 +34,7 @@ fn found(n: i64) -> Option<UndatedCloses> {
             unknown_orders: 0,
             orders: n,
             valuation: None,
+            traded_volume: Default::default(),
         },
     })
 }

@@ -349,6 +349,19 @@ and exposes the complete text through a fitted trigger and tooltip. The toolbar 
 semantic chrome sections whose dividers travel with the following section; exact strategy, mask,
 and detached range bounds wrap independently instead of forcing horizontal scrolling.
 
+The Report footer's traded volume is computed in the same `query_totals` pass, under the same
+`ReportFilter` and pinned read snapshot as the visible rows, count, and profit. It is an unsigned
+two-sided notional: each closed non-Funding trade contributes quantity times entry price plus
+quantity times exit price, regardless of long/short direction. Native totals remain split by exact
+quote currency; a mixed scope is unified in USDT only when every eligible row has a trustworthy
+native notional and a rate from the Report snapshot's active historical/current valuation mode.
+The volume aggregate owns completeness separately from profit coverage because open and Funding
+rows still belong to Report count/profit. Inverse contracts whose prices and money use different
+quotes, explicit liquidations with non-economic prices, unknown quote identities, and missing or
+invalid quantity/price inputs fail closed: the footer withholds a partial amount instead of
+presenting it as the filter total. A source without `sellreason` likewise cannot prove that a
+closed row is not Funding, so it contributes to completeness but cannot publish volume.
+
 For a group-owned `AutoCore` Report only, `core_name` is contextually unavailable because every row
 already belongs to the selected core. This is a display lens, not a persistence mutation: the raw
 visible set, `app_meta`/`layout.toml`, sort state, and widths remain untouched. The grid, Columns

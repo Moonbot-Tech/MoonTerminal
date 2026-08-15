@@ -101,6 +101,9 @@ pub(super) fn test_health_guard() -> TestHealthGuard {
 /// `quote_rate`, so an aggregate can convert a figure built from raw quantities and prices, which
 /// no valuation column replaces. That is sound because `rate` reads the `v` value join alone,
 /// which [`CoverageSql::joins`] already carries — but it holds ONLY for `rate`.
+/// [`quote_rate`](Self::quote_rate) removes only the numeric-profit coverage gate for consumers
+/// that reconstruct their own money amount, such as Report volume; a historical non-identity row
+/// still needs the prepared-value join to identify its cached rate.
 /// [`source`](Self::source) additionally needs the `ra` provenance join and must not follow it
 /// into an aggregate.
 pub(crate) struct PerRowSql {
@@ -111,6 +114,11 @@ pub(crate) struct PerRowSql {
     pub joins: String,
     /// USDT paid for one quote unit, `1.0` on an identity row.
     pub rate: String,
+    /// USDT paid for one quote unit without requiring a numeric profit value.
+    ///
+    /// Consumers valuing another independently reconstructed amount use this expression instead
+    /// of inheriting profit coverage from [`Self::rate`].
+    pub quote_rate: String,
     /// Human-readable provenance of that rate, NULL while the row is uncovered.
     pub source: String,
 }
@@ -379,6 +387,17 @@ pub(crate) fn coverage_sql(
     // identity in memory — so every per-row expression must answer for it before consulting the
     // cache. Treating a NULL provider as "not valued" would blank the column on most trades.
     let rate = format!("CASE WHEN {identity} THEN 1.0 WHEN {prepared} THEN v.rate_usdt END");
+    let rate_identity = if has_quote {
+        format!(
+            "({eligible} AND ({quote})={usdt})",
+            usdt = super::QuoteCurrency::usdt().ordinal()
+        )
+    } else {
+        "0".to_string()
+    };
+    let rate_prepared = format!("({eligible} AND {date_valid} AND v.row_id IS NOT NULL)");
+    let quote_rate =
+        format!("CASE WHEN {rate_identity} THEN 1.0 WHEN {rate_prepared} THEN v.rate_usdt END");
     // Without a quote column there is nothing to join on, and the source expression must not name
     // `ra`: SQLite resolves every column reference at prepare time, unreachable arms included.
     let (rate_join, source) = if has_quote {
@@ -419,6 +438,7 @@ pub(crate) fn coverage_sql(
             // `rate_join` resolves `v.rate_minute_utc`, so it can only follow the value join.
             joins: format!("{value_join}{rate_join}"),
             rate,
+            quote_rate,
             source,
         },
         profit_usdt,

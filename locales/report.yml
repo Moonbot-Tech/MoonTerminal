@@ -201,6 +201,25 @@ report.totals_n_tip:
   ru: "Итого (%{n} ордеров)"
   en: "Total (%{n} orders)"
   es: "Total (%{n} órdenes)"
+# Unsigned entry-plus-exit notional over the exact loaded Report filter.
+report.traded_volume:
+  ru: "Объём: %{amount}"
+  en: "Volume: %{amount}"
+  es: "Volumen: %{amount}"
+# Fully spelled recovery text used by the shared footer tooltip when the compact fact is clipped.
+report.traded_volume_tip:
+  ru: "Общий торговый объём: %{amount}"
+  en: "Total traded volume: %{amount}"
+  es: "Volumen total negociado: %{amount}"
+# A unified mixed-quote amount converted with the loaded snapshot's current-rate mode.
+report.traded_volume_current:
+  ru: "Объём по текущему курсу: %{amount}"
+  en: "Volume at the current rate: %{amount}"
+  es: "Volumen a la tasa actual: %{amount}"
+report.traded_volume_current_tip:
+  ru: "Общий торговый объём по текущему курсу: %{amount}"
+  en: "Total traded volume at the current rate: %{amount}"
+  es: "Volumen total negociado a la tasa actual: %{amount}"
 report.unknown_quote_orders:
   ru: "валюта неизвестна: %{n}"
   en: "unknown quote: %{n}"
