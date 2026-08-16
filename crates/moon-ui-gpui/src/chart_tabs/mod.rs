@@ -829,6 +829,11 @@ impl ChartTabs {
             )
         });
         if let Some((core, market, history, activate)) = req {
+            // Captured before `history` moves. A Report-scoped request is the coin click in the
+            // Report table, which is the ONE non-activating gesture that hands the chart the
+            // keyboard below; every other `activate: false` producer — detect, log, screener,
+            // plain table navigation — keeps the documented no-focus-change contract.
+            let from_report = matches!(history, crate::backend::ChartHistoryScope::Report { .. });
             self.main
                 .update(cx, |p, pcx| p.open_or_focus(core, market, history, pcx));
             self.active = Tab::Main;
@@ -839,6 +844,30 @@ impl ChartTabs {
                 let handle = self.window_handle;
                 cx.defer(move |app| {
                     let _ = handle.update(app, |_, window, _| window.activate_window());
+                });
+            } else if allow_window_activation
+                && from_report
+                && let Some(focus) = self.main.read(cx).active_focus_handle(cx)
+            {
+                // The Report coin click must still hand the chart the keyboard. Escape is a
+                // window-root hotkey, so it reaches nothing while focus stays in the table that
+                // opened the chart — the user had to click the plot before the key did anything.
+                //
+                // THREE gates, each closing a different way this could misbehave:
+                // `allow_window_activation` excludes CONSTRUCTION, where taking focus would fight
+                // the seeded startup presentation this call site exists to leave alone;
+                // `from_report` keeps every other non-activating producer on the documented
+                // no-focus-change contract, so navigating from a detect, the log or the screener
+                // still cannot pull focus out of a text input the user is typing in; and
+                // `is_window_active` means focus can never be pulled OUT of another window — it
+                // only settles where focus lands inside the window the user is already in.
+                let handle = self.window_handle;
+                cx.defer(move |app| {
+                    let _ = handle.update(app, |_, window, app| {
+                        if window.is_window_active() {
+                            window.focus(&focus, app);
+                        }
+                    });
                 });
             }
             self.sync_inactive_chart_visibility(cx);
