@@ -22,7 +22,13 @@ pub(super) const BALANCE_REPAIR_INTERVAL: Duration = Duration::from_secs(3);
 /// closes. Left wider on purpose — scoping the answer to the request is what makes the trace
 /// readable when it is on, and at [`BALANCE_TRACE_LEVEL`] the overlap costs one clock read per
 /// balance event and no log records at all.
-pub(super) const BALANCE_REFRESH_LOG_WINDOW: Duration = Duration::from_secs(5);
+///
+/// Live, from `limits.balance_repeat_window_sec` in `cfg/diagnostics.toml`: someone who has just
+/// switched the trace on is exactly the person who may need to see every request rather than one
+/// per window, and making them rebuild for that would defeat the point of the switch.
+pub(super) fn balance_refresh_log_window() -> Duration {
+    crate::diagnostics::balance_repeat_window()
+}
 
 /// Level for the balance-repair diagnostic: the request, and the core's answer to it.
 ///
@@ -36,9 +42,9 @@ pub(super) const BALANCE_REFRESH_LOG_WINDOW: Duration = Duration::from_secs(5);
 /// `warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info` (`moon-ui-gpui/src/startup.rs`), so
 /// `Debug` is dropped before it reaches the ring, the file, or the panel.
 ///
-/// Turning it back on takes a full directive, not just this target — `RUST_LOG` REPLACES the default
-/// filter rather than adding to it:
-/// `RUST_LOG=warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info,moon_core::feed::live=debug`.
+/// Turning it back on is `log.balances = true` in `cfg/diagnostics.toml` — applied without a
+/// restart — or `MOON_DIAG_BALANCES=1`. Both resolve to a `moon_core::feed::live=debug` directive
+/// appended to the default filter; see `crate::diagnostics::filter`.
 ///
 /// What this costs, stated plainly: the phantom-Assets failure these lines were added for does not
 /// survive a restart, so evidence can no longer be collected AFTER a user reports one — the trace

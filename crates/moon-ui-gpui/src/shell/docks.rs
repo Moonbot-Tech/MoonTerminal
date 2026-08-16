@@ -364,8 +364,8 @@ fn strip_names(node: &PanelState) -> Option<Vec<String>> {
     node.children.iter().find_map(strip_names)
 }
 
-/// Append one dock-diagnostic line to `dock_diag.log` (in the working directory) and the app log,
-/// but only when render diagnostics are enabled (`MOON_RENDER_DIAG`, same gate as `diag.rs`).
+/// Append one dock-diagnostic line to `logs/dock_diag.log` and the app log, but only when render
+/// diagnostics are enabled (`channels.render`, same gate as `diag.rs`).
 ///
 /// Gated because the debug binary is built for the `windows` subsystem (no console; `[profile.dev]`
 /// disables debug assertions, so `not(debug_assertions)` holds even in debug): `[dock]` events reach
@@ -374,18 +374,11 @@ fn strip_names(node: &PanelState) -> Option<Vec<String>> {
 /// channel that also survives a subsequent hang: the last line written localizes the freeze. Off by
 /// default so ordinary detach/restore neither grows a file in the process CWD nor spams the Log tab.
 fn dock_log(msg: &str) {
-    use std::io::Write;
     if !crate::diag::is_enabled() {
         return;
     }
     log::info!("{msg}");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("dock_diag.log")
-    {
-        let _ = writeln!(f, "{msg}");
-    }
+    moon_core::diagnostics::channel_line("dock_diag.log", msg);
 }
 
 /// Render a compact one-line outline of a dock subtree for diagnostics, e.g.

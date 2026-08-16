@@ -631,6 +631,20 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             if last_report.elapsed().as_millis() >= 1000 {
                 let ms = last_report.elapsed().as_secs_f64() * 1000.0;
                 last_report = Instant::now();
+                // Pick up an edit to `cfg/diagnostics.toml` without a restart — the state worth
+                // observing is usually the one a restart would destroy.
+                //
+                // On the BACKGROUND executor, never here: this task runs on the foreground thread,
+                // and the file sits beside the executable, on whatever volume that is — a network
+                // share or a synchronised folder turns one `stat` per second into a stall the whole
+                // UI feels. The work is all atomics and a lock, so it is safe off-thread.
+                if let Some(cfg) = cx
+                    .update(|cx| cx.background_executor().clone())
+                    .spawn(async { moon_core::diagnostics::poll() })
+                    .await
+                {
+                    moon_core::diagnostics::announce(&cfg);
+                }
                 // Point-in-time context for the diagnostics line: process/system CPU, counts of
                 // windows and open chart panels, plus the assets_rev delta (Assets snapshots
                 // collected by feed threads during the interval, even with no window open).
@@ -733,7 +747,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         });
     }
     // Observation channel for the Analytics coin table, gated by env exactly like
-    // `MOON_RENDER_DIAG` (see `diag.rs`): open the window straight onto that panel so it
+    // the render channel (see `diag.rs`): open the window straight onto that panel so it
     // can be driven and read back without clicking through the UI by hand. Inert in every
     // build unless the variable is set — a normal run never opens this window on startup.
     if crate::analytics::probe_enabled() {

@@ -15,8 +15,9 @@ use crate::market::MarketDataMode;
 /// interrupt subscriptions or reads and reload history from scratch.
 const UNSUB_DELAY: Duration = Duration::from_secs(5);
 
+/// Whether the market channel is on (`channels.markets`, or `MOON_MARKET_DIAG`/`MOON_RENDER_DIAG`).
 fn market_diag_enabled() -> bool {
-    std::env::var_os("MOON_MARKET_DIAG").is_some() || std::env::var_os("MOON_RENDER_DIAG").is_some()
+    crate::diagnostics::markets()
 }
 
 fn market_diag(msg: impl std::fmt::Display) {

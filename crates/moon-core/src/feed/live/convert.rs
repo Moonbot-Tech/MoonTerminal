@@ -953,7 +953,7 @@ fn exchange_of(snap: &moonproto::MoonStateSnapshot) -> crate::symbol::Exchange {
 ///
 /// Event rows preserve terminal states that may disappear from the retained
 /// snapshot before the application processes the event queue.
-/// Reports one order batch to the `MOON_ORDER_DIAG` channel, and only when it changed.
+/// Reports one order batch to the order channel, and only when it changed.
 ///
 /// Answers the question static reading cannot: an order the core says it published either reaches
 /// `snapshot().orders()` or it does not, and the moonproto client drops exactly one class silently —
@@ -1056,7 +1056,7 @@ fn diag_order_batch(server_id: u64, snap: &moonproto::MoonStateSnapshot, rows: &
 ///     row: Projected row whose `stop_loss`/`take_profit` prices are being explained.
 fn diag_order_prices(server_id: u64, snap: &moonproto::MoonStateSnapshot, row: &OrderRow) {
     // Only orders that actually carry a protective level have a base to argue about, and skipping
-    // the rest keeps a `MOON_ORDER_DIAG=1` run over twenty cores down to the lines worth reading.
+    // the rest keeps a `channels.orders = "1"` run over twenty cores down to the lines worth reading.
     if row.stop_loss.is_none() && row.take_profit.is_none() {
         return;
     }

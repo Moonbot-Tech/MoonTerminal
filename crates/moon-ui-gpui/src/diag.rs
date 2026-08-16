@@ -1,14 +1,14 @@
 //! Persistent render-frequency diagnostics. Global atomic counters are bumped from render,
 //! observe, and notify paths. About once per second, the startup drain loop snapshots and resets
-//! them, converts each value to hertz, and writes one line to `render_diag.log` and `log::info`.
-//! Use the runtime log, rather than code inspection alone, to find excessive rendering.
+//! them, converts each value to hertz, and writes one line to `logs/render_diag.log` and
+//! `log::info`. Use the runtime log, rather than code inspection alone, to find excessive rendering.
 //!
-//! Important: the gate is the `MOON_RENDER_DIAG` environment variable or an explicit
-//! [`force_enable`] call, not `#[cfg(debug_assertions)]`. This project's `[profile.dev]` disables
-//! debug assertions in `Cargo.toml` to avoid the DX12 validation layer, so a debug-assertion gate
-//! would remove the counters from normal development builds. Without the environment variable or
-//! a force-enable call, diagnostics are inert in both development and release builds and do not
-//! create the log file.
+//! Important: the gate is `channels.render` in `cfg/diagnostics.toml` (equivalently
+//! `MOON_RENDER_DIAG`) or an explicit [`force_enable`] call, not `#[cfg(debug_assertions)]`. This
+//! project's `[profile.dev]` disables debug assertions in `Cargo.toml` to avoid the DX12 validation
+//! layer, so a debug-assertion gate would remove the counters from normal development builds.
+//! Without one of those switches, diagnostics are inert in both development and release builds and
+//! do not create the log file.
 //!
 //! This remains manual instrumentation at selected call sites, so new paths can be missed. A
 //! framework checkpoint that records each view render by type would cover view rendering more
@@ -295,18 +295,16 @@ static FORCE_ON: AtomicBool = AtomicBool::new(false);
 static GPU_FRAME_US_SUM: AtomicU64 = AtomicU64::new(0);
 static GPU_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Return whether render diagnostics have been enabled explicitly.
+/// Return whether render diagnostics are on.
 ///
-/// [`force_enable`] takes effect immediately. Otherwise, the first call caches whether
-/// `MOON_RENDER_DIAG` exists; any value enables diagnostics. Without either mechanism, counters
-/// and `render_diag.log` remain inactive in every build profile. This cannot use
+/// Two ways in: [`force_enable`], used by FireTest, which cannot be turned off again for the life
+/// of the run; and `channels.render` in `cfg/diagnostics.toml` (or `MOON_RENDER_DIAG`), which is
+/// live and can be flipped either way while the terminal runs. Without either, counters and
+/// `logs/render_diag.log` stay inactive in every build profile. This cannot use
 /// `cfg(debug_assertions)` because the development profile disables debug assertions to avoid the
 /// DX12 validation layer.
 fn enabled() -> bool {
-    use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
-    FORCE_ON.load(std::sync::atomic::Ordering::Relaxed)
-        || *ON.get_or_init(|| std::env::var_os("MOON_RENDER_DIAG").is_some())
+    FORCE_ON.load(std::sync::atomic::Ordering::Relaxed) || moon_core::diagnostics::render()
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -334,7 +332,7 @@ pub fn bump_by(c: &AtomicU64, n: u64) {
 
 /// Snapshot and reset all counters for the elapsed interval, returning their rates in hertz.
 ///
-/// Returns `None` without `MOON_RENDER_DIAG` or [`force_enable`].
+/// Returns `None` while render diagnostics are off — see [`enabled`].
 pub fn take_sample(elapsed_ms: f64) -> Option<Vec<DiagRate>> {
     if !enabled() {
         return None;
@@ -379,23 +377,16 @@ pub fn format_sample(elapsed_ms: f64, sample: &[DiagRate]) -> String {
     line
 }
 
-/// Write a sample to the application log and append it to `render_diag.log` when possible.
+/// Write a sample to the application log and append it to `logs/render_diag.log` when possible.
 ///
 /// `ctx` describes the sampling moment, including process/system CPU and open window/chart counts.
 /// It is inserted after the diagnostic prefix so the log shows what was open at the measured load.
 pub fn write_sample(elapsed_ms: f64, sample: &[DiagRate], ctx: &str) {
-    use std::io::Write;
     let mut line = format_sample(elapsed_ms, sample);
     if !ctx.is_empty() {
         let head_end = line.find(']').map(|i| i + 1).unwrap_or(0);
         line.insert_str(head_end, &format!(" {ctx}"));
     }
     log::info!("{line}");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("render_diag.log")
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    moon_core::diagnostics::channel_line("render_diag.log", &line);
 }

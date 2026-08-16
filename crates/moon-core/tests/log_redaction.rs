@@ -14,10 +14,8 @@ fn addresses_logged_by_dependencies_never_reach_the_buffer() {
     // Files belong to the running application, not to a test run; the ring is what we inspect.
     applog::set_file_logging(false, 0);
     // Same installer the application uses, so the chain under test is the chain that ships.
-    let env = env_logger::Builder::new()
-        .parse_filters("moon_core=info,log_redaction=info")
-        .build();
-    applog::install(env).expect("no other logger is installed in this test binary");
+    applog::install("moon_core=info,log_redaction=info")
+        .expect("no other logger is installed in this test binary");
 
     log::error!("server address resolve failed for 10.0.0.7:3011: timed out");
     log::warn!("[UDP_Cmd 172.110.223.179:10042]: BAD HMAC");

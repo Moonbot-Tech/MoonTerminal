@@ -640,15 +640,18 @@ fn coin_row(
 
 /// One line of the env-gated observation channel (see `analytics::probe_enabled`), written
 /// only when what that surface shows CHANGES — a per-frame log would drown the signal it
-/// exists to carry. Appends to `analytics_probe.log` next to the executable, like
-/// `render_diag.log`.
+/// exists to carry. Appends to `logs/analytics_probe.log`, beside every other channel file.
+///
+/// The GATE stays on the environment rather than moving into `cfg/diagnostics.toml`, because
+/// `MOON_ANALYTICS_PROBE` also opens the Analytics window at startup: a checkbox in a settings
+/// file must not open windows. The FILE still goes through the shared writer, so it lands where
+/// the others do.
 ///
 /// `key` names the surface, and the last line is remembered PER key: three surfaces sharing
 /// one slot would each see the previous one's line, never match, and write on every frame —
 /// the exact flood the deduplication is here to prevent.
 pub(super) fn probe(key: &'static str, line: String) {
     use std::collections::HashMap;
-    use std::io::Write;
     use std::sync::{Mutex, OnceLock};
     static LAST: OnceLock<Mutex<HashMap<&'static str, String>>> = OnceLock::new();
     let map = LAST.get_or_init(|| Mutex::new(HashMap::new()));
@@ -659,11 +662,5 @@ pub(super) fn probe(key: &'static str, line: String) {
     }
     last.clone_from(&line);
     drop(seen);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("analytics_probe.log")
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    moon_core::diagnostics::channel_line("analytics_probe.log", &line);
 }

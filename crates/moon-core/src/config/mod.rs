@@ -40,7 +40,7 @@ mod migrate;
 mod reconcile;
 mod schema;
 mod store;
-mod toml_io;
+pub(crate) mod toml_io;
 mod uid_counter;
 
 #[cfg(test)]

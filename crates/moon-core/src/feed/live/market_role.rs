@@ -96,8 +96,7 @@ impl MarketRoleState {
             apply_market_role(client, server_id, desired.provider);
         }
 
-        let diag_on = std::env::var_os("MOON_MARKET_DIAG").is_some()
-            || std::env::var_os("MOON_RENDER_DIAG").is_some();
+        let diag_on = crate::diagnostics::markets();
         let applied_orderbooks = applied
             .map(|current| current.orderbook_markets.as_slice())
             .unwrap_or_default();

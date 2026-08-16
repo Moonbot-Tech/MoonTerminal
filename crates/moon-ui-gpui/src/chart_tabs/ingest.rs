@@ -79,7 +79,7 @@ impl ChartTabs {
             return;
         }
         // Detect diagnostics: AddToChart detects reached this group's UI. `fresh` is the number of
-        // new AddToChart events processed in this pass. `MOON_DETECT_DIAG` enables this and is off
+        // new AddToChart events processed in this pass. `channels.detect` enables this and is off
         // by default.
         moon_core::detect_diag::line(&format!(
             "[ingest] group={} split={split} fresh={} existing_tabs={}",

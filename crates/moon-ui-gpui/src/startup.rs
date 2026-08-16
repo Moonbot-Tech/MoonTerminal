@@ -326,15 +326,19 @@ fn observed_uid_floor(
 /// Args:
 ///     startup_update: Validated resume or recovery receipt dispatched before GPUI startup.
 pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyhow::Result<()> {
-    // Build env_logger as a Logger (rather than calling .init()) and wrap it in TeeLogger, which
-    // duplicates emitted records into the in-memory ring shown by the Log tab (ported from egui main).
-    let env = env_logger::Builder::from_env(
-        env_logger::Env::default()
-            .default_filter_or("warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info"),
-    )
-    .build();
-    if let Err(e) = moon_core::applog::install(env) {
+    // Diagnostics BEFORE the logger: the `[log]` areas in `cfg/diagnostics.toml` decide the
+    // logger's filter, so they have to be known before it is built. Reading that file this early is
+    // safe precisely because it neither creates directories nor logs — a missing file yields
+    // all-off defaults, which is the right state for a first launch. The file itself is created
+    // further down, after the config directory has settled.
+    let (diag_cfg, diag_err) = moon_core::diagnostics::init();
+    // The wrapper duplicates emitted records into the in-memory ring shown by the Log tab (ported
+    // from egui main) and owns the filter, which is what makes the areas switchable while running.
+    if let Err(e) = moon_core::applog::install(&moon_core::diagnostics::filter_string(&diag_cfg)) {
         eprintln!("не удалось установить логгер: {e}");
+    }
+    if let Some(e) = diag_err {
+        log::warn!("{e}");
     }
     log::info!(
         "build: moonterminal={} release_base={} moonui={}",
@@ -396,6 +400,14 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // idempotent, so the call inside `AppConfig::load` stays a no-op.
     moon_core::config::paths::migrate_bundle_data();
     moon_core::config::paths::migrate_flat_to_cfg();
+    // After the logger, so a failed write can be reported, and after the migrations purely so the
+    // `cfg/` directory is settled before anything is added to it. `diagnostics.toml` is in neither
+    // migration's file list, so no move could reach it either way.
+    moon_core::diagnostics::ensure_file();
+    // Announced only now, and from the ACTIVE state rather than the one `init` returned:
+    // `ensure_file` may have found a file that appeared in between and re-applied it, and a
+    // warning naming the switches has to name the ones actually in force.
+    moon_core::diagnostics::announce(&moon_core::diagnostics::active());
 
     // Read the core-keyed stores BEFORE the config: `AppConfig::load` assigns uids to entries
     // that carry none and persists them, so the floor has to be known by then. These loads are

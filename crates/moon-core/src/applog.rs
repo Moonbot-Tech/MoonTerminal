@@ -27,8 +27,11 @@ use crate::util::now_unix_ms_i64 as now_ms_i64;
 
 static LOG: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
 
-/// Maximum number of lines in the ring buffer; oldest lines are evicted.
-const RING_CAP: usize = 5000;
+/// Capacity the ring is allocated with. The LIMIT itself is live and comes from
+/// `limits.log_ring_lines` in `cfg/diagnostics.toml`; this is only how much is reserved up front,
+/// kept modest so a configured ceiling of a million lines does not reserve ~80 MB on the first
+/// record for a buffer that may never fill. Growth past it is the `VecDeque`'s own problem.
+const RING_PREALLOC: usize = 1024;
 
 /// Whether to write logs to `logs/<date>_<source>.log`. Defaults to on so early entries
 /// are not lost before config loading; the application later applies the configured value.
@@ -118,7 +121,7 @@ static REVISION: AtomicU64 = AtomicU64::new(0);
 fn ring() -> &'static Mutex<Ring> {
     RING.get_or_init(|| {
         Mutex::new(Ring {
-            lines: VecDeque::with_capacity(RING_CAP),
+            lines: VecDeque::with_capacity(RING_PREALLOC.min(crate::diagnostics::ring_lines())),
             pushed: 0,
         })
     })
@@ -145,7 +148,10 @@ fn push(line: LogLine) {
         }
     }
     if let Ok(mut r) = ring().lock() {
-        if r.lines.len() >= RING_CAP {
+        // A LOOP, not a single pop: the capacity is live, so lowering it leaves the ring over its
+        // new limit and one eviction per push would take as many pushes as lines to converge.
+        let cap = crate::diagnostics::ring_lines().max(1);
+        while r.lines.len() >= cap {
             r.lines.pop_front();
         }
         r.lines.push_back(line);
@@ -343,7 +349,11 @@ impl DatedWriter {
     }
 
     fn open(&mut self, date: &str) {
-        let dir = paths::logs_dir();
+        // The NON-logging resolver, and this line is why: `paths::logs_dir` warns when it cannot
+        // create the directory, and it is reached from `push` — i.e. from inside a log record.
+        // That warning re-enters the logger on the same thread and takes `app_writer`'s mutex
+        // again, which is a self-deadlock. `create_dir_all` right here does the same job silently.
+        let dir = paths::logs_dir_no_create();
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(format!("{date}_{}.log", self.label));
         self.file = OpenOptions::new()
@@ -575,13 +585,109 @@ pub fn command(line: &str) {
     });
 }
 
-/// Installs `env` as the global logger, wrapped in [`TeeLogger`].
+/// The live filter. Every gate — [`TeeLogger::enabled`], [`TeeLogger::log`] and the global
+/// `log::max_level` — reads this one value, so a swap changes all of them at once.
+///
+/// It lives here rather than inside [`TeeLogger`] because `log::set_boxed_logger` consumes the
+/// logger and never gives it back: once installed, the only way to reach its innards is a static.
+static FILTER: OnceLock<std::sync::RwLock<std::sync::Arc<env_filter::Filter>>> = OnceLock::new();
+
+fn filter_cell() -> &'static std::sync::RwLock<std::sync::Arc<env_filter::Filter>> {
+    // A defensive default rather than "deny": nothing should reach the logger before `install`
+    // (`log::max_level` is `Off` until then), but a filter that denied everything would turn any
+    // future ordering mistake into total silence instead of a visible surplus of lines.
+    FILTER.get_or_init(|| {
+        let (filter, _) = build_filter(crate::diagnostics::DEFAULT_BASE_FILTER);
+        std::sync::RwLock::new(std::sync::Arc::new(filter))
+    })
+}
+
+/// The filter in force right now, as an owned handle.
+///
+/// The `Arc` is what keeps the lock off the logging path. Holding a read guard across the actual
+/// work would be two separate disasters: a panic anywhere under it poisons the lock and kills ALL
+/// logging for the life of the process, and the work itself can log — `push` reaches
+/// `paths::data_dir`, which warns when it cannot create the directory — re-entering the logger and
+/// taking the same read lock again, which deadlocks the moment `set_filter` has a write queued.
+/// Cloning one `Arc` under a guard held for a few instructions avoids both.
+///
+/// Poisoning is recovered from rather than propagated, for the same reason: a filter is only ever
+/// wholly replaced, so a poisoned lock still guards a perfectly valid value, and treating it as
+/// fatal would silence the application over an unrelated panic elsewhere.
+fn current_filter() -> std::sync::Arc<env_filter::Filter> {
+    let cell = filter_cell();
+    let guard = cell.read().unwrap_or_else(|e| e.into_inner());
+    std::sync::Arc::clone(&guard)
+}
+
+/// Parse a directive string in `RUST_LOG` syntax into a filter, falling back to the base filter.
+///
+/// `try_parse`, never `parse`, and the fallback is the point. `env_filter::parse_spec` abandons the
+/// WHOLE spec — every directive, not just the bad one — as soon as it sees a second `/`, and
+/// `build()` then substitutes a single `error` directive. So one typo in the hand-edited
+/// `log.filter` field would drop the entire application to error-only, live, with the only
+/// diagnosis printed to a stderr that a Windows GUI process does not have. Falling back to the
+/// documented base keeps a bad edit from being louder than a missing file.
+/// Returns the filter and, when the spec had to be rejected, the message explaining it.
+///
+/// The message is RETURNED rather than logged here. At install time this runs while
+/// `log::max_level` is still `Off`, so a `log::warn!` from inside would be dropped by the macro's
+/// own gate — losing precisely the line that says why a bad filter did nothing. The caller emits it
+/// after raising the level.
+fn build_filter(spec: &str) -> (env_filter::Filter, Option<String>) {
+    let mut builder = env_filter::Builder::new();
+    match builder.try_parse(spec) {
+        Ok(built) => (built.build(), None),
+        Err(e) => (
+            env_filter::Builder::new()
+                .parse(crate::diagnostics::DEFAULT_BASE_FILTER)
+                .build(),
+            Some(format!(
+                "фильтр логов «{spec}» не разобран ({e}); беру базовый \
+                 (см. log.filter в cfg/diagnostics.toml)"
+            )),
+        ),
+    }
+}
+
+/// Installs the global logger with `spec` (a `RUST_LOG`-syntax directive string) as its filter.
 ///
 /// The wrapper is what redacts and what feeds the Log tab, so nothing may install the inner logger
 /// directly. Returns the error from `log::set_boxed_logger` when a logger is already installed.
-pub fn install(env: env_logger::Logger) -> Result<(), log::SetLoggerError> {
-    log::set_max_level(env.filter());
-    log::set_boxed_logger(Box::new(TeeLogger::new(env)))
+///
+/// The inner `env_logger` is built to accept EVERYTHING and is left owning only formatting and
+/// output. That is deliberate: its filter is fixed at `build()` and a logger can be installed once
+/// per process, so leaving the gate there would make the log level unchangeable for the life of the
+/// run — which is precisely what stopped the diagnostics areas from being switchable at all.
+pub fn install(spec: &str) -> Result<(), log::SetLoggerError> {
+    // The logger goes in FIRST so a failed install cannot leave another logger's filter and
+    // `max_level` reconfigured behind it. Nothing is lost in between: `log::max_level` is `Off`
+    // until `set_filter` raises it, so no record can slip past unjudged.
+    let mut inner = env_logger::Builder::new();
+    inner.filter_level(log::LevelFilter::Trace);
+    log::set_boxed_logger(Box::new(TeeLogger::new(inner.build())))?;
+    set_filter(spec);
+    Ok(())
+}
+
+/// Swaps the live filter and re-derives `log::max_level` from it.
+///
+/// `max_level` is the cheap global short-circuit inside the `log!` macros: while every area is off
+/// it stays at the base level, so a `debug!` call site returns before touching the logger and never
+/// evaluates its arguments. Raising it is what makes a switched-on area cost anything at all.
+pub fn set_filter(spec: &str) {
+    let (filter, problem) = build_filter(spec);
+    log::set_max_level(filter.filter());
+    {
+        let cell = filter_cell();
+        let mut guard = cell.write().unwrap_or_else(|e| e.into_inner());
+        *guard = std::sync::Arc::new(filter);
+    }
+    // After the level is raised AND the guard is dropped: before the first, the record would be
+    // discarded by the macro; before the second, emitting it would re-enter the lock we hold.
+    if let Some(problem) = problem {
+        log::warn!("{problem}");
+    }
 }
 
 /// Appends a crash report to `panic.log`, redacting addresses first.
@@ -628,13 +734,18 @@ impl TeeLogger {
 
 impl log::Log for TeeLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        self.inner.enabled(metadata)
+        current_filter().enabled(metadata)
     }
 
     fn log(&self, record: &log::Record) {
-        // Level/module gate first: formatting the message for a record env_logger will drop is the
+        // Level/module gate first: formatting the message for a record the filter will drop is the
         // dependency trace noise this wrapper exists to keep out of the buffer.
-        if !self.inner.enabled(record.metadata()) {
+        //
+        // One owned handle for the whole call, so both decisions below — console/file output and
+        // the ring — are made by the SAME filter even if a swap lands mid-record, WITHOUT holding a
+        // lock across the work. See `current_filter` for why the lock must not be held here.
+        let filter = current_filter();
+        if !filter.enabled(record.metadata()) {
             return;
         }
         // Format ONCE. Dependencies such as moonproto format addresses into their own records, so
@@ -651,10 +762,15 @@ impl log::Log for TeeLogger {
         let msg = masked.unwrap_or(raw);
         // Both copies are decided on the SAME text: env_logger's filter can match on the message
         // body, so testing one text and emitting another would let the two disagree.
+        // The inner logger accepts everything now, so the body-regex half of a directive
+        // (`moon_core=info/pattern`) is only honoured if it is checked HERE. Emitting first and
+        // testing afterwards would put lines on the console that the filter excludes.
         let buffered = with_redacted_record(&msg, record, |rebuilt| {
-            let matched = self.inner.matches(rebuilt);
+            if !filter.matches(rebuilt) {
+                return false;
+            }
             self.inner.log(rebuilt);
-            matched
+            true
         });
         if buffered {
             push(LogLine {

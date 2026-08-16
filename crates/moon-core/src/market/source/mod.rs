@@ -23,10 +23,28 @@ use crate::session::CoreId;
 use super::SharedMarketStore;
 
 const ORDERBOOK_PULL_PERIOD_MS: u64 = 200;
-const MARKET_DIAG_FLOOR: Duration = Duration::from_millis(1000);
 
+/// Default gap between two trace lines about the same subject, from
+/// `limits.market_trace_min_interval_ms`. A function rather than a constant because the value is
+/// live: the order-book pull runs five times a second, so this floor is what decides whether the
+/// channel is readable, and it has to be adjustable without a rebuild.
+fn market_diag_floor() -> Duration {
+    crate::diagnostics::market_trace_min_interval()
+}
+
+/// Level for market-source tracing, admitted by `log.market_sources` in `cfg/diagnostics.toml`.
+///
+/// Debug, so the default filter (info and above) excludes it. At info these lines followed cursor
+/// movement — a hovering cursor re-reads sources — and produced ~2600 lines a day on their own,
+/// against a Log panel ring that holds a few thousand.
+pub(super) const SOURCE_TRACE_LEVEL: log::Level = log::Level::Debug;
+
+/// Whether the market channel is on, from `channels.markets` in `cfg/diagnostics.toml`.
+///
+/// `MOON_MARKET_DIAG` and `MOON_RENDER_DIAG` both still enable it; that pairing is preserved in
+/// `diagnostics::config::apply_env` rather than restated here.
 fn market_diag_enabled() -> bool {
-    std::env::var_os("MOON_MARKET_DIAG").is_some() || std::env::var_os("MOON_RENDER_DIAG").is_some()
+    crate::diagnostics::markets()
 }
 
 fn market_diag_due(key: impl Into<String>, floor: Duration) -> bool {

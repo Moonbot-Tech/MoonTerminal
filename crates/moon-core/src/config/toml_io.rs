@@ -132,7 +132,7 @@ pub fn save<T: Serialize>(path: &Path, value: &T, label: &str) -> anyhow::Result
 
 /// Writes a file through a temporary sibling plus rename. A direct `fs::write` can leave a
 /// truncated config if the process or power fails during the write.
-pub(super) fn write_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).with_context(|| format!("создание папки для {label}"))?;
     }

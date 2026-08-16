@@ -20,6 +20,11 @@ sha2 = "0.10"
 toml = "0.8"
 anyhow = "1"
 log = "0.4"
+# Format-preserving TOML, used only by diagnostics/upgrade.rs to append switches a new release
+# added to a `diagnostics.toml` the user already edited. A serde round-trip would delete every
+# comment in that file, and the comments are its content. Already in the tree as `toml`'s own
+# dependency, so this direct edge adds no crate and no build time.
+toml_edit = "0.22"
 
 # Full non-Turkic Unicode case folding for literal strategy-name masks in Reports.
 unicode-casefold = "0.2"
@@ -31,6 +36,11 @@ chrono-tz = "0.10"
 
 # The TeeLogger wrapper (applog.rs) delegates to env_logger and is installed in main.
 env_logger = "0.11"
+# The filter env_logger itself parses `RUST_LOG` with, taken directly because TeeLogger now owns
+# the gate: env_logger's own Logger fixes its filter at build time and the logger can only be
+# installed once, so a runtime-swappable filter cannot come from it. Already in the tree as
+# env_logger's own dependency, so this direct edge adds no crate and no build time.
+env_filter = "2"
 
 # Language based on the system locale (config/lang.rs::from_system).
 sys-locale = "0.3"
