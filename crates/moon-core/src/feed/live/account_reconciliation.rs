@@ -13,6 +13,40 @@ use moonproto::{Event, ExchangeCode, ExchangeKind, OrderWorkerStatus};
 
 /// Minimum interval between explicit full balance repair requests.
 pub(super) const BALANCE_REPAIR_INTERVAL: Duration = Duration::from_secs(3);
+
+/// How long after a repair request the core's balance answer is traced.
+///
+/// It sits beside the cooldown because the two only make sense read together, and reading them
+/// apart is what went wrong: this window is LONGER than that interval, so on any core with steady
+/// order flow the next repair re-arms it before it expires and the "diagnostic window" never
+/// closes. Left wider on purpose — scoping the answer to the request is what makes the trace
+/// readable when it is on, and at [`BALANCE_TRACE_LEVEL`] the overlap costs one clock read per
+/// balance event and no log records at all.
+pub(super) const BALANCE_REFRESH_LOG_WINDOW: Duration = Duration::from_secs(5);
+
+/// Level for the balance-repair diagnostic: the request, and the core's answer to it.
+///
+/// A constant rather than a literal macro choice so the decision is data one test can hold, and so
+/// the three emit sites cannot drift apart.
+///
+/// `Debug` because of what this path costs at `info`, measured 2026-08-15 on 22 cores: repairs run
+/// at the cooldown around the clock on a trading core, and these lines were **271 201 of the day's
+/// 323 265 log records — 83.9%**. The ring the Log panel reads holds 5000 records, so that rate left
+/// under ten minutes of history in which every other message was drowned. The default filter is
+/// `warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info` (`moon-ui-gpui/src/startup.rs`), so
+/// `Debug` is dropped before it reaches the ring, the file, or the panel.
+///
+/// Turning it back on takes a full directive, not just this target — `RUST_LOG` REPLACES the default
+/// filter rather than adding to it:
+/// `RUST_LOG=warn,moon_ui_gpui=info,moon_gpui=info,moon_core=info,moon_core::feed::live=debug`.
+///
+/// What this costs, stated plainly: the phantom-Assets failure these lines were added for does not
+/// survive a restart, so evidence can no longer be collected AFTER a user reports one — the trace
+/// has to be enabled beforehand. Accepted because the question it was left on to answer has since
+/// been answered by measurement: every repair in the sample was answered by a full snapshot, 54 of
+/// 54 on the busiest core. Should phantoms return, the honest instrument is an alarm on the
+/// condition itself, and that needs a state model this constant does not pretend to be.
+pub(super) const BALANCE_TRACE_LEVEL: log::Level = log::Level::Debug;
 /// Minimum interval between explicit Spot-wallet repair requests.
 pub(super) const SPOT_WALLET_REPAIR_INTERVAL: Duration = Duration::from_secs(10);
 /// Interval between API-key expiration polls.

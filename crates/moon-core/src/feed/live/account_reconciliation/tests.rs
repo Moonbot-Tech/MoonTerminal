@@ -330,3 +330,68 @@ fn a_failed_check_is_retried_before_the_full_interval() {
     assert!(reconciliation.api_expiry_due(start + API_EXPIRY_RETRY_INTERVAL));
     assert!(!reconciliation.api_expiry_due(start));
 }
+
+/// The balance-repair trace is emitted from three sites on a path that runs on every trading core,
+/// and at `info` it measured 83.9% of a day's log — enough to evict the Log panel's whole
+/// 5000-record history in under ten minutes. What keeps it out is the LEVEL, so the level is the
+/// thing to hold: the default filter admits `moon_core=info`, and anything at or below Info is
+/// admitted with it.
+#[test]
+fn the_balance_trace_level_is_below_the_default_filter() {
+    assert!(
+        BALANCE_TRACE_LEVEL > log::Level::Info,
+        "the default filter admits Info and above; {BALANCE_TRACE_LEVEL} would reach the Log panel"
+    );
+}
+
+/// The constant is only worth anything while the emit sites go through it — reverting one to
+/// `log::info!` restores the flood with the test above still green, which is precisely the
+/// regression this pairs with.
+///
+/// A source scan because a macro call site is not reachable any other way, but a NARROW one: each
+/// message is located by `find` (so a rename fails the test instead of silently matching the whole
+/// file), and only the ~200 characters that precede it are inspected, so the verdict cannot be
+/// decided by an unrelated macro elsewhere in a 1500-line file.
+#[test]
+fn every_balance_trace_site_goes_through_the_level_constant() {
+    const EMITS: [(&str, &str); 3] = [
+        (
+            "feed/live/mod.rs",
+            "core {} balance repair requested (account order change)",
+        ),
+        (
+            "feed/live/mod.rs",
+            "core {} balance event after refresh: {bev:?}",
+        ),
+        (
+            "feed/live/commands.rs",
+            "core {} balance refresh requested (assets refresh)",
+        ),
+    ];
+    let sources = [
+        ("feed/live/mod.rs", include_str!("../mod.rs")),
+        ("feed/live/commands.rs", include_str!("../commands.rs")),
+    ];
+
+    for (file, message) in EMITS {
+        let source = sources
+            .iter()
+            .find(|(name, _)| *name == file)
+            .map(|(_, text)| *text)
+            .expect("the scanned file must be listed");
+        let at = source
+            .find(message)
+            .unwrap_or_else(|| panic!("{file} no longer emits `{message}`"));
+        let window = &source[at.saturating_sub(200)..at];
+        assert!(
+            window.contains("BALANCE_TRACE_LEVEL"),
+            "{file}: `{message}` must be emitted through the level constant, not a fixed macro"
+        );
+        for fixed in ["log::info!", "log::warn!", "log::error!"] {
+            assert!(
+                !window.contains(fixed),
+                "{file}: `{message}` is emitted with {fixed}, which the default filter admits"
+            );
+        }
+    }
+}
