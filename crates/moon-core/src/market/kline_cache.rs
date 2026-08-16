@@ -194,8 +194,82 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Level for the per-key merge trace.
+///
+/// A constant so the decision is data one test can hold, and so the two emit sites cannot drift.
+///
+/// `Debug` because of what this cost at `info`, measured 2026-08-15: the set that deduplicates it
+/// lives in the writer thread, so "the first merge for each key" starts over on every launch —
+/// 6042 distinct keys became **32 803 lines a day**, arriving in bursts of ~4700 within minutes of
+/// each start, which made this the largest single producer in the log.
+const MERGE_TRACE_LEVEL: log::Level = log::Level::Debug;
+
+/// Announce, once per writer, that the cache has committed something.
+///
+/// Distinct from the line `open` writes: that one says the file was opened, this one says data is
+/// actually reaching it, which is what the per-key flood was really being read for. No counts: the
+/// caller knows only that something was stored, and a number that described submitted rows would
+/// read as stored ones.
+///
+/// Returns whether it announced, so "once" is a fact a test can observe rather than a claim.
+///
+/// Args:
+///     announced: Per-writer latch, set here on the first call.
+///
+/// Returns:
+///     `true` on the call that wrote the line, `false` for every call after it.
+fn log_active_once(announced: &mut bool) -> bool {
+    if *announced {
+        return false;
+    }
+    *announced = true;
+    log::info!("kline cache: first merge committed");
+    true
+}
+
+/// Records that `key` was traced, and returns whether this is the first time.
+///
+/// The membership set is populated ONLY when `enabled`, and that ordering is the point:
+/// `HashSet::insert` takes its key by value, so the previous unconditional form allocated two
+/// `String`s for every merged item — roughly 5500 markets per recorder cycle — purely to decide
+/// whether to write a log line nobody was reading. With the guard first, a disabled trace costs
+/// nothing and the set stays empty.
+///
+/// Bounded per key rather than per merge on purpose: a cycle covers thousands of markets, so an
+/// unbounded trace would overrun the Log panel's 5000-record ring the moment it was switched on.
+///
+/// `enabled` is a parameter rather than a `log_enabled!` inside, so both branches are testable
+/// without a unit test installing a process-global logger.
+///
+/// Args:
+///     seen: Keys this writer has already traced.
+///     key: Exchange, market and kind just merged.
+///     enabled: Whether the trace level is live.
+///
+/// Returns:
+///     Whether this key should be logged now.
+fn trace_first_merge(
+    seen: &mut std::collections::HashSet<(String, String, u32)>,
+    key: TraceKey<'_>,
+    enabled: bool,
+) -> bool {
+    if !enabled {
+        return false;
+    }
+    seen.insert((key.0.to_string(), key.1.to_string(), key.2))
+}
+
+/// Exchange, market and kind identifying one cache key for the trace.
+type TraceKey<'a> = (&'a str, &'a str, u32);
+
 fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
-    // Log the first merge for each key at INFO so normal logs show that the cache is active.
+    // One INFO line per writer says data is reaching the cache; the per-key detail is a trace whose
+    // deduplication set stays EMPTY unless that trace is on.
+    //
+    // The batch arm marks keys traced inside the loop, before its commit: a rolled-back cycle
+    // therefore loses those "first rows" lines rather than repeating them. Acceptable for a
+    // debug-only breadcrumb on a path that already warns about the failed commit.
+    let mut announced = false;
     let mut seen: std::collections::HashSet<(String, String, u32)> =
         std::collections::HashSet::new();
     while let Ok(op) = rx.recv() {
@@ -208,16 +282,31 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
             } => {
                 let now = now_unix_ms();
                 let res = conn.unchecked_transaction().and_then(|tx| {
-                    upsert_one(&tx, &exchange, &market, kind_min, &rows, now)?;
-                    tx.commit()
+                    let wrote = upsert_one(&tx, &exchange, &market, kind_min, &rows, now)?;
+                    tx.commit()?;
+                    Ok(wrote)
                 });
-                if let Err(e) = res {
-                    log::warn!("kline cache merge failed {exchange}/{market}/{kind_min}: {e}");
-                } else if seen.insert((exchange.clone(), market.clone(), kind_min)) {
-                    log::info!(
-                        "kline cache: первые ряды {exchange}/{market}/kind{kind_min}: {}",
-                        rows.len()
-                    );
+                match res {
+                    Err(e) => {
+                        log::warn!("kline cache merge failed {exchange}/{market}/{kind_min}: {e}");
+                    }
+                    // Committed AND non-empty. A merge whose rows were all filtered out stored
+                    // nothing, and announcing it would burn the one-shot latch on a write that
+                    // never happened.
+                    Ok(wrote) => {
+                        if wrote {
+                            let _ = log_active_once(&mut announced);
+                            let enabled = log::log_enabled!(MERGE_TRACE_LEVEL);
+                            let key = (exchange.as_str(), market.as_str(), kind_min);
+                            if trace_first_merge(&mut seen, key, enabled) {
+                                log::log!(
+                                    MERGE_TRACE_LEVEL,
+                                    "kline cache: first rows {exchange}/{market}/kind{kind_min}: {}",
+                                    rows.len()
+                                );
+                            }
+                        }
+                    }
                 }
             }
             Op::MergeBatch { items } => {
@@ -231,12 +320,17 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                 };
                 // An item failure does not abort the SQLite transaction. Log it, write the
                 // remaining items, then commit the entire cycle once.
+                let enabled = log::log_enabled!(MERGE_TRACE_LEVEL);
+                let mut merged_any = false;
                 for it in &items {
                     match upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now) {
-                        Ok(()) => {
-                            if seen.insert((it.exchange.clone(), it.market.clone(), it.kind_min)) {
-                                log::info!(
-                                    "kline cache: первые ряды {}/{}/kind{}: {}",
+                        Ok(wrote) => {
+                            merged_any |= wrote;
+                            let key = (it.exchange.as_str(), it.market.as_str(), it.kind_min);
+                            if wrote && trace_first_merge(&mut seen, key, enabled) {
+                                log::log!(
+                                    MERGE_TRACE_LEVEL,
+                                    "kline cache: first rows {}/{}/kind{}: {}",
                                     it.exchange,
                                     it.market,
                                     it.kind_min,
@@ -252,11 +346,24 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                         ),
                     }
                 }
-                if let Err(e) = tx.commit() {
-                    log::warn!(
+                // Announced only AFTER the commit succeeds. Announcing beside the loop would claim
+                // a write for a cycle a failed commit rolled back — and, because the latch is
+                // one-shot, would then stay silent for the first cycle that really landed.
+                //
+                // `merged_any` follows the items that reported a write. An item that errors partway
+                // through its days has already written the earlier ones into this transaction and
+                // is not counted, so a cycle can commit rows without announcing; the latch is only
+                // ever SET on success, so the next clean cycle says it instead.
+                match tx.commit() {
+                    Ok(()) => {
+                        if merged_any {
+                            let _ = log_active_once(&mut announced);
+                        }
+                    }
+                    Err(e) => log::warn!(
                         "kline cache batch commit failed ({} items): {e}",
                         items.len()
-                    );
+                    ),
                 }
             }
             Op::Read {
@@ -283,6 +390,11 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
 /// `conn` may be a regular `Connection` or a dereferenced `Transaction`. The caller owns
 /// transaction and commit management, allowing both a single merge and a batch of
 /// thousands to use the caller's chosen commit granularity.
+///
+/// Returns:
+///     Whether any chunk was written. `false` means every row failed the timestamp/`high` filter,
+///     which is a successful call that stored nothing — the distinction the liveness line needs,
+///     and one a bare `Ok(())` hid from its caller.
 fn upsert_one(
     conn: &rusqlite::Connection,
     exchange: &str,
@@ -290,7 +402,7 @@ fn upsert_one(
     kind_min: u32,
     rows: &[ChartCandle],
     now: i64,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<bool> {
     // Group by day and merge by t_open within each day; BTreeMap preserves ordering.
     let mut by_day: BTreeMap<i64, Vec<&ChartCandle>> = BTreeMap::new();
     for r in rows {
@@ -302,8 +414,11 @@ fn upsert_one(
             .or_default()
             .push(r);
     }
+    // Nothing survived the filter, so nothing is written — reported to the caller rather than
+    // hidden behind `Ok`, because "the write succeeded" and "the write happened" are the two
+    // different things the liveness line is read to tell apart.
     if by_day.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     for (day, day_rows) in by_day {
         let existing: Option<Vec<u8>> = conn
@@ -330,7 +445,7 @@ fn upsert_one(
             rusqlite::params![exchange, market, kind_min, day, blob, now],
         )?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn read_rows(
