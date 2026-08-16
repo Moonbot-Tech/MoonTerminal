@@ -17,6 +17,10 @@ use super::*;
 use moon_ui::{MoonButtonIconSlot, MoonDisclosureDirection};
 use rust_i18n::t;
 
+/// Floor for the search field, in design units. Below it the row wraps its two trailing controls
+/// onto their own line rather than squeezing the field toward nothing.
+const SEARCH_MIN_W: f32 = 90.0;
+
 impl StrategiesView {
     /// Render the Strategies tree pane, its responsive filter row, and atomic action footer.
     ///
@@ -79,13 +83,28 @@ impl StrategiesView {
                     .px(design::ui_px(cx, 10.0))
                     .py(design::ui_px(cx, 10.0))
                     .gap(design::ui_px(cx, 7.0))
+                    // Search row: the input takes the slack, then the active-only toggle and the
+                    // settings gear ride flush right. It wraps like the filter row below it, and
+                    // the input keeps a floor so a narrow pane at a raised font scale drops the
+                    // trailing controls onto their own line — the gear first — instead of squeezing
+                    // the field to nothing.
                     .child(
-                        div().w_full().child(
-                            MoonInput::new("strat-search")
-                                .state(&self.search)
-                                .small()
-                                .cleanable(true),
-                        ),
+                        h_flex()
+                            .w_full()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_x(design::ui_px(cx, 7.0))
+                            .gap_y(design::ui_px(cx, 5.0))
+                            .child(
+                                div().flex_1().min_w(design::ui_px(cx, SEARCH_MIN_W)).child(
+                                    MoonInput::new("strat-search")
+                                        .state(&self.search)
+                                        .small()
+                                        .cleanable(true),
+                                ),
+                            )
+                            .child(self.active_only_toggle(p, cx))
+                            .child(settings),
                     )
                     .child(
                         h_flex()
@@ -101,34 +120,30 @@ impl StrategiesView {
                                 self.create_dropdown(cc, ct, cx)
                             })
                             .child(
-                                h_flex()
-                                    .ml_auto()
-                                    .flex_none()
-                                    .gap(design::ui_px(cx, 7.0))
-                                    .items_center()
-                                    .child(settings)
-                                    .child(
-                                        MoonButton::new("expand-all")
-                                            .ghost()
-                                            .size(MoonButtonSize::Micro)
-                                            .leading_icon(MoonButtonIconSlot::caret(
-                                                MoonDisclosureDirection::DownUp,
-                                                !collapsed,
-                                            ))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                // Resolved at click time, like the paste handler in
-                                                // `ui.rs`: capturing the frame's list instead cost
-                                                // a deep copy of every core name on every repaint.
-                                                let backend = this.backend.read(cx);
-                                                let cores = visible_strategy_cores(this, backend);
-                                                let store = backend.session.store();
-                                                let coll = this.expanded_cores.is_empty()
-                                                    && this.expanded_folders.is_empty();
-                                                this.expand_collapse_toggle(&cores, store, coll);
-                                                cx.notify();
-                                            }))
-                                            .render(),
-                                    ),
+                                // Wrapper, not a bare button: the caret is right-aligned by
+                                // `ml_auto` and must not be shrunk by the wrapping row.
+                                h_flex().ml_auto().flex_none().items_center().child(
+                                    MoonButton::new("expand-all")
+                                        .ghost()
+                                        .size(MoonButtonSize::Micro)
+                                        .leading_icon(MoonButtonIconSlot::caret(
+                                            MoonDisclosureDirection::DownUp,
+                                            !collapsed,
+                                        ))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            // Resolved at click time, like the paste handler in
+                                            // `ui.rs`: capturing the frame's list instead cost
+                                            // a deep copy of every core name on every repaint.
+                                            let backend = this.backend.read(cx);
+                                            let cores = visible_strategy_cores(this, backend);
+                                            let store = backend.session.store();
+                                            let coll = this.expanded_cores.is_empty()
+                                                && this.expanded_folders.is_empty();
+                                            this.expand_collapse_toggle(&cores, store, coll);
+                                            cx.notify();
+                                        }))
+                                        .render(),
+                                ),
                             ),
                     ),
             )

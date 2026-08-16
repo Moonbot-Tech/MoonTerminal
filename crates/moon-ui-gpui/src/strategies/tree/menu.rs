@@ -7,6 +7,15 @@ use super::ui::{ContextMenu, MenuTarget};
 use moon_ui::{MoonContextMenuWindowExt as _, MoonWindowExt as _};
 use rust_i18n::t;
 
+/// Minimum outer width at the configured font reference size, keeping the short entries from
+/// rendering as a cramped stub. Unlike the retired fixed width, a fitted minimum is multiplied by
+/// the theme's text scale, so the menu now follows the font slider like the rest of the UI.
+const MENU_MIN_WIDTH: f32 = 190.0;
+/// Maximum outer width at that same reference size. Every current label is a locale constant that
+/// fits well inside it; the cap exists so a longer translation widens the menu instead of stretching
+/// it across the pane.
+const MENU_MAX_WIDTH: f32 = 460.0;
+
 impl StrategiesView {
     pub(super) fn open_menu(
         &mut self,
@@ -18,7 +27,16 @@ impl StrategiesView {
         self.op_input = None;
         let pos = menu.pos;
         let items = self.context_menu_items(&menu, cx);
-        window.open_moon_context_menu(cx, "strategies-context-menu", pos, items, 190.0);
+        // Fitted, not fixed: the longest entry did not fit the fixed 190 px level, and a row that
+        // overruns its level no longer lays out like the rows that fit it.
+        window.open_fitted_moon_context_menu(
+            cx,
+            "strategies-context-menu",
+            pos,
+            items,
+            MENU_MIN_WIDTH,
+            MENU_MAX_WIDTH,
+        );
         cx.notify();
     }
 

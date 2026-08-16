@@ -399,7 +399,7 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
     );
     assert!(
         strategies_menu.contains("MoonContextMenuWindowExt")
-            && strategies_menu.contains("window.open_moon_context_menu(")
+            && strategies_menu.contains("window.open_fitted_moon_context_menu(")
             && !strategies_mod.contains("menu: Option<tree::ui::ContextMenu>")
             && !strategies_mod.contains("menu_overlay(cx)")
             && !strategies_tree.contains("fn menu_overlay(")

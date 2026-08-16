@@ -274,9 +274,11 @@ fn the_per_frame_row_pass_uses_the_prepared_filter() {
     );
 }
 
-/// Strategies may own a persisted `active_only` filter, but the retired toolbar/parameter controls
-/// and active-dependent parameter skipping must stay gone. Reintroducing any retired symbol would
-/// duplicate the settings-popup authority or hide dependency-inactive fields again.
+/// Strategies owns a persisted `active_only` filter edited from the search row, but the retired
+/// toolbar/parameter symbols and active-dependent parameter skipping must stay gone. The current
+/// toggle is built in `settings.rs` and writes through `write_pref`; reviving a retired symbol
+/// would give one preference a second, unpersisted authority or hide dependency-inactive fields
+/// again.
 #[test]
 fn persisted_active_filter_does_not_restore_retired_controls_or_hide_params() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -309,15 +311,24 @@ fn persisted_active_filter_does_not_restore_retired_controls_or_hide_params() {
 
     let tree = read_src("strategies/tree/mod.rs");
     let tree_panel = code_only(braced_body(&tree, "pub(super) fn tree_panel("));
+    let toggle = code_only(braced_body(
+        &read_src("strategies/settings.rs"),
+        "pub(super) fn active_only_toggle(",
+    ));
     assert!(
-        tree_panel.contains("MoonButton::new(\"expand-all\")")
-            && tree_panel.contains("settings_popover(")
-            && tree_panel.contains(".ml_auto()"),
-        "the gear and expand/collapse caret must share the right-aligned filter-row cluster"
+        tree_panel.contains("self.active_only_toggle("),
+        "the pane must render the active-only toggle it delegates to settings.rs"
+    );
+    // Twice: the label and the mark are separate hit targets, and a half that stopped writing
+    // through the setter would look alive while persisting nothing.
+    assert_eq!(
+        toggle.matches("set_active_only(").count(),
+        2,
+        "both halves of the filter-row toggle must write through the persisted setter"
     );
     assert!(
-        !tree_panel.contains("MoonCheckbox::new"),
-        "preference checkboxes belong inside strategies/settings.rs, never directly on tree_panel"
+        !toggle.contains("prefs.active_only ="),
+        "the toggle must never assign the resolved preference directly"
     );
 
     let params = read_src("strategies/params.rs");
@@ -507,29 +518,51 @@ fn selected_folder_hover_does_not_replace_its_surface() {
     assert!(!row.contains(".when(selected, |s| s.bg(") || !row.contains("\n.hover("));
 }
 
-/// The top filter row must wrap fitted triggers while keeping the gear and caret in one atomic
-/// right-aligned cluster. Restoring fixed trigger widths or letting the cluster split recreates
-/// horizontal overflow in a narrow Strategies pane.
+/// The search row must end with the active-only toggle and the gear pinned right of a flexible
+/// input, and the filter row below it must wrap fitted triggers while keeping the expand/collapse
+/// caret in an atomic right-aligned cluster. Restoring fixed trigger widths, letting the cluster
+/// split, or giving the search input a fixed width recreates horizontal overflow in a narrow
+/// Strategies pane.
 #[test]
-fn strategy_filter_row_wraps_fitted_controls_with_an_atomic_settings_cluster() {
+fn strategy_filter_rows_wrap_fitted_controls_and_pin_their_right_hand_controls() {
     let tree = read_src("strategies/tree/mod.rs");
     let panel = code_only(braced_body(&tree, "pub(super) fn tree_panel("));
-    assert!(
-        panel.contains(".flex_wrap()"),
-        "the top filter row must wrap"
+    assert_eq!(
+        panel.matches(".flex_wrap()").count(),
+        2,
+        "both the search row and the filter row below it must wrap"
     );
-    let cluster = panel
+    let input_at = panel
+        .find("MoonInput::new(\"strat-search\")")
+        .expect("the search row must host the search input");
+    let cluster_at = panel
         .find(".ml_auto()")
-        .map(|at| &panel[at..])
-        .expect("the settings/caret cluster must be right-aligned");
-    assert!(cluster.contains(".flex_none()"));
-    let gear_at = cluster
+        .map(|at| at + ".ml_auto()".len())
+        .expect("the caret cluster must be right-aligned");
+    // The input yields its width to the two controls beside it instead of pushing them out of the
+    // pane, which a `w_full` input did — but keeps a floor, so the row wraps before the field is
+    // squeezed to nothing.
+    let slot = &panel[..input_at];
+    assert!(
+        slot.contains(".flex_1()") && slot.contains("min_w(design::ui_px(cx, SEARCH_MIN_W))"),
+        "the search input must sit in a flexible slot with a scaled minimum width"
+    );
+    let toggle_at = panel
+        .find("self.active_only_toggle(")
+        .expect("the active-only toggle must sit in the search row");
+    let gear_at = panel
         .find(".child(settings)")
-        .expect("the settings popover must be inside the atomic cluster");
-    let caret_at = cluster
-        .find("MoonButton::new(\"expand-all\")")
-        .expect("the expand/collapse caret must be inside the atomic cluster");
-    assert!(gear_at < caret_at);
+        .expect("the settings popover must sit in the search row");
+    assert!(
+        input_at < toggle_at && toggle_at < gear_at && gear_at < cluster_at,
+        "search row order must read input -> active-only -> gear, all above the filter row"
+    );
+    let cluster = &panel[cluster_at..];
+    assert!(cluster.contains(".flex_none()"));
+    assert!(
+        cluster.contains("MoonButton::new(\"expand-all\")"),
+        "the expand/collapse caret must be inside the atomic cluster"
+    );
 
     let kind = braced_body(&tree, "fn combo_kind(");
     let direction = braced_body(&tree, "fn combo_dir(");
@@ -577,7 +610,10 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
         "strat.settings.title",
         "strat.settings.display",
         "strat.settings.group_by_venue",
+        // Still consumed after active-only left the popup: it is the toggle's tooltip, the only
+        // place the preference still spells itself out in full.
         "strat.settings.active_only",
+        "strat.active_only",
     ] {
         assert!(settings.contains(key), "settings UI does not consume {key}");
         assert!(
@@ -641,7 +677,12 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
         &settings,
         "pub(super) fn disable_active_only_for_reveal(",
     ));
-    assert!(disable.contains("self.write_pref(&PREF_ROWS[1], false, cx)"));
+    assert!(disable.contains("self.set_active_only(false, cx)"));
+    let set_active = code_only(braced_body(&settings, "fn set_active_only("));
+    assert!(
+        set_active.contains("self.write_pref(&ACTIVE_ONLY, value, cx)"),
+        "the reveal path and the filter-row toggle must share one persisted writer"
+    );
     for function in ["fn clear_filters_for_reveal(", "fn queue_pending_name("] {
         assert!(
             braced_body(&selection, function).contains("disable_active_only_for_reveal(cx)"),
@@ -657,7 +698,9 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     ));
     assert!(panel.contains("settings_popover(") && panel.contains("settings_trigger("));
     assert!(!panel.contains("MoonCheckbox::new"));
-    assert!(settings.contains("MoonCheckbox::new"));
+    // Scoped to the popup's own group builder: asserting it against the whole file would now be
+    // satisfied by the search-row toggle, and the popup could quietly lose every checkbox.
+    assert!(code_only(braced_body(&settings, "fn pref_group(")).contains("MoonCheckbox::new"));
     assert!(settings.contains(".close_on_content_click(false)"));
     assert!(settings.contains("fn settings_content_width("));
     assert!(settings.contains(".content_width(settings_content_width(cx))"));

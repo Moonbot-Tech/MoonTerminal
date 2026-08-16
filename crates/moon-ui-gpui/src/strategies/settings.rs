@@ -1,7 +1,10 @@
-//! Persisted Strategies display preferences and their settings popover.
+//! Persisted Strategies display preferences and the controls that edit them.
 //!
-//! The popup owns only process-lifetime open state. Each checkbox reads resolved state from the
-//! view and writes its own optional `layout.toml` key through the shared layout coordinator.
+//! Most rows live in the settings popover, which owns only process-lifetime open state; active-only
+//! is edited from the filter row instead, because it is a filter the user flips while reading the
+//! tree. Both surfaces are built here so one preference keeps one authority: each checkbox reads
+//! resolved state from the view and writes its own optional `layout.toml` key through the shared
+//! layout coordinator.
 
 use gpui::*;
 use moon_core::config::layout::WindowLayout;
@@ -12,7 +15,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::StrategiesView;
-use crate::design;
+use crate::design::{self, moon};
 use crate::panels::{
     popup_close_button, popup_gear_trigger, popup_group, popup_group_inset_px, popup_title,
 };
@@ -76,7 +79,7 @@ struct PrefRow {
     id: &'static str,
     /// Locale key of the group caption this row belongs under.
     group: &'static str,
-    /// Locale key of the visible checkbox label.
+    /// Locale key of the descriptive checkbox label.
     label: &'static str,
     /// Read the resolved value from the view-owned preferences.
     read: fn(&StrategiesPrefs) -> bool,
@@ -88,30 +91,41 @@ struct PrefRow {
     store: fn(&mut WindowLayout, bool),
 }
 
-/// Caption shared by both Strategies display preferences.
+/// Caption of the popup's display-preferences group.
 const DISPLAY_GROUP: &str = "strat.settings.display";
 
-/// Strategies preferences in the order rendered by the popup.
-const PREF_ROWS: [PrefRow; 2] = [
-    PrefRow {
-        id: "group-by-venue",
-        group: DISPLAY_GROUP,
-        label: "strat.settings.group_by_venue",
-        read: |prefs| prefs.group_by_venue,
-        set: |prefs, value| prefs.group_by_venue = value,
-        saved: |layout| layout.strategies_group_by_venue,
-        store: |layout, value| layout.strategies_group_by_venue = Some(value),
-    },
-    PrefRow {
-        id: "active-only",
-        group: DISPLAY_GROUP,
-        label: "strat.settings.active_only",
-        read: |prefs| prefs.active_only,
-        set: |prefs, value| prefs.active_only = value,
-        saved: |layout| layout.strategies_active_only,
-        store: |layout, value| layout.strategies_active_only = Some(value),
-    },
-];
+/// Group core roots under exchange headings.
+const GROUP_BY_VENUE: PrefRow = PrefRow {
+    id: "group-by-venue",
+    group: DISPLAY_GROUP,
+    label: "strat.settings.group_by_venue",
+    read: |prefs| prefs.group_by_venue,
+    set: |prefs, value| prefs.group_by_venue = value,
+    saved: |layout| layout.strategies_group_by_venue,
+    store: |layout, value| layout.strategies_group_by_venue = Some(value),
+};
+
+/// Hide unchecked live strategies from the tree.
+///
+/// Edited from the filter row rather than the popup — it is a filter the user flips while reading
+/// the tree — and named rather than indexed, so the writers that reach it cannot be repointed at
+/// another preference by reordering a table.
+const ACTIVE_ONLY: PrefRow = PrefRow {
+    id: "active-only",
+    group: DISPLAY_GROUP,
+    label: "strat.settings.active_only",
+    read: |prefs| prefs.active_only,
+    set: |prefs, value| prefs.active_only = value,
+    saved: |layout| layout.strategies_active_only,
+    store: |layout, value| layout.strategies_active_only = Some(value),
+};
+
+/// Every preference, in the order `restore` resolves them. Persistence covers all of them wherever
+/// their control lives.
+const PREF_ROWS: [&PrefRow; 2] = [&GROUP_BY_VENUE, &ACTIVE_ONLY];
+
+/// The subset the settings popup renders, in display order.
+const POPUP_ROWS: [&PrefRow; 1] = [&GROUP_BY_VENUE];
 
 impl StrategiesView {
     /// Apply and persist one Strategies display preference.
@@ -137,6 +151,78 @@ impl StrategiesView {
         cx.notify();
     }
 
+    /// Apply and persist active-only from the filter-row toggle.
+    ///
+    /// Args:
+    ///     value: New resolved value.
+    ///     cx: View context used to persist and repaint when the preference changes.
+    ///
+    /// Returns:
+    ///     Nothing; the shared setter ignores an unchanged value.
+    fn set_active_only(&mut self, value: bool, cx: &mut Context<Self>) {
+        self.write_pref(&ACTIVE_ONLY, value, cx);
+    }
+
+    /// Build the filter-row active-only toggle: its label, then its compact checkbox.
+    ///
+    /// The label sits left of the mark because the row reads left to right into the settings gear
+    /// that follows it — which is also why this is not a labelled `MoonCheckbox`, the one thing that
+    /// component cannot place. Clicking either half writes the same preference, so the label is not
+    /// a dead zone beside a live checkbox, and the cluster carries one tooltip spelling the
+    /// preference out in full.
+    ///
+    /// Args:
+    ///     palette: Active MoonUI palette, resolved once by the caller.
+    ///     cx: View context used to read the resolved preference and wire the callbacks.
+    ///
+    /// Returns:
+    ///     The label and checkbox as one flex-none cluster.
+    pub(super) fn active_only_toggle(
+        &self,
+        palette: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let checked = (ACTIVE_ONLY.read)(&self.prefs);
+        let view = cx.entity();
+        h_flex()
+            .id("strategies-active-only")
+            .flex_none()
+            .items_center()
+            .gap(design::ui_px(cx, COMPACT_CHECKBOX_GAP))
+            .tooltip(crate::panels::common::text_tooltip(
+                t!(ACTIVE_ONLY.label).to_string(),
+            ))
+            .child(
+                div()
+                    .id("strategies-active-only-label")
+                    .cursor_pointer()
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(palette.text_soft))
+                    .child(t!("strat.active_only").to_string())
+                    // Reads the preference at click time rather than flipping the value this frame
+                    // captured, so the label cannot write a stale flip.
+                    .on_click({
+                        let view = view.clone();
+                        move |_, _window, app: &mut App| {
+                            view.update(app, |this, cx| {
+                                let next = !(ACTIVE_ONLY.read)(&this.prefs);
+                                this.set_active_only(next, cx);
+                            });
+                        }
+                    }),
+            )
+            .child(
+                MoonCheckbox::new("strategies-active-only-mark")
+                    .checked(checked)
+                    .size(MoonCheckboxSize::Compact)
+                    .on_change(move |value: &bool, _window, app| {
+                        let value = *value;
+                        view.update(app, |this, cx| this.set_active_only(value, cx));
+                    }),
+            )
+            .into_any_element()
+    }
+
     /// Disable active-only through the same persisted setter used by the popup.
     ///
     /// Args:
@@ -145,7 +231,7 @@ impl StrategiesView {
     /// Returns:
     ///     Nothing; the shared setter handles the already-disabled case.
     pub(super) fn disable_active_only_for_reveal(&mut self, cx: &mut Context<Self>) {
-        self.write_pref(&PREF_ROWS[1], false, cx);
+        self.set_active_only(false, cx);
     }
 
     /// Close the settings popup when it is currently open.
@@ -220,7 +306,7 @@ fn settings_content_width(cx: &App) -> f32 {
     let title_width =
         design::ui_text_width(cx, &title, tokens.typography.mono_font_size, 400.0, true);
     let group_width = design::ui_text_width(cx, &group, GROUP_CAPTION_FONT, 600.0, true);
-    let checkbox_label_width = PREF_ROWS
+    let checkbox_label_width = POPUP_ROWS
         .iter()
         .map(|row| design::ui_text_width(cx, &t!(row.label), COMPACT_CHECKBOX_FONT, 400.0, false))
         .fold(0.0_f32, f32::max);
@@ -289,7 +375,7 @@ fn settings_content(
         .into_any_element()
 }
 
-/// Build one captioned group from the matching rows in [`PREF_ROWS`].
+/// Build one captioned group from the rows in [`POPUP_ROWS`] that sit under this caption.
 ///
 /// Args:
 ///     id: Stable group-box identity.
@@ -306,21 +392,21 @@ fn pref_group(
     view: &Entity<StrategiesView>,
 ) -> MoonGroupBox {
     popup_group(id, t!(caption).to_string()).children(
-        PREF_ROWS
+        POPUP_ROWS
             .iter()
-            .enumerate()
-            .filter(|(_, row)| row.group == caption)
-            .map(|(index, row)| {
+            .filter(|row| row.group == caption)
+            .map(|row| {
                 let target = view.clone();
+                // `row` is a `&'static PrefRow`, so the handler carries the row itself instead of
+                // an index back into the table.
+                let row = *row;
                 MoonCheckbox::new(SharedString::from(format!("strategies-pref-{}", row.id)))
                     .label(t!(row.label).to_string())
                     .checked((row.read)(&prefs))
                     .size(MoonCheckboxSize::Compact)
                     .on_change(move |checked: &bool, _window, app| {
                         let checked = *checked;
-                        target.update(app, |this, cx| {
-                            this.write_pref(&PREF_ROWS[index], checked, cx)
-                        });
+                        target.update(app, |this, cx| this.write_pref(row, checked, cx));
                     })
                     .into_any_element()
             }),
