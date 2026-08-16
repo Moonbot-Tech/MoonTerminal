@@ -20,8 +20,8 @@ use crate::chartdx::input;
 /// two differ by at most a third of a millisecond.
 const DRAG_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
-use super::ChartPanel;
 use super::trade::TradeMouseButton;
+use super::ChartPanel;
 
 /// Count one press against the series this panel itself saw, for the trading gestures to match.
 ///
@@ -592,6 +592,11 @@ pub(super) fn mouse_move(
         if this.sync_warn_hover(pos, within, cx) {
             cx.notify();
         }
+        // Trade arrows: gated by the same movement threshold, then a plot-bounds test that fails
+        // for almost every pointer position before anything scans the clusters.
+        if this.sync_trade_hover(pos, within, cx) {
+            cx.notify();
+        }
         let order_hover_changed = if within {
             this.sync_order_hover(pos, cx)
         } else {
@@ -737,6 +742,9 @@ pub(super) fn hover(
             _cx.notify();
         }
         if this.clear_warn_hover(_cx) {
+            _cx.notify();
+        }
+        if this.clear_trade_hover(_cx) {
             _cx.notify();
         }
         let changed =

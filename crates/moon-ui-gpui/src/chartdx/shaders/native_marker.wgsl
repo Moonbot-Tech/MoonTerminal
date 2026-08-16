@@ -37,7 +37,10 @@ fn data_to_px(cv: ChartView, t_rel: f32, price: f32) -> vec2<f32> {
 @group(0) @binding(0) var<uniform> cv: ChartView;
 @group(0) @binding(1) var<storage, read> markers: array<GpuMarker>;
 
-// shape: 0 = cross, 1 = filled knot, 2 = news gem (pos.z half height, pos.w half width, m.z/m.w the
+// shape: 0 = cross, 1 = filled knot, 3 = warning badge, 4 = trade arrow UP (a buy), 5 = trade arrow
+// DOWN (a sell); the registry lives on `MARKER_SHAPE_CROSS` in moon-chart's layers/order_lines.rs,
+// and the warning badge is dispatched OPEN-ENDED as `> 2.5`, so any id above 3 must be tested for
+// before it. 2 = news gem (pos.z half height, pos.w half width, m.z/m.w the
 // tag-colour wedge). m.y anchor: 0 = price, 1 = plot bottom (pos.y is physical px above the bottom
 // edge, plus a horizontal clip to the plot). Keep in sync with order_lines.hlsl / chart_native.metal.
 struct MOut {
@@ -54,6 +57,15 @@ struct MOut {
 const GEM_FACET_GAP: f32 = 0.055;
 const GEM_LEFT_SHADE: f32 = 0.78;
 const GEM_TWO_PI: f32 = 6.28318531;
+// Trade-arrow rim: width as a fraction of the glyph's half-height, and how far its colour is
+// darkened. Keep in sync with order_lines.hlsl / chart_native.metal.
+const ARROW_RIM_FRAC: f32 = 0.22;
+const ARROW_RIM_SHADE: f32 = 0.18;
+// How much a clustered arrow grows per doubling of its member count, and the doublings after which
+// it stops growing. Capped because the count is unbounded — a thousand-trade cluster must still be
+// an arrow, not a billboard; the exact number belongs to the hover card, not to the glyph.
+const ARROW_CLUSTER_GROW: f32 = 0.25;
+const ARROW_CLUSTER_GROW_CAP: f32 = 3.0;
 
 @vertex
 fn marker_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> MOut {
@@ -63,12 +75,31 @@ fn marker_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: 
     if bottom {
         c.y = cv.bounds.y + cv.bounds.w - mk.pos.y;
     }
+    var half_sz = max(mk.pos.z, 1.0);
+    var half_w = max(mk.pos.w, 1.0);
+    if mk.m.x > 3.5 && mk.m.x < 5.5 {
+        // A CLUSTER of trades draws as one arrow, grown by a capped log of its member count (m.z),
+        // so a busy pixel column reads as "several" rather than hiding all but one of them.
+        let grow = 1.0 + ARROW_CLUSTER_GROW * min(log2(max(mk.m.z, 1.0)), ARROW_CLUSTER_GROW_CAP);
+        half_sz = half_sz * grow;
+        half_w = half_w * grow;
+        // A trade-history arrow hangs off its price: the APEX stays on the level and the body
+        // extends away from it, clear of the candle. Derived from `shape` alone, so no instance
+        // field pays for it, and applied in PIXELS so zoom leaves it untouched — a price-space
+        // offset would have to be rebuilt on every view change, which is the one thing this own
+        // pass exists to avoid. It uses the GROWN half height, or a cluster's apex would drift off
+        // its own price as the cluster gets bigger.
+        if mk.m.x < 4.5 {
+            c.y = c.y + half_sz;
+        } else {
+            c.y = c.y - half_sz;
+        }
+    }
     let center = vec2<f32>(round(c.x), round(c.y));
-    let half_sz = max(mk.pos.z, 1.0);
     // The gem is taller than wide; every other marker keeps its square quad.
     var half_ext = vec2<f32>(half_sz, half_sz);
     if mk.m.x >= 1.5 {
-        half_ext = vec2<f32>(max(mk.pos.w, 1.0), half_sz);
+        half_ext = vec2<f32>(half_w, half_sz);
     }
     let corner = CORNERS_PM_ALT[vid];
     let px = center + corner * half_ext;
@@ -77,7 +108,7 @@ fn marker_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: 
     out.color = mk.color;
     out.local = corner * half_ext;
     out.shape = mk.m.x;
-    out.thick = mk.pos.w;
+    out.thick = half_w;
     out.sz = half_sz;
     // Price-anchored markers keep their historical reach (order lines extend into the book zone).
     if bottom {
@@ -106,6 +137,29 @@ fn marker_fragment(in: MOut) -> @location(0) vec4<f32> {
     if in.shape < 1.5 {
         if length(in.local) > in.sz {
             discard;
+        }
+        return in.color;
+    }
+    if in.shape > 3.5 && in.shape < 5.5 {
+        // Trade-history arrow: a solid triangle, apex UP for a buy and DOWN for a sell. Bounded on
+        // BOTH sides deliberately — the warning badge below is an open-ended `> 2.5`, which is
+        // exactly how these ids would otherwise have rendered as warning triangles.
+        var dir = 1.0;
+        if in.shape >= 4.5 {
+            dir = -1.0;
+        }
+        let anx = in.local.x / max(in.thick, 1.0);
+        let any = in.local.y / max(in.sz, 1.0) * dir;
+        let inside = any - (2.0 * abs(anx) - 1.0);
+        if inside < 0.0 {
+            discard;
+        }
+        // A dark rim, because a trade arrow is drawn in the SAME palette as the candles: a green
+        // buy landing on a green candle has no edge at all without one. Derived from the glyph's
+        // own half-height so it holds its weight at any DPI instead of thinning out.
+        let rim = max(1.0, in.sz * ARROW_RIM_FRAC) / max(in.sz, 1.0);
+        if inside < rim || (1.0 - any) < rim {
+            return vec4<f32>(in.color.rgb * ARROW_RIM_SHADE, in.color.a);
         }
         return in.color;
     }

@@ -27,7 +27,7 @@ mod data_state;
 mod engine;
 mod figures_sync;
 mod news_sync;
-mod trade_history_sync;
+pub(crate) mod trade_history_sync;
 mod warn_sync;
 pub use engine::ChartGhostCursor;
 pub(crate) use figures_sync::FigureVisual;
@@ -80,9 +80,9 @@ use windows::Win32::Graphics::Direct3D11::{
 use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
+    cover_uv, fill_candle_upload, fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4,
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, ReadoutRect, cover_uv, fill_candle_upload, fill_cross_upload, fill_liq_upload,
-    fill_price_upload, rgb4,
+    GridParams, ReadoutRect,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -142,7 +142,11 @@ fn chart_market_diag_due(key: impl Into<String>) -> bool {
     match last.get(&key).copied() {
         // The configured floor, not a literal: this throttle and `market::source`'s serve the same
         // channel, and a second copy of the number would ignore `limits.market_trace_min_interval_ms`.
-        Some(prev) if now.duration_since(prev) < moon_core::diagnostics::market_trace_min_interval() => false,
+        Some(prev)
+            if now.duration_since(prev) < moon_core::diagnostics::market_trace_min_interval() =>
+        {
+            false
+        }
         _ => {
             last.insert(key, now);
             true
@@ -352,6 +356,13 @@ struct PaneRender {
     last_news_sig: u64,
     /// Durable closed-trade marker signature encoded into userdata.
     last_trade_history_sig: u64,
+    /// What the currently uploaded trade arrows were built FROM: the clusters, and the map from
+    /// their members back to the panel's own record list.
+    ///
+    /// Retained rather than recomputed because the signature above quantizes the view scale: within
+    /// one bucket the view keeps moving while the buffers do not, so re-clustering from the live
+    /// scale would answer about a picture that is not on screen. Hit-testing reads this.
+    trade_geometry: trade_history_sync::TradeGeometry,
     /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
     last_warn_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
@@ -483,6 +494,7 @@ impl PaneRender {
             last_figures_sig: u64::MAX,
             last_news_sig: u64::MAX,
             last_trade_history_sig: u64::MAX,
+            trade_geometry: trade_history_sync::TradeGeometry::default(),
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
@@ -853,6 +865,13 @@ struct ChartDataState {
     trade_history: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
     /// Revision incremented whenever the durable history set changes.
     trade_history_revision: u64,
+    /// The trade arrow under the cursor as `(pane, mark index in that pane, buy)`. It is drawn
+    /// grown and fully opaque.
+    ///
+    /// Qualified by PANE because every pane draws only its own core's trades. Identified by an
+    /// ACTION — mark plus direction — rather than by cluster, because clusters are renumbered by
+    /// every rebuild and a bare mark names a whole trade rather than one of its two ends.
+    trade_hovered: Option<(usize, usize, bool)>,
     /// This panel's warning badges (amber gems on the plot's bottom edge); see `warn_sync`. Shared
     /// with the panel, which hit-tests the same list.
     warn_marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,

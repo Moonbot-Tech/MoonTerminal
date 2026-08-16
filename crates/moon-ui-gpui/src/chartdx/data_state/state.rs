@@ -36,6 +36,7 @@ impl ChartDataState {
             news_hovered: None,
             trade_history: std::rc::Rc::new(Vec::new()),
             trade_history_revision: 0,
+            trade_hovered: None,
             warn_marks: std::rc::Rc::new(Vec::new()),
             warn_hovered: None,
             market_source: None,

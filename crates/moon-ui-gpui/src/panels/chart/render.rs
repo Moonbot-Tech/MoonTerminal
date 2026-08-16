@@ -510,6 +510,11 @@ impl Render for ChartPanel {
         // like the news card, reusing the same live modifier state.
         self.revalidate_warn_hover(cx);
         let warn_card = self.warn_card(ppp, news_ctrl, palette, cx);
+        // Trade arrows: same re-validate, and for a stronger reason — an arrow is anchored to a
+        // PRICE, so it slides out from under a resting cursor on a Y auto-fit as well as on a
+        // scroll. This card needs no modifier (see `trade_history_hover`).
+        self.revalidate_trade_hover(cx);
+        let trade_card = self.trade_hover_card(ppp, palette, cx);
         // Per-figure settings panel, opened from a right-click on a figure. Rendered here beside
         // the other overlays rather than as a context menu: it holds swatches and switches, which
         // a menu of text items cannot draw.
@@ -696,6 +701,7 @@ impl Render for ChartPanel {
             // the action buttons), so it can never swallow a trading click's target.
             .children(news_card)
             .children(warn_card)
+            .children(trade_card)
             .children(close_btns.into_iter().map(|(idx, right, top)| {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-close-{idx}")))

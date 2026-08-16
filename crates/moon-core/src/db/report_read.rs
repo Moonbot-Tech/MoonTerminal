@@ -8,7 +8,9 @@ use unicode_casefold::UnicodeCaseFold;
 use super::read_fail::read_fail;
 use super::rep;
 use super::valuation::ValuationMode;
-use super::{read_sources_res, table_columns_res, QuoteBreakdown, ReadResult, ReadSource};
+use super::{
+    read_sources_res, table_columns_res, QuoteBreakdown, QuoteCurrency, ReadResult, ReadSource,
+};
 
 /// Columns and ordering displayed in the Reports window; the window owns titles and widths.
 ///
@@ -170,6 +172,25 @@ pub struct ChartTradeRecord {
     pub quantity: f64,
     /// Whether the trade is short.
     pub is_short: bool,
+    /// Realized profit as the row SETTLED it, or `None` when this source carries no profit column.
+    ///
+    /// Read through `quote::settled_amount_expr`, the same correction the Report grid and the
+    /// footer apply, so a COIN-M liquidation is not off by its own entry price. An absence is
+    /// never a zero: a legacy source without `profitbtc` still returns every trade, and the hover
+    /// card says the figure is unknown rather than printing a profit of nothing.
+    pub profit: Option<f64>,
+    /// Currency [`Self::profit`] is denominated in, decided by `quote::effective_ordinal_expr`.
+    ///
+    /// The ONE place a row's currency is decided, and it is not derivable from the coin: COIN-M
+    /// rows share a coin spelling with USD-M while settling in BTC. Carried beside the amount
+    /// because a bare number labelled with the wrong ticker is worse than no number.
+    pub quote: Option<QuoteCurrency>,
+    /// Realized profit as a PERCENTAGE of the amount spent, or `None` when either leg is missing.
+    ///
+    /// Both legs are settled amounts, so a COIN-M liquidation divides like for like — the exact
+    /// definition the Report's own profit-percent column already uses. Unitless, and therefore
+    /// readable even where [`Self::quote`] could not be resolved.
+    pub profit_pct: Option<f64>,
 }
 
 /// Bounded durable chart-history result with explicit truncation state.
@@ -1348,9 +1369,31 @@ pub fn query_chart_trade_history(
             "COALESCE(NULLIF({}, 0), {fallback_id}, 0)",
             rec_id_expr(&source)
         );
+        // Money is OPTIONAL here, deliberately: `REQUIRED_COLUMNS` names none of these columns, so
+        // a source that cannot produce a figure still returns every trade and the chart still draws
+        // it. Both legs go through `settled_amount_expr` — the same correction the Report grid and
+        // its footer apply — or a COIN-M liquidation would be off by its own entry price.
+        let (profit_sql, percent_sql) = if source.cols.contains("profitbtc") {
+            let profit = super::quote::settled_amount_expr("r", &source.cols, "profitbtc");
+            let percent = if source.cols.contains("spentbtc") {
+                let spent = super::quote::settled_amount_expr("r", &source.cols, "spentbtc");
+                // Settled over settled, so the ratio is unit-free even where the two would have
+                // needed different corrections. Same definition as the Report's percent column.
+                format!("CASE WHEN {spent} > 0 THEN {profit} / {spent} * 100.0 END")
+            } else {
+                "NULL".to_string()
+            };
+            (profit, percent)
+        } else {
+            ("NULL".to_string(), "NULL".to_string())
+        };
+        // The currency the amount above is IN. Not derivable from the coin — a COIN-M row spells
+        // its coin like a USD-M one while settling in BTC — so it travels with the amount.
+        let quote_sql = super::quote::effective_ordinal_expr("r", &source.cols);
         let sql = format!(
             "SELECT {record_id}, r.core_uid, r.coin, r.buydate, r.closedate, \
-             r.buyprice, r.sellprice, r.quantity, r.isshort \
+             r.buyprice, r.sellprice, r.quantity, r.isshort, \
+             {profit_sql}, {quote_sql}, {percent_sql} \
              FROM {} r{where_sql} \
              ORDER BY r.closedate DESC, {record_id} DESC LIMIT ?",
             source.table
@@ -1373,6 +1416,9 @@ pub fn query_chart_trade_history(
                     row.get::<_, Value>(6)?,
                     row.get::<_, Value>(7)?,
                     row.get::<_, Value>(8)?,
+                    row.get::<_, Value>(9)?,
+                    row.get::<_, Value>(10)?,
+                    row.get::<_, Value>(11)?,
                 ))
             })
             .map_err(|error| read_fail(CONTEXT, error))?;
@@ -1387,6 +1433,9 @@ pub fn query_chart_trade_history(
                 sell_price,
                 quantity,
                 is_short,
+                profit,
+                quote,
+                profit_percent,
             ) = row.map_err(|error| read_fail(CONTEXT, error))?;
             let Some(buy_date) = report_value_i64(&buy_date) else {
                 continue;
@@ -1419,6 +1468,12 @@ pub fn query_chart_trade_history(
                 sell_price,
                 quantity: report_value_f64(&quantity).unwrap_or_default(),
                 is_short: report_value_i64(&is_short).unwrap_or_default() != 0,
+                // `report_value_f64` already rejects a non-finite cell, which keeps the derived
+                // `PartialEq` on this record meaningful: a NaN here would make two identical
+                // histories compare unequal forever and republish on every poll.
+                profit: report_value_f64(&profit),
+                quote: QuoteCurrency::from_report_value(&quote),
+                profit_pct: report_value_f64(&profit_percent),
             });
         }
     }

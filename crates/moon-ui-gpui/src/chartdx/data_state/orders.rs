@@ -90,7 +90,7 @@ impl ChartDataState {
 
             let news_sig = self.news_sig();
             let warn_sig = self.warn_sig();
-            let trade_history_sig = self.trade_history_sig();
+            let trade_history_sig = self.trade_history_sig(&pane.view);
             if let Some(core_st) = session.store().core(pane.core) {
                 let highlight_uid = self
                     .order_highlight
@@ -149,10 +149,17 @@ impl ChartDataState {
                             labels: &mut pr.figure_labels,
                         },
                     );
-                    // News marks ride the same layer, last, so a mark is never hidden under an
-                    // order line's cross.
+                    // News marks, then trade history, then warning badges ride the same layer
+                    // after the orders, so none of them is hidden under an order line's cross.
+                    // The order among these three is their stacking order, last one on top.
                     self.append_news_geometry(pane.view.epoch_ms, &mut markers);
-                    self.append_trade_history_geometry(pane.core, pane.view.epoch_ms, &mut markers);
+                    pr.trade_geometry = self.append_trade_history_geometry(
+                        *idx,
+                        pane.core,
+                        &pane.view,
+                        &mut markers,
+                        &mut segs,
+                    );
                     // Warning badges ride the same layer, after news.
                     self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
                     let zone_sig = hash_order_zones(&zones);
@@ -206,10 +213,20 @@ impl ChartDataState {
                         base_changed = true;
                     }
                     let mut markers = Vec::new();
+                    // Trade history outlives its core: the replica is durable, so a pane whose core
+                    // was removed still draws its closed trades — and their connectors, which is why
+                    // this branch carries a real segment buffer rather than an empty slice.
+                    let mut segs = Vec::new();
                     self.append_news_geometry(pane.view.epoch_ms, &mut markers);
-                    self.append_trade_history_geometry(pane.core, pane.view.epoch_ms, &mut markers);
+                    pr.trade_geometry = self.append_trade_history_geometry(
+                        *idx,
+                        pane.core,
+                        &pane.view,
+                        &mut markers,
+                        &mut segs,
+                    );
                     self.append_warn_geometry(pane.view.epoch_ms, &mut markers);
-                    pr.layers.set_userdata(&[], &[], &[], &markers);
+                    pr.layers.set_userdata(&[], &[], &segs, &markers);
                     pr.order_labels.clear();
                     pr.order_label_order.clear();
                     pr.orderbook_labels.clear();
@@ -393,7 +410,11 @@ fn rgb_u32(c: [u8; 3]) -> u32 {
 /// and loss red for either side: a short sell below entry is positive and a stop above it is negative.
 fn signed_pct(level: f32, entry: f32, short: bool) -> f32 {
     let raw = (level - entry) / entry * 100.0;
-    if short { -raw } else { raw }
+    if short {
+        -raw
+    } else {
+        raw
+    }
 }
 
 /// Selects the positive size-label color for longs and the negative color for shorts.
