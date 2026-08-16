@@ -377,10 +377,13 @@ impl Render for DebugPerfWindow {
             .child(Self::stat_row("cwd", cwd, p, cx))
             .child(Self::stat_row(
                 "render diag",
-                if std::env::var_os("MOON_RENDER_DIAG").is_some() {
-                    "MOON_RENDER_DIAG=on"
+                // `diag::is_enabled`, which is the gate the counters actually consult: it covers the
+                // file switch, the variable AND FireTest's `force_enable`. Reading the file switch
+                // alone would report "off" during a FireTest run with the counters running.
+                if crate::diag::is_enabled() {
+                    "channels.render=on"
                 } else {
-                    "MOON_RENDER_DIAG=off"
+                    "channels.render=off"
                 },
                 p,
                 cx,
@@ -412,9 +415,9 @@ impl Render for DebugPerfWindow {
 
 #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
 fn latest_render_diag_line() -> String {
-    let path = std::path::Path::new("render_diag.log");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return "render_diag.log not found in current working directory".to_string();
+    let path = moon_core::config::paths::logs_dir().join("render_diag.log");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return format!("render_diag.log not found at {}", path.display());
     };
     text.lines()
         .rev()

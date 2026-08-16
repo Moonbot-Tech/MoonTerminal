@@ -169,9 +169,9 @@ impl AssetsView {
         let mut out = Vec::new();
         for (id, name) in self.query_cores(b) {
             let Some(cd) = store.core(id) else { continue };
-            // `MOON_ASSETS_DIAG` logs the core's raw balance-position rows, distinguishing a row
+            // `channels.assets` logs the core's raw balance-position rows, distinguishing a row
             // hidden by filtering from one absent at the source.
-            if std::env::var_os("MOON_ASSETS_DIAG").is_some() {
+            if moon_core::diagnostics::assets() {
                 log::error!(
                     "[assets_diag] core={name} futures_acc={} rows={}",
                     cd.assets.futures_account,

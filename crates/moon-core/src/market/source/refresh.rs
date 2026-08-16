@@ -13,7 +13,7 @@ use crate::session::CoreId;
 use super::{
     bump_generation, bump_market_revisions, cadence_phase_ms, cadence_slot, market_diag,
     market_diag_due, market_diag_enabled, MarketDataSource, MarketDataSourceInner,
-    MARKET_DIAG_FLOOR, ORDERBOOK_PULL_PERIOD_MS,
+    market_diag_floor, ORDERBOOK_PULL_PERIOD_MS,
 };
 
 impl MarketDataSource {
@@ -326,7 +326,7 @@ impl MarketDataSource {
             let inner = self.inner.read().expect("market source poisoned");
             let Some(provider) = inner.core_provider.get(&core).copied() else {
                 if market_diag_enabled()
-                    && market_diag_due(format!("no-provider:{core}:{market}"), MARKET_DIAG_FLOOR)
+                    && market_diag_due(format!("no-provider:{core}:{market}"), market_diag_floor())
                 {
                     market_diag(format!(
                         "refresh core={} market={market}: no provider",
@@ -337,7 +337,7 @@ impl MarketDataSource {
             };
             let Some(client) = inner.clients.get(&provider).and_then(SharedMoonClient::get) else {
                 if market_diag_enabled()
-                    && market_diag_due(format!("no-client:{provider}:{market}"), MARKET_DIAG_FLOOR)
+                    && market_diag_due(format!("no-client:{provider}:{market}"), market_diag_floor())
                 {
                     market_diag(format!(
                         "refresh core={} provider={} market={market}: no client",
@@ -364,7 +364,7 @@ impl MarketDataSource {
             if market_diag_enabled()
                 && market_diag_due(
                     format!("no-snapshot:{provider}:{market}"),
-                    MARKET_DIAG_FLOOR,
+                    market_diag_floor(),
                 )
             {
                 market_diag(format!(
@@ -462,7 +462,7 @@ impl MarketDataSource {
         let mut store = store.write().expect("market store poisoned");
         if store.view(provider, market).is_none() {
             if market_diag_enabled()
-                && market_diag_due(format!("no-view:{provider}:{market}"), MARKET_DIAG_FLOOR)
+                && market_diag_due(format!("no-view:{provider}:{market}"), market_diag_floor())
             {
                 let price_known = snapshot.markets().price(market).is_some();
                 market_diag(format!(
@@ -485,7 +485,7 @@ impl MarketDataSource {
             changed = true;
         }
         if market_diag_enabled()
-            && market_diag_due(format!("refresh:{provider}:{market}"), MARKET_DIAG_FLOOR)
+            && market_diag_due(format!("refresh:{provider}:{market}"), market_diag_floor())
         {
             let book_len = store
                 .view(provider, market)

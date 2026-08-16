@@ -503,10 +503,10 @@ impl MarketDataSource {
             }
         }
 
-        // With MOON_DETECT_DIAG=1, report actual bucket structure: candle count, total span, maximum
+        // With the detect channel on, report actual bucket structure: candle count, total span, maximum
         // time gap, and price range. Index-based rendering hides time gaps, but they reveal sparse
         // data; a price outlier explains flattening. This avoids guessing about discontinuities.
-        if std::env::var_os("MOON_DETECT_DIAG").is_some() {
+        if crate::detect_diag::enabled() {
             let keys: Vec<i64> = buckets.keys().copied().collect();
             let max_gap = keys.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
             let (mut pmin, mut pmax) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -867,7 +867,8 @@ impl MarketDataSource {
                                 cache.read_range(ex, market, 1440, need_from, i64::MAX);
                         }
                         if !cursor.cache_rows.is_empty() {
-                            log::info!(
+                            log::log!(
+                                super::SOURCE_TRACE_LEVEL,
                                 "kline cache: префикс {market} kind{}: {} рядов",
                                 cursor.cache_rows_kind,
                                 cursor.cache_rows.len()
@@ -900,7 +901,8 @@ impl MarketDataSource {
                     if !done.contains(&key) {
                         done.insert(key);
                         match client.candles().request_coin_card(market, native_kind) {
-                            Ok(_) => log::info!(
+                            Ok(_) => log::log!(
+                                super::SOURCE_TRACE_LEVEL,
                                 "kline cache: разовый нативный бэкфилл {market} kind={native_kind:?}"
                             ),
                             Err(e) => super::market_diag(format!(

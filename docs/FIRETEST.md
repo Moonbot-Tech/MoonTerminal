@@ -9,7 +9,7 @@ FireTest — встроенный debug/test scenario runner для поиска
 ```powershell
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
 cmd.exe /d /s /c "`"$vcvars`" && cargo build -p moon-ui-gpui --bin moonterminal --target x86_64-pc-windows-msvc"
-Remove-Item -ErrorAction SilentlyContinue firetest.log, render_diag.log
+Remove-Item -ErrorAction SilentlyContinue firetest.log, logs\render_diag.log
 .\target\x86_64-pc-windows-msvc\debug\moonterminal.exe --debug-script chart-smoke
 ```
 

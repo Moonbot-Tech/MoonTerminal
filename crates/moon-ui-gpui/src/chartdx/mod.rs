@@ -122,8 +122,10 @@ fn scale_badge_pct(view: &moon_chart::view::ChartView) -> Option<i32> {
     (cur != selected).then_some(cur)
 }
 
+/// Whether the market channel is on (`channels.markets` in `cfg/diagnostics.toml`, or
+/// `MOON_MARKET_DIAG`/`MOON_RENDER_DIAG`). Live, so it follows an edit without a restart.
 fn chart_market_diag_enabled() -> bool {
-    std::env::var_os("MOON_MARKET_DIAG").is_some() || std::env::var_os("MOON_RENDER_DIAG").is_some()
+    moon_core::diagnostics::markets()
 }
 
 fn chart_market_diag_due(key: impl Into<String>) -> bool {
@@ -138,7 +140,9 @@ fn chart_market_diag_due(key: impl Into<String>) -> bool {
         .lock()
         .expect("chart market diag lock poisoned");
     match last.get(&key).copied() {
-        Some(prev) if now.duration_since(prev) < Duration::from_millis(1000) => false,
+        // The configured floor, not a literal: this throttle and `market::source`'s serve the same
+        // channel, and a second copy of the number would ignore `limits.market_trace_min_interval_ms`.
+        Some(prev) if now.duration_since(prev) < moon_core::diagnostics::market_trace_min_interval() => false,
         _ => {
             last.insert(key, now);
             true

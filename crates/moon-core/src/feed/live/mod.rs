@@ -68,7 +68,7 @@ fn apply_strategy_delivery_ack(
 }
 
 use account_reconciliation::{
-    AccountReconciliation, BALANCE_REFRESH_LOG_WINDOW, BALANCE_TRACE_LEVEL,
+    balance_refresh_log_window, AccountReconciliation, BALANCE_TRACE_LEVEL,
 };
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
 use commands::{drain_commands, CommandDrain, LocalStratEdits, StrategyPlacementGuard};
@@ -582,7 +582,7 @@ pub(super) fn run(
         if account_reconciliation.balance_due(account_now) {
             match client.balances().refresh() {
                 Ok(()) => {
-                    balance_refresh_log_until = Some(Instant::now() + BALANCE_REFRESH_LOG_WINDOW);
+                    balance_refresh_log_until = Some(Instant::now() + balance_refresh_log_window());
                     log::log!(
                         BALANCE_TRACE_LEVEL,
                         "core {} balance repair requested (account order change)",
@@ -981,7 +981,7 @@ pub(super) fn run(
         let want_log = server.feed.log;
         // detect-diag: report a subset of server feed flags once per process. The line includes
         // detects/reports/log but not alerts; `Event::Detect` can still run with detects=false when
-        // alerts=true. Controlled by MOON_DETECT_DIAG, off by default.
+        // alerts=true. Controlled by `channels.detect`, off by default.
         {
             use std::sync::OnceLock;
             static FLAGS_ONCE: OnceLock<()> = OnceLock::new();

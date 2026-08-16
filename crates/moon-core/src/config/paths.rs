@@ -278,6 +278,22 @@ fn data_dir_raw() -> PathBuf {
     }
 }
 
+/// Diagnostics switches (`cfg/diagnostics.toml`), resolved WITHOUT creating the directory and,
+/// crucially, without logging.
+///
+/// For the read that happens BEFORE the logger is installed — the file decides the logger's own
+/// filter, so it cannot wait for it. [`cfg_dir`] both creates the directory and warns when it
+/// cannot, and that warning would be handed to a logger that does not exist yet and vanish.
+/// Resolves to the same path as [`diagnostics_path`]; a test in `diagnostics` pins them together.
+pub fn diagnostics_path_no_create() -> PathBuf {
+    data_dir_raw().join("cfg").join("diagnostics.toml")
+}
+
+/// Diagnostics switches, creating `cfg/` like every other configuration path.
+pub fn diagnostics_path() -> PathBuf {
+    cfg_dir().join("diagnostics.toml")
+}
+
 /// User data/config directory. Created on first access; on Windows this is exe_dir and already
 /// exists, so `create_dir_all` is a no-op.
 pub fn data_dir() -> PathBuf {
@@ -595,6 +611,15 @@ pub fn storage_path() -> PathBuf {
 /// Log directory for diagnostic core commands/reports.
 pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
+}
+
+/// [`logs_dir`] resolved without creating the data directory and, crucially, without logging.
+///
+/// For callers reached FROM inside a log record — `applog::DatedWriter::open` is one — where a
+/// warning would re-enter the logger on the same thread and deadlock on its own mutex. Callers
+/// create the directory themselves.
+pub fn logs_dir_no_create() -> PathBuf {
+    data_dir_raw().join("logs")
 }
 
 /// Crash report file, written by the panic hook and the native crash handler.

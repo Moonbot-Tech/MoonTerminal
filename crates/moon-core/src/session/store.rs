@@ -363,7 +363,7 @@ impl CoreData {
                 if !detects.is_empty() {
                     // The detect diagnostic reached `CoreData` and is about to increment
                     // `detects_rev`, which gates `ChartTabs::ingest` through `chart_tabs_sig`.
-                    // Enable this path with `MOON_DETECT_DIAG`.
+                    // Enable this path with `channels.detect` in `cfg/diagnostics.toml`.
                     crate::detect_diag::line(&format!(
                         "[store] +{} detects → rev={}",
                         detects.len(),

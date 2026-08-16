@@ -246,7 +246,8 @@ MOON_RENDER_DIAG_OPEN_10_BTC=1 \
 ./target/release/moonterminal
 ```
 
-Смотреть `render_diag.log`. Хорошие признаки:
+Смотреть `logs/render_diag.log` (рядом с остальными логами приложения; путь больше не зависит от
+рабочего каталога). Хорошие признаки:
 
 ```text
 orders_render and shell_render do not jump to monitor/mouse rate
