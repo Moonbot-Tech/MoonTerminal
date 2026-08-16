@@ -5,6 +5,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 use moonproto::{MoonClient, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot};
 
+use super::account_reconciliation::BALANCE_TRACE_LEVEL;
 use super::client_settings::{ClientSettingsSequence, ManualOrder};
 use super::convert::apply_lev_manage_edit;
 use super::market_role::MarketRoleState;
@@ -672,8 +673,16 @@ pub(super) fn drain_commands(
                         crate::feed::core_label(server.id)
                     );
                 } else {
-                    log::info!(
-                        "core {} balance refresh requested (assets click)",
+                    // Same level as the automatic path, and for a sharper reason than "a click is
+                    // rare": the Assets panel re-requests for every scoped core on every cache
+                    // rebuild while `transfer_rev == 0` (`panels/assets/cache.rs`), which measured
+                    // 5250 of these lines a day with whole groups of cores stamped in the same
+                    // millisecond. That re-request is a defect of its own; this keeps it out of the
+                    // log until it is fixed — and the message says "refresh" rather than "click"
+                    // because a click is not what usually produces it.
+                    log::log!(
+                        BALANCE_TRACE_LEVEL,
+                        "core {} balance refresh requested (assets refresh)",
                         crate::feed::core_label(server.id)
                     );
                 }

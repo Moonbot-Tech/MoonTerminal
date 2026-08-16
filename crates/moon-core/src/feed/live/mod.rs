@@ -67,7 +67,9 @@ fn apply_strategy_delivery_ack(
     }
 }
 
-use account_reconciliation::AccountReconciliation;
+use account_reconciliation::{
+    AccountReconciliation, BALANCE_REFRESH_LOG_WINDOW, BALANCE_TRACE_LEVEL,
+};
 pub(in crate::feed) use client_settings::ClientSettingsSequence;
 use commands::{drain_commands, CommandDrain, LocalStratEdits, StrategyPlacementGuard};
 use convert::{
@@ -580,8 +582,9 @@ pub(super) fn run(
         if account_reconciliation.balance_due(account_now) {
             match client.balances().refresh() {
                 Ok(()) => {
-                    balance_refresh_log_until = Some(Instant::now() + Duration::from_secs(5));
-                    log::info!(
+                    balance_refresh_log_until = Some(Instant::now() + BALANCE_REFRESH_LOG_WINDOW);
+                    log::log!(
+                        BALANCE_TRACE_LEVEL,
                         "core {} balance repair requested (account order change)",
                         crate::feed::core_label(server.id)
                     );
@@ -774,10 +777,12 @@ pub(super) fn run(
                 // Diagnostic window after our balance refresh for phantom Assets entries. Response
                 // type determines the stuck coin's fate: Snapshot clears missing entries while
                 // Incremental does not. Do not log outside this window because balances are pushed
-                // continuously.
+                // continuously — and see BALANCE_TRACE_LEVEL for why the window alone was not
+                // enough to keep this quiet.
                 Event::Balance(bev) => {
                     if balance_refresh_log_until.is_some_and(|t| Instant::now() < t) {
-                        log::info!(
+                        log::log!(
+                            BALANCE_TRACE_LEVEL,
                             "core {} balance event after refresh: {bev:?}",
                             crate::feed::core_label(server.id)
                         );
