@@ -35,6 +35,10 @@ strat.settings.active_only:
   ru: "Показывать только активные"
   en: "Show active strategies only"
   es: "Mostrar solo las activas"
+strat.active_only:
+  ru: "активные"
+  en: "active"
+  es: "activas"
 strat.clear:
   ru: "Очистить"
   en: "Clear"
