@@ -24,4 +24,6 @@ pub use news_marks::build_news_geometry;
 pub mod order_geometry;
 pub use order_geometry::build_order_geometry;
 pub mod paint;
+pub mod trade_marks;
+pub use trade_marks::build_trade_geometry;
 pub mod view;

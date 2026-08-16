@@ -63,7 +63,9 @@ pub struct SegInstance {
     pub t1_rel: f32,
     pub p1: f32,
     pub thickness: f32,
-    /// 0 = solid, 1 = DashDotDot, 2 = Dot (Moonbot trace parity).
+    /// Delphi `TPenStyle` index: 0 = solid, 1 = dash, 2 = dot, 3 = dash-dot, 4 = dash-dot-dot.
+    /// The shaders switch on it directly in `pattern_on`; the named constants live in
+    /// [`crate::layers`] as `SEG_PATTERN_*`.
     pub pattern: f32,
     /// How the far end is found: [`SEG_EXTEND_NONE`], [`SEG_EXTEND_EDGE`] or [`SEG_EXTEND_RAY`].
     pub extend: f32,
@@ -90,33 +92,65 @@ pub const MARKER_ANCHOR_PRICE: f32 = 0.0;
 /// Time still positions it on X. Used by news marks, which belong to a moment, not to a price.
 pub const MARKER_ANCHOR_BOTTOM: f32 = 1.0;
 
-/// Instance of a marker (cross/knot/news gem).
+/// Instance of a marker glyph shared by orders, figures, news, warnings, and trade history.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MarkerInstance {
     pub t_rel: f32,
     /// Price, or — under [`MARKER_ANCHOR_BOTTOM`] — physical pixels above the plot's bottom edge.
     pub price: f32,
-    /// Half size in physical px; the news gem reads it as its half HEIGHT.
+    /// Half size in physical px; news gems and trade arrows read it as their half HEIGHT.
     pub size: f32,
-    /// Line thickness in physical px; the news gem reads it as its half WIDTH, which is what makes
-    /// the gem vertical without a second size field or a shader-side aspect constant.
+    /// Line thickness in physical px; news gems and trade arrows read it as their half WIDTH, which
+    /// lets non-square glyphs reuse the existing instance layout.
     pub thickness: f32,
-    pub shape: f32, // 0 = cross, 1 = filled knot, 2 = news gem (faceted diamond)
+    /// Which glyph the shader draws; see the registry on [`MARKER_SHAPE_CROSS`].
+    pub shape: f32,
     /// [`MARKER_ANCHOR_PRICE`] or [`MARKER_ANCHOR_BOTTOM`].
     pub anchor: f32,
-    /// Wedge this instance paints, `0..sectors`. Only the news gem is sliced; everything else
+    /// A TAGGED field whose meaning is decided by [`Self::shape`] — read the two together.
+    ///
+    /// For the news gem: the wedge this instance paints, `0..sectors`. For a trade arrow
+    /// ([`MARKER_SHAPE_ARROW_UP`] / [`MARKER_SHAPE_ARROW_DOWN`]): the number of trades the arrow's
+    /// cluster aggregates, which the shader turns into a capped size increase. Everything else
     /// leaves this at `0` with `sectors` `1` and draws whole.
+    ///
+    /// The union is safe because no instance is ever both a gem and an arrow, and it keeps the GPU
+    /// struct — and therefore all three backends' strides — untouched.
     pub sector: f32,
     /// Number of wedges the mark is split into (1 = undivided).
     pub sectors: f32,
     pub color: [f32; 4],
 }
 
+/// The full `shape` registry, in one place because the ids are split across two modules and the
+/// shaders dispatch on bare numbers:
+///
+/// | id | shape | declared in |
+/// |----|-------|-------------|
+/// | 0 | order line's start/end cross | here |
+/// | 1 | figure's square drag knot (a filled disc) | here |
+/// | 2 | news gem (faceted diamond) | `crate::news_marks` |
+/// | 3 | warning badge (triangle with an exclamation) | `crate::news_marks` |
+/// | 4 | trade-history arrow pointing UP — a BUY action | here |
+/// | 5 | trade-history arrow pointing DOWN — a SELL action | here |
+///
+/// Adding an id means editing all three shader copies (`order_lines.hlsl`, `native_marker.wgsl`,
+/// `chart_native.metal`). Mind that the warning badge is dispatched there as an OPEN-ENDED
+/// `shape > 2.5`, so a new id above 3 must be tested for BEFORE that branch or it renders as a
+/// warning triangle. `theme_contract` asserts both the cross-copy presence and the branch order.
+///
 /// `shape` of an order line's start/end cross.
 pub const MARKER_SHAPE_CROSS: f32 = 0.0;
 /// `shape` of a figure's square drag knot.
 pub const MARKER_SHAPE_KNOT: f32 = 1.0;
+/// `shape` of a trade-history arrow pointing UP: a BUY action — a long's entry or a short's exit.
+///
+/// The shader hangs the arrow off its price so the apex points at the level from below and the
+/// body clears the candle; the offset is derived from this id alone, costing no instance field.
+pub const MARKER_SHAPE_ARROW_UP: f32 = 4.0;
+/// `shape` of a trade-history arrow pointing DOWN: a SELL action — a long's exit or a short's entry.
+pub const MARKER_SHAPE_ARROW_DOWN: f32 = 5.0;
 
 impl MarkerInstance {
     /// A price-anchored, undivided marker — every marker except a news mark.
@@ -141,6 +175,37 @@ impl MarkerInstance {
             sector: 0.0,
             sectors: 1.0,
             color,
+        }
+    }
+
+    /// A trade-history arrow carrying its cluster's member count.
+    ///
+    /// `half_h` and `half_w` are the RESTING half-extents; the shader grows both by a capped
+    /// function of `count`, so a caller must not pre-scale them or the growth applies twice.
+    ///
+    /// Args:
+    ///     t_rel: Arrow timestamp relative to the chart epoch.
+    ///     price: Price touched by the arrow's apex.
+    ///     half_h: Resting half-height in physical pixels.
+    ///     half_w: Resting half-width in physical pixels.
+    ///     shape: Trade-arrow shape id.
+    ///     count: Number of trades aggregated into the arrow.
+    ///     color: Normalized RGBA colour.
+    ///
+    /// Returns:
+    ///     A price-anchored marker with the cluster count encoded for the shader.
+    pub fn arrow(
+        t_rel: f32,
+        price: f32,
+        half_h: f32,
+        half_w: f32,
+        shape: f32,
+        count: u32,
+        color: [f32; 4],
+    ) -> Self {
+        Self {
+            sector: count.max(1) as f32,
+            ..Self::at_price(t_rel, price, half_h, half_w, shape, color)
         }
     }
 }

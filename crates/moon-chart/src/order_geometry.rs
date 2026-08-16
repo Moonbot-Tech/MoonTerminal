@@ -14,15 +14,7 @@ use crate::layers::{
 use moon_core::config::{LineStyle, OrdersStyle};
 use moon_core::session::order_lines::{LineKind, OrderLineStore, RetainedOrder};
 
-/// sRGB color [u8;3] + alpha → [f32;4] (the shader converts RGB to linear).
-fn rgba(c: [u8; 3], alpha: f32) -> [f32; 4] {
-    [
-        c[0] as f32 / 255.0,
-        c[1] as f32 / 255.0,
-        c[2] as f32 / 255.0,
-        alpha,
-    ]
-}
+use crate::layers::rgb_with_alpha as rgba;
 
 /// Traced line kinds: (style, index into RetainedOrder::lines).
 fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, usize); 7] {

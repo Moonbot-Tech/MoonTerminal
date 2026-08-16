@@ -345,9 +345,27 @@ impl ChartEngine {
         self.data.borrow_mut().scene_visible = visible;
     }
 
+    /// Adopt a new device pixel scale, invalidating the userdata layer when it actually moved.
+    ///
+    /// Marker geometry is baked in PHYSICAL pixels, so a DPI change — dragging a window to a
+    /// monitor with a different scale factor — alters every gem, arrow, badge and connector
+    /// without touching a single record. `news_sig`/`trade_history_sig` already fold `last_ppp` in,
+    /// but `sync_orders_if_visible` short-circuits on the ORDER signature before it ever compares
+    /// them, so on an otherwise idle chart those inner signatures are never reached and the layer
+    /// keeps the geometry baked at the old scale. Dropping the outer gate here is what lets them
+    /// do their job. Guarded on a real change because render calls this every frame.
+    ///
+    /// Args:
+    ///     ppp: Current device pixels per logical pixel.
     pub fn set_last_ppp(&mut self, ppp: f32) {
         let ppp = ppp.max(0.1);
-        self.data.borrow_mut().last_ppp = ppp;
+        {
+            let mut data = self.data.borrow_mut();
+            if data.last_ppp != ppp {
+                data.last_ppp = ppp;
+                data.last_order_sig = u64::MAX;
+            }
+        }
         self.state.borrow_mut().set_pixel_scale(ppp);
     }
 
@@ -456,6 +474,59 @@ impl ChartEngine {
         records: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
     ) -> bool {
         self.data.borrow_mut().set_trade_history(records)
+    }
+
+    /// Set the trade arrow under the cursor, which draws grown and fully opaque.
+    ///
+    /// Args:
+    ///     hovered: Pane index, mark index within that pane, and whether that end BUYS; `None` for
+    ///         no hover.
+    ///
+    /// Returns:
+    ///     Whether anything changed, so the caller can skip the userdata resync.
+    pub(crate) fn set_trade_hover(&mut self, hovered: Option<(usize, usize, bool)>) -> bool {
+        self.data.borrow_mut().set_trade_hover(hovered)
+    }
+
+    /// Read the durable closed trades currently published to this chart.
+    ///
+    /// The panel does not keep its own copy — it publishes the set here and reads it back — so this
+    /// is what a cluster's member indices resolve against.
+    ///
+    /// Args:
+    ///     read: Receives the published records in their published order.
+    ///
+    /// Returns:
+    ///     The closure's value.
+    pub(crate) fn with_trade_records<R>(
+        &self,
+        read: impl FnOnce(&[moon_core::db::ChartTradeRecord]) -> R,
+    ) -> R {
+        read(&self.data.borrow().trade_history)
+    }
+
+    /// Read one pane's retained trade-arrow geometry.
+    ///
+    /// Handed to a closure rather than returned, because it holds the clusters and their member
+    /// lists: cloning it on every pointer move — which is what a hit test does — would allocate a
+    /// vector per cluster for a read that touches only their positions.
+    ///
+    /// Args:
+    ///     pane: Pane index to read.
+    ///     read: Receives the pane's retained geometry.
+    ///
+    /// Returns:
+    ///     The closure's value, or `None` when that pane does not exist.
+    pub(crate) fn with_trade_geometry<R>(
+        &self,
+        pane: usize,
+        read: impl FnOnce(&super::trade_history_sync::TradeGeometry) -> R,
+    ) -> Option<R> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)
+            .map(|pr| read(&pr.trade_geometry))
     }
 
     /// Applies a price-axis scale to every pane and stores it in the container. None selects Auto.

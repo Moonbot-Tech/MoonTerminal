@@ -2,6 +2,63 @@
 
 use super::support::*;
 
+/// `trade_history_hover.rs:profit_text` — dropping the `record.quote` half of the guard would
+/// print a profit amount with no resolved ticker, which is exactly the unlabeled figure this
+/// design refuses to show. `moon-ui-gpui` has no `[lib]`, so this invariant can only be read as
+/// text.
+#[test]
+fn trade_hover_profit_text_never_prints_an_amount_outside_a_resolved_quote() {
+    let source = code_only(&read_src("panels/chart/trade_history_hover.rs"));
+    let body = braced_body(&source, "fn profit_text(");
+    assert!(
+        body.contains("if let Some(profit) = record.profit")
+            && body.contains("&& let Some(quote) = record.quote"),
+        "profit_text must gate the profit amount on a resolved quote currency, or it prints an \
+         amount with no ticker"
+    );
+}
+
+/// All three shader copies of closed-trade-history geometry must bound the arrow branch
+/// (`3.5 < shape < 5.5`) strictly BEFORE the open-ended warning-badge branch (`shape > 2.5`).
+///
+/// Nothing in the repository compiles a shader, so a tweak landing in one backend and forgotten
+/// in the others is invisible until someone runs that platform — and this workspace only runs
+/// the DX11 (HLSL) backend daily. A later shape id would silently render as the warning badge on
+/// whichever backend drifted.
+#[test]
+fn every_backend_bounds_the_arrow_branch_before_the_open_ended_warning_branch() {
+    const BACKENDS: &[(&str, &str, &str)] = &[
+        (
+            "chartdx/shaders/order_lines.hlsl",
+            "if (i.shape > 3.5 && i.shape < 5.5) {",
+            "if (i.shape > 2.5) {",
+        ),
+        (
+            "chartdx/shaders/native_marker.wgsl",
+            "if in.shape > 3.5 && in.shape < 5.5 {",
+            "if in.shape > 2.5 {",
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            "if (in.shape > 3.5 && in.shape < 5.5) {",
+            "if (in.shape > 2.5) {",
+        ),
+    ];
+    for (path, arrow_branch, warning_branch) in BACKENDS {
+        let source = code_only(&read_src(path));
+        let arrow_at = source
+            .find(arrow_branch)
+            .unwrap_or_else(|| panic!("{path}: missing the bounded arrow branch"));
+        let warning_at = source
+            .find(warning_branch)
+            .unwrap_or_else(|| panic!("{path}: missing the open-ended warning branch"));
+        assert!(
+            arrow_at < warning_at,
+            "{path}: the arrow branch must be tested before the open-ended warning branch"
+        );
+    }
+}
+
 /// Moving the visibility guard below `aligned_ticks_ms` makes every hidden time axis resolve,
 /// sort, and discard a complete selected-zone DST grid on each chart text preparation.
 #[test]

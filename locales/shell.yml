@@ -356,6 +356,22 @@ chart.trade_history.retry:
   ru: "Повторить"
   en: "Retry"
   es: "Reintentar"
+chart.trade_history.hover.qty:
+  ru: "Объём"
+  en: "Qty"
+  es: "Cant."
+chart.trade_history.hover.pnl:
+  ru: "П/У"
+  en: "P&L"
+  es: "P/G"
+chart.trade_history.hover.pnl_unknown:
+  ru: "нет данных"
+  en: "unknown"
+  es: "sin datos"
+chart.trade_history.hover.more:
+  ru: "ещё %{n}"
+  en: "%{n} more"
+  es: "%{n} más"
 coin_menu.compare:
   ru: "Сравнить"
   en: "Compare"

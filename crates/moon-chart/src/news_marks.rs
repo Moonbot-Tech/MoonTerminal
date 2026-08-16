@@ -37,6 +37,10 @@ pub const MAX_MARK_COLORS: usize = 4;
 /// Opacity of a mark. Slightly translucent so a mark never hides the volume bars underneath.
 const MARK_ALPHA: f32 = 0.88;
 /// Shader shape id for the news gem (a vertically elongated diamond).
+///
+/// Ids 2 and 3 live here for historical reasons while 0, 1, 4 and 5 live in
+/// [`crate::layers::order_lines`]; that module's `MARKER_SHAPE_CROSS` docstring carries the ONE
+/// registry of the whole id space. Pick a new id from there, never by scanning this file.
 pub const SHAPE_GEM: f32 = 2.0;
 /// Shader shape id for a warning badge (an upward triangle with an exclamation mark).
 pub const SHAPE_WARN: f32 = 3.0;

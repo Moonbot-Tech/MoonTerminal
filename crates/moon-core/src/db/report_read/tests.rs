@@ -4,8 +4,8 @@ use rusqlite::types::Value;
 use rusqlite::Connection;
 
 use super::{
-    distinct_strategies, query_chart_trade_history, query_reports, query_totals, ReportFilter,
-    ReportStrategyKey, SideFilter,
+    distinct_strategies, query_chart_trade_history, query_reports, query_totals, QuoteCurrency,
+    ReportFilter, ReportStrategyKey, SideFilter,
 };
 
 /// Removing the exact core, exact coin, or inclusive close-date predicate from
@@ -55,6 +55,46 @@ fn chart_history_keeps_the_exact_core_coin_and_report_close_window() {
         vec![(12, 100, 200), (11, 50, 100)]
     );
     assert!(!result.truncated);
+}
+
+/// `report_read.rs:query_chart_trade_history` — replacing `quote::effective_ordinal_expr` with
+/// the raw `basecurrency` column reads a COIN-M row's mislabeled persisted currency (USDT)
+/// instead of its market-derived one (BTC), so the hover card would show a BTC amount labeled
+/// USDT — wrong by the BTC price, and presented as a precise figure.
+#[test]
+fn chart_history_quote_settles_a_coin_m_liquidation_in_its_true_currency() {
+    let conn = Connection::open_in_memory().expect("open coin-m chart-history fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL,
+             newrecid INTEGER NOT NULL,
+             coin TEXT,
+             fname TEXT,
+             buydate INTEGER,
+             closedate INTEGER,
+             buyprice REAL,
+             sellprice REAL,
+             quantity REAL,
+             isshort INTEGER,
+             profitbtc REAL,
+             spentbtc REAL,
+             basecurrency INTEGER
+         );
+         INSERT INTO orders_rep VALUES
+             (7, 31, 'ETH_0926', 'BinanceQ_USD-ETH_0926_09-09-2025 07-57-19_2.bin',
+              100, 200, 3600.0, 3650.0, 0.5, 0, 12.5, 1800.0, 1);",
+    )
+    .expect("seed coin-m chart-history fixture");
+
+    let result = query_chart_trade_history(&conn, 7, &["ETH_0926".to_string()], None, 10)
+        .expect("query coin-m chart history");
+
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(
+        result.records[0].quote,
+        Some(QuoteCurrency::btc()),
+        "a COIN-M row's stored basecurrency (USDT) must not override the market-derived quote"
+    );
 }
 
 /// Removing the limit-plus-one read or stable newest-first order makes the independently seeded

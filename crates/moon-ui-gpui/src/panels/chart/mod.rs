@@ -24,6 +24,7 @@ mod report_trades;
 #[cfg(test)]
 mod tests;
 mod trade;
+mod trade_history_hover;
 mod warn;
 
 use std::collections::HashSet;
@@ -213,6 +214,8 @@ pub struct ChartPanel {
     warn: warn::WarnState,
     /// Runtime-only durable history for this exact Main core and market.
     report_trades: report_trades::ReportTradesState,
+    /// Hover over a drawn closed-trade arrow, and the card it opens; see [`trade_history_hover`].
+    trade_hover: trade_history_hover::TradeHoverState,
     /// Figure-drawing state for this panel: draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
     /// Screen point where the latest draft node was placed. Releasing sufficiently far away
@@ -438,6 +441,7 @@ impl ChartPanel {
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             report_trades: report_trades::ReportTradesState::default(),
+            trade_hover: trade_history_hover::TradeHoverState::default(),
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,
@@ -588,6 +592,7 @@ impl ChartPanel {
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
             report_trades: report_trades::ReportTradesState::default(),
+            trade_hover: trade_history_hover::TradeHoverState::default(),
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,
