@@ -941,6 +941,24 @@ impl MainChartStack {
             .and_then(|entry| entry.panel.read(cx).active_target())
     }
 
+    /// Focus handle of the chart currently selected in this stack.
+    ///
+    /// Exists so an opened chart can be made the keyboard target. Escape is a WINDOW-root hotkey
+    /// (`Shell::on_hotkey`), and it only reaches that root when focus sits somewhere inside the
+    /// window — so a chart opened while focus is still in the table that opened it receives no
+    /// keystrokes at all until the user clicks it.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the selected panel.
+    ///
+    /// Returns:
+    ///     The selected chart's focus handle, or `None` when the stack has no selection.
+    pub(crate) fn active_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        self.active
+            .and_then(|ix| self.charts.get(ix))
+            .map(|entry| entry.panel.read(cx).focus_handle(cx))
+    }
+
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     pub(crate) fn debug_data_handle(&self, cx: &App) -> Option<crate::chartdx::ChartDataHandle> {
         self.active
