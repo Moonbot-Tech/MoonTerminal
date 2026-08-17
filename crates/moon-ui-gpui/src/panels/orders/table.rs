@@ -2,8 +2,10 @@
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
+use crate::order_math::MONEY_DECIMALS;
 use moon_core::feed::OrderStopKind;
 use moon_core::session::CoreId;
+use moon_core::util::fmt;
 use rust_i18n::t;
 use std::collections::HashSet;
 
@@ -329,136 +331,34 @@ pub(super) fn side_label(r: &OrderRow) -> (String, MoonTone) {
     (side, tone)
 }
 
-/// Return the position quantity used by the PnL calculations.
-///
-/// When `filled` indicates an executed entry or active exit leg, use `remaining_size` when positive
-/// and otherwise the original `size`. This preserves positions such as a sale from an already-held
-/// asset whose `fill_pct` is zero. Before that state, use the filled entry quantity
-/// (`size * fill_pct`). Return `None` when the resulting quantity is not positive.
-fn position_qty(r: &OrderRow) -> Option<f64> {
-    let qty = if r.filled {
-        if r.remaining_size > 0.0 {
-            r.remaining_size
-        } else {
-            r.size
-        }
-    } else {
-        r.size * (r.fill_pct as f64) / 100.0
-    };
-    (qty > 0.0).then_some(qty)
-}
-
-/// Estimate unrealized PnL locally as `(mark - entry) * position_qty * direction`.
-///
-/// [`OrderRow`] carries no server PnL, so this table calculates it just as the Assets panel does.
-/// Return `None` when there is no position or either entry or mark price is unavailable.
-///
-/// `OrderRow::buy_price` is the normalized entry for both directions, and Moonbot models
-/// `buy_order` as the entry leg for both long and short lifecycle phases. After execution, the raw
-/// core snapshot stores a break-even price including commission in `buy_price`; the feed converter
-/// replaces it with the average position price (`pos_price`) before constructing `OrderRow`.
-/// `sell_price` is the exit target; for a profitable short it lies below entry. Treating it as a
-/// short entry previously calculated PnL from the exit price and diverged from Assets, for example
-/// VELVET showed -3.96 from `sell_price` versus about zero from `pos_price`.
-pub(super) fn order_pnl(r: &OrderRow) -> Option<f64> {
-    let qty = position_qty(r)?;
-    let entry = r.buy_price;
-    let mark = r.price as f64;
-    if entry <= 0.0 || mark <= 0.0 {
-        return None;
-    }
-    let dir = if r.is_short { -1.0 } else { 1.0 };
-    Some((mark - entry) * qty * dir)
-}
-
-/// Estimate PnL if the position closes at its take-profit price (`sell_price`).
-///
-/// This uses the same formula as [`order_pnl`] with the take target in place of the current mark,
-/// which shows the expected profit from a split grid of sell orders. Return `None` without a
-/// position, entry price, or take-profit price.
-pub(super) fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
-    let qty = position_qty(r)?;
-    let entry = r.buy_price;
-    let tp = r.sell_price;
-    if entry <= 0.0 || tp <= 0.0 {
-        return None;
-    }
-    let dir = if r.is_short { -1.0 } else { 1.0 };
-    Some((tp - entry) * qty * dir)
-}
-
 /// Build the PNL TP cell as a signed colored delta, or a dash without a position or target.
 fn pnl_tp_cell(r: &OrderRow) -> MoonDataCell {
-    match order_pnl_at_tp(r) {
-        Some(v) => {
-            let tone = if v >= 0.0 {
-                MoonTone::Positive
-            } else {
-                MoonTone::Danger
-            };
-            let text = if v >= 0.0 {
-                format!("+{v:.2}")
-            } else {
-                format!("{v:.2}")
-            };
-            MoonDataCell::text(text).tone(tone).weight(500.0)
-        }
+    match crate::order_math::order_pnl_at_tp(r).and_then(|v| fmt::signed_fixed(v, MONEY_DECIMALS)) {
+        Some((text, sign)) => MoonDataCell::text(text)
+            .tone(design::delta_tone(sign))
+            .weight(500.0),
         None => MoonDataCell::text("–").tone(MoonTone::Muted),
     }
 }
 
 /// Build the PnL cell as a signed green or red delta, or a dash without a position.
 fn pnl_cell(r: &OrderRow) -> MoonDataCell {
-    match order_pnl(r) {
-        Some(v) => {
-            let tone = if v >= 0.0 {
-                MoonTone::Positive
-            } else {
-                MoonTone::Danger
-            };
-            // Show two decimals without `$`; this is a currency amount, not an adaptive price.
-            let text = if v >= 0.0 {
-                format!("+{v:.2}")
-            } else {
-                format!("{v:.2}")
-            };
-            MoonDataCell::text(text).tone(tone).weight(500.0)
-        }
+    // Fixed decimals without `$`; this is a currency amount in a right-aligned column, not an
+    // adaptive price — `fmt::signed_amount` would trim `12.00` to `12` and break the alignment.
+    match crate::order_math::order_pnl(r).and_then(|v| fmt::signed_fixed(v, MONEY_DECIMALS)) {
+        Some((text, sign)) => MoonDataCell::text(text)
+            .tone(design::delta_tone(sign))
+            .weight(500.0),
         None => MoonDataCell::text("–").tone(MoonTone::Muted),
     }
 }
 
-/// Calculate directional PnL percentage as `(mark - entry) / entry * direction * 100`.
-///
-/// Return `None` under the same conditions as [`order_pnl`]. `buy_price` is the entry for both
-/// directions.
-pub(super) fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
-    position_qty(r)?; // Apply the same in-position gate as `order_pnl`.
-    let entry = r.buy_price;
-    let mark = r.price as f64;
-    if entry <= 0.0 || mark <= 0.0 {
-        return None;
-    }
-    let dir = if r.is_short { -1.0 } else { 1.0 };
-    Some((mark - entry) / entry * dir * 100.0)
-}
-
 /// Build the PnL-percent cell as a signed green or red value with two decimals, or a dash.
 fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
-    match order_pnl_pct(r) {
-        Some(v) => {
-            let tone = if v >= 0.0 {
-                MoonTone::Positive
-            } else {
-                MoonTone::Danger
-            };
-            let text = if v >= 0.0 {
-                format!("+{v:.2}%")
-            } else {
-                format!("{v:.2}%")
-            };
-            MoonDataCell::text(text).tone(tone).weight(500.0)
-        }
+    match crate::order_math::order_pnl_pct(r).and_then(|v| fmt::signed_pct(v, MONEY_DECIMALS)) {
+        Some((text, sign)) => MoonDataCell::text(text)
+            .tone(design::delta_tone(sign))
+            .weight(500.0),
         None => MoonDataCell::text("–").tone(MoonTone::Muted),
     }
 }

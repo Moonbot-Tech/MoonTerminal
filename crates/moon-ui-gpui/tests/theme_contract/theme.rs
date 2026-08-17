@@ -1,5 +1,5 @@
-//! Theme and chart-surface bans: the runtime MoonUI theme is the only palette, and the GPU
-//! chart keeps its own pass under the scene.
+//! Theme and chart-surface bans: the runtime MoonUI theme is the only palette, one mapping turns
+//! a profit-and-loss sign into a tone, and the GPU chart keeps its own pass under the scene.
 
 use super::support::*;
 
@@ -35,6 +35,69 @@ fn terminal_ui_uses_runtime_moon_ui_theme() {
         "terminal UI must use MoonPalette::active/MoonTheme runtime config, not old palette sources:\n{}",
         violations.join("\n")
     );
+}
+
+/// Every money cell that states an unrealized PnL must resolve its tone through
+/// `design::delta_tone`, and must not pick a colour by comparing the raw amount against zero.
+///
+/// This is the defect that started the shared helpers, and it was found by GREP rather than by a
+/// test: each surface hand-rolled `if v >= 0.0 { Positive } else { Danger }` beside its own
+/// `format!("+{v:.2}")`. Two things go wrong the moment they drift apart. A `-0.004` prints as
+/// `0.00` while `v < 0.0` still paints it red, so a break-even figure reads as a loss; and a
+/// literal `-0.0` passes `v >= 0.0`, so the other spelling renders `+-0.00`. Routing the tone from
+/// the `DeltaSign` the formatter returns makes both unrepresentable, because the sign is
+/// classified from the value the TEXT was rendered from.
+///
+/// `moon-ui-gpui` is a binary crate with no `[lib]`, so this is checked as text. Each body is
+/// stripped through [`code_only`] first: `braced_body` returns comments too, and the comment above
+/// each of these cells names `delta_tone`, so a substring assertion would pass with the call
+/// deleted. `MoonTone::Muted` stays legal — it is the dash these cells show when there is no
+/// figure at all, not a sign-derived colour.
+#[test]
+fn pnl_money_cells_take_their_tone_from_the_shared_delta_mapping() {
+    // Every money cell that states an unrealized PnL, by file and by function signature.
+    const CELLS: [(&str, &str); 4] = [
+        ("panels/orders/table.rs", "fn pnl_cell("),
+        ("panels/orders/table.rs", "fn pnl_tp_cell("),
+        ("panels/orders/table.rs", "fn pnl_pct_cell("),
+        ("panels/assets/table.rs", "fn pnl_cell("),
+    ];
+
+    for (rel, signature) in CELLS {
+        let source = read_src(rel);
+        // `braced_body` takes the FIRST match, so a signature that appears twice would silently
+        // check the wrong body — and a renamed cell would make every assertion below vacuous.
+        assert_eq!(
+            source.matches(signature).count(),
+            1,
+            "{rel}: `{signature}` must name exactly one money cell"
+        );
+        let body = code_only(braced_body(&source, signature));
+
+        assert!(
+            body.contains("design::delta_tone("),
+            "{rel}:{signature} must resolve its tone through design::delta_tone"
+        );
+        for hand_rolled in ["MoonTone::Positive", "MoonTone::Danger"] {
+            assert!(
+                !body.contains(hand_rolled),
+                "{rel}:{signature} must not name {hand_rolled} itself; delta_tone owns that mapping"
+            );
+        }
+        // A raw comparison against zero is how the sign got out of step with the text: these all
+        // read the UNROUNDED amount, which the rendered digits no longer represent.
+        for raw_compare in [">= 0.0", "> 0.0", "< 0.0", "<= 0.0"] {
+            assert!(
+                !body.contains(raw_compare),
+                "{rel}:{signature} must not compare the raw amount `{raw_compare}` to pick a colour"
+            );
+        }
+        // The text must come from the same rounding the sign does, not from a local `format!`.
+        assert!(
+            !body.contains("format!(\"+"),
+            "{rel}:{signature} must not hand-format its sign; fmt::signed_* returns both halves"
+        );
+    }
 }
 
 #[test]
