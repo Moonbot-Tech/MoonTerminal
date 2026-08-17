@@ -13,6 +13,7 @@ use rust_i18n::t;
 
 use super::super::candle_popup;
 use super::super::common;
+use super::super::graphics_popup;
 use super::super::{chart_pane_label, coin_search};
 use super::DetachedChartHost;
 use crate::design;
@@ -66,6 +67,7 @@ impl Render for DetachedChartHost {
             .show_controls(design::show_custom_window_controls());
         let popup_open = self.layout_popup_open;
         let candle_popup_open = self.candle_popup_open;
+        let graphics_popup_open = self.graphics_popup_open;
         // Header market-search input and matches. Render the list at the `v_flex` level after the
         // body; otherwise the later-painted window body covers the header dropdown.
         let coin_search_el = div()
@@ -173,6 +175,24 @@ impl Render for DetachedChartHost {
                                         MoonButtonVariant::Ghost
                                     })
                                     .selected(candle_popup_open)
+                                    .render(),
+                                cx,
+                            ))
+                            // The palette button edits the GLOBAL chart-drawing settings, so a
+                            // detached window reaches exactly the same values as the dock strip.
+                            .child(graphics_popup::graphics_popup_host(
+                                self,
+                                "detached-chart-graphics",
+                                MoonButton::new("detached-graphics-settings")
+                                    .leading_icon(MoonButtonIconSlot::new("icons/palette.svg"))
+                                    .tooltip(t!("chart.graphics.tip").to_string())
+                                    .size(MoonButtonSize::Micro)
+                                    .variant(if graphics_popup_open {
+                                        MoonButtonVariant::Blue
+                                    } else {
+                                        MoonButtonVariant::Ghost
+                                    })
+                                    .selected(graphics_popup_open)
                                     .render(),
                                 cx,
                             ))

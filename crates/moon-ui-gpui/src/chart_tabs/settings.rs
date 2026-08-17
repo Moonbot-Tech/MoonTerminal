@@ -462,6 +462,17 @@ impl ChartTabs {
     }
 }
 
+/// Host for the "Chart graphics" palette popup. The settings are global, so the host owns nothing
+/// but its own open flag.
+impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
+    fn graphics_popup_open(&self) -> bool {
+        self.graphics_popup_open
+    }
+    fn set_graphics_popup_open(&mut self, open: bool) {
+        self.graphics_popup_open = open;
+    }
+}
+
 /// Host for the "Candles and Trades" candlestick popup targeting the ACTIVE tab, like ⚙.
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::CandleView)`.

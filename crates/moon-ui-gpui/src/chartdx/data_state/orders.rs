@@ -120,6 +120,8 @@ impl ChartDataState {
                         &core_st.order_lines,
                         &pane.market,
                         &self.orders,
+                        &self.chart_graphics,
+                        self.last_ppp,
                         highlight_uid,
                         drag_preview,
                         pane.view.epoch_ms,
@@ -410,11 +412,7 @@ fn rgb_u32(c: [u8; 3]) -> u32 {
 /// and loss red for either side: a short sell below entry is positive and a stop above it is negative.
 fn signed_pct(level: f32, entry: f32, short: bool) -> f32 {
     let raw = (level - entry) / entry * 100.0;
-    if short {
-        -raw
-    } else {
-        raw
-    }
+    if short { -raw } else { raw }
 }
 
 /// Selects the positive size-label color for longs and the negative color for shorts.

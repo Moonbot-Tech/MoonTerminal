@@ -6,16 +6,47 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonButtonSize, MoonButtonVariant,
-    MoonPalette, MoonRect, rgba_from,
+    MoonPalette, MoonRect, MoonTone, rgba_from,
 };
 use rust_i18n::t;
 
 use moon_chart::paint::now_unix_ms;
 
+use super::order_stats;
 use super::render_input;
 use super::report_trades::ReportTradesStatus;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};
 use crate::persistence::chart_persist::ChartBtnPos;
+
+/// Fixed clearance for the chart's top-left control strip, so the status row never competes with
+/// its corner controls for the same pixels.
+const OVERLAY_LEFT_PX: f32 = 92.0;
+
+/// Right-edge reserve that protects the price scale and the visible price action from an overlong
+/// status row.
+const OVERLAY_RIGHT_MARGIN_PX: f32 = 120.0;
+
+/// Micro retry-action footprint reserved while it is visible, so the badges do not claim room the
+/// button will occupy.
+const RETRY_BUTTON_PX: f32 = 72.0;
+
+/// Tiny-badge text-size approximation used for measurement because MoonUI does not expose that
+/// component's fitted width.
+///
+/// MoonUI keeps a Tiny badge's own font and padding metrics private and exposes no fitted-width
+/// API, and it is consumed here at a pinned revision, so this row measures an APPROXIMATION of what
+/// MoonUI will draw rather than the thing itself. What that buys over a per-character constant is
+/// that the text half of the estimate goes through `design::ui_text_width` and therefore follows
+/// the active theme and the font-size setting; only the chrome below stays fixed.
+const OVERLAY_TEXT_PX: f32 = 11.0;
+
+/// Conservative fixed charge for Tiny-badge chrome and the following inter-badge gap, on top of
+/// measured text width.
+///
+/// It is biased high on purpose: over-charging drops one figure, which is safe and reversible by
+/// widening the chart, while under-charging lets a money figure reach the clip edge — and a price
+/// clipped mid-number reads as a plausible wrong number.
+const BADGE_CHROME_PX: f32 = 18.0;
 
 /// Market-action button type for the chart overlay.
 #[derive(Clone, Copy)]
@@ -113,7 +144,7 @@ impl Render for ChartPanel {
         // IMPORTANT: there is no request_animation_frame or continuous present. `gpu_canvas.frame()`
         // decides whether to present on the platform tick without dirtying the GPUI tree, and
         // `draw()` renders during that same tick.
-        let (theme, orders_style, follow, prospective_usd, candle_view) = {
+        let (theme, orders_style, follow, prospective_usd, candle_view, chart_graphics) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
             // Prospective F1-F6 order size in dollars for the active coin's crosshair label.
@@ -128,7 +159,15 @@ impl Render for ChartPanel {
             let theme = eff.theme.get(palette.is_light()).clone();
             // Candles use the panel's per-tab override or the global layout default.
             let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
-            (theme, orders, b.follow, prospective, candle_view)
+            // Chart graphics are GLOBAL by design: no per-tab override to fall back through.
+            (
+                theme,
+                orders,
+                b.follow,
+                prospective,
+                candle_view,
+                b.layout.chart_graphics,
+            )
         };
         // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
         // runs on every backend notification: it appears on the keypress rather than on the next
@@ -144,6 +183,7 @@ impl Render for ChartPanel {
                 .set_liquidations_enabled(self.liquidations_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_candle_view(candle_view)
+            | self.chart.set_chart_graphics(chart_graphics)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
             | self.chart.set_line_labels(self.line_labels)
@@ -556,6 +596,32 @@ impl Render for ChartPanel {
             ReportTradesStatus::NotReady | ReportTradesStatus::Failed
         );
         let (slot_w, _) = self.chart.slot_dev_size();
+        // Live open-order figures for the chart's active pane, assembled beside the closed-trade
+        // badge above. The two share a row but nothing else: this reads the live session store,
+        // that one a durable report snapshot.
+        //
+        // The row is absolutely positioned and cannot measure itself, so the slot's own width is
+        // what bounds it. Measurement goes through `design::ui_text_width`, the same active-theme
+        // text metric the rest of the UI truncates against, rather than a per-character constant of
+        // this file's own — a fixed advance would be a second typography system and would drift the
+        // moment the font-size setting or MoonUI's badge metrics moved.
+        let measure = |text: &str| {
+            crate::design::ui_text_width(cx, text, OVERLAY_TEXT_PX, 400.0, false) + BADGE_CHROME_PX
+        };
+        let stats_budget = {
+            let logical_w = slot_w as f32 / ppp;
+            let claimed = OVERLAY_LEFT_PX
+                + OVERLAY_RIGHT_MARGIN_PX
+                + if trade_retry { RETRY_BUTTON_PX } else { 0.0 }
+                // The closed-trade badge is drawn first and spends from the same row.
+                + trade_status.as_deref().map_or(0.0, &measure);
+            (logical_w - claimed).max(0.0)
+        };
+        let order_stats = self.chart.active_target().and_then(|(core, market)| {
+            let backend = self.backend.read(cx);
+            let core_state = backend.session.store().core(core)?;
+            order_stats::order_stats(&core_state.orders, &market, stats_budget, &measure)
+        });
         let logo_w = ((slot_w as f32 / ppp) * 0.28).clamp(180.0, 280.0);
         div()
             .id("chart-slot")
@@ -617,21 +683,29 @@ impl Render for ChartPanel {
             // in `frame()`; see data_state::apply_slot_geometry. The first present therefore uses
             // the real slot, without expanding to a default size or lagging during reflow.
             .child(self.chart.canvas().text_under().absolute().size_full())
-            .children(trade_status.map(|status| {
+            // Top-left status row. The container is hoisted out of the trade-history status so the
+            // live order figures still appear while that durable read is Idle; it is rendered only
+            // when at least one of the two sources produced something.
+            .children((trade_status.is_some() || order_stats.is_some()).then(|| {
                 let entity = cx.entity();
                 div()
                     .absolute()
                     .top(px(6.0))
-                    .left(px(92.0))
+                    .left(px(OVERLAY_LEFT_PX))
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(
+                    // Defensive only: the width budget already dropped anything that would not
+                    // fit, so clipping here means the badge measurement under-estimated. It is
+                    // the backstop for that estimate being an estimate, not a layout mode this
+                    // row is meant to reach.
+                    .overflow_hidden()
+                    .children(trade_status.map(|status| {
                         MoonBadge::new(status)
                             .variant(MoonBadgeVariant::Soft)
                             .size(MoonBadgeSize::Tiny)
-                            .render(),
-                    )
+                            .render()
+                    }))
                     .when(trade_retry, |this| {
                         this.child(
                             MoonButton::new("chart-trade-history-retry")
@@ -644,6 +718,25 @@ impl Render for ChartPanel {
                                 .render(),
                         )
                     })
+                    .children(order_stats.iter().flat_map(|stats| {
+                        stats.iter().map(|stat| {
+                            // Through MoonUI's own tone tokens rather than a hand-picked
+                            // colour: this is the same route the Orders table's PNL cells
+                            // take, so one quantity keeps one colour convention across both
+                            // surfaces, and the light theme's legibility stays MoonUI's
+                            // problem instead of being re-solved here.
+                            let tone = match stat.tone {
+                                order_stats::StatTone::Soft => MoonTone::Muted,
+                                order_stats::StatTone::Positive => MoonTone::Positive,
+                                order_stats::StatTone::Negative => MoonTone::Danger,
+                            };
+                            MoonBadge::new(stat.text.clone())
+                                .variant(MoonBadgeVariant::Soft)
+                                .size(MoonBadgeSize::Tiny)
+                                .tone(tone)
+                                .render()
+                        })
+                    }))
             }))
             .when(show_empty_logo, |this| {
                 // Cover the own pass with an opaque chart background in an empty slot so its logo

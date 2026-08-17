@@ -2,6 +2,37 @@
 
 use super::*;
 
+/// `layout.rs:ChartGraphicsCfg` must keep its shipped defaults and salvage a single malformed
+/// field; replacing its lenient reader can reset chart settings or discard the surrounding layout.
+#[test]
+fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
+    let empty: WindowLayout = toml::from_str("").expect("an empty layout must load");
+    assert!(empty.chart_graphics.hide_closed_sell_line);
+    assert!(empty.chart_graphics.show_real_trades);
+    assert!(empty.chart_graphics.show_emulator_trades);
+    assert_eq!(empty.chart_graphics.trade_arrow_scale, 1.0);
+    assert_eq!(empty.chart_graphics.connector_thickness_px, 2.0);
+
+    let doc = "analytics_period = \"p-cur-month\"\n\
+               [chart_graphics]\n\
+               trade_arrow_scale = 1.5\n\
+               connector_thickness_px = 3.0\n\
+               show_real_trades = \"yes\"\n\
+               show_emulator_trades = false\n\
+               hide_closed_sell_line = false\n";
+    let decoded: WindowLayout = toml::from_str(doc)
+        .expect("one malformed chart-graphics field must not reject the layout document");
+    assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
+    assert_eq!(decoded.chart_graphics.trade_arrow_scale, 1.5);
+    assert_eq!(decoded.chart_graphics.connector_thickness_px, 3.0);
+    assert!(
+        decoded.chart_graphics.show_real_trades,
+        "the malformed bool must fall back to its documented default"
+    );
+    assert!(!decoded.chart_graphics.show_emulator_trades);
+    assert!(!decoded.chart_graphics.hide_closed_sell_line);
+}
+
 /// Protects all workspace maps as a restart-stable, backwards-compatible layout contract.
 ///
 /// Plausible breakage: marking a map as skipped/default-only makes a saved Auto workspace silently

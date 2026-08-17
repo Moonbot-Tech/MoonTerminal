@@ -64,7 +64,8 @@ pub use hotkeys::{
 };
 pub use lang::Language;
 pub use layout::{
-    clamp_auto_workspace_rail_width, DetachedLayout, GeomRect, GroupLayout, ReportFilterPrefs,
+    clamp_auto_workspace_rail_width, ChartGraphicsCfg, DetachedLayout, GeomRect, GroupLayout,
+    ReportFilterPrefs,
     TableSortPreference, WindowLayout, WorkspaceMode, AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT,
     AUTO_WORKSPACE_RAIL_WIDTH_MAX, AUTO_WORKSPACE_RAIL_WIDTH_MIN,
 };

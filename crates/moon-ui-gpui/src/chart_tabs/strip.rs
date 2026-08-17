@@ -13,6 +13,7 @@ use rust_i18n::t;
 
 use super::candle_popup;
 use super::common;
+use super::graphics_popup;
 use super::{chart_tab_strip_h, coin_search, ChartTabs, Tab};
 use crate::design;
 
@@ -237,6 +238,24 @@ impl Render for ChartTabs {
                 .render(),
             cx,
         );
+        // The palette button beside the candles one edits the GLOBAL chart-drawing settings.
+        let graphics_popup_open = self.graphics_popup_open;
+        let graphics_btn = graphics_popup::graphics_popup_host(
+            self,
+            "chart-graphics",
+            MoonButton::new("chart-graphics-settings")
+                .leading_icon(MoonButtonIconSlot::new("icons/palette.svg"))
+                .tooltip(t!("chart.graphics.tip").to_string())
+                .size(MoonButtonSize::Micro)
+                .variant(if graphics_popup_open {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Ghost
+                })
+                .selected(graphics_popup_open)
+                .render(),
+            cx,
+        );
         // The per-window market search sits left of scale and queries the active tab's cores.
         // Absolutely position matches below its wrapper and place the cluster outside the strip's
         // clipping layer so `overflow_hidden` cannot cut off the dropdown.
@@ -354,6 +373,7 @@ impl Render for ChartTabs {
                             .child(scale_dropdown)
                             .children(gather_btn)
                             .child(candle_btn)
+                            .child(graphics_btn)
                             .child(settings_btn),
                     ),
             );

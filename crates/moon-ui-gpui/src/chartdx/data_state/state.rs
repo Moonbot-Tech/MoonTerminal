@@ -25,6 +25,7 @@ impl ChartDataState {
             price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
             time_axis_visible: true,
             candle_view: moon_core::market::CandleViewCfg::default(),
+            chart_graphics: moon_core::config::ChartGraphicsCfg::default(),
             default_x_ppm: None,
             prospective_usd: None,
             order_highlight: None,

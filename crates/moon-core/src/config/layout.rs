@@ -584,6 +584,9 @@ pub struct WindowLayout {
     /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     #[serde(default)]
     pub candle_view: crate::market::candles::CandleViewCfg,
+    /// Chart drawing settings from the toolbar's palette popup — GLOBAL, with no per-tab override.
+    #[serde(default, deserialize_with = "de_lenient_graphics")]
+    pub chart_graphics: ChartGraphicsCfg,
     // The former `detect_view_by_group` moved to a separate `detects_view.toml`
     // (see `detect_view::DetectViewFile`); the old layout.toml key is simply ignored.
     /// Chart X time scale (pixels per millisecond) BY GROUP WINDOW: [Shift+middle click] on a chart
@@ -706,6 +709,75 @@ impl Default for WarnAxesCfg {
             ping: true,
             exch: true,
             api: true,
+        }
+    }
+}
+
+/// Default multiplier on the closed-trade-history arrow size: the sizes the layer shipped with.
+fn def_trade_arrow_scale() -> f32 {
+    1.0
+}
+
+/// Default entry-to-exit connector thickness, matching `moon_chart::trade_marks::CONNECTOR_THICKNESS`.
+fn def_connector_thickness_px() -> f32 {
+    2.0
+}
+
+/// Chart drawing settings edited from the toolbar's palette popup — GLOBAL, one set for every
+/// chart in the application.
+///
+/// Deliberately separate from `OrdersStyle` in `orders.toml`: that file describes how each ORDER
+/// LINE is painted (colour, dash, marker sizes), while these five values decide how big the
+/// closed-trade history is drawn and which closed TRADES appear at all. Mixing them would make two
+/// unrelated surfaces move together, which is the same reason `trade_marks.rs` refused to read
+/// `orders.toml`.
+///
+/// The two numeric fields are NOT clamped here, because `layout.toml` is hand-editable and the
+/// drawing path and the hit-test path must clamp IDENTICALLY or the glyph and the region that
+/// responds to it drift apart. Both clamps, and the `normalize_chart_graphics` that every storing
+/// or comparing site applies, therefore live together in `moon_chart::trade_marks`.
+///
+/// Every field decodes LENIENTLY and independently, because the whole document is one
+/// deserialization (see [`WindowLayout`]): a hand-typed `show_real_trades = "yes"` falls back to
+/// that one field's default instead of resetting the other four — or the file.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ChartGraphicsCfg {
+    /// Multiplier on the trade-history arrow's half-extents. One is the size the layer shipped with.
+    #[serde(default = "def_trade_arrow_scale", deserialize_with = "de_arrow_scale")]
+    pub trade_arrow_scale: f32,
+    /// Thickness of the dashed entry-to-exit connector, in LOGICAL px.
+    #[serde(
+        default = "def_connector_thickness_px",
+        deserialize_with = "de_connector_thickness"
+    )]
+    pub connector_thickness_px: f32,
+    /// Whether closed trades made by a REAL (non-emulator) order draw their history marks.
+    ///
+    /// This pair once selected which ORDER LINES were drawn. It selects TRADES now: the order lines
+    /// a core reports are few and every one of them is actionable, while closed-trade history is the
+    /// crowded layer where telling a live result from an emulated one is what the user needs.
+    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    pub show_real_trades: bool,
+    /// Whether closed trades made by an EMULATOR order draw their history marks.
+    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    pub show_emulator_trades: bool,
+    /// Whether a CLOSED order hides its sell-price line. Live orders always keep theirs.
+    ///
+    /// On by default: after an order closes, its blue sell line stays on the chart at
+    /// `closed_alpha` and reads as a live price the terminal is still tracking.
+    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    pub hide_closed_sell_line: bool,
+}
+
+impl Default for ChartGraphicsCfg {
+    /// The shipped sizes with every trade kind visible, and the closed sell line hidden.
+    fn default() -> Self {
+        Self {
+            trade_arrow_scale: def_trade_arrow_scale(),
+            connector_thickness_px: def_connector_thickness_px(),
+            show_real_trades: true,
+            show_emulator_trades: true,
+            hide_closed_sell_line: true,
         }
     }
 }
@@ -979,6 +1051,43 @@ where
         Some(Or::Val(v)) => Some(v),
         Some(Or::Other(_)) | None => None,
     })
+}
+
+/// Read one [`ChartGraphicsCfg`] boolean leniently, defaulting an unusable value to `true`.
+///
+/// All three of them default on, so one helper covers the set.
+fn de_lenient_true<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, bool>(d)?.unwrap_or(true))
+}
+
+/// Read the arrow-size multiplier leniently, defaulting an unusable value.
+fn de_arrow_scale<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_trade_arrow_scale))
+}
+
+/// Read the connector thickness leniently, defaulting an unusable value.
+fn de_connector_thickness<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_connector_thickness_px))
+}
+
+/// Read [`ChartGraphicsCfg`] leniently, falling back to the defaults for an unusable table.
+///
+/// The whole document is one deserialization (see [`WindowLayout`]), so a hand-edited chart
+/// graphics table must never cost every window position in the file.
+fn de_lenient_graphics<'de, D>(d: D) -> Result<ChartGraphicsCfg, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, ChartGraphicsCfg>(d)?.unwrap_or_default())
 }
 
 /// Read a hand-editable map without allowing one malformed preference to reject the layout.
