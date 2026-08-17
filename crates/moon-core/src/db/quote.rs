@@ -602,13 +602,29 @@ pub struct UsdtTotal {
 pub struct QuoteVolume {
     /// Currency shared by every eligible trade in this bucket.
     pub currency: QuoteCurrency,
-    /// Unsigned entry-plus-exit notional, withheld when any eligible row is unprovable.
-    pub amount: Option<f64>,
+    /// Unsigned entry-plus-exit notional over the RECONSTRUCTED trades of this bucket only.
+    ///
+    /// Never a withheld figure: the physical query already sums nothing but reconstructed rows, so
+    /// this is a dimensionally sound subtotal whatever the rest of the bucket did. It is the WHOLE
+    /// bucket only while [`Self::reconstructed`] equals [`Self::orders`]; a reader that presents it
+    /// without checking that pair states a partial sum as if it were the complete filter total.
+    pub amount: f64,
     /// Closed non-Funding trades assigned to this currency.
     pub orders: i64,
+    /// Trades of this bucket whose two price legs reconstructed in native money.
+    ///
+    /// Kept beside [`Self::orders`] rather than collapsed into an optional amount, because one
+    /// unprovable row out of a thousand used to blank a bucket entirely — and a single-currency
+    /// scope has no second bucket to fall back on.
+    pub reconstructed: i64,
 }
 
-/// Complete-only two-sided traded volume for one exact Report filter.
+/// Two-sided traded volume for one exact Report filter, complete or partial.
+///
+/// Only [`Self::usdt`] is complete-only. The native buckets always carry their money and state
+/// their own completeness through [`QuoteVolume::reconstructed`], because a single-currency scope
+/// has no second bucket to fall back on: withholding the amount there left the footer with nothing
+/// to say over one unprovable row in a thousand.
 ///
 /// This carrier is deliberately independent of [`ValuationCoverage`]: open and Funding rows are
 /// valid Report/profit rows but are not eligible volume rows, so profit coverage cannot decide
@@ -630,13 +646,14 @@ pub struct TradedVolume {
 }
 
 impl TradedVolume {
-    /// Build complete-only volume from physical-source quote groups.
+    /// Build per-quote volume subtotals from physical-source quote groups.
     ///
     /// Args:
     ///     groups: `(ordinal, eligible, reconstructed, native sum, valued, USDT sum)` aggregates.
     ///
     /// Returns:
-    ///     Per-quote native buckets plus independently complete unified USDT coverage.
+    ///     Per-quote native subtotals with their own reconstruction counts, plus independently
+    ///     complete unified USDT coverage.
     pub(crate) fn from_groups(
         groups: impl IntoIterator<Item = (Option<i64>, i64, i64, f64, i64, f64)>,
     ) -> Self {
@@ -665,8 +682,9 @@ impl TradedVolume {
             .into_iter()
             .map(|(currency, (orders, reconstructed, native))| QuoteVolume {
                 currency,
-                amount: (orders == reconstructed).then_some(native),
+                amount: native,
                 orders,
+                reconstructed,
             })
             .collect();
         out.usdt = (out.eligible_orders > 0
@@ -721,7 +739,8 @@ pub struct QuoteBreakdown {
     pub orders: i64,
     /// Optional historical USDT coverage from the attached valuation cache.
     pub valuation: Option<ValuationCoverage>,
-    /// Complete-only two-sided volume computed over this same filter and snapshot.
+    /// Two-sided volume computed over this same filter and snapshot; [`TradedVolume`] states its
+    /// own completeness rather than withholding a native amount.
     pub traded_volume: TradedVolume,
 }
 

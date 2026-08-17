@@ -34,7 +34,7 @@ fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
 ///
 /// Args:
 ///     snapshot: Loaded Report result whose profit/count behavior stays intact.
-///     volume: Complete-only volume state to render.
+///     volume: Volume state to render, complete or partial.
 ///
 /// Returns:
 ///     The same snapshot carrying the supplied volume state.
@@ -504,8 +504,9 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
         TradedVolume {
             totals: vec![QuoteVolume {
                 currency: usdt,
-                amount: Some(1_617_960.71),
+                amount: 1_617_960.71,
                 orders: 2,
+                reconstructed: 2,
             }],
             eligible_orders: 2,
             reconstructed_orders: 2,
@@ -545,13 +546,15 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
             totals: vec![
                 QuoteVolume {
                     currency: usdt,
-                    amount: Some(12_345.67),
+                    amount: 12_345.67,
                     orders: 1,
+                    reconstructed: 1,
                 },
                 QuoteVolume {
                     currency: usdc,
-                    amount: Some(2_345_678_901.23),
+                    amount: 2_345_678_901.23,
                     orders: 1,
+                    reconstructed: 1,
                 },
             ],
             eligible_orders: 2,
@@ -591,10 +594,11 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
     );
 }
 
-/// Publishing one reconstructed bucket when another is incomplete would make a partial amount
-/// look like the exact total, while empty/loading/failed states must never fabricate zero volume.
+/// `totals.rs:traded_volume_amount` must keep a complete native bucket when another bucket is
+/// unreconstructable; restoring the old all-or-nothing collection hides known traded volume from a
+/// Full summary, while empty/loading/failed states must still never fabricate a volume fact.
 #[test]
-fn traded_volume_is_absent_when_the_loaded_scope_is_incomplete_or_absent() {
+fn traded_volume_keeps_its_known_buckets_and_is_absent_only_with_nothing_provable() {
     let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
     let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
     let incomplete = with_volume(
@@ -603,13 +607,15 @@ fn traded_volume_is_absent_when_the_loaded_scope_is_incomplete_or_absent() {
             totals: vec![
                 QuoteVolume {
                     currency: usdt,
-                    amount: Some(420.0),
+                    amount: 420.0,
                     orders: 1,
+                    reconstructed: 1,
                 },
                 QuoteVolume {
                     currency: usdc,
-                    amount: None,
+                    amount: 0.0,
                     orders: 1,
+                    reconstructed: 0,
                 },
             ],
             eligible_orders: 2,
@@ -618,10 +624,13 @@ fn traded_volume_is_absent_when_the_loaded_scope_is_incomplete_or_absent() {
         },
     );
     let facts = historical_facts(Some(&incomplete), false, &ValuationStatus::default(), T0);
-    assert!(
-        facts.tail.iter().all(|fact| !fact.section_start),
-        "no partial volume fact or orphan separator may render"
-    );
+    let volume = facts
+        .tail
+        .iter()
+        .find(|fact| fact.section_start)
+        .expect("a complete USDT bucket must remain visible beside the incomplete warning");
+    assert_eq!(volume.text, "Volume (partial): 420 USDT");
+    assert_eq!(volume.tone, FactTone::Warn);
 
     for (snapshot, failed) in [(None, false), (None, true)] {
         let facts = historical_facts(snapshot, failed, &ValuationStatus::default(), T0);
@@ -629,5 +638,183 @@ fn traded_volume_is_absent_when_the_loaded_scope_is_incomplete_or_absent() {
     }
     let empty = data(Vec::new(), 0);
     let facts = historical_facts(Some(&empty), false, &ValuationStatus::default(), T0);
-    assert!(facts.tail.iter().all(|fact| !fact.section_start));
+    assert!(
+        facts.tail.iter().all(|fact| !fact.section_start),
+        "an empty loaded result may not render an orphan volume separator"
+    );
+}
+
+/// `totals.rs:traded_volume_amount` must not restore the all-or-nothing native-volume guard;
+/// otherwise a Full summary with one unreconstructable USDC bucket silently loses the complete
+/// USDT volume instead of warning that one order and its quote currency were withheld.
+#[test]
+fn partial_traded_volume_keeps_the_known_bucket_and_spells_its_shortfall() {
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
+    let incomplete = with_volume(
+        data(vec![(Some(1), 12.5, 1), (Some(8), 2.0, 1)], 2),
+        TradedVolume {
+            totals: vec![
+                QuoteVolume {
+                    currency: usdt,
+                    amount: 420.0,
+                    orders: 1,
+                    reconstructed: 1,
+                },
+                QuoteVolume {
+                    currency: usdc,
+                    amount: 0.0,
+                    orders: 1,
+                    reconstructed: 0,
+                },
+            ],
+            eligible_orders: 2,
+            reconstructed_orders: 1,
+            ..Default::default()
+        },
+    );
+
+    let facts = historical_facts(Some(&incomplete), false, &ValuationStatus::default(), T0);
+    let volume = facts
+        .tail
+        .iter()
+        .find(|fact| fact.section_start)
+        .expect("the independently complete USDT bucket must produce one volume fact");
+    assert_eq!(volume.text, "Volume (partial): 420 USDT");
+    assert_eq!(volume.tone, FactTone::Warn);
+    assert_eq!(
+        volume.spelled.as_deref(),
+        Some(
+            "Traded volume over the reconstructed trades: 420 USDT. Orders not accounted for: 1 (USDC)"
+        ),
+        "the recovery text must identify the independently withheld order and its persisted quote"
+    );
+    let tooltip = footer_tooltip(&facts);
+    assert!(
+        tooltip.contains("Orders not accounted for: 1 (USDC)"),
+        "the row tooltip must retain the partial fact's independently assembled shortfall, got {tooltip:?}"
+    );
+}
+
+/// `totals.rs:traded_volume_amount` must reserve unified USDT conversion for Mixed scopes; widening
+/// that shortcut to a single USDC bucket swaps its persisted native amount for a rate-derived USDT
+/// figure and, in current valuation mode, gives a lone-currency Report the wrong money and wording.
+#[test]
+fn single_quote_volume_keeps_its_persisted_native_amount() {
+    let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
+    let single = with_volume(
+        data(vec![(Some(8), 12.5, 1)], 1),
+        TradedVolume {
+            totals: vec![QuoteVolume {
+                currency: usdc,
+                amount: 12.5,
+                orders: 1,
+                reconstructed: 1,
+            }],
+            eligible_orders: 1,
+            reconstructed_orders: 1,
+            valued_orders: 1,
+            usdt: Some(20.0),
+            ..Default::default()
+        },
+    );
+
+    let facts = historical_facts(Some(&single), false, &ValuationStatus::default(), T0);
+    let volume = facts
+        .tail
+        .iter()
+        .find(|fact| fact.section_start)
+        .expect("a complete single-currency scope must state its native volume");
+    assert_eq!(volume.text, "Volume: 12.5 USDC");
+    assert_eq!(volume.tone, FactTone::Soft);
+}
+
+/// The regression the previous fix missed: a SINGLE-currency scope has no second bucket, so
+/// deciding completeness inside the bucket blanked the whole footer figure over one liquidation out
+/// of a thousand trades. Restoring an all-or-nothing bucket — dropping `QuoteVolume::reconstructed`
+/// and gating the amount on `orders == reconstructed` again — turns the first half red; counting
+/// the shortfall per BUCKET instead of per ROW turns the mixed half red, because a bucket that is
+/// stated AND short would then contribute nothing to the gap.
+#[test]
+fn partial_single_currency_volume_is_stated_and_marked_rather_than_withheld() {
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
+    let single = with_volume(
+        data(vec![(Some(1), 322.79, 1004)], 1004),
+        TradedVolume {
+            totals: vec![QuoteVolume {
+                currency: usdt,
+                amount: 1_234_567.89,
+                orders: 1004,
+                reconstructed: 1003,
+            }],
+            eligible_orders: 1004,
+            reconstructed_orders: 1003,
+            ..Default::default()
+        },
+    );
+
+    let facts = historical_facts(Some(&single), false, &ValuationStatus::default(), T0);
+    let volume = facts
+        .tail
+        .iter()
+        .find(|fact| fact.section_start)
+        .expect("one unreconstructable trade may not erase the only bucket's volume");
+    assert_eq!(volume.text, "Volume (partial): 1.23M USDT");
+    assert_eq!(
+        volume.tone,
+        FactTone::Warn,
+        "a partial subtotal must never wear the tone of a complete filter total"
+    );
+    assert_eq!(
+        volume.spelled.as_deref(),
+        Some(
+            "Traded volume over the reconstructed trades: 1234567.89 USDT. Orders not accounted for: 1 (USDT)"
+        ),
+        "the shortfall names the one row and the quote it belongs to"
+    );
+    assert!(
+        footer_tooltip(&facts).contains("Orders not accounted for: 1 (USDT)"),
+        "the shortfall must survive clipping through the shared row tooltip"
+    );
+
+    // A mixed scope whose buckets are BOTH stated while one is short: the gap is a row count, not a
+    // bucket count, so the partially reconstructed USDT bucket keeps its money and still warns.
+    let mixed = with_volume(
+        data(vec![(Some(1), 12.5, 4), (Some(8), 2.0, 2)], 6),
+        TradedVolume {
+            totals: vec![
+                QuoteVolume {
+                    currency: usdt,
+                    amount: 900.0,
+                    orders: 4,
+                    reconstructed: 3,
+                },
+                QuoteVolume {
+                    currency: usdc,
+                    amount: 75.0,
+                    orders: 2,
+                    reconstructed: 2,
+                },
+            ],
+            eligible_orders: 6,
+            reconstructed_orders: 5,
+            ..Default::default()
+        },
+    );
+    let facts = historical_facts(Some(&mixed), false, &ValuationStatus::default(), T0);
+    let volume = facts
+        .tail
+        .iter()
+        .find(|fact| fact.section_start)
+        .expect("both known buckets must remain stated");
+    assert_eq!(volume.text, "Volume (partial): 900 USDT + 75 USDC");
+    assert_eq!(volume.tone, FactTone::Warn);
+    assert_eq!(
+        volume.spelled.as_deref(),
+        Some(
+            "Traded volume over the reconstructed trades: 900 USDT + 75 USDC. Orders not accounted for: 1 (USDT)"
+        ),
+        "only the short bucket names itself, and only its missing row is counted"
+    );
 }

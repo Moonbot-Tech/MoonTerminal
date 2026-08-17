@@ -1,11 +1,11 @@
 //! Regression tests for exact Report strategy filtering.
 
-use rusqlite::types::Value;
 use rusqlite::Connection;
+use rusqlite::types::Value;
 
 use super::{
-    distinct_strategies, query_chart_trade_history, query_reports, query_totals, QuoteCurrency,
-    ReportFilter, ReportStrategyKey, SideFilter,
+    QuoteCurrency, ReportFilter, ReportStrategyKey, SideFilter, distinct_strategies,
+    query_chart_trade_history, query_reports, query_totals,
 };
 
 /// Removing the exact core, exact coin, or inclusive close-date predicate from
@@ -421,7 +421,8 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
     );
     assert_eq!(current.traded_volume.eligible_orders, 2);
     assert_eq!(current.traded_volume.reconstructed_orders, 2);
-    assert_eq!(current.traded_volume.totals[0].amount, Some(870.0));
+    assert_eq!(current.traded_volume.totals[0].amount, 870.0);
+    assert_eq!(current.traded_volume.totals[0].reconstructed, 2);
     assert_eq!(
         current.traded_volume.usdt,
         Some(870.0),
@@ -451,7 +452,7 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
         .expect("query historical traded volume");
     assert_eq!(historical.orders, 4);
     assert_eq!(historical.totals[0].profit, 140.0);
-    assert_eq!(historical.traded_volume.totals[0].amount, Some(870.0));
+    assert_eq!(historical.traded_volume.totals[0].amount, 870.0);
     assert_eq!(
         historical.traded_volume.usdt,
         Some(435.0),
@@ -462,10 +463,13 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
     std::fs::remove_dir_all(dir).expect("remove traded-volume fixture directory");
 }
 
-/// Publishing a SUM when one eligible row is inverse-denominated or an explicit liquidation
-/// would present a confident partial or dimensionally invalid amount as the whole filter total.
+/// An inverse-denominated row, an explicit liquidation, a missing reason and a source without the
+/// reason column must all stay OUT of the summed money while still being counted, so the published
+/// subtotal is dimensionally sound and its shortfall is recoverable. Widening the summed predicate
+/// would mix incomparable quotes into one figure; dropping the reconstruction count would leave the
+/// reader unable to tell a partial subtotal from the whole filter total.
 #[test]
-fn traded_volume_withholds_unprovable_rows_instead_of_publishing_a_partial_sum() {
+fn traded_volume_sums_only_provable_rows_and_publishes_its_shortfall() {
     let conn = Connection::open_in_memory().expect("open incomplete-volume fixture");
     conn.execute_batch(
         "CREATE TABLE orders_rep (
@@ -499,13 +503,27 @@ fn traded_volume_withholds_unprovable_rows_instead_of_publishing_a_partial_sum()
     assert_eq!(totals.traded_volume.eligible_orders, 6);
     assert_eq!(totals.traded_volume.reconstructed_orders, 1);
     assert_eq!(totals.traded_volume.usdt, None);
-    assert!(
-        totals
-            .traded_volume
-            .totals
-            .iter()
-            .all(|bucket| bucket.amount.is_none()),
-        "neither the ordinary-row subtotal nor contract quantity times USD prices is publishable"
+    let buckets = &totals.traded_volume.totals;
+    assert_eq!(
+        buckets.len(),
+        2,
+        "the USD-quoted inverse contract keeps a bucket of its own, got {buckets:?}"
+    );
+    assert_eq!(buckets[0].orders, 1);
+    assert_eq!(
+        buckets[0].reconstructed, 0,
+        "the inverse contract's USD prices never reconstruct against its own money"
+    );
+    assert_eq!(buckets[0].amount, 0.0);
+    assert_eq!(buckets[1].currency.ticker(), "USDT");
+    assert_eq!(buckets[1].orders, 5);
+    assert_eq!(
+        buckets[1].reconstructed, 1,
+        "the liquidation, the reasonless row and the reasonless source all stay out"
+    );
+    assert_eq!(
+        buckets[1].amount, 420.0,
+        "only the one ordinary same-quote row contributes: 2 * 100 entry plus 2 * 110 exit"
     );
 }
 
@@ -887,15 +905,17 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
         .map(|strategy| (strategy.key.core_uid, strategy.key.strategy_id))
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(open_keys, std::collections::BTreeSet::from([(2, 109)]));
-    assert!(distinct_strategies(
-        &conn,
-        &ReportFilter {
-            closed_only: true,
-            ..open
-        },
-    )
-    .expect("load closed-only strategy choices")
-    .is_empty());
+    assert!(
+        distinct_strategies(
+            &conn,
+            &ReportFilter {
+                closed_only: true,
+                ..open
+            },
+        )
+        .expect("load closed-only strategy choices")
+        .is_empty()
+    );
 }
 
 /// Replacing the grouped exact-key predicate with only its first key must lose one selected row,
@@ -953,10 +973,12 @@ fn multiple_and_explicit_empty_strategy_filters_remain_exact() {
         strategies: Some(Vec::new()),
         ..ReportFilter::default()
     };
-    assert!(query_reports(&conn, &empty, "closedate", false, 100)
-        .expect("query explicit empty strategy set")
-        .rows
-        .is_empty());
+    assert!(
+        query_reports(&conn, &empty, "closedate", false, 100)
+            .expect("query explicit empty strategy set")
+            .rows
+            .is_empty()
+    );
     let empty_totals = query_totals(&conn, &empty).expect("query explicit empty totals");
     assert_eq!(empty_totals.orders, 0);
     assert!(empty_totals.totals.is_empty());
@@ -1783,4 +1805,86 @@ fn every_corrected_column_sorts_by_the_same_sql_it_projects() {
             "`{column}` must not sort by the raw stored value"
         );
     }
+}
+
+/// Dropping the `emulator` projection from `query_chart_trade_history`, or making it REQUIRED,
+/// must fail here.
+///
+/// The chart's two trade-kind checkboxes filter marks at drawing time, so the flag has to reach the
+/// terminal per row rather than as a query predicate. Two failures matter and they point opposite
+/// ways: not selecting the column at all reports every trade as real and leaves the emulator
+/// checkbox inert, while treating the column as REQUIRED would make a replica whose table predates
+/// it return NO trades and blank the chart. The column is therefore optional with a `0` fallback,
+/// and the fallback direction is deliberate - showing an emulated trade as real is visible and
+/// recoverable, hiding real trades on old data is not.
+#[test]
+fn chart_history_carries_the_emulator_flag_and_defaults_it_to_real() {
+    let with_column = Connection::open_in_memory().expect("open emulator fixture");
+    with_column
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER NOT NULL,
+                 newrecid INTEGER NOT NULL,
+                 coin TEXT,
+                 buydate INTEGER,
+                 closedate INTEGER,
+                 buyprice REAL,
+                 sellprice REAL,
+                 quantity REAL,
+                 isshort INTEGER,
+                 emulator INTEGER
+             );
+             INSERT INTO orders_rep VALUES
+                 (7, 21, 'BTCUSDT', 50, 100, 10.0, 12.0, 2.0, 0, 0),
+                 (7, 22, 'BTCUSDT', 60, 110, 10.0, 12.0, 2.0, 0, 1),
+                 (7, 23, 'BTCUSDT', 70, 120, 10.0, 12.0, 2.0, 0, NULL);",
+        )
+        .expect("seed emulator fixture");
+
+    let result = query_chart_trade_history(&with_column, 7, &["btcusdt".to_string()], None, 10)
+        .expect("query chart history with an emulator column");
+    let mut seen: Vec<(i64, bool)> = result
+        .records
+        .iter()
+        .map(|record| (record.record_id, record.emulator))
+        .collect();
+    seen.sort_unstable();
+    assert_eq!(
+        seen,
+        vec![(21, false), (22, true), (23, false)],
+        "the per-row flag must be read, with a NULL counting as real"
+    );
+
+    // A source predating the column: every trade still returns, and every one of them reads as REAL.
+    let without_column = Connection::open_in_memory().expect("open legacy fixture");
+    without_column
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER NOT NULL,
+                 newrecid INTEGER NOT NULL,
+                 coin TEXT,
+                 buydate INTEGER,
+                 closedate INTEGER,
+                 buyprice REAL,
+                 sellprice REAL,
+                 quantity REAL,
+                 isshort INTEGER
+             );
+             INSERT INTO orders_rep VALUES
+                 (7, 31, 'BTCUSDT', 50, 100, 10.0, 12.0, 2.0, 0),
+                 (7, 32, 'BTCUSDT', 60, 110, 10.0, 12.0, 2.0, 0);",
+        )
+        .expect("seed legacy fixture");
+
+    let legacy = query_chart_trade_history(&without_column, 7, &["btcusdt".to_string()], None, 10)
+        .expect("a source without the emulator column must still return every trade");
+    assert_eq!(
+        legacy.records.len(),
+        2,
+        "an absent emulator column must not filter anything out"
+    );
+    assert!(
+        legacy.records.iter().all(|record| !record.emulator),
+        "an unknown flag must read as REAL, the recoverable direction"
+    );
 }
