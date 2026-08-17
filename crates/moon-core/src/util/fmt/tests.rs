@@ -141,3 +141,117 @@ fn signed_amount_takes_its_sign_from_the_rounded_value() {
         "a non-finite amount has no sign worth stating"
     );
 }
+
+/// A loss too small to survive rounding must render UNSIGNED and classify [`DeltaSign::Zero`], so
+/// the text and the colour a caller picks from that sign cannot disagree.
+///
+/// Breakage: signing the zero branch — `format!("{:+.*}", ..)` for every arm, or classifying `v`
+/// instead of `rounded`. Either paints a red, minus-signed `-0.00` on a figure that reads as
+/// break-even, which is the visible symptom this helper exists to remove.
+#[test]
+fn signed_fixed_renders_a_rounded_away_loss_unsigned_and_zero() {
+    assert_eq!(
+        signed_fixed(-0.004, 2).unwrap(),
+        ("0.00".to_string(), DeltaSign::Zero),
+        "a loss that rounds away is neither minus-signed nor negative"
+    );
+    // A gain that rounds away must not claim a "+" either.
+    assert_eq!(
+        signed_fixed(0.004, 2).unwrap(),
+        ("0.00".to_string(), DeltaSign::Zero)
+    );
+    // Literal -0.0 is canonicalized rather than printed with its minus.
+    assert_eq!(
+        signed_fixed(-0.0, 2).unwrap(),
+        ("0.00".to_string(), DeltaSign::Zero)
+    );
+    assert_eq!(
+        signed_fixed(0.0, 2).unwrap(),
+        ("0.00".to_string(), DeltaSign::Zero)
+    );
+}
+
+/// The whole reason this sibling of [`signed_amount`] exists: a right-aligned money COLUMN needs
+/// every decimal place, and `signed_amount` trims them through `compact`.
+///
+/// Breakage: routing `signed_fixed` through `compact` like its sibling. The two assertions are
+/// written as a PAIR so what is pinned is the DIFFERENCE between them — one of them alone would
+/// still pass if the helpers were merged back into one.
+#[test]
+fn signed_fixed_keeps_the_places_signed_amount_trims() {
+    assert_eq!(signed_fixed(12.0, 2).unwrap().0, "+12.00");
+    assert_eq!(signed_amount(12.0, 2).0, "+12");
+    assert_eq!(signed_fixed(12.5, 2).unwrap().0, "+12.50");
+    assert_eq!(signed_amount(12.5, 2).0, "+12.5");
+    assert_ne!(
+        signed_fixed(12.0, 2).unwrap().0,
+        signed_amount(12.0, 2).0,
+        "the fixed form must not collapse back onto the trimmed one"
+    );
+}
+
+/// A value with a sign keeps its explicit `+`/`-` at exactly the requested precision.
+#[test]
+fn signed_fixed_signs_both_directions_at_the_requested_precision() {
+    assert_eq!(
+        signed_fixed(3.5, 2).unwrap(),
+        ("+3.50".to_string(), DeltaSign::Positive)
+    );
+    assert_eq!(
+        signed_fixed(-3.5, 2).unwrap(),
+        ("-3.50".to_string(), DeltaSign::Negative)
+    );
+    // The precision is the caller's, not a fixed two places.
+    assert_eq!(signed_fixed(-3.5, 0).unwrap().0, "-4");
+    assert_eq!(signed_fixed(3.5, 4).unwrap().0, "+3.5000");
+}
+
+/// A non-finite amount returns `None` so each caller supplies its own placeholder.
+///
+/// Breakage: `unwrap_or(0.0)` on the rounding, as [`signed_amount`] does. A money column would
+/// then print a confident `0.00` — or, without the guard at all, a literal `NaN` — where the
+/// figure is simply unknown.
+#[test]
+fn signed_fixed_rejects_what_cannot_be_an_amount() {
+    assert!(signed_fixed(f64::NAN, 2).is_none());
+    assert!(signed_fixed(f64::INFINITY, 2).is_none());
+    assert!(signed_fixed(f64::NEG_INFINITY, 2).is_none());
+    // A finite input whose scaling overflows the rounding is rejected too.
+    assert!(signed_fixed(f64::MAX, 2).is_none());
+    // Just inside the range: still a real number, still formatted.
+    assert!(signed_fixed(1e300, 2).is_some());
+}
+
+/// Rounding precedes the sign choice, and it is half-AWAY-from-zero, as `pct` and `signed_amount`
+/// already are.
+///
+/// Breakage: classifying before rounding (the `0.004` cases regain a sign), or dropping
+/// [`round_to`] and letting `{:+.*}` round on its own — `{:.0}` is half-to-EVEN, so `2.5` would
+/// print `+2` and `-0.5` would print `-0`, disagreeing with every other formatter in this module.
+#[test]
+fn signed_fixed_rounds_before_choosing_the_sign() {
+    // Just under half a unit in the last place: no sign survives.
+    assert_eq!(
+        signed_fixed(-0.00499, 2).unwrap(),
+        ("0.00".to_string(), DeltaSign::Zero)
+    );
+    assert_eq!(
+        signed_fixed(0.00499, 2).unwrap(),
+        ("0.00".to_string(), DeltaSign::Zero)
+    );
+    // Exactly half a unit: rounds away from zero and keeps the sign it earned.
+    assert_eq!(
+        signed_fixed(0.005, 2).unwrap(),
+        ("+0.01".to_string(), DeltaSign::Positive)
+    );
+    assert_eq!(
+        signed_fixed(2.5, 0).unwrap(),
+        ("+3".to_string(), DeltaSign::Positive),
+        "midpoints round away from zero, not to even"
+    );
+    assert_eq!(
+        signed_fixed(-0.5, 0).unwrap(),
+        ("-1".to_string(), DeltaSign::Negative),
+        "midpoints round away from zero, not to even"
+    );
+}

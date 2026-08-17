@@ -32,6 +32,7 @@ mod firetest;
 mod hotkeys;
 mod load_state;
 mod media;
+mod order_math;
 mod panels;
 mod persistence;
 mod pulse;

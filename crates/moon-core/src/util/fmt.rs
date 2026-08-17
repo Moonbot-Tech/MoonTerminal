@@ -239,6 +239,33 @@ pub fn signed_amount(v: f64, decimals: usize) -> (String, DeltaSign) {
     )
 }
 
+/// Signed amount at FIXED decimals, classified from the ROUNDED value.
+///
+/// Identical in contract to [`signed_amount`] — one rounding rule feeds both the digits and the
+/// sign, so text and colour cannot disagree — but the fraction keeps every place instead of being
+/// trimmed. A right-aligned money COLUMN needs that: [`compact`]'s trimming renders `12.00` as
+/// `12` and `12.50` as `12.5`, so the decimal points in a table stop lining up and two rows of the
+/// same magnitude no longer read as comparable. Prefer [`signed_amount`] for prose and single
+/// figures; reach for this one when the value sits in a column.
+///
+/// A value that rounds to zero is rendered UNSIGNED and classified [`DeltaSign::Zero`]: a `+` there
+/// would claim a gain the figure does not show. This mirrors [`signed_pct`] exactly.
+///
+/// Args:
+///     v: Raw signed amount.
+///     decimals: Places to round and format to.
+///
+/// Returns:
+///     The formatted amount and the sign that text represents, or `None` when rounding produces no
+///     finite result, so each caller supplies its own placeholder.
+pub fn signed_fixed(v: f64, decimals: usize) -> Option<(String, DeltaSign)> {
+    let rounded = round_to(v, decimals)?;
+    match classify(rounded) {
+        DeltaSign::Zero => Some((format!("{:.*}", decimals, rounded), DeltaSign::Zero)),
+        sign => Some((format!("{:+.*}", decimals, rounded), sign)),
+    }
+}
+
 /// Classify an already-rounded value.
 fn classify(rounded: f64) -> DeltaSign {
     if rounded == 0.0 {
