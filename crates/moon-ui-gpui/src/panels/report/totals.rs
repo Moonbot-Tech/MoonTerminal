@@ -93,7 +93,7 @@ fn fact(text: String, tone: FactTone, bold: bool) -> FooterFact {
     }
 }
 
-/// Visible and recovery representations of one complete traded-volume amount.
+/// Visible and recovery representations of one traded-volume amount.
 struct VolumeAmountText {
     /// SI-compacted text used by the fixed-height footer row.
     visible: String,
@@ -101,6 +101,23 @@ struct VolumeAmountText {
     exact: String,
     /// Whether the amount is a unified active-mode USDT conversion.
     unified: bool,
+    /// What the stated amount leaves out, or `None` when it is the complete filter total.
+    gap: Option<VolumeGap>,
+}
+
+/// The eligible rows a stated volume amount could not account for.
+///
+/// Carried only by an INCOMPLETE amount, which is why its presence decides the fact's wording and
+/// tone rather than adding a second fact behind it: a shortfall stated in a neighbouring fact would
+/// be the FIRST thing a narrow dock clips, leaving a partial figure reading as the filter total —
+/// the exact failure the fail-closed rule exists to prevent.
+struct VolumeGap {
+    /// Eligible closed trades absent from the stated amount.
+    orders: i64,
+    /// What those trades are in the row's own terms: the quote tickers that fell short — including
+    /// a ticker whose own subtotal IS stated, since a bucket can be partial without being absent —
+    /// plus unknown quote identity as its own entry. Never empty while a gap exists.
+    currencies: String,
 }
 
 /// Format an unsigned volume amount in compact and exact native quote forms.
@@ -123,59 +140,84 @@ fn native_volume(amount: f64, currency: db::QuoteCurrency) -> (String, String) {
     )
 }
 
-/// Select the one complete amount the volume footer may state.
+/// Select the amount the volume footer may state, and name what that amount leaves out.
 ///
-/// A single known quote stays native. Mixed known quotes prefer complete active-mode USDT and
-/// otherwise remain an explicit per-quote breakdown. Unknown identity or any incomplete native
-/// bucket yields nothing rather than a confident partial sum.
+/// A complete active-mode USDT conversion is preferred over a MIXED scope, because it is the only
+/// single scalar such a scope can be stated as; a single known currency keeps its own native money.
+/// Otherwise the known quote buckets are stated explicitly and INDIVIDUALLY.
+///
+/// Fail-closed is a WORDING rule, not a withholding rule, and it lives HERE rather than in the
+/// bucket. [`db::QuoteVolume::amount`] sums nothing but reconstructed rows, so it is always a
+/// dimensionally sound subtotal — what varies is whether it is the WHOLE bucket, which
+/// [`db::QuoteVolume::reconstructed`] against [`db::QuoteVolume::orders`] answers. Deciding that at
+/// the bucket instead cost the user the figure entirely: a single-currency Report has no second
+/// bucket to fall back on, so one liquidation out of a thousand trades blanked the footer. Every
+/// bucket with at least one reconstructed trade is therefore stated, and each row it could not
+/// account for is carried into the shortfall that forces the partial wording and the warn tone.
 ///
 /// Args:
-///     volume: Independently complete volume carrier from the Report snapshot.
+///     volume: Volume carrier from the Report snapshot, complete or not.
 ///
 /// Returns:
-///     Compact visible text, exact tooltip text and unified-conversion identity, or `None` when
-///     the scope cannot be stated completely.
+///     Compact visible text, exact tooltip text, unified-conversion identity and the unaccounted
+///     rows, or `None` when not one bucket reconstructed a single trade.
 fn traded_volume_amount(volume: &db::TradedVolume) -> Option<VolumeAmountText> {
-    match volume.scope() {
-        db::QuoteScope::Empty | db::QuoteScope::Unknown => None,
-        db::QuoteScope::Single(currency) => volume
-            .totals
-            .first()
-            .and_then(|bucket| bucket.amount)
-            .map(|amount| {
-                let (visible, exact) = native_volume(amount, currency);
-                VolumeAmountText {
-                    visible,
-                    exact,
-                    unified: false,
-                }
-            }),
-        db::QuoteScope::Mixed => {
-            if let Some(usdt) = volume.usdt {
-                let (visible, exact) = native_volume(usdt, db::QuoteCurrency::usdt());
-                return Some(VolumeAmountText {
-                    visible,
-                    exact,
-                    unified: true,
-                });
-            }
-            let amounts = volume
-                .totals
-                .iter()
-                .map(|bucket| {
-                    bucket
-                        .amount
-                        .map(|amount| native_volume(amount, bucket.currency))
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let (visible, exact): (Vec<_>, Vec<_>) = amounts.into_iter().unzip();
-            Some(VolumeAmountText {
-                visible: visible.join(" + "),
-                exact: exact.join(" + "),
-                unified: false,
-            })
+    // A unified conversion answers only the scope a native amount CANNOT. Under one known currency
+    // that currency's own money already IS the answer, and `TradedVolume::usdt` is published for a
+    // fully valued SINGLE bucket too — so without this gate a lone USDC report would swap its
+    // persisted figure for a rate-derived USDT one, and under the current-rate mode take that
+    // mode's wording with it. A unified figure also exists only over a fully reconstructed and
+    // fully valued scope, which is why it can never carry a gap.
+    if matches!(volume.scope(), db::QuoteScope::Mixed) {
+        if let Some(usdt) = volume.usdt {
+            let (visible, exact) = native_volume(usdt, db::QuoteCurrency::usdt());
+            return Some(VolumeAmountText {
+                visible,
+                exact,
+                unified: true,
+                gap: None,
+            });
         }
     }
+    let mut visible = Vec::new();
+    let mut exact = Vec::new();
+    let mut withheld = Vec::new();
+    let mut unaccounted = 0;
+    for bucket in &volume.totals {
+        if bucket.reconstructed > 0 {
+            let (compact, full) = native_volume(bucket.amount, bucket.currency);
+            visible.push(compact);
+            exact.push(full);
+        }
+        // A bucket can be stated AND short at the same time, so the shortfall is counted per row
+        // rather than per bucket — the case the previous all-or-nothing bucket could not express.
+        let missing = bucket.orders.saturating_sub(bucket.reconstructed);
+        if missing > 0 {
+            withheld.push(bucket.currency.ticker().to_string());
+            unaccounted += missing;
+        }
+    }
+    // Rows whose quote identity is unknown are part of the shortfall too, and they have no ticker to
+    // name themselves with.
+    if volume.unknown_orders > 0 {
+        withheld.push(t!("report.traded_volume_unknown_quote").to_string());
+        unaccounted += volume.unknown_orders;
+    }
+    // Nothing provable at all — an empty filter, or a scope where not one trade reconstructed —
+    // states no volume rather than an amount-less warning: the row already carries the unknown-quote
+    // tally, and a fact with no figure in it would only occupy the slot the figure belongs in.
+    if visible.is_empty() {
+        return None;
+    }
+    Some(VolumeAmountText {
+        visible: visible.join(" + "),
+        exact: exact.join(" + "),
+        unified: false,
+        gap: (unaccounted > 0).then(|| VolumeGap {
+            orders: unaccounted,
+            currencies: withheld.join(", "),
+        }),
+    })
 }
 
 /// Choose a money colour role from the sign of the rounded display amount.
@@ -405,22 +447,49 @@ pub(super) fn footer_facts(
             visible,
             exact,
             unified,
+            gap,
         } = amount;
+        // A unified conversion is the only amount the current-rate wording can apply to, and it is
+        // also the only one that is never partial — so the two labels below cannot collide.
         let current = unified && mode == db::valuation::ValuationMode::Current;
-        let (label, tip) = if current {
-            (
-                "report.traded_volume_current",
-                "report.traded_volume_current_tip",
-            )
-        } else {
-            ("report.traded_volume", "report.traded_volume_tip")
+        let mut volume = match gap {
+            // The shortfall shares ONE fact with the figure it qualifies, so no dock width can show
+            // the number without it, and the warn tone repeats the same signal in colour.
+            Some(gap) => {
+                let mut partial = fact(
+                    t!("report.traded_volume_partial", amount = visible).to_string(),
+                    FactTone::Warn,
+                    false,
+                );
+                partial.spelled = Some(
+                    t!(
+                        "report.traded_volume_partial_tip",
+                        amount = exact,
+                        n = gap.orders,
+                        currencies = gap.currencies
+                    )
+                    .to_string(),
+                );
+                partial
+            }
+            None => {
+                let (label, tip) = if current {
+                    (
+                        "report.traded_volume_current",
+                        "report.traded_volume_current_tip",
+                    )
+                } else {
+                    ("report.traded_volume", "report.traded_volume_tip")
+                };
+                let mut complete = fact(
+                    t!(label, amount = visible).to_string(),
+                    FactTone::Soft,
+                    false,
+                );
+                complete.spelled = Some(t!(tip, amount = exact).to_string());
+                complete
+            }
         };
-        let mut volume = fact(
-            t!(label, amount = visible).to_string(),
-            FactTone::Soft,
-            false,
-        );
-        volume.spelled = Some(t!(tip, amount = exact).to_string());
         volume.section_start = true;
         tail.push(volume);
     }

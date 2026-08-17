@@ -371,9 +371,20 @@ native notional and a rate from the Report snapshot's active historical/current 
 The volume aggregate owns completeness separately from profit coverage because open and Funding
 rows still belong to Report count/profit. Inverse contracts whose prices and money use different
 quotes, explicit liquidations with non-economic prices, unknown quote identities, and missing or
-invalid quantity/price inputs fail closed: the footer withholds a partial amount instead of
-presenting it as the filter total. A source without `sellreason` likewise cannot prove that a
-closed row is not Funding, so it contributes to completeness but cannot publish volume.
+invalid quantity/price inputs fail closed, and they do so PER ROW: such a row is excluded from the
+summed money while still being counted, so every published native subtotal is dimensionally sound
+and each bucket carries its own reconstructed count beside its eligible count. Completeness is
+therefore a property the FOOTER states, not one the query withholds an amount for. Deciding it
+inside the bucket was the earlier design and it failed on the commonest scope of all: a
+single-currency Report has no second bucket to fall back on, so one liquidation among a thousand
+trades blanked the figure entirely. The footer states every bucket that reconstructed at least one
+trade and, when any eligible row is unaccounted for, marks the result incomplete in the same fact
+that carries the figure — warn tone, its own wording, and the excluded order count with the quotes
+those orders belong to in the row tooltip. What stays forbidden is the opposite: a partial amount
+presented as the complete filter total, so an incomplete figure never wears the plain wording, the
+unified USDT conversion remains complete-only, and a scope where not one trade reconstructed still
+publishes no volume at all. A source without `sellreason` likewise cannot prove that a closed row is
+not Funding, so it contributes to completeness but cannot publish volume.
 
 For a group-owned `AutoCore` Report only, `core_name` is contextually unavailable because every row
 already belongs to the selected core. This is a display lens, not a persistence mutation: the raw

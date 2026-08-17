@@ -75,10 +75,11 @@ fn breakdown_merges_only_identical_known_quotes() {
     assert_eq!(totals.traded_volume, TradedVolume::default());
 }
 
-/// Dropping per-quote completeness while merging physical sources would publish a partial money
-/// total; reusing profit coverage would also suppress the complete USDC bucket in this fixture.
+/// Merging physical sources must keep each quote's reconstruction count beside its own subtotal.
+/// Collapsing that pair back into an optional amount blanks the USDT bucket over one unprovable
+/// row; reusing profit coverage instead would suppress the complete USDC bucket in this fixture.
 #[test]
-fn traded_volume_merges_quotes_without_publishing_partial_money() {
+fn traded_volume_merges_quotes_and_keeps_each_bucket_reconstruction_count() {
     let volume = TradedVolume::from_groups([
         (Some(1), 2, 2, 420.0, 2, 840.0),
         (Some(1), 1, 0, 0.0, 0, 0.0),
@@ -96,10 +97,19 @@ fn traded_volume_merges_quotes_without_publishing_partial_money() {
     assert_eq!(volume.totals.len(), 2);
     assert_eq!(volume.totals[0].currency.ticker(), "USDT");
     assert_eq!(volume.totals[0].orders, 3);
-    assert_eq!(volume.totals[0].amount, None);
+    assert_eq!(
+        volume.totals[0].reconstructed, 2,
+        "the unprovable row shortens the USDT bucket instead of erasing it"
+    );
+    assert_eq!(volume.totals[0].amount, 420.0);
     assert_eq!(volume.totals[1].currency.ticker(), "USDC");
-    assert_eq!(volume.totals[1].amount, Some(75.0));
-    assert_eq!(volume.usdt, None);
+    assert_eq!(volume.totals[1].orders, 1);
+    assert_eq!(volume.totals[1].reconstructed, 1);
+    assert_eq!(volume.totals[1].amount, 75.0);
+    assert_eq!(
+        volume.usdt, None,
+        "the unified figure stays complete-only whatever the native buckets publish"
+    );
 }
 
 /// Columns a report source carries, as the SQL builders discover them.

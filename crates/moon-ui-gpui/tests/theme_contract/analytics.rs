@@ -1778,6 +1778,18 @@ fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
         ),
         (
             "report.traded_volume_current_tip",
+            "report.traded_volume_partial:",
+        ),
+        (
+            "report.traded_volume_partial",
+            "report.traded_volume_partial_tip:",
+        ),
+        (
+            "report.traded_volume_partial_tip",
+            "report.traded_volume_unknown_quote:",
+        ),
+        (
+            "report.traded_volume_unknown_quote",
             "report.unknown_quote_orders:",
         ),
     ] {

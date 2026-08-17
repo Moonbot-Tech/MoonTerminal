@@ -172,6 +172,20 @@ pub struct ChartTradeRecord {
     pub quantity: f64,
     /// Whether the trade is short.
     pub is_short: bool,
+    /// Whether an EMULATOR order made this trade, rather than a live one.
+    ///
+    /// Carried per row so the chart's trade-kind checkboxes can hide marks at DRAWING time. The
+    /// alternative — narrowing the query itself — would make a display toggle decide which rows were
+    /// read, and since the row cap is applied after the filter, hiding emulator trades would free
+    /// slots and surface OLDER REAL trades that had been truncated away. A checkbox must not change
+    /// what the history contains.
+    ///
+    /// OPTIONAL at the source, exactly like [`Self::profit`]: a replica whose table predates the
+    /// `emulator` column reports every trade as REAL. That direction is deliberate — hiding real
+    /// trades on old data is the unrecoverable error, while showing an emulated one as real is
+    /// visible and recoverable. On such a replica the "emulator trades" checkbox appears inert,
+    /// which is the correct failure.
+    pub emulator: bool,
     /// Realized profit as the row SETTLED it, or `None` when this source carries no profit column.
     ///
     /// Read through `quote::settled_amount_expr`, the same correction the Report grid and the
@@ -863,8 +877,9 @@ pub fn strategy_purge_rows(
 ///     f: Complete Report filter.
 ///
 /// Returns:
-///     Exact known-currency profit buckets, unknown and complete row counts, complete-only closed
-///     non-Funding traded volume, and optional complete active-mode USDT coverage.
+///     Exact known-currency profit buckets, unknown and complete row counts, closed non-Funding
+///     traded volume with its per-quote reconstruction counts, and optional complete active-mode
+///     USDT coverage.
 ///
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
@@ -934,7 +949,7 @@ pub(in crate::db) fn source_partition(src: &ReadSource) -> super::valuation::Tra
     }
 }
 
-/// Per-source SQL for complete-only two-sided Report volume.
+/// Per-source SQL for two-sided Report volume over provable rows only.
 struct TradedVolumeSql {
     /// Closed non-Funding row predicate, independent of the Report's profit/count scope.
     eligible: String,
@@ -1029,8 +1044,8 @@ fn traded_volume_sql(src: &ReadSource, rate: Option<&str>) -> TradedVolumeSql {
 ///         current-rate mode does not depend on it.
 ///
 /// Returns:
-///     Exact quote profit totals and complete-only two-sided traded volume, optionally carrying
-///     active-mode USDT coverage for each metric.
+///     Exact quote profit totals and two-sided traded volume over the reconstructed rows of each
+///     quote, optionally carrying active-mode USDT coverage for each metric.
 ///
 /// Errors:
 ///     Returns the underlying SQLite error from any physical-source aggregate.
@@ -1390,10 +1405,19 @@ pub fn query_chart_trade_history(
         // The currency the amount above is IN. Not derivable from the coin — a COIN-M row spells
         // its coin like a USD-M one while settling in BTC — so it travels with the amount.
         let quote_sql = super::quote::effective_ordinal_expr("r", &source.cols);
+        // OPTIONAL exactly like the money columns above, and for the same reason: `REQUIRED_COLUMNS`
+        // does not name it, so a source predating the column must still return every trade. It falls
+        // back to 0 = REAL, which is the recoverable direction — hiding real trades on old data
+        // would not be.
+        let emulator_sql = if source.cols.contains("emulator") {
+            "COALESCE(r.emulator, 0)"
+        } else {
+            "0"
+        };
         let sql = format!(
             "SELECT {record_id}, r.core_uid, r.coin, r.buydate, r.closedate, \
              r.buyprice, r.sellprice, r.quantity, r.isshort, \
-             {profit_sql}, {quote_sql}, {percent_sql} \
+             {profit_sql}, {quote_sql}, {percent_sql}, {emulator_sql} \
              FROM {} r{where_sql} \
              ORDER BY r.closedate DESC, {record_id} DESC LIMIT ?",
             source.table
@@ -1419,6 +1443,7 @@ pub fn query_chart_trade_history(
                     row.get::<_, Value>(9)?,
                     row.get::<_, Value>(10)?,
                     row.get::<_, Value>(11)?,
+                    row.get::<_, Value>(12)?,
                 ))
             })
             .map_err(|error| read_fail(CONTEXT, error))?;
@@ -1436,6 +1461,7 @@ pub fn query_chart_trade_history(
                 profit,
                 quote,
                 profit_percent,
+                emulator,
             ) = row.map_err(|error| read_fail(CONTEXT, error))?;
             let Some(buy_date) = report_value_i64(&buy_date) else {
                 continue;
@@ -1468,6 +1494,8 @@ pub fn query_chart_trade_history(
                 sell_price,
                 quantity: report_value_f64(&quantity).unwrap_or_default(),
                 is_short: report_value_i64(&is_short).unwrap_or_default() != 0,
+                // An unreadable or absent flag means REAL, matching the `0` fallback in the SELECT.
+                emulator: report_value_i64(&emulator).unwrap_or_default() != 0,
                 // `report_value_f64` already rejects a non-finite cell, which keeps the derived
                 // `PartialEq` on this record meaningful: a NaN here would make two identical
                 // histories compare unequal forever and republish on every poll.

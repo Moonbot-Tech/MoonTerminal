@@ -220,6 +220,22 @@ report.traded_volume_current_tip:
   ru: "Общий торговый объём по текущему курсу: %{amount}"
   en: "Total traded volume at the current rate: %{amount}"
   es: "Volumen total negociado a la tasa actual: %{amount}"
+# An amount over the reconstructed quote buckets only. The qualifier shares the fact with the
+# figure so a narrow dock cannot clip one without the other.
+report.traded_volume_partial:
+  ru: "Объём (частично): %{amount}"
+  en: "Volume (partial): %{amount}"
+  es: "Volumen (parcial): %{amount}"
+# The recovery text has room for the shortfall itself: how many orders are excluded, and from where.
+report.traded_volume_partial_tip:
+  ru: "Торговый объём по восстановленным сделкам: %{amount}. Не учтено ордеров: %{n} (%{currencies})"
+  en: "Traded volume over the reconstructed trades: %{amount}. Orders not accounted for: %{n} (%{currencies})"
+  es: "Volumen negociado de las operaciones reconstruidas: %{amount}. Órdenes no contabilizadas: %{n} (%{currencies})"
+# Names the excluded rows that have no quote ticker of their own to be named by.
+report.traded_volume_unknown_quote:
+  ru: "валюта неизвестна"
+  en: "unknown quote"
+  es: "moneda desconocida"
 report.unknown_quote_orders:
   ru: "валюта неизвестна: %{n}"
   en: "unknown quote: %{n}"
