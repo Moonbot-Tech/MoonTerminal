@@ -599,7 +599,14 @@ fn check_storm(
     // "one draw per frame, not five"; bakes rebuild a cached texture and should be far rarer than
     // one per frame, which is the whole point of the cache.
     for (label, delta_max, abs_max) in [
-        ("chart_gpu_prepare", 0.60, 1.60),
+        // 0.80 rather than the 0.60 the other layers get, because a userdata rebuild is what
+        // legitimately answers a hover change: moving the pointer over figures or order lines
+        // re-bakes the layer, and that is the work, not waste. Under the storm the pointer visits
+        // thousands of positions a second across a chart carrying figures, so the hover flips tens
+        // of times a second and the rebuild rate rises with it — measured at 0.70 per frame on the
+        // fixture bench. The ceiling still catches the failure this gate exists for: a rebuild
+        // driven by the FRAME rather than by a change sits at 1.0 and above.
+        ("chart_gpu_prepare", 0.80, 1.60),
         ("bg_draw", 0.60, 1.60),
         ("grid_draw", 0.60, 1.60),
         ("combo_draw", 0.60, 1.60),

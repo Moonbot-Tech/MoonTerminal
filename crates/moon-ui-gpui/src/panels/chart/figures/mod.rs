@@ -284,6 +284,10 @@ impl ChartPanel {
     /// `pressed_left` reports whether the left button remains held. The return value reports an
     /// active drag or a later preview/hover change; cancelling a draft after drawing mode is disabled
     /// synchronizes visuals but can still return `false`, especially when outside the chart.
+    ///
+    /// It is NOT a "repaint the GPUI tree" request, and both callers discard it: everything this
+    /// updates reaches the screen through the chart's own pass. A caller that ever does need the
+    /// tree repainted has to decide that for itself.
     pub(super) fn update_fig_pointer(
         &mut self,
         pos: (f32, f32),
@@ -342,8 +346,14 @@ impl ChartPanel {
                     d.moved |= edited;
                 }
                 if edited {
+                    // No `cx.notify()`, for the same reason as `sync_fig_visual`: a dragged figure
+                    // is redrawn by the chart's own pass out of the userdata layer rebuilt here,
+                    // and no GPUI element reads the drag. Order-line dragging keeps a notify but
+                    // PACES it (`render_input.rs`, `DRAG_NOTIFY_MIN_INTERVAL`) precisely because an
+                    // unpaced one repaints the whole window at the mouse-event rate — roughly 110 a
+                    // second, above anything the own pass can present. Figures need neither: with
+                    // nothing in the tree to refresh, the cheapest correct rate is none at all.
                     self.fig_resync(cx);
-                    cx.notify();
                 }
                 // Keep the crosshair under the pointer, matching order-line dragging.
                 self.input.cursor = Some(pos);
@@ -668,8 +678,17 @@ impl ChartPanel {
         if self.chart.set_figure_visual(visual) {
             // Userdata rebuilds only through `sync_orders_*`; trigger it immediately so preview and
             // highlighting do not wait for the next data tick or Backend notification.
+            //
+            // NO `cx.notify()`. Everything this changes — the hover highlight, the selection
+            // handles, the draft preview — is drawn by the chart's OWN pass out of the userdata
+            // layer rebuilt on the line above, and nothing in the GPUI tree reads `fig_hover`,
+            // `fig_selected` or the draft. A notify here dirties the view AND every ancestor, and a
+            // re-rendered root bypasses each descendant's view cache, so one hover change repainted
+            // the whole window — measured on the fixture bench at 90 chart+shell renders per second
+            // under a mouse storm against 1/s with no figures. News marks take the same route for
+            // the same reason (`news.rs::publish_news_marks`); a caller that ever needs the GPUI
+            // tree repainted must ask for it itself.
             self.fig_resync(cx);
-            cx.notify();
         }
     }
 
