@@ -17,6 +17,7 @@ mod click_series;
 mod figures;
 mod geom;
 mod news;
+mod order_stats;
 mod refs;
 mod render;
 mod render_input;
@@ -83,6 +84,10 @@ struct ChartSettingsSig {
     theme: ChartTheme,
     orders: OrdersStyleSet,
     follow: bool,
+    /// Global chart-drawing settings. In the signature because the graphics popup writes them into
+    /// `Backend` from a DIFFERENT entity: without this, a chart that is otherwise idle never
+    /// re-renders, and `render` is the only place the value reaches the engine.
+    chart_graphics: moon_core::config::ChartGraphicsCfg,
 }
 
 fn chart_settings_sig(backend: &Backend) -> ChartSettingsSig {
@@ -91,6 +96,10 @@ fn chart_settings_sig(backend: &Backend) -> ChartSettingsSig {
         theme: effective.chart_theme().clone(),
         orders: effective.orders.clone(),
         follow: backend.follow,
+        // From `layout`, not from the previewed config: layout.toml has no Settings-window draft.
+        // NORMALIZED, because this value is COMPARED: a hand-edited `nan` never equals itself and
+        // would make every backend notification look like a settings change.
+        chart_graphics: moon_chart::normalize_chart_graphics(backend.layout.chart_graphics),
     }
 }
 
@@ -270,6 +279,12 @@ impl ChartPanel {
         // open hover card catches up on the next repaint.
         self.sync_news_marks(cx);
         self.sync_warn_marks(cx);
+        // The top-left overlay needs no revision gate of its own: it reads the live order rows when
+        // GPUI renders. Structural order changes advance `order_lines_rev` through
+        // `OrderLineStore::update`, and `ChartDataState::order_signature` already gates that
+        // per-pane work. A mark-price-only update follows the market signature and its throttled
+        // repaint instead, so polling `orders_table_rev` here would add an aggregate pass without
+        // covering an input the existing signatures do not already schedule.
         self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx)
     }
 

@@ -8,15 +8,71 @@
 //! [`super::detached_host`]).
 
 use gpui::*;
-use moon_ui::{MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement};
+use moon_ui::{
+    v_flex, MoonAccent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    MoonSegmentItem, MoonSegmentedControl,
+};
 
 use super::{layout_popup, stack};
+use crate::design;
 use crate::Backend;
 use crate::persistence::chart_persist::{
     self, ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
 };
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
+
+/// Build one popup setting as a caption with a segmented control below it.
+///
+/// Shared by the candle and graphics popups, which had a byte-identical copy each. It takes only
+/// primitives, so it is coupled to neither host trait and neither settings type.
+///
+/// Args:
+///     id: Element identity for the segmented control.
+///     caption: Localized label drawn above it.
+///     labels: One `(text, selected)` pair per segment, in display order.
+///     seg_w: Width of one segment, in design units.
+///     p: Active palette, for the caption colour.
+///     cx: App context, for the caption text size.
+///     on_pick: Receives the picked segment index.
+///
+/// Returns:
+///     The caption and its segmented control as one column.
+pub(super) fn seg_row(
+    id: String,
+    caption: String,
+    labels: Vec<(String, bool)>,
+    seg_w: f32,
+    p: MoonPalette,
+    cx: &App,
+    on_pick: impl Fn(usize, &mut App) + 'static,
+) -> impl IntoElement {
+    let items: Vec<MoonSegmentItem> = labels
+        .into_iter()
+        .map(|(label, selected)| {
+            let mut it = MoonSegmentItem::new("", label).width(seg_w);
+            if selected {
+                it = it.selected(true);
+            }
+            it
+        })
+        .collect();
+    let seg = MoonSegmentedControl::new(id)
+        .accent(MoonAccent::Blue)
+        .items(items)
+        .on_click(move |ix, _, _, cx| on_pick(ix, cx))
+        .render();
+    v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 2.0))
+        .child(
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text))
+                .child(caption),
+        )
+        .child(seg)
+}
 
 /// One per-tab chart-stack setting value. It can write itself to a spec (the shared persistence
 /// half); [`set_stack_setting!`] applies it to panels using identically named and typed setters on

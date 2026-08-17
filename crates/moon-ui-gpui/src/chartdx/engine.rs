@@ -619,6 +619,35 @@ impl ChartEngine {
         true
     }
 
+    /// Applies the global chart graphics settings — trade-history arrow size, connector thickness,
+    /// and trade-kind visibility — to every engine pane. Returns true on change.
+    ///
+    /// The order and trade-history geometry is baked in the userdata layer, so a change has to
+    /// invalidate it: `mark_view_dirty` drives the panel's forced resynchronization, and
+    /// `last_order_sig` is reset for the same reason `set_last_ppp` resets it — the outer order
+    /// signature short-circuits the per-surface ones on an otherwise idle chart.
+    pub fn set_chart_graphics(&mut self, cfg: moon_core::config::ChartGraphicsCfg) -> bool {
+        // NORMALIZED before it is stored: a hand-edited `nan` would make the equality guard below
+        // report a change on every frame. See `normalize_chart_graphics`.
+        let cfg = moon_chart::normalize_chart_graphics(cfg);
+        let mut data = self.data.borrow_mut();
+        if data.chart_graphics == cfg {
+            return false;
+        }
+        data.chart_graphics = cfg;
+        data.last_order_sig = u64::MAX;
+        data.mark_view_dirty();
+        true
+    }
+
+    /// The graphics settings the currently uploaded geometry was built with.
+    ///
+    /// The hit test reads THIS rather than the backend config: the arrows on screen were baked
+    /// with this value, and testing against a newer one would answer for arrows not yet drawn.
+    pub(crate) fn chart_graphics(&self) -> moon_core::config::ChartGraphicsCfg {
+        self.data.borrow().chart_graphics
+    }
+
     /// Enables or disables liquidation trades for every pane in this window. Returns true on change.
     pub fn set_liquidations_enabled(&mut self, enabled: bool) -> bool {
         let mut data = self.data.borrow_mut();

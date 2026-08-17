@@ -64,6 +64,84 @@ pub fn fit_band(
     }
 }
 
+/// How far past the candle span an order price may drag the fit, as a fraction of that span.
+///
+/// At `0.5` the pane can reach at most twice the candle height, so the candles are guaranteed at
+/// least half of it whatever an order asks for. A fraction of the CANDLE span rather than an
+/// absolute percentage of price, because the candle span is the thing the user is actually looking
+/// at and it already tracks both the market's volatility and the current zoom: the same rule holds
+/// on a 0.3% range and on a 40% one without a second constant.
+pub const ORDER_FIT_SLACK: f32 = 0.5;
+
+/// Floor on that allowance, as a fraction of the price itself.
+///
+/// Exists so a candle span of zero cannot collapse the allowance to nothing: a single flat candle is
+/// ordinary on an illiquid market, and without this every order line would be clipped there.
+///
+/// Its value coincides with the order-book focus band's half-fraction, and that is a COINCIDENCE, not
+/// a coupling — both answer "how wide is a hairline band around a price" and independently landed on
+/// half a percent. Retuning either one must not drag the other, so they stay separate constants.
+pub const ORDER_FIT_MIN_FRAC: f32 = 0.005;
+
+/// Unions the candle span with an order-line span, but only as far as [`ORDER_FIT_SLACK`] allows.
+///
+/// The auto-fit used to union the two outright, and one order carrying a distant target was enough
+/// to destroy the chart: measured on a live pane, a `+27%` sell with a `-4.5%` stop stretched the
+/// range to roughly fifteen times the candle span, squeezing every candle into a corner — and the
+/// translucent panic-sell zone that spans entry-to-sell then covered the whole pane, which reads as
+/// "something painted the chart red" rather than as a scale problem. The zone was never wrong; the
+/// FIT was.
+///
+/// So the candles are fitted FIRST and the order span is admitted only inside a bounded expansion of
+/// them. An order line beyond that bound is not dropped from the chart — it keeps its own price and
+/// is simply drawn off the visible band, which is the cheap and honest outcome: a target 27% away is
+/// not information the user can read off a price axis anyway, while a usable candle scale is.
+///
+/// The ordinary case is deliberately UNCHANGED. A stop or sell within ±50% of the visible candle
+/// span still pulls the range to itself exactly as before, so the everyday "keep my stop on screen"
+/// behaviour survives and only the pathological case is bounded.
+///
+/// KNOWN CONSEQUENCE, and it is not confined to the pathological case: on a zoomed-in low timeframe
+/// the visible candle span can be a fraction of a percent, so a routine stop a couple of percent away
+/// is many candle spans out and is clipped off screen where it used to be visible. That is what
+/// "must not squash the candles" costs — a distant line and a large candle scale cannot both be had —
+/// and the clipped line is still readable from its price label and the Orders table. Raising the
+/// slack does not rescue that case either, it only hides less of the problem, so the bound stays
+/// where the candles are guaranteed half the pane.
+///
+/// The allowance has a FLOOR of [`ORDER_FIT_MIN_FRAC`] of the price, and that floor is the whole
+/// handling of the degenerate input: one flat candle (`height == 0`) is routine on an illiquid market
+/// and is exactly when an unbounded union hands the pane to a distant order, so falling back to a
+/// plain union there would have left the bug reachable through its own escape hatch.
+///
+/// This lives here beside [`fit_band`], and for the same reason: its caller is in a binary crate and
+/// could not otherwise be tested.
+///
+/// Args:
+///     candles: Price span of the candles actually drawn in the window, if any.
+///     orders: Price span of the open orders' lines for this market, if any.
+///
+/// Returns:
+///     The span to hand the fit, bounded so the candles keep a usable scale.
+pub fn admit_order_band(
+    candles: Option<(f32, f32)>,
+    orders: Option<(f32, f32)>,
+) -> Option<(f32, f32)> {
+    let (Some((clo, chi)), Some((olo, ohi))) = (candles, orders) else {
+        return candles.or(orders);
+    };
+    let height = chi - clo;
+    let mid = (clo + chi) * 0.5;
+    if !height.is_finite() || !mid.is_finite() {
+        // Nothing to bound against; the old behaviour is the honest fallback.
+        return Some((clo.min(olo), chi.max(ohi)));
+    }
+    let slack = (height.max(0.0) * ORDER_FIT_SLACK).max(mid.abs() * ORDER_FIT_MIN_FRAC);
+    // `max`/`min` against the candle edge, not a bare clamp: an order price INSIDE the candle span
+    // must leave the span alone rather than pull an edge inward.
+    Some((clo.min(olo.max(clo - slack)), chi.max(ohi.min(chi + slack))))
+}
+
 /// Rectangle in pixels (top-left origin).
 #[derive(Clone, Copy)]
 pub struct Rect {

@@ -25,5 +25,5 @@ pub mod order_geometry;
 pub use order_geometry::build_order_geometry;
 pub mod paint;
 pub mod trade_marks;
-pub use trade_marks::build_trade_geometry;
+pub use trade_marks::{build_trade_geometry, normalize_chart_graphics};
 pub mod view;

@@ -611,7 +611,11 @@ impl ChartDataState {
             // window, while the last price and the book band only have to stay on screen. Unioning
             // the two left the fit unable to tell "no data here" from "data here", which is what
             // made a view panned off the data rescale to a reference that is not in it.
-            let window_data = union_range(tick_price, pr.cached_order_price);
+            // BOUNDED, not unioned: an order carrying a distant target would otherwise drag the whole
+            // pane to itself and squeeze the candles into a corner. `admit_order_band` fits the
+            // candles first and admits the order span only inside a bounded expansion of them; the
+            // rule and the reason it is a fraction of the CANDLE span live with the function.
+            let window_data = moon_chart::view::admit_order_band(tick_price, pr.cached_order_price);
             let reference = union_range(last_price.map(|p| (p, p)), book_focus);
             // A pane that has NEVER had data of its own has no scale to keep, so it goes on fitting
             // the reference until something real arrives — otherwise a chart opened while the

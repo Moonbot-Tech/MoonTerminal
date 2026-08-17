@@ -24,9 +24,15 @@
 //!
 //! Every constant below is in LOGICAL pixels and is multiplied by the device scale exactly once, at
 //! the point of use. Sizes are deliberately NOT derived from the view: a marker that grew with zoom
-//! is what made the previous design collapse into blobs. There is deliberately no `orders.toml`
-//! setting either — `marker_size`/`knot_size` there belong to order lines, and wiring a slider
-//! through to trade history would make two unrelated surfaces move together.
+//! is what made the previous design collapse into blobs.
+//!
+//! The arrow size and the connector thickness ARE user-settable, through the chart toolbar's
+//! graphics popup, and arrive per call in [`TradeGeometryCtx`] — a global `layout.toml` setting
+//! that is still independent of zoom. It is deliberately NOT the `orders.toml` one:
+//! `marker_size`/`knot_size` there belong to order lines, and making one slider move both
+//! surfaces is exactly what this layer refused to do.
+
+use moon_core::config::ChartGraphicsCfg;
 
 use crate::layers::{
     rgb_with_alpha as rgba, MarkerInstance, SegInstance, MARKER_SHAPE_ARROW_DOWN,
@@ -46,6 +52,78 @@ pub const ARROW_HALF_H: f32 = 6.0;
 pub const ARROW_HALF_W: f32 = 4.5;
 /// Thickness of the entry-to-exit connector, in logical px.
 pub const CONNECTOR_THICKNESS: f32 = 2.0;
+
+/// Smallest accepted arrow-size multiplier.
+///
+/// Floored rather than left open because the three shaders clamp the drawn half-extents with
+/// `max(pos.z, 1.0)` in PHYSICAL px while [`hit_trade_marks`] has no such clamp: below this the
+/// glyph would stop shrinking and the region that responds to it would not. At 0.4 the smaller
+/// half-extent is `ARROW_HALF_W * 0.4 = 1.8` logical px, which stays above one physical px for
+/// every device scale the terminal runs at.
+pub const ARROW_SCALE_MIN: f32 = 0.4;
+/// Largest accepted arrow-size multiplier. Past this a cluster of ten swallows the pane.
+pub const ARROW_SCALE_MAX: f32 = 3.0;
+/// Smallest accepted connector thickness, in logical px.
+pub const CONNECTOR_THICKNESS_MIN: f32 = 0.5;
+/// Largest accepted connector thickness, in logical px.
+pub const CONNECTOR_THICKNESS_MAX: f32 = 8.0;
+
+/// Clamp a configured arrow-size multiplier into the drawable range.
+///
+/// The ONE definition, called from BOTH the drawing path and the hit test: the setting comes from
+/// a hand-editable `layout.toml`, and clamping it differently on the two paths is precisely how the
+/// glyph and its hit area drift apart (see [`hit_trade_marks`]).
+///
+/// Args:
+///     scale: Configured multiplier; a non-finite value means an unusable config.
+///
+/// Returns:
+///     The multiplier within `[ARROW_SCALE_MIN, ARROW_SCALE_MAX]`, or `1.0` when it is not finite.
+pub fn clamp_arrow_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(ARROW_SCALE_MIN, ARROW_SCALE_MAX)
+    } else {
+        1.0
+    }
+}
+
+/// Bring a configured [`ChartGraphicsCfg`] into its drawable ranges.
+///
+/// The ONE normalizer, and it exists for a reason the two clamps alone do not cover: `layout.toml`
+/// is hand-editable and TOML accepts `nan`, which the config's lenient reader passes through as a
+/// perfectly valid `f32`. Every `PartialEq` comparison against a stored NaN then reports a CHANGE,
+/// so a settings signature or an idempotent setter holding a raw value would mark the chart dirty
+/// on every single frame, forever. Call this wherever the value is STORED or COMPARED; the drawing
+/// and hit-test paths still clamp their own inputs, which is idempotent and therefore free.
+///
+/// Args:
+///     cfg: Settings as they were read from the configuration.
+///
+/// Returns:
+///     The same settings with both numeric fields finite and in range.
+pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
+    ChartGraphicsCfg {
+        trade_arrow_scale: clamp_arrow_scale(cfg.trade_arrow_scale),
+        connector_thickness_px: clamp_connector_thickness(cfg.connector_thickness_px),
+        ..cfg
+    }
+}
+
+/// Clamp a configured connector thickness into the drawable range.
+///
+/// Args:
+///     thickness: Configured thickness in logical px; a non-finite value means an unusable config.
+///
+/// Returns:
+///     The thickness within `[CONNECTOR_THICKNESS_MIN, CONNECTOR_THICKNESS_MAX]`, or
+///     [`CONNECTOR_THICKNESS`] when it is not finite.
+pub fn clamp_connector_thickness(thickness: f32) -> f32 {
+    if thickness.is_finite() {
+        thickness.clamp(CONNECTOR_THICKNESS_MIN, CONNECTOR_THICKNESS_MAX)
+    } else {
+        CONNECTOR_THICKNESS
+    }
+}
 /// Opacity of an arrow. The markers are the data.
 pub const MARKER_ALPHA: f32 = 0.95;
 /// Opacity of the connector. It is context rather than data, so it stays below [`MARKER_ALPHA`];
@@ -387,6 +465,12 @@ pub struct TradeGeometryCtx {
     pub px_per_ms: f32,
     /// Vertical view scale, physical px per price unit.
     pub px_per_price: f32,
+    /// User multiplier on the arrow half-extents, clamped by [`clamp_arrow_scale`] at use.
+    ///
+    /// The hit test takes the SAME number through the same clamp; see [`hit_trade_marks`].
+    pub arrow_scale: f32,
+    /// User connector thickness in logical px, clamped by [`clamp_connector_thickness`] at use.
+    pub connector_thickness: f32,
     /// The ACTION under the cursor as `(marks index, buy)`; its cluster grows and goes fully opaque.
     ///
     /// Deliberately not a cluster index. The caller takes this from the snapshot of a PREVIOUS
@@ -429,12 +513,15 @@ pub fn build_trade_geometry(
         scale,
         px_per_ms,
         px_per_price,
+        arrow_scale,
+        connector_thickness,
         hovered,
     } = *ctx;
     let clusters = cluster_actions(&explode_actions(marks), px_per_ms, px_per_price, scale);
 
-    let half_h = ARROW_HALF_H * scale;
-    let half_w = ARROW_HALF_W * scale;
+    let arrow_scale = clamp_arrow_scale(arrow_scale);
+    let half_h = ARROW_HALF_H * scale * arrow_scale;
+    let half_w = ARROW_HALF_W * scale * arrow_scale;
     markers.reserve(clusters.len());
     for cluster in &clusters {
         let rgb = if cluster.is_short {
@@ -468,7 +555,7 @@ pub fn build_trade_geometry(
     // Connectors stay PER TRADE and are never clustered: a cluster's two ends belong to different
     // trades, so a line between aggregates would join a synthetic pair that never traded together.
     {
-        let thickness = CONNECTOR_THICKNESS * scale;
+        let thickness = clamp_connector_thickness(connector_thickness) * scale;
         let min_px = (CONNECTOR_MIN_PX * scale.max(0.1)) as f64;
         segs.reserve(marks.len());
         for mark in marks {
@@ -541,6 +628,10 @@ pub struct TradeHit {
 ///     marks: Drawn arrows, in cluster order; the returned indices point back into this sequence.
 ///     cursor: Cursor position in the same device pixels.
 ///     scale: Device pixel scale, applied to the logical size constants.
+///     arrow_scale: The SAME user multiplier the arrows were drawn with; it goes through
+///         [`clamp_arrow_scale`] here exactly as it did in [`build_trade_geometry`]. `HIT_SLACK`
+///         is deliberately left out of it — the slack is how steadily a hand holds a cursor, not
+///         a property of the glyph, so it must not shrink with a smaller arrow.
 ///
 /// Returns:
 ///     The touched clusters, or `None` when the cursor is over none of them.
@@ -548,13 +639,15 @@ pub fn hit_trade_marks(
     marks: impl IntoIterator<Item = TradeMarkAt>,
     cursor: (f32, f32),
     scale: f32,
+    arrow_scale: f32,
 ) -> Option<TradeHit> {
     let scale = scale.max(0.1);
     let slack = HIT_SLACK * scale;
     // Hoisted: this loop runs on the POINTER PATH, once per mark on every mouse move that clears
     // the movement threshold, and only `grow` varies between iterations.
-    let half_w = ARROW_HALF_W * scale;
-    let body_full = 2.0 * ARROW_HALF_H * scale;
+    let arrow_scale = clamp_arrow_scale(arrow_scale);
+    let half_w = ARROW_HALF_W * scale * arrow_scale;
+    let body_full = 2.0 * ARROW_HALF_H * scale * arrow_scale;
     let mut stack: Vec<usize> = Vec::new();
     let mut nearest = 0usize;
     let mut best = f32::INFINITY;

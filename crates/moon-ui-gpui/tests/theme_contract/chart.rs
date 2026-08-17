@@ -341,6 +341,17 @@ fn the_price_fit_is_told_what_the_window_holds_and_what_only_has_to_be_visible()
         src.contains("let window_data =") && src.contains("let reference ="),
         "the reference band must be built apart from the window's own data"
     );
+    // The candle band and the order band must be joined through the BOUNDED admission, never through
+    // a plain union. `union_range` here compiles, type-checks and passes every unit test, and shows up
+    // only as one order with a distant target squeezing every candle into a corner — with the
+    // translucent entry-to-sell panic zone then covering the whole pane, which is what the user
+    // reported as "something painted the chart red". The rule itself is unit-tested in `moon-chart`;
+    // only its CALL can be pinned here.
+    assert!(
+        src.contains("admit_order_band(tick_price, pr.cached_order_price)"),
+        "the order band is unioned into the candle band again, so one distant order target can squash \
+         the candles to a hairline"
+    );
     // And the fallback test is TWO things joined by OR: following the live edge, or never having had
     // window data. `&&` would strip the reference from every live pane; testing the view's current
     // scale instead of the data would switch the fallback off one frame after the first fit and

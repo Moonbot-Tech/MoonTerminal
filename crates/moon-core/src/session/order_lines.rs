@@ -4,8 +4,10 @@
 //!
 //! Each line is a staircase of `(t_ms, price)` steps: from `t_ms`, the price remains at `price`
 //! until the next step. Repricing appends a step (knot). The line begins at order creation and
-//! ends when the order closes, or at the live right edge. The chart uses this as the canonical
-//! source of starts, knots, and ends for markers and segments.
+//! ends when the order closes, or at the live right edge — except the ENTRY line, which ends at
+//! the fill once the wire dates one (`RetainedOrder::entry_fill_ms`), because the entry leg stops
+//! existing there while the order itself lives on. The chart uses this as the canonical source of
+//! starts, knots, and ends for markers and segments.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -205,6 +207,13 @@ pub struct RetainedOrder {
     pub uid: u64,
     pub market: String,
     pub is_short: bool,
+    /// Whether the order is EMULATED rather than live, mirrored from the wire row.
+    ///
+    /// Nothing on the chart reads it any more: the real/emulator setting used to hide order LINES and
+    /// now selects closed TRADES instead, where the flag is a predicate on the report replica rather
+    /// than a field on an order. Kept because it mirrors the wire faithfully, like `is_short` and
+    /// `pending` beside it, and a consumer asking "was this order emulated" has nowhere else to ask.
+    pub emulator: bool,
     /// Entry-leg size in base currency, used by the buy-line size label.
     pub size: f32,
     /// Remaining exit-leg size in base currency, used by the sell-line label.
@@ -225,6 +234,9 @@ pub struct RetainedOrder {
     pub corridor_price_up: f32,
     /// Creation time and line start in Unix milliseconds.
     pub create_ms: f64,
+    /// Wire-dated moment a filled entry leg closed, in Unix milliseconds. `None` when the entry
+    /// did not fill or the wire gives no usable date; the chart then draws the line as before.
+    pub entry_fill_ms: Option<f64>,
     /// Logical line-end time; backstop closure uses the last-seen time rather than detection time.
     /// `None` means the order is active.
     pub closed_ms: Option<f64>,
@@ -280,6 +292,7 @@ impl RetainedOrder {
             uid: r.uid,
             market: r.market.clone(),
             is_short: r.is_short,
+            emulator: r.emulator,
             size: r.size as f32,
             remaining_size: r.remaining_size as f32,
             fill_pct: r.fill_pct,
@@ -290,6 +303,7 @@ impl RetainedOrder {
             corridor_price_down: r.corridor_price_down,
             corridor_price_up: r.corridor_price_up,
             create_ms,
+            entry_fill_ms: None,
             closed_ms: None,
             closed_reason: None,
             closed_store_ms: None,
@@ -406,6 +420,12 @@ impl OrderLineStore {
             }
             order.is_short = r.is_short;
             order.pending = r.pending;
+            // Stored like the two scalars above and, like them, NOT render-affecting. It used to be:
+            // the flag decided whether the order was drawn at all, so a flip had to force a rebuild.
+            // That filter is gone — the setting selects closed trades now — and nothing on the chart
+            // reads this field, so bumping the revision here would rebuild every zone, line, segment
+            // and marker of the market to change nothing visible.
+            order.emulator = r.emulator;
             // Size and fill drive line labels. Bump the revision on a meaningful change so the
             // bought-quantity label follows progressive fills, using a threshold against float
             // jitter.
@@ -458,6 +478,32 @@ impl OrderLineStore {
                 let fill = wire_line_start(r.entry_fill_time_ms, floor_ms, now_ms);
                 if fill > 1.0 { fill } else { sell_start_ms }
             };
+            // The same wire fill, kept as the ENTRY line's own END so the chart can stop that line
+            // where the leg ceased instead of running it on to the pane edge. Gated on `f`:
+            // `entry_fill_time_ms` is the buy leg's CLOSE, which a CANCELLED entry carries too, and
+            // a fill mark on an order that never filled would be a lie. The `sell_start_ms`
+            // fallback above is deliberately NOT inherited — the exit leg's creation is not a fill.
+            let wire_fill_ms = wire_line_start(r.entry_fill_time_ms, floor_ms, now_ms);
+            let entry_fill_ms = (f && wire_fill_ms > 1.0).then_some(wire_fill_ms);
+            // While the core clock LEADS the local one, `wire_line_start` folds the fill back to
+            // `now_ms` — a value that advances on every update. Adopting that on a plain equality
+            // test would rebuild and re-upload all order geometry every frame for as long as the
+            // skew lasts; refusing every later date instead would freeze that stand-in as the
+            // permanent fill moment even after the skew resolves. So a FOLDED date is taken only
+            // as the first one and never re-adopted, while the settled wire date that eventually
+            // replaces it is adopted once — after which it is stable and this test stops firing.
+            // The other callers never face the choice: they feed the value to a line's FIRST step
+            // and never read it again.
+            let folded = r.entry_fill_time_ms > now_ms;
+            let adopt = match (order.entry_fill_ms, entry_fill_ms) {
+                (stored, fresh) if stored.is_some() != fresh.is_some() => true,
+                (Some(stored), Some(fresh)) => !folded && stored != fresh,
+                _ => false,
+            };
+            if adopt {
+                order.entry_fill_ms = entry_fill_ms;
+                changed = true;
+            }
             let new_liq = if f { r.liq.map(|v| v as f32) } else { None };
             if order.liq != new_liq {
                 order.liq = new_liq;
@@ -481,7 +527,11 @@ impl OrderLineStore {
 
             let vals: [(Option<f32>, f64, usize); TRACED_KINDS - 2] = [
                 (go(f, r.stop_loss), fill_start_ms, LineKind::Stop as usize),
-                (go(f, r.trailing), fill_start_ms, LineKind::Trailing as usize),
+                (
+                    go(f, r.trailing),
+                    fill_start_ms,
+                    LineKind::Trailing as usize,
+                ),
                 (
                     go(f, r.take_profit),
                     fill_start_ms,
@@ -631,10 +681,19 @@ impl OrderLineStore {
         self.orders.values().filter(move |o| o.market == market)
     }
 
-    /// Returns orders to draw for a market: all open orders followed by at most `max_closed` newest
-    /// closed orders in reverse ring order.
+    /// Returns orders to draw for a market: every open order, followed by at most `max_closed`
+    /// newest closed orders, in reverse ring order.
     ///
     /// The result is not sorted, and the store separately caps retained closed history via its ring.
+    ///
+    /// This once took a caller-supplied `keep` visibility predicate, applied before the cap so a
+    /// hidden order could not push a visible one off the chart. The chart's only order-visibility
+    /// filter was real-vs-emulator, and that setting now selects TRADES rather than order lines, so
+    /// nothing filters here any more and the parameter went with it.
+    ///
+    /// Args:
+    ///     market: Market whose orders are drawn.
+    ///     max_closed: Cap on the returned closed orders.
     pub fn market_draw_orders(&self, market: &str, max_closed: usize) -> Vec<&RetainedOrder> {
         let mut out: Vec<&RetainedOrder> = self
             .orders

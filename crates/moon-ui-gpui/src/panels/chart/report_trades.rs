@@ -43,7 +43,64 @@ pub(super) struct ReportTradesState {
     last_refresh_start: Option<Instant>,
     refresh_timer_armed: bool,
     refresh_timer_token: u64,
+    /// The `(show_real_trades, show_emulator_trades)` pair the current history was read with.
+    ///
+    /// The two checkboxes narrow the durable read itself rather than the drawing, because the
+    /// real-vs-emulator flag never reaches the terminal per row — it exists only as a predicate on
+    /// the report replica — so a toggle has to re-read. Remembering the pair is what makes that
+    /// re-read fire on a real change and on nothing else.
+    last_trade_kinds: Option<(bool, bool)>,
     pub(super) status: ReportTradesStatus,
+}
+
+/// Which emulator kinds one durable-history read may return.
+///
+/// Three-valued because `ReportFilter::emulator` is an `Option<bool>` and cannot say "neither", while
+/// both checkboxes off is a legal and reachable UI state. Collapsing that onto `None` would show
+/// EVERY trade at the exact moment the user asked for none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EmulatorAdmission {
+    /// No predicate at all: real and emulator alike.
+    All,
+    /// Emulator only (`true`) or real only (`false`).
+    Only(bool),
+    /// No row can match, so the read is skipped entirely.
+    Nothing,
+}
+
+/// Intersect the chart's two trade-kind checkboxes with the Report scope's own emulator predicate.
+///
+/// Both are independent narrowings of one set, so the answer is their CONJUNCTION. A chart opened
+/// from a Report pinned to emulator trades, with the emulator checkbox unticked, admits nothing —
+/// answering `Some(true)` there would put back on the chart precisely the rows the user just hid,
+/// and answering `Some(false)` would show rows the Report scope excluded. Neither widening is
+/// acceptable, so the contradiction is named instead of resolved.
+///
+/// Args:
+///     show_real: Whether real (non-emulator) trades are drawn.
+///     show_emulator: Whether emulator trades are drawn.
+///     scope: The published Report scope's own emulator predicate, if it carries one.
+///
+/// Returns:
+///     The predicate one read must carry, or [`EmulatorAdmission::Nothing`].
+fn admitted_emulator_kinds(
+    show_real: bool,
+    show_emulator: bool,
+    scope: Option<bool>,
+) -> EmulatorAdmission {
+    // The scope expressed as the same pair, so the intersection is one boolean AND per kind rather
+    // than a nine-arm match over two different encodings of the same fact.
+    let (scope_real, scope_emulator) = match scope {
+        None => (true, true),
+        Some(false) => (true, false),
+        Some(true) => (false, true),
+    };
+    match (show_real && scope_real, show_emulator && scope_emulator) {
+        (true, true) => EmulatorAdmission::All,
+        (true, false) => EmulatorAdmission::Only(false),
+        (false, true) => EmulatorAdmission::Only(true),
+        (false, false) => EmulatorAdmission::Nothing,
+    }
 }
 
 /// Read one durable history snapshot without touching GPUI state.
@@ -151,7 +208,7 @@ impl ChartPanel {
         {
             exact_coins.push(label_coin);
         }
-        let (filter, report_coin, focus_record_id) = match &scope {
+        let (mut filter, report_coin, focus_record_id) = match &scope {
             ChartHistoryScope::Default => (None, None, None),
             ChartHistoryScope::Report {
                 filter,
@@ -171,10 +228,46 @@ impl ChartPanel {
             exact_coins.push(report_coin);
         }
 
+        // Which trade kinds the graphics popup admits, intersected with whatever the Report scope
+        // already asked for. Normalized first, for the same reason every other reader of this config
+        // normalizes: `layout.toml` is hand-editable.
+        let graphics =
+            moon_chart::normalize_chart_graphics(self.backend.read(cx).layout.chart_graphics);
+        let trade_kinds = (graphics.show_real_trades, graphics.show_emulator_trades);
+        let admitted = admitted_emulator_kinds(
+            trade_kinds.0,
+            trade_kinds.1,
+            filter.as_ref().and_then(|f| f.emulator),
+        );
+
         self.report_trades.sequence = self.report_trades.sequence.wrapping_add(1);
         let sequence = self.report_trades.sequence;
         self.report_trades.target = Some((core, market.clone()));
         self.report_trades.scope = scope.clone();
+        self.report_trades.last_trade_kinds = Some(trade_kinds);
+        if admitted == EmulatorAdmission::Nothing {
+            // Nothing can match, so no SQL round trip is worth making. The visible set is cleared
+            // whatever `replace_visible` says: the user asked for no trades, and leaving the previous
+            // ones drawn would answer the opposite.
+            self.report_trades.status = ReportTradesStatus::Empty;
+            self.publish_trade_history(Rc::new(Vec::new()), cx);
+            cx.notify();
+            return;
+        }
+        // A manufactured filter is not a widening: `query_chart_trade_history` itself does
+        // `filter.cloned().unwrap_or_default()`, so `Some(ReportFilter::default())` and `None` are the
+        // same query. Only `emulator` is being set here.
+        match admitted {
+            EmulatorAdmission::All => {
+                if let Some(f) = filter.as_mut() {
+                    f.emulator = None;
+                }
+            }
+            EmulatorAdmission::Only(emulator) => {
+                filter.get_or_insert_with(ReportFilter::default).emulator = Some(emulator);
+            }
+            EmulatorAdmission::Nothing => unreachable!("returned above"),
+        }
         if default_needs_catalog && !catalog_ready {
             self.report_trades.status = ReportTradesStatus::NotReady;
             if replace_visible {
@@ -335,6 +428,36 @@ impl ChartPanel {
             });
         })
         .detach();
+    }
+
+    /// Re-read durable history when the graphics popup changes which trade kinds are drawn.
+    ///
+    /// Guarded on the PAIR itself rather than on the settings signature: that signature also moves for
+    /// a theme edit or an arrow-size step, and a SQLite read per theme change is not what a checkbox
+    /// asked for. Two booleans compared per observer fire is the steady-state cost, and the observer
+    /// is a GPUI notification raised by the popup — not a present tick, not a scroll — so this never
+    /// runs at live-scroll or mousemove frequency.
+    ///
+    /// No coalescing, unlike `requery_trade_history_on_generation`: this input is a human ticking a
+    /// box, not the report generator.
+    ///
+    /// Args:
+    ///     cx: Panel context used to start a non-clearing refresh.
+    ///
+    /// Returns:
+    ///     Nothing; idle panels and unchanged settings do no work.
+    pub(super) fn requery_trade_history_on_trade_kinds(&mut self, cx: &mut Context<Self>) {
+        if self.report_trades.target.is_none() {
+            return;
+        }
+        let graphics =
+            moon_chart::normalize_chart_graphics(self.backend.read(cx).layout.chart_graphics);
+        let kinds = (graphics.show_real_trades, graphics.show_emulator_trades);
+        // `None` means no read has settled yet, and the read that does will stamp the pair itself.
+        if self.report_trades.last_trade_kinds == Some(kinds) {
+            return;
+        }
+        self.refresh_trade_history(cx);
     }
 
     /// Refresh the current exact history after a committed Report generation without refocusing.

@@ -372,6 +372,26 @@ chart.trade_history.hover.more:
   ru: "ещё %{n}"
   en: "%{n} more"
   es: "%{n} más"
+# Live open-order figures beside the closed-trade badge. Keep each translation short because its
+# active-language characters consume the overlay width budget on a narrow chart. The P/L wording
+# deliberately matches `chart.trade_history.hover.pnl`; two names for the same quantity on one chart
+# would imply a distinction that does not exist.
+chart.order_stats.count:
+  ru: "Ордера: %{n}"
+  en: "Orders: %{n}"
+  es: "Órdenes: %{n}"
+chart.order_stats.sum:
+  ru: "Сумма: %{v} USDT"
+  en: "Size: %{v} USDT"
+  es: "Tamaño: %{v} USDT"
+chart.order_stats.pnl:
+  ru: "П/У: %{v} USDT"
+  en: "P&L: %{v} USDT"
+  es: "P/G: %{v} USDT"
+chart.order_stats.pnl_pct:
+  ru: "%{v}"
+  en: "%{v}"
+  es: "%{v}"
 coin_menu.compare:
   ru: "Сравнить"
   en: "Compare"
@@ -437,6 +457,50 @@ chart.gather_windows.tip:
   ru: "Собрать окна графиков этой группы"
   en: "Gather this group's chart windows"
   es: "Reunir las ventanas de gráficos de este grupo"
+chart.graphics.title:
+  ru: "Графика чарта"
+  en: "Chart graphics"
+  es: "Gráficos del chart"
+chart.graphics.tip:
+  ru: "Настройки отрисовки чарта (общее для всех чартов)"
+  en: "Chart drawing settings (global for all charts)"
+  es: "Ajustes de dibujo del chart (global para todos los charts)"
+chart.graphics.frame_history:
+  ru: "История сделок"
+  en: "Trade history"
+  es: "Historial de operaciones"
+chart.graphics.frame_orders:
+  ru: "Линии ордеров"
+  en: "Order lines"
+  es: "Líneas de órdenes"
+chart.graphics.arrow_size:
+  ru: "Размер треугольников"
+  en: "Triangle size"
+  es: "Tamaño de los triángulos"
+chart.graphics.connector:
+  ru: "Толщина линии вход-выход"
+  en: "Entry-exit connector thickness"
+  es: "Grosor del conector entrada-salida"
+chart.graphics.real_trades:
+  ru: "Реальные сделки"
+  en: "Real trades"
+  es: "Operaciones reales"
+chart.graphics.emulator_trades:
+  ru: "Сделки эмулятора"
+  en: "Emulator trades"
+  es: "Operaciones del emulador"
+chart.graphics.hide_closed_sell:
+  ru: "Скрывать линию продажи закрытых ордеров"
+  en: "Hide the sell-price line of closed orders"
+  es: "Ocultar la línea de venta de las órdenes cerradas"
+chart.graphics.hide_closed_sell_hint:
+  ru: "Живые ордера всегда показывают свою линию продажи"
+  en: "Live orders always keep their sell line"
+  es: "Las órdenes activas siempre conservan su línea de venta"
+chart.graphics.global_hint:
+  ru: "Настройки общие для всех чартов и окон"
+  en: "These settings are shared by every chart and window"
+  es: "Estos ajustes son comunes a todos los charts y ventanas"
 chart.candles.title:
   ru: "Свечи и трейды"
   en: "Candles & trades"

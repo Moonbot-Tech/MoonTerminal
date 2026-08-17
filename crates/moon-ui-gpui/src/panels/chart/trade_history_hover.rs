@@ -188,6 +188,9 @@ impl ChartPanel {
                 }),
                 pos,
                 self.last_ppp,
+                // From the engine, not from the backend config: these arrows were baked with the
+                // value the engine holds, and the hit area has to match what is on screen.
+                self.chart.chart_graphics().trade_arrow_scale,
             )?;
             // A cluster's members index the pane's FILTERED mark list; `sources` is the only way
             // back to the panel's records.

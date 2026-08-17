@@ -467,6 +467,65 @@ fn a_reference_price_is_something_to_fit_only_while_live() {
     assert_eq!(super::fit_band(None, None, true), None);
 }
 
+/// Restoring the plain union of candles and order lines in `chartdx/data_state/market.rs` must fail
+/// here, and so must widening [`super::ORDER_FIT_SLACK`] into uselessness.
+///
+/// One open order carrying a distant target used to drag the whole price range to itself: measured on
+/// a live pane, a `+27%` sell with a `-4.5%` stop stretched the fit far past the candles, squeezed
+/// them into a corner, and left the translucent entry-to-sell panic zone covering the pane — which
+/// reads as "something painted the chart red" rather than as a scale problem. The candles must keep at
+/// least half the pane whatever an order asks for.
+#[test]
+fn a_distant_order_target_cannot_squash_the_candles() {
+    let candles = Some((100.0, 110.0));
+
+    // Far below: the fit grows by the allowance and no further, so the candles keep >= half the pane.
+    let bounded = super::admit_order_band(candles, Some((10.0, 10.0)))
+        .expect("candles and orders both present must produce a band");
+    assert_eq!(bounded, (95.0, 110.0), "a distant order must be clipped");
+    assert!(
+        (110.0 - 100.0) / (bounded.1 - bounded.0) >= 0.5,
+        "the candles must keep at least half the pane, got {bounded:?}"
+    );
+
+    // The ORDINARY case is untouched: a target inside the allowance still pulls the range to itself.
+    assert_eq!(
+        super::admit_order_band(candles, Some((108.0, 112.0))),
+        Some((100.0, 112.0)),
+        "a nearby order target must still be fitted exactly as before"
+    );
+    // An order INSIDE the candles may not pull an edge inward.
+    assert_eq!(
+        super::admit_order_band(candles, Some((104.0, 106.0))),
+        candles
+    );
+    // Either side missing leaves the other alone; that is what the caller's `saw_window_data` test
+    // depends on, so `Some`-ness has to follow the plain union exactly.
+    assert_eq!(super::admit_order_band(candles, None), candles);
+    assert_eq!(
+        super::admit_order_band(None, Some((10.0, 10.0))),
+        Some((10.0, 10.0))
+    );
+    assert_eq!(super::admit_order_band(None, None), None);
+}
+
+/// A candle span of ZERO must still bound a distant order.
+///
+/// This is the escape hatch the obvious implementation leaves open: `height == 0` looks degenerate
+/// enough to fall back to the plain union, but one flat candle is routine on an illiquid market and is
+/// exactly when an unbounded union hands the whole pane to a distant order — the very bug above,
+/// reachable through its own special case. [`super::ORDER_FIT_MIN_FRAC`] is the floor that closes it.
+#[test]
+fn a_flat_candle_span_still_bounds_a_distant_order() {
+    let bounded = super::admit_order_band(Some((100.0, 100.0)), Some((10.0, 10.0)))
+        .expect("a flat candle span is still a span");
+    assert_eq!(
+        bounded,
+        (99.5, 100.0),
+        "a flat candle span must fall back to the price-fraction floor, not to a plain union"
+    );
+}
+
 /// Making the fallback depend on whether the view HAS a price must fail here.
 ///
 /// A pane that has never had window data must go on fitting its reference: a chart opened while the

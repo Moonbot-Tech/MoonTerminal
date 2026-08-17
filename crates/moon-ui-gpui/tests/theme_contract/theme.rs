@@ -264,6 +264,11 @@ fn popover_contents_do_not_paint_a_second_surface() {
             r#".id(SharedString::from(format!("{id}-popup")))"#,
         ),
         (
+            "chart_tabs/graphics_popup.rs",
+            "chart_tabs/graphics_popup.rs",
+            r#".id(SharedString::from(format!("{id}-popup")))"#,
+        ),
+        (
             "analytics/profit_monitor/settings.rs",
             "analytics/profit_monitor/settings.rs",
             r#".id("profit-monitor-settings-popup")"#,

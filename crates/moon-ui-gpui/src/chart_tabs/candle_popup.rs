@@ -14,13 +14,12 @@ use moon_core::market::candles::{
     CandleViewCfg,
 };
 use moon_ui::{
-    MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem, MoonSegmentedControl, h_flex,
-    v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
+    MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
 };
 use rust_i18n::t;
 
-use super::common::{LayoutPopupHost, StackSetting};
+use super::common::{seg_row, LayoutPopupHost, StackSetting};
 use crate::design;
 use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup_title};
 
@@ -59,43 +58,6 @@ const OUTLINES: [u8; 3] = [1, 2, 3];
 /// slack, kept deliberately — the mode labels are localized and ES runs longer than RU/EN.
 pub(super) fn content_width(cx: &App) -> Pixels {
     px(7.0 * 42.0 + popup_group_inset_px(cx))
-}
-
-/// Build one setting as a caption with a segmented control below it.
-fn seg_row(
-    id: String,
-    caption: String,
-    labels: Vec<(String, bool)>,
-    seg_w: f32,
-    p: MoonPalette,
-    cx: &App,
-    on_pick: impl Fn(usize, &mut App) + 'static,
-) -> impl IntoElement {
-    let items: Vec<MoonSegmentItem> = labels
-        .into_iter()
-        .map(|(label, selected)| {
-            let mut it = MoonSegmentItem::new("", label).width(seg_w);
-            if selected {
-                it = it.selected(true);
-            }
-            it
-        })
-        .collect();
-    let seg = MoonSegmentedControl::new(id)
-        .accent(MoonAccent::Blue)
-        .items(items)
-        .on_click(move |ix, _, _, cx| on_pick(ix, cx))
-        .render();
-    v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 2.0))
-        .child(
-            div()
-                .text_size(design::t_caption(cx))
-                .text_color(rgb(p.text))
-                .child(caption),
-        )
-        .child(seg)
 }
 
 /// Build a multiline hint below a control.

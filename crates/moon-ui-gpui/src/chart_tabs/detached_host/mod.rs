@@ -60,6 +60,8 @@ pub(super) struct DetachedChartHost {
     layout_popup_open: bool,
     /// Anchored "Candles and Trades" popup opened by the candlestick button for this window tab.
     candle_popup_open: bool,
+    /// Anchored "Chart graphics" popup opened by the palette button; its settings are global.
+    graphics_popup_open: bool,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in THIS window applies scale to its panel
     /// and persists it in the tab spec exactly once.
     last_x_sync_rev: u64,
@@ -355,6 +357,7 @@ impl DetachedChartHost {
             restore_size,
             layout_popup_open: false,
             candle_popup_open: false,
+            graphics_popup_open: false,
             last_x_sync_rev: initial_x_sync_rev,
             layout_fit_input,
             layout_scroll_input,
@@ -614,6 +617,17 @@ impl DetachedChartHost {
             "[geom] n={num} bucket={bucket:?} → x={} y={} w={} h={} (spec_found={found})",
             geom.x, geom.y, geom.w, geom.h
         ));
+    }
+}
+
+/// Host for the "Chart graphics" palette popup. The settings are global, so this host owns only
+/// its own open flag.
+impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
+    fn graphics_popup_open(&self) -> bool {
+        self.graphics_popup_open
+    }
+    fn set_graphics_popup_open(&mut self, open: bool) {
+        self.graphics_popup_open = open;
     }
 }
 

@@ -16,6 +16,29 @@ use moon_core::session::CoreId;
 
 use super::ChartDataState;
 
+/// Whether a closed trade of this kind is drawn, per the graphics popup's two checkboxes.
+///
+/// The ONE definition of the real/emulator trade filter, and it lives at DRAWING time rather than in
+/// the durable query on purpose. Narrowing the SQL instead would let a display toggle decide which
+/// rows the history CONTAINS: the row cap is applied after the predicate, so hiding emulator trades
+/// would free slots under it and surface older REAL trades that had been truncated away, and the
+/// on-screen trade count would answer to a checkbox. Here the query is one thing and the drawing
+/// another — unticking both empties the layer without touching the database.
+///
+/// Args:
+///     graphics: The chart's graphics settings.
+///     emulator: Whether an emulator order made the trade.
+///
+/// Returns:
+///     Whether the trade's marks are drawn.
+fn trade_kind_visible(graphics: &moon_core::config::ChartGraphicsCfg, emulator: bool) -> bool {
+    if emulator {
+        graphics.show_emulator_trades
+    } else {
+        graphics.show_real_trades
+    }
+}
+
 /// Everything a pane must retain about the trade arrows it currently has on the GPU.
 ///
 /// The two halves travel together because neither is usable alone: the clusters say WHERE the
@@ -117,11 +140,7 @@ impl ChartDataState {
             // through a quantized bucket, never the raw scale, or a smooth zoom would rebuild every
             // marker on every frame.
             .wrapping_add(trade_marks::scale_bucket(view.px_per_ms, view.px_per_price));
-        if sig == u64::MAX {
-            0
-        } else {
-            sig
-        }
+        if sig == u64::MAX { 0 } else { sig }
     }
 
     /// Append entry/exit arrows and their connectors for records owned by this exact pane core.
@@ -157,6 +176,7 @@ impl ChartDataState {
             .iter()
             .enumerate()
             .filter(|(_, record)| record.core_uid == core)
+            .filter(|(_, record)| trade_kind_visible(&self.chart_graphics, record.emulator))
             .map(|(index, record)| {
                 // Built in the same pass as the marks, so the two lists cannot fall out of step.
                 sources.push(index);
@@ -179,6 +199,8 @@ impl ChartDataState {
                 scale: self.last_ppp,
                 px_per_ms: view.px_per_ms,
                 px_per_price: view.px_per_price,
+                arrow_scale: self.chart_graphics.trade_arrow_scale,
+                connector_thickness: self.chart_graphics.connector_thickness_px,
                 hovered: self
                     .trade_hovered
                     .and_then(|(hot, mark, buy)| (hot == pane).then_some((mark, buy))),
@@ -189,3 +211,6 @@ impl ChartDataState {
         TradeGeometry { clusters, sources }
     }
 }
+
+#[cfg(test)]
+mod tests;

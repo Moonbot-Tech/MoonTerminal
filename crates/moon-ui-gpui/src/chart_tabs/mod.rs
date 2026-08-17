@@ -9,6 +9,7 @@
 
 mod add_stack;
 mod candle_popup;
+mod graphics_popup;
 // `pub(crate)` because the header price ticker reuses `search` and `render_popup`.
 pub(crate) mod coin_search;
 mod common;
@@ -325,6 +326,8 @@ pub struct ChartTabs {
     layout_popup_open: bool,
     /// Anchored Candles and Trades popup for global candle-display settings.
     candle_popup_open: bool,
+    /// Anchored Chart graphics popup for the global chart-drawing settings.
+    graphics_popup_open: bool,
     /// Fit-mode height field.
     layout_fit_input: Entity<MoonInputState>,
     /// Scroll-mode height field.
@@ -703,6 +706,7 @@ impl ChartTabs {
             fig_style_popup_open: false,
             layout_popup_open: false,
             candle_popup_open: false,
+            graphics_popup_open: false,
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,
