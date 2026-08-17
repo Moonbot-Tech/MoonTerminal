@@ -149,9 +149,9 @@ hotkeys.sells_to_rect:
   en: "Sells to rectangle"
   es: "Sells to rectangle"
 hotkeys.sells_to_rect_hint:
-  ru: "Растянуть селы рынка по нарисованной Зоне или прямоугольнику на графике под курсором: берётся выделенная фигура, иначе единственная на графике. Раскладывает ядро."
-  en: "Stretch the market's sells across a drawn Zone or rectangle on the chart under the cursor: the selected figure, or the only one on that chart. The core does the spreading."
-  es: "Extiende las ventas del mercado sobre una Zona o rectángulo dibujado en el gráfico bajo el cursor: la figura seleccionada, o la única del gráfico. El núcleo hace el reparto."
+  ru: "Включает режим разовой зоны: два Ctrl+клика по графику задают её границы, у курсора виден значок ✎. По второму клику зона исчезает, а селы рынка раскладывает ядро. Повторное нажатие или Escape выключает режим. Уже нарисованная Зона или прямоугольник — пункт «Вписать селы в зону» по правому клику на фигуре."
+  en: "Arms a one-shot zone: two Ctrl+clicks on the chart set its bounds and the cursor carries a ✎ mark. The second click makes the zone disappear and the core spreads the market's sells across it. Pressing the key again, or Escape, disarms it. For a Zone or rectangle already drawn, use the figure's right-click entry."
+  es: "Activa una zona de un solo uso: dos Ctrl+clic en el gráfico fijan sus límites y el cursor muestra la marca ✎. Con el segundo clic la zona desaparece y el núcleo reparte las ventas del mercado. Pulsar de nuevo, o Escape, la desactiva. Para una Zona o rectángulo ya dibujado, use la entrada del clic derecho sobre la figura."
 hotkeys.split_parts:
   ru: "Частей для Split Order X"
   en: "Parts for Split Order X"

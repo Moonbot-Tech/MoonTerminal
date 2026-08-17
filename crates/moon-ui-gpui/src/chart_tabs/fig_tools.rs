@@ -43,8 +43,7 @@ fn tool_item(
         backend.update(app, |b, bcx| {
             // Picking a tool is also how drawing is entered: choosing one and then being told to
             // turn something else on would be a step with no purpose.
-            b.fig_tool = tool;
-            b.fig_draw_mode = true;
+            b.select_fig_tool(tool);
             bcx.notify();
         });
     })
@@ -91,6 +90,10 @@ impl ChartTabs {
             .checked(current.is_none())
             .on_click(move |_, _, app| {
                 backend_off.update(app, |b, bcx| {
+                    // Cursor means "no tool places anything", which an armed one-shot draw would
+                    // contradict on the next click. Restored first so the tool the mode interrupted
+                    // is the one that comes back when drawing is switched on again.
+                    b.disarm_sells_zone();
                     b.fig_draw_mode = false;
                     bcx.notify();
                 });

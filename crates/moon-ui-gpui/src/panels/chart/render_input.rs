@@ -213,13 +213,40 @@ pub(super) fn mouse_down_left(
     // Windows/Linux; macOS Ctrl cannot be used because the OS converts Ctrl+left-click to a right
     // click before the drawing event arrives. An active draft continues without a modifier, so
     // Command/Ctrl is required only on the first click.
+    // A Sells-to-zone band is the one draft that does NOT relax the modifier for its later clicks:
+    // its finishing click sends a live bulk move, and an unmodified left click on a chart is the
+    // trading/navigation gesture. Both of its clicks are held to Ctrl/Command — here for the press
+    // and in `try_fig_release` for the drag gesture — which is also how Moonbot's own rectangle is
+    // drawn.
     if within
         && e.click_count <= 1
-        && this.try_fig_click(pos, e.modifiers.secondary() || this.fig_draft.is_some(), cx)
+        && this.try_fig_click(
+            pos,
+            e.modifiers.secondary()
+                || this
+                    .fig_draft
+                    .as_ref()
+                    .is_some_and(|draft| !draft.needs_modifier()),
+            cx,
+        )
     {
         cx.notify();
         cx.stop_propagation();
         return;
+    }
+    // The press was not the figure layer's. Two things follow from that while a band is half drawn.
+    //
+    // First, the drag-release gesture must not measure against a press that belongs to some other
+    // gesture: `fig_draw_down` is written only by an ACCEPTED figure press, so leaving a stale one
+    // behind would let a press refused here — over the order book, or outside the pane — release
+    // into the plot and finish the band, sending a live bulk move.
+    //
+    let awaiting_band = this
+        .fig_draft
+        .as_ref()
+        .is_some_and(|draft| draft.needs_modifier());
+    if awaiting_band {
+        this.fig_draw_down = None;
     }
     // The click was not the figure layer's — but a click that landed on no figure still ends the
     // selection, which is what every editor does and what the handles left on screen otherwise
@@ -231,6 +258,15 @@ pub(super) fn mouse_down_left(
     // order, place one, or start a drag, depending on where it happened to land.
     if within && e.click_count <= 1 && this.fig_settings.take().is_some() {
         cx.notify();
+        cx.stop_propagation();
+        return;
+    }
+    // Second, an unmodified press while a Sells-to-zone band waits for its second corner is a
+    // MISTAKE, not a trade: the badge says the mode is waiting for a click, and letting it through
+    // would place or cancel an order instead. Swallowed at EVERY click count — the trading gestures
+    // below include a double-click buy, and a first press that visibly did nothing is exactly what
+    // provokes a second one. The draft keeps waiting for its Ctrl+click; Ctrl+S or Escape leave.
+    if awaiting_band && within {
         cx.stop_propagation();
         return;
     }
@@ -310,7 +346,7 @@ pub(super) fn mouse_up_left(
     // A draw-drag-release gesture (Command/Ctrl down, drag, release) completes a segment/channel
     // without a second click. A stationary click is not a drag gesture and waits for click two.
     if let Some((pos, _)) = this.chart_local(e.position) {
-        if this.try_fig_release(pos, cx) {
+        if this.try_fig_release(pos, e.modifiers.secondary(), cx) {
             cx.notify();
             cx.stop_propagation();
             return;

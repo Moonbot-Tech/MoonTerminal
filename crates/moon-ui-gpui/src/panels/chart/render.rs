@@ -130,6 +130,9 @@ impl Render for ChartPanel {
             let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
             (theme, orders, b.follow, prospective, candle_view)
         };
+        // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
+        // runs on every backend notification: it appears on the keypress rather than on the next
+        // repaint, and it costs no userdata rebuild — so nothing about it belongs here.
         // Scale is PER TAB: use self.scale, updated through set_scale by the active-tab toolbar or
         // detached-window header, rather than the global backend.price_scale.
         let mut settings_changed = self.chart.set_theme(theme)

@@ -274,6 +274,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         figures: std::rc::Rc::new(std::cell::RefCell::new(figures)),
         fig_draw_mode: true,
         fig_tool: moon_core::figures::FigureTool::HLine,
+        sells_zone_arm: None,
         fig_styles: std::collections::HashMap::new(),
         fig_tool_settings: std::collections::HashMap::new(),
         fig_selected: None,

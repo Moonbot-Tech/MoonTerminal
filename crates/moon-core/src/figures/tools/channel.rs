@@ -51,6 +51,11 @@ impl ToolShape for Channel {
         &DEF
     }
 
+    /// The corridor IS a band: its two prices are exactly what it stores.
+    fn price_band(&self) -> Option<(f64, f64)> {
+        Some((self.price1, self.price2))
+    }
+
     fn handle_count(&self) -> usize {
         2
     }

@@ -149,6 +149,16 @@ pub trait ToolShape {
     /// them generically for every tool that grabs by knot.
     fn build(&self, ctx: &BuildCtx, sink: &mut dyn GeomSink);
 
+    /// The two prices of the price BAND this tool draws, or `None` when it draws none.
+    ///
+    /// A band is an area between two price levels, which is what "spread these orders across it"
+    /// needs and what a line, a level or a ratio scale cannot answer. Defaulting to `None` means a
+    /// tool added later is not a band until it says so, rather than answering with whatever pair of
+    /// handles it happens to have.
+    fn price_band(&self) -> Option<(f64, f64)> {
+        None
+    }
+
     fn grab_mode(&self) -> GrabMode {
         GrabMode::Knots
     }

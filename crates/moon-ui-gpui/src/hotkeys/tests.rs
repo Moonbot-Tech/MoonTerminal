@@ -24,3 +24,20 @@ fn a_latin_layout_needs_no_translation() {
     assert_eq!(us_letter("q"), None);
     assert_eq!(us_letter("w"), None);
 }
+
+/// Pins that the two clicks of an armed Sells-to-zone draw ARE the two prices that go on the wire.
+///
+/// Plausible breakage: the Zone tool starts building its band from something other than its two
+/// placed nodes — a snapped level, a single price plus a width — and the command silently addresses
+/// a band the user did not draw, which nothing downstream can detect. Which TOOLS are bands is
+/// pinned next to the tools themselves, in `moon_core::figures::tools`.
+#[test]
+fn the_zone_tool_sends_the_two_prices_that_were_clicked() {
+    use moon_core::figures::{FigNode, FigureTool};
+
+    let clicks = [FigNode::new(1_000.0, 42.5), FigNode::new(2_000.0, 41.0)];
+    let def = FigureTool::Channel.def();
+    assert_eq!(def.clicks, 2, "the mode is documented as a two-click draw");
+    let kind = (def.make)(&clicks).expect("two nodes finish a Zone");
+    assert_eq!(kind.price_band(), Some((42.5, 41.0)));
+}

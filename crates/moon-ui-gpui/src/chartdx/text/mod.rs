@@ -11,6 +11,10 @@ pub(super) const LINE_H: f32 = FONT_SIZE + 4.0;
 const READOUT_PAD_X: f32 = 5.0;
 const READOUT_PAD_Y: f32 = 2.5;
 const READOUT_INSET: f32 = 2.0;
+// Offset of the cursor's mode badge from the crosshair (px): far enough that neither crosshair line
+// runs through it, close enough to read as belonging to the cursor.
+pub(super) const CURSOR_BADGE_DX: f32 = 10.0;
+pub(super) const CURSOR_BADGE_DY: f32 = 8.0;
 // Distance from an order-line label to the line itself (px). Large enough that the badge
 // (its bottom/top = dy ± READOUT_PAD_Y) does not cover the line: GAP > READOUT_PAD_Y.
 const LABEL_LINE_GAP: f32 = 4.0;
