@@ -5,9 +5,11 @@
 //! than through a database — the SQL they sit next to is exercised by the tuner's own DB tests.
 
 use super::{
-    chronological_order, edges_max_for, fold_cuts, restarts_max_for, train_split, EDGES_MAX,
-    EDGES_MAX_LIGHT, RESTARTS_MAX, RESTARTS_MAX_LIGHT, RESTARTS_MIN,
+    chronological_order, compose, composed_set, edges_max_for, fold_cuts, restarts_max_for,
+    train_split, ComposeDecision, EDGES_MAX, EDGES_MAX_LIGHT, RESTARTS_MAX, RESTARTS_MAX_LIGHT,
+    RESTARTS_MIN,
 };
+use crate::db::tuner::FIELDS;
 
 /// Trades with distinct timestamps, so a split can land anywhere.
 fn distinct(n: usize) -> Vec<i64> {
@@ -240,5 +242,61 @@ fn equally_timed_rows_are_ordered_by_their_own_values() {
     assert_eq!(
         chronological_order(&closes, &profits, &vals),
         vec![3, 1, 2, 0]
+    );
+}
+
+/// The declined set is named from its OWN mask, not from the ranges the refit applied.
+///
+/// `ComposedSet::fields` is deliberately keyed to the applied ranges, and under
+/// `NoAdditionalFilters` — the only verdict that renders the declined set — there are none. So the
+/// fixture gives `composed_set` an EMPTY `applied` list, exactly as production does on that path,
+/// and still requires the declined columns to come out.
+///
+/// Breakage this pins: building `RejectedSet::fields` from `applied` the way `ComposedSet::fields`
+/// is built. The row would name no fields at all and would read as "a set was declined" with
+/// nothing to say which — a sentence the user cannot act on, and one that no other test notices
+/// because the numbers beside it stay correct.
+#[test]
+fn a_declined_set_names_its_columns_from_its_own_mask() {
+    let chosen = vec![false; FIELDS.len()];
+    let mut mask = vec![false; FIELDS.len()];
+    mask[0] = true;
+    mask[2] = true;
+    let out = compose::ComposeOutcome {
+        chosen,
+        decision: ComposeDecision::NoAdditionalFilters,
+        support: vec![0u8; FIELDS.len()],
+        folds: 5,
+        gate_robust: true,
+        rejected: Some(compose::RejectedCandidate {
+            mask,
+            inner_lift: 116.41,
+            gate_lift: -129.91,
+            inner_folds: 3,
+            gate_folds: 2,
+        }),
+    };
+    let set = composed_set(&out, &[]);
+    let declined = set
+        .rejected
+        .expect("a carried rejection must survive into the reported set");
+    assert_eq!(
+        declined.fields,
+        vec![FIELDS[0].col, FIELDS[2].col],
+        "the declined set must name the columns of its own mask, even with no applied ranges"
+    );
+    assert_eq!(
+        (
+            declined.inner_lift,
+            declined.gate_lift,
+            declined.inner_folds,
+            declined.gate_folds
+        ),
+        (116.41, -129.91, 3, 2),
+        "both figures and both fold counts must reach the surface unchanged"
+    );
+    assert!(
+        set.fields.is_empty(),
+        "the CHOSEN set stays keyed to the applied ranges, which is what makes the two differ"
     );
 }

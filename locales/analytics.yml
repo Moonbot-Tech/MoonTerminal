@@ -430,17 +430,17 @@ analytics.tuner.compose_toggle:
   en: "Select the field set"
   es: "Seleccionar el conjunto de campos"
 analytics.tuner.compose_short:
-  ru: "Сравнит сокращённый состав, все поля и вариант без дополнительных фильтров; при близкой прибыли учтёт PF, просадку и число сделок."
-  en: "Compares a reduced set, all fields, and no additional filters; close profits also consider PF, drawdown, and trade count."
-  es: "Compara un conjunto reducido, todos los campos y ningún filtro adicional; con beneficios cercanos también tiene en cuenta PF, drawdown y número de operaciones."
+  ru: "Сравнит сокращённый состав, все поля и вариант без дополнительных фильтров по прибавке на сделку, а не по сумме; при близкой прибавке учтёт PF, просадку и абсолютную прибыль."
+  en: "Compares a reduced set, all fields, and no additional filters on profit per trade above the unfiltered rate, not on the summed total; close results also consider PF, drawdown, and absolute profit."
+  es: "Compara un conjunto reducido, todos los campos y ningún filtro adicional por el beneficio por operación sobre la tasa sin filtrar, no por la suma; con resultados cercanos también tiene en cuenta PF, drawdown y beneficio absoluto."
 analytics.tuner.compose_run:
   ru: "Подобрать состав"
   en: "Compose set"
   es: "Componer conjunto"
 analytics.tuner.compose_help:
-  ru: "Сравнивает три равноправных пути: отдельный состав, совместный поиск по всем разрешённым полям и отсутствие дополнительных фильтров. До %{seeds} независимых seed проверяют каждый временной срез; решает большинство seed внутри среза, затем большинство срезов. Beam держит 8 ветвей при ясной границе и расширяется до 16 при спорной. Большая разница прибыли решает сразу, а при близкой прибыли учитываются PF, меньшая просадка и число сделок. Галочки остаются границей поиска. Нужна выбранная стратегия."
-  en: "Compares three equal paths: a distinct field set, joint search across every admitted field, and no additional filters. Up to %{seeds} independent seeds check each time fold; seeds vote inside the fold, then folds vote. The beam keeps 8 branches at a clear boundary and expands to 16 when it is ambiguous. A material profit gap remains decisive; close profits also use PF, lower drawdown, and trade count. The checkboxes remain the search boundary. A strategy must be selected."
-  es: "Compara tres caminos equivalentes: un conjunto propio, la búsqueda conjunta en todos los campos permitidos y ningún filtro adicional. Hasta %{seeds} seeds independientes comprueban cada corte temporal; primero votan los seeds dentro del corte y después los cortes. El beam conserva 8 ramas con un límite claro y se amplía hasta 16 cuando es ambiguo. Una diferencia material de beneficio sigue siendo decisiva; con beneficios cercanos también se usan PF, menor drawdown y número de operaciones. Las casillas siguen siendo el límite. Debe seleccionarse una estrategia."
+  ru: "Сравнивает три равноправных пути: отдельный состав, совместный поиск по всем разрешённым полям и отсутствие дополнительных фильтров. До %{seeds} независимых seed проверяют каждый временной срез; решает большинство seed внутри среза, затем большинство срезов. Beam держит 8 ветвей при ясной границе и расширяется до 16 при спорной. Решает прибавка: прибыль среза минус то, что дало бы то же число сделок без фильтров, поэтому вариант без фильтров не выигрывает просто потому, что собирает все сделки; прибавка считается только при достаточном числе оставленных сделок. При близкой прибавке учитываются PF, меньшая просадка и абсолютная прибыль. Если отложенные срезы ничего не разделили, итог так и напишет. Галочки остаются границей поиска. Нужна выбранная стратегия."
+  en: "Compares three equal paths: a distinct field set, joint search across every admitted field, and no additional filters. Up to %{seeds} independent seeds check each time fold; seeds vote inside the fold, then folds vote. The beam keeps 8 branches at a clear boundary and expands to 16 when it is ambiguous. The decisive figure is LIFT: held-out profit minus what the same number of unfiltered trades would have earned, so no-filters cannot win merely by keeping every trade; lift counts only above a retained-trade floor. Close results also use PF, lower drawdown, and absolute profit. When the reserved folds separate nothing, the result says so. The checkboxes remain the search boundary. A strategy must be selected."
+  es: "Compara tres caminos equivalentes: un conjunto propio, la búsqueda conjunta en todos los campos permitidos y ningún filtro adicional. Hasta %{seeds} seeds independientes comprueban cada corte temporal; primero votan los seeds dentro del corte y después los cortes. El beam conserva 8 ramas con un límite claro y se amplía hasta 16 cuando es ambiguo. La cifra decisiva es la GANANCIA ADICIONAL: el beneficio fuera de muestra menos lo que habría ganado el mismo número de operaciones sin filtrar, de modo que «sin filtros» no gana solo por conservarlas todas; solo cuenta por encima de un mínimo de operaciones conservadas. Con resultados cercanos se usan PF, menor drawdown y beneficio absoluto. Si los cortes reservados no separan nada, el resultado lo indica. Las casillas siguen siendo el límite. Debe seleccionarse una estrategia."
 analytics.tuner.compose_budget_fields:
   ru: "полей: %{n}"
   en: "fields: %{n}"
@@ -453,6 +453,10 @@ analytics.tuner.compose_budget_seeds:
   ru: "seed: до %{n}"
   en: "seeds: up to %{n}"
   es: "seeds: hasta %{n}"
+analytics.tuner.compose_budget_ranking:
+  ru: "попыток на вариант: %{n} из %{total}"
+  en: "restarts per candidate: %{n} of %{total}"
+  es: "reinicios por candidato: %{n} de %{total}"
 analytics.tuner.compose_budget_folds:
   ru: "срезов: %{n}"
   en: "folds: %{n}"
@@ -501,18 +505,30 @@ analytics.tuner.compose_refit_dropped:
   ru: "состав подобран (%{n}), но на полном прогоне ни одно поле не получило порогов"
   en: "%{n} field(s) composed, but the full run gave none of them a range"
   es: "%{n} campo(s) compuestos, pero la pasada completa no dio rango a ninguno"
-analytics.tuner.compose_done:
-  ru: "состав подобран"
-  en: "set composed"
-  es: "conjunto compuesto"
-analytics.tuner.compose_stopped:
-  ru: "подбор состава остановлен"
-  en: "composition stopped"
-  es: "composición detenida"
+analytics.tuner.compose_done_units:
+  ru: "состав подобран, попыток на вариант: %{ranking}, всего: %{units}"
+  en: "set composed, restarts per candidate: %{ranking}, total: %{units}"
+  es: "conjunto compuesto, reinicios por candidato: %{ranking}, total: %{units}"
+analytics.tuner.compose_stopped_units:
+  ru: "подбор состава остановлен, попыток на вариант: %{ranking}, всего: %{units}"
+  en: "composition stopped, restarts per candidate: %{ranking}, total: %{units}"
+  es: "composición detenida, reinicios por candidato: %{ranking}, total: %{units}"
+analytics.tuner.compose_inconclusive:
+  ru: "доказательств недостаточно: отложенные срезы не разделили пути"
+  en: "evidence inconclusive: the reserved folds separated no path"
+  es: "evidencia no concluyente: los cortes reservados no separaron ningún camino"
 analytics.tuner.compose_no_split:
   ru: "состав подобран, но проверять его не на чем: обучение 100%"
   en: "the set was composed, but nothing is held back to check it: training 100%"
   es: "el conjunto se compuso, pero no hay nada reservado para comprobarlo: entrenamiento 100%"
+analytics.tuner.compose_rejected:
+  ru: "отклонён"
+  en: "rejected"
+  es: "rechazado"
+analytics.tuner.compose_rejected_detail:
+  ru: "%{fields}: %{inner} на срезах подбора, %{gate} на отложенных"
+  en: "%{fields}: %{inner} on the folds it was fitted on, %{gate} on the reserved ones"
+  es: "%{fields}: %{inner} en los cortes de ajuste, %{gate} en los reservados"
 analytics.tuner.train_off:
   ru: "весь период"
   en: "whole period"

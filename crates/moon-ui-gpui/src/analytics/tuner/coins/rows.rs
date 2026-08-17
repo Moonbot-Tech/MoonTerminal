@@ -223,10 +223,22 @@ fn sort_rows(state: &CoinsState, rows: &mut [CoinRow]) {
     if let Some(col) = super::super::COIN_COLS.iter().find(|c| c.key == key) {
         let f = col.sort;
         partial_sort(rows, |a, b| {
-            let o = f(&a.stat)
-                .partial_cmp(&f(&b.stat))
-                .unwrap_or(std::cmp::Ordering::Equal);
-            let o = if desc { o.reverse() } else { o };
+            let (left, right) = (f(&a.stat), f(&b.stat));
+            // Mixed/unknown quote groups publish NaN for raw-money columns, and `partial_cmp`
+            // answers `None` for every comparison involving one. Collapsing that to `Equal` makes
+            // the relation non-total — a NaN row compares "equal" to two finite rows that are
+            // themselves ordered — and `select_nth_unstable_by` aborts the process on the
+            // violation. Partition on finiteness first, keeping unavailable rows at the bottom in
+            // BOTH directions; the sibling `list::filter_sort_indices` already does exactly this.
+            let o = match (left.is_finite(), right.is_finite()) {
+                (false, false) => std::cmp::Ordering::Equal,
+                (false, true) => std::cmp::Ordering::Greater,
+                (true, false) => std::cmp::Ordering::Less,
+                (true, true) => {
+                    let numeric = left.partial_cmp(&right).unwrap_or(std::cmp::Ordering::Equal);
+                    if desc { numeric.reverse() } else { numeric }
+                }
+            };
             o.then_with(|| a.name.cmp(&b.name))
         });
     } else {
