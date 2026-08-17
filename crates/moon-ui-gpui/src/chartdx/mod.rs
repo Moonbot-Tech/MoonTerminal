@@ -640,6 +640,13 @@ struct RenderState {
     /// Disabled hides cursor values prepared by `text/prepare.rs::prepare_text` and ghost labels
     /// drawn by `text/runs.rs::draw_ghost_cursor_labels`.
     cursor_labels: bool,
+    /// Marker drawn beside the crosshair while a mode is active — today the one-shot Sells-to-zone
+    /// draw. `None` draws nothing. It rides the crosshair rather than the GPUI tree, so following
+    /// the pointer costs no repaint of the view tree.
+    ///
+    /// A `&'static str` because a mode marker is a GLYPH, not a sentence: nothing to translate and
+    /// nothing to allocate on the present path that redraws it.
+    cursor_badge: Option<&'static str>,
     pixel_scale: f32,
     /// Lazily created own-pass scissor rasterizer, recreated on device changes. It clips layers to
     /// the panel so price-positioned order books and orders cannot spill beyond the plot onto

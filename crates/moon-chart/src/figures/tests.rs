@@ -1,6 +1,6 @@
 use super::*;
 
-use moon_core::figures::tools::{HLine, Segment};
+use moon_core::figures::tools::{Channel, FibRetracement, HLine, Segment};
 use moon_core::figures::{DrawStyle, FigureKind};
 
 const EPOCH: f64 = 1_700_000_000_000.0;
@@ -182,6 +182,102 @@ fn a_draft_draws_bright_and_thick_without_knots() {
         !labels[0].permanent,
         "the figure being drawn keeps its numbers whatever the label switch says"
     );
+}
+
+/// Builds one draft, optionally alongside a figure the mouse is dragging.
+fn build_draft(draft: &Figure, alongside: Option<(&Figure, u64)>) -> Buffers {
+    let (mut zones, mut hlines, mut segs, mut markers, mut labels) = buffers();
+    let mut out = FigureBuffers {
+        zones: &mut zones,
+        hlines: &mut hlines,
+        segs: &mut segs,
+        markers: &mut markers,
+        labels: &mut labels,
+    };
+    let (others, dragging) = match alongside {
+        Some((fig, id)) => (vec![fig], Some(id)),
+        None => (Vec::new(), None),
+    };
+    build_figure_geometry(
+        others,
+        Some(draft),
+        FigureView {
+            epoch_ms: EPOCH,
+            hovered: None,
+            selected: None,
+            dragging,
+        },
+        &mut out,
+    );
+    (zones, hlines, segs, markers, labels)
+}
+
+/// A draft figure in a style whose fill is a DIFFERENT colour from its line.
+fn draft_fig(kind: FigureKind) -> Figure {
+    let mut f = Figure::new(
+        kind,
+        DrawStyle {
+            color: [10, 20, 30, 255],
+            thickness: 2.0,
+            kind: LineKind::Dash,
+            fill: [200, 40, 90, 64],
+        },
+        0.0,
+    );
+    f.id = 7;
+    f
+}
+
+/// A band being DRAWN shows the area it is choosing, in the fill the finished figure will have —
+/// including when the figure listed just before it is being dragged, which suppresses ITS fill.
+///
+/// Plausible breakage: the draft is built with an empty fill again — the state this replaced — and
+/// the Zone being placed shows two bare lines with nothing between them, which is the one thing the
+/// user is aiming; or the fill flag leaks in from the last figure of the loop and the area vanishes
+/// only while some other figure happens to be dragged.
+#[test]
+fn a_draft_band_fills_the_area_it_is_choosing() {
+    let draft = draft_fig(FigureKind::Channel(Channel {
+        price1: 100.0,
+        price2: 110.0,
+    }));
+    let dragged = hline_fig(3);
+    for alongside in [None, Some((&dragged, 3))] {
+        // The dragged neighbour contributes its own line, and no fill — that is its own rule.
+        let others = usize::from(alongside.is_some());
+        let (zones, hlines, ..) = build_draft(&draft, alongside);
+        assert_eq!(zones.len(), 1, "the band being drawn painted no area");
+        assert!(
+            (zones[0].color[3] - 64.0 / 255.0).abs() < 1e-6,
+            "the preview must use the style's own fill opacity"
+        );
+        assert_eq!(
+            rgb_u32(zones[0].color),
+            0x00C8_285A,
+            "the preview filled with the line colour instead of the fill colour"
+        );
+        assert_eq!(hlines.len(), 2 + others, "both bounds are still drawn");
+    }
+}
+
+/// Only a BAND fills while it is drawn; every other tool's draft stays lines-only.
+///
+/// Plausible breakage: the exception is widened back to every tool, and a Fibonacci preview pushes
+/// ten moving bands through the zone signature on every mouse move — each one re-baking the base
+/// cache of every pane.
+#[test]
+fn a_non_band_draft_paints_no_fill() {
+    let draft = draft_fig(FigureKind::FibRetracement(FibRetracement {
+        a: FigNode::new(EPOCH, 100.0),
+        b: FigNode::new(EPOCH + 60_000.0, 110.0),
+        hidden_levels: 0,
+    }));
+    let (zones, _, segs, ..) = build_draft(&draft, None);
+    assert!(
+        zones.is_empty(),
+        "a ratio scale being drawn re-baked the base cache for its level bands"
+    );
+    assert!(!segs.is_empty(), "its lines are still previewed");
 }
 
 #[test]

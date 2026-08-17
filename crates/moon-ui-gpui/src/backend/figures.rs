@@ -92,6 +92,49 @@ impl Backend {
             != Some(on)
     }
 
+    /// Whether the one-shot Sells-to-zone draw is armed.
+    pub(crate) fn sells_zone_armed(&self) -> bool {
+        self.sells_zone_arm.is_some()
+    }
+
+    /// Arms the one-shot Sells-to-zone draw, or ends it when it is already armed.
+    ///
+    /// Arming selects the Zone tool and enables drawing, so the band is placed by the ordinary
+    /// two-click figure path; the previous tool and drawing mode are remembered and put back by
+    /// [`Self::disarm_sells_zone`], whether the draw completed, was replaced by another tool, or
+    /// the key was simply pressed again.
+    pub(crate) fn toggle_sells_zone_arm(&mut self) {
+        if self.sells_zone_arm.is_some() {
+            self.disarm_sells_zone();
+            return;
+        }
+        self.sells_zone_arm = Some((self.fig_tool, self.fig_draw_mode));
+        self.fig_tool = FigureTool::Channel;
+        self.fig_draw_mode = true;
+    }
+
+    /// Ends the one-shot Sells-to-zone draw, restoring the tool and drawing mode it interrupted.
+    ///
+    /// A no-op when nothing is armed, so every place that ends the mode — the finished band, the
+    /// repeated hotkey, a tool picked from the toolbar — can call it unconditionally.
+    pub(crate) fn disarm_sells_zone(&mut self) {
+        if let Some((tool, draw_mode)) = self.sells_zone_arm.take() {
+            self.fig_tool = tool;
+            self.fig_draw_mode = draw_mode;
+        }
+    }
+
+    /// Selects a drawing tool and enters drawing, as the toolbar and the per-tool hotkeys do.
+    ///
+    /// The single place that pair is written, so a caller cannot select a tool while leaving the
+    /// one-shot Sells-to-zone mode armed — which would hand the next band drawn to the core as a
+    /// live bulk move.
+    pub(crate) fn select_fig_tool(&mut self, tool: FigureTool) {
+        self.disarm_sells_zone();
+        self.fig_tool = tool;
+        self.fig_draw_mode = true;
+    }
+
     /// Returns the core's default Alerts-strategy ID from `ServerConfig`, or zero when the core is
     /// absent. The setting is persisted as per-server metadata in `cfg/settings.toml`.
     pub(crate) fn alert_def_strategy(&self, core: CoreId) -> u64 {

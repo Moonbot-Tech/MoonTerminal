@@ -559,27 +559,31 @@ impl ChartPanel {
         true
     }
 
-    /// Spread this chart's sells across the band drawn on it, for the Sells-to-rectangle hotkey.
+    /// Spread this chart's sells across a band named on it, for both ways of naming one: the
+    /// one-shot Ctrl+S draw and the right-click entry on a Zone or Rect.
     ///
-    /// The band belongs to a specific chart, so the pointer picks the chart — the window's own
-    /// target would send a zone drawn on one pane to the market of another, and in a multi-pane
-    /// detached window without an anchor it would send nothing at all. `false` means the pointer is
-    /// over no pane, leaving the caller its window-target fallback.
-    pub fn sells_to_rect_at_cursor(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some((core, market)) = self.target_at_cursor() else {
-            return false;
-        };
-        // Same authority check its two siblings make: this panel may be showing a core the group's
-        // Auto rail no longer trades, and the command below is a live bulk move.
+    /// `a` and `z` are the band's two prices. The authority check is the one its trading siblings
+    /// make — this panel may be showing a core the group's Auto rail no longer trades, and this is a
+    /// live bulk move. Every way this can end without a command is logged, because by the time it
+    /// runs the band the user drew is already gone from the screen.
+    pub(super) fn send_sells_to_zone(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        a: f64,
+        z: f64,
+        cx: &mut Context<Self>,
+    ) {
         if !self.workspace_action_allowed(self.backend.read(cx), core) {
-            return true;
+            log::warn!(
+                "sells to zone: core={} market={market} is not authorized for this workspace group, nothing sent",
+                moon_core::feed::core_label(core)
+            );
+            return;
         }
-        self.backend
-            .update(cx, |b, _| crate::hotkeys::sells_to_rect(b, core, &market));
-        // Handled because the pointer NAMED this market, whether or not it had a band to spread
-        // into. Reporting the miss as unhandled would let the caller fall back to the window's own
-        // chart and spread sells on a market the user was not pointing at.
-        true
+        self.backend.update(cx, |b, _| {
+            crate::hotkeys::sells_to_zone(b, core, market, a, z)
+        });
     }
 
     /// Split the order under this panel's cursor into `parts` for the Split Order hotkeys.

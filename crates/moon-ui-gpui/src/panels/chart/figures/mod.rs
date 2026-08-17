@@ -30,6 +30,13 @@ pub(super) use self::draft::FigDraft;
 /// Figure-line hit-test threshold in pixels before scaling by pixels-per-point, matching order lines.
 const HIT_PX: f32 = 6.0;
 
+/// Glyph shown beside the crosshair while the one-shot Sells-to-zone draw is armed.
+///
+/// A mark, not a word: it sits ON the chart next to the pointer, where a label would cover price.
+/// Taken from the same geometric/dingbat range as the toolbar's own tool glyphs (`ToolDef::glyph`),
+/// which the UI font is already proven to draw.
+const SELLS_ZONE_BADGE: &str = "✎";
+
 /// Drag state for an existing figure.
 pub(super) struct FigDrag {
     pub core: CoreId,
@@ -91,21 +98,26 @@ impl ChartPanel {
         };
         // With no active draft, modifier-click grabs/selects an existing handle or body first.
         // Empty space, or any click continuing a draft, places a node for the new figure.
-        if self.fig_draft.is_none() && self.try_fig_grab(pane, pos, &map, cx) {
-            return true;
-        }
+        //
+        // NOT while the one-shot Sells-to-zone draw is armed: the mode was entered to place a band,
+        // and letting a click that happens to land within grab range of an old figure drag it
+        // instead would leave the mode armed while the badge still says it is waiting for a click.
+        //
         // Grabbing works with no tool armed — that is what the Cursor entry leaves behind — but
         // PLACING a node needs one. Without this the click would fall through to trading, which is
         // exactly right: with no tool selected a modifier-click that hits nothing is not a draw.
-        let tool = {
+        let (tool, draw_mode, armed) = {
             let b = self.backend.read(cx);
-            if !b.fig_draw_mode {
-                return false;
-            }
-            b.fig_tool
+            (b.fig_tool, b.fig_draw_mode, b.sells_zone_armed())
         };
+        if self.fig_draft.is_none() && !armed && self.try_fig_grab(pane, pos, &map, cx) {
+            return true;
+        }
+        if !draw_mode {
+            return false;
+        }
         let node = map.node_at(pos);
-        self.fig_draw_click(pane, tool, node, cx);
+        self.fig_draw_click(pane, tool, node, armed, cx);
         // Retain the placed-node position for the drag-release gesture in `try_fig_release`.
         self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
         true
@@ -117,16 +129,19 @@ impl ChartPanel {
         pane: usize,
         tool: FigureTool,
         node: FigNode,
+        armed: bool,
         cx: &mut Context<Self>,
     ) {
         let Some((core, market)) = self.fig_pane_key(pane) else {
             return;
         };
-        // Discard a draft started on another pane, chart or tool; drawing follows the current click.
+        // Discard a draft started on another pane, chart, tool or drawing mode; drawing follows the
+        // current click. Tested here as well as in `sync_fig_visual` so the answer does not depend
+        // on an observer having run between a keypress and this click.
         if self
             .fig_draft
             .as_ref()
-            .is_some_and(|d| !d.belongs_to(pane, core, &market, tool))
+            .is_some_and(|d| !d.belongs_to(pane, core, &market, tool, armed))
         {
             self.fig_draft = None;
         }
@@ -137,15 +152,10 @@ impl ChartPanel {
                     let b = self.backend.read(cx);
                     (b.fig_style(tool), b.tool_switches(tool).clone())
                 };
-                self.fig_draft.insert(FigDraft::new(
-                    pane,
-                    core,
-                    market.clone(),
-                    tool,
-                    style,
-                    switches,
-                    node,
-                ))
+                self.fig_draft.insert(
+                    FigDraft::new(pane, core, market.clone(), tool, style, switches, node)
+                        .for_sells_zone(armed),
+                )
             }
         };
         // Every click, including the first, goes through `place`: a one-click tool simply finishes
@@ -154,21 +164,43 @@ impl ChartPanel {
         // the figure being placed. Read before the draft is dropped: it is the only source there
         // has ever been for a finished figure.
         let style = draft.style;
+        let sells_zone = draft.sells_zone;
         let finished = draft.place(node);
         if let Some(kind) = finished {
             self.fig_draft = None;
-            let fig = Figure::new(kind, style, moon_core::util::now_unix_ms_i64() as f64);
-            let id = self
-                .backend
-                .read(cx)
-                .figures
-                .borrow_mut()
-                .add(core, &market, fig);
-            // Select a new figure immediately so its handles appear and it can be moved or deleted.
-            self.backend.update(cx, |b, bcx| {
-                b.fig_selected = Some((core, market.clone(), id));
-                bcx.notify();
-            });
+            // The one-shot Sells-to-zone band ends HERE and goes no further: the prices go to the
+            // core and the figure is dropped, never reaching the store, `figures.json` or the
+            // selection. Moonbot draws the same band as a throwaway `CO_SysRect`.
+            if sells_zone {
+                self.backend.update(cx, |b, bcx| {
+                    b.disarm_sells_zone();
+                    bcx.notify();
+                });
+                match kind.price_band() {
+                    Some((a, z)) => self.send_sells_to_zone(core, &market, a, z, cx),
+                    // Unreachable while the mode arms the Zone tool, and logged rather than
+                    // swallowed if that ever stops being true: the band would otherwise vanish
+                    // with no command and no trace of why.
+                    None => log::warn!(
+                        "sells to zone: {} drew no band, nothing sent",
+                        tool.def().key
+                    ),
+                }
+            } else {
+                let fig = Figure::new(kind, style, moon_core::util::now_unix_ms_i64() as f64);
+                let id = self
+                    .backend
+                    .read(cx)
+                    .figures
+                    .borrow_mut()
+                    .add(core, &market, fig);
+                // Select a new figure immediately so its handles appear and it can be moved or
+                // deleted.
+                self.backend.update(cx, |b, bcx| {
+                    b.fig_selected = Some((core, market.clone(), id));
+                    bcx.notify();
+                });
+            }
         }
         self.sync_fig_visual(cx);
     }
@@ -178,10 +210,26 @@ impl ChartPanel {
     /// A release far enough from the placed node counts as the next click, including the next
     /// triangle vertex. A release near the press is not a gesture, so the normal click-click flow
     /// continues. Returns whether the release advanced the draft.
-    pub(super) fn try_fig_release(&mut self, pos: (f32, f32), cx: &mut Context<Self>) -> bool {
+    ///
+    /// `draw_mod` reports whether the secondary modifier is still held, and the one-shot
+    /// Sells-to-zone band requires it: its finishing "click" sends a live bulk move, while
+    /// `fig_draw_down` survives from the band's own first click, so an ordinary unmodified
+    /// left-drag of the chart would otherwise be measured against that press and complete the band.
+    pub(super) fn try_fig_release(
+        &mut self,
+        pos: (f32, f32),
+        draw_mod: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // The mode as it stands now, for the same reason the press path reads it: the release must
+        // not finish a band against a mode that was dropped since its first click.
+        let armed = self.backend.read(cx).sells_zone_armed();
         let Some(d) = self.fig_draft.as_ref() else {
             return false;
         };
+        if d.needs_modifier() && !draw_mod {
+            return false;
+        }
         let Some(down) = self.fig_draw_down else {
             return false;
         };
@@ -196,7 +244,7 @@ impl ChartPanel {
             return false;
         };
         let node = map.node_at(pos);
-        self.fig_draw_click(pane, tool, node, cx);
+        self.fig_draw_click(pane, tool, node, armed, cx);
         self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
         true
     }
@@ -482,19 +530,28 @@ impl ChartPanel {
         let Some((core, market)) = self.fig_pane_key(pane) else {
             return false;
         };
+        // One lookup for everything the menu needs about this figure: `FigureStore::get` falls back
+        // to scanning every core's list, so a second identical fetch would pay for that twice.
+        // `band` is the pair of prices it would spread sells across, `None` for a tool that draws
+        // no band — which is most of them.
         let state = {
             let b = self.backend.read(cx);
             let store = b.figures.borrow();
             store
                 .get(core, &market, id)
-                .map(|f| (f.alert, f.shared, f.can_alert(), f.can_share()))
-                .map(|s| (s, store.owns(core, &market, id)))
+                .map(|f| {
+                    (
+                        (f.alert, f.shared, f.can_alert(), f.can_share()),
+                        f.kind.price_band(),
+                    )
+                })
+                .map(|(s, band)| (s, band, store.owns(core, &market, id)))
         };
         // Whether the core can be commanded at all. A chart alert is attempted once and never
         // retried, so `Backend::set_figure_alert` refuses while the core is not `Ready` — and this
         // menu must not offer a click that would then do nothing.
         let core_ready = self.backend.read(cx).core_can_command(core);
-        let Some(((armed, shared, can_alert, can_share), owned)) = state else {
+        let Some(((armed, shared, can_alert, can_share), band, owned)) = state else {
             return false;
         };
         // Select the right-clicked figure so its handles are visible.
@@ -529,6 +586,28 @@ impl ChartPanel {
                     });
                 }),
         );
+        // Spreading this market's sells across the band the figure already describes — the standing
+        // counterpart of the one-shot Ctrl+S draw. Offered for any figure that IS a band, with no
+        // `core_ready` gate: this is an ordinary trade command that queues on the core's channel
+        // like the panic-sell and join hotkeys, unlike the alert entry below, whose upsert is
+        // attempted once and never retried. Gating it would also make the two ways of naming a band
+        // behave differently.
+        if let Some((a, z)) = band {
+            let view_zone = cx.entity();
+            let market_zone = market.clone();
+            items.push(
+                MoonMenuItem::with_key(
+                    "fig-sells-zone",
+                    t!("chart.fig_menu.sells_to_zone").to_string(),
+                )
+                .on_click(move |_, window, app| {
+                    window.close_context_menu(app);
+                    view_zone.update(app, |this: &mut Self, vcx| {
+                        this.send_sells_to_zone(core, &market_zone, a, z, vcx);
+                    });
+                }),
+            );
+        }
         // A tool the core has no chart-object type for cannot be armed at all, and neither arming
         // nor disarming reaches a core that is not connected: offer the item only where it would
         // work, instead of failing after the click.
@@ -643,17 +722,31 @@ impl ChartPanel {
         // Cursor abandons it for the same reason, and HERE rather than on the next mouse move over
         // the chart — this runs from the backend observer, so the half-placed nodes go the moment
         // the tool is disarmed instead of lingering until the cursor happens to pass over them.
-        let (tool, armed) = {
+        // The Sells-to-zone mode changes what a FINISHING click does while leaving the tool alone,
+        // so a draft started on the other side of that switch is abandoned here too: entering the
+        // mode must not adopt a half-drawn figure as a live command, and leaving it must not turn a
+        // half-drawn command into a stored figure.
+        let (tool, drawing, sells_zone) = {
             let b = self.backend.read(cx);
-            (b.fig_tool, b.fig_draw_mode)
+            (b.fig_tool, b.fig_draw_mode, b.sells_zone_armed())
         };
         if self
             .fig_draft
             .as_ref()
-            .is_some_and(|d| d.tool != tool || !armed)
+            .is_some_and(|d| d.tool != tool || !drawing || d.sells_zone != sells_zone)
         {
             self.fig_draft = None;
+            // The press the drag-release gesture measures against belongs to the draft that just
+            // died. Cleared with it, so a release cannot finish a band against a point placed for
+            // something else — a press this panel never saw refused would otherwise leave it.
+            self.fig_draw_down = None;
         }
+        // The badge riding the crosshair. Published from here rather than from the render path
+        // because this runs on the backend observer: the mode becomes visible on the keypress
+        // itself, through the chart's own present, instead of waiting for the next GPUI repaint —
+        // and it costs no userdata rebuild.
+        self.chart
+            .set_cursor_badge(sells_zone.then_some(SELLS_ZONE_BADGE));
         let b = self.backend.read(cx);
         let key = self
             .fig_draft

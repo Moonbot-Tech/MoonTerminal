@@ -13,6 +13,10 @@
 //! pane. (A tool with a typed scale takes the hue from its own level and only the OPACITY from the
 //! figure; the rule that matters here is the same — no interaction state reaches a fill.)
 //!
+//! The ONE exception is the band being drawn: a Zone or rectangle in progress paints its fill and
+//! pays that re-bake while the draft follows the cursor, because there the area is precisely what
+//! the user is aiming. See `Sink::fills`.
+//!
 //! Visual language (to distinguish figures from order lines and make their state visible):
 //! - regular figure — THIN BASE-STYLE LINE;
 //! - armed (alert) figure — THICK BASE-STYLE LINE (clearly shows that it is armed);
@@ -104,6 +108,10 @@ pub struct FigureView {
     /// Its fills are suppressed for the duration: a fill lives in the chart's base cache, and one
     /// that moved with the cursor would re-bake the background, grid, candles and order book of
     /// every pane at mouse-move rate. They come back on release, in one bake.
+    ///
+    /// A DRAFT band pays that cost on purpose — see `Sink::fills` — because there the moving area
+    /// is the thing being chosen. Moving an existing figure is not: its outline already says where
+    /// it is going.
     pub dragging: Option<u64>,
 }
 
@@ -167,10 +175,12 @@ struct Sink<'a, 'b> {
     epoch_ms: f64,
     /// Whether fills are emitted at all.
     ///
-    /// Off for the DRAFT and for the figure being DRAGGED: both follow the cursor, and a fill
-    /// entering the base-cache signature on every mouse move would re-bake the background, grid,
-    /// candles and book of every pane while the user is still aiming. Lines and readouts are what
-    /// aiming needs; the fill returns on release, in one bake.
+    /// Off for the figure being DRAGGED: a fill entering the base-cache signature on every mouse
+    /// move re-bakes the background, grid, candles and book of every pane, and a figure being moved
+    /// is recognised by its lines. It returns on release, in one bake.
+    ///
+    /// For the DRAFT it is on only for a tool that draws a BAND: there the area IS what the user is
+    /// choosing, so the same cost buys the thing being aimed rather than a decoration.
     fills: bool,
     /// Whether the figure being built is the DRAFT, whose labels are transient by nature.
     ///
@@ -331,12 +341,24 @@ pub fn build_figure_geometry<'a>(
                 thickness: d.thickness * FIG_ACTIVE_THICKNESS,
                 kind: d.line_kind,
             },
-            // The draft paints no fill (`sink.fills` below), so this only has to be a colour.
-            fill: [0.0; 4],
+            // A BAND being drawn paints its fill, in the style the finished figure will have: the
+            // Zone and the rectangle ARE areas, and two bare lines do not show the area being
+            // chosen. Every other tool keeps the old empty fill, so a Fibonacci preview does not
+            // push ten moving bands through the zone signature.
+            fill: rgba(d.fill, 1.0),
             hot: true,
             handles: false,
         };
-        sink.fills = false;
+        // Set, never inherited: the loop above leaves this false when the LAST figure was the one
+        // being dragged, and the draft's own fill must not depend on which figure came last.
+        //
+        // The cost is real and deliberate: a moving fill re-enters the zone signature and re-bakes
+        // the base cache of every pane at present rate for as long as the draft follows the cursor
+        // (see `FigureView::dragging`, which is refused for exactly that reason). It is accepted
+        // here only for the two tools whose whole point is the area, and only while a draft is
+        // live — a draft ends on its finishing click, a click elsewhere, a tool change or leaving
+        // drawing mode.
+        sink.fills = d.kind.price_band().is_some();
         sink.draft = true;
         build_figure(&d.kind, &ctx, &mut sink);
     }

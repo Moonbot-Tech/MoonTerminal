@@ -65,6 +65,15 @@ impl FigureKind {
         }
     }
 
+    /// The two prices of the band this figure draws, or `None` when it draws none.
+    ///
+    /// Answered by the tool through [`ToolShape::price_band`], so "is this a band" stays a property
+    /// of the tool rather than a list of types kept somewhere else. Read by the Sells-to-zone
+    /// command, which needs a band and nothing but a band.
+    pub fn price_band(&self) -> Option<(f64, f64)> {
+        self.shape().price_band()
+    }
+
     /// Reference price used by the alert list's Price column and sorting: the figure's first
     /// handle, which every tool orders first.
     pub fn anchor_price(&self) -> f64 {

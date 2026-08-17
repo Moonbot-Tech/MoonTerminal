@@ -365,6 +365,35 @@ fn an_unknown_stored_switch_is_ignored() {
     }
 }
 
+/// Pins which tools are price BANDS, and that a band answers with the prices it was drawn from.
+///
+/// Plausible breakage: a tool that merely has two handles — a segment, a ray, a Fibonacci — starts
+/// answering, and Sells-to-zone then spreads live sell orders across a band the user never drew;
+/// or the Zone/Rect answer stops being the two clicked prices and the command addresses a
+/// different band than the one on screen.
+#[test]
+fn only_zone_and_rect_are_price_bands() {
+    let bands = [FigureTool::Channel, FigureTool::Rect];
+    for def in REGISTRY {
+        let drawn = (def.make)(&nodes(def.clicks as usize)).expect("full node set must build");
+        let band = drawn.price_band();
+        assert_eq!(
+            band.is_some(),
+            bands.contains(&def.tool),
+            "{} disagrees about being a band",
+            def.key
+        );
+        if let Some((a, z)) = band {
+            let clicked: Vec<f64> = nodes(def.clicks as usize).iter().map(|n| n.price).collect();
+            assert!(
+                clicked.contains(&a) && clicked.contains(&z) && a != z,
+                "{} answers with prices it was not drawn from",
+                def.key
+            );
+        }
+    }
+}
+
 /// Every tool can be asked about itself before one has been drawn.
 ///
 /// `settings_of` builds a throwaway figure to do that; a tool whose `make` refused the throwaway

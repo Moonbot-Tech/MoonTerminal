@@ -25,6 +25,15 @@ pub(crate) struct FigDraft {
     pub nodes: Vec<FigNode>,
     /// Current cursor position in data coordinates.
     pub cursor: FigNode,
+    /// Whether this draft was started with the one-shot Sells-to-zone mode armed, snapshotted for
+    /// the same reason the style is.
+    ///
+    /// What the finishing click does is decided by THIS, never by the mode's current state: the
+    /// mode and the tool are the same `Channel` either way, so a mode armed — or dropped —
+    /// mid-draw would otherwise turn a figure the user was drawing into a live bulk command, or
+    /// the reverse. `sync_fig_visual` abandons a draft whose flag stops matching, exactly as it
+    /// does for a changed tool.
+    pub sells_zone: bool,
 }
 
 impl FigDraft {
@@ -48,19 +57,45 @@ impl FigDraft {
             switches,
             nodes: Vec::new(),
             cursor,
+            sells_zone: false,
         }
     }
 
-    /// Whether the draft belongs to this pane, chart and tool. A click anywhere else — another
-    /// pane, another market, or after switching tools — abandons it.
+    /// Marks the draft as the one-shot Sells-to-zone band, taken at the moment it starts.
+    pub(super) fn for_sells_zone(mut self, armed: bool) -> Self {
+        self.sells_zone = armed;
+        self
+    }
+
+    /// Whether the draft belongs to this pane, chart, tool and drawing mode. A click anywhere else
+    /// — another pane, another market, after switching tools, or after the one-shot Sells-to-zone
+    /// mode was armed or dropped mid-draw — abandons it.
+    ///
+    /// `sells_zone` is the mode as it stands NOW: the tool is `Channel` on both sides of that
+    /// switch, so without it a half-drawn figure would be finished as a live command, or a
+    /// half-drawn command stored as a figure.
     pub(super) fn belongs_to(
         &self,
         pane: usize,
         core: CoreId,
         market: &str,
         tool: FigureTool,
+        sells_zone: bool,
     ) -> bool {
-        self.pane == pane && self.core == core && self.market == market && self.tool == tool
+        self.pane == pane
+            && self.core == core
+            && self.market == market
+            && self.tool == tool
+            && self.sells_zone == sells_zone
+    }
+
+    /// Whether this draft's later clicks still require the secondary modifier.
+    ///
+    /// Only the Sells-to-zone band does: its finishing click sends a live bulk move, while an
+    /// unmodified left click on a chart is the trading/navigation gesture. The single statement of
+    /// that rule, read by both the press and the release path.
+    pub(crate) fn needs_modifier(&self) -> bool {
+        self.sells_zone
     }
 
     /// Adds a node. Returns the finished figure kind once the tool's click count is reached, in

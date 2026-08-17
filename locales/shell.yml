@@ -758,6 +758,10 @@ chart.fig_menu.delete_shared:
   ru: "Удалить у всех ядер"
   en: "Delete for every core"
   es: "Eliminar en todos los núcleos"
+chart.fig_menu.sells_to_zone:
+  ru: "Вписать селы в зону"
+  en: "Fit sells into this zone"
+  es: "Ajustar ventas a esta zona"
 
 # --- Alerts window ---
 alerts.col.core:

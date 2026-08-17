@@ -57,6 +57,12 @@ impl ToolShape for Rect {
         &DEF
     }
 
+    /// The box spans a band: its two stored corners carry its two prices, and the time span it also
+    /// has is not part of the answer.
+    fn price_band(&self) -> Option<(f64, f64)> {
+        Some((self.a.price, self.b.price))
+    }
+
     fn handle_count(&self) -> usize {
         4
     }

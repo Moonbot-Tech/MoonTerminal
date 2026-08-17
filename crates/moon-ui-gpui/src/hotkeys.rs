@@ -59,8 +59,12 @@ pub enum HotkeyAction {
         /// Move up when true, down when false.
         up: bool,
     },
-    /// Spread the active market's sell orders across the drawn rectangle — Moonbot's
-    /// "sells to rectangle", the take-profit grid stretched over a box.
+    /// Arm the one-shot Sells-to-zone draw — Moonbot's "sells to rectangle".
+    ///
+    /// The key draws rather than sends: it arms the Zone tool for ONE band, whose two Ctrl+clicks
+    /// name the prices the market's sells are spread across, after which the band disappears
+    /// instead of joining the chart's figures. Pressing it again disarms it. Spreading an existing
+    /// Zone or Rect is the right-click entry on that figure, not this.
     SellsToRect,
     /// Split a sell order for the active chart's market into `parts`.
     ///
@@ -369,6 +373,8 @@ fn with_hovered_chart(
 ///   one the user means, the rule the built-in Tab/Delete cancellation already follows. Split needs
 ///   it; with nothing hovered it falls through to [`apply`]'s market-level split, which the core
 ///   performs only when the market has exactly one active sell order.
+/// - **Escape cancels a mode first**: while the one-shot Sells-to-zone draw is armed, Escape ends
+///   it and stops there, so the chart it was armed for is still open for a second press.
 pub fn pre_dispatch(
     action: HotkeyAction,
     ev: &KeyDownEvent,
@@ -379,15 +385,22 @@ pub fn pre_dispatch(
         return true;
     }
     match action {
-        HotkeyAction::SplitOrder { parts } => {
-            with_hovered_chart(backend, cx, |panel, pcx| {
-                panel.split_hovered_order(parts, pcx)
+        HotkeyAction::SplitOrder { parts } => with_hovered_chart(backend, cx, |panel, pcx| {
+            panel.split_hovered_order(parts, pcx)
+        }),
+        // Escape leaves the armed Sells-to-zone draw before it closes anything: a mode entered by a
+        // key needs a way out that is not the same key, and closing the chart the band was meant for
+        // would otherwise leave the mode armed for whatever chart is clicked next. The SECOND press
+        // closes the chart as it always did.
+        HotkeyAction::CloseActiveChart | HotkeyAction::CloseAllCharts => {
+            backend.update(cx, |b, bcx| {
+                if !b.sells_zone_armed() {
+                    return false;
+                }
+                b.disarm_sells_zone();
+                bcx.notify();
+                true
             })
-        }
-        // The drawn band belongs to the chart it was drawn on, so the pointer picks the chart. With
-        // the pointer elsewhere this falls through to the window's own active market.
-        HotkeyAction::SellsToRect => {
-            with_hovered_chart(backend, cx, |panel, pcx| panel.sells_to_rect_at_cursor(pcx))
         }
         _ => false,
     }
@@ -411,21 +424,26 @@ pub fn apply(
     use HotkeyAction as A;
     match action {
         A::FigTool(tool) => {
+            // The armed mode ends first, so the toggle below tests the user's OWN tool: the mode
+            // leaves `Channel` selected, and testing that instead would make the Zone binding turn
+            // drawing off rather than select the Zone.
+            b.disarm_sells_zone();
             // Repeating the active tool disables drawing; another tool selects it and enables drawing.
             if b.fig_draw_mode && b.fig_tool == tool {
                 b.fig_draw_mode = false;
             } else {
-                b.fig_tool = tool;
-                b.fig_draw_mode = true;
+                b.select_fig_tool(tool);
             }
             bcx.notify();
             true
         }
         A::SwitchFigure => {
             // Cycle through tools and keep drawing mode enabled, matching Moonbot's switch-figure
-            // action. This action never exits drawing mode; the Cursor entry or the active-tool toggle does.
-            b.fig_tool = b.fig_tool.next();
-            b.fig_draw_mode = true;
+            // action. This action never exits drawing mode; the Cursor entry or the active-tool
+            // toggle does. Disarming first means the cycle starts from the tool the mode
+            // interrupted rather than from the `Channel` it forced.
+            b.disarm_sells_zone();
+            b.select_fig_tool(b.fig_tool.next());
             bcx.notify();
             true
         }
@@ -532,10 +550,13 @@ pub fn apply(
             Some((core, market)) => shift_orders(b, core, &market, sell, up),
             None => false,
         },
-        A::SellsToRect => match target {
-            Some((core, market)) => sells_to_rect(b, core, &market),
-            None => false,
-        },
+        // Arms the draw; it sends nothing by itself, so it needs no target. The band is placed on
+        // the chart that is clicked, and THAT chart's market is the one the command addresses.
+        A::SellsToRect => {
+            b.toggle_sells_zone_arm();
+            bcx.notify();
+            true
+        }
         // Caller-routed actions have mixed scope: scale is window-specific; cursor placement and
         // cancellation use `Backend::hovered_chart`; switching and active-chart closing are
         // group-local; reset and close-all are application-global.
@@ -551,43 +572,18 @@ pub fn apply(
     }
 }
 
-/// Spread the market's sell orders across the price band drawn on its chart.
+/// Spread the market's sell orders across a price band, as Moonbot's "sells to rectangle" does.
 ///
-/// Two tools draw a band and both count: the **Zone** (`Channel`), which is Moonbot's own
-/// chart-object type 5 and therefore the band a core can also send us, and the local **Rect**.
-/// Every other tool is a single line or level and would only let this guess at a band the user did
-/// not draw. The band is the SELECTED figure when the selection is one of those two on this chart,
-/// and otherwise the most recently drawn one. Returns `false` when there is none, leaving the key
-/// unhandled rather than sending a zone nobody asked for.
-pub(crate) fn sells_to_rect(b: &mut Backend, core: CoreId, market: &str) -> bool {
-    let zone = {
-        let store = b.figures.borrow();
-        let selected = b
-            .fig_selected
-            .as_ref()
-            .filter(|(fig_core, fig_market, _)| *fig_core == core && fig_market == market)
-            .and_then(|(_, _, id)| store.get(core, market, *id))
-            .and_then(figure_zone);
-        selected.or_else(|| {
-            // With nothing selected, only an UNAMBIGUOUS band is taken: exactly one on this chart.
-            // "The newest of several" reads well and behaves badly — a forgotten box from last week,
-            // scrolled far off screen, would quietly decide where live sells land. Several bands is
-            // a question only the user can answer, by selecting one.
-            //
-            // `figures`, not `visible`: the latter also yields bands another core merely SHARES
-            // onto this market, and a box drawn elsewhere is not this chart's answer either.
-            let mut bands = store.figures(core, market).iter().filter_map(figure_zone);
-            let only = bands.next()?;
-            bands.next().is_none().then_some(only)
-        })
-    };
-    let Some((a, z)) = zone else {
-        log::warn!(
-            "hotkey sells to rectangle: core={} market={market} has no single Zone/Rect to spread into — draw one or select it",
-            moon_core::feed::core_label(core)
-        );
-        return false;
-    };
+/// `a` and `z` are the band's two prices in the order they were drawn or stored; ordering them is
+/// [`moon_core::session::Session::sells_to_zone`]'s job. ONE command goes out, carrying only the
+/// market, the side and the two prices: the core selects the sells and does the spreading, and the
+/// moved orders come back through the ordinary order stream.
+///
+/// Shared by both ways to name a band — the one-shot Ctrl+S draw, whose figure is never stored, and
+/// the right-click entry on a Zone or Rect that is. Every refusal below is logged rather than
+/// reported: nothing upstream can act on the difference, and the band is gone from the screen by
+/// the time this runs.
+pub(crate) fn sells_to_zone(b: &mut Backend, core: CoreId, market: &str, a: f64, z: f64) {
     // Refuse a band no thinner than one price STEP of this market — the authoritative number, not a
     // constant picked here: below it every sell rounds onto the same level, which is the opposite of
     // spreading them. An unknown step falls back to demanding two distinct prices. Logged, like the
@@ -600,34 +596,23 @@ pub(crate) fn sells_to_rect(b: &mut Backend, core: CoreId, market: &str) -> bool
     };
     if thin || !(a.is_finite() && z.is_finite()) || a <= 0.0 || z <= 0.0 {
         log::warn!(
-            "hotkey sells to rectangle: core={} market={market} zone {a:.8}..{z:.8} is thinner than one price step or out of range, nothing sent",
+            "sells to zone: core={} market={market} zone {a:.8}..{z:.8} is thinner than one price step or out of range, nothing sent",
             moon_core::feed::core_label(core)
         );
-        return true;
+        return;
     }
     let short = b.market_position_short(core, market);
     log::info!(
-        "hotkey sells to rectangle: core={} market={market} zone={:.8}..{:.8} short={short}",
+        "sells to zone: core={} market={market} zone={:.8}..{:.8} short={short}",
         moon_core::feed::core_label(core),
         a.min(z),
         a.max(z),
     );
-    if let Err(error) = b.session.sells_to_zone(core, market.to_string(), a, z, short) {
-        log::warn!("hotkey sells to rectangle failed: {error}");
-    }
-    true
-}
-
-/// Return a figure's two band prices, or `None` for a tool that draws no band.
-///
-/// `Channel` is shown to the user as **Zone** and is Moonbot's own two-price object; `Rect` is the
-/// local box. Both describe exactly the pair of prices this command needs.
-fn figure_zone(fig: &moon_core::figures::Figure) -> Option<(f64, f64)> {
-    use moon_core::figures::FigureKind;
-    match &fig.kind {
-        FigureKind::Rect(rect) => Some((rect.a.price, rect.b.price)),
-        FigureKind::Channel(channel) => Some((channel.price1, channel.price2)),
-        _ => None,
+    if let Err(error) = b
+        .session
+        .sells_to_zone(core, market.to_string(), a, z, short)
+    {
+        log::warn!("sells to zone failed: {error}");
     }
 }
 

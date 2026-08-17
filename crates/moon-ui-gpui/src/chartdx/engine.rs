@@ -148,6 +148,7 @@ impl ChartEngine {
             label_font_delta: theme.label_font_delta,
             line_labels: true,
             cursor_labels: true,
+            cursor_badge: None,
             pixel_scale: 1.0,
             #[cfg(windows)]
             scissor_rs: None,
@@ -684,6 +685,18 @@ impl ChartEngine {
             return false;
         }
         st.cursor_labels = show;
+        st.needs_present = true;
+        true
+    }
+
+    /// Sets the mode marker glyph drawn beside the crosshair; `None` clears it.
+    /// Returns true on change.
+    pub fn set_cursor_badge(&mut self, badge: Option<&'static str>) -> bool {
+        let mut st = self.state.borrow_mut();
+        if st.cursor_badge == badge {
+            return false;
+        }
+        st.cursor_badge = badge;
         st.needs_present = true;
         true
     }

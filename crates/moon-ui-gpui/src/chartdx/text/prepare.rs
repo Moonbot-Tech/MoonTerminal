@@ -590,6 +590,51 @@ impl RenderState {
                 }
             }
 
+            // Sells-to-zone mode marker: a badge riding the crosshair while the one-shot draw is
+            // armed, so the mode is visible where the eyes already are — Moonbot marks its own
+            // cursor the same way. Deliberately NOT behind the crosshair-label switch: that switch
+            // hides readouts of what the cursor is OVER, and this says what the next click DOES.
+            let badge = self
+                .cursor_badge
+                .zip(self.cursor.filter(|cursor| cursor.pane == idx));
+            if let Some((text, cursor)) = badge {
+                let cx_log = (self.slot_origin[0] + cursor.local[0]) / sf;
+                let cy_log = (self.slot_origin[1] + cursor.local[1]) / sf;
+                let inside = (plot_left..=plot_right).contains(&cx_log)
+                    && (plot_top..=plot_bottom).contains(&cy_log);
+                if inside {
+                    let metrics = self.measure_label_text(ctx, text);
+                    let (bw, bh) = (metrics.width.as_f32(), metrics.line_height.as_f32());
+                    // Below-right of the crosshair, then pulled back inside the plot so a cursor at
+                    // the right or bottom edge does not push the badge over the order book or off
+                    // the pane. `clamp_anchor` is the module's lo-above-hi-safe clamp, which a pane
+                    // narrower than the badge would otherwise hit.
+                    let x = clamp_anchor(
+                        cx_log + CURSOR_BADGE_DX,
+                        plot_left,
+                        plot_right - bw - READOUT_PAD_X,
+                    );
+                    let y = clamp_anchor(
+                        cy_log + CURSOR_BADGE_DY,
+                        plot_top,
+                        plot_bottom - bh - READOUT_PAD_Y,
+                    );
+                    self.draw_label_text(ctx, text, x, y, 0.0, 0.0, readout)?;
+                    // Same opaque backdrop the cursor's own values get, and for the same reason:
+                    // this sits over candles. `placed` feeds the backing plates in
+                    // `render_state.rs`, which is all it is for.
+                    placed.push(PlacedLabel {
+                        x,
+                        y,
+                        ax: 0.0,
+                        ay: 0.0,
+                        w: bw,
+                        h: bh,
+                        solid: true,
+                    });
+                }
+            }
+
             // A per-tab "crosshair label" checkbox in the settings popup disables cursor readout.
             let cursor = self
                 .cursor
