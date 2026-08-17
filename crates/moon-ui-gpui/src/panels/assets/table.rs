@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
+use moon_core::util::fmt;
 use moon_ui::{MoonButtonVariant, MoonDisclosure, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
 
@@ -615,26 +616,18 @@ fn assets_row(
 /// has no unrealized PnL, and neither a missing entry price nor an unknown quote rate may print as
 /// a confident `0.00`. Those all get a muted dash, and the PnL sort orders them the same way.
 fn pnl_cell(e: &AssetEntry) -> MoonDataCell {
-    let Some(v) = super::columns::pnl_display(e) else {
-        return MoonDataCell::text("–").tone(MoonTone::Muted);
-    };
-    // `> 0.0` for the sign, not `>= 0.0`: a short resting exactly at its entry produces `-0.0`,
-    // which passes `>= 0.0` and would render as `+-0.00`.
-    let text = if v > 0.0 {
-        format!("+{v:.2}")
-    } else if v < 0.0 {
-        format!("{v:.2}")
-    } else {
-        "0.00".to_string()
-    };
-    let tone = if v < 0.0 {
-        MoonTone::Danger
-    } else {
-        MoonTone::Positive
-    };
-    // Two decimals without `$`, matching the Orders PnL column — this is a currency amount, not an
-    // adaptive price.
-    MoonDataCell::text(text).tone(tone).weight(500.0)
+    // Fixed decimals without `$`, through the same helper as the Orders PnL column so the two
+    // columns cannot drift — this is a currency amount, not an adaptive price. The helper also
+    // owns the `-0.0` case this cell used to special-case by hand: it classifies the sign from the
+    // ROUNDED value, so a short resting exactly at its entry renders an unsigned `0.00`.
+    match super::columns::pnl_display(e)
+        .and_then(|v| fmt::signed_fixed(v, crate::order_math::MONEY_DECIMALS))
+    {
+        Some((text, sign)) => MoonDataCell::text(text)
+            .tone(design::delta_tone(sign))
+            .weight(500.0),
+        None => MoonDataCell::text("–").tone(MoonTone::Muted),
+    }
 }
 
 /// Render a muted core-name cell that targets the row's core when clicked.

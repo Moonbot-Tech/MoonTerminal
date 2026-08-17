@@ -4,11 +4,23 @@
 //! no terminal logic, no chart renderer state.
 
 use gpui::*;
-use moon_ui::{MoonMetrics, MoonPalette, MoonTheme, rgba_from};
+use moon_core::util::fmt::DeltaSign;
+use moon_ui::{MoonMetrics, MoonPalette, MoonTheme, MoonTone, rgba_from};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 const M: MoonMetrics = MoonMetrics::TERMINAL;
+
+/// The one profit-and-loss sign-to-tone mapping: gain green, loss red, and a value that ROUNDED to
+/// zero muted rather than green.
+///
+/// Every money cell resolves its colour here so no surface can tint the same figure differently.
+/// Taking a [`DeltaSign`] rather than an `f64` is the load-bearing part: the sign is classified
+/// from the value AFTER rounding, so a `-0.004` that prints as `0.00` can no longer arrive here
+/// still claiming to be a loss and paint a red cell that reads as break-even.
+pub fn delta_tone(sign: DeltaSign) -> MoonTone {
+    sign.pick(MoonTone::Positive, MoonTone::Danger, MoonTone::Muted)
+}
 
 pub const HEADER_TOP_H: f32 = M.header_top_h;
 pub const TOOLBAR_H: f32 = M.toolbar_h;
