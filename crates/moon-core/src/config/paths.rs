@@ -257,7 +257,40 @@ fn validate_update_nonce(nonce: &str) -> std::io::Result<()> {
 
 /// User-data directory without creating it as a side effect, used for migration path comparison.
 /// Location logic is centralized here.
+/// Process-wide replacement for the data root, installed before any path is resolved.
+///
+/// Set by [`set_data_dir_override`] and never cleared: every path in this module funnels through
+/// `data_dir_raw`, so a value that could change mid-run would let two callers disagree about where
+/// the databases live.
+static DATA_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Point every data path at `dir` instead of the platform default.
+///
+/// For the fixture bench (`--fixture`), which runs the real application against a throwaway copy
+/// of a committed database set. Environment variables are deliberately NOT read
+/// here: the caller decides, and a stray variable must not be able to move a user's live databases.
+///
+/// Args:
+///     dir: Existing directory that becomes the data root for this process.
+///
+/// Returns:
+///     Whether this call installed the override. `false` means one was already installed, and the
+///     caller is too late — some path has probably been resolved already.
+pub fn set_data_dir_override(dir: PathBuf) -> bool {
+    DATA_DIR_OVERRIDE.set(dir).is_ok()
+}
+
+/// Whether this process runs against a replaced data root.
+pub fn has_data_dir_override() -> bool {
+    DATA_DIR_OVERRIDE.get().is_some()
+}
+
+/// Data root before any directory is created: the override when one is installed, otherwise the
+/// platform location.
 fn data_dir_raw() -> PathBuf {
+    if let Some(dir) = DATA_DIR_OVERRIDE.get() {
+        return dir.clone();
+    }
     #[cfg(windows)]
     {
         exe_dir()
@@ -680,6 +713,14 @@ pub fn legacy_toml_path() -> PathBuf {
 /// copy stays readable here — the migration is between directories on ONE machine. Carrying the
 /// file to a different machine is the case the password slot exists for; see `config::crypto`.
 pub fn migrate_bundle_data() {
+    // A replaced data root is a throwaway copy, never an installation that needs repairing. On
+    // Windows the early return below normally covers everything, because `data_dir == exe_dir`;
+    // under an override the two differ, and this migration would then copy the REAL `servers.enc`,
+    // report replica and whole `cfg/` from beside the executable into the copy — the exact
+    // isolation the override exists to provide.
+    if has_data_dir_override() {
+        return;
+    }
     let src_dir = exe_dir();
     let dst_dir = data_dir();
     if src_dir == dst_dir {

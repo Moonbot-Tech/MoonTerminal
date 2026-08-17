@@ -20,6 +20,7 @@ pub mod detect_diag;
 pub mod diagnostics;
 pub mod feed;
 pub mod figures;
+pub mod fixture;
 pub mod market;
 pub mod metrics;
 pub mod order_diag;

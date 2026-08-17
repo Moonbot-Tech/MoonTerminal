@@ -326,6 +326,16 @@ fn observed_uid_floor(
 /// Args:
 ///     startup_update: Validated resume or recovery receipt dispatched before GPUI startup.
 pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyhow::Result<()> {
+    // The fixture bench BEFORE everything else, including diagnostics: it replaces the data root,
+    // and the very next line resolves a path under it. Preparing it any later would open — and,
+    // through the report writer, WRITE TO — the developer's real databases first.
+    // `args_os`: a non-UTF-8 argument makes `std::env::args` panic, and this call sits before the
+    // panic hook. It is not the only such call — `update::dispatch_process_mode` collects `args()`
+    // in `main` before startup is entered at all — but there is no reason to add a second one.
+    let fixture = fixture::bootstrap(
+        std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
+    )?;
+
     // Diagnostics BEFORE the logger: the `[log]` areas in `cfg/diagnostics.toml` decide the
     // logger's filter, so they have to be known before it is built. Reading that file this early is
     // safe precisely because it neither creates directories nor logs — a missing file yields
@@ -352,6 +362,11 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     let update_recovered = startup_update
         .as_ref()
         .is_some_and(crate::update::StartupUpdate::recovered);
+    if let Some(fixture) = fixture {
+        // Announced HERE, not in `prepare`: that runs before `applog::install`, so its line would
+        // go nowhere.
+        fixture.announce();
+    }
     let firetest_config = firetest::Config::from_args(std::env::args())?;
     if firetest_config.is_some() {
         diag::force_enable();
@@ -454,6 +469,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
 }
 
 mod boot;
+mod fixture;
 mod unlock;
 
 #[cfg(test)]

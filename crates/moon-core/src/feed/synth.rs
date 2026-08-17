@@ -26,6 +26,21 @@ fn env_usize(k: &str, d: usize) -> usize {
         .and_then(|v| v.parse().ok())
         .unwrap_or(d)
 }
+/// Explicit market names from `MOON_SYNTH_MARKET_NAMES`, comma-separated.
+///
+/// Returns `None` when the variable is absent or holds nothing but separators, so the caller keeps
+/// its generated `SYNTH0..N` names rather than starting a feed with zero markets.
+fn named_markets() -> Option<Vec<String>> {
+    let raw = std::env::var("MOON_SYNTH_MARKET_NAMES").ok()?;
+    let names: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    (!names.is_empty()).then_some(names)
+}
+
 fn env_f64(k: &str, d: f64) -> f64 {
     std::env::var(k)
         .ok()
@@ -61,12 +76,22 @@ pub fn run(
     let tps = env_f64("MOON_SYNTH_TPS", 50.0).max(0.1);
     let bookhz = env_f64("MOON_SYNTH_BOOKHZ", 20.0).max(0.1);
     let depth = env_usize("MOON_SYNTH_DEPTH", 50).max(1);
+    // Spacing between order-book levels, as a fraction of price. The default 0.01% over 50 levels
+    // spans half a percent, which on a chart scaled to a whole trading day is a line one pixel
+    // wide; a bench that wants a book with visible extent raises it.
+    let book_step = env_f64("MOON_SYNTH_BOOK_STEP_PCT", 0.01).max(0.0001) / 100.0;
     let seed = std::env::var("MOON_SYNTH_SEED")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1u64);
 
-    let markets: Vec<String> = (0..n).map(|i| format!("SYNTH{i}")).collect();
+    // `MOON_SYNTH_MARKET_NAMES` names the markets explicitly instead of generating `SYNTH0..N`.
+    // The fixture bench needs it: its candles and trades belong to one real market name, and a
+    // chart opened on `SYNTH0` would find neither.
+    let markets: Vec<String> = named_markets().unwrap_or_else(|| {
+        (0..n).map(|i| format!("SYNTH{i}")).collect()
+    });
+    let n = markets.len();
     log::info!(
         "synth-фид: {windows} окон × {charts} панелей, {n} рынков, {tps} тик/с, {bookhz} стак/с"
     );
@@ -131,7 +156,17 @@ pub fn run(
     }
     let mut last_news = Instant::now();
 
-    let mut price: Vec<f64> = (0..n).map(|i| 100.0 * (i as f64 + 1.0)).collect();
+    // `MOON_SYNTH_START_PRICE` anchors the whole stream — ticks, and through them the order book,
+    // the ticker and the chart's price labels — at a given price instead of the default 100 per
+    // market. The fixture bench needs it: its candles sit near 0.2, and a tick stream three orders
+    // of magnitude above them drags the automatic Y fit and the header ticker with it, which on
+    // screen looks exactly like "the chart is empty".
+    let start_price = env_f64("MOON_SYNTH_START_PRICE", 0.0);
+    let mut price: Vec<f64> = if start_price > 0.0 {
+        vec![start_price; n]
+    } else {
+        (0..n).map(|i| 100.0 * (i as f64 + 1.0)).collect()
+    };
     let mut rng = Lcg(seed);
     let tick_dt = Duration::from_secs_f64(1.0 / tps);
     let book_dt = Duration::from_secs_f64(1.0 / bookhz);
@@ -183,7 +218,7 @@ pub fn run(
                 let mut bids = Vec::with_capacity(depth);
                 let mut asks = Vec::with_capacity(depth);
                 for k in 0..depth {
-                    let off = (k as f64 + 1.0) * mid * 0.0001;
+                    let off = (k as f64 + 1.0) * mid * book_step;
                     bids.push(Level {
                         price: (mid - off) as f32,
                         qty: (rng.unit() * 10.0 + 1.0) as f32,
