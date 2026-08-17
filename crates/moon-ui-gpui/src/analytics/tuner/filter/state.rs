@@ -234,15 +234,8 @@ pub(in crate::analytics::tuner) enum SuggestState {
     Running(SuggestJob),
     /// The last stoppable search finished.
     Done {
-        /// Restarts that actually completed, not the number requested — and `None` when the run
-        /// composed the field set.
-        ///
-        /// A composition's counter spans every candidate ranking, every fold and the final
-        /// refit, so it is an internal work total rather than the restart count behind the
-        /// applied thresholds. Reporting it under the same word as the plain search's would
-        /// overstate that count by orders of magnitude, against a restart box the user set
-        /// themselves; there is no honest single number here, so none is shown.
-        rounds: Option<usize>,
+        /// The restart figures behind this run, in the shape its own mode actually has.
+        work: SuggestWork,
         /// Whether cancellation abandoned any unit of the requested work.
         stopped: bool,
         /// Fitted and held-back scores, or `None` when the search had no answer.
@@ -253,6 +246,31 @@ pub(in crate::analytics::tuner) enum SuggestState {
     },
     /// The last search could not read the report.
     Failed(ReadFail),
+}
+
+/// What a finished search can honestly say about the restarts behind it.
+///
+/// The two modes count DIFFERENT things, which is why they are an enum rather than two optional
+/// numbers: a plain search has one counter that is exactly the restarts behind its thresholds,
+/// while a composition's single counter spans every candidate ranking, every fold and the final
+/// refit — an internal work total, not a restart count. Two independent `Option`s would admit
+/// combinations that mean nothing, and the renderer would have to invent behaviour for them.
+///
+/// Composition used to report NEITHER number. That was worse than reporting the wrong one: the
+/// restart box said 100 000 while each candidate was ranked on a fraction of it, and the only
+/// caption that could have said so was deliberately blank.
+#[derive(Clone, Copy)]
+pub(in crate::analytics::tuner) enum SuggestWork {
+    /// A plain search: restarts that actually completed behind the applied thresholds.
+    Plain { completed: usize },
+    /// A composition: restarts each candidate got on each ranking fold, and the total work units.
+    ///
+    /// The per-candidate figure is the one the user's setting actually buys where the field set is
+    /// CHOSEN; the total is what the whole click cost.
+    Composed {
+        ranking_per_candidate: usize,
+        completed_units: usize,
+    },
 }
 
 /// How the last suggestion's ranges scored, kept apart by whether the search was allowed to see

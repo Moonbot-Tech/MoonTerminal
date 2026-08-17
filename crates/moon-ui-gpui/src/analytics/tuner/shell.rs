@@ -20,7 +20,8 @@ use rust_i18n::t;
 
 use super::super::AnalyticsView;
 use super::filter::state::{
-    SuggestJob, SuggestState, TRAIN_OPTIONS, canonical_iters, edge_options, iters_of, persist_seed,
+    SuggestJob, SuggestState, SuggestWork, TRAIN_OPTIONS, canonical_iters, edge_options, iters_of,
+    persist_seed,
 };
 use super::shared::TunerKind;
 use crate::design;
@@ -411,29 +412,17 @@ impl AnalyticsView {
                 p.text_soft,
             ),
             SuggestState::Done {
-                rounds,
+                work,
                 stopped: true,
                 ..
-            } => (
-                match rounds {
-                    Some(n) => t!("analytics.tuner.sugg_stopped", rounds = n).to_string(),
-                    None => t!("analytics.tuner.compose_stopped").to_string(),
-                },
-                p.orange,
-            ),
+            } => (search_caption(*work, true), p.orange),
             // A search that ran to the end with nothing to give did not fail: the scope simply
             // holds fewer trades than the minimum a suggestion must retain. Saying "done" here
             // would read as "these are your thresholds", which is the one thing it is not.
             SuggestState::Done { split: None, .. } => {
                 (t!("analytics.tuner.sugg_small").to_string(), p.text_soft)
             }
-            SuggestState::Done { rounds, .. } => (
-                match rounds {
-                    Some(n) => t!("analytics.tuner.sugg_done", rounds = n).to_string(),
-                    None => t!("analytics.tuner.compose_done").to_string(),
-                },
-                p.text_muted,
-            ),
+            SuggestState::Done { work, .. } => (search_caption(*work, false), p.text_muted),
             // A failed read must not read as "found nothing", so it is said in the danger colour
             // with the database's own words rather than left to the log alone.
             SuggestState::Failed(ReadFail::NotReady) => (
@@ -699,7 +688,7 @@ impl AnalyticsView {
                     let help = SharedString::from(
                         t!("analytics.tuner.compose_help", seeds = budget.seed_groups).to_string(),
                     );
-                    let metrics = compose_budget_labels(&budget);
+                    let metrics = compose_budget_labels(&budget, iters_of(&self.tuner.iters));
                     el.child(
                         // One contained block makes the mode, its short explanation, and its real
                         // work budget read as one setting instead of an unrelated checkbox plus a
@@ -1037,16 +1026,60 @@ impl AnalyticsView {
     }
 }
 
+/// The status caption of a finished search, naming the restart information its mode exposes.
+///
+/// A plain search has one number and always had it. A composition has TWO, and used to show
+/// neither: the restart box said 100 000 while each candidate was ranked on a fraction of it, and
+/// the caption that could have said so was deliberately blank. Both are named here, in the one
+/// place the user looks after a run.
+///
+/// Args:
+///     work: The restart figures in the shape this run's own mode has.
+///     stopped: Whether cancellation abandoned part of the requested work.
+///
+/// Returns:
+///     The localized caption for this run.
+fn search_caption(work: SuggestWork, stopped: bool) -> String {
+    match work {
+        SuggestWork::Plain { completed } if stopped => {
+            t!("analytics.tuner.sugg_stopped", rounds = completed).to_string()
+        }
+        SuggestWork::Plain { completed } => {
+            t!("analytics.tuner.sugg_done", rounds = completed).to_string()
+        }
+        SuggestWork::Composed {
+            ranking_per_candidate,
+            completed_units,
+        } if stopped => t!(
+            "analytics.tuner.compose_stopped_units",
+            ranking = ranking_per_candidate,
+            units = completed_units
+        )
+        .to_string(),
+        SuggestWork::Composed {
+            ranking_per_candidate,
+            completed_units,
+        } => t!(
+            "analytics.tuner.compose_done_units",
+            ranking = ranking_per_candidate,
+            units = completed_units
+        )
+        .to_string(),
+    }
+}
+
 /// Compact labels for the composition work budget shown inside its setting block.
 ///
 /// Args:
 ///     budget: The same machine budget that allowed the composition block to render.
+///     restarts: The restart count currently in the user's own box.
 ///
 /// Returns:
-///     Localized field-count, adaptive-beam, seed-group, and fold-count labels.
+///     Localized field-count, adaptive-beam, seed-group, fold-count and ranking-budget labels.
 fn compose_budget_labels(
     budget: &moon_core::db::tuner::threshold_search::ComposeBudget,
-) -> [String; 4] {
+    restarts: usize,
+) -> [String; 5] {
     [
         t!(
             "analytics.tuner.compose_budget_fields",
@@ -1065,5 +1098,13 @@ fn compose_budget_labels(
         )
         .to_string(),
         t!("analytics.tuner.compose_budget_folds", n = budget.folds).to_string(),
+        // The one label that depends on what the user typed, and the one they could not otherwise
+        // discover: ranking is where the field set is CHOSEN, and it never gets the full count.
+        t!(
+            "analytics.tuner.compose_budget_ranking",
+            n = budget.ranking_restarts(restarts),
+            total = restarts
+        )
+        .to_string(),
     ]
 }

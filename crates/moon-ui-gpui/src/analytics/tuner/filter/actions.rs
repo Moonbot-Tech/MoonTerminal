@@ -11,10 +11,10 @@ use rust_i18n::t;
 use super::super::super::AnalyticsView;
 use super::super::shared::SaveTarget;
 use super::state::{
-    SearchSplit, SuggestJob, SuggestState, edges_of, iters_of, seed_of, train_frac,
+    SearchSplit, SuggestJob, SuggestState, SuggestWork, edges_of, iters_of, seed_of, train_frac,
 };
 use super::{fmt_bound, parse_num, staged_dirty};
-use moon_core::db::tuner::threshold_search::{SearchHandle, SearchParams};
+use moon_core::db::tuner::threshold_search::{SearchHandle, SearchParams, composition_budget};
 use moon_core::db::tuner::{FIELDS, FieldClass, slot_type_for};
 
 /// How often the suggestion row repaints while a search runs.
@@ -144,11 +144,21 @@ impl AnalyticsView {
                     && found
                         .as_ref()
                         .is_none_or(|res| res.compose_skipped.is_none());
-                // The raw counter still goes to the LOG, where an internal work total is what a
-                // developer wants; only the caption withholds it. See `SuggestState::Done`.
-                let rounds = (!composed).then_some(completed);
+                // A plain search reports the restarts behind its thresholds. A composition reports
+                // its OWN two numbers instead — the per-candidate ranking budget the user's
+                // setting actually buys, and the total work units — because the run's single
+                // counter means neither of those on its own. Withholding both, as this used to,
+                // let the visible "100 000" stand while a candidate was ranked on a fraction of
+                // it. See `SuggestState::Done`.
+                let work = composed.then(composition_budget).flatten().map_or(
+                    SuggestWork::Plain { completed },
+                    |budget| SuggestWork::Composed {
+                        ranking_per_candidate: budget.ranking_restarts(restarts),
+                        completed_units: completed,
+                    },
+                );
                 this.tuner.sugg = SuggestState::Done {
-                    rounds,
+                    work,
                     stopped,
                     split: found.as_ref().map(|res| SearchSplit {
                         train: res.train.clone(),

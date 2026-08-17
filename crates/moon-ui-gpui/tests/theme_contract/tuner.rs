@@ -579,11 +579,93 @@ fn the_composed_set_is_reported_beside_the_holdout() {
         body.contains("analytics.tuner.compose_result"),
         "the selected path needs its own explicit result line"
     );
+    // B7. "No additional filters" is the ordinary verdict, and on its own it reads as a search
+    // that found nothing — so the set that WAS found and then lost on the reserved folds has to
+    // be named right there. Over `code_only`, because the comment beside that row names
+    // `set.rejected` too and would keep this green with the row deleted.
+    //
+    // The window is the GATE's own span, not "anywhere after the decision is mentioned". An
+    // open-ended search proves only that these strings appear later in the same function, and
+    // would survive the exact regression this pins: the rejected row moved OUT of its
+    // `.when(matches!(..))` so the explanation renders under every decision. The anchor is the
+    // `matches!` form, which exists only in that gate — the `match set.decision` arm above spells
+    // the variant without it — and the stop is the next chained call on the same builder, so a row
+    // lifted out of the gate lands outside the window in either direction.
+    let code = code_only(body);
+    let gate = chain_between(
+        &code,
+        "matches!(set.decision, ComposeDecision::NoAdditionalFilters)",
+        ".when_some(split.compose_skipped",
+        "the declined-set gate in `split_summary`",
+    );
+    for needle in ["set.rejected", "analytics.tuner.compose_rejected_detail"] {
+        assert!(
+            gate.contains(needle),
+            "{needle} must be rendered INSIDE the NoAdditionalFilters gate: without it the \
+             ordinary verdict reads as a search that found nothing, when a set was found and \
+             then declined"
+        );
+    }
+    assert_eq!(
+        code.matches("set.rejected").count(),
+        1,
+        "the declined set may be named ONCE, inside its gate: a second reference is the row \
+         rendering under decisions that did not decline anything"
+    );
     assert!(
         body.contains("split.compose_skipped")
             && body.contains("analytics.tuner.compose_decision_all_direct"),
         "when comparison cannot run, the summary must still name the all-fields path that did"
     );
+
+    // B8. `locales/*.yml` is compiled by the `i18n!` proc macro, so a key missing in one language
+    // surfaces at runtime as the raw key rather than as a build error.
+    let locales = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/analytics.yml"),
+    )
+    .expect("failed to read locales/analytics.yml")
+    .replace("\r\n", "\n");
+    for (key, next) in [
+        (
+            "analytics.tuner.compose_rejected",
+            "analytics.tuner.compose_rejected_detail:",
+        ),
+        (
+            "analytics.tuner.compose_rejected_detail",
+            "analytics.tuner.train_off:",
+        ),
+    ] {
+        let block = chain_between(
+            &locales,
+            &format!("{key}:\n"),
+            next,
+            "declined-set locale block",
+        );
+        let members = block
+            .lines()
+            .filter(|line| line.starts_with("  "))
+            .collect::<Vec<_>>();
+        assert_eq!(members.len(), 3, "{key} must define exactly ru, en, and es");
+        for locale in ["ru", "en", "es"] {
+            assert!(
+                members
+                    .iter()
+                    .any(|line| line.starts_with(&format!("  {locale}: \""))),
+                "{key} must carry {locale}, or that language shows the raw key instead"
+            );
+        }
+        if key.ends_with("_detail") {
+            for placeholder in ["%{fields}", "%{inner}", "%{gate}"] {
+                assert_eq!(
+                    block.matches(placeholder).count(),
+                    3,
+                    "every language of the declined-set line must interpolate {placeholder}: the \
+                     two signed lifts ARE the explanation, and naming the set without them says \
+                     nothing"
+                );
+            }
+        }
+    }
 }
 
 /// Every strategy-list sort click must persist its stable key and direction.
@@ -707,7 +789,7 @@ fn the_filter_search_popup_keeps_its_grouped_composition_block() {
     for needle in [
         "analytics.tuner.compose_short",
         "MoonTag::new()",
-        "compose_budget_labels(&budget)",
+        "compose_budget_labels(&budget, iters_of(&self.tuner.iters))",
     ] {
         assert!(
             content.contains(needle),

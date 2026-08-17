@@ -72,7 +72,12 @@ fn sample(n: usize, seed: u64) -> (Vec<f64>, Vec<Vec<f64>>, Vec<i64>) {
 
 // ─────────────────────────────── the acceptance rules ───────────────────────────────
 
-/// Build one hand-authored comparison outcome.
+/// Build one hand-authored comparison outcome on a fold whose unfiltered baseline pays ZERO per
+/// trade, where lift is profit by definition and the whole window was retained.
+///
+/// That baseline is what keeps every fixture written before lift existed meaning exactly what its
+/// author wrote: with a base rate of zero, `lift = profit - 0 * trades = profit`. Use
+/// [`quality_lift`] wherever the point of the fixture is a baseline that pays something.
 ///
 /// Args:
 ///     profit: Held-out profit.
@@ -88,6 +93,38 @@ fn quality(profit: f64, profit_factor: f64, max_dd: f64, trades: f64) -> Quality
         profit_factor,
         max_dd,
         trades,
+        lift: profit,
+        retention: 1.0,
+    }
+}
+
+/// Build one hand-authored comparison outcome with lift and retention stated independently.
+///
+/// Args:
+///     lift: Held-out profit above the fold's own unfiltered rate for this many trades.
+///     profit: Held-out profit.
+///     profit_factor: Held-out profit factor.
+///     max_dd: Held-out maximum drawdown.
+///     trades: Held-out retained trade count.
+///     retention: Share of the fold's base-passing validate rows retained.
+///
+/// Returns:
+///     Quality evidence independent of the production search.
+fn quality_lift(
+    lift: f64,
+    profit: f64,
+    profit_factor: f64,
+    max_dd: f64,
+    trades: f64,
+    retention: f64,
+) -> Quality {
+    Quality {
+        profit,
+        profit_factor,
+        max_dd,
+        trades,
+        lift,
+        retention,
     }
 }
 
@@ -190,8 +227,9 @@ fn seed_votes_cannot_outvote_the_chronological_fold_hierarchy() {
 
 /// Production fold scoring must carry every requested seed group into the vote hierarchy.
 ///
-/// The fixture spends exactly [`SEED_GROUPS`] ranking restarts, so each group owns one distinct
-/// restart and the returned evidence shape is observable without relying on a tuned profit answer.
+/// The fixture spends [`SEED_GROUPS`] times [`SEED_GROUP_MIN_RESTARTS`] ranking restarts, so every
+/// requested group can own the minimum honest evidence and the returned shape is observable
+/// without relying on a tuned profit answer.
 ///
 /// Breakage this pins: replacing `requested_groups` with `1` in `compose.rs:score_set`. The pure
 /// consensus tests would still pass on hand-built evidence, while real composition silently
@@ -203,8 +241,8 @@ fn score_set_uses_every_budgeted_seed_group_in_production_scoring() {
     let locked = vec![None; FIELDS.len()];
     let folds = super::super::build_folds(&cols, &locked, &slot_flags(), &closes, 10, 16, 500, 3);
     let p = ComposeParams {
-        ranking_restarts: SEED_GROUPS,
-        gate_restarts: SEED_GROUPS,
+        ranking_restarts: SEED_GROUPS * SEED_GROUP_MIN_RESTARTS,
+        gate_restarts: SEED_GROUPS * SEED_GROUP_MIN_RESTARTS,
         seed: 0x5EED,
         round: false,
         max_fields: FIELDS.len(),
@@ -214,8 +252,15 @@ fn score_set_uses_every_budgeted_seed_group_in_production_scoring() {
     };
     let mut mask = vec![false; FIELDS.len()];
     mask[0] = true;
-    let scores = score_set(&folds, &mask, &p, SEED_GROUPS, 1, &SearchHandle::new())
-        .expect("an uncancelled full-group score answers");
+    let scores = score_set(
+        &folds,
+        &mask,
+        &p,
+        SEED_GROUPS * SEED_GROUP_MIN_RESTARTS,
+        1,
+        &SearchHandle::new(),
+    )
+    .expect("an uncancelled full-group score answers");
     assert!(
         scores.iter().all(|fold| fold.seeds.len() == SEED_GROUPS),
         "every production fold must preserve all {SEED_GROUPS} seed votes"
@@ -376,7 +421,6 @@ fn a_weak_singleton_can_survive_to_form_a_strong_pair() {
         Some(scores(mask))
     })
     .expect("the deterministic scorer never cancels");
-    let empty = [false, false, false];
     let empty_scores = profit_scores(&[0.0, 0.0, 0.0]);
     assert!(
         masks
@@ -394,8 +438,8 @@ fn a_weak_singleton_can_survive_to_form_a_strong_pair() {
         })
         .collect();
     assert_eq!(
-        inner_winner(&empty_scores, ranked, &empty),
-        [true, true, false],
+        inner_winner(&empty_scores, ranked).as_deref(),
+        Some(&[true, true, false][..]),
         "the beam must carry the losing branches into their jointly profitable pair"
     );
 }
@@ -495,6 +539,7 @@ fn the_outer_gate_reports_each_distinct_decision() {
         GateChoice {
             decision: ComposeDecision::ReducedSet,
             mask: subset.to_vec(),
+            robust: true,
         },
         "a strict subset that beats both complete alternatives is its own decision"
     );
@@ -509,6 +554,7 @@ fn the_outer_gate_reports_each_distinct_decision() {
         GateChoice {
             decision: ComposeDecision::AllAllowedFields,
             mask: all_fields.to_vec(),
+            robust: true,
         },
         "all admitted fields must be named when their search wins"
     );
@@ -523,6 +569,7 @@ fn the_outer_gate_reports_each_distinct_decision() {
         GateChoice {
             decision: ComposeDecision::NoAdditionalFilters,
             mask: no_filters.to_vec(),
+            robust: true,
         },
         "no additional filters is a normal winning path"
     );
@@ -537,6 +584,7 @@ fn the_outer_gate_reports_each_distinct_decision() {
         GateChoice {
             decision: ComposeDecision::ReducedSet,
             mask: subset.to_vec(),
+            robust: true,
         },
         "one inconclusive alternative must not make the gate default to a route the subset beat"
     );
@@ -580,8 +628,8 @@ fn the_outer_gate_reports_each_distinct_decision() {
 /// losing the 16-branch ceiling would make ambiguity either invisible or unbounded. Reducing
 /// `seed_groups` would restore dependence on fewer restart streams. Finally, `ranking_restarts`
 /// dividing without its one-restart floor would report "this period has no answer" at low settings;
-/// reducing `RANKING_RESTARTS_MAX` back to 256 would discard half the requested evidence for every
-/// Beam candidate.
+/// reducing `RANKING_RESTARTS_MAX` below `RESTARTS_MAX / RANKING_RESTART_DIVISOR` would again
+/// clamp the user's restart setting before it reaches every Beam candidate.
 #[test]
 fn composition_has_a_budget_exactly_above_the_core_bar() {
     let bar = super::super::search::HEAVY_SEARCH_MIN_CORES;
@@ -616,10 +664,21 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
                 b.ranking_restarts(restarts)
             );
         }
+        let full_user_budget = b.ranking_restarts(super::super::RESTARTS_MAX);
         assert_eq!(
-            b.ranking_restarts(super::super::RESTARTS_MAX),
-            512,
-            "a 100k user budget must give every Beam candidate the requested 512 restarts"
+            full_user_budget,
+            super::super::RESTARTS_MAX / RANKING_RESTART_DIVISOR,
+            "a 100k user budget must reach each Beam candidate at the configured divisor"
+        );
+        assert!(
+            full_user_budget < RANKING_RESTARTS_MAX,
+            "the ranking guard must not bind inside the accepted user-restart range"
+        );
+        let scaled = [1_000usize, 10_000, super::super::RESTARTS_MAX]
+            .map(|restarts| b.ranking_restarts(restarts));
+        assert!(
+            scaled.windows(2).all(|pair| pair[0] < pair[1]),
+            "larger accepted user budgets must strictly increase ranking evidence"
         );
     }
     // Width is set by what makes the answer trustworthy, not by the hardware, so a bigger machine
@@ -644,6 +703,459 @@ fn composition_has_a_budget_exactly_above_the_core_bar() {
             far_above.ranking_restarts(800)
         ),
         "past the bar the budget must stop growing"
+    );
+}
+
+/// A better retained-trade rate must make a selective filter beat the empty mask.
+///
+/// The hand-authored evidence starts from an empty baseline paying +1.00 per trade over one
+/// hundred trades. The candidate retains forty trades at +1.80 each, so its +32 lift follows
+/// directly from `72 - 1.00 * 40`, independently of the production comparator.
+///
+/// Breakage this pins: changing `compose.rs:lift_order` from `a.lift - b.lift` to
+/// `a.profit - b.profit`. The empty mask would win by construction on its +100 total, and the
+/// tuner would silently return "no additional filters" despite a materially better filter.
+#[test]
+fn lift_orders_a_better_per_trade_filter_above_the_empty_mask() {
+    let empty = quality_lift(0.0, 100.0, 1.0, 10.0, 100.0, 1.0);
+    let candidate = quality_lift(32.0, 72.0, 1.0, 10.0, 40.0, 0.40);
+    let empty_scores = vec![seed_fold(&[empty]); 3];
+    let candidate_scores = vec![seed_fold(&[candidate]); 3];
+
+    assert!(
+        quality_order(candidate, empty).is_gt(),
+        "a +1.80 retained-trade rate must beat the empty mask's +1.00 despite a lower sum"
+    );
+    assert!(
+        accepts(&empty_scores, &candidate_scores),
+        "three independently stronger folds must accept the selective filter"
+    );
+}
+/// A worse retained-trade rate must make a selective filter lose despite a higher sum.
+///
+/// The hand-authored empty baseline loses -0.60 per trade over one hundred trades. The candidate
+/// loses -0.80 over forty trades, so its -32 total is higher than -60 but its -8 lift follows
+/// independently from `-32 - (-0.60 * 40)` and is worse than the baseline.
+///
+/// Breakage this pins: changing `compose.rs:lift_order` from `a.lift - b.lift` to
+/// `a.profit - b.profit`. The absolute-total rule would accept a per-trade-worse filter merely
+/// because its smaller retained loss is numerically higher.
+#[test]
+fn lift_orders_a_worse_per_trade_filter_below_the_empty_mask() {
+    let empty = quality_lift(0.0, -60.0, 1.0, 10.0, 100.0, 1.0);
+    let candidate = quality_lift(-8.0, -32.0, 1.0, 10.0, 40.0, 0.40);
+    let empty_scores = vec![seed_fold(&[empty]); 3];
+    let candidate_scores = vec![seed_fold(&[candidate]); 3];
+
+    assert!(
+        quality_order(candidate, empty).is_lt(),
+        "a -0.80 retained-trade rate must lose to the empty mask's -0.60 rate"
+    );
+    assert!(
+        !accepts(&empty_scores, &candidate_scores),
+        "three independently weaker folds must reject the selective filter"
+    );
+}
+/// The best real finalist must reach the outer gate even when none clears the inner control.
+///
+/// The hand-authored control holds +100 in every fold while the two finalists hold +90 and +80,
+/// so every finalist independently fails `accepts`. Their score table still makes the +90 mask
+/// the best actual subset for the reserved gate folds to judge.
+///
+/// Breakage this pins: replacing `compose.rs:inner_winner`'s fallback pool with only `cleared`.
+/// The empty pool would return `None`, composition would substitute the empty mask, and the tuner
+/// would report "no additional filters" without a reduced-set gate comparison.
+#[test]
+fn inner_winner_keeps_a_ranked_finalist_when_none_clear_the_control() {
+    let control_scores = profit_scores(&[100.0, 100.0, 100.0]);
+    let best_mask = vec![true, false, false];
+    let ranked = vec![
+        ScoredMask {
+            scores: profit_scores(&[90.0, 90.0, 90.0]),
+            mask: best_mask.clone(),
+            key: RankingKey::default(),
+        },
+        ScoredMask {
+            scores: profit_scores(&[80.0, 80.0, 80.0]),
+            mask: vec![false, true, false],
+            key: RankingKey::default(),
+        },
+    ];
+    assert!(
+        ranked
+            .iter()
+            .all(|candidate| !accepts(&control_scores, &candidate.scores)),
+        "the fixture must leave every finalist below the inner control"
+    );
+    assert_eq!(
+        inner_winner(&control_scores, ranked).as_deref(),
+        Some(best_mask.as_slice()),
+        "an empty cleared pool must still supply the best non-empty finalist to the outer gate"
+    );
+}
+/// The strongest weakest fold must choose the gate finalist over the higher mean.
+///
+/// Against a zero control, candidate A wins two folds by +100 but collapses to -10 in the third,
+/// while candidate B earns +40 in all three. Both independently clear the control; A's mean is
+/// higher, but B's +40 weakest fold is the hand-authored stronger unseen-stretch evidence.
+///
+/// Breakage this pins: replacing `compose.rs:inner_winner`'s `worst_fold` sort closure with
+/// `ranked_order`. The higher-mean collapsed candidate would reach the reserved gate folds, where
+/// it can turn a robust reduced set into an apparent "no additional filters" result.
+#[test]
+fn inner_winner_prefers_the_stronger_weakest_fold_over_the_higher_mean() {
+    let control_scores = profit_scores(&[0.0, 0.0, 0.0]);
+    let collapsed_high_mean = profit_scores(&[100.0, 100.0, -10.0]);
+    let steady_lower_mean = profit_scores(&[40.0, 40.0, 40.0]);
+    let steady_mask = vec![false, true, false];
+    assert!(
+        accepts(&control_scores, &collapsed_high_mean)
+            && accepts(&control_scores, &steady_lower_mean),
+        "both candidates must clear the control before weakest-fold ranking decides between them"
+    );
+    assert!(
+        aggregate_order(summary(&collapsed_high_mean), summary(&steady_lower_mean)).is_gt(),
+        "the fixture must give the collapsed candidate the higher mean"
+    );
+    assert!(
+        aggregate_order(
+            worst_fold(&steady_lower_mean),
+            worst_fold(&collapsed_high_mean)
+        )
+        .is_gt(),
+        "the fixture must give the steady candidate the stronger weakest fold"
+    );
+    let ranked = vec![
+        ScoredMask {
+            scores: collapsed_high_mean,
+            mask: vec![true, false, false],
+            key: RankingKey::default(),
+        },
+        ScoredMask {
+            scores: steady_lower_mean,
+            mask: steady_mask.clone(),
+            key: RankingKey::default(),
+        },
+    ];
+    assert_eq!(
+        inner_winner(&control_scores, ranked).as_deref(),
+        Some(steady_mask.as_slice()),
+        "the reserved gate must receive the candidate with the stronger weakest fold"
+    );
+}
+
+/// Three finalists whose weakest folds form a top-spanning cycle, so NO maximal element exists.
+///
+/// Lift is the only metric that draws a dependency edge, so the fixture puts every adjacent pair
+/// inside the risk band — where the intransitive drawdown vote decides — while the outer pair
+/// clears it. `strong` beats `weak` on material lift; `mid` beats `strong` and `weak` beats `mid`
+/// on the secondary vote. Nothing is maximal.
+///
+/// Returns:
+///     The three candidates in the order `(strong, mid, weak)`, matching the scan order the old
+///     fold walked.
+fn cycling_finalists() -> Vec<ScoredMask> {
+    // 109.7 / 104.9 / 100.0: each neighbouring gap is under the pair's own 5% band while the
+    // 9.7 outer gap clears it. Drawdown runs the other way, so the secondary vote reverses the
+    // pairs the band tied.
+    let fold = |lift: f64, max_dd: f64| {
+        vec![seed_fold(&[quality_lift(lift, lift, 1.0, max_dd, 100.0, 1.0)]); 3]
+    };
+    vec![
+        ScoredMask {
+            scores: fold(109.7, 30.0),
+            mask: vec![true, false, false],
+            key: RankingKey::default(),
+        },
+        ScoredMask {
+            scores: fold(104.9, 20.0),
+            mask: vec![false, true, false],
+            key: RankingKey::default(),
+        },
+        ScoredMask {
+            scores: fold(100.0, 10.0),
+            mask: vec![false, false, true],
+            key: RankingKey::default(),
+        },
+    ]
+}
+
+/// A finalist pool with no maximal element must still answer, and never with a candidate another
+/// finalist materially beats on lift.
+///
+/// The fixture is asserted to CYCLE before anything is asserted about the winner: without that
+/// first block the test would pass over any ordinary pool and prove nothing. The oracle is
+/// implementation-independent and is deliberately NOT an identity — under a cycle the identity
+/// legitimately follows the documented input-order tie-break, which is why the rotated pool is
+/// checked for the same PROPERTY rather than for the same mask.
+///
+/// Breakage this pins: restoring `compose.rs:inner_winner`'s `reduce` over `aggregate_order`. A
+/// fold returns a maximum only when a maximal element exists; on this pool it walks
+/// `strong -> mid -> weak` and answers `weak`, which `strong` beats by 9.7 of lift — measured on a
+/// real 1289-trade scope, that is exactly the scan-order artifact this selection removes. Handing
+/// the same relation to `sort_by` instead aborts the process outright.
+#[test]
+fn inner_winner_answers_a_pool_with_no_maximal_element() {
+    let cycle = cycling_finalists();
+    let worst: Vec<Quality> = cycle
+        .iter()
+        .map(|candidate| worst_fold(&candidate.scores))
+        .collect();
+    assert!(
+        aggregate_order(worst[0], worst[2]).is_gt()
+            && aggregate_order(worst[2], worst[1]).is_gt()
+            && aggregate_order(worst[1], worst[0]).is_gt(),
+        "the fixture must genuinely cycle, or this test proves nothing about an intransitive pool"
+    );
+    assert!(
+        (0..worst.len()).all(|candidate| (0..worst.len()).any(|other| aggregate_order(
+            worst[other],
+            worst[candidate]
+        )
+        .is_gt())),
+        "every candidate must be beaten by another, so the pool has no maximal element at all"
+    );
+    assert!(
+        lift_order(worst[0], worst[2]).is_gt(),
+        "the fixture's outer pair must clear the risk band, or the oracle below cannot fail"
+    );
+
+    // A control nothing clears, so the pool is the whole fixture in its written order.
+    let control_scores = vec![seed_fold(&[quality_lift(1000.0, 1000.0, 3.0, 5.0, 500.0, 1.0)]); 3];
+    for rotation in 0..3 {
+        let mut candidates = cycling_finalists();
+        candidates.rotate_left(rotation);
+        let pool: Vec<(Vec<bool>, Quality)> = candidates
+            .iter()
+            .map(|candidate| (candidate.mask.clone(), worst_fold(&candidate.scores)))
+            .collect();
+        let winner = inner_winner(&control_scores, candidates)
+            .unwrap_or_else(|| panic!("rotation {rotation}: a non-empty pool must answer"));
+        let chosen = pool
+            .iter()
+            .find(|(mask, _)| *mask == winner)
+            .expect("the winner must be one of the finalists")
+            .1;
+        assert!(
+            pool.iter()
+                .all(|(_, other)| !lift_order(*other, chosen).is_gt()),
+            "rotation {rotation}: no finalist may be sent to the reserved folds while another \
+             materially beats it on lift"
+        );
+    }
+}
+
+/// The mean-based tie-break survives, and it lives in the sort above the selection.
+///
+/// Both candidates have a BYTE-IDENTICAL weakest fold, so the weakest-fold ranking cannot separate
+/// them and the answer is decided entirely by the input order the pool was left in. That order is
+/// set by `pool.sort_by(ranked_order)` at `compose.rs:inner_winner`, whose deletion — the obvious
+/// "this sort is unused now" cleanup — flips this answer to the worse-mean candidate while every
+/// other test stays green.
+///
+/// What it does NOT pin, and must not be read as pinning: that the selection ranks the WEAKEST
+/// FOLD at all. On this fixture the mean and the weakest fold agree, so it passes just as well
+/// against the old `reduce` over `aggregate_order`. The weakest-fold SELECTION is proven by
+/// [`inner_winner_prefers_the_stronger_weakest_fold_over_the_higher_mean`] and by
+/// [`inner_winner_ignores_an_unmeasurably_thin_weakest_fold`]; this test only proves what happens
+/// once that selection has run out of separating power.
+///
+/// Breakage this pins, and ONLY this: removing that `pool.sort_by(ranked_order)` line, or removing
+/// the `assign_ranking(pool)` that fills the key it reads.
+#[test]
+fn inner_winner_breaks_an_identical_weakest_fold_by_the_better_mean() {
+    let control_scores = profit_scores(&[0.0, 0.0, 0.0]);
+    let flat = profit_scores(&[50.0, 50.0, 50.0]);
+    let higher_mean = profit_scores(&[50.0, 200.0, 200.0]);
+    let higher_mean_mask = vec![false, true, false];
+    let (flat_worst, rich_worst) = (worst_fold(&flat), worst_fold(&higher_mean));
+    assert_eq!(
+        (flat_worst.lift, flat_worst.profit, flat_worst.max_dd),
+        (rich_worst.lift, rich_worst.profit, rich_worst.max_dd),
+        "the fixture must give both candidates the same weakest fold, or the mean never decides"
+    );
+    assert!(
+        aggregate_order(summary(&higher_mean), summary(&flat)).is_gt(),
+        "the fixture must give one candidate the better mean"
+    );
+    // Written worst-mean FIRST, so only the sort can put the better-mean candidate at index 0.
+    let ranked = vec![
+        ScoredMask {
+            scores: flat,
+            mask: vec![true, false, false],
+            key: RankingKey::default(),
+        },
+        ScoredMask {
+            scores: higher_mean,
+            mask: higher_mean_mask.clone(),
+            key: RankingKey::default(),
+        },
+    ];
+    assert_eq!(
+        inner_winner(&control_scores, ranked).as_deref(),
+        Some(higher_mean_mask.as_slice()),
+        "an unbreakable weakest-fold tie must fall to the better mean-ranked candidate"
+    );
+}
+
+/// A fold too thin to measure must not be the weakest fold a candidate is judged on.
+///
+/// Candidate A holds a steady +40 lift over 120 trades in all three folds. Candidate B holds +120
+/// over 150 trades twice and then a fold that retained FOUR trades at 2% — below both
+/// `LIFT_MIN_TRADES` and `LIFT_MIN_RETENTION`, so `quality_order` would make it abstain from its
+/// own seed vote. Every number is hand-authored; nothing is derived from the code under test.
+///
+/// Breakage this pins: ranking single measurements without the retention floor — passing `false`
+/// for `single_measurements` at `compose.rs:inner_winner`, or dropping the measurable-fold filter
+/// in `compose.rs:worst_fold`. B's weakest fold becomes the four-trade one at -30, `lift_order`
+/// draws an edge A -> B, and a candidate leading by +80 of lift on every fold that MEASURED
+/// anything is eliminated from the reserved gate by four trades. The mirror of the same flaw
+/// promotes a candidate whose best-looking evidence is a 2%-retention fold.
+#[test]
+fn inner_winner_ignores_an_unmeasurably_thin_weakest_fold() {
+    let steady = |lift: f64, trades: f64, retention: f64| {
+        vec![seed_fold(&[quality_lift(lift, lift, 1.0, 10.0, trades, retention)]); 3]
+    };
+    let thin_fold = quality_lift(-30.0, -30.0, 1.0, 10.0, 4.0, 0.02);
+    assert!(
+        !lift_is_measurable(thin_fold),
+        "the fixture's third fold must be BELOW the floor, or this test proves nothing"
+    );
+    let steady_lower = steady(40.0, 120.0, 0.6);
+    let mut stronger_with_thin_fold = steady(120.0, 150.0, 0.75);
+    stronger_with_thin_fold[2] = seed_fold(&[thin_fold]);
+
+    assert_eq!(
+        worst_fold(&stronger_with_thin_fold).lift,
+        120.0,
+        "the weakest MEASURED fold is the +120 one; the four-trade fold has no evidence to be \
+         weakest with"
+    );
+    assert!(
+        lift_order(worst_fold(&steady_lower), thin_fold).is_gt(),
+        "the fixture must let the thin fold lose to the steady candidate, or the pre-fix \
+         elimination it reproduces could not happen"
+    );
+
+    // A control nothing clears, so the pool is both candidates in the order written below.
+    let control_scores = profit_scores(&[1_000.0, 1_000.0, 1_000.0]);
+    let thin_mask = vec![false, true, false];
+    let ranked = vec![
+        ScoredMask {
+            scores: steady_lower,
+            mask: vec![true, false, false],
+            key: RankingKey::default(),
+        },
+        ScoredMask {
+            scores: stronger_with_thin_fold,
+            mask: thin_mask.clone(),
+            key: RankingKey::default(),
+        },
+    ];
+    assert_eq!(
+        inner_winner(&control_scores, ranked).as_deref(),
+        Some(thin_mask.as_slice()),
+        "an unmeasurably thin fold must not eliminate the candidate that leads every measured fold"
+    );
+}
+
+/// The aggregate ranking must stay floor-FREE, so the single-measurement floor cannot leak into it.
+///
+/// One candidate's MEAN retained four trades at 2% while leading on lift by +160 — as a single
+/// measurement it would be rejected outright, and as an aggregate it must still take rank 0. That
+/// is not a hypothetical: a mean of ten folds under the bar is exactly the case `aggregate_order`
+/// documents rejecting a +37-lift set over.
+///
+/// Breakage this pins: passing `true` for `single_measurements` at `compose.rs:ranking_keys`, or
+/// applying `lift_is_measurable` unconditionally inside `ranking_keys_from_qualities`. The beam
+/// and the outer gate would then rank on a floor that was only ever meant for one measurement.
+#[test]
+fn aggregate_ranking_keeps_no_retention_floor() {
+    let aggregate = |lift: f64, trades: f64, retention: f64| {
+        vec![seed_fold(&[quality_lift(lift, lift, 1.0, 10.0, trades, retention)]); 3]
+    };
+    let thin_but_leading = aggregate(200.0, 4.0, 0.02);
+    let measured_but_trailing = aggregate(40.0, 150.0, 0.75);
+    assert!(
+        !lift_is_measurable(summary(&thin_but_leading))
+            && lift_is_measurable(summary(&measured_but_trailing)),
+        "the fixture must straddle the floor, or a leak into the aggregate path would be invisible"
+    );
+    assert!(
+        lift_order(summary(&thin_but_leading), summary(&measured_but_trailing)).is_gt(),
+        "the fixture must give the thin aggregate a materially better lift"
+    );
+
+    let keys = ranking_keys(&[&thin_but_leading, &measured_but_trailing]);
+    assert_eq!(
+        keys[0].rank, 0,
+        "the aggregate ranking must still answer on lift alone, with no retention floor applied"
+    );
+}
+
+/// The declined beam set is carried with the gate figure from the GATE folds, and only when there
+/// is something to explain.
+///
+/// The shape is the owner's real one: a set that earned its keep on the folds it was fitted on and
+/// gave it back on the two nobody fitted it to. That is why "no additional filters" is right and
+/// why the window has to be able to say so.
+///
+/// Breakage this pins two ways. Swapping the two score sets in
+/// `compose.rs:rejected_candidate` — the row would then claim the set lost where it was fitted and
+/// won where it was not, inverting the whole explanation while both numbers still look plausible.
+/// And dropping any of the three `None` guards: a set that WON would be reported as declined, or
+/// an empty mask would be named as a set that was tried.
+#[test]
+fn a_declined_beam_set_is_carried_with_its_reserved_fold_figure() {
+    let subset = vec![true, false, true];
+    let no_filters = vec![false, false, false];
+    let inner = profit_scores(&[116.41, 116.41, 116.41]);
+    let gate = profit_scores(&[-129.91, -129.91]);
+    let lost = GateChoice {
+        decision: ComposeDecision::NoAdditionalFilters,
+        mask: no_filters.clone(),
+        robust: true,
+    };
+    let carried = rejected_candidate(&lost, &subset, &inner, &gate, 3, 2)
+        .expect("a real set the gate declined must be carried beside the verdict");
+    assert_eq!(
+        (
+            carried.mask.clone(),
+            carried.inner_folds,
+            carried.gate_folds
+        ),
+        (subset.clone(), 3, 2),
+        "the declined set must be reported as its own mask over its own fold counts"
+    );
+    assert!(
+        carried.inner_lift > 0.0 && carried.gate_lift < 0.0,
+        "inner {} and gate {}: the two lifts must come from their own fold groups, or the row \
+         inverts the explanation",
+        carried.inner_lift,
+        carried.gate_lift
+    );
+
+    let won = GateChoice {
+        decision: ComposeDecision::ReducedSet,
+        mask: subset.clone(),
+        robust: true,
+    };
+    assert!(
+        rejected_candidate(&won, &subset, &inner, &gate, 3, 2).is_none(),
+        "a set the gate TOOK was not declined and must not be reported as one"
+    );
+    assert!(
+        rejected_candidate(&lost, &no_filters, &inner, &gate, 3, 2).is_none(),
+        "the empty mask is not a set that was tried"
+    );
+    let same = GateChoice {
+        decision: ComposeDecision::AllAllowedFields,
+        mask: subset.clone(),
+        robust: true,
+    };
+    assert!(
+        rejected_candidate(&same, &subset, &inner, &gate, 3, 2).is_none(),
+        "a beam set equal to the winning mask was not declined, whatever the path is called"
     );
 }
 
@@ -738,7 +1250,8 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
     };
     let mut pick = conn
         .prepare(
-            "SELECT strategyid, core_uid, COUNT(*) n FROM orders_rep WHERE closedate > 0 \
+            "SELECT strategyid, core_uid, COUNT(*) n FROM orders_rep \
+             WHERE closedate > 0 AND COALESCE(deleted,0) = 0 AND COALESCE(emulator,0) = 0 \
              GROUP BY strategyid, core_uid HAVING n >= ?1 \
              ORDER BY n DESC, strategyid, core_uid LIMIT ?2",
         )
@@ -757,9 +1270,14 @@ fn snapshot_scopes(want: usize, min_trades: usize) -> Vec<Scope> {
         .map(|s| format!("\"{}\"", s.col))
         .collect::<Vec<_>>()
         .join(", ");
+    // The SAME row predicates as the pick above and as the running window's defaults. Without
+    // them this measured a row set the product never scans: on the author's own replica every
+    // scope but two was entirely emulated or deleted trades, so the unfiltered query answered
+    // with thousands of rows that `suggest` would never see.
     let sql = format!(
         "SELECT {cols}, COALESCE(profitbtc,0), COALESCE(closedate,0) FROM orders_rep \
-         WHERE closedate > 0 AND strategyid = ?1 AND core_uid = ?2"
+         WHERE closedate > 0 AND COALESCE(deleted,0) = 0 AND COALESCE(emulator,0) = 0 \
+         AND strategyid = ?1 AND core_uid = ?2"
     );
     let mut stmt = conn.prepare(&sql).expect("scope rows");
     picked
@@ -968,6 +1486,28 @@ fn report_one_scope(scope: Scope) -> ScopeReport {
             .map(|f| (f.search.train_n(), f.validate.end))
             .collect::<Vec<_>>()
     );
+    // What each control RETAINS on every fold's validation stretch, which is the quantity the
+    // retention floor is stated against. Printed because a floor that silently becomes the
+    // binding selectivity bar looks exactly like a selector that found nothing.
+    for (what, mask) in [
+        ("no filter", vec![false; FIELDS.len()]),
+        ("all fields", full.free_mask().to_vec()),
+    ] {
+        let retained: Vec<String> = folds
+            .iter()
+            .map(|f| {
+                let out = f
+                    .search
+                    .run_masked(&mask, budget.ranking_restarts(restarts), 0x5EED, &handle)
+                    .expect("an uncancelled search answers");
+                let applied = f.search.applied_ranges(&out.sel, true);
+                let kept = f.search.tally(&applied, f.validate.clone()).n;
+                let base = f.search.tally(&[], f.validate.clone()).n;
+                format!("{kept}/{base}")
+            })
+            .collect();
+        println!("[retention {what}] {}", retained.join(" "));
+    }
     let p = ComposeParams {
         ranking_restarts: budget.ranking_restarts(restarts),
         gate_restarts: restarts,
@@ -978,6 +1518,60 @@ fn report_one_scope(scope: Scope) -> ScopeReport {
         beam_width_max,
         seed_groups,
     };
+    // The vote, laid out. A composition that answers "no additional filters" is indistinguishable
+    // from one that never had a measurable candidate, so the aggregates the decision is actually
+    // taken on are printed rather than inferred.
+    {
+        let (inner, gate) = folds.split_at(folds.len() - 2);
+        let no_filters = vec![false; FIELDS.len()];
+        let all_fields = full.free_mask().to_vec();
+        // An arbitrary field set named on the command line, so a set a previous run produced can
+        // be re-scored under the CURRENT predicate. Without it, "the selector no longer picks
+        // that set" cannot be told apart from "that set never had the evidence".
+        let named: Vec<bool> = std::env::var("MOON_TUNER_BENCH_FIELDS")
+            .ok()
+            .map(|names| {
+                let wanted: Vec<&str> = names.split(',').map(str::trim).collect();
+                FIELDS
+                    .iter()
+                    .zip(full.free_mask())
+                    .map(|(field, free)| *free && wanted.contains(&field.col))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (label, set, restarts_for) in [
+            ("inner", inner, p.ranking_restarts),
+            ("gate", gate, p.gate_restarts),
+        ] {
+            let mut masks = vec![("no filter", &no_filters), ("all fields", &all_fields)];
+            if named.iter().any(|chosen| *chosen) {
+                masks.push(("named set", &named));
+            }
+            for (what, mask) in masks {
+                let Some(scores) = score_set(set, mask, &p, restarts_for, 1, &handle) else {
+                    continue;
+                };
+                let q = summary(&scores);
+                let per_fold: Vec<String> = scores
+                    .iter()
+                    .map(|f| {
+                        let m = mean_quality(f.seeds.iter().copied());
+                        format!("{:.0}tr/{:.0}%", m.trades, m.retention * 100.0)
+                    })
+                    .collect();
+                println!(
+                    "[vote {label} {what}] lift {:+.2}, profit {:+.2}, trades {:.1},                      retention {:.1}%, pf {:.2}, dd {:.2} | folds {}",
+                    q.lift,
+                    q.profit,
+                    q.trades,
+                    q.retention * 100.0,
+                    q.profit_factor,
+                    q.max_dd,
+                    per_fold.join(" ")
+                );
+            }
+        }
+    }
     let composition_started = Instant::now();
     let out = compose(&folds, &p, &handle).expect("an uncancelled composition answers");
     let composition_seconds = composition_started.elapsed().as_secs_f64();
@@ -1094,5 +1688,218 @@ fn a_folds_thresholds_are_fitted_without_its_validation_rows() {
         altered_profit.to_bits(),
         "the fixture must actually change what the validation rows are worth, or this test \
          cannot distinguish a fold that peeked from one that did not"
+    );
+}
+
+// ─────────────────────── one pinned real scope, end to end ───────────────────────
+
+/// Signed integer override for the pinned-scope diagnostic.
+///
+/// Strategy identifiers are hashes and routinely negative, so the unsigned reader above cannot
+/// carry one. An absent or unparseable value answers `None`, which the diagnostic reports as a
+/// missing scope rather than silently benchmarking a different one.
+///
+/// Args:
+///     name: Environment variable to read.
+///
+/// Returns:
+///     The parsed identifier, or `None`.
+fn bench_i64(name: &str) -> Option<i64> {
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
+}
+
+/// Load ONE exact strategy+core scope, filtered the way the running window filters it.
+///
+/// The scope query mirrors `analytics::Query`'s own row predicates for the app defaults — closed
+/// trades only, `deleted = 0`, real trades only (`emulator = 0`) — and reads `profitbtc`, which
+/// is what `unified_from_mode` projects as `pnl` under `ProjectionMode::Native`. Without those
+/// predicates the diagnostic measures a row set the product never scans.
+///
+/// Args:
+///     strategy_id: Stable strategy identifier.
+///     core_uid: Stable core identifier.
+///
+/// Returns:
+///     The chronologically ordered scope, or `None` when no snapshot was named.
+fn pinned_scope(strategy_id: i64, core_uid: i64) -> Option<Scope> {
+    let path = std::env::var("MOON_TUNER_BENCH_DB").ok()?;
+    let conn =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+    let nf = FIELDS.len();
+    let cols = FIELDS
+        .iter()
+        .map(|s| format!("\"{}\"", s.col))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT {cols}, COALESCE(profitbtc,0), COALESCE(closedate,0) FROM orders_rep \
+         WHERE closedate > 0 AND COALESCE(deleted,0) = 0 AND COALESCE(emulator,0) = 0 \
+         AND strategyid = ?1 AND core_uid = ?2"
+    );
+    let mut stmt = conn.prepare(&sql).expect("scope rows");
+    let mut rows = stmt
+        .query(rusqlite::params![strategy_id, core_uid])
+        .expect("scope rows");
+    let (mut profits, mut closes) = (Vec::new(), Vec::new());
+    let mut vals = vec![Vec::new(); nf];
+    while let Some(r) = rows.next().expect("scope row") {
+        profits.push(r.get::<_, f64>(nf).expect("profit"));
+        closes.push(r.get::<_, i64>(nf + 1).expect("closedate"));
+        for (fi, col) in vals.iter_mut().enumerate() {
+            let v = r.get::<_, Option<f64>>(fi).expect("field");
+            col.push(v.filter(|v| v.is_finite()).unwrap_or(0.0));
+        }
+    }
+    let n = profits.len();
+    let order = super::super::chronological_order(&closes, &profits, &vals);
+    let gather = |c: &[f64]| order.iter().map(|t| c[*t]).collect::<Vec<f64>>();
+    Some(Scope {
+        strategy_id,
+        core_uid,
+        label: format!("strategy {strategy_id} core {core_uid} ({n} trades)"),
+        profits: gather(&profits),
+        vals: vals.iter().map(|c| gather(c)).collect(),
+        closes: order.iter().map(|t| closes[*t]).collect(),
+    })
+}
+
+/// Reproduce ONE user-reported scope on both paths: the plain threshold search and composition.
+///
+/// Opt-in, because it needs a real snapshot and takes minutes:
+/// `MOON_TUNER_BENCH_DB=<snapshot> MOON_TUNER_BENCH_STRATEGY=<id> MOON_TUNER_BENCH_CORE=<uid>
+/// cargo test -p moon-core pinned_scope -- --ignored --nocapture`
+///
+/// The point of a PINNED scope, next to the aggregate diagnostic above, is that a report from the
+/// running window names one strategy on one core. Comparing against the snapshot's largest scopes
+/// answers a different question, and a selector regression that only shows up on the scope a user
+/// actually tunes would never appear in that aggregate.
+///
+/// The comparison itself is PRINTED, never asserted, exactly as in the aggregate diagnostic above:
+/// the fold count and cut points are a judgement call, and freezing today's profits into a
+/// threshold would make an evolving snapshot fail spuriously. It is therefore not a behavioural
+/// oracle and pins no breakage — it would pass against any selector. The one assertion it does
+/// carry is the fixture guard: a pinned scope that resolved to zero rows would print an empty
+/// report that reads exactly like a run in which composition found nothing.
+#[test]
+#[ignore]
+fn a_pinned_scope_compares_composition_against_the_plain_search() {
+    let (Some(strategy_id), Some(core_uid)) = (
+        bench_i64("MOON_TUNER_BENCH_STRATEGY"),
+        bench_i64("MOON_TUNER_BENCH_CORE"),
+    ) else {
+        println!("[x] MOON_TUNER_BENCH_STRATEGY / MOON_TUNER_BENCH_CORE unset - nothing pinned");
+        return;
+    };
+    let Some(scope) = pinned_scope(strategy_id, core_uid) else {
+        println!("[x] MOON_TUNER_BENCH_DB unset - the pinned diagnostic needs a snapshot");
+        return;
+    };
+    assert!(
+        !scope.profits.is_empty(),
+        "the pinned scope must hold trades - check the strategy and core identifiers"
+    );
+    report_one_scope(scope);
+}
+
+/// How stable is ONE plain-search answer? Re-run the all-fields path across several base seeds.
+///
+/// Opt-in, and cheap next to composition — a plain search is one fan-out, not thousands:
+/// `MOON_TUNER_BENCH_DB=<snapshot> MOON_TUNER_BENCH_STRATEGY=<id> MOON_TUNER_BENCH_CORE=<uid>
+/// cargo test -p moon-core plain_search_spread -- --ignored --nocapture`
+///
+/// This exists to keep a single plain-search figure from being read as a target. The plain search
+/// maximizes IN-SAMPLE profit over a hundred thousand random restarts and reports whatever the
+/// winning restart happens to earn on the holdout; that held-out number was never optimized for
+/// and never averaged, so two seeds over the same rows can disagree by more than any selector
+/// change. Composition's answer has to be judged against that SPREAD, not against one draw of it.
+///
+/// Prints, never asserts, and deliberately carries no oracle at all: the spread is a property of
+/// the snapshot rather than of any selector, so it pins no breakage and would pass against any
+/// version of this code. Read it as the measuring stick the other numbers are judged against.
+#[test]
+#[ignore]
+fn a_plain_search_spread_shows_how_much_one_seed_decides() {
+    let (Some(strategy_id), Some(core_uid)) = (
+        bench_i64("MOON_TUNER_BENCH_STRATEGY"),
+        bench_i64("MOON_TUNER_BENCH_CORE"),
+    ) else {
+        println!("[x] MOON_TUNER_BENCH_STRATEGY / MOON_TUNER_BENCH_CORE unset - nothing pinned");
+        return;
+    };
+    let Some(scope) = pinned_scope(strategy_id, core_uid) else {
+        println!("[x] MOON_TUNER_BENCH_DB unset - the spread diagnostic needs a snapshot");
+        return;
+    };
+    let total = scope.profits.len();
+    let closes = scope.closes;
+    let cols = Arc::new(Columns {
+        profits: scope.profits,
+        vals: scope.vals,
+    });
+    let locked: Vec<Option<(Option<f64>, Option<f64>)>> = FIELDS
+        .iter()
+        .map(|field| {
+            if field.mapped() {
+                None
+            } else {
+                Some((None, None))
+            }
+        })
+        .collect();
+    let ne = bench_usize("MOON_TUNER_BENCH_EDGES", 32)
+        .clamp(super::super::EDGES_MIN, super::super::edges_max());
+    let restarts = bench_usize("MOON_TUNER_BENCH_RESTARTS", 2_000)
+        .clamp(super::super::RESTARTS_MIN, super::super::restarts_max());
+    let train_pct = bench_usize("MOON_TUNER_BENCH_TRAIN_PCT", 90).clamp(1, 99);
+    let train_n = super::super::train_split(&closes, train_pct as f64 / 100.0);
+    let seeds = bench_usize("MOON_TUNER_BENCH_SPREAD_SEEDS", 8);
+    let handle = SearchHandle::new();
+    let full = Search::new(
+        cols,
+        &locked,
+        slot_flags(),
+        (train_n / 10).max(1),
+        ne,
+        train_n,
+    )
+    .expect("the snapshot is larger than its min_n");
+    println!(
+        "\n[spread] {} - train {train_n}, holdout {}, restarts {restarts}, edges {ne}",
+        scope.label,
+        total - train_n
+    );
+    let mut holdouts = Vec::with_capacity(seeds);
+    for i in 0..seeds {
+        // Seeds spelled out from the index rather than drawn: the whole point is a run another
+        // machine can repeat and get the same spread.
+        let seed = 0x5EED_u64.wrapping_add(i as u64 * 0x9E37_79B9_7F4A_7C15);
+        let out = full
+            .run_masked(full.free_mask(), restarts, seed, &handle)
+            .expect("an uncancelled search answers");
+        let applied = full.applied_ranges(&out.sel, true);
+        let (tr, ho) = (
+            full.tally(&applied, 0..train_n),
+            full.tally(&applied, train_n..total),
+        );
+        println!(
+            "[seed {i}] fields {} -> in sample {:+.4} over {}, OUT OF SAMPLE {:+.4} over {}",
+            applied.len(),
+            tr.profit,
+            tr.n,
+            ho.profit,
+            ho.n
+        );
+        holdouts.push(ho.profit);
+    }
+    let mean = holdouts.iter().sum::<f64>() / holdouts.len().max(1) as f64;
+    let lo = holdouts.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = holdouts.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let sd = (holdouts.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+        / holdouts.len().max(1) as f64)
+        .sqrt();
+    println!(
+        "[spread] out of sample over {} seeds: mean {mean:+.4}, sd {sd:.4}, min {lo:+.4}, max {hi:+.4}",
+        holdouts.len()
     );
 }

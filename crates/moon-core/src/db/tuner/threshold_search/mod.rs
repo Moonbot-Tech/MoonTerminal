@@ -137,6 +137,42 @@ pub struct ComposedSet {
     /// Fields composition chose that the final refit then left unfiltered. Normally zero; a
     /// standing non-zero count means the ranking budget is too small to agree with the refit.
     pub dropped_at_refit: usize,
+    /// Whether the reserved gate folds robustly separated the winning path from the alternatives.
+    ///
+    /// `false` means the two folds produced no pairwise win at all and the decision above rests on
+    /// the balanced ranking alone. That is still the best supported answer, and it is a WEAKER
+    /// claim than a pairwise win — a surface that renders the decision has to be able to say which
+    /// of the two it is showing, or an undecided gate reads as a confident verdict.
+    pub gate_robust: bool,
+    /// The set the beam found and the reserved folds declined, when it declined a real one.
+    ///
+    /// `None` when the beam's set WON, or when there was no set to decline. It exists so that the
+    /// ordinary "no additional filters" verdict can say what was tried instead of reading as a
+    /// search that found nothing.
+    pub rejected: Option<RejectedSet>,
+}
+
+/// The field set composition found and the reserved gate folds then declined.
+///
+/// Deliberately built UNLIKE [`ComposedSet::fields`]: that one is keyed to the ranges the final
+/// refit actually applied, because a badge beside an empty threshold box would describe a set the
+/// grid does not show. This candidate is never refitted at all — it lost — so there are no applied
+/// ranges to key it to, and its columns come straight from its own mask.
+///
+/// The two lifts come from different fold groups, different restart budgets and different streams.
+/// They say WHERE the set held up; they are not a controlled A/B and must not be worded as one.
+#[derive(Clone, Debug)]
+pub struct RejectedSet {
+    /// Report columns the declined set filtered on, taken from its mask.
+    pub fields: Vec<&'static str>,
+    /// Mean lift over the inner selection folds — the stretch it was fitted on.
+    pub inner_lift: f64,
+    /// Mean lift over the reserved gate folds — the stretch it had never seen.
+    pub gate_lift: f64,
+    /// Inner folds `inner_lift` is a mean over.
+    pub inner_folds: u8,
+    /// Reserved folds `gate_lift` is a mean over.
+    pub gate_folds: u8,
 }
 
 /// Final path selected by composition's reserved gate folds.
@@ -380,6 +416,23 @@ fn composed_set(out: &compose::ComposeOutcome, applied: &[(usize, f64, f64)]) ->
         dropped_at_refit: out.chosen.iter().filter(|c| **c).count() - fields.len(),
         fields,
         folds: out.folds,
+        gate_robust: out.gate_robust,
+        // From the MASK, not from `applied`: the declined set was never refitted, so under
+        // `NoAdditionalFilters` — the case this row exists for — `applied` is empty and keying it
+        // there would produce a row that names no fields at all.
+        rejected: out.rejected.as_ref().map(|rejected| RejectedSet {
+            fields: rejected
+                .mask
+                .iter()
+                .enumerate()
+                .filter(|(_, chosen)| **chosen)
+                .map(|(fi, _)| FIELDS[fi].col)
+                .collect(),
+            inner_lift: rejected.inner_lift,
+            gate_lift: rejected.gate_lift,
+            inner_folds: rejected.inner_folds,
+            gate_folds: rejected.gate_folds,
+        }),
     }
 }
 
@@ -484,10 +537,7 @@ fn build_folds(
                 ne,
                 fit_end,
             )?;
-            Some(compose::Fold {
-                search,
-                validate: fit_end..validate_end,
-            })
+            Some(compose::Fold::new(search, fit_end..validate_end))
         })
         .collect()
 }

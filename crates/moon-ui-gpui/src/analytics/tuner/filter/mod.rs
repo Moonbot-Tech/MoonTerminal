@@ -918,6 +918,18 @@ impl AnalyticsView {
                             t!("analytics.tuner.compose_decision_none")
                         }
                     };
+                    // The path above is the best supported answer either way; this says WHETHER
+                    // anything supported it. Without it an undecided gate — the ordinary outcome,
+                    // since a pairwise win must repeat on both reserved folds — reaches the user
+                    // wearing the same confident wording as a verdict that was actually won.
+                    let decision = if set.gate_robust {
+                        decision.to_string()
+                    } else {
+                        format!(
+                            "{decision} — {}",
+                            t!("analytics.tuner.compose_inconclusive")
+                        )
+                    };
                     let fields: Vec<String> = set
                         .fields
                         .iter()
@@ -962,7 +974,7 @@ impl AnalyticsView {
                         )
                         .to_string()
                     };
-                    if fields.is_empty() && set.dropped_at_refit == 0 {
+                    let el = if fields.is_empty() && set.dropped_at_refit == 0 {
                         el
                     } else {
                         el.child(
@@ -986,7 +998,67 @@ impl AnalyticsView {
                                         .child(text),
                                 ),
                         )
-                    }
+                    };
+                    // "No additional filters" is the ordinary verdict and reads as the search
+                    // having found nothing. It usually DID find a set — one that earned its keep
+                    // on the folds it was fitted on and lost the money back on the two nobody
+                    // fitted it to. Naming that set and both figures is the difference between a
+                    // verdict the user can act on and one they can only distrust. Soft, not
+                    // orange: the orange rows in this block mean something could not be CHECKED,
+                    // and this one is an explanation of a check that ran and came out negative.
+                    el.when(
+                        matches!(set.decision, ComposeDecision::NoAdditionalFilters),
+                        |el| {
+                            el.when_some(set.rejected.as_ref(), |el, rejected| {
+                                let names: Vec<&str> = rejected
+                                    .fields
+                                    .iter()
+                                    .map(|col| {
+                                        FIELDS
+                                            .iter()
+                                            .find(|s| s.col == *col)
+                                            .map_or(*col, |s| s.label)
+                                    })
+                                    .collect();
+                                el.child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap(design::ui_px(cx, 6.0))
+                                        .child(
+                                            div()
+                                                .w(design::font_w_px(cx, 74.0))
+                                                .flex_none()
+                                                .truncate()
+                                                .text_color(moon(p.text_muted))
+                                                .child(
+                                                    t!("analytics.tuner.compose_rejected")
+                                                        .to_string(),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(moon(p.text_soft))
+                                                .child(
+                                                    t!(
+                                                        "analytics.tuner.compose_rejected_detail",
+                                                        fields = names.join(" · "),
+                                                        inner = super::super::summary::fmt_signed(
+                                                            rejected.inner_lift
+                                                        ),
+                                                        gate = super::super::summary::fmt_signed(
+                                                            rejected.gate_lift
+                                                        )
+                                                    )
+                                                    .to_string(),
+                                                ),
+                                        ),
+                                )
+                            })
+                        },
+                    )
                 })
                 // Composition was asked for and could not compare its three paths. State both
                 // what DID run and why the comparison was unavailable.
