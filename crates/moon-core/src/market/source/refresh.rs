@@ -12,8 +12,8 @@ use crate::session::CoreId;
 
 use super::{
     bump_generation, bump_market_revisions, cadence_phase_ms, cadence_slot, market_diag,
-    market_diag_due, market_diag_enabled, MarketDataSource, MarketDataSourceInner,
-    market_diag_floor, ORDERBOOK_PULL_PERIOD_MS,
+    market_diag_due, market_diag_enabled, market_diag_floor, MarketDataSource,
+    MarketDataSourceInner, ORDERBOOK_PULL_PERIOD_MS,
 };
 
 impl MarketDataSource {
@@ -33,7 +33,7 @@ impl MarketDataSource {
                 candle_subs: std::sync::Mutex::new(HashMap::new()),
                 kline_cache: None,
                 provider_exchange: HashMap::new(),
-                native_backfill_done: std::sync::Mutex::new(HashSet::new()),
+                native_backfill: Default::default(),
                 archive: Default::default(),
             })),
         }
@@ -192,6 +192,7 @@ impl MarketDataSource {
         // as "already asked" for a client that has never been asked. Epochs only order installs
         // WITHIN one slot; replacing the slot has to drop them.
         inner.archive.forget_provider(core);
+        inner.native_backfill.forget_provider(core);
         bump_generation(&mut inner.provider_generations, core);
     }
 
@@ -208,6 +209,7 @@ impl MarketDataSource {
         inner.provider_orderbook_kind.remove(&core);
         inner.core_provider.remove(&core);
         inner.archive.forget_provider(core);
+        inner.native_backfill.forget_provider(core);
         bump_generation(&mut inner.provider_generations, core);
     }
 
@@ -226,6 +228,7 @@ impl MarketDataSource {
             .provider_orderbook_kind
             .retain(|provider, _| active_providers.contains(provider));
         inner.archive.retain_providers(&active_providers);
+        inner.native_backfill.retain_providers(&active_providers);
     }
 
     pub fn set_orderbook_kind(&self, core: CoreId, kind: OrderBookKind) {
@@ -284,6 +287,7 @@ impl MarketDataSource {
             inner.provider_orderbook_kind.remove(&provider);
             inner.market_revisions.remove(&provider);
             inner.archive.forget_provider(provider);
+            inner.native_backfill.forget_provider(provider);
             inner.store.clone()
         };
         store
@@ -301,6 +305,7 @@ impl MarketDataSource {
             inner.provider_generations.clear();
             inner.provider_orderbook_kind.clear();
             inner.archive.clear();
+            inner.native_backfill.clear();
             inner.store.clone()
         };
         store.write().expect("market store poisoned").clear();
@@ -337,7 +342,10 @@ impl MarketDataSource {
             };
             let Some(client) = inner.clients.get(&provider).and_then(SharedMoonClient::get) else {
                 if market_diag_enabled()
-                    && market_diag_due(format!("no-client:{provider}:{market}"), market_diag_floor())
+                    && market_diag_due(
+                        format!("no-client:{provider}:{market}"),
+                        market_diag_floor(),
+                    )
                 {
                     market_diag(format!(
                         "refresh core={} provider={} market={market}: no client",
