@@ -299,7 +299,9 @@ fn cfg_defaults_sane() {
     assert_eq!(cfg.tf_ms(), TF5);
     assert_eq!(cfg.mode, CANDLE_MODE_OUTLINE_IN_ZONE);
     assert!(cfg.trade_candles > 0);
-    assert!(cfg.price_lines);
+    assert!(cfg.last_price_line);
+    assert!(cfg.mark_price_line);
+    assert!(cfg.moonshot_zone);
     // Clamp an unknown or removed timeframe to 5 minutes, including legacy 15-minute configs.
     let bad = CandleViewCfg { tf_min: 15, ..cfg };
     assert_eq!(bad.tf_ms(), TF5);
@@ -313,4 +315,153 @@ fn cfg_defaults_sane() {
         .tf_ms(),
         86_400_000
     );
+}
+
+/// A `layout.toml` or `charts.json` written before the price-line split carries only
+/// `price_lines`. Losing it would turn BOTH lines back on for every user who had them off, which
+/// is exactly the setting they went into the popup to change.
+#[test]
+fn legacy_price_lines_flag_drives_both_split_lines() {
+    let off: CandleViewCfg = toml::from_str("tf_min = 5\nprice_lines = false\n")
+        .expect("a pre-split layout.toml must still load");
+    assert!(!off.last_price_line);
+    assert!(!off.mark_price_line);
+
+    let on: CandleViewCfg =
+        serde_json::from_str(r#"{"tf_min":5,"price_lines":true}"#).expect("a pre-split spec loads");
+    assert!(on.last_price_line);
+    assert!(on.mark_price_line);
+}
+
+/// A file carrying BOTH the legacy flag and a split one keeps the split value: the legacy flag is
+/// a fallback, not an override, or a stale key would outrank what the user just clicked.
+#[test]
+fn split_price_line_flags_outrank_the_legacy_one() {
+    let cfg: CandleViewCfg =
+        serde_json::from_str(r#"{"price_lines":false,"mark_price_line":true}"#)
+            .expect("a mixed spec loads");
+    assert!(!cfg.last_price_line, "the legacy flag still covers last");
+    assert!(cfg.mark_price_line, "the split flag wins for mark");
+}
+
+/// Every field stays optional: a spec that predates the whole struct, or one hand-edited down to a
+/// single key, must load on defaults rather than fail the whole config.
+#[test]
+fn missing_keys_fall_back_to_defaults() {
+    let cfg: CandleViewCfg = serde_json::from_str("{}").expect("an empty spec loads");
+    assert_eq!(cfg, CandleViewCfg::default());
+}
+
+/// A hand-written `nan` must not reach the config. It compares unequal to itself, so the engine's
+/// "did the candle view change?" check would fire on EVERY frame, marking the view dirty and
+/// rebuilding order geometry forever.
+#[test]
+fn a_non_finite_outline_width_falls_back_to_the_default() {
+    let cfg: CandleViewCfg = toml::from_str("outline_px = nan\n").expect("loads");
+    assert_eq!(cfg.outline_px, CandleViewCfg::default().outline_px);
+    assert_eq!(cfg, cfg, "the loaded config must compare equal to itself");
+}
+
+/// Only what the history read consumes may buy a pane reset. A style checkbox or the order-line
+/// corridor changing must leave the reduced value untouched, while the timeframe must move it.
+#[test]
+fn history_inputs_ignores_style_and_overlay_fields() {
+    let base = CandleViewCfg::default();
+    let styled = CandleViewCfg {
+        outline_px: 3.0,
+        wicks_in_zone: !base.wicks_in_zone,
+        neutral_in_zone: !base.neutral_in_zone,
+        hide_candles: 5,
+        trades_limit: 7,
+        moonshot_zone: !base.moonshot_zone,
+        ..base
+    };
+    assert_eq!(
+        styled.history_inputs(),
+        base.history_inputs(),
+        "a style or overlay change must not reset the pane's history"
+    );
+
+    for changed in [
+        CandleViewCfg { tf_min: 30, ..base },
+        CandleViewCfg {
+            mode: CANDLE_MODE_OFF,
+            ..base
+        },
+        CandleViewCfg {
+            trade_candles: base.trade_candles + 1,
+            ..base
+        },
+        CandleViewCfg {
+            last_price_line: false,
+            ..base
+        },
+        CandleViewCfg {
+            mark_price_line: false,
+            ..base
+        },
+    ] {
+        assert_ne!(
+            changed.history_inputs(),
+            base.history_inputs(),
+            "a read input must still reset: {changed:?}"
+        );
+    }
+}
+
+/// The `[candle_view]` block copied VERBATIM out of a real `layout.toml` this machine had written
+/// before the split, with the price lines deliberately turned off. A synthetic fixture would only
+/// prove the migration against the keys the migration itself knows about.
+#[test]
+fn a_real_pre_split_layout_block_still_loads() {
+    let cfg: CandleViewCfg = toml::from_str(
+        "tf_min = 1\n\
+         mode = 0\n\
+         trade_candles = 0\n\
+         hide_candles = 0\n\
+         trades_limit = 50000\n\
+         outline_px = 1.0\n\
+         wicks_in_zone = true\n\
+         neutral_in_zone = false\n\
+         price_lines = false\n",
+    )
+    .expect("a layout.toml written before the split must still load");
+
+    assert_eq!(cfg.tf_min, 1);
+    assert_eq!(cfg.mode, CANDLE_MODE_FILLED);
+    assert_eq!(cfg.trade_candles, 0);
+    assert!(cfg.wicks_in_zone);
+    assert!(!cfg.neutral_in_zone);
+    assert!(!cfg.last_price_line, "the user had the price lines off");
+    assert!(!cfg.mark_price_line, "the user had the price lines off");
+    assert!(cfg.moonshot_zone, "a key that did not exist keeps drawing");
+}
+
+/// Saving and reloading must be lossless, or a setting would drift every time the app writes its
+/// config. The wire shim only affects reading, so this is the guard that it stays symmetric.
+#[test]
+fn candle_view_survives_a_save_and_reload_round_trip() {
+    // EVERY field differs from the default on purpose: a field the wire shim forgets is filled
+    // from the default on load, so a fixture sharing any default value would let that loss pass.
+    // Spelled out in full rather than through `..default()` for the same reason — a field added
+    // later fails to compile here until someone gives it a non-default value.
+    let cfg = CandleViewCfg {
+        tf_min: 30,
+        mode: CANDLE_MODE_FILLED,
+        trade_candles: 10,
+        hide_candles: 2,
+        trades_limit: 1_234,
+        outline_px: 3.0,
+        wicks_in_zone: false,
+        neutral_in_zone: true,
+        last_price_line: false,
+        mark_price_line: false,
+        moonshot_zone: false,
+    };
+    let toml_back: CandleViewCfg =
+        toml::from_str(&toml::to_string(&cfg).expect("serializes")).expect("reloads");
+    assert_eq!(toml_back, cfg);
+    let json_back: CandleViewCfg =
+        serde_json::from_str(&serde_json::to_string(&cfg).expect("serializes")).expect("reloads");
+    assert_eq!(json_back, cfg);
 }

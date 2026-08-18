@@ -49,7 +49,9 @@ pub const VOLUME_STYLE_MAX: u8 = VOLUME_STYLE_HILLS;
 /// `layout.toml` stores the global default as `WindowLayout::candle_view`, while
 /// `charts.json` stores optional per-tab overrides.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+// Deserialized through [`CandleViewWire`], which migrates the pre-split `price_lines` flag and
+// supplies the per-field defaults `#[serde(default)]` used to give this struct directly.
+#[serde(from = "CandleViewWire")]
 pub struct CandleViewCfg {
     /// Candle timeframe in minutes, selected from [`CANDLE_TF_CHOICES_MIN`].
     pub tf_min: u32,
@@ -70,8 +72,15 @@ pub struct CandleViewCfg {
     /// Whether to use a neutral candle color in the trade zone to avoid competing with
     /// the cross colors.
     pub neutral_in_zone: bool,
-    /// Whether to draw last/mark price lines: orange LastPrice and blue MarkPrice.
-    pub price_lines: bool,
+    /// Whether to draw the orange LastPrice line.
+    pub last_price_line: bool,
+    /// Whether to draw the blue MarkPrice line. A market whose provider reports no mark price
+    /// draws nothing regardless.
+    pub mark_price_line: bool,
+    /// Whether a MoonShot order fills its corridor between `corridor_price_down` and
+    /// `corridor_price_up`. This is the ORDER's own area, unrelated to the layout popup's
+    /// `show_zone`, which shades the trading control strip.
+    pub moonshot_zone: bool,
 }
 
 impl Default for CandleViewCfg {
@@ -85,12 +94,99 @@ impl Default for CandleViewCfg {
             outline_px: 1.0,
             wicks_in_zone: true,
             neutral_in_zone: false,
-            price_lines: true,
+            last_price_line: true,
+            mark_price_line: true,
+            moonshot_zone: true,
+        }
+    }
+}
+
+/// Deserialization form of [`CandleViewCfg`], carrying the pre-split `price_lines` flag so a
+/// `layout.toml` or `charts.json` written before the split still loads with the user's choice.
+///
+/// It exists because a plain `#[serde(default)]` cannot express "default to ANOTHER field": a
+/// config that only says `price_lines = false` would silently come back with both lines ON, which
+/// is the setting the user explicitly turned off. Every field is optional so a file missing any key
+/// still loads; [`From`] resolves each against [`CandleViewCfg::default`], which keeps the defaults
+/// named once instead of once per struct.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct CandleViewWire {
+    tf_min: Option<u32>,
+    mode: Option<u8>,
+    trade_candles: Option<u16>,
+    hide_candles: Option<u16>,
+    trades_limit: Option<u32>,
+    outline_px: Option<f32>,
+    wicks_in_zone: Option<bool>,
+    neutral_in_zone: Option<bool>,
+    /// Pre-split toggle that drove BOTH price lines at once. Read only where the split flag for
+    /// that line is absent, so a file carrying both keeps the newer one.
+    price_lines: Option<bool>,
+    last_price_line: Option<bool>,
+    mark_price_line: Option<bool>,
+    moonshot_zone: Option<bool>,
+}
+
+impl From<CandleViewWire> for CandleViewCfg {
+    fn from(w: CandleViewWire) -> Self {
+        let d = CandleViewCfg::default();
+        Self {
+            tf_min: w.tf_min.unwrap_or(d.tf_min),
+            mode: w.mode.unwrap_or(d.mode),
+            trade_candles: w.trade_candles.unwrap_or(d.trade_candles),
+            hide_candles: w.hide_candles.unwrap_or(d.hide_candles),
+            trades_limit: w.trades_limit.unwrap_or(d.trades_limit),
+            // A hand-edited `nan` compares unequal to itself, so it would report a change forever:
+            // `set_candle_view` would mark the view dirty and rebuild order geometry every single
+            // frame. The renderer's own `.max(1.0)` cannot save it, because NaN survives the
+            // comparison it feeds. The pane's history gate is already safe — `history_inputs`
+            // neutralizes this field — but nothing else is.
+            outline_px: w
+                .outline_px
+                .filter(|px| px.is_finite())
+                .unwrap_or(d.outline_px),
+            wicks_in_zone: w.wicks_in_zone.unwrap_or(d.wicks_in_zone),
+            neutral_in_zone: w.neutral_in_zone.unwrap_or(d.neutral_in_zone),
+            last_price_line: w
+                .last_price_line
+                .or(w.price_lines)
+                .unwrap_or(d.last_price_line),
+            mark_price_line: w
+                .mark_price_line
+                .or(w.price_lines)
+                .unwrap_or(d.mark_price_line),
+            moonshot_zone: w.moonshot_zone.unwrap_or(d.moonshot_zone),
         }
     }
 }
 
 impl CandleViewCfg {
+    /// Returns this config with every purely visual field neutralized, leaving only what the
+    /// HISTORY read consumes. Compare two of these to decide whether a pane must reset.
+    ///
+    /// A reset is expensive — a window re-read, a candle-series rebuild, a combo re-upload and both
+    /// price-line cursors re-seeded, per pane, multiplied by every tab and window when the candle
+    /// popup's ⧉ distributes a setting. Six fields cannot change what is READ and so must not buy
+    /// one: `outline_px`, `wicks_in_zone`, `neutral_in_zone` and `hide_candles` only reach the
+    /// candle STYLE, which the renderer gates separately; `trades_limit` is not passed to the read
+    /// protocol at all; `moonshot_zone` is order-line geometry.
+    ///
+    /// Neutralizing those by name rather than listing the survivors is deliberate: a field added
+    /// later keeps forcing a reset until someone decides otherwise, which is the safe direction to
+    /// be wrong in.
+    pub fn history_inputs(self) -> Self {
+        Self {
+            hide_candles: 0,
+            trades_limit: 0,
+            outline_px: 0.0,
+            wicks_in_zone: false,
+            neutral_in_zone: false,
+            moonshot_zone: false,
+            ..self
+        }
+    }
+
     /// Returns the timeframe in milliseconds, clamped to the supported set.
     ///
     /// Legacy 30-second code 0 maps to 1 minute because sub-minute settings were removed.

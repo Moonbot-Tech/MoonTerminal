@@ -601,15 +601,30 @@ impl ChartEngine {
         changed
     }
 
-    /// Applies global candle and trade display settings, including timeframe, mode, zone, and
-    /// outline, to every engine pane. Returns true on change and forces history resynchronization.
+    /// Applies candle and trade display settings — timeframe, mode, trade zone, outline, the two
+    /// price lines and the MoonShot corridor — to every engine pane. Returns true on change and
+    /// forces history resynchronization.
+    ///
+    /// The corridor flag feeds ORDER geometry rather than history, and BOTH rebuild gates are blind
+    /// to it: the outer order signature short-circuits on an otherwise idle chart (hence
+    /// `last_order_sig`, as in `set_chart_graphics`), and the per-pane gate in
+    /// `sync_orders_from_session` folds no candle input either (hence `last_order_lines_rev`, as in
+    /// `set_orders`). Clearing only the outer one would stamp the signature and leave the stale
+    /// corridor on the pane. The panel's `view_dirty` forces the same resync today; these two keep
+    /// the flag correct for a caller that does not travel that path — on a pane that HAS order
+    /// data, which is the only pane that draws a corridor to begin with.
     pub fn set_candle_view(&mut self, cfg: moon_core::market::CandleViewCfg) -> bool {
         let mut data = self.data.borrow_mut();
         if data.candle_view == cfg {
             return false;
         }
         data.candle_view = cfg;
+        data.last_order_sig = u64::MAX;
         data.mark_view_dirty();
+        drop(data);
+        for pr in &mut self.state.borrow_mut().panes {
+            pr.last_order_lines_rev = u64::MAX;
+        }
         true
     }
 

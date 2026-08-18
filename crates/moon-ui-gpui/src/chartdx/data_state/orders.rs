@@ -129,6 +129,9 @@ impl ChartDataState {
                         f32::NEG_INFINITY,
                         f32::INFINITY,
                         0.0,
+                        // Per-chart, from this panel's candle popup. A change reaches here because
+                        // the panel marks the view dirty and the render path then forces this sync.
+                        self.candle_view.moonshot_zone,
                         &mut zones,
                         &mut hlines,
                         &mut segs,
