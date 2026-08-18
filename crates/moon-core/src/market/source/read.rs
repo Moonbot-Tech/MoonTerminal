@@ -5,6 +5,8 @@ use crate::feed::SharedMoonClient;
 use crate::market::source::MarketLabel;
 use crate::session::CoreId;
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use moonproto::DeepHistoryKind;
@@ -29,6 +31,160 @@ use super::{
     DetectSnapshot, LatestPriceError, MarketDataSource, MarketRevisions, MarketTickerReadout,
 };
 use crate::market::candles::ChartCandle;
+
+/// Lower bound of every history-retry delay in this file, in seconds.
+///
+/// Deliberately the same 30 seconds the effective-kind deep request starts from, so the two
+/// request paths cannot beat each other into the core's API-limit auto-stop.
+const HISTORY_RETRY_MIN_S: u32 = 30;
+/// Upper bound of every history-retry delay in this file, in seconds.
+const HISTORY_RETRY_MAX_S: u32 = 600;
+/// Claims allowed per key before the backfill gives up for this client slot.
+///
+/// A budget is required, not merely tidy: the completion guard reads coarse depth out of the
+/// snapshot and the cache, and a market that has no coarse depth to find — a young listing, or one
+/// the core answers with an empty vector — can never satisfy it. Unbudgeted, such a key would keep
+/// spending exchange weight at the 600-second cap forever. Five claims land at roughly 0, 30, 90,
+/// 210 and 450 seconds, so the budget covers about seven and a half minutes of outage and the cap
+/// is never actually reached on this path. That is sized against what a reconnect does rather than
+/// against the outage alone: a dropped or replaced client slot clears the claims outright, so the
+/// failure this exists for — a disconnected or momentarily busy core — gets a fresh budget exactly
+/// when its cause clears.
+const NATIVE_BACKFILL_MAX_ATTEMPTS: u32 = 5;
+
+/// Whether a native backfill may be claimed now for a key in this state.
+///
+/// An absent entry has never been tried; a present one is due again once its own backoff elapses,
+/// and never once it has spent its claim budget.
+///
+/// Success is deliberately NOT decided here: `request_coin_card` returns on QUEUEING, so no answer
+/// at this call site can mean the backfill applied. The caller's `!have_native && !cache_covers`
+/// guard is what observes the applied response and stops the requests for good; the budget is the
+/// backstop for the markets that guard can never be satisfied for.
+///
+/// `now` is a parameter rather than an `Instant::now()` inside, so the decision is testable without
+/// sleeping, and the comparison is saturating because the two instants come from separate clock
+/// readings and a caller may legitimately hand back an earlier one.
+fn native_backfill_due(state: Option<&NativeBackfillAttempt>, now: Instant) -> bool {
+    match state {
+        None => true,
+        Some(a) => {
+            a.attempts < NATIVE_BACKFILL_MAX_ATTEMPTS
+                && now.saturating_duration_since(a.last_attempt)
+                    >= Duration::from_secs(a.delay_s.max(HISTORY_RETRY_MIN_S) as u64)
+        }
+    }
+}
+
+/// One claimed native-backfill attempt; see [`NativeBackfillGate`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativeBackfillAttempt {
+    /// When the claim was taken, which is when the request was about to be queued.
+    last_attempt: Instant,
+    /// Seconds that must elapse before the key may be claimed again.
+    delay_s: u32,
+    /// Claims taken so far for this key, against [`NATIVE_BACKFILL_MAX_ATTEMPTS`].
+    attempts: u32,
+}
+
+/// Who may currently ask the core for a coarse-timeframe native backfill.
+///
+/// Shaped after [`super::archive::ArchiveGate`], which guards the analogous one-per-client archive
+/// request: the state is private to the gate and the lifecycle points call methods on it rather
+/// than reaching into a map and repeating the poison handling at each site.
+///
+/// A claim is taken BEFORE the request is queued, never after it lands. It cannot be the latter:
+/// `request_coin_card` returns as soon as the request is queued, and whether it applied arrives
+/// later as `CoinCardCandles::Updated` or `UpdateFailed`. So this gate only says "do not ask again
+/// yet"; what says "stop asking" is the caller's own depth guard, which reads the applied response
+/// out of the snapshot and the cache, backstopped by the claim budget for the markets that guard
+/// can never be satisfied for.
+///
+/// The gate is PROCESS-GLOBAL rather than per panel — unlike [`super::ChartHistoryCursor`]'s
+/// `deep_retry_delay_s` — because the request deliberately changes the core's shared timeframe
+/// slot. A per-panel clock would multiply the attempt rate by the number of panels showing the
+/// coin, which is exactly what the core's API-limit auto-stop punishes.
+#[derive(Default)]
+pub(super) struct NativeBackfillGate {
+    claims: Mutex<HashMap<(CoreId, String, u32), NativeBackfillAttempt>>,
+}
+
+impl NativeBackfillGate {
+    /// Take the send permit for `key`, or `None` when it is not due.
+    ///
+    /// Returns the backoff the gate will enforce before allowing a retry, so a failed-send
+    /// diagnostic can name it. Claiming under the lock is what keeps N panels of one coin from all
+    /// sending on the same frame: recording only the OUTCOME would leave every panel seeing an
+    /// absent entry at once.
+    fn claim(&self, key: (CoreId, String, u32), now: Instant) -> Option<u32> {
+        let mut claims = self.claims.lock().expect("native backfill gate poisoned");
+        let prev = claims.get(&key).copied();
+        if !native_backfill_due(prev.as_ref(), now) {
+            return None;
+        }
+        let delay_s = history_retry_next_delay_s(prev.map(|a| a.delay_s));
+        claims.insert(
+            key,
+            NativeBackfillAttempt {
+                last_attempt: now,
+                delay_s,
+                attempts: prev.map_or(1, |a| a.attempts + 1),
+            },
+        );
+        Some(delay_s)
+    }
+
+    /// Drop every claim belonging to one provider, restoring its full budget.
+    ///
+    /// Called wherever the archive claims are forgotten: a replacement client slot has empty
+    /// retained rings, so an old slot's backoff would only delay the first request the new one
+    /// genuinely needs.
+    pub(super) fn forget_provider(&self, provider: CoreId) {
+        self.claims
+            .lock()
+            .expect("native backfill gate poisoned")
+            .retain(|(p, _, _), _| *p != provider);
+    }
+
+    /// Drop the claims of every provider outside `keep`.
+    pub(super) fn retain_providers(&self, keep: &HashSet<CoreId>) {
+        self.claims
+            .lock()
+            .expect("native backfill gate poisoned")
+            .retain(|(p, _, _), _| keep.contains(p));
+    }
+
+    /// Drop every claim.
+    pub(super) fn clear(&self) {
+        self.claims
+            .lock()
+            .expect("native backfill gate poisoned")
+            .clear();
+    }
+}
+
+/// Next history-retry delay in seconds: 30 doubling to a 600 cap, floored on a fresh start.
+///
+/// ONE backoff shape for both history request paths in this file. The effective-kind deep request
+/// and the coarse native backfill sit on different state — one per panel, one process-global — but
+/// they answer to the same thing: the core spends exchange request weight on our behalf and stops
+/// itself when it runs out. Two copies of this arithmetic drifted apart once already, the deep one
+/// carrying bare literals where the named bounds belong.
+///
+/// The doubling SATURATES. Nothing in this file can currently reach a delay near `u32::MAX` — the
+/// cap below is applied to every value that comes back out — but this is a total function now
+/// serving two independent callers, and a plain `* 2` makes it panic in a debug build for an input
+/// its own signature accepts. Saturating costs nothing here, because the cap discards the excess
+/// either way.
+fn history_retry_next_delay_s(prev: Option<u32>) -> u32 {
+    match prev {
+        None => HISTORY_RETRY_MIN_S,
+        Some(d) => d
+            .max(HISTORY_RETRY_MIN_S)
+            .saturating_mul(2)
+            .min(HISTORY_RETRY_MAX_S),
+    }
+}
 
 /// Return a short exchange-type label from `server_info.exchange_type_mask`.
 ///
@@ -902,13 +1058,17 @@ impl MarketDataSource {
                     }
                 }
             }
-            // Perform a one-time native backfill for a coarse timeframe when the panel requests a
-            // kind coarser than the effective one-core timeframe and neither retained state nor the
-            // cache has native depth. Send one deliberate native-kind request per session for each
-            // `(provider, market, kind)`. The core slot changes there and back as the freshness
-            // guard restores the effective kind with backoff, while the response settles into the
-            // cache and avoids future changes. Skip backfill without a cache because its result
-            // would be lost on every restart while the slot changes remained.
+            // Backfill a coarse timeframe natively when the panel asks for a kind coarser than the
+            // effective one-core timeframe and neither retained state nor the cache has native
+            // depth. The core slot changes there and back as the freshness guard restores the
+            // effective kind with backoff, while the response settles into the cache and avoids
+            // future changes. Skip backfill without a cache because its result would be lost on
+            // every restart while the slot changes remained.
+            //
+            // The request is deliberately NOT one-shot. It used to be, and a single disconnect then
+            // killed that market's history for the whole process. It is instead claimed against a
+            // bounded backoff with a claim budget, and stopped for good by the depth guard below
+            // the moment the rows actually arrive.
             if use_deep && native_kind_min > deep_kind_min && kline_cache.is_some() {
                 let native_kind = deep_history_kind(native_kind_min);
                 let have_native = snapshot
@@ -917,21 +1077,31 @@ impl MarketDataSource {
                 let cache_covers =
                     cursor.cache_rows_kind == native_kind_min && cursor.cache_rows.len() >= 30;
                 if !have_native && !cache_covers {
-                    let inner = self.inner.read().expect("market source poisoned");
-                    let mut done = inner
-                        .native_backfill_done
-                        .lock()
-                        .expect("native backfill set poisoned");
                     let key = (provider, market.to_string(), native_kind_min);
-                    if !done.contains(&key) {
-                        done.insert(key);
+                    let now_i = Instant::now();
+                    // CLAIM the attempt under the locks, then send with both released. Two things
+                    // ride on that order. The send is IPC to the core, and the sibling deep request
+                    // below already refuses to make it under the source lock. And the claim is what
+                    // keeps N panels of one coin from all sending on the same frame: recording only
+                    // the OUTCOME would leave every panel seeing an absent entry at once, which is
+                    // the herd the old unconditional insert prevented by accident.
+                    let claimed = {
+                        let inner = self.inner.read().expect("market source poisoned");
+                        inner.native_backfill.claim(key, now_i)
+                    };
+                    // Nothing is written back after the send. `Ok` only means the core accepted the
+                    // request into its queue; the outcome arrives asynchronously as a
+                    // `CoinCardCandles` event, so marking the key done here would make an
+                    // asynchronously failed or silently dropped request terminal. The guard above
+                    // already stops the requests the moment the rows actually show up.
+                    if let Some(delay_s) = claimed {
                         match client.candles().request_coin_card(market, native_kind) {
                             Ok(_) => log::log!(
                                 super::SOURCE_TRACE_LEVEL,
-                                "kline cache: разовый нативный бэкфилл {market} kind={native_kind:?}"
+                                "kline cache: native backfill queued {market} kind={native_kind:?}"
                             ),
                             Err(e) => super::market_diag(format!(
-                                "native backfill request failed {market} kind={native_kind:?}: {e}"
+                                "native backfill request failed {market} kind={native_kind:?}: {e}; retrying in {delay_s}s"
                             )),
                         }
                     }
@@ -985,7 +1155,8 @@ impl MarketDataSource {
                     .and_then(|r| r.last())
                     .map_or(true, |r| (r.unix_millis() as f64) < cur_bucket_ms);
                 let kind_changed = cursor.last_deep_kind != Some(deep_kind);
-                let retry_delay = Duration::from_secs(cursor.deep_retry_delay_s.max(30) as u64);
+                let retry_delay =
+                    Duration::from_secs(cursor.deep_retry_delay_s.max(HISTORY_RETRY_MIN_S) as u64);
                 if deep_stale
                     && (kind_changed
                         || cursor
@@ -1012,11 +1183,9 @@ impl MarketDataSource {
                         }
                     };
                     if gate_open {
-                        cursor.deep_retry_delay_s = if kind_changed {
-                            30
-                        } else {
-                            (cursor.deep_retry_delay_s.max(30) * 2).min(600)
-                        };
+                        cursor.deep_retry_delay_s = history_retry_next_delay_s(
+                            (!kind_changed).then_some(cursor.deep_retry_delay_s),
+                        );
                         if let Err(e) = client.candles().request_coin_card(market, deep_kind) {
                             super::market_diag(format!(
                                 "coin-card request failed {market} kind={deep_kind:?}: {e}"
@@ -1040,7 +1209,7 @@ impl MarketDataSource {
             };
             if deep_rows_sig != cursor.last_deep_sig {
                 // A response or live bar advanced the deep rows, so reset the request backoff.
-                cursor.deep_retry_delay_s = 30;
+                cursor.deep_retry_delay_s = HISTORY_RETRY_MIN_S;
             }
             let series_reset = force_reset
                 || read.combo_reset
@@ -1569,3 +1738,6 @@ fn fixture_revision(tf_ms: i64, from_ms: i64, to_ms: i64) -> u64 {
     // hashed to it would be answered with "nothing changed" on the very first read.
     hash.max(1)
 }
+
+#[cfg(test)]
+mod tests;

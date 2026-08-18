@@ -6,7 +6,7 @@ mod refresh;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -269,8 +269,8 @@ pub struct ChartHistoryCursor {
     last_gap_diag: Option<Instant>,
     /// Equivalent signature for rows of the panel's native kind.
     ///
-    /// These rows are produced by a one-time backfill when the core's effective kind is finer than
-    /// the panel's native kind.
+    /// These rows are produced by native backfill attempts when the core's effective kind is finer
+    /// than the panel's native kind.
     cache_written_native_sig: u64,
     /// Low-cost fingerprint of loaded deep rows at the last series rebuild.
     ///
@@ -422,11 +422,9 @@ struct MarketDataSourceInner {
     /// survive selected-provider changes. `CoreId` itself is a stable uid since schema v11, but it
     /// identifies one core rather than the exchange.
     provider_exchange: HashMap<CoreId, crate::feed::ExchangeId>,
-    /// One-time native backfills for coarse timeframes during a session.
-    ///
-    /// Each `(provider, market, kind_min)` records one deliberate core timeframe-slot change when
-    /// opening a coarse timeframe with an empty cache.
-    native_backfill_done: Mutex<HashSet<(CoreId, String, u32)>>,
+    /// Who may currently ask the core for a coarse-timeframe native backfill; see
+    /// [`read::NativeBackfillGate`], which owns the claim state and the whole rationale.
+    native_backfill: read::NativeBackfillGate,
     /// Who has already been asked for a core chart archive; see [`archive`].
     ///
     /// Shared behind an `Arc` so the chart read can take its handle in the same guard that

@@ -11,6 +11,39 @@ fn candles_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var_os("MOON_CANDLES_OFF").is_some())
 }
 
+/// Wall-clock span an opened chart asks back for, before the bar band clamps it.
+const HISTORY_FLOOR_SPAN_MS: f64 = 2.0 * 86_400_000.0;
+/// Fewest base candles the floor may resolve to. Keeps the coarse timeframes honest: two days is
+/// two candles on a daily chart, which is the case where the symptom is worst.
+const HISTORY_FLOOR_MIN_BARS: f64 = 120.0;
+/// Most base candles the floor may resolve to. Keeps a 1-minute chart from rebuilding a
+/// multi-thousand-bar series every time a bucket rolls over.
+const HISTORY_FLOOR_MAX_BARS: f64 = 1500.0;
+
+/// Minimum history span an open chart requests, regardless of camera zoom.
+///
+/// A chart opened at a few hours of zoom used to ask for only those few hours, so it started near
+/// now and showed nothing of the history the local kline cache and the core's retained rings were
+/// already holding; the user had to pan left before anything was fetched. The floor is really a BAR
+/// COUNT — two days is only the tie-breaker inside the band — because a wall-clock span alone is
+/// meaningless at both ends of the timeframe range.
+///
+/// It costs no exchange API weight. `from_rel_ms` reaches only the in-memory trade and candle
+/// rings, the local SQLite prefix read and the series clip; every outbound `request_coin_card` is
+/// gated on staleness, the effective-kind change, the per-panel backoff and the 30-second global
+/// dedup, none of which reads it. A wider ask is the same one request.
+///
+/// Zero in pure tick mode, where there is no series to fill.
+fn chart_history_floor_ms(cfg: moon_core::market::CandleViewCfg) -> f32 {
+    if candles_disabled() || cfg.mode == moon_core::market::candles::CANDLE_MODE_OFF {
+        return 0.0;
+    }
+    let tf = cfg.tf_ms() as f64;
+    HISTORY_FLOOR_SPAN_MS
+        .max(HISTORY_FLOOR_MIN_BARS * tf)
+        .min(HISTORY_FLOOR_MAX_BARS * tf) as f32
+}
+
 impl ChartDataState {
     pub(crate) fn sync_from_market_source(
         &mut self,
@@ -175,7 +208,11 @@ impl ChartDataState {
                 view::cross_cull_margin_physical_px(&pane.view, self.last_ppp, theme_marker_scale)
                     / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             let history_prefetch = (window_ms * 0.20).max(marker_margin);
-            let history_from = view_time0 - history_prefetch;
+            // The LEFT edge gets a floor; the right edge and the prefetch itself do not. Widening
+            // the prefetch would also widen `pan_budget_px` below, which is a different decision
+            // about when to reset; the right edge keeps its existing normal prefetch.
+            let history_from =
+                view_time0 - history_prefetch.max(chart_history_floor_ms(self.candle_view));
             let history_to = view_time0 + window_ms + history_prefetch;
             let scan_price = device_lost || cam_px != pr.scan_cam_px;
             let source_revs = source.market_revisions(pane.core, &pane.market);
@@ -392,7 +429,9 @@ impl ChartDataState {
                     &mut pr.history_buffers,
                 );
                 crate::diag::record_us(&crate::diag::CHART_HISTORY_READ_US, read_timer);
-                if let Some(started) = read_timer {
+                if force_history_reset
+                    && let Some(started) = read_timer
+                {
                     crate::diag::bump_by(
                         &crate::diag::CHART_HISTORY_RESET_MS,
                         started.elapsed().as_millis().max(1) as u64,
@@ -974,3 +1013,6 @@ impl ChartDataState {
         self.view_dirty = false;
     }
 }
+
+#[cfg(test)]
+mod tests;
