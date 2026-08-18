@@ -59,12 +59,12 @@ pub enum HotkeyAction {
         /// Move up when true, down when false.
         up: bool,
     },
-    /// Arm the one-shot Sells-to-zone draw — Moonbot's "sells to rectangle".
+    /// Toggle the Sells-to-zone drawing mode — Moonbot's "sells to rectangle".
     ///
-    /// The key draws rather than sends: it arms the Zone tool for ONE band, whose two Ctrl+clicks
-    /// name the prices the market's sells are spread across, after which the band disappears
-    /// instead of joining the chart's figures. Pressing it again disarms it. Spreading an existing
-    /// Zone or Rect is the right-click entry on that figure, not this.
+    /// The key draws rather than sends: it arms the Zone tool, and every pair of Ctrl+clicks then
+    /// names the prices one band of sells is spread across, after which that band disappears
+    /// instead of joining the chart's figures. The mode stays on until this key, Escape, or a tool
+    /// pick ends it. Spreading an existing Zone or Rect is the right-click entry on that figure.
     SellsToRect,
     /// Split a sell order for the active chart's market into `parts`.
     ///
@@ -373,8 +373,8 @@ fn with_hovered_chart(
 ///   one the user means, the rule the built-in Tab/Delete cancellation already follows. Split needs
 ///   it; with nothing hovered it falls through to [`apply`]'s market-level split, which the core
 ///   performs only when the market has exactly one active sell order.
-/// - **Escape cancels a mode first**: while the one-shot Sells-to-zone draw is armed, Escape ends
-///   it and stops there, so the chart it was armed for is still open for a second press.
+///
+/// Escape's own rule lives in [`escape_leaves_sells_zone`], which the same callers run first.
 pub fn pre_dispatch(
     action: HotkeyAction,
     ev: &KeyDownEvent,
@@ -388,22 +388,32 @@ pub fn pre_dispatch(
         HotkeyAction::SplitOrder { parts } => with_hovered_chart(backend, cx, |panel, pcx| {
             panel.split_hovered_order(parts, pcx)
         }),
-        // Escape leaves the armed Sells-to-zone draw before it closes anything: a mode entered by a
-        // key needs a way out that is not the same key, and closing the chart the band was meant for
-        // would otherwise leave the mode armed for whatever chart is clicked next. The SECOND press
-        // closes the chart as it always did.
-        HotkeyAction::CloseActiveChart | HotkeyAction::CloseAllCharts => {
-            backend.update(cx, |b, bcx| {
-                if !b.sells_zone_armed() {
-                    return false;
-                }
-                b.disarm_sells_zone();
-                bcx.notify();
-                true
-            })
-        }
         _ => false,
     }
+}
+
+/// Let Escape leave the Sells-to-zone mode before anything else acts on it.
+///
+/// Matched on the RAW key rather than on a resolved action: the mode's own posture is Ctrl held
+/// down, and `resolve` only reads Escape as "close the chart" when no modifier is present — so
+/// Ctrl+Escape, which is what a hand still on the modifier actually presses, would otherwise reach
+/// nothing at all. A mode entered by a key needs a way out that is not the same key.
+///
+/// Consumes the press when it disarms, so the SECOND Escape closes the chart exactly as before.
+/// Every window calls this ahead of its own routing, which is why it takes the event and not an
+/// action.
+pub fn escape_leaves_sells_zone(ev: &KeyDownEvent, backend: &Entity<Backend>, cx: &mut App) -> bool {
+    if ev.keystroke.key != "escape" {
+        return false;
+    }
+    backend.update(cx, |b, bcx| {
+        if !b.sells_zone_armed() {
+            return false;
+        }
+        b.disarm_sells_zone();
+        bcx.notify();
+        true
+    })
 }
 
 /// Execute a shared backend action against the caller's trading context.
@@ -579,8 +589,8 @@ pub fn apply(
 /// market, the side and the two prices: the core selects the sells and does the spreading, and the
 /// moved orders come back through the ordinary order stream.
 ///
-/// Shared by both ways to name a band — the one-shot Ctrl+S draw, whose figure is never stored, and
-/// the right-click entry on a Zone or Rect that is. Every refusal below is logged rather than
+/// Shared by both ways to name a band — a band drawn in Ctrl+S mode, whose figure is never
+/// stored, and the right-click entry on a Zone or Rect that is. Every refusal below is logged rather than
 /// reported: nothing upstream can act on the difference, and the band is gone from the screen by
 /// the time this runs.
 pub(crate) fn sells_to_zone(b: &mut Backend, core: CoreId, market: &str, a: f64, z: f64) {
@@ -602,17 +612,19 @@ pub(crate) fn sells_to_zone(b: &mut Backend, core: CoreId, market: &str, a: f64,
         return;
     }
     let short = b.market_position_short(core, market);
-    log::info!(
-        "sells to zone: core={} market={market} zone={:.8}..{:.8} short={short}",
-        moon_core::feed::core_label(core),
-        a.min(z),
-        a.max(z),
-    );
-    if let Err(error) = b
+    // Logged AFTER the send, so the line means "this left the terminal" rather than "this was about
+    // to": in a mode that draws band after band, an overstating log is the only record anyone has.
+    match b
         .session
         .sells_to_zone(core, market.to_string(), a, z, short)
     {
-        log::warn!("sells to zone failed: {error}");
+        Ok(()) => log::info!(
+            "sells to zone: core={} market={market} zone={:.8}..{:.8} short={short}",
+            moon_core::feed::core_label(core),
+            a.min(z),
+            a.max(z),
+        ),
+        Err(error) => log::warn!("sells to zone failed: {error}"),
     }
 }
 

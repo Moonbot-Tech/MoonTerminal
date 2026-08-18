@@ -393,6 +393,12 @@ impl DetachedChartHost {
     /// are global state and always work.
     fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         use crate::hotkeys::HotkeyAction;
+        // Same first rule as the group window: Escape leaves the Sells-to-zone mode regardless of
+        // the modifier held with it.
+        if crate::hotkeys::escape_leaves_sells_zone(ev, &self.backend, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let action = {
             let b = self.backend.read(cx);
             crate::hotkeys::resolve(ev, &b.preview.as_ref().unwrap_or(&b.config).hotkeys)

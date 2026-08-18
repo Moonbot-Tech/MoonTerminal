@@ -513,11 +513,28 @@ impl MainChartStack {
         else {
             return false;
         };
+        self.disarm_sells_zone_on_user_close(cx);
         // Escape has already decided what stays active and that the remainder returns to stack
         // view; this only performs the removal.
         self.remove_chart_at(idx, cx);
         self.publish(cx);
         true
+    }
+
+    /// Leave the Sells-to-zone mode because the USER closed a chart.
+    ///
+    /// Deliberately not inside `remove_chart_at`: that teardown also runs for the inactivity TTL
+    /// and for an Auto-rail retarget, and a background timer closing some other chart must not
+    /// cancel a band the user is in the middle of drawing on this one. The mode is global and its
+    /// only marks are the crosshair badge and the tool picker, so one armed on a chart the user
+    /// just closed would otherwise land on whatever chart is opened next.
+    fn disarm_sells_zone_on_user_close(&mut self, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            if b.sells_zone_armed() {
+                b.disarm_sells_zone();
+                bcx.notify();
+            }
+        });
     }
 
     /// Remove one chart and release everything hanging off it, deciding nothing about what is
@@ -577,6 +594,7 @@ impl MainChartStack {
             .and_then(|active| self.charts.get(active))
             .map(|entry| (entry.core, entry.market.clone()));
         let fallback = self.active;
+        self.disarm_sells_zone_on_user_close(cx);
         self.remove_chart_at(idx, cx);
         let charts = &self.charts;
         self.active = remap_active_index(charts.len(), keep.as_ref(), fallback, |ix, key| {
@@ -596,6 +614,7 @@ impl MainChartStack {
         if self.charts.is_empty() {
             return false;
         }
+        self.disarm_sells_zone_on_user_close(cx);
         for entry in self.charts.drain(..) {
             entry.panel.update(cx, |p, pcx| p.close_all_panes(pcx));
         }

@@ -92,17 +92,17 @@ impl Backend {
             != Some(on)
     }
 
-    /// Whether the one-shot Sells-to-zone draw is armed.
+    /// Whether the Sells-to-zone drawing mode is armed.
     pub(crate) fn sells_zone_armed(&self) -> bool {
         self.sells_zone_arm.is_some()
     }
 
-    /// Arms the one-shot Sells-to-zone draw, or ends it when it is already armed.
+    /// Arms the Sells-to-zone drawing mode, or ends it when it is already armed.
     ///
-    /// Arming selects the Zone tool and enables drawing, so the band is placed by the ordinary
-    /// two-click figure path; the previous tool and drawing mode are remembered and put back by
-    /// [`Self::disarm_sells_zone`], whether the draw completed, was replaced by another tool, or
-    /// the key was simply pressed again.
+    /// Arming selects the Zone tool and enables drawing, so each band is placed by the ordinary
+    /// two-click figure path. It STAYS armed while band after band is drawn — spreading sells is
+    /// aiming work, and the first band is rarely the last. The previous tool and drawing mode are
+    /// remembered and put back by [`Self::disarm_sells_zone`], whichever way the mode ends.
     pub(crate) fn toggle_sells_zone_arm(&mut self) {
         if self.sells_zone_arm.is_some() {
             self.disarm_sells_zone();
@@ -113,10 +113,10 @@ impl Backend {
         self.fig_draw_mode = true;
     }
 
-    /// Ends the one-shot Sells-to-zone draw, restoring the tool and drawing mode it interrupted.
+    /// Ends the Sells-to-zone drawing mode, restoring the tool and drawing mode it interrupted.
     ///
-    /// A no-op when nothing is armed, so every place that ends the mode — the finished band, the
-    /// repeated hotkey, a tool picked from the toolbar — can call it unconditionally.
+    /// A no-op when nothing is armed, so every place that ends the mode — the repeated hotkey,
+    /// Escape, a tool picked from the toolbar — can call it unconditionally.
     pub(crate) fn disarm_sells_zone(&mut self) {
         if let Some((tool, draw_mode)) = self.sells_zone_arm.take() {
             self.fig_tool = tool;
@@ -127,8 +127,8 @@ impl Backend {
     /// Selects a drawing tool and enters drawing, as the toolbar and the per-tool hotkeys do.
     ///
     /// The single place that pair is written, so a caller cannot select a tool while leaving the
-    /// one-shot Sells-to-zone mode armed — which would hand the next band drawn to the core as a
-    /// live bulk move.
+    /// Sells-to-zone mode armed — which would hand the next band drawn to the core as a live
+    /// bulk move.
     pub(crate) fn select_fig_tool(&mut self, tool: FigureTool) {
         self.disarm_sells_zone();
         self.fig_tool = tool;

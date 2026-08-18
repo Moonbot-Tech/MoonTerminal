@@ -462,14 +462,15 @@ struct Backend {
     fig_draw_mode: bool,
     /// Selected drawing tool used by Ctrl+left-click and chosen from the settings panel.
     fig_tool: moon_core::figures::FigureTool,
-    /// Armed one-shot "sells to zone" draw — Moonbot's Sells-to-rectangle — holding the
+    /// Armed "sells to zone" drawing mode — Moonbot's Sells-to-rectangle — holding the
     /// `(fig_tool, fig_draw_mode)` to put back when it ends.
     ///
     /// While it is `Some` the Zone tool is armed like any other, so the whole drawing path is
     /// reused unchanged; the ONE difference is what the finishing click does with the result: the
     /// band goes to the core as a price zone and the figure is never stored, exactly as Moonbot's
-    /// own `CO_SysRect` is drawn and dropped. The previous tool comes back afterwards so a mode
-    /// entered for one command does not silently redefine what the next Ctrl+click draws.
+    /// own `CO_SysRect` is drawn and dropped. Band after band can be drawn that way until the mode
+    /// ends; the previous tool then comes back, so a mode entered for one job does not silently
+    /// redefine what the next Ctrl+click draws.
     sells_zone_arm: Option<(moon_core::figures::FigureTool, bool)>,
     /// Style for new figures — colour, thickness, dash pattern and fill — PER TOOL, keyed by
     /// `ToolDef::key`. A tool absent from the map has never been styled and draws in

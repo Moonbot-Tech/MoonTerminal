@@ -25,8 +25,8 @@ pub(crate) struct FigDraft {
     pub nodes: Vec<FigNode>,
     /// Current cursor position in data coordinates.
     pub cursor: FigNode,
-    /// Whether this draft was started with the one-shot Sells-to-zone mode armed, snapshotted for
-    /// the same reason the style is.
+    /// Whether this draft was started with the Sells-to-zone mode armed, snapshotted for the same
+    /// reason the style is.
     ///
     /// What the finishing click does is decided by THIS, never by the mode's current state: the
     /// mode and the tool are the same `Channel` either way, so a mode armed — or dropped —
@@ -61,15 +61,15 @@ impl FigDraft {
         }
     }
 
-    /// Marks the draft as the one-shot Sells-to-zone band, taken at the moment it starts.
+    /// Marks the draft as a Sells-to-zone band, taken at the moment it starts.
     pub(super) fn for_sells_zone(mut self, armed: bool) -> Self {
         self.sells_zone = armed;
         self
     }
 
     /// Whether the draft belongs to this pane, chart, tool and drawing mode. A click anywhere else
-    /// — another pane, another market, after switching tools, or after the one-shot Sells-to-zone
-    /// mode was armed or dropped mid-draw — abandons it.
+    /// — another pane, another market, after switching tools, or after the Sells-to-zone mode was
+    /// armed or dropped mid-draw — abandons it.
     ///
     /// `sells_zone` is the mode as it stands NOW: the tool is `Channel` on both sides of that
     /// switch, so without it a half-drawn figure would be finished as a live command, or a

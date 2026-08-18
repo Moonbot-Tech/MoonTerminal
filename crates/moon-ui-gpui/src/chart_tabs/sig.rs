@@ -27,6 +27,11 @@ pub(super) fn chart_tabs_sig(b: &Backend, group: &str) -> u64 {
     if b.switch_charts_group.as_deref() == Some(group) {
         sig = sig.wrapping_mul(31).wrapping_add(b.switch_charts_rev);
     }
+    // The Sells-to-zone mode is global and the tool picker is the one part of the UI that shows it
+    // wherever the pointer happens to be, so the strip must repaint when it is armed or dropped.
+    sig = sig
+        .wrapping_mul(31)
+        .wrapping_add(u64::from(b.sells_zone_armed()));
     // This revision is global rather than group-addressed because Shift+Esc closes every Main stack.
     sig = sig.wrapping_mul(31).wrapping_add(b.close_all_charts_rev);
     if b.close_active_chart_group.as_deref() == Some(group) {
