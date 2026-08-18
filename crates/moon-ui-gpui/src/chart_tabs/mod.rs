@@ -715,7 +715,11 @@ impl ChartTabs {
             coin_popup_open: false,
             fig_color_picker,
         };
-        this.restore_detached(cx);
+        // Read from the window being built rather than looked up later: `group_windows` is filled
+        // only after `open_window` returns, so the deferred restore below has no addressable group
+        // window and would put every restored chart on the primary display.
+        let owner_display = crate::window::windowing::window_display_id(window, cx);
+        this.restore_detached(owner_display, cx);
         this.restore_custom_tabs(cx);
         // A request can predate this group window. Consume it after the observers and child stacks
         // exist, but leave startup window/tab presentation to Shell's seeded revision cursor.

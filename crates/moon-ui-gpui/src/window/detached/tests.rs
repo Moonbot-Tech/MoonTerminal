@@ -244,7 +244,7 @@ fn detached_respawn_yields_and_revalidates_each_spec_before_opening() {
         .map(|offset| loop_start + offset)
         .expect("each yielded spec must be checked against live Backend state");
     let open = code[loop_start..]
-        .find("spawn(app, &backend, &spec, None)")
+        .find("spawn(app, &backend, &mut spec, None, None)")
         .map(|offset| loop_start + offset)
         .expect("an authorized spec must open once");
     assert!(timer < revalidate && revalidate < open);

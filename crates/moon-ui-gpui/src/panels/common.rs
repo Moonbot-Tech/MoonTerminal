@@ -356,27 +356,58 @@ pub fn detach_button(
     group: String,
     backend: Entity<Backend>,
     dock: Option<WeakEntity<DockArea>>,
+    cx: &App,
 ) -> AnyElement {
+    // Auto owns navigation through its single window and refuses detachment, so the control is not
+    // rendered there at all — a visible button that answers a click with nothing reads as a bug.
+    if !crate::workspace::should_persist_normal_dock(backend.read(cx).workspace_mode(&group)) {
+        return div().into_any_element();
+    }
     MoonButton::new(SharedString::from(format!("detach-{name}")))
         .ghost()
         .size(MoonButtonSize::Action)
         .label("⧉")
         .tooltip(rust_i18n::t!("dock.detach_hint").to_string())
         .on_click(move |_, window, app| {
+            // Refuse what the dock route refuses, for the same reasons it does: Auto owns navigation
+            // and can be entered between render and click, an unsupported panel has no detached
+            // form, and a detach finishing during teardown creates a window whose spec is never
+            // saved. All three gates lived only in `shell/docks.rs` while this button — rendered by
+            // six panels — went straight to `spawn`.
+            if !crate::workspace::should_persist_normal_dock(
+                backend.read(app).workspace_mode(&group),
+            ) || !crate::window::detached::supports_panel(name)
+                || backend.read(app).quitting
+            {
+                return;
+            }
             // Decline an already-detached panel, as the dock's own detach route does, before
             // building the spec: a second window for one `(group, panel)` takes over the handle map
-            // and orphans the first, which can then never repin.
+            // and orphans the first, which can then never repin. The user clicking a second time is
+            // asking to SEE that window, so raise it rather than doing nothing.
             if backend.read(app).is_detached(&group, name) {
+                crate::window::detached::raise_existing(&backend, &group, name, app);
                 return;
             }
-            let spec =
+            let mut spec =
                 DetachedSpec::with_saved_geom(&backend, app, group.clone(), name.to_string());
-            if let Err(err) =
-                crate::window::detached::spawn(app, &backend, &spec, Some(window.window_handle()))
-            {
-                log::warn!("detach panel failed group={} panel={name}: {err:#}", group);
-                return;
-            }
+            // Captured here for the same reason as the dock's detach route: this click handler runs
+            // inside its window's update, so `spawn` cannot resolve the owner display by itself and
+            // macOS would open the panel on the primary display.
+            let owner_display = crate::window::windowing::window_display_id(window, app);
+            let detached_window = match crate::window::detached::spawn(
+                app,
+                &backend,
+                &mut spec,
+                Some(window.window_handle()),
+                owner_display,
+            ) {
+                Ok(detached_window) => detached_window,
+                Err(err) => {
+                    log::warn!("detach panel failed group={} panel={name}: {err:#}", group);
+                    return;
+                }
+            };
             // Remove the source panel only after the detached window opens successfully.
             if let Some(dock) = dock.as_ref().and_then(|d| d.upgrade()) {
                 dock.update(app, |area, cx| {
@@ -390,6 +421,9 @@ pub fn detach_button(
                     b.detached_dirty = true;
                 }
             });
+            // Raised last, once the panel is out of the dock and its spec recorded: on macOS a
+            // window created on another display stays hidden until the next app activation.
+            crate::window::windowing::activate_new_window(detached_window.into(), app);
         })
         .render()
         .into_any_element()

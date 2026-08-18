@@ -575,3 +575,93 @@ fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
          not also suppress the wake the rest of the app runs on"
     );
 }
+
+/// A secondary window opened from inside its owner's event handler must carry the display captured
+/// at the call site, and an explicit detach must raise the window it just created.
+///
+/// Both halves are macOS defects that no Windows run can reproduce, which is exactly why they are
+/// pinned statically. `saved_or_owner_display_id`'s owner fallback CANNOT resolve from within an
+/// owner-window update — GPUI takes that window out of `cx.windows` for the duration — so a route
+/// passing `None` there silently opens on the primary display. And a window created on another
+/// display stays hidden until the next application activation, which is what made the reported
+/// double-click "do nothing" until the user opened some other window.
+///
+/// Scoped to the function bodies that own each step, because both files legitimately contain a
+/// SECOND `activate_new_window` — the branch that raises an already-detached panel — and a
+/// file-level match would stay green with the post-spawn raise deleted.
+#[test]
+fn detach_routes_capture_the_owner_display_and_raise_what_they_open() {
+    let docks = code_only(&read_src("shell/docks.rs"));
+    let panels_common = code_only(&read_src("panels/common.rs"));
+    let chart_windows = code_only(&read_src("chart_tabs/windows.rs"));
+    let chart_tabs_mod = code_only(&read_src("chart_tabs/mod.rs"));
+    let chart_strip = code_only(&read_src("chart_tabs/strip.rs"));
+
+    let panel_routes = [
+        ("dock tab", braced_body(&docks, "fn defer_detach_panel(")),
+        (
+            "panel toolbar",
+            braced_body(&panels_common, "fn detach_button("),
+        ),
+    ];
+    for (route, body) in panel_routes {
+        assert!(
+            body.contains("window_display_id(window, app)"),
+            "the {route} detach route must capture the owner display at the call site: the owner              fallback cannot resolve while that window's slot is borrowed"
+        );
+        let spawn_at = body
+            .find("detached::spawn(")
+            .expect("every detach route must open through detached::spawn");
+        // Bounded at the `match` arm's brace, not at the statement's `;`: the `Err` arm logs the
+        // group and panel, and a slice reaching that far would accept the token from the log line.
+        let spawn_args = body[spawn_at..]
+            .split_once('{')
+            .map(|(call, _)| call)
+            .unwrap_or(&body[spawn_at..]);
+        assert!(
+            spawn_args.contains("owner_display"),
+            "the {route} detach route must hand `spawn` the captured display, not a literal `None`"
+        );
+        let raise = body
+            .rfind("activate_new_window(")
+            .expect("every detach route must raise the window it opened");
+        assert!(
+            raise > spawn_at,
+            "the {route} route must raise the window AFTER opening it, not only the pre-existing one"
+        );
+    }
+    assert!(
+        chart_strip.contains("window_display_id(window, app)")
+            && chart_strip.contains("this.detach(tab_id, owner_display, cx)"),
+        "the chart tab double-click — the reported gesture — must hand its own display to detach"
+    );
+    assert!(
+        chart_tabs_mod.contains("window_display_id(window, cx)")
+            && chart_tabs_mod.contains("this.restore_detached(owner_display, cx);"),
+        "restored detached charts must receive the display of the window being built, because          `group_windows` is filled only after `open_window` returns"
+    );
+    let open_chart = braced_body(&chart_windows, "fn open_chart_window(");
+    assert!(
+        open_chart.contains("remembered.then_some(origin)"),
+        "only a remembered origin may pick a display: the first-detach cascade point lies inside          the primary display and would answer for every monitor"
+    );
+    let chart_detach = braced_body(&chart_windows, "pub(super) fn detach(");
+    assert!(
+        !open_chart.contains("activate_new_window(")
+            && chart_detach.contains("activate_new_window(window.into(), cx)")
+            && chart_detach.find("upsert_spec") < chart_detach.find("activate_new_window("),
+        "the chart window must be raised by the detach gesture AFTER its spec is recorded — never          inside the opener, which startup restoration also calls once per restored window"
+    );
+    assert!(
+        code_only(&read_src("window/detached.rs")).contains("(!spec.cascade_origin).then_some("),
+        "spawn must read the remembered-origin fact off the spec rather than re-deriving it from          a second file, which can disagree with the spec it describes"
+    );
+    assert!(
+        docks.contains("self.defer_detach_panel(panel, false, cx);"),
+        "the Backend-driven detach drain must not take the foreground: no gesture asked for it"
+    );
+    assert!(
+        braced_body(&docks, "fn defer_detach_panel(").contains("if backend.read(app).quitting {"),
+        "a detach deferred across shutdown must not create or raise a native window"
+    );
+}
