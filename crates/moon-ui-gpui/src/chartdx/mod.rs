@@ -80,9 +80,9 @@ use windows::Win32::Graphics::Direct3D11::{
 use backend::PlatformLayers;
 use pane::{Container, ContainerKind};
 use types::{
-    cover_uv, fill_candle_upload, fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4,
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, ReadoutRect,
+    GridParams, PriceStyleGpu, ReadoutRect, VolumeStyleGpu, cover_uv, fill_candle_upload,
+    fill_cross_upload, fill_liq_upload, fill_price_upload, rgb4, rgba3,
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
@@ -310,6 +310,22 @@ struct PaneRender {
     last_zone_bucket: i64,
     /// Last candle style sent to the layer, compared before `set_candle_style`.
     candle_style: CandleStyleGpu,
+    /// Last price-line style sent to the layer, compared before `set_price_style`.
+    price_style: PriceStyleGpu,
+    /// Last bottom-volume style sent to the layer, compared before `set_volume_style`.
+    volume_style: VolumeStyleGpu,
+    /// Retained per-candle volume samples for the visible-range max/average.
+    ///
+    /// A COPY on purpose: `history_buffers.candles` is cleared at the start of every read and
+    /// refilled only when the series revision moved, so during a plain pan it is empty while
+    /// the uploaded candle layer is still resident. Scaling the band from it would blank the
+    /// band on exactly the gesture that should rescale it.
+    volume_samples: Vec<moon_chart::VolumeSample>,
+    /// Visible-range volume max and average behind the band, kept as SEMANTIC values.
+    ///
+    /// The numeric labels read these rather than inverting `VolumeStyleGpu.m`, whose fields are
+    /// normalisation reciprocals and are deliberately quantized for cache stability.
+    volume_stats: Option<moon_chart::VolumeStats>,
     combo_cross_capacity: usize,
     combo_price_line_capacity: usize,
     orderbook_view: ChartViewGpu,
@@ -470,6 +486,10 @@ impl PaneRender {
             applied_candle_cfg: moon_core::market::CandleViewCfg::default(),
             last_zone_bucket: i64::MIN,
             candle_style: CandleStyleGpu::default(),
+            price_style: PriceStyleGpu::default(),
+            volume_style: VolumeStyleGpu::default(),
+            volume_samples: Vec::new(),
+            volume_stats: None,
             combo_cross_capacity: 0,
             combo_price_line_capacity: 0,
             orderbook_view: ChartViewGpu::default(),

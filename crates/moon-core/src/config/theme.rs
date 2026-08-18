@@ -44,6 +44,40 @@ pub struct ChartTheme {
     /// Candle-body fill opacity, 0..1 (outlines/wicks are drawn more opaquely).
     pub candle_fill_alpha: f32,
 
+    // --- Price lines ---
+    // Colour and width used to live as literals in the shaders (one copy per backend). They are
+    // uniforms now, so all three backends read the same numbers from here.
+    /// Last-price line colour, sRGB.
+    pub price_line: [u8; 3],
+    /// Last-price line opacity, 0..1.
+    pub price_line_alpha: f32,
+    /// Mark-price line colour, sRGB.
+    pub mark_line: [u8; 3],
+    /// Mark-price line opacity, 0..1.
+    pub mark_line_alpha: f32,
+    /// Thickness of BOTH price lines, in LOGICAL pixels. The device scale is applied once, where
+    /// the uniform is built.
+    pub price_line_px: f32,
+
+    // --- Trade / tick marks ---
+    /// Multiplier on the trade-cross marker size. 1.0 keeps the historical 7x7 "Normal Trade X";
+    /// the device pixel ratio is applied separately and is not part of this number.
+    pub marker_scale: f32,
+    /// Opacity of the per-TRADE volume bars along the plot's bottom edge, 0..1. Distinct from
+    /// [`Self::candle_volume_alpha`], which is the per-CANDLE band drawn beneath them.
+    pub trade_volume_alpha: f32,
+
+    // --- Bottom candle volumes ---
+    /// Display style: `moon_core::market::candles::VOLUME_STYLE_OFF` / `_BARS` / `_HILLS`.
+    pub candle_volume_style: u8,
+    /// Band height as a fraction of the plot height, 0..1. Capped in physical pixels by the
+    /// geometry module so the band cannot swallow a tall chart.
+    pub candle_volume_height: f32,
+    /// Bottom-volume opacity, 0..1. The band's colours come from the candle colours.
+    pub candle_volume_alpha: f32,
+    /// Colour of the volume scale's max and average reference lines, sRGB.
+    pub candle_volume_scale: [u8; 3],
+
     // --- Order book ---
     /// Order-book background BETWEEN the best bid/ask (spread gap), sRGB.
     pub book_bg: [u8; 3],
@@ -109,6 +143,24 @@ impl Default for ChartTheme {
             candle_down: [255, 142, 90],
             candle_neutral: [128, 128, 128],
             candle_fill_alpha: 0.85,
+            // The five numbers below reproduce the literals the shaders used to carry, so a fresh
+            // install renders byte-identically to the version before they became configurable:
+            // last was vec4(0.82, 0.60, 0.36, 0.82), mark was vec4(0.42, 0.72, 1.00, 0.78), and
+            // the line half-width was a fixed 0.85 px (hence 1.7 full width).
+            price_line: [209, 153, 92],
+            price_line_alpha: 0.82,
+            mark_line: [107, 184, 255],
+            mark_line_alpha: 0.78,
+            price_line_px: 1.7,
+            marker_scale: 1.0,
+            // Was the compile-time DEFAULT_VOLUME_ALPHA in chartdx.
+            trade_volume_alpha: 0.34,
+            candle_volume_style: crate::market::candles::VOLUME_STYLE_HILLS,
+            // 0.18 is the fraction the per-trade band has always used; the two bands share it so
+            // they line up.
+            candle_volume_height: 0.18,
+            candle_volume_alpha: 0.30,
+            candle_volume_scale: [110, 110, 110],
             book_bg: [30, 30, 30],
             // The two halves of the order book are lightly tinted by side; the spread gap
             // between the best bid/ask remains the neutral book_bg.
@@ -153,6 +205,17 @@ impl ChartTheme {
         self.candle_down = [255, 0, 0];
         self.candle_neutral = [150, 150, 150];
         self.candle_fill_alpha = 0.85;
+        // Only the colours are overridden: the dark tan and light blue both wash out on white.
+        // The sizes and opacities read the same in either mode, so they are deliberately absent.
+        //
+        // Caveat, and it predates these fields: this runs only from `default_light`, so a user
+        // whose `theme.toml` already has a `[light]` table gets the DARK value for any key that
+        // table does not mention (serde fills a missing key from `ChartTheme::default`). Deleting
+        // `theme.toml` or the `[light]` table restores these.
+        self.price_line = [166, 110, 46];
+        self.mark_line = [26, 115, 190];
+        self.candle_volume_alpha = 0.22;
+        self.candle_volume_scale = [170, 170, 170];
         self.book_bg = [255, 255, 255];
         self.book_bg_ask = [255, 244, 242];
         self.book_bg_bid = [243, 250, 242];
@@ -196,11 +259,7 @@ impl Default for ChartThemeSet {
 impl ChartThemeSet {
     /// Set for the active mode: `light=true` → light, otherwise dark.
     pub fn get(&self, light: bool) -> &ChartTheme {
-        if light {
-            &self.light
-        } else {
-            &self.dark
-        }
+        if light { &self.light } else { &self.dark }
     }
     pub fn get_mut(&mut self, light: bool) -> &mut ChartTheme {
         if light {

@@ -55,6 +55,16 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
             storage_entry(1),
         ],
     });
+    // Price lines take their own layout so the shared `view_storage_layout` keeps exactly two
+    // entries for its six other consumers.
+    let price_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("moon_chart_price_layout"),
+        entries: &[
+            uniform_entry(0, std::mem::size_of::<ChartViewGpu>()),
+            storage_entry(1),
+            uniform_entry(2, std::mem::size_of::<PriceStyleGpu>()),
+        ],
+    });
     let book_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("moon_chart_book_layout"),
         entries: &[
@@ -69,6 +79,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
             uniform_entry(0, std::mem::size_of::<ChartViewGpu>()),
             uniform_entry(1, std::mem::size_of::<CandleStyleGpu>()),
             storage_entry(2),
+            uniform_entry(3, std::mem::size_of::<VolumeStyleGpu>()),
         ],
     });
     let background = pipeline(
@@ -132,7 +143,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         device,
         format,
         &price_shader,
-        &view_storage_layout,
+        &price_layout,
         "price_line_vertex",
         "price_last_fragment",
     );
@@ -140,9 +151,27 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         device,
         format,
         &price_shader,
-        &view_storage_layout,
+        &price_layout,
         "price_line_vertex",
         "price_mark_fragment",
+    );
+    // Both volume pipelines share the candle layout and the candle instance buffer: the band
+    // is a second view of the same data, not a second dataset.
+    let volume_bars = pipeline(
+        device,
+        format,
+        &candles_shader,
+        &candle_layout,
+        "volume_bars_vertex",
+        "volume_bars_fragment",
+    );
+    let volume_scale = pipeline(
+        device,
+        format,
+        &candles_shader,
+        &candle_layout,
+        "volume_scale_vertex",
+        "volume_scale_fragment",
     );
     let book_bg = opaque_pipeline(
         device,
@@ -218,6 +247,7 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         cursor_layout,
         readout_layout,
         view_storage_layout,
+        price_layout,
         book_layout,
         candle_layout,
         background,
@@ -232,6 +262,8 @@ pub(super) fn create_pipelines(device: &wgpu::Device, format: wgpu::TextureForma
         book_bg,
         book_bars,
         candles,
+        volume_bars,
+        volume_scale,
         zone,
         hline,
         seg,

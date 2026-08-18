@@ -18,7 +18,7 @@ use std::ffi::c_void;
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu,
+    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, VolumeStyleGpu, ZoneGpu,
     append_cross_ring, cross_volume_max, evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring,
     ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
@@ -143,6 +143,8 @@ struct Pipelines {
     cursor: RenderPipelineState,
     readout_rect: RenderPipelineState,
     candles: RenderPipelineState,
+    volume_bars: RenderPipelineState,
+    volume_scale: RenderPipelineState,
     crosses: RenderPipelineState,
     volume: RenderPipelineState,
     price_last: RenderPipelineState,
@@ -182,6 +184,12 @@ struct ComboTexture {
     last_price_to_px: f32,
     last_view_price0: f32,
     last_marker_half: f32,
+    /// Trade-volume opacity the texture was baked with.
+    ///
+    /// Part of the cache key because the bars are baked INTO the texture. It was a
+    /// compile-time constant until the theme gained `trade_volume_alpha`, which is why the
+    /// other four fields were once a complete key and no longer are.
+    last_volume_alpha: f32,
     valid: bool,
 }
 
@@ -311,6 +319,10 @@ pub struct MetalLayers {
     cross_buffer: BufferSlot,
     last_line_buffer: BufferSlot,
     mark_line_buffer: BufferSlot,
+    price_style_uniform: BufferSlot,
+    price_style: PriceStyleGpu,
+    volume_style_uniform: BufferSlot,
+    volume_style: VolumeStyleGpu,
     level_buffer: BufferSlot,
     zone_buffer: BufferSlot,
     hline_buffer: BufferSlot,
@@ -361,6 +373,10 @@ impl MetalLayers {
             cross_buffer: BufferSlot::default(),
             last_line_buffer: BufferSlot::default(),
             mark_line_buffer: BufferSlot::default(),
+            price_style_uniform: BufferSlot::default(),
+            price_style: PriceStyleGpu::default(),
+            volume_style_uniform: BufferSlot::default(),
+            volume_style: VolumeStyleGpu::default(),
             level_buffer: BufferSlot::default(),
             zone_buffer: BufferSlot::default(),
             hline_buffer: BufferSlot::default(),
@@ -496,6 +512,25 @@ impl MetalLayers {
         self.combo_dirty_ranges.clear();
     }
 
+    /// Idempotently sets the bottom-volume band style.
+    pub fn set_volume_style(&mut self, style: VolumeStyleGpu) {
+        if self.volume_style != style {
+            self.volume_style = style;
+            self.candle_buffers_dirty = true;
+            // The band is drawn in the BASE pass, so a style change with no cache
+            // invalidation would not appear until something else forced a rebake.
+            self.base_cache.valid = false;
+        }
+    }
+
+    /// Idempotently sets the price-line colours and half-width.
+    pub fn set_price_style(&mut self, style: PriceStyleGpu) {
+        if self.price_style != style {
+            self.price_style = style;
+            self.price_line_buffers_dirty = true;
+        }
+    }
+
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
         self.last_line = tail_vec(last, self.price_line_capacity);
         self.mark_line = tail_vec(mark, self.price_line_capacity);
@@ -543,6 +578,8 @@ impl MetalLayers {
         self.cross_buffer = BufferSlot::default();
         self.last_line_buffer = BufferSlot::default();
         self.mark_line_buffer = BufferSlot::default();
+        self.price_style_uniform = BufferSlot::default();
+        self.volume_style_uniform = BufferSlot::default();
         self.level_buffer = BufferSlot::default();
         self.zone_buffer = BufferSlot::default();
         self.hline_buffer = BufferSlot::default();
@@ -632,6 +669,21 @@ impl MetalLayers {
             set_uniform(encoder, 0, self.view_uniform.buffer());
             set_uniform(encoder, 1, self.candle_style_uniform.buffer());
             set_storage(encoder, 2, self.candle_buffer.buffer());
+            set_uniform(encoder, 3, self.volume_style_uniform.buffer());
+            // The band and its scale draw BEFORE the bodies so the candles sit on top.
+            if self.volume_style.m[0] >= 0.5 {
+                crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
+                // Hills read `candles[iid + 1]`, so they take one instance fewer.
+                let bars = if self.volume_style.m[0] >= 1.5 {
+                    self.candles.len().saturating_sub(1)
+                } else {
+                    self.candles.len()
+                };
+                if bars > 0 {
+                    draw(encoder, &pipelines.volume_bars, 6, bars as u64);
+                }
+                draw(encoder, &pipelines.volume_scale, 6, 2);
+            }
             draw(encoder, &pipelines.candles, 18, self.candles.len() as u64);
         }
 
@@ -705,6 +757,7 @@ impl MetalLayers {
                 last_price_to_px: 0.0,
                 last_view_price0: 0.0,
                 last_marker_half: 0.0,
+                last_volume_alpha: f32::NAN,
                 valid: false,
             });
         }
@@ -737,6 +790,7 @@ impl MetalLayers {
                 || tex.last_price_to_px != view.price_to_px
                 || tex.last_view_price0 != view.view_price0
                 || tex.last_marker_half != view.marker_half
+                || tex.last_volume_alpha != view.volume_alpha
             {
                 tex.valid = false;
             }
@@ -764,7 +818,7 @@ impl MetalLayers {
             pad: 0.0,
             volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
             volume_sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
-            volume_alpha: DEFAULT_VOLUME_ALPHA,
+            volume_alpha: view.volume_alpha,
             _pad2: 0.0,
         };
 
@@ -801,6 +855,7 @@ impl MetalLayers {
             tex.last_price_to_px = view.price_to_px;
             tex.last_view_price0 = view.view_price0;
             tex.last_marker_half = view.marker_half;
+            tex.last_volume_alpha = view.volume_alpha;
             tex.valid = true;
             self.combo_dirty_ranges.clear();
             crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
@@ -862,6 +917,7 @@ impl MetalLayers {
     fn draw_price_lines_layer(&self, encoder: &RenderCommandEncoderRef) {
         let pipelines = self.pipelines.as_ref().unwrap();
         set_uniform(encoder, 0, self.view_uniform.buffer());
+        set_uniform(encoder, 2, self.price_style_uniform.buffer());
         if self.last_line.len() > 1 {
             crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
             set_storage(encoder, 1, self.last_line_buffer.buffer());
@@ -1055,7 +1111,6 @@ impl MetalLayers {
         let mut view = *view;
         view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
         view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
         self.bg_uniform
             .write(device, "moon_chart_bg_uniform", &[*background_params]);
         self.grid_uniform
@@ -1100,11 +1155,14 @@ impl MetalLayers {
         if self.price_line_buffers_dirty
             || self.last_line_buffer.buffer.is_none()
             || self.mark_line_buffer.buffer.is_none()
+            || self.price_style_uniform.buffer.is_none()
         {
             self.last_line_buffer
                 .write(device, "moon_chart_last_line", &self.last_line);
             self.mark_line_buffer
                 .write(device, "moon_chart_mark_line", &self.mark_line);
+            self.price_style_uniform
+                .write(device, "moon_chart_price_style", &[self.price_style]);
             self.price_line_buffers_dirty = false;
         }
         if self.book_buffer_dirty || self.level_buffer.buffer.is_none() {
@@ -1130,6 +1188,7 @@ impl MetalLayers {
         if self.candle_buffers_dirty
             || self.candle_buffer.buffer.is_none()
             || self.candle_style_uniform.buffer.is_none()
+            || self.volume_style_uniform.buffer.is_none()
         {
             self.candle_buffer
                 .write(device, "moon_chart_candles", &self.candles);
@@ -1137,6 +1196,11 @@ impl MetalLayers {
                 device,
                 "moon_chart_candle_style",
                 &[self.candle_style],
+            );
+            self.volume_style_uniform.write(
+                device,
+                "moon_chart_volume_style",
+                &[self.volume_style],
             );
             self.candle_buffers_dirty = false;
         }
@@ -1155,7 +1219,6 @@ impl MetalLayers {
         let mut view = *view;
         view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
         view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
         self.bg_uniform
             .write(device, "moon_chart_bg_uniform", &[*background_params]);
         self.grid_uniform
@@ -1357,6 +1420,20 @@ fn create_pipelines(device: &DeviceRef, pixel_format: MTLPixelFormat) -> Pipelin
             pixel_format,
             "candles_vertex",
             "candles_fragment",
+        ),
+        volume_bars: pipeline(
+            device,
+            &library,
+            pixel_format,
+            "volume_bars_vertex",
+            "volume_bars_fragment",
+        ),
+        volume_scale: pipeline(
+            device,
+            &library,
+            pixel_format,
+            "volume_scale_vertex",
+            "volume_scale_fragment",
         ),
         crosses: pipeline(
             device,

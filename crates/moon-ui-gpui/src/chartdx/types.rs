@@ -6,9 +6,6 @@ use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance
 use moon_core::data::PriceLinePoint;
 use moon_core::feed::{PricePoint, Side, Tick};
 
-/// Shared default volume opacity for all native backends.
-pub const DEFAULT_VOLUME_ALPHA: f32 = 0.34;
-
 /// Convert sRGB `[u8; 3]` to `[f32; 4]` with alpha one for cbuffer colors converted to linear by shaders.
 pub fn rgb4(c: [u8; 3]) -> [f32; 4] {
     [
@@ -17,6 +14,16 @@ pub fn rgb4(c: [u8; 3]) -> [f32; 4] {
         c[2] as f32 / 255.0,
         1.0,
     ]
+}
+
+/// Convert sRGB `[u8; 3]` plus an opacity to `[f32; 4]`, clamping the alpha into 0..1.
+///
+/// Lives beside [`rgb4`] rather than in one consumer: it is the same conversion with the alpha
+/// channel filled, and two callers in different modules had no shared home for it.
+pub fn rgba3(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
+    let mut out = rgb4(rgb);
+    out[3] = alpha.clamp(0.0, 1.0);
+    out
 }
 
 /// Convert a packed `0xRRGGBB` palette token to the chart layers' sRGB channels.
@@ -97,6 +104,23 @@ pub struct CandleGpu {
     pub tf_rel: f32,
 }
 
+/// Price-line style constants: cbuffer `PriceStyle` at b1 in crosses.hlsl,
+/// `@group(0) @binding(2)` in native_price.wgsl, and `[[buffer(2)]]` in chart_native.metal.
+///
+/// Every member is a `[f32; 4]` on purpose. A bare `f32` or `[f32; 2]` is exactly where HLSL's
+/// 16-byte straddle rule, WGSL's vec4 alignment and MSL's C rules stop agreeing, and nothing in
+/// this repository compiles a shader, so that disagreement would be silent.
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PriceStyleGpu {
+    /// Last-price line, rgb + alpha.
+    pub last: [f32; 4],
+    /// Mark-price line, rgb + alpha.
+    pub mark: [f32; 4],
+    /// `x` is the line HALF-width in physical pixels; the rest is padding to 16 bytes.
+    pub m: [f32; 4],
+}
+
 /// Candle-layer style constants matching cbuffer `CandleStyle` at b1 in candles.hlsl.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -119,6 +143,27 @@ pub struct CandleStyleGpu {
     ///
     /// Candles with `t_open` at or beyond this boundary do not render, leaving only trades.
     pub hide_start_rel: f32,
+}
+
+/// Bottom candle-volume style: cbuffer `VolumeStyle` at b2 in candles.hlsl,
+/// `@group(0) @binding(3)` in native_candles.wgsl, and `[[buffer(3)]]` in chart_native.metal.
+///
+/// All-`[f32; 4]` for the same packing reason as [`PriceStyleGpu`].
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct VolumeStyleGpu {
+    /// Rising-bucket colour, rgb + the band opacity.
+    pub up: [f32; 4],
+    /// Falling-bucket colour, rgb + the band opacity.
+    pub down: [f32; 4],
+    /// Max/average reference-line colour, rgb + alpha.
+    pub scale: [f32; 4],
+    /// `x` style (0 off, 1 bars, 2 hills) - `y` band height as a fraction of the plot -
+    /// `z` 1/visible_max, quantized - `w` visible average over visible max, 0..1.
+    pub m: [f32; 4],
+    /// `x` band height cap in physical px - `y` max bar width in physical px -
+    /// `z` reference-line thickness in physical px - `w` unused.
+    pub m2: [f32; 4],
 }
 
 /// Fill the candle GPU buffer from a series, converting time relative to the epoch.

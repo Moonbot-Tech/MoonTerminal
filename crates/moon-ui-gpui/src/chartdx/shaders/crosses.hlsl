@@ -25,6 +25,15 @@ struct Cross {
     float qty;
 };
 
+// Price-line appearance. b1 is free in this file: only ChartView occupies b0, and FXC strips a
+// cbuffer no entry point references, so the crosses and volume PSOs do not acquire a b1
+// requirement from this declaration.
+cbuffer PriceStyle : register(b1) {
+    float4 ps_last; // last-price line rgb + alpha
+    float4 ps_mark; // mark-price line rgb + alpha
+    float4 ps_m;    // x = line half-width in physical px
+};
+
 StructuredBuffer<Cross> crosses : register(t1);
 
 Cross combo_cross(uint iid) {
@@ -161,7 +170,7 @@ PriceLineOut price_line_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;
-    float2 nrm = float2(-dir.y, dir.x) * 0.85;
+    float2 nrm = float2(-dir.y, dir.x) * max(ps_m.x, 0.25);
     float along[6] = { 0, 1, 1, 0, 1, 0 };
     float side[6]  = { -1, -1, 1, -1, 1, 1 };
     float2 px = lerp(a, b, along[vid]) + nrm * side[vid];
@@ -174,9 +183,9 @@ PriceLineOut price_line_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
 }
 
 float4 price_last_fragment(PriceLineOut i) : SV_Target {
-    return float4(0.82, 0.60, 0.36, 0.82);
+    return ps_last;
 }
 
 float4 price_mark_fragment(PriceLineOut i) : SV_Target {
-    return float4(0.42, 0.72, 1.00, 0.78);
+    return ps_mark;
 }

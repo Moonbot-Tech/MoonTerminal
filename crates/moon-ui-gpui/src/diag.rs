@@ -84,6 +84,10 @@ diag_counters!(
     // inexpensive because the instance buffer contains only hundreds of rows.
     CHART_CANDLE_DRAW => "candle_draw",
     CHART_CANDLE_UPLOAD_LEN => "candle_upload_len",
+    // The bottom volume band is a SECOND draw on the candle layer with its own on/off switch,
+    // so it gets its own counter: folded into `candle_draw` a disabled band would be
+    // indistinguishable from an enabled one and the reuse comparison would say nothing.
+    CHART_CANDLE_VOLUME_DRAW => "candle_volume_draw",
     CHART_HISTORY_RESET_ROWS => "history_reset_rows",
     CHART_HISTORY_RESET_MS => "history_reset_ms",
     // Microseconds per second inside `read_chart_history_into`, over EVERY call — the reset pair

@@ -7,7 +7,7 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    GridParams, ReadoutRect,
+    GridParams, PriceStyleGpu, ReadoutRect, VolumeStyleGpu,
 };
 
 #[cfg(target_os = "macos")]
@@ -153,6 +153,34 @@ impl PlatformLayers {
         self.wgpu.set_candle_style(style);
         #[cfg(target_os = "macos")]
         self.metal.set_candle_style(style);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = style;
+        }
+    }
+
+    /// Idempotently sets the bottom-volume band style, height, opacity and normalisation.
+    pub fn set_volume_style(&mut self, style: VolumeStyleGpu) {
+        #[cfg(windows)]
+        self.candles.set_volume_style(style);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_volume_style(style);
+        #[cfg(target_os = "macos")]
+        self.metal.set_volume_style(style);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = style;
+        }
+    }
+
+    /// Idempotently sets the last/mark price-line colours and thickness.
+    pub fn set_price_style(&mut self, style: PriceStyleGpu) {
+        #[cfg(windows)]
+        self.combo.set_price_style(style);
+        #[cfg(target_os = "linux")]
+        self.wgpu.set_price_style(style);
+        #[cfg(target_os = "macos")]
+        self.metal.set_price_style(style);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = style;

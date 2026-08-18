@@ -35,12 +35,6 @@ fn hex3(rgb: [u8; 3]) -> u32 {
     ((rgb[0] as u32) << 16) | ((rgb[1] as u32) << 8) | rgb[2] as u32
 }
 
-fn rgba3(rgb: [u8; 3], alpha: f32) -> [f32; 4] {
-    let mut out = rgb4(rgb);
-    out[3] = alpha.clamp(0.0, 1.0);
-    out
-}
-
 fn initial_palette_from_theme(theme: &ChartTheme) -> moon_ui::MoonPalette {
     let base = moon_ui::MoonPalette::default();
     let panel = hex3(theme.panel_bg);
