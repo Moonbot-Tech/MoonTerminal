@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use moon_core::config::{AppConfig, CoreSortMode};
+use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
@@ -35,6 +36,53 @@ impl IntoIterator for OrderedCores {
     }
 }
 
+/// Which exchange section one core belongs to.
+///
+/// The value a caller RETAINS when it has to remember a section across frames — a filter selection,
+/// a chosen source — because it borrows nothing: current sections derive from the live venue map,
+/// and a `&CoreVenue` cannot outlive that. Identity alone is enough to name the bucket, and
+/// [`venue_id_label`] can caption it after every member has disconnected.
+///
+/// [`venue_id_label`]: crate::controls::venue_id_label
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ExchangeSection {
+    /// Every core no venue could be named for, which share one section.
+    Unidentified,
+    /// One identified venue, keyed exactly as [`exchange_sections`] groups on.
+    Venue(ExchangeId),
+}
+
+/// Return the section a core's venue belongs to.
+///
+/// THE bucketing rule, so a filter and the headings it filters cannot drift apart: both ask this
+/// function rather than each re-deciding what "unidentified" means.
+///
+/// Args:
+///     venue: What the core reported it is connected to, or `None` before that arrives.
+///
+/// Returns:
+///     The core's section.
+pub(crate) fn section_of(venue: Option<&CoreVenue>) -> ExchangeSection {
+    match nameable(venue) {
+        Some(venue) => ExchangeSection::Venue(venue.id),
+        None => ExchangeSection::Unidentified,
+    }
+}
+
+/// Keep a venue only while something can put a name on it.
+///
+/// A core whose venue nothing can name belongs in the unidentified group, not in a section of its
+/// own captioned with that same wording.
+///
+/// Args:
+///     venue: What the core reported it is connected to, or `None` before that arrives.
+///
+/// Returns:
+///     The venue when it is nameable, else `None`.
+fn nameable(venue: Option<&CoreVenue>) -> Option<&CoreVenue> {
+    venue.filter(|venue| venue.is_nameable())
+}
+
 /// Partition ordered rows into unknown-first exchange sections ordered by brand.
 ///
 /// Callers decide membership and row order before invoking this helper; the returned member indices
@@ -60,9 +108,9 @@ pub(crate) fn exchange_sections<'a>(
     // the key is a `Copy` pair of integers and there are at most a dozen sections.
     let mut known: Vec<(&CoreVenue, Vec<usize>)> = Vec::new();
     for (index, venue) in rows {
-        // A core whose venue nothing can name belongs in the unidentified group, not in a section
-        // of its own captioned with that same wording.
-        let Some(venue) = venue.filter(|venue| venue.is_nameable()) else {
+        // Through the shared predicate, so this partition and [`section_of`] cannot disagree about
+        // which cores belong to the unidentified group.
+        let Some(venue) = nameable(venue) else {
             unknown.push(index);
             continue;
         };

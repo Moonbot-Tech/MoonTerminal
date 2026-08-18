@@ -124,8 +124,9 @@ pub(crate) struct MoonTreeBuild {
 /// Builds the visible MoonTree forest and row data without exposing store borrows.
 ///
 /// Collapsed cores contribute only their root row and totals; open cores are each scanned once for
-/// visible rows and folder counts. The resolved display preference either wraps nonempty cores in
-/// canonical exchange sections or emits those same core roots directly.
+/// visible rows and folder counts. The exchange filter excludes whole sections or cores before
+/// row-level filtering; the display preference then wraps the retained nonempty cores in canonical
+/// exchange sections or emits those same core roots directly.
 ///
 /// Args:
 ///     view: Strategies state providing filters, expansion, and selection.
@@ -156,6 +157,12 @@ pub(crate) fn build(
                 .map(|(index, (core, _))| (index, venues.get(core))),
         );
         for (venue, members) in sections {
+            // Skipped whole, heading included: a section the exchange filter excludes has nothing
+            // left to caption. Asked through the filter's own predicate, which resolves the section
+            // exactly as `exchange_sections` did when it put these members here.
+            if !view.filter.core_matches(venue) {
+                continue;
+            }
             let mut section_children = Vec::new();
             for member in members {
                 let (core, core_name) = &cores[member];
@@ -193,6 +200,12 @@ pub(crate) fn build(
         }
     } else {
         for (core, core_name) in cores.iter() {
+            // The same exclusion one core at a time: ungrouped mode draws no headings, so the
+            // filter has to be applied per core rather than per section. Both branches ask the
+            // SAME predicate, so grouping cannot change which cores a selection keeps.
+            if !view.filter.core_matches(venues.get(core)) {
+                continue;
+            }
             if let Some(root) = build_core_root(
                 view,
                 store,

@@ -16,6 +16,11 @@
 //!     opening or closing spends one rebuild it did not need. Bounded by data events rather than by
 //!     frames — the distinction this module is about — so it is left alone rather than given a
 //!     fourth digest to keep in step.
+//!   * the exchange list takes that same store half — which already carries `venues_digest`, so a
+//!     venue appearing, vanishing or being recaptioned moves the key by construction — PLUS the
+//!     active locale, which that half does not cover for a core whose venue has not arrived. It
+//!     inherits the same documented overshoot as the kinds list, and is retained for a different
+//!     reason: its captions are freshly allocated `String`s, not a whole-account walk.
 //!   * the Start/Stop plan reads the store, the staged checkboxes and the workspace generation, and
 //!     nothing else. Staging comes from [`TreeSig::staged`] rather than the view half: that half
 //!     also hashes the search text, and a plan the search box cannot change must not be rebuilt on
@@ -43,10 +48,15 @@ const FOOTER_LABEL_WEIGHT: f32 = 400.0;
 /// Strategy kinds present across the visible cores, as `(ordinal, name)` in display order.
 pub(in crate::strategies) type KindList = Rc<Vec<(u8, String)>>;
 
+/// Exchange sections present across the visible cores, as `(section, caption)` in section order.
+pub(in crate::strategies) type ExchangeList = Rc<Vec<(crate::core_order::ExchangeSection, String)>>;
+
 /// What the left pane needs each frame that costs a whole-account walk or a font measurement.
 pub(in crate::strategies) struct LeftPaneFrame {
     /// Strategy kinds present across the visible cores, for the kind filter.
     pub(super) kinds: KindList,
+    /// Exchange sections present across the visible cores, for the exchange filter.
+    pub(super) exchanges: ExchangeList,
     /// Exact Start/Stop payload the footer buttons capture.
     pub(super) plan: Arc<StartStopPlan>,
     /// Summed glyph width of the footer's localized labels, including the staged count.
@@ -82,6 +92,7 @@ struct LabelKey {
 #[derive(Default)]
 pub(in crate::strategies) struct PaneCache {
     kinds: Option<(u64, KindList)>,
+    exchanges: Option<(u64, SharedString, ExchangeList)>,
     plan: Option<(PlanKey, Arc<StartStopPlan>)>,
     labels: Option<(LabelKey, f32)>,
 }
@@ -92,10 +103,10 @@ impl StrategiesView {
     /// Args:
     ///     sig: Tree signature already computed for this frame by the adapter cache.
     ///     cores: Visible cores in canonical order.
-    ///     cx: Application context used to read the store, the workspace generation and typography.
+    ///     cx: Application context used to read the store, venue map, workspace generation, and typography.
     ///
     /// Returns:
-    ///     Shared handles to the kinds list and Start/Stop plan plus the footer label width.
+    ///     Shared handles to the kind and exchange lists, Start/Stop plan, and footer label width.
     pub(in crate::strategies) fn left_pane_frame(
         &mut self,
         sig: TreeSig,
@@ -106,6 +117,7 @@ impl StrategiesView {
         let staged = staged_count(self);
         LeftPaneFrame {
             kinds: self.pane_kinds(sig.store, cores, cx),
+            exchanges: self.pane_exchanges(sig.store, cores, cx),
             plan: self.pane_plan(sig, cores, cx),
             footer_label_width: self.pane_footer_label_width(staged, cx),
             staged,
@@ -127,6 +139,57 @@ impl StrategiesView {
         crate::diag::bump(&crate::diag::STRAT_PANE_BUILD);
         let built = Rc::new(kinds_present(cores, self.backend.read(cx).session.store()));
         self.pane_cache.kinds = Some((store_sig, Rc::clone(&built)));
+        built
+    }
+
+    /// Exchange sections across the visible cores, rebuilt when the store or the language moved.
+    ///
+    /// Retained for the ALLOCATION rather than the walk: the walk is a dozen cores against a
+    /// dozen sections, but every caption is a fresh `String` from `venue_section_label`, and this
+    /// row is rebuilt on every hover repaint — the one path this module exists to keep empty.
+    ///
+    /// The locale is part of the key and cannot be dropped as redundant. `venues_digest` folds a
+    /// venue's CAPTION into the store half, so an identified section does invalidate itself on a
+    /// language switch — but a core whose venue has not arrived contributes a bare presence byte
+    /// and no caption at all, while still producing an unidentified entry whose caption comes from
+    /// the dictionary. A language switch reaches this window as a plain repaint that moves nothing
+    /// else here, so without this the combo would keep the retired language while the tree heading
+    /// it filters to had already switched.
+    ///
+    /// Args:
+    ///     store_sig: Store half of the tree signature, which already carries `venues_digest`.
+    ///     cores: Visible cores in canonical order.
+    ///     cx: Application context used to read the session's venue map.
+    ///
+    /// Returns:
+    ///     Shared list of `(section, caption)` in canonical section order.
+    fn pane_exchanges(
+        &mut self,
+        store_sig: u64,
+        cores: &crate::core_order::OrderedCores,
+        cx: &App,
+    ) -> ExchangeList {
+        let locale = rust_i18n::locale();
+        let locale: &str = &locale;
+        // Compared field by field like the footer widths below, and for the same reason: owning
+        // the locale means allocating it, and doing that on a HIT is the per-frame allocation this
+        // module exists to avoid.
+        if let Some((key, cached_locale, exchanges)) = &self.pane_cache.exchanges
+            && *key == store_sig
+            && cached_locale.as_ref() == locale
+        {
+            return Rc::clone(exchanges);
+        }
+        crate::diag::bump(&crate::diag::STRAT_PANE_BUILD);
+        let built = Rc::new(exchanges_present(
+            cores,
+            self.backend.read(cx).session.core_venues(),
+        ));
+        self.pane_cache.exchanges = Some((
+            store_sig,
+            SharedString::from(locale.to_string()),
+            Rc::clone(&built),
+        ));
         built
     }
 
@@ -209,6 +272,40 @@ fn kinds_present(cores: &[(CoreId, String)], store: &CoreStore) -> Vec<(u8, Stri
     let mut v: Vec<(u8, String)> = map.into_iter().collect();
     v.sort_by_key(|(_, name)| name.to_lowercase());
     v
+}
+
+/// Return the exchange sections present across `cores`, in canonical section order.
+///
+/// Built through `core_order::exchange_sections` and `venue_section_label` — the very helper and
+/// the very label function the tree's headings use — so a combo entry and the heading it filters to
+/// cannot spell the same venue two ways or disagree about which cores are unidentified. The
+/// unidentified entry appears only when such a core exists, because that partition drops an empty
+/// leading bucket.
+///
+/// Args:
+///     cores: Visible cores in canonical order.
+///     venues: Session-owned venue identities keyed by core.
+///
+/// Returns:
+///     `(section, caption)` per section, unidentified first and then by brand.
+fn exchanges_present(
+    cores: &[(CoreId, String)],
+    venues: &std::collections::HashMap<CoreId, moon_core::venue::CoreVenue>,
+) -> Vec<(crate::core_order::ExchangeSection, String)> {
+    crate::core_order::exchange_sections(
+        cores
+            .iter()
+            .enumerate()
+            .map(|(index, (core, _))| (index, venues.get(core))),
+    )
+    .into_iter()
+    .map(|(venue, _)| {
+        (
+            crate::core_order::section_of(venue),
+            crate::controls::venue_section_label(venue),
+        )
+    })
+    .collect()
 }
 
 /// Measure one full set of footer labels at the size and weight they are rendered with.

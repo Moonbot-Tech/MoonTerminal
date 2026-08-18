@@ -4,8 +4,16 @@
 //! [`StrategyFilter`] stores the editable filter state, while [`PreparedFilter`] holds the lowered
 //! search query used by per-row predicates. The tree prepares once per frame so query normalization
 //! is independent of the number of strategies; row names are lowered only while search is active.
+//!
+//! One dimension is deliberately absent from [`PreparedFilter`]: the exchange. It selects whole
+//! CORES rather than rows, and a [`StrategyRow`] carries no venue to test — so `tree::moon::build`
+//! evaluates it once per core against the session's venue map, and every row-level predicate here
+//! stays a pure function of the row.
 
 use moon_core::feed::StrategyRow;
+use moon_core::venue::CoreVenue;
+
+use crate::core_order::{ExchangeSection, section_of};
 
 /// Editable strategy-filter state retained by the Strategies window.
 #[derive(Default)]
@@ -16,15 +24,38 @@ pub struct StrategyFilter {
     pub kind: Option<u8>,
     /// Direction filter: `None` for both, `Some(true)` for short, and `Some(false)` for long.
     pub dir: Option<bool>,
+    /// Exchange section whose cores are shown, or `None` for every exchange.
+    ///
+    /// Held as an owned identity rather than a borrowed venue: current sections derive from the
+    /// live venue map, so a selection that outlives one core's connection must borrow nothing.
+    /// Evaluated by `tree::moon::build`, never by [`PreparedFilter`].
+    pub exchange: Option<ExchangeSection>,
     /// Whether unchecked live strategies are hidden from the tree.
     pub active_only: bool,
 }
 
 impl StrategyFilter {
+    /// Return whether one core's exchange passes the filter.
+    ///
+    /// The exchange dimension's ONE predicate, so the tree's two build branches and the reveal path
+    /// cannot each spell it differently — three call sites comparing an `Option<ExchangeSection>` by
+    /// hand is three places for the meaning of "this core is filtered out" to drift.
+    ///
+    /// Args:
+    ///     venue: What the core reported it is connected to, or `None` before that arrives.
+    ///
+    /// Returns:
+    ///     `true` when no exchange is selected, or when this core belongs to the selected section.
+    pub fn core_matches(&self, venue: Option<&CoreVenue>) -> bool {
+        self.exchange
+            .is_none_or(|selected| selected == section_of(venue))
+    }
+
     /// Lower the search text once, so the per-row predicate does not redo it for every row.
     ///
     /// Returns:
-    ///     A prepared predicate carrying every resolved filter dimension.
+    ///     A prepared predicate carrying every ROW-level filter dimension. The exchange is not one
+    ///     of them — see the module docs.
     pub fn prepare(&self) -> PreparedFilter {
         let query = self.search.trim();
         PreparedFilter {
@@ -43,7 +74,9 @@ impl StrategyFilter {
     ///     row: Live strategy row to evaluate.
     ///
     /// Returns:
-    ///     `true` when the row passes search, kind, direction, and active-only visibility.
+    ///     `true` when the row passes search, kind, direction, and active-only visibility. A row on
+    ///     a filtered-out EXCHANGE still passes here: its core is what the exchange filter removes,
+    ///     and callers that must account for that use [`StrategyFilter::core_matches`].
     pub fn matches(&self, row: &StrategyRow) -> bool {
         self.prepare().matches(row)
     }

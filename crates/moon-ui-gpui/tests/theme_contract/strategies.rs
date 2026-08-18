@@ -474,6 +474,30 @@ fn strategy_tree_groups_visible_cores_by_venue_identity() {
     assert!(sig.contains("venues_digest("));
 }
 
+/// Both tree modes must prune cores excluded by the exchange filter.
+///
+/// Removing `tree::moon::build`'s flat `core_matches(venues.get(core))` guard would leave the
+/// grouped default looking correct but make an exchange selection ineffective after users disable
+/// grouping. The two branch-local source slices are independent of the predicate implementation:
+/// they verify that each rendering route delegates the exclusion at the venue representation it
+/// owns.
+#[test]
+fn strategy_tree_prunes_exchange_filter_in_grouped_and_flat_modes() {
+    let tree = read_src("strategies/tree/moon.rs");
+    let build = code_only(braced_body(&tree, "pub(crate) fn build("));
+    let grouped = code_only(braced_body(&build, "if view.prefs.group_by_venue {"));
+    let flat = code_only(braced_body(&build, "} else {"));
+
+    assert!(
+        grouped.contains("view.filter.core_matches(venue)"),
+        "grouped mode must exclude an entire exchange section before its heading is rendered"
+    );
+    assert!(
+        flat.contains("view.filter.core_matches(venues.get(core))"),
+        "flat mode must exclude each core by its venue after grouping is disabled"
+    );
+}
+
 /// Raw shortcuts belong only to the focused Strategies tree, and both keyboard and footer Copy
 /// must prefer the last clicked folder/core over a stale strategy selection.
 #[test]
@@ -854,6 +878,7 @@ fn the_tree_cache_signature_covers_every_input_the_build_reads() {
     let sig_body = code_only(braced_body(&cache, "pub(crate) fn data_sig("));
     for read in [
         "view.prefs.group_by_venue",
+        "view.filter.exchange",
         "view.filter.active_only",
         "venues_digest(",
     ] {

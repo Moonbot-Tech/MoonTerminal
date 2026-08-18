@@ -19,6 +19,12 @@ strat.all_dirs:
   ru: "все стороны"
   en: "all sides"
   es: "todos los lados"
+# Exchange filter. Its entries are derived from the visible cores, so the trigger names the
+# axis rather than showing a bare "all".
+strat.all_exchanges:
+  ru: "все биржи"
+  en: "all exchanges"
+  es: "todos los exchanges"
 strat.settings.title:
   ru: "Настройки стратегий"
   en: "Strategies settings"
