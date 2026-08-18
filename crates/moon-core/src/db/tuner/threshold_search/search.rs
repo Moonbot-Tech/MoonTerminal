@@ -120,6 +120,24 @@ fn pool() -> Option<&'static rayon::ThreadPool> {
     .as_ref()
 }
 
+/// Run one parallel section inside the tuner's own worker pool.
+///
+/// The single entry point to that pool, so no fan-out can reach rayon's global one by accident and
+/// take the core the window repaints on. Nesting is expected and harmless: an inner call from a
+/// pool thread runs its closure right there rather than handing it to a second pool.
+///
+/// Args:
+///     f: The parallel section.
+///
+/// Returns:
+///     Whatever `f` returns.
+pub(super) fn install<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    match pool() {
+        Some(pool) => pool.install(f),
+        None => f(),
+    }
+}
+
 /// Random stream seed of one restart, mixed from the base seed and the restart index.
 ///
 /// Deriving per restart rather than drawing from one shared generator is what makes the parallel
@@ -254,8 +272,18 @@ struct Workspace {
     bin_count: Vec<usize>,
     pre_profit: Vec<f64>,
     pre_count: Vec<usize>,
+    /// Bins the last field scan actually wrote, so the next one clears those instead of the whole
+    /// array.
+    ///
+    /// At the deepest slicing a `fill` over both bin arrays is a thousand writes on EVERY visit to
+    /// EVERY field, while a scope of a few hundred trades can only reach a few hundred bins — and
+    /// most visits reach far fewer, because the trades passing every other field are what land in
+    /// them at all. Clearing by list makes the cost track the data rather than the setting.
+    touched: Vec<u32>,
     /// Field visiting order for the current pass.
     order: Vec<usize>,
+    /// Per field, the change epoch its last decision was computed at. See [`Search::one_restart`].
+    computed: Vec<u32>,
 }
 
 impl Workspace {
@@ -268,7 +296,9 @@ impl Workspace {
             bin_count: vec![0; ne + 1],
             pre_profit: vec![0.0; ne + 1],
             pre_count: vec![0; ne + 1],
+            touched: Vec::with_capacity(ne + 1),
             order: Vec::with_capacity(nf),
+            computed: vec![0; nf],
         }
     }
 }
@@ -302,7 +332,10 @@ pub(super) struct Search {
     edges: Vec<Vec<f64>>,
     /// Per-field quantile bin index (or `BELOW`) for each TRAIN trade — the descent's own view,
     /// and the only column here that stops at the train window.
-    bins: Vec<Vec<u16>>,
+    ///
+    /// Flattened to `fi * n + t`, the same layout as the workspace's pass mask, so the descent's
+    /// innermost loop walks one contiguous slice per field instead of chasing a pointer per row.
+    bins: Vec<u16>,
     /// Failure counts contributed by fields the caller fixed, per trade.
     base_fail: Vec<u16>,
     /// Whether a field may be searched (`false` for a caller-fixed field).
@@ -355,34 +388,30 @@ impl Search {
         // would make the holdout meaningless, and the bins because nothing outside the descent
         // reads them: a bound set is scored against the raw values in `tally`, not against bins.
         let mut edges: Vec<Vec<f64>> = Vec::with_capacity(nf);
-        let mut bins: Vec<Vec<u16>> = Vec::with_capacity(nf);
+        let mut bins: Vec<u16> = Vec::with_capacity(nf * n);
         for col in &cols.vals {
             let mut sorted = col[..n].to_vec();
             sorted.sort_by(|a, b| a.total_cmp(b));
             let e: Vec<f64> = (0..=ne).map(|k| sorted[k * (n - 1) / ne]).collect();
-            let b = col[..n]
-                .iter()
-                .map(|v| {
-                    if *v < e[0] {
-                        BELOW
-                    } else {
-                        // The last edge is inclusive, so clamp it into the top bin.
-                        let mut lo = 0usize;
-                        let mut hi = ne;
-                        while lo + 1 < hi {
-                            let m = (lo + hi) / 2;
-                            if *v >= e[m] {
-                                lo = m
-                            } else {
-                                hi = m
-                            }
+            bins.extend(col[..n].iter().map(|v| {
+                if *v < e[0] {
+                    BELOW
+                } else {
+                    // The last edge is inclusive, so clamp it into the top bin.
+                    let mut lo = 0usize;
+                    let mut hi = ne;
+                    while lo + 1 < hi {
+                        let m = (lo + hi) / 2;
+                        if *v >= e[m] {
+                            lo = m
+                        } else {
+                            hi = m
                         }
-                        lo.min(ne - 1) as u16
                     }
-                })
-                .collect();
+                    lo.min(ne - 1) as u16
+                }
+            }));
             edges.push(e);
-            bins.push(b);
         }
         // Searchable fields; fixed masks remain embedded in the baseline failure counts.
         let free: Vec<bool> = (0..nf)
@@ -500,11 +529,11 @@ impl Search {
     ///     The lowest and highest train value the pair covers.
     pub(super) fn bound_values(&self, fi: usize, i: usize, j: usize) -> (f64, f64) {
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for t in 0..self.n {
-            let b = self.bins[fi][t];
-            if b != BELOW && (i..j).contains(&(b as usize)) {
-                lo = lo.min(self.cols.vals[fi][t]);
-                hi = hi.max(self.cols.vals[fi][t]);
+        let (bins, vals) = (self.bins_of(fi), &self.cols.vals[fi][..self.n]);
+        for (b, v) in bins.iter().zip(vals) {
+            if *b != BELOW && (i..j).contains(&(*b as usize)) {
+                lo = lo.min(*v);
+                hi = hi.max(*v);
             }
         }
         if lo > hi {
@@ -547,7 +576,12 @@ impl Search {
 
     /// Number of fields in the sample.
     fn field_count(&self) -> usize {
-        self.bins.len()
+        self.edges.len()
+    }
+
+    /// The train-window bin column of one field.
+    fn bins_of(&self, fi: usize) -> &[u16] {
+        &self.bins[fi * self.n..(fi + 1) * self.n]
     }
 
     /// Fields this search is allowed to optimize at all, i.e. the ones the caller left unfixed.
@@ -706,10 +740,7 @@ impl Search {
                 .reduce(|| None, keep_better)
                 .map(|(_, outcome)| outcome)
         };
-        match pool() {
-            Some(pool) => pool.install(search),
-            None => search(),
-        }
+        install(search)
     }
 
     /// Run one restart of coordinate descent to convergence or the pass cap, over the fields
@@ -760,18 +791,31 @@ impl Search {
         }
         // Masks from initialization, layered over fixed filters. `base_fail` spans the whole
         // sample while the workspace spans the train window, so only its head is copied.
-        w.pass.fill(true);
+        //
+        // Only ADMITTED columns are painted. Every reader of the mask — `best_for_field`,
+        // `apply_field`, `drop_redundant` — addresses the field it was handed, and the descent
+        // hands them only fields `allow` admits, so an excluded column's leftovers from the
+        // previous restart are never read. Repainting all `nf * n` of it to serve the handful of
+        // columns a shallow candidate set actually visits is the cost this skips: composition
+        // runs the descent thousands of times over masks holding one or two fields.
         w.fail.copy_from_slice(&self.base_fail[..n]);
+        for (fi, admitted) in allow.iter().enumerate() {
+            if *admitted {
+                w.pass[fi * n..(fi + 1) * n].fill(true);
+            }
+        }
         for (fi, chosen) in sel.iter().enumerate() {
             if let Some((i, j)) = *chosen {
                 let base = fi * n;
-                for t in 0..n {
-                    let b = self.bins[fi][t];
-                    let ok = b != BELOW && (i..j).contains(&(b as usize));
+                let bins = &self.bins[base..base + n];
+                let pass = &mut w.pass[base..base + n];
+                let fail = &mut w.fail[..n];
+                for (t, b) in bins.iter().enumerate() {
+                    let ok = *b != BELOW && (i..j).contains(&(*b as usize));
                     if !ok {
-                        w.fail[t] += 1;
+                        fail[t] += 1;
                     }
-                    w.pass[base + t] = ok;
+                    pass[t] = ok;
                 }
             }
         }
@@ -783,6 +827,17 @@ impl Search {
         // — and composition would be reading that difference as the candidate's contribution.
         w.order.clear();
         w.order.extend((0..nf).filter(|fi| self.free[*fi]));
+        // A field's best range is answered from the OTHER fields alone — `best_for_field` excludes
+        // the visited field's own mask from `others_ok` — so the answer can only change when some
+        // other field's range does. Stamping each decision with the change epoch it was taken at
+        // turns a visit nothing has invalidated into one integer comparison instead of a full pass
+        // over the train window.
+        //
+        // The last pass of every restart is the one this pays for: it exists only to observe that
+        // nothing changed, and it used to re-scan every admitted field to find that out. It is
+        // exact, not approximate — a skipped visit provably returns what the stamped one did.
+        w.computed.fill(0);
+        let mut epoch: u32 = 1;
         for _pass_no in 0..MAX_PASSES {
             if restart > 0 {
                 // Fisher-Yates gives each pass its own field order.
@@ -799,7 +854,7 @@ impl Search {
                 }
                 let fi = w.order[oi];
                 // Its draws were spent above; only the VISIT is withheld.
-                if !allow[fi] {
+                if !allow[fi] || w.computed[fi] == epoch {
                     continue;
                 }
                 let best = self.best_for_field(fi, &sel, w);
@@ -807,7 +862,12 @@ impl Search {
                     self.apply_field(fi, best, w);
                     sel[fi] = best;
                     changed = true;
+                    // Every other field's stamp was taken against the range this one just replaced.
+                    epoch += 1;
                 }
+                // Valid at the epoch that now stands, in both branches: the answer never depended
+                // on this field's own previous range, so applying it cannot change what it is.
+                w.computed[fi] = epoch;
             }
             if !changed {
                 break;
@@ -827,22 +887,23 @@ impl Search {
     /// Install a new range for one field, updating its mask, the failure counts, and the
     /// candidate list.
     fn apply_field(&self, fi: usize, best: Option<(usize, usize)>, w: &mut Workspace) {
-        let base = fi * self.n;
-        for t in 0..self.n {
+        let n = self.n;
+        let base = fi * n;
+        let bins = &self.bins[base..base + n];
+        let pass = &mut w.pass[base..base + n];
+        let fail = &mut w.fail[..n];
+        for (t, b) in bins.iter().enumerate() {
             let ok = match best {
                 None => true,
-                Some((i, j)) => {
-                    let b = self.bins[fi][t];
-                    b != BELOW && (i..j).contains(&(b as usize))
-                }
+                Some((i, j)) => *b != BELOW && (i..j).contains(&(*b as usize)),
             };
-            if ok != w.pass[base + t] {
+            if ok != pass[t] {
                 if ok {
-                    w.fail[t] -= 1;
+                    fail[t] -= 1;
                 } else {
-                    w.fail[t] += 1;
+                    fail[t] += 1;
                 }
-                w.pass[base + t] = ok;
+                pass[t] = ok;
             }
         }
     }
@@ -874,37 +935,67 @@ impl Search {
         if slot_full {
             return None;
         }
-        // Sum bins among trades that pass every other field.
-        w.bin_profit.fill(0.0);
-        w.bin_count.fill(0);
+        // Split the workspace into its own fields so the scan below can hold the read-only
+        // columns and the accumulators at the same time.
+        let Workspace {
+            pass,
+            fail,
+            bin_profit,
+            bin_count,
+            pre_profit,
+            pre_count,
+            touched,
+            ..
+        } = w;
+        // Clear only what the PREVIOUS scan wrote. A `fill` here is `2 * (ne + 1)` writes on every
+        // visit to every field — at the deepest slicing that alone outweighs the scan itself on a
+        // scope of a few hundred trades, and it is proportional to a SETTING rather than to the
+        // data. The touched list is bounded by the trades that reached a bin at all.
+        for idx in touched.drain(..) {
+            bin_profit[idx as usize] = 0.0;
+            bin_count[idx as usize] = 0;
+        }
+        // Sum bins among trades that pass every other field. Sliced up front so the innermost
+        // loop of the whole search carries no bounds check per column per row.
+        let n = self.n;
+        let bins = &self.bins[base..base + n];
+        let profits = &self.cols.profits[..n];
+        let pass = &pass[base..base + n];
+        let fail = &fail[..n];
         let (mut tot_p, mut tot_c) = (0.0f64, 0usize);
-        for t in 0..self.n {
-            let others_ok = w.fail[t] == u16::from(!w.pass[base + t]);
+        for t in 0..n {
+            let others_ok = fail[t] == u16::from(!pass[t]);
             if !others_ok {
                 continue;
             }
-            tot_p += self.cols.profits[t];
+            let profit = profits[t];
+            tot_p += profit;
             tot_c += 1;
-            let b = self.bins[fi][t];
+            let b = bins[t];
             let idx = if b == BELOW { ne } else { b as usize };
-            w.bin_profit[idx] += self.cols.profits[t];
-            w.bin_count[idx] += 1;
+            // A zero count is what "not written since the last clear" means: the two arrays are
+            // only ever written together, so the count alone decides it.
+            if bin_count[idx] == 0 {
+                touched.push(idx as u32);
+            }
+            bin_profit[idx] += profit;
+            bin_count[idx] += 1;
         }
         // Prefix sums over the real bins; the BELOW bucket at index `ne` is deliberately left
         // out, because no contiguous edge range can include it.
-        w.pre_profit[0] = 0.0;
-        w.pre_count[0] = 0;
+        pre_profit[0] = 0.0;
+        pre_count[0] = 0;
         for k in 0..ne {
-            w.pre_profit[k + 1] = w.pre_profit[k] + w.bin_profit[k];
-            w.pre_count[k + 1] = w.pre_count[k] + w.bin_count[k];
+            pre_profit[k + 1] = pre_profit[k] + bin_profit[k];
+            pre_count[k + 1] = pre_count[k] + bin_count[k];
         }
         // The no-filter candidate is the baseline. A range must beat it beyond floating-point
         // noise because bin sums and `tot_p` accumulate in different orders; otherwise an
         // equivalent trade set can win by about 1e-12 and leave a no-op filter.
         let floor = tot_p + improvement_margin(tot_p);
         range_pick::best_pair(
-            &w.pre_profit[..=ne],
-            &w.pre_count[..=ne],
+            &pre_profit[..=ne],
+            &pre_count[..=ne],
             self.min_n,
             tot_c,
             floor,
@@ -930,7 +1021,11 @@ impl Search {
                 }
                 let base = fi * self.n;
                 // Only a trade this field uniquely rejects can refute redundancy.
-                let redundant = (0..self.n).all(|t| w.pass[base + t] || w.fail[t] > 1);
+                let redundant = {
+                    let pass = &w.pass[base..base + self.n];
+                    let fail = &w.fail[..self.n];
+                    pass.iter().zip(fail).all(|(p, f)| *p || *f > 1)
+                };
                 if redundant {
                     self.apply_field(fi, None, w);
                     *chosen = None;

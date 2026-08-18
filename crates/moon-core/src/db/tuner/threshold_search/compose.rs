@@ -31,6 +31,9 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ops::Range;
+use std::sync::atomic::{self, AtomicUsize};
+
+use rayon::prelude::*;
 
 use super::handle::SearchHandle;
 use super::search::Search;
@@ -1093,6 +1096,14 @@ fn adaptive_width(scored: &[ScoredMask], min_width: usize, max_width: usize) -> 
 /// same restart stream for comparable candidates. Masks are retained by rank even when they do
 /// not yet beat the empty set: two individually weak fields can still form a useful pair.
 ///
+/// One depth's masks are scored CONCURRENTLY. They are independent by construction — a mask's
+/// score depends on the folds, the mask and the step, never on another mask — and the results are
+/// collected in mask order rather than completion order, so the ranking that follows is the same
+/// one a sequential scoring would have produced. The width is where the machine's cores belong:
+/// scoring one mask fans out over its restarts and then joins, so a depth of hundreds of masks
+/// used to pay hundreds of joins, each one idling every worker that finished early while the
+/// slowest restart of that mask converged.
+///
 /// Args:
 ///     candidate: Fields the beam may add.
 ///     is_slot: Fields that consume one of the two Delta2/Delta3 slots.
@@ -1111,10 +1122,10 @@ fn beam_candidates<F>(
     max_fields: usize,
     min_width: usize,
     max_width: usize,
-    mut score: F,
+    score: F,
 ) -> Option<Vec<Vec<bool>>>
 where
-    F: FnMut(&[bool], usize, usize, usize) -> Option<ScoreSet>,
+    F: Fn(&[bool], usize, usize, usize) -> Option<ScoreSet> + Sync,
 {
     if min_width == 0 || max_fields == 0 {
         return Some(Vec::new());
@@ -1141,14 +1152,26 @@ where
             break;
         }
         let total = expanded.len();
-        let mut scored = Vec::with_capacity(total);
-        for (done, mask) in expanded.into_iter().enumerate() {
-            scored.push(ScoredMask {
-                scores: score(&mask, depth, done, total)?,
-                mask,
-                key: RankingKey::default(),
-            });
-        }
+        // Progress counts masks STARTED, as the sequential index did, but drawn from a shared
+        // counter. Workers can take consecutive numbers and publish them in the opposite order, so
+        // the scorer publishes through `SearchHandle::advance_stage`, which drops a number lower
+        // than the one already standing for this depth — a caption counting DOWN reads as work
+        // being redone. It reports work, never a decision, so it is no part of the answer either
+        // way.
+        let started = AtomicUsize::new(0);
+        let mut scored: Vec<ScoredMask> = super::search::install(|| {
+            expanded
+                .into_par_iter()
+                .map(|mask| {
+                    let done = started.fetch_add(1, atomic::Ordering::Relaxed);
+                    score(&mask, depth, done, total).map(|scores| ScoredMask {
+                        scores,
+                        mask,
+                        key: RankingKey::default(),
+                    })
+                })
+                .collect::<Option<Vec<_>>>()
+        })?;
         assign_ranking(&mut scored);
         scored.sort_by(ranked_order);
         let retained_width = adaptive_width(&scored, min_width, max_width);
@@ -1531,7 +1554,8 @@ pub(super) fn compose(
         p.beam_width_min,
         p.beam_width_max,
         |mask, depth, done, total| {
-            handle.set_stage(depth, done, total);
+            // Concurrent publishers: the beam scores one depth's masks in parallel.
+            handle.advance_stage(depth, done, total);
             score_set(inner_folds, mask, p, p.ranking_restarts, depth, handle)
         },
     )?;

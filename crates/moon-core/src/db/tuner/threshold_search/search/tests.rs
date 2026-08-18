@@ -112,7 +112,7 @@ fn run_reference(s: &Search, allow: &[bool], restarts: usize, seed: u64) -> Opti
 /// shuffle — and only the assignment and the visit are withheld, mirroring the production rule
 /// that keeps the random stream a property of the search rather than of the mask.
 fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut Rng) -> Outcome {
-    let nf = s.bins.len();
+    let nf = s.field_count();
     let (n, ne) = (s.n, s.ne);
     let mut sel: Vec<Option<(usize, usize)>> = vec![None; nf];
     if restart > 0 {
@@ -142,7 +142,7 @@ fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut R
     for fi in 0..nf {
         if let Some((i, j)) = sel[fi] {
             for t in 0..n {
-                let b = s.bins[fi][t];
+                let b = s.bins_of(fi)[t];
                 let ok = b != BELOW && (i..j).contains(&(b as usize));
                 if !ok {
                     fail[t] += 1;
@@ -174,7 +174,7 @@ fn one_restart_reference(s: &Search, allow: &[bool], restart: usize, rng: &mut R
                     let ok = match best {
                         None => true,
                         Some((i, j)) => {
-                            let b = s.bins[fi][t];
+                            let b = s.bins_of(fi)[t];
                             b != BELOW && (i..j).contains(&(b as usize))
                         }
                     };
@@ -243,7 +243,7 @@ fn best_for_field_reference(
         }
         tot_p += s.cols.profits[t];
         tot_c += 1;
-        let b = s.bins[fi][t];
+        let b = s.bins_of(fi)[t];
         let idx = if b == BELOW { ne } else { b as usize };
         bp[idx] += s.cols.profits[t];
         bc[idx] += 1;
@@ -457,10 +457,10 @@ fn depth_512_keeps_bin_511_distinct_from_below() {
     let search = build(vec![0.0; n], &vals, &[None], 1, 512);
 
     assert_eq!(search.edges[0].len(), 513);
-    assert_eq!(search.bins[0][0], 0);
-    assert_eq!(search.bins[0][n - 1], 511);
+    assert_eq!(search.bins_of(0)[0], 0);
+    assert_eq!(search.bins_of(0)[n - 1], 511);
     assert!(
-        search.bins[0].iter().all(|bin| *bin != BELOW),
+        search.bins_of(0).iter().all(|bin| *bin != BELOW),
         "all fixture values are at or above the first edge"
     );
 }
