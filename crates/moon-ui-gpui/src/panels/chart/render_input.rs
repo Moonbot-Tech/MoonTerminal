@@ -754,7 +754,7 @@ fn settle_paced_drag(this: &mut ChartPanel, cx: &mut Context<ChartPanel>) {
 pub(super) fn hover(
     this: &mut ChartPanel,
     hovered: &bool,
-    _window: &mut Window,
+    window: &mut Window,
     _cx: &mut Context<ChartPanel>,
 ) {
     // Track the chart under the pointer for cursor-dependent new_long/new_short hotkeys. Enter/leave
@@ -762,9 +762,16 @@ pub(super) fn hover(
     let self_id = _cx.entity_id();
     let weak = _cx.entity().downgrade();
     let hov = *hovered;
+    // Recorded on ENTER only, under this panel's own OS window: the chart shot resolves through it
+    // once the pointer has left, and it must not answer a keystroke that arrived at a DIFFERENT
+    // window. Dead entries are dropped on the way past - a closed chart leaves a weak handle that
+    // no longer upgrades, and a closed window leaves one nothing will ever ask for again.
+    let window_handle = window.window_handle();
     this.backend.update(_cx, |b, _| {
         if hov {
-            b.hovered_chart = Some(weak);
+            b.hovered_chart = Some(weak.clone());
+            b.last_chart.retain(|_, chart| chart.upgrade().is_some());
+            b.last_chart.insert(window_handle, weak);
         } else if b.hovered_chart.as_ref().map(|w| w.entity_id()) == Some(self_id) {
             b.hovered_chart = None;
         }

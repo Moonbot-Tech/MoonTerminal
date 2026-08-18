@@ -17,7 +17,10 @@ pub const MANUAL_STRATEGY_KEYS: usize = 10;
 
 /// Current `hotkeys.toml` generation. Bump only together with a new arm in
 /// [`HotkeysConfig::fill_unbound_slots`].
-const SCHEMA: u8 = 1;
+///
+/// 1: backfilled the slots that shipped unbound. 2: cleared `chart_shot` where the user had
+/// already given Ctrl+F10 to something else.
+const SCHEMA: u8 = 2;
 
 /// Parts produced by the plain Split Order action, matching Moonbot, where that action always
 /// splits a sell order into three. The configurable count belongs to `Split N` instead.
@@ -230,19 +233,37 @@ pub struct HotkeysConfig {
     #[serde(default = "default_shift_sell_down")]
     pub shift_sell_down: String,
 
-    // Moonbot hotkeys with no send command to call (reload book/chart, make shot, spy, show
-    // charts, fit sells, broadcast, sell +/-) were removed completely on 2026-07-10 (configuration
-    // + tab + dispatcher); serde silently ignores their keys in old hotkeys.toml files. Restore
-    // them from git history as commands turn up: `Sells to rectangle` came back that way on
-    // 2026-08-15, on `move_all_sells`, whose `percent` form now also drives the order shifts and
-    // whose `replace_kind` form is still unused — so "no command" means "not on this list, check
+    // Moonbot hotkeys with no send command to call (reload book/chart, spy, show charts, fit
+    // sells, broadcast, sell +/-) were removed completely on 2026-07-10 (configuration + tab +
+    // dispatcher); serde silently ignores their keys in old hotkeys.toml files. Restore them from
+    // git history as commands turn up: `Sells to rectangle` came back that way on 2026-08-15, on
+    // `move_all_sells`, whose `percent` form now also drives the order shifts and whose
+    // `replace_kind` form is still unused — so "no command" means "not on this list, check
     // moonproto first".
+    //
+    // `Make shot` left that list on 2026-08-18 by a different route: it never needed a command at
+    // all, only a way to read the chart's own pixels, so it is `chart_shot` above rather than a
+    // restoration from history. A Moonbot slot can therefore return either way.
     #[serde(default = "default_scale_plus")]
     pub scale_plus: String,
     #[serde(default = "default_scale_minus")]
     pub scale_minus: String,
     #[serde(default = "default_switch_figure")]
     pub switch_figure: String,
+
+    /// Copies an image of the active chart — plot, order book and the coin caption — to the
+    /// system clipboard. Moonbot's "make shot", back on a command the Terminal can serve.
+    ///
+    /// Nothing reaches the disk: the clipboard is the whole deliverable.
+    ///
+    /// Serde's default already gives every existing `hotkeys.toml` this key on load, so the field
+    /// needs no BACKFILL. What it does need is a COLLISION check: a user who had given Ctrl+F10 to
+    /// another action now holds it twice, and the duplicate resolves by branch order in the
+    /// dispatcher — silently shadowing whatever sits lower, which includes the trading actions.
+    /// Generation 2 of [`HotkeysConfig::fill_unbound_slots`] clears this slot in that case, exactly
+    /// as generation 1 did for `sells_to_rect`.
+    #[serde(default = "default_chart_shot")]
+    pub chart_shot: String,
 
     /// Figure drawing layer: arms a tool. Pressing the same hotkey again disarms it, leaving the
     /// drawn figures in place. Defaults are on Ctrl because Moonbot has no drawing hotkeys to
@@ -325,6 +346,7 @@ impl Default for HotkeysConfig {
             scale_plus: default_scale_plus(),
             scale_minus: default_scale_minus(),
             switch_figure: default_switch_figure(),
+            chart_shot: default_chart_shot(),
             draw_hline: default_draw_hline(),
             draw_segment: default_draw_segment(),
             draw_triangle: default_draw_triangle(),
@@ -411,7 +433,7 @@ impl HotkeysConfig {
         Some(cfg)
     }
 
-    /// Brings a file written by an older build up to [`SCHEMA`].
+    /// Brings a file written by an older build up to [`SCHEMA`], one generation at a time.
     ///
     /// Generation 0 → 1: the actions Moonbot binds by default shipped here UNBOUND, so a file from
     /// that build has empty strings where a new install now has Moonbot's key. Those empties are
@@ -420,26 +442,42 @@ impl HotkeysConfig {
     /// user chose is never overwritten — and a shipped key ALREADY IN USE elsewhere in this file is
     /// skipped rather than duplicated, because a duplicate resolves by branch order in the
     /// dispatcher and would silently turn, say, a manual-strategy Alt+1 into a live long order.
+    ///
+    /// Generation 1 → 2: clear `chart_shot` where Ctrl+F10 was already the user's key for something
+    /// else. A NEW field never needs backfilling — serde's default fills it — but it does need that
+    /// collision check, and running it must NOT drag generation 1 along behind it, which is why
+    /// each arm is gated on its own predecessor rather than on the aggregate.
+    ///
     /// Returns whether anything changed, so the caller can persist the stamp.
     pub(super) fn fill_unbound_slots(&mut self) -> bool {
         if self.schema >= SCHEMA {
             return false;
         }
+        // Each generation is gated on its OWN predecessor, never on `schema < SCHEMA` as a whole:
+        // a file already at generation 1 must NOT have the empty-slot backfill run over it again,
+        // or every key its owner has deliberately cleared since comes back on the next launch.
+        if self.schema < 1 {
+            self.fill_generation_1();
+        }
+        if self.schema < 2 {
+            self.clear_generation_2_collisions();
+        }
+        self.schema = SCHEMA;
+        true
+    }
+
+    /// Generation 0 -> 1: backfill the slots that shipped unbound.
+    ///
+    /// Returns:
+    ///     Nothing; updates only slots that were empty in a generation-0 file.
+    fn fill_generation_1(&mut self) {
         let defaults = Self::default();
         let taken = self.bound_keys();
         // `count` is how many slots already hold this key. A candidate for an EMPTY slot may hold
         // none; a slot serde has already filled from a NEW field's default holds one — its own —
         // and anything above that is a real collision.
         let occurrences = |key: &str| taken.iter().filter(|held| held.as_str() == key).count();
-        // A field added in this generation arrives pre-filled by its serde default, so it never
-        // reaches the empty-slot loop below and would keep a key the user has bound elsewhere.
-        if occurrences(&self.sells_to_rect) > 1 {
-            log::warn!(
-                "hotkeys.toml: {} уже занят, Sells to rectangle оставлен без клавиши",
-                self.sells_to_rect
-            );
-            self.sells_to_rect = String::new();
-        }
+        clear_if_duplicate(&taken, &mut self.sells_to_rect, "Sells to rectangle");
         // ONLY the slots that shipped unbound. A slot that always had a key (panic_sell_one,
         // cancel_all_buys, switch_figure) is empty for exactly one reason — the user cleared it —
         // and filling it would take that choice back. Those keep their old value; the Moonbot key
@@ -463,8 +501,23 @@ impl HotkeysConfig {
                 *slot = shipped;
             }
         }
-        self.schema = SCHEMA;
-        true
+    }
+
+    /// Generation 1 -> 2: `chart_shot` arrives pre-filled by its serde default, so it never reaches
+    /// generation 1's empty-slot loop and would keep Ctrl+F10 even where the user had already given
+    /// that keystroke to another action.
+    ///
+    /// The duplicate is not harmless: `resolve_binding` answers the FIRST matching branch, and the
+    /// chart shot is resolved above every trading action, so the shipped default would quietly take
+    /// a key that used to send an order. Clearing the NEW slot rather than the old one keeps the
+    /// user's own choice, which is the same trade generation 1 made for `sells_to_rect`.
+    ///
+    /// Returns:
+    ///     Nothing; clears only the new chart-shot slot when its default collides.
+    fn clear_generation_2_collisions(&mut self) {
+        // Recomputed rather than reused: generation 1 may have just filled slots above.
+        let taken = self.bound_keys();
+        clear_if_duplicate(&taken, &mut self.chart_shot, "Make Shot");
     }
 
     /// Every keystroke this file already binds, for collision checks.
@@ -492,6 +545,7 @@ impl HotkeysConfig {
             &self.scale_plus,
             &self.scale_minus,
             &self.switch_figure,
+            &self.chart_shot,
             &self.draw_hline,
             &self.draw_segment,
             &self.draw_triangle,
@@ -537,6 +591,38 @@ impl HotkeysConfig {
             None
         }
     }
+}
+
+/// Clear `field` when the keystroke it holds is ALREADY bound elsewhere in this file.
+///
+/// Every generation of [`HotkeysConfig::fill_unbound_slots`] needs this and for the same reason: a
+/// field ADDED in that generation arrives pre-filled by its serde default, so it never reaches the
+/// empty-slot loop and would keep a keystroke its owner has given to something else. A duplicate
+/// resolves by branch order in the dispatcher, so the shipped default would silently shadow the
+/// user's own binding — which is why the NEW slot is the one that yields, never the old one.
+///
+/// `taken` is a [`HotkeysConfig::bound_keys`] snapshot, in which the field's OWN key already counts
+/// once; anything above one occurrence is a real collision. An empty field binds nothing and is
+/// left alone.
+///
+/// Args:
+///     taken: Snapshot of all already-bound, non-empty keystrokes.
+///     field: Newly introduced binding that yields to an existing collision.
+///     label: User-facing name included in the collision warning.
+///
+/// Returns:
+///     Nothing; clears `field` only when its key occurs more than once in `taken`.
+fn clear_if_duplicate(taken: &[String], field: &mut String, label: &str) {
+    let key = field.trim();
+    if key.is_empty() || taken.iter().filter(|held| held.as_str() == key).count() <= 1 {
+        return;
+    }
+    log::warn!(
+        "hotkeys.toml: {} уже занят, {} оставлен без клавиши",
+        field,
+        label
+    );
+    field.clear();
 }
 
 fn default_order_size_keys() -> [String; ORDER_SIZE_KEYS] {
@@ -597,10 +683,25 @@ fn default_switch_figure() -> String {
     "alt-d".into()
 }
 
+/// Ctrl+F10, next to the built-in Ctrl+Shift+F10 that resets window positions but never colliding
+/// with it: the resolver matches on the WHOLE modifier set, so the two are distinct keystrokes.
+/// Free on every shipped default and on Moonbot's own Hotkeys page.
+///
+/// Returns:
+///     The default GPUI keystroke for copying the active chart.
+fn default_chart_shot() -> String {
+    "ctrl-f10".into()
+}
+
 // Moonbot's own bindings, taken from its Hotkeys page. `scale_plus`/`scale_minus` (Ctrl+Q/Ctrl+W)
 // and `sell_preset`/`order_size` already matched; these are the rest of the set that has a Terminal
 // action behind it. Moonbot entries with no command here — Reload Book/Chart, screenshots, Center
 // Chart, Show\Hide Charts, Hide Balance, Open coin in all bots — stay absent, as they were.
+// Two have come back since, each on a command that turned up later: `Sells to rectangle` on
+// 2026-08-15 (`move_all_sells`), and Moonbot's screenshot on 2026-08-18 — that one needs no
+// protocol command at all, only a way to read the chart's own pixels (`chart_shot`). So
+// "no command" still means "not on this list, check moonproto first", and sometimes it means
+// the action was never remote to begin with.
 fn default_cancel_buy() -> String {
     "alt-z".into()
 }

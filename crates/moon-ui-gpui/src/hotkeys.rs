@@ -113,6 +113,13 @@ pub enum HotkeyAction {
     ScalePlus,
     /// Zoom the active chart's Y scale outward through the calling window.
     ScaleMinus,
+    /// Copy an image of the active chart to the system clipboard - Moonbot's "make shot".
+    ///
+    /// The caller executes this because it needs the OS window behind the chart and the
+    /// clipboard, neither of which [`apply`] is handed. See
+    /// [`crate::panels::chart::shot`] for which chart is chosen, which rectangle is read and how
+    /// it reaches the clipboard.
+    ChartShot,
 }
 
 /// Return whether an event matches a configured GPUI keystroke string.
@@ -156,6 +163,11 @@ impl HotkeyAction {
     /// to a bulk percent command, which is sent with no unique key and coalesced nowhere, so a held
     /// key would now compound a ±1% move on the whole market tens of times a second.
     ///
+    /// The chart shot is here for a different reason than the rest: it costs nothing REMOTE, but
+    /// one press is a desktop `BitBlt` over the chart slot, a PNG encode and a seizure of clipboard
+    /// ownership. A
+    /// held key would do that tens of times a second and leave the clipboard thrashing.
+    ///
     /// The ones still repeating: cancels (the second press finds nothing left to cancel) and the
     /// presets (setting a value twice sets it once).
     fn suppress_on_repeat(self) -> bool {
@@ -172,6 +184,7 @@ impl HotkeyAction {
                 | Self::FigAlert
                 | Self::FigTool(_)
                 | Self::SwitchFigure
+                | Self::ChartShot
         )
     }
 }
@@ -179,9 +192,9 @@ impl HotkeyAction {
 /// Resolve a key-down event to the first matching configured or built-in action.
 ///
 /// Branch order defines collision precedence: configured figure actions; built-in Shift+Escape,
-/// Escape, reset, and Tab/Delete; configured scale actions; order-size and fixed-sell presets;
-/// active-market and active-core trading actions; configured `switch_charts`; then manual
-/// strategies. Returns `None` when no binding matches.
+/// Escape, reset, and Tab/Delete; configured scale actions and the chart shot; order-size and
+/// fixed-sell presets; active-market and active-core trading actions; configured `switch_charts`;
+/// then manual strategies. Returns `None` when no binding matches.
 fn resolve_binding(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     use HotkeyAction as A;
     let p = |raw: &str| pressed(raw, ev);
@@ -236,6 +249,12 @@ fn resolve_binding(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction
     }
     if p(&hk.scale_minus) {
         return Some(A::ScaleMinus);
+    }
+    // Reading the chart's own pixels belongs to the same window-local cluster as its scale, and
+    // deliberately sits ABOVE the preset arrays: those are user-editable and a Moonbot import can
+    // move one onto any key at all.
+    if p(&hk.chart_shot) {
+        return Some(A::ChartShot);
     }
 
     // Order-size and fixed-sell presets.
@@ -569,7 +588,8 @@ pub fn apply(
         }
         // Caller-routed actions have mixed scope: scale is window-specific; cursor placement and
         // cancellation use `Backend::hovered_chart`; switching and active-chart closing are
-        // group-local; reset and close-all are application-global.
+        // group-local; reset and close-all are application-global; and the chart shot needs the OS
+        // window plus the clipboard, neither of which reaches this function.
         A::ScalePlus
         | A::ScaleMinus
         | A::NewLong
@@ -578,7 +598,8 @@ pub fn apply(
         | A::ResetWindows
         | A::CancelHoveredOrder
         | A::CloseAllCharts
-        | A::CloseActiveChart => false,
+        | A::CloseActiveChart
+        | A::ChartShot => false,
     }
 }
 

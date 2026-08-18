@@ -22,13 +22,63 @@ fn unbound_slots_are_filled_once_and_user_choices_survive() {
     assert_eq!(old.cancel_buy, shipped.cancel_buy);
     assert_eq!(old.join_sells, shipped.join_sells);
     assert_eq!(old.sells_to_rect, shipped.sells_to_rect);
-    assert_eq!(old.new_long, "f9", "a key the user set is never overwritten");
+    assert_eq!(
+        old.new_long, "f9",
+        "a key the user set is never overwritten"
+    );
     assert_eq!(old.schema, SCHEMA);
 
     // Clearing a slot after the migration ran must STAY cleared across loads.
     old.cancel_buy = String::new();
     old.fill_unbound_slots();
     assert!(old.cancel_buy.is_empty());
+}
+
+/// Pins `hotkeys.rs::clear_generation_2_collisions` against an off-by-one duplicate threshold.
+///
+/// Plausible breakage: treating the two holders of Ctrl+F10 as non-colliding leaves the new chart
+/// shot above the user's existing panic-sell binding, so that keystroke captures a chart instead
+/// of sending the order it used to send.
+#[test]
+fn generation_2_yields_chart_shot_to_an_existing_binding() {
+    let mut existing_file = HotkeysConfig {
+        schema: 1,
+        panic_sell: "ctrl-f10".into(),
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert_eq!(existing_file.panic_sell, "ctrl-f10");
+    assert!(
+        existing_file.chart_shot.is_empty(),
+        "the new chart-shot default must yield to the user's existing binding"
+    );
+}
+
+/// Pins `hotkeys.rs::fill_unbound_slots` so generation 1 cannot re-run on a generation-1 file.
+///
+/// Plausible breakage: collapsing the generation gates restores a deliberately cleared Cancel Buy
+/// key while upgrading the chart-shot slot, so a user can accidentally send an order they disabled.
+#[test]
+fn generation_2_preserves_slots_deliberately_cleared_after_generation_1() {
+    let mut existing_file = HotkeysConfig {
+        schema: 1,
+        cancel_buy: String::new(),
+        panic_sell: "ctrl-f10".into(),
+        ..HotkeysConfig::default()
+    };
+
+    existing_file.fill_unbound_slots();
+
+    assert!(
+        existing_file.cancel_buy.is_empty(),
+        "generation 1 must not restore a key cleared after its migration"
+    );
+    assert!(
+        existing_file.chart_shot.is_empty(),
+        "generation 2 must still clear the chart-shot collision"
+    );
 }
 
 /// Pins that the shipped keyboard defaults are Moonbot's own, so a user switching over finds

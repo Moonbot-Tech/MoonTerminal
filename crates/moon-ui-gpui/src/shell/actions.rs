@@ -128,11 +128,18 @@ impl Shell {
     ///
     /// Args:
     ///     ev: Key-down event to resolve against built-in and configured shortcuts.
+    ///     window: The window the key arrived at. The chart shot needs it to reach the OS window
+    ///         behind the chart and to report what it managed to copy.
     ///     cx: Shell context used to route the resolved action.
     ///
     /// Returns:
     ///     Nothing; handled actions stop event propagation.
-    pub(super) fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+    pub(super) fn on_hotkey(
+        &mut self,
+        ev: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         use crate::hotkeys::HotkeyAction;
         // Before the bindings are even consulted: Escape leaves the Sells-to-zone mode, whatever
         // modifier the drawing hand still holds down.
@@ -192,6 +199,12 @@ impl Shell {
                     Some(chart) => chart.update(cx, |p, pcx| p.place_order_at_cursor(short, pcx)),
                     None => false,
                 }
+            }
+            // The chart shot is scoped to THIS window: a group window has no single unambiguous
+            // chart, so it resolves through the hover trail recorded for its own window rather
+            // than naming a panel here.
+            HotkeyAction::ChartShot => {
+                crate::panels::shot::copy_active_chart(&self.backend, window, cx)
             }
             // Built-in Ctrl+Shift+F10 restores all windows to on-screen positions.
             HotkeyAction::ResetWindows => {

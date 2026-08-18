@@ -96,7 +96,7 @@ fn apply_hotkey(cfg: &mut AppConfig, id: &str, ks: &str) -> bool {
     let Some(field) = id.strip_prefix("hotkey.") else {
         return false;
     };
-    // Mirrors plan::hotkey_field with the same 17 destination fields.
+    // Mirrors plan::hotkey_field with the same 18 destination fields.
     let target = match field {
         "cancel_buy" => &mut h.cancel_buy,
         "panic_sell" => &mut h.panic_sell,
@@ -115,6 +115,7 @@ fn apply_hotkey(cfg: &mut AppConfig, id: &str, ks: &str) -> bool {
         "scale_plus" => &mut h.scale_plus,
         "scale_minus" => &mut h.scale_minus,
         "switch_figure" => &mut h.switch_figure,
+        "chart_shot" => &mut h.chart_shot,
         _ => return false,
     };
     *target = ks.to_string();

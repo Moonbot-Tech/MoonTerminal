@@ -391,7 +391,15 @@ impl DetachedChartHost {
     /// Scale belongs to this window panel and is applied directly, without group revision routing.
     /// Trading and figure actions use shared `apply` against THIS window's `window_target`; figures
     /// are global state and always work.
-    fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+    ///
+    /// Args:
+    ///     ev: Key-down event to resolve against the configured hotkeys.
+    ///     window: Detached OS window receiving the event and, if requested, the chart shot.
+    ///     cx: Host context used to dispatch the resolved action.
+    ///
+    /// Returns:
+    ///     Nothing; a handled action stops propagation.
+    fn on_hotkey(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         use crate::hotkeys::HotkeyAction;
         // Same first rule as the group window: Escape leaves the Sells-to-zone mode regardless of
         // the modifier held with it.
@@ -413,6 +421,11 @@ impl DetachedChartHost {
             return;
         }
         let handled = match action {
+            // Resolved against THIS window's own hover trail, exactly as in the group window: a
+            // detached host owns a stack rather than a single chart, so it names no panel either.
+            HotkeyAction::ChartShot => {
+                crate::panels::shot::copy_active_chart(&self.backend, window, cx)
+            }
             // Built-in Ctrl+Shift+F10 resets every window position.
             HotkeyAction::ResetWindows => {
                 crate::window::windowing::reset_all_windows_onscreen(cx);

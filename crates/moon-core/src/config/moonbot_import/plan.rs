@@ -151,7 +151,9 @@ fn map_ui_theme(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportP
 /// Returns the local destination field for a MoonBot shortcut slot.
 ///
 /// `None` means Terminal has no such action; those were removed on 2026-07-10 for want of a send
-/// command. `FitSells` stays unmapped for a different reason: moonproto's own shared config calls
+/// command. `MakeShot` came back on 2026-08-18 without one — copying the chart to the clipboard
+/// asks nothing of the core — while `MakeShotBot` stays out: that slot shoots Moonbot's own
+/// window, which the Terminal does not have. `FitSells` stays unmapped for a different reason: moonproto's own shared config calls
 /// that slot "Fit sells to orderbook", which is not the price-band spread the Terminal's
 /// `sells_to_rect` performs, and Moonbot's "Sells to rectangle" has no slot among the 27 at all.
 fn action_target(action: ShortcutAction) -> Option<&'static str> {
@@ -174,8 +176,9 @@ fn action_target(action: ShortcutAction) -> Option<&'static str> {
         SwitchFigure => "switch_figure",
         PanicSellOne => "panic_sell_one",
         CancelAllBuys => "cancel_all_buys",
-        ReloadBook | MakeShot | MakeShotBot | ReloadChart | SellPlus | SellMinus | SpyMode
-        | ShowCharts | FitSells | Broadcast => return None,
+        MakeShot => "chart_shot",
+        ReloadBook | MakeShotBot | ReloadChart | SellPlus | SellMinus | SpyMode | ShowCharts
+        | FitSells | Broadcast => return None,
     })
 }
 
@@ -233,6 +236,7 @@ fn hotkey_field(cfg: &HotkeysConfig, field: &str) -> String {
         "scale_plus" => cfg.scale_plus.clone(),
         "scale_minus" => cfg.scale_minus.clone(),
         "switch_figure" => cfg.switch_figure.clone(),
+        "chart_shot" => cfg.chart_shot.clone(),
         _ => String::new(),
     }
 }
@@ -292,7 +296,7 @@ fn map_hotkeys(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPl
             &cur.hotkeys.sell_preset[i],
         );
     }
-    // 27 shortcut slots: 17 importable and 10 without a Terminal command.
+    // 27 shortcut slots: 18 importable and 9 without a Terminal action.
     for action in SHORTCUT_ACTIONS {
         let raw = h.shortcuts.get(action);
         match action_target(action) {
