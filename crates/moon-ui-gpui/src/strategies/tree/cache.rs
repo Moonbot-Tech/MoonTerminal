@@ -97,7 +97,8 @@ impl TreeCache {
 ///   * per core, in the order the window lists them: its id, its display name, venue presence and
 ///     identity/caption fields, `strategies_rev` (the strategy snapshot), and the rendered
 ///     open-order digest. A core appearing, disappearing or being renamed moves the list itself.
-///   * per window field: venue grouping, the filter, the three expansion sets, the UI-only folders,
+///   * per window field: venue grouping, the filter — search, kind, direction, EXCHANGE and
+///     active-only — the three expansion sets, the UI-only folders,
 ///     the selection, the staged checkboxes, the selected folder, and the deleted-strategy
 ///     revision.
 ///
@@ -142,6 +143,11 @@ pub(crate) fn data_sig(
     view.filter.search.hash(&mut h);
     view.filter.kind.hash(&mut h);
     view.filter.dir.hash(&mut h);
+    // The contract test that scans the build for `view.<field>` reads stops at the first dot, so it
+    // sees `view.filter` and is satisfied by any one of these lines. This one is therefore load
+    // bearing on its own: without it the exchange combo would move the tree on the frame it is
+    // clicked and revert on the next hover repaint, with every test still green.
+    view.filter.exchange.hash(&mut h);
     view.filter.active_only.hash(&mut h);
 
     unordered(view.expanded_cores.iter()).hash(&mut h);

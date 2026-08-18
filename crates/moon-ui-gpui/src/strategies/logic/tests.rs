@@ -104,12 +104,16 @@ fn accumulate(rows: &[StrategyRow], filter: &PreparedFilter) -> FolderCounts {
     counts
 }
 
-/// Builds a prepared filter with independently chosen values for each filter dimension.
+/// Builds a prepared filter with independently chosen values for each ROW-level dimension.
+///
+/// The exchange filter takes no parameter: it never reaches [`PreparedFilter`], because it selects
+/// whole cores and the folder counts under test are per core.
 fn filter(search: &str, kind: Option<u8>, dir: Option<bool>, active_only: bool) -> PreparedFilter {
     StrategyFilter {
         search: search.to_string(),
         kind,
         dir,
+        exchange: None,
         active_only,
     }
     .prepare()

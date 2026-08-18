@@ -22,12 +22,16 @@ fn row(name: &str, kind_ordinal: u8, is_short: bool, checked: bool) -> StrategyR
     }
 }
 
-/// Builds stored filter state with independently chosen values for each filter dimension.
+/// Builds stored filter state with independently chosen values for each ROW-level dimension.
+///
+/// The exchange filter takes no parameter: it selects whole cores rather than rows, so nothing
+/// these tests assert about `matches` or `counts` can depend on it.
 fn filter(search: &str, kind: Option<u8>, dir: Option<bool>, active_only: bool) -> StrategyFilter {
     StrategyFilter {
         search: search.to_string(),
         kind,
         dir,
+        exchange: None,
         active_only,
     }
 }

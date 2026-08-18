@@ -104,7 +104,8 @@ impl StrategiesView {
 
     /// Queue a local create/paste echo selection with the current singleton workspace authority.
     /// Active-only is disabled through the persisted preference setter before the unchecked echo
-    /// can arrive hidden.
+    /// can arrive hidden; a process-only exchange selection is cleared when it hides the target
+    /// core.
     ///
     /// Args:
     ///     core: Core expected to echo the new strategy.
@@ -120,6 +121,14 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) {
         self.disable_active_only_for_reveal(cx);
+        // Cleared HERE, at the queue, for the same reason active-only is: the echo lands on `core`,
+        // and nothing between here and `sync_pending_select` re-checks visibility. A create or
+        // paste whose target came from a retained selection can name a core this filter hides, and
+        // the reveal would then focus and scroll to a row the tree pruned — a request that appears
+        // to do nothing at all.
+        if !self.core_shown_by_exchange(core, cx) {
+            self.filter.exchange = None;
+        }
         let workspace_group = self
             .backend
             .read(cx)
@@ -132,11 +141,27 @@ impl StrategiesView {
         ));
     }
 
+    /// Return whether one core survives the exchange filter, against the live venue map.
+    ///
+    /// The single seam between the reveal paths and the filter's own predicate, so "hidden by the
+    /// exchange" means the same thing here as it does in the tree build.
+    ///
+    /// Args:
+    ///     core: Core a reveal is about to target.
+    ///     cx: Context used to read the session's venue identities.
+    ///
+    /// Returns:
+    ///     `true` when no exchange is selected, or when this core belongs to the selected section.
+    fn core_shown_by_exchange(&self, core: CoreId, cx: &App) -> bool {
+        let venues = self.backend.read(cx).session.core_venues();
+        self.filter.core_matches(venues.get(&core))
+    }
+
     /// Clear every filter that could hide a strategy the user explicitly asked to see.
     ///
     /// `set_value` does not emit Change, so the search filter is updated explicitly alongside the
-    /// input. Active-only is cleared through the persisted preference setter; the other filters
-    /// remain process-only.
+    /// input. Active-only is cleared through the persisted preference setter; kind, direction and
+    /// the exchange remain process-only and are cleared here directly.
     ///
     /// Args:
     ///     window: Owning window needed to update the retained search input.
@@ -148,6 +173,7 @@ impl StrategiesView {
         self.disable_active_only_for_reveal(cx);
         self.filter.kind = None;
         self.filter.dir = None;
+        self.filter.exchange = None;
         if !self.filter.search.trim().is_empty() {
             self.filter.search.clear();
             self.search
@@ -203,8 +229,13 @@ impl StrategiesView {
             }
             return None;
         };
-        // Reset kind, direction, and search only if they still hide the target.
-        if !self.filter.matches(&row) {
+        // The exchange filter has to be asked separately: it selects CORES, and `filter.matches`
+        // takes a `StrategyRow`, which carries no venue — so a target on a filtered-out exchange
+        // would otherwise pass the guard below and be revealed into a tree that cannot show it.
+        // Bound before the `if` because the venue lookup borrows `self.backend`.
+        let hidden_by_exchange = !self.core_shown_by_exchange(core, cx);
+        // Reset kind, direction, exchange, and search only if they still hide the target.
+        if !self.filter.matches(&row) || hidden_by_exchange {
             self.clear_filters_for_reveal(window, cx);
         }
         let key: Key = (core, row.id);

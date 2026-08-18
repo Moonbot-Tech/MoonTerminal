@@ -1,5 +1,5 @@
 //! Left pane of the Strategies window: an optionally grouped core -> folder -> strategy tree with
-//! search/kind/direction filters, persisted display settings, staged checkboxes, and start/stop
+//! search/kind/direction/exchange filters, persisted display settings, staged checkboxes, and start/stop
 //! (Apply) buttons. These methods extend `StrategiesView`; state and pure helpers live in [`super`]
 //! and [`super::logic`].
 
@@ -28,7 +28,7 @@ impl StrategiesView {
     ///     store: Current strategy and order snapshot.
     ///     cores: Visible cores in canonical order.
     ///     node_data: Row data keyed by the tree adapter's stable ids.
-    ///     pane: This frame's cached kinds list, Start/Stop plan and footer label width.
+    ///     pane: This frame's cached kind and exchange lists, Start/Stop plan, and footer label width.
     ///     cx: View context used by the settings popover and callbacks.
     ///
     /// Returns:
@@ -48,7 +48,7 @@ impl StrategiesView {
         // The `CoreStore -> MoonTreeItem` adapter plus rows, DnD, and menus live in `moon`.
         let tree_el = self.moon_tree_el(node_data, cx);
 
-        // Search, strategy-kind filter, and direction filter.
+        // Search and the strategy-kind, direction, and exchange filters.
         let kind_text = self
             .filter
             .kind
@@ -59,6 +59,26 @@ impl StrategiesView {
             None => t!("strat.all_dirs").to_string(),
             Some(true) => "SHORT".to_string(),
             Some(false) => "LONG".to_string(),
+        };
+
+        // A selection whose cores have all disconnected still names itself, from the identity alone
+        // (`venue_id_label`) or as the shared unidentified caption. Falling back to "all exchanges"
+        // instead would leave an empty tree beside a trigger claiming nothing is filtered.
+        let exchange_text = match self.filter.exchange {
+            None => t!("strat.all_exchanges").to_string(),
+            Some(selected) => pane
+                .exchanges
+                .iter()
+                .find(|(section, _)| *section == selected)
+                .map(|(_, label)| label.clone())
+                .unwrap_or_else(|| match selected {
+                    crate::core_order::ExchangeSection::Venue(id) => {
+                        crate::controls::venue_id_label(id)
+                    }
+                    crate::core_order::ExchangeSection::Unidentified => {
+                        crate::controls::venue_section_label(None)
+                    }
+                }),
         };
 
         let collapsed = self.expanded_cores.is_empty() && self.expanded_folders.is_empty();
@@ -115,6 +135,7 @@ impl StrategiesView {
                             .items_center()
                             .child(self.combo_kind(kind_text, &pane.kinds, cx))
                             .child(self.combo_dir(dir_text, cx))
+                            .child(self.combo_exchange(exchange_text, &pane.exchanges, cx))
                             .child({
                                 let (cc, ct) = self.default_target(store, cores);
                                 self.create_dropdown(cc, ct, cx)
@@ -252,6 +273,82 @@ impl StrategiesView {
             .fit_trigger_width(96.0, 128.0)
             .menu_width_scaled(140.0)
             .menu_size(MoonMenuSize::Compact)
+            .items(items)
+            .into_any_element()
+    }
+
+    /// Render the exchange-filter combo box with "all exchanges" and the sections currently present.
+    ///
+    /// Single selection, like its two neighbours: one exchange narrows the tree to the cores of that
+    /// section. The entries are DERIVED — the list is whatever the connected cores partition into,
+    /// so a build never carries a roster of exchange names to fall behind the directory.
+    ///
+    /// Args:
+    ///     current: Caption already resolved for the trigger, including the vanished-selection case.
+    ///     exchanges: This frame's cached sections in canonical order.
+    ///     cx: View context used to wire the selection callbacks.
+    ///
+    /// Returns:
+    ///     Complete dropdown as one type-erased element.
+    fn combo_exchange(
+        &self,
+        current: String,
+        exchanges: &[(crate::core_order::ExchangeSection, String)],
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        use crate::core_order::ExchangeSection;
+
+        let view = cx.entity();
+        let selected_exchange = self.filter.exchange;
+        let mut items = Vec::with_capacity(exchanges.len() + 1);
+        items.push(
+            MoonMenuItem::with_key("exch-all", t!("strat.all_exchanges").to_string())
+                .selected(selected_exchange.is_none())
+                .on_click({
+                    let view = view.clone();
+                    move |_, _, app| {
+                        view.update(app, |this, c| {
+                            if this.filter.exchange.is_some() {
+                                this.filter.exchange = None;
+                                c.notify();
+                            }
+                        });
+                    }
+                }),
+        );
+        for (section, label) in exchanges {
+            let section = *section;
+            let view = view.clone();
+            // Keyed by IDENTITY, not by the caption: an element id built from a localized or
+            // wire-reported name would change under a language switch and under a core rename.
+            let key = match section {
+                ExchangeSection::Unidentified => "exch-unknown".to_string(),
+                ExchangeSection::Venue(id) => format!("exch-{}-{}", id.code, id.dex),
+            };
+            items.push(
+                MoonMenuItem::with_key(key, label.clone())
+                    .selected(selected_exchange == Some(section))
+                    .on_click(move |_, _, app| {
+                        view.update(app, |this, c| {
+                            if this.filter.exchange != Some(section) {
+                                this.filter.exchange = Some(section);
+                                c.notify();
+                            }
+                        });
+                    }),
+            );
+        }
+        MoonDropdown::new("strat-exchange-filter")
+            .label(current)
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::Action)
+            // Roomier than its neighbours at both ends: a venue caption is a brand plus a market
+            // kind ("Binance Quarterly"), and a HIP-3 core appends its DEX name on top of that.
+            .fit_trigger_width(96.0, 150.0)
+            .fit_menu_width(160.0, 320.0)
+            .menu_size(MoonMenuSize::Compact)
+            .menu_max_height_ui(240.0)
             .items(items)
             .into_any_element()
     }
