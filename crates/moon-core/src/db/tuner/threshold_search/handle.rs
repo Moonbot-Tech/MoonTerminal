@@ -42,6 +42,18 @@ const STAGE_FIELD_BITS: u32 = 24;
 /// Largest value the packed `done`/`total` fields can hold.
 const STAGE_FIELD_MAX: usize = (1 << STAGE_FIELD_BITS) - 1;
 
+/// Pack one `(step, done, total)` into the stage word.
+///
+/// Values above what the packed fields hold are clamped rather than wrapped: this drives a
+/// caption, and a clamped count merely stops rising while a wrapped one counts backwards. The top
+/// bit is always set so a published stage is never zero, which is what lets zero mean "no stage".
+fn pack_stage(step: usize, done: usize, total: usize) -> u64 {
+    ((step as u64) << (2 * STAGE_FIELD_BITS))
+        | ((done.min(STAGE_FIELD_MAX) as u64) << STAGE_FIELD_BITS)
+        | total.min(STAGE_FIELD_MAX) as u64
+        | 1 << 63
+}
+
 impl SearchHandle {
     /// Build a handle for one search run.
     pub fn new() -> Self {
@@ -103,14 +115,43 @@ impl SearchHandle {
     /// Publish the stage of a multi-stage run: `step` is the outer iteration, `done` of `total`
     /// the progress within it.
     ///
-    /// Values above what the packed word holds are clamped rather than wrapped: this drives a
-    /// caption, and a clamped count merely stops rising while a wrapped one counts backwards.
+    /// The unconditional publisher, for the stages that are reached in sequence by one thread.
+    /// Concurrent publishers take [`Self::advance_stage`] instead.
     pub(super) fn set_stage(&self, step: usize, done: usize, total: usize) {
-        let packed = ((step as u64) << (2 * STAGE_FIELD_BITS))
-            | ((done.min(STAGE_FIELD_MAX) as u64) << STAGE_FIELD_BITS)
-            | total.min(STAGE_FIELD_MAX) as u64;
-        // Never zero once a stage has been published, so `stage()` can use zero for "no stage".
-        self.0.stage.store(packed | 1 << 63, Ordering::Relaxed);
+        self.0
+            .stage
+            .store(pack_stage(step, done, total), Ordering::Relaxed);
+    }
+
+    /// Publish a stage that may not move BACKWARD inside the step already standing.
+    ///
+    /// For the concurrent publishers. Composition scores one beam depth's masks in parallel, so
+    /// two of them can take their progress numbers in one order and publish them in the other; a
+    /// plain store would then let the caption count down, which reads as work being redone rather
+    /// than as arrival order. A lower `done` for the step that already stands is dropped instead.
+    ///
+    /// A LATER step always replaces whatever stood before it, whatever its `done` — that is a move
+    /// forward through the run, not a regression within one stage. The comparison is one unsigned
+    /// compare over the packed word above the `total` field, which orders it by `(step, done)`
+    /// exactly because the two sit in that order inside it.
+    pub(super) fn advance_stage(&self, step: usize, done: usize, total: usize) {
+        let next = pack_stage(step, done, total);
+        let mut current = self.0.stage.load(Ordering::Relaxed);
+        loop {
+            // Same step and an equal-or-higher count already published: nothing to say.
+            if current >> STAGE_FIELD_BITS >= next >> STAGE_FIELD_BITS {
+                return;
+            }
+            match self.0.stage.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(seen) => current = seen,
+            }
+        }
     }
 
     /// Withdraw the published stage: the run continues, but no longer has a step to report.
