@@ -250,6 +250,13 @@ impl SettingsView {
                     &hotkeys,
                     cx,
                 ),
+                self.hotkey_row(
+                    t!("hotkeys.chart_shot").to_string(),
+                    t!("hotkeys.chart_shot_hint").to_string(),
+                    HotkeySlot::ChartShot,
+                    &hotkeys,
+                    cx,
+                ),
             ],
             HotkeyGroup::Draw => vec![
                 self.hotkey_row(

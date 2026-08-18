@@ -22,6 +22,7 @@ mod refs;
 mod render;
 mod render_input;
 mod report_trades;
+pub(crate) mod shot;
 #[cfg(test)]
 mod tests;
 mod trade;
@@ -650,6 +651,24 @@ impl ChartPanel {
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     pub fn debug_data_handle(&self) -> crate::chartdx::ChartDataHandle {
         self.chart.data_handle()
+    }
+
+    /// This panel's chart-slot rectangle, in window-relative LOGICAL pixels, plus the device
+    /// pixels per logical pixel and the slot's size already in DEVICE pixels.
+    ///
+    /// The slot is the `gpu_canvas` element: plot, price axis, time axis, order book and the corner
+    /// caption, and none of the panel's GPUI chrome around them. That is exactly the region the
+    /// chart shot copies, which is why this accessor exists at all - `self.chart` is private to
+    /// this module tree and `shot` is the one caller from outside it.
+    ///
+    /// `None` before the first paint: the geometry is published by the GPU canvas per frame
+    /// (`chartdx::data_state::state::apply_slot_geometry`), so a chart in a tab that has never been
+    /// shown has none yet.
+    ///
+    /// Returns:
+    ///     Logical bounds, the window scale, and the engine's physical slot size after a paint.
+    pub(crate) fn shot_geometry(&self) -> Option<(Bounds<Pixels>, f32, (u32, u32))> {
+        self.chart.slot_geometry()
     }
 
     /// Mark whether this panel is part of the currently rendered GPUI scene. This only gates

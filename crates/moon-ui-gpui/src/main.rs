@@ -493,6 +493,20 @@ struct Backend {
     /// enter and leave events. Cursor-dependent hotkeys such as `new_long` and `new_short` use it
     /// to place an order at the pointer price regardless of focus. The weak handle may expire.
     hovered_chart: Option<WeakEntity<crate::panels::ChartPanel>>,
+    /// The last chart the pointer entered in each OS window, retained after `hovered_chart` is
+    /// cleared on leave and kept per window rather than once for the application.
+    ///
+    /// The chart shot needs it because a screenshot hotkey is not a cursor gesture: the user
+    /// presses it after moving the pointer to a toolbar, a settings field, or off the chart
+    /// entirely, and still means the chart they were just working in. The weak handle dies with
+    /// the panel, so a closed chart resolves to `None` without anyone clearing it.
+    ///
+    /// Keyed BY WINDOW because `hovered_chart` is application-global while a keystroke is not: the
+    /// last chart hovered anywhere may sit in a detached window that is now behind the group window
+    /// the key actually reached. Capturing that one would grab an occluded rectangle belonging to a
+    /// window the user is not looking at, so each dispatcher looks up its OWN window and finds
+    /// nothing rather than something wrong.
+    last_chart: HashMap<gpui::AnyWindowHandle, WeakEntity<crate::panels::ChartPanel>>,
     /// Last observed aggregate revision of server-side chart alerts, gating remote-figure
     /// reconciliation in the feed-drain path.
     last_chart_alerts_activity: u64,

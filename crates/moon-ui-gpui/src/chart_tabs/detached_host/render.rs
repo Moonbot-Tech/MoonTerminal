@@ -6,8 +6,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput,
-    MoonPalette, MoonWindowFrame, MoonWindowFrameControls,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
+    MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -126,7 +126,9 @@ impl Render for DetachedChartHost {
             .relative()
             // Focusable root with window-hotkey handling through the shared dispatcher.
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| this.on_hotkey(ev, cx)))
+            .on_key_down(
+                cx.listener(|this, ev: &KeyDownEvent, window, cx| this.on_hotkey(ev, window, cx)),
+            )
             .child(
                 h_flex()
                     .h(header_h)

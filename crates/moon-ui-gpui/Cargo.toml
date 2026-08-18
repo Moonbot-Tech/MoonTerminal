@@ -99,11 +99,21 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    # OpenClipboard/EmptyClipboard/SetClipboardData/RegisterClipboardFormatW, so the chart shot can
+    # publish one bitmap under BOTH CF_DIB and the registered "PNG" format in a single ownership
+    # window (panels/chart/shot/clipboard_win.rs). GPUI's own writer publishes "PNG" alone, and a
+    # second format cannot be appended after it: SetClipboardData needs ownership, which only
+    # EmptyClipboard establishes.
+    "Win32_System_DataExchange",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Kernel",
+    # GlobalAlloc/GlobalLock/GlobalUnlock - the GMEM_MOVEABLE blocks the clipboard takes ownership of.
+    "Win32_System_Memory",
     "Win32_System_LibraryLoader",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
+    # The CF_DIB clipboard format id.
+    "Win32_System_Ole",
     "Win32_UI_HiDpi",
     # GetDoubleClickTime, so the chart pairs its own presses on the same interval the platform
     # used to count them (panels/chart/click_series.rs).

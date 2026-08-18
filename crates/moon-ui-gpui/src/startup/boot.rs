@@ -251,6 +251,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         // otherwise land in the developer's saved workspace.
         persist_allowed: firetest_config.is_none(),
         hovered_chart: None,
+        last_chart: HashMap::new(),
         detached,
         detached_dirty: false,
         repin_request: Vec::new(),
