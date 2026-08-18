@@ -533,10 +533,6 @@ chart.candles.mode_off:
   ru: "Нет"
   en: "Off"
   es: "No"
-chart.candles.price_lines:
-  ru: "Линии цены (last/mark)"
-  en: "Price lines (last/mark)"
-  es: "Líneas de precio (last/mark)"
 chart.candles.mode_filled:
   ru: "Заливка"
   en: "Filled"
@@ -577,6 +573,18 @@ chart.candles.limit:
   ru: "Лимит трейдов"
   en: "Trades limit"
   es: "Límite de trades"
+chart.candles.last_price_line:
+  ru: "Линия Last price"
+  en: "Last price line"
+  es: "Línea Last price"
+chart.candles.mark_price_line:
+  ru: "Линия Mark price"
+  en: "Mark price line"
+  es: "Línea Mark price"
+chart.candles.moonshot_zone:
+  ru: "Коридор MoonShot"
+  en: "MoonShot corridor"
+  es: "Corredor MoonShot"
 chart.candles.wicks_in_zone:
   ru: "Тени в зоне трейдов"
   en: "Wicks in trade zone"

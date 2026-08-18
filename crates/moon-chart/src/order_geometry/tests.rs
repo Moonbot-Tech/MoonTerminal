@@ -114,6 +114,7 @@ fn draw_order_segments(
         0.0,
         10_000.0,
         10_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -218,6 +219,7 @@ fn an_order_dated_only_by_its_exit_survives_a_window_before_its_creation() {
         0.0,
         400_000.0,
         400_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -258,6 +260,7 @@ fn moonshot_zone_keeps_moonbot_fixed_opacity() {
         0.0,
         10_000.0,
         10_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -295,6 +298,7 @@ fn server_trace_is_separate_from_active_order_line() {
         0.0,
         10_000.0,
         10_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -382,6 +386,7 @@ fn dragging_order_keeps_server_trace_visible() {
         0.0,
         10_000.0,
         10_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -463,6 +468,7 @@ fn geometry_for_scaled(
         0.0,
         800_000.0,
         800_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -626,6 +632,7 @@ fn entry_fill_before_a_fallback_creation_is_clamped_to_the_line_start() {
         0.0,
         800_000.0,
         800_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -793,6 +800,7 @@ fn filled_repriced_entry_path_stops_at_fill_without_post_fill_risers() {
         0.0,
         800_000.0,
         800_000.0,
+        true,
         &mut zones,
         &mut hlines,
         &mut segs,
@@ -928,4 +936,88 @@ fn the_fill_arrow_matches_a_trade_history_arrow_at_every_scale_and_setting() {
             ARROW_HALF_W * expected
         );
     }
+}
+
+/// Turning the corridor off must silence the MoonShot area and NOTHING else. A panic-sell fill on
+/// the same order is a separate warning the user did not ask to hide, and the order's own lines are
+/// what the chart is for: hiding either of them would turn "hide the corridor" into "hide the order".
+#[test]
+fn moonshot_zone_toggle_hides_only_the_corridor() {
+    let mut row = test_order_with_buy_trace();
+    row.is_moon_shot = true;
+    row.corridor_price_down = 59_000.0;
+    row.corridor_price_up = 61_000.0;
+    // A panic sell needs both legs priced to fill between them, and the store only materializes the
+    // exit leg once the entry has FILLED (`order_lines.rs`, `let f = r.filled`). Without that the
+    // second zone is never built and the assertions below would pass on one zone vanishing.
+    row.panic_sell = true;
+    row.filled = true;
+    row.fill_pct = 100.0;
+    row.sell_price = 60_500.0;
+    row.sell_create_time_ms = 2_000.0;
+
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[row]));
+
+    let draw = |show_corridor: bool| {
+        let mut zones = Vec::new();
+        let mut hlines = Vec::new();
+        let mut segs = Vec::new();
+        let mut markers = Vec::new();
+        build_order_geometry(
+            &store,
+            "BTCUSDT",
+            &OrdersStyle::default(),
+            &ChartGraphicsCfg::default(),
+            1.0,
+            None,
+            None,
+            0.0,
+            3_000.0,
+            0.0,
+            10_000.0,
+            10_000.0,
+            show_corridor,
+            &mut zones,
+            &mut hlines,
+            &mut segs,
+            &mut markers,
+        );
+        (zones, segs)
+    };
+
+    let (shown, shown_segs) = draw(true);
+    let (hidden, hidden_segs) = draw(false);
+
+    let is_corridor = |z: &ZoneInstance| near(z.price0, 59_000.0) && near(z.price1, 61_000.0);
+    assert_eq!(
+        shown.iter().filter(|z| is_corridor(z)).count(),
+        1,
+        "the corridor is drawn while the toggle is on"
+    );
+    assert_eq!(
+        hidden.iter().filter(|z| is_corridor(z)).count(),
+        0,
+        "the corridor is gone while the toggle is off"
+    );
+    let is_panic_fill = |z: &ZoneInstance| near(z.price0, 60_000.0) && near(z.price1, 60_500.0);
+    assert_eq!(
+        shown.len(),
+        2,
+        "the fixture must build BOTH zones, or hiding one proves nothing"
+    );
+    assert_eq!(
+        hidden.len(),
+        1,
+        "only the corridor leaves the zone layer; the panic-sell fill stays"
+    );
+    assert!(
+        is_panic_fill(&hidden[0]),
+        "the surviving zone is the panic-sell fill"
+    );
+    assert_eq!(
+        hidden_segs.len(),
+        shown_segs.len(),
+        "the order's own lines are untouched by the corridor toggle"
+    );
 }

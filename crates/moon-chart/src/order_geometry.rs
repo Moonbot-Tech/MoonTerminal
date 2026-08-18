@@ -75,6 +75,11 @@ pub fn build_order_geometry(
     left_rel: f32,
     right_rel: f32,
     edge_rel: f32,
+    // Whether a MoonShot order fills its corridor. Per-chart, from `CandleViewCfg::moonshot_zone`:
+    // the corridor spans the whole pane width and is the loudest thing on a chart watching a
+    // MoonShot, so it is the one zone the user can turn off. The panic-sell fill below is NOT
+    // covered by it — that one marks an order about to be dumped and stays unconditional.
+    show_moonshot_zone: bool,
     zones: &mut Vec<ZoneInstance>,
     hlines: &mut Vec<LineInstance>,
     segs: &mut Vec<SegInstance>,
@@ -134,7 +139,7 @@ pub fn build_order_geometry(
                     zones.push(ZoneInstance::full_width(a.min(b), a.max(b), color));
                 }
             };
-            if ord.is_moon_shot {
+            if ord.is_moon_shot && show_moonshot_zone {
                 push_zone(
                     ord.corridor_price_down,
                     ord.corridor_price_up,

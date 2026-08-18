@@ -301,10 +301,10 @@ struct PaneRender {
     candle_upload: Vec<CandleGpu>,
     /// Last candle-series revision delivered to the GPU; `u64::MAX` means never delivered.
     last_candle_rev: u64,
-    /// Applied candle-view config. Any effective change resets history, including the time frame,
-    /// mode, trade or hidden-candle boundary, trade limit, outline, wick or neutral-zone behavior,
-    /// and price-line visibility. The separately cached GPU style also carries theme colors and fill
-    /// alpha.
+    /// Applied candle-view config, stored already reduced to `CandleViewCfg::history_inputs` — the
+    /// fields the history read consumes: time frame, mode, the trade-candle boundary and price-line
+    /// visibility. A change in any of them resets history. Style-only fields are neutralized there
+    /// and reach the separately cached GPU style, which also carries theme colors and fill alpha.
     applied_candle_cfg: moon_core::market::CandleViewCfg,
     /// Current-time time-frame bucket at the previous sync; movement shifts the trade zone and resets.
     last_zone_bucket: i64,
@@ -483,7 +483,7 @@ impl PaneRender {
             mark_line_upload: Vec::new(),
             candle_upload: Vec::new(),
             last_candle_rev: u64::MAX,
-            applied_candle_cfg: moon_core::market::CandleViewCfg::default(),
+            applied_candle_cfg: moon_core::market::CandleViewCfg::default().history_inputs(),
             last_zone_bucket: i64::MIN,
             candle_style: CandleStyleGpu::default(),
             price_style: PriceStyleGpu::default(),

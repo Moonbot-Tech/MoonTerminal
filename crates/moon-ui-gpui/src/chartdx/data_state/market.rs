@@ -274,8 +274,13 @@ impl ChartDataState {
             // measured in minutes, so resets are infrequent.
             let candle_cfg = self.candle_view;
             let candle_tf_ms = candle_cfg.tf_ms();
-            let candle_cfg_changed = pr.applied_candle_cfg != candle_cfg;
-            pr.applied_candle_cfg = candle_cfg;
+            // Only the fields the read actually consumes may buy a reset; the popup's style
+            // checkboxes and the MoonShot corridor must not. See `CandleViewCfg::history_inputs`,
+            // which owns that policy next to the struct it governs. The pane stores the already
+            // neutralized value, so the comparison costs nothing extra per sync.
+            let candle_history_inputs = candle_cfg.history_inputs();
+            let candle_cfg_changed = pr.applied_candle_cfg != candle_history_inputs;
+            pr.applied_candle_cfg = candle_history_inputs;
             // Mode None is a pure tick chart: do not build or draw candles, and do not restrict
             // crosses to a trade zone. Passing params=None below keeps trades across the full window.
             let candles_off = candles_disabled()
@@ -578,30 +583,28 @@ impl ChartDataState {
                     pixels_changed = true;
                 }
                 if history.price_lines_changed || history.combo_reset {
-                    // When Price Lines is disabled, omit last and mark lines. Changing the toggle
-                    // forces a history reset through candle_cfg_changed and reaches this branch.
-                    if candle_cfg.price_lines {
-                        fill_price_upload(
-                            &pr.history_buffers.last_points,
-                            pane.view.epoch_ms,
-                            &mut pr.last_line_upload,
-                        );
-                        fill_price_upload(
-                            &pr.history_buffers.mark_points,
-                            pane.view.epoch_ms,
-                            &mut pr.mark_line_upload,
-                        );
-                        crate::diag::bump_by(
-                            &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
-                            (pr.last_line_upload.len() + pr.mark_line_upload.len()) as u64,
-                        );
-                        pr.layers
-                            .set_price_lines(&pr.last_line_upload, &pr.mark_line_upload);
+                    // Each price line follows its OWN toggle, so one can be drawn without the
+                    // other. Flipping either forces a history reset through candle_cfg_changed and
+                    // reaches this branch; a disabled line uploads an empty buffer rather than a
+                    // stale one, because the layer keeps whatever it was last given.
+                    let last_points: &[_] = if candle_cfg.last_price_line {
+                        &pr.history_buffers.last_points
                     } else {
-                        pr.last_line_upload.clear();
-                        pr.mark_line_upload.clear();
-                        pr.layers.set_price_lines(&[], &[]);
-                    }
+                        &[]
+                    };
+                    fill_price_upload(last_points, pane.view.epoch_ms, &mut pr.last_line_upload);
+                    let mark_points: &[_] = if candle_cfg.mark_price_line {
+                        &pr.history_buffers.mark_points
+                    } else {
+                        &[]
+                    };
+                    fill_price_upload(mark_points, pane.view.epoch_ms, &mut pr.mark_line_upload);
+                    crate::diag::bump_by(
+                        &crate::diag::CHART_PRICE_LINE_UPLOAD_LEN,
+                        (pr.last_line_upload.len() + pr.mark_line_upload.len()) as u64,
+                    );
+                    pr.layers
+                        .set_price_lines(&pr.last_line_upload, &pr.mark_line_upload);
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }

@@ -76,6 +76,41 @@ fn hint_block(key: &str, p: MoonPalette, cx: &App) -> impl IntoElement {
     )
 }
 
+/// Build one checkbox bound to a single `CandleViewCfg` flag.
+///
+/// The popup's flag rows differ only in id, label and the field they write, so they share one
+/// builder instead of a hand-rolled block each; `set` is a plain fn pointer because none of these
+/// closures captures anything.
+///
+/// Args:
+///     entity: Popup host, updated on toggle.
+///     id: Per-host element identity prefix.
+///     suffix: Element id suffix, unique within this popup.
+///     label_key: Locale key for the label.
+///     checked: Current value, read fresh on every render.
+///     set: Writes the new value into the target's config.
+///
+/// Returns:
+///     The checkbox.
+fn flag_cb<T: CandlePopupHost>(
+    entity: &Entity<T>,
+    id: &str,
+    suffix: &str,
+    label_key: &str,
+    checked: bool,
+    set: fn(&mut CandleViewCfg, bool),
+) -> impl IntoElement {
+    let entity = entity.clone();
+    MoonCheckbox::new(SharedString::from(format!("{id}-{suffix}")))
+        .label(t!(label_key).to_string())
+        .checked(checked)
+        .size(MoonCheckboxSize::Compact)
+        .on_change(move |ch: &bool, _w, app| {
+            let v = *ch;
+            write_cfg(&entity, app, |c| set(c, v));
+        })
+}
+
 /// Edit the target config by loading its current value, mutating it, and applying it to the tab spec.
 fn write_cfg<T: CandlePopupHost>(
     entity: &Entity<T>,
@@ -215,40 +250,51 @@ fn render_candle_popup<T: CandlePopupHost>(
             },
         )
     };
-    // "Price lines" toggles the orange LastPrice and blue MarkPrice MoonProto lines.
-    let price_lines_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-price-lines")))
-            .label(t!("chart.candles.price_lines").to_string())
-            .checked(cfg.price_lines)
-            .size(MoonCheckboxSize::Compact)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.price_lines = v);
-            })
-    };
-    let wicks_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-wicks")))
-            .label(t!("chart.candles.wicks_in_zone").to_string())
-            .checked(cfg.wicks_in_zone)
-            .size(MoonCheckboxSize::Compact)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.wicks_in_zone = v);
-            })
-    };
-    let neutral_cb = {
-        let entity = entity.clone();
-        MoonCheckbox::new(SharedString::from(format!("{id}-neutral-zone")))
-            .label(t!("chart.candles.neutral_in_zone").to_string())
-            .checked(cfg.neutral_in_zone)
-            .size(MoonCheckboxSize::Compact)
-            .on_change(move |ch: &bool, _w, app| {
-                let v = *ch;
-                write_cfg(&entity, app, |c| c.neutral_in_zone = v);
-            })
-    };
+    // The two MoonProto price lines carry a toggle each: the orange LastPrice and the blue
+    // MarkPrice. A market whose provider reports no mark price draws none regardless of the flag.
+    let last_line_cb = flag_cb(
+        &entity,
+        id,
+        "last-price-line",
+        "chart.candles.last_price_line",
+        cfg.last_price_line,
+        |c, v| c.last_price_line = v,
+    );
+    let mark_line_cb = flag_cb(
+        &entity,
+        id,
+        "mark-price-line",
+        "chart.candles.mark_price_line",
+        cfg.mark_price_line,
+        |c, v| c.mark_price_line = v,
+    );
+    let wicks_cb = flag_cb(
+        &entity,
+        id,
+        "wicks",
+        "chart.candles.wicks_in_zone",
+        cfg.wicks_in_zone,
+        |c, v| c.wicks_in_zone = v,
+    );
+    let neutral_cb = flag_cb(
+        &entity,
+        id,
+        "neutral-zone",
+        "chart.candles.neutral_in_zone",
+        cfg.neutral_in_zone,
+        |c, v| c.neutral_in_zone = v,
+    );
+    // The MoonShot order's own corridor fill, NOT the layout popup's "zone" (that one shades the
+    // trading control strip). It spans the full pane width, so it is the one order area worth a
+    // switch of its own.
+    let moonshot_cb = flag_cb(
+        &entity,
+        id,
+        "moonshot-zone",
+        "chart.candles.moonshot_zone",
+        cfg.moonshot_zone,
+        |c, v| c.moonshot_zone = v,
+    );
     // Candle colors for up, down, and neutral are edited under Settings -> Interface. The single
     // theme is shared by all windows and stored with every color in theme.toml, so this only tells
     // users where to edit them.
@@ -317,9 +363,11 @@ fn render_candle_popup<T: CandlePopupHost>(
                     .child(hint_block("chart.candles.zone_hint", p, cx))
                     .child(hide_row)
                     .child(hint_block("chart.candles.hide_hint", p, cx))
-                    .child(price_lines_cb)
+                    .child(last_line_cb)
+                    .child(mark_line_cb)
                     .child(wicks_cb)
                     .child(neutral_cb)
+                    .child(moonshot_cb)
                     .child(colors_hint),
             ),
         )
