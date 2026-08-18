@@ -171,6 +171,119 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     return o;
 }
 
+// ---- Bottom volume band (mirrors candles.hlsl) -----------------------------
+struct VolumeStyle {
+    up: vec4<f32>,
+    down: vec4<f32>,
+    scale: vec4<f32>,
+    m: vec4<f32>,  // x style, y height fraction, z 1/max, w avg/max
+    m2: vec4<f32>, // x band cap px, y bar width px, z line px
+};
+
+@group(0) @binding(3) var<uniform> vs: VolumeStyle;
+
+struct VolumeBarOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) @interpolate(flat) up: u32,
+};
+
+fn vol_center_px(cd: Candle) -> vec2<f32> {
+    var tf_rel = cs.tf_rel;
+    if cd.tf_rel > 0.0 {
+        tf_rel = cd.tf_rel;
+    }
+    let x0 = cv.bounds.x + (cd.t_open - cv.view_time0) * cv.time_to_px;
+    return vec2<f32>(x0 + tf_rel * cv.time_to_px * 0.5, tf_rel * cv.time_to_px);
+}
+
+fn vol_band_h() -> f32 {
+    return min(cv.bounds.w * vs.m.y, vs.m2.x);
+}
+
+fn vol_height_px(cd: Candle) -> f32 {
+    let norm = clamp(cd.vol * vs.m.z, 0.0, 1.0);
+    return sqrt(norm) * vol_band_h();
+}
+
+fn vol_cull() -> VolumeBarOut {
+    var o: VolumeBarOut;
+    o.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+    o.up = 0u;
+    return o;
+}
+
+@vertex
+fn volume_bars_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VolumeBarOut {
+    if vs.m.x < 0.5 {
+        return vol_cull();
+    }
+    let cd = candles[iid];
+    let c0 = vol_center_px(cd);
+    let base = cv.bounds.y + cv.bounds.w - 1.0;
+    let h0 = vol_height_px(cd);
+    let corner = CORNERS_01[vid % 6u];
+
+    var o: VolumeBarOut;
+    o.up = 0u;
+    if cd.c >= cd.o {
+        o.up = 1u;
+    }
+
+    if vs.m.x < 1.5 {
+        let bw = clamp(c0.y * 0.5, 1.0, vs.m2.y);
+        let p0 = vec2<f32>(round(c0.x - bw * 0.5), base - h0);
+        var px = p0 + corner * vec2<f32>(bw, h0);
+        px.x = clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z);
+        o.pos = to_clip(px, cv.resolution);
+        return o;
+    }
+
+    let cd1 = candles[iid + 1u];
+    let c1 = vol_center_px(cd1);
+    let h1 = vol_height_px(cd1);
+    let x = mix(c0.x, c1.x, corner.x);
+    let h = mix(h0, h1, corner.x);
+    var pxh = vec2<f32>(x, base - h * (1.0 - corner.y));
+    pxh.x = clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z);
+    o.pos = to_clip(pxh, cv.resolution);
+    return o;
+}
+
+@fragment
+fn volume_bars_fragment(in: VolumeBarOut) -> @location(0) vec4<f32> {
+    return select(vs.down, vs.up, in.up == 1u);
+}
+
+struct VolumeScaleOut {
+    @builtin(position) pos: vec4<f32>,
+};
+
+@vertex
+fn volume_scale_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VolumeScaleOut {
+    var o: VolumeScaleOut;
+    if vs.m.x < 0.5 {
+        o.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+        return o;
+    }
+    let band = vol_band_h();
+    var frac = sqrt(clamp(vs.m.w, 0.0, 1.0));
+    if iid == 0u {
+        frac = 1.0;
+    }
+    let base = cv.bounds.y + cv.bounds.w - 1.0;
+    let y = round(base - band * frac);
+    let th = max(vs.m2.z, 1.0);
+    let corner = CORNERS_01[vid % 6u];
+    let px = vec2<f32>(cv.bounds.x, y) + corner * vec2<f32>(cv.bounds.z, th);
+    o.pos = to_clip(px, cv.resolution);
+    return o;
+}
+
+@fragment
+fn volume_scale_fragment(_in: VolumeScaleOut) -> @location(0) vec4<f32> {
+    return vs.scale;
+}
+
 @fragment
 fn candles_fragment(in: CandleOut) -> @location(0) vec4<f32> {
     if in.outline > 0.5 {

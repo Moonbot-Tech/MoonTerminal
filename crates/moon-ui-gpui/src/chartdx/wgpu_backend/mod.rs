@@ -10,7 +10,7 @@ use moon_core::data::{LevelInstance, PriceLinePoint};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
-    DEFAULT_VOLUME_ALPHA, GridParams, HLineGpu, MarkerGpu, ReadoutRect, SegGpu, ZoneGpu,
+    GridParams, HLineGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu, VolumeStyleGpu, ZoneGpu,
     append_cross_ring, cross_append_ranges, cross_volume_max, evicted_cross_ranges, hl_of, mk_of,
     ordered_cross_ring, ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, seg_of,
     update_cross_volume_max, zone_of,
@@ -113,6 +113,10 @@ struct Pipelines {
     cursor_layout: wgpu::BindGroupLayout,
     readout_layout: wgpu::BindGroupLayout,
     view_storage_layout: wgpu::BindGroupLayout,
+    /// The two price pipelines only. NOT `view_storage_layout`: that one is shared with
+    /// crosses, volume, zone, hline, seg and marker, and a third binding on it would
+    /// invalidate all six of their bind groups.
+    price_layout: wgpu::BindGroupLayout,
     book_layout: wgpu::BindGroupLayout,
     candle_layout: wgpu::BindGroupLayout,
     background: wgpu::RenderPipeline,
@@ -127,6 +131,8 @@ struct Pipelines {
     book_bg: wgpu::RenderPipeline,
     book_bars: wgpu::RenderPipeline,
     candles: wgpu::RenderPipeline,
+    volume_bars: wgpu::RenderPipeline,
+    volume_scale: wgpu::RenderPipeline,
     zone: wgpu::RenderPipeline,
     hline: wgpu::RenderPipeline,
     seg: wgpu::RenderPipeline,
@@ -162,6 +168,12 @@ struct ComboTexture {
     last_price_to_px: f32,
     last_view_price0: f32,
     last_marker_half: f32,
+    /// Trade-volume opacity the texture was baked with.
+    ///
+    /// Part of the cache key because the bars are baked INTO the texture. It was a
+    /// compile-time constant until the theme gained `trade_volume_alpha`, which is why the
+    /// other four fields were once a complete key and no longer are.
+    last_volume_alpha: f32,
     valid: bool,
 }
 
@@ -372,6 +384,8 @@ pub struct WgpuLayers {
     cross_buffer: BufferSlot,
     last_line_buffer: BufferSlot,
     mark_line_buffer: BufferSlot,
+    price_style_uniform: BufferSlot,
+    price_style: PriceStyleGpu,
     level_buffer: BufferSlot,
     zone_buffer: BufferSlot,
     hline_buffer: BufferSlot,
@@ -379,6 +393,8 @@ pub struct WgpuLayers {
     marker_buffer: BufferSlot,
     candle_buffer: BufferSlot,
     candle_style_uniform: BufferSlot,
+    volume_style_uniform: BufferSlot,
+    volume_style: VolumeStyleGpu,
     combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,

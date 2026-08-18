@@ -17,7 +17,6 @@ impl WgpuLayers {
         let mut view = *view;
         view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
         view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
         let mut binds_dirty = false;
         binds_dirty |= self.bg_uniform.write(
             device,
@@ -115,6 +114,7 @@ impl WgpuLayers {
         if self.price_line_buffers_dirty
             || self.last_line_buffer.buffer.is_none()
             || self.mark_line_buffer.buffer.is_none()
+            || self.price_style_uniform.buffer.is_none()
         {
             binds_dirty |= self.last_line_buffer.write(
                 device,
@@ -129,6 +129,13 @@ impl WgpuLayers {
                 "moon_chart_mark_line",
                 wgpu::BufferUsages::STORAGE,
                 &self.mark_line,
+            );
+            binds_dirty |= self.price_style_uniform.write(
+                device,
+                queue,
+                "moon_chart_price_style",
+                wgpu::BufferUsages::UNIFORM,
+                &[self.price_style],
             );
             self.price_line_buffers_dirty = false;
         }
@@ -181,6 +188,7 @@ impl WgpuLayers {
         if self.candle_buffers_dirty
             || self.candle_buffer.buffer.is_none()
             || self.candle_style_uniform.buffer.is_none()
+            || self.volume_style_uniform.buffer.is_none()
         {
             binds_dirty |= self.candle_buffer.write(
                 device,
@@ -195,6 +203,13 @@ impl WgpuLayers {
                 "moon_chart_candle_style",
                 wgpu::BufferUsages::UNIFORM,
                 &[self.candle_style],
+            );
+            binds_dirty |= self.volume_style_uniform.write(
+                device,
+                queue,
+                "moon_chart_volume_style",
+                wgpu::BufferUsages::UNIFORM,
+                &[self.volume_style],
             );
             self.candle_buffers_dirty = false;
         }
@@ -217,7 +232,6 @@ impl WgpuLayers {
         let mut view = *view;
         view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
         view.volume_sell_inv = 1.0 / self.volume_sell_max.max(1e-6);
-        view.volume_alpha = DEFAULT_VOLUME_ALPHA;
         let mut binds_dirty = false;
         binds_dirty |= self.bg_uniform.write(
             device,
@@ -279,6 +293,36 @@ impl WgpuLayers {
                 binding: 0,
                 resource: uniform.binding(),
             }],
+        })
+    }
+
+    /// Bind group for one price line: the view uniform, its point buffer, and the shared style.
+    ///
+    /// Deliberately not `bind_view_storage`: `price_layout` carries a third entry, and a bind
+    /// group built against the two-entry layout would be rejected at creation.
+    fn bind_price<'a>(
+        &'a self,
+        device: &wgpu::Device,
+        layout: &'a wgpu::BindGroupLayout,
+        points: &'a BufferSlot,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("moon_chart_price_bind"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.view_uniform.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: points.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.price_style_uniform.binding(),
+                },
+            ],
         })
     }
 
@@ -350,18 +394,8 @@ impl WgpuLayers {
             &self.combo_view_uniform,
             &self.cross_buffer,
         );
-        let last_bind = self.bind_view_storage(
-            device,
-            &pipelines.view_storage_layout,
-            &self.view_uniform,
-            &self.last_line_buffer,
-        );
-        let mark_bind = self.bind_view_storage(
-            device,
-            &pipelines.view_storage_layout,
-            &self.view_uniform,
-            &self.mark_line_buffer,
-        );
+        let last_bind = self.bind_price(device, &pipelines.price_layout, &self.last_line_buffer);
+        let mark_bind = self.bind_price(device, &pipelines.price_layout, &self.mark_line_buffer);
         let book_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("moon_chart_book_bind"),
             layout: &pipelines.book_layout,
@@ -395,6 +429,13 @@ impl WgpuLayers {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.candle_buffer.binding(),
+                },
+                // Paired with `uniform_entry(3, ..)` on `candle_layout`. A layout entry without its
+                // bind-group entry, or the reverse, is rejected at bind-group creation - on Linux
+                // only, which is the one platform this tree cannot build.
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.volume_style_uniform.binding(),
                 },
             ],
         });

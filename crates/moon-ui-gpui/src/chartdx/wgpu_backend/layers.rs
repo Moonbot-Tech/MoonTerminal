@@ -40,6 +40,8 @@ impl WgpuLayers {
             cross_buffer: BufferSlot::default(),
             last_line_buffer: BufferSlot::default(),
             mark_line_buffer: BufferSlot::default(),
+            price_style_uniform: BufferSlot::default(),
+            price_style: PriceStyleGpu::default(),
             level_buffer: BufferSlot::default(),
             zone_buffer: BufferSlot::default(),
             hline_buffer: BufferSlot::default(),
@@ -47,6 +49,8 @@ impl WgpuLayers {
             marker_buffer: BufferSlot::default(),
             candle_buffer: BufferSlot::default(),
             candle_style_uniform: BufferSlot::default(),
+            volume_style_uniform: BufferSlot::default(),
+            volume_style: VolumeStyleGpu::default(),
             combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
@@ -178,6 +182,25 @@ impl WgpuLayers {
         }
     }
 
+    /// Idempotently sets the bottom-volume band style.
+    pub fn set_volume_style(&mut self, style: VolumeStyleGpu) {
+        if self.volume_style != style {
+            self.volume_style = style;
+            self.candle_buffers_dirty = true;
+            // The band is drawn in the BASE pass, so a style change with no cache
+            // invalidation would not appear until something else forced a rebake.
+            self.base_cache.valid = false;
+        }
+    }
+
+    /// Idempotently sets the price-line colours and half-width.
+    pub fn set_price_style(&mut self, style: PriceStyleGpu) {
+        if self.price_style != style {
+            self.price_style = style;
+            self.price_line_buffers_dirty = true;
+        }
+    }
+
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
         self.last_line = tail_vec(last, self.price_line_capacity);
         self.mark_line = tail_vec(mark, self.price_line_capacity);
@@ -232,6 +255,8 @@ impl WgpuLayers {
         self.marker_buffer = BufferSlot::default();
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
+        self.volume_style_uniform = BufferSlot::default();
+        self.price_style_uniform = BufferSlot::default();
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;

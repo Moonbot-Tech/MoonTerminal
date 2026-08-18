@@ -96,7 +96,10 @@ fn volume_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: 
     let c = crosses[iid];
     var out: VolumeOut;
     let sx = cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px;
-    if sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0 {
+    // side>=2 (liquidations) do not draw a volume bar, so cull them from this pass. They are
+    // also excluded from the volume SCALE, so a bar here would be normalised against a maximum
+    // it never contributed to and would clamp at full band height.
+    if sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0 || c.side >= 2u {
         out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         out.side = 0u;
         return out;

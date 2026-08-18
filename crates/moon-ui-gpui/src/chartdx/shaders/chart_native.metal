@@ -344,6 +344,96 @@ vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
     return out;
 }
 
+// ---- Bottom volume band (mirrors candles.hlsl) -----------------------------
+struct VolumeStyle {
+    float4 up;
+    float4 down;
+    float4 scale;
+    float4 m;  // x style, y height fraction, z 1/max, w avg/max
+    float4 m2; // x band cap px, y bar width px, z line px
+};
+
+struct VolumeBarOut {
+    float4 position [[position]];
+    uint up [[flat]];
+};
+
+static inline float2 vol_center_px(constant ChartView& cv, constant CandleStyle& cs, Candle cd) {
+    float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs.tf_rel;
+    float x0 = cv.bounds.x + (cd.t_open - cv.view_time0) * cv.time_to_px;
+    return float2(x0 + tf_rel * cv.time_to_px * 0.5, tf_rel * cv.time_to_px);
+}
+
+static inline float vol_band_h(constant ChartView& cv, constant VolumeStyle& vs) {
+    return min(cv.bounds.w * vs.m.y, vs.m2.x);
+}
+
+static inline float vol_height_px(constant ChartView& cv, constant VolumeStyle& vs, Candle cd) {
+    float norm = saturate(cd.vol * vs.m.z);
+    return sqrt(norm) * vol_band_h(cv, vs);
+}
+
+vertex VolumeBarOut volume_bars_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                                       constant ChartView& cv [[buffer(0)]],
+                                       constant CandleStyle& cs [[buffer(1)]],
+                                       const device Candle* candles [[buffer(2)]],
+                                       constant VolumeStyle& vs [[buffer(3)]]) {
+    if (vs.m.x < 0.5) {
+        return { float4(2.0, 2.0, 0.0, 1.0), 0u };
+    }
+    Candle cd = candles[iid];
+    float2 c0 = vol_center_px(cv, cs, cd);
+    float base = cv.bounds.y + cv.bounds.w - 1.0;
+    float h0 = vol_height_px(cv, vs, cd);
+    float2 corner = CORNERS_01[vid % 6u];
+    uint up = (cd.c >= cd.o) ? 1u : 0u;
+
+    if (vs.m.x < 1.5) {
+        float bw = clamp(c0.y * 0.5, 1.0, vs.m2.y);
+        float2 px = float2(round(c0.x - bw * 0.5), base - h0) + corner * float2(bw, h0);
+        px.x = clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z);
+        return { to_clip(px, cv.resolution), up };
+    }
+
+    Candle cd1 = candles[iid + 1];
+    float2 c1 = vol_center_px(cv, cs, cd1);
+    float h1 = vol_height_px(cv, vs, cd1);
+    float x = mix(c0.x, c1.x, corner.x);
+    float h = mix(h0, h1, corner.x);
+    float2 pxh = float2(x, base - h * (1.0 - corner.y));
+    pxh.x = clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z);
+    return { to_clip(pxh, cv.resolution), up };
+}
+
+fragment float4 volume_bars_fragment(VolumeBarOut in [[stage_in]],
+                                     constant VolumeStyle& vs [[buffer(3)]]) {
+    return (in.up == 1u) ? vs.up : vs.down;
+}
+
+struct VolumeScaleOut {
+    float4 position [[position]];
+};
+
+vertex VolumeScaleOut volume_scale_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                                          constant ChartView& cv [[buffer(0)]],
+                                          constant VolumeStyle& vs [[buffer(3)]]) {
+    if (vs.m.x < 0.5) {
+        return { float4(2.0, 2.0, 0.0, 1.0) };
+    }
+    float band = vol_band_h(cv, vs);
+    float frac = (iid == 0u) ? 1.0 : sqrt(saturate(vs.m.w));
+    float base = cv.bounds.y + cv.bounds.w - 1.0;
+    float y = round(base - band * frac);
+    float th = max(vs.m2.z, 1.0);
+    float2 corner = CORNERS_01[vid % 6u];
+    float2 px = float2(cv.bounds.x, y) + corner * float2(cv.bounds.z, th);
+    return { to_clip(px, cv.resolution) };
+}
+
+fragment float4 volume_scale_fragment(constant VolumeStyle& vs [[buffer(3)]]) {
+    return vs.scale;
+}
+
 fragment float4 candles_fragment(CandleOut in [[stage_in]],
                                  constant CandleStyle& cs [[buffer(1)]]) {
     if (in.outline > 0.5) {
@@ -393,7 +483,10 @@ vertex VolumeOut volume_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                const device Cross* crosses [[buffer(1)]]) {
     Cross c = crosses[iid];
     float sx = cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px;
-    if (sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0) {
+    // side>=2 (liquidations) do not draw a volume bar, so cull them from this pass. They are
+    // also excluded from the volume SCALE, so a bar here would be normalised against a maximum
+    // it never contributed to and would clamp at full band height.
+    if (sx < cv.bounds.x - 2.0 || sx > cv.bounds.x + cv.bounds.z + 2.0 || c.qty <= 0.0 || c.side >= 2) {
         return { float4(2.0, 2.0, 0.0, 1.0), 0 };
     }
     float inv = c.side == 0 ? cv.volume_buy_inv : cv.volume_sell_inv;
@@ -417,23 +510,33 @@ static inline float2 price_point_px(constant ChartView& cv, PricePoint p) {
                   cv.bounds.y + cv.bounds.w - (p.price - cv.view_price0) * cv.price_to_px);
 }
 
+struct PriceStyle {
+    float4 last;
+    float4 mark;
+    float4 m; // x = line half-width in physical px
+};
+
+// buffer(2) on BOTH stages. `set_uniform` binds one index to the vertex and the fragment
+// function together, and MSL gives each stage its own index space, so splitting the two would
+// read a different buffer in the fragment than the one that was bound.
 vertex PriceOut price_line_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                   constant ChartView& cv [[buffer(0)]],
-                                  const device PricePoint* points [[buffer(1)]]) {
+                                  const device PricePoint* points [[buffer(1)]],
+                                  constant PriceStyle& ps [[buffer(2)]]) {
     float2 a = price_point_px(cv, points[iid]);
     float2 b = price_point_px(cv, points[iid + 1]);
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;
-    float2 nrm = float2(-dir.y, dir.x) * 0.85;
+    float2 nrm = float2(-dir.y, dir.x) * max(ps.m.x, 0.25);
     float along = (vid == 1 || vid == 2 || vid == 4) ? 1.0 : 0.0;
     float side = (vid == 2 || vid == 4 || vid == 5) ? 1.0 : -1.0;
     float2 px = mix(a, b, along) + nrm * side;
     return { to_clip(px, cv.resolution) };
 }
 
-fragment float4 price_last_fragment() { return float4(0.82, 0.60, 0.36, 0.82); }
-fragment float4 price_mark_fragment() { return float4(0.42, 0.72, 1.00, 0.78); }
+fragment float4 price_last_fragment(constant PriceStyle& ps [[buffer(2)]]) { return ps.last; }
+fragment float4 price_mark_fragment(constant PriceStyle& ps [[buffer(2)]]) { return ps.mark; }
 
 struct BookOut { float4 position [[position]]; float kind [[flat]]; };
 

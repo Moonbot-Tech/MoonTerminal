@@ -13,7 +13,7 @@ use super::gpu::{
     create_alpha_blend, create_dynamic_cb, create_srv, create_structured, device_changed,
     full_viewport, set_scissor_rect, update_dynamic,
 };
-use super::types::{CandleGpu, CandleStyleGpu, ChartViewGpu};
+use super::types::{CandleGpu, CandleStyleGpu, ChartViewGpu, VolumeStyleGpu};
 
 /// Candle instance capacity of the GPU buffer. The visible window plus prefetch uses hundreds;
 /// 4096 leaves ample headroom while consuming 96 KB of VRAM at 24 bytes per instance. On
@@ -24,6 +24,11 @@ const CANDLES_HLSL: &str = include_str!("shaders/candles.hlsl");
 struct CandlePipe {
     vs: ID3D11VertexShader,
     ps: ID3D11PixelShader,
+    volume_vs: ID3D11VertexShader,
+    volume_ps: ID3D11PixelShader,
+    scale_vs: ID3D11VertexShader,
+    scale_ps: ID3D11PixelShader,
+    volume_cb: ID3D11Buffer,
     blend: ID3D11BlendState,
     buffer: ID3D11Buffer,
     srv: ID3D11ShaderResourceView,
@@ -37,6 +42,8 @@ pub struct CandleLayer {
     count: u32,
     style: CandleStyleGpu,
     style_dirty: bool,
+    volume_style: VolumeStyleGpu,
+    volume_dirty: bool,
     device_generation_seen: u64,
 }
 
@@ -48,6 +55,8 @@ impl CandleLayer {
             count: 0,
             style: CandleStyleGpu::default(),
             style_dirty: true,
+            volume_style: VolumeStyleGpu::default(),
+            volume_dirty: true,
             device_generation_seen: 0,
         }
     }
@@ -65,6 +74,14 @@ impl CandleLayer {
         }
     }
 
+    /// Idempotently sets the bottom-volume band style.
+    pub fn set_volume_style(&mut self, style: VolumeStyleGpu) {
+        if self.volume_style != style {
+            self.volume_style = style;
+            self.volume_dirty = true;
+        }
+    }
+
     /// Uploads the pending buffer and style constants during `prepare_gpu`.
     pub fn prepare(
         &mut self,
@@ -78,6 +95,7 @@ impl CandleLayer {
             self.pipe = None;
             self.count = 0;
             self.style_dirty = true;
+            self.volume_dirty = true;
         }
         if self.pipe.is_none() {
             self.pipe = Some(Self::create_pipe(device));
@@ -98,6 +116,10 @@ impl CandleLayer {
         if self.style_dirty {
             update_dynamic(context, &pipe.style_cb, &[self.style]);
             self.style_dirty = false;
+        }
+        if self.volume_dirty {
+            update_dynamic(context, &pipe.volume_cb, &[self.volume_style]);
+            self.volume_dirty = false;
         }
     }
 
@@ -129,16 +151,35 @@ impl CandleLayer {
                 panel_clip[3],
             );
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            context.VSSetConstantBuffers(
-                0,
-                Some(&[Some(pipe.view_cb.clone()), Some(pipe.style_cb.clone())]),
-            );
-            context.PSSetConstantBuffers(
-                0,
-                Some(&[Some(pipe.view_cb.clone()), Some(pipe.style_cb.clone())]),
-            );
+            let cbs = [
+                Some(pipe.view_cb.clone()),
+                Some(pipe.style_cb.clone()),
+                Some(pipe.volume_cb.clone()),
+            ];
+            context.VSSetConstantBuffers(0, Some(&cbs));
+            context.PSSetConstantBuffers(0, Some(&cbs));
             context.VSSetShaderResources(3, Some(&[Some(pipe.srv.clone())]));
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
+            // The volume band and its scale go FIRST so the candle bodies sit on top of them.
+            // `m[0]` is the style: 0 is off.
+            if self.volume_style.m[0] >= 0.5 {
+                crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
+                // Hills read `candles[iid + 1]`, so they get one instance fewer; bars would
+                // otherwise lose the newest bucket, hence the per-style count.
+                let bars = if self.volume_style.m[0] >= 1.5 {
+                    self.count.saturating_sub(1)
+                } else {
+                    self.count
+                };
+                if bars > 0 {
+                    context.VSSetShader(&pipe.volume_vs, None);
+                    context.PSSetShader(&pipe.volume_ps, None);
+                    context.DrawInstanced(6, bars, 0, 0);
+                }
+                context.VSSetShader(&pipe.scale_vs, None);
+                context.PSSetShader(&pipe.scale_ps, None);
+                context.DrawInstanced(6, 2, 0, 0);
+            }
             context.VSSetShader(&pipe.vs, None);
             context.PSSetShader(&pipe.ps, None);
             // Use 18 vertices per candle: the body and upper/lower wicks form three quads.
@@ -149,6 +190,10 @@ impl CandleLayer {
     fn create_pipe(device: &ID3D11Device) -> CandlePipe {
         let vs = super::gpu::make_vs(device, CANDLES_HLSL, "candles_vertex");
         let ps = super::gpu::make_ps(device, CANDLES_HLSL, "candles_fragment");
+        let volume_vs = super::gpu::make_vs(device, CANDLES_HLSL, "volume_bars_vertex");
+        let volume_ps = super::gpu::make_ps(device, CANDLES_HLSL, "volume_bars_fragment");
+        let scale_vs = super::gpu::make_vs(device, CANDLES_HLSL, "volume_scale_vertex");
+        let scale_ps = super::gpu::make_ps(device, CANDLES_HLSL, "volume_scale_fragment");
         let blend = create_alpha_blend(device);
         let buffer = create_structured(
             device,
@@ -158,9 +203,15 @@ impl CandleLayer {
         let srv = create_srv(device, &buffer);
         let view_cb = create_dynamic_cb(device, std::mem::size_of::<ChartViewGpu>() as u32);
         let style_cb = create_dynamic_cb(device, std::mem::size_of::<CandleStyleGpu>() as u32);
+        let volume_cb = create_dynamic_cb(device, std::mem::size_of::<VolumeStyleGpu>() as u32);
         CandlePipe {
             vs,
             ps,
+            volume_vs,
+            volume_ps,
+            scale_vs,
+            scale_ps,
+            volume_cb,
             blend,
             buffer,
             srv,

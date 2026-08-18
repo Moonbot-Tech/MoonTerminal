@@ -71,6 +71,20 @@ impl WgpuLayers {
         }
         // Candles render beneath trade crosses; combo is blitted over the base cache.
         if !self.candles.is_empty() {
+            // The band and its scale draw BEFORE the bodies so the candles sit on top.
+            if self.volume_style.m[0] >= 0.5 {
+                crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
+                // Hills read `candles[iid + 1]`, so they take one instance fewer.
+                let bars = if self.volume_style.m[0] >= 1.5 {
+                    self.candles.len().saturating_sub(1)
+                } else {
+                    self.candles.len()
+                };
+                if bars > 0 {
+                    draw_pipeline(pass, &pipelines.volume_bars, &binds.candle, 6, bars as u32);
+                }
+                draw_pipeline(pass, &pipelines.volume_scale, &binds.candle, 6, 2);
+            }
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
             draw_pipeline(
                 pass,
@@ -165,6 +179,7 @@ impl WgpuLayers {
                 last_price_to_px: 0.0,
                 last_view_price0: 0.0,
                 last_marker_half: 0.0,
+                last_volume_alpha: f32::NAN,
                 valid: false,
             });
         }
@@ -198,6 +213,7 @@ impl WgpuLayers {
                 || tex.last_price_to_px != view.price_to_px
                 || tex.last_view_price0 != view.view_price0
                 || tex.last_marker_half != view.marker_half
+                || tex.last_volume_alpha != view.volume_alpha
             {
                 tex.valid = false;
             }
@@ -225,7 +241,7 @@ impl WgpuLayers {
             pad: 0.0,
             volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
             volume_sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
-            volume_alpha: DEFAULT_VOLUME_ALPHA,
+            volume_alpha: view.volume_alpha,
             _pad2: 0.0,
         };
         {
@@ -266,6 +282,7 @@ impl WgpuLayers {
             tex.last_price_to_px = view.price_to_px;
             tex.last_view_price0 = view.view_price0;
             tex.last_marker_half = view.marker_half;
+            tex.last_volume_alpha = view.volume_alpha;
             tex.valid = true;
             self.combo_dirty_ranges.clear();
             crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);

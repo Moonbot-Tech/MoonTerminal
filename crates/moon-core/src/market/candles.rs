@@ -30,6 +30,21 @@ pub const CANDLE_MODE_OUTLINE_IN_ZONE: u8 = 2;
 /// Disables candles completely, leaving a pure tick chart across the full window.
 pub const CANDLE_MODE_OFF: u8 = 3;
 
+/// Bottom candle-volume styles used by `ChartTheme::candle_volume_style`.
+///
+/// A `u8` rather than an enum for the same reason [`CANDLE_MODE_FILLED`] is one: the value travels
+/// into a shader uniform as a float and is clamped at the edge, so an open integer keeps the whole
+/// path — `theme.toml`, the settings slider, `VolumeStyleGpu.m.x` — free of per-representation
+/// conversions. `theme.toml` is a portable file users copy between machines; a bare enum string in
+/// it would be a new value shape there.
+pub const VOLUME_STYLE_OFF: u8 = 0;
+/// Thin per-candle bars, one bar per bucket.
+pub const VOLUME_STYLE_BARS: u8 = 1;
+/// Moonbot-style "hills": a filled area whose top edge joins neighbouring buckets.
+pub const VOLUME_STYLE_HILLS: u8 = 2;
+/// Highest valid style id, for clamping a hand-edited `theme.toml`.
+pub const VOLUME_STYLE_MAX: u8 = VOLUME_STYLE_HILLS;
+
 /// Candle/trade chart display settings controlled by the candle button in the tab strip.
 /// `layout.toml` stores the global default as `WindowLayout::candle_view`, while
 /// `charts.json` stores optional per-tab overrides.
@@ -273,6 +288,18 @@ impl Default for CandleSeries {
     }
 }
 
+/// Does a candle bucket overlap `[from_ms, to_ms]`?
+///
+/// The one authority on what "visible" means for a candle. The chart's auto-Y range and the bottom
+/// volume band both scale themselves from the visible set, and if they disagreed by one bucket the
+/// band would normalise against a candle the price scale had already dropped.
+///
+/// Half-open at the left so a bucket that merely ENDS on the window edge is out, and inclusive at
+/// the right so the bucket the right edge falls inside is in.
+pub fn candle_intersects_window(t_open_ms: f64, tf_ms: f64, from_ms: f64, to_ms: f64) -> bool {
+    t_open_ms + tf_ms > from_ms && t_open_ms <= to_ms
+}
+
 impl CandleSeries {
     pub fn is_valid(&self) -> bool {
         self.valid
@@ -449,7 +476,7 @@ impl CandleSeries {
         let mut lo = f32::MAX;
         let mut hi = f32::MIN;
         for c in &self.candles {
-            if c.t_open_ms + tf <= from_ms || c.t_open_ms > to_ms {
+            if !candle_intersects_window(c.t_open_ms, tf, from_ms, to_ms) {
                 continue;
             }
             lo = lo.min(c.low);

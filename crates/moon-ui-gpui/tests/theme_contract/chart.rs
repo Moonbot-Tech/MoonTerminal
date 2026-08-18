@@ -59,6 +59,184 @@ fn every_backend_bounds_the_arrow_branch_before_the_open_ended_warning_branch() 
     }
 }
 
+/// `chartdx` price and volume shader contracts — removing one backend uniform, changing the
+/// `VolumeStyle` layout, moving the volume draw after the 18-vertex candle draw, or restoring a
+/// liquidation volume bar makes one platform silently render different chart pixels.
+#[test]
+fn chart_appearance_contracts_stay_identical_across_shader_backends() {
+    const PRICE_BACKENDS: &[(&str, &[&str])] = &[
+        (
+            "chartdx/shaders/crosses.hlsl",
+            &[
+                "cbuffer PriceStyle",
+                "return ps_last",
+                "return ps_mark",
+                "max(ps_m.x, 0.25)",
+            ],
+        ),
+        (
+            "chartdx/shaders/native_price.wgsl",
+            &[
+                "struct PriceStyle",
+                "return ps.last",
+                "return ps.mark",
+                "max(ps.m.x, 0.25)",
+            ],
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            &[
+                "struct PriceStyle",
+                "return ps.last",
+                "return ps.mark",
+                "max(ps.m.x, 0.25)",
+            ],
+        ),
+    ];
+    for (path, required) in PRICE_BACKENDS {
+        let source = code_only(&read_src(path));
+        for token in *required {
+            assert!(
+                source.contains(token),
+                "{path}: price lines must use `{token}` from PriceStyle"
+            );
+        }
+        let vertex = braced_body(&source, "price_line_vertex");
+        for retired in ["0.82", "0.60", "0.36", "0.42", "0.72", "0.78", "* 0.85"] {
+            assert!(
+                !vertex.contains(retired),
+                "{path}: retired hard-coded price appearance `{retired}` bypasses PriceStyle"
+            );
+        }
+    }
+
+    const VOLUME_BACKENDS: &[(&str, &[&str], &[&str])] = &[
+        (
+            "chartdx/shaders/candles.hlsl",
+            &[
+                "float4 vs_up;",
+                "float4 vs_down;",
+                "float4 vs_scale;",
+                "float4 vs_m;",
+                "float4 vs_m2;",
+            ],
+            &[
+                "vs_m.x < 0.5",
+                "vs_m.x >= 1.5",
+                "sqrt(norm)",
+                "min(cv_bounds.w * vs_m.y, vs_m2.x)",
+                "cv_bounds.y + cv_bounds.w - 1.0",
+                "clamp(pxh.x, cv_bounds.x, cv_bounds.x + cv_bounds.z)",
+                "clamp(px.x, cv_bounds.x, cv_bounds.x + cv_bounds.z)",
+            ],
+        ),
+        (
+            "chartdx/shaders/native_candles.wgsl",
+            &[
+                "up: vec4<f32>,",
+                "down: vec4<f32>,",
+                "scale: vec4<f32>,",
+                "m: vec4<f32>,",
+                "m2: vec4<f32>,",
+            ],
+            &[
+                "vs.m.x < 0.5",
+                "vs.m.x < 1.5",
+                "sqrt(norm)",
+                "min(cv.bounds.w * vs.m.y, vs.m2.x)",
+                "cv.bounds.y + cv.bounds.w - 1.0",
+                "clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
+                "clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
+            ],
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            &[
+                "float4 up;",
+                "float4 down;",
+                "float4 scale;",
+                "float4 m;",
+                "float4 m2;",
+            ],
+            &[
+                "vs.m.x < 0.5",
+                "vs.m.x < 1.5",
+                "sqrt(norm)",
+                "min(cv.bounds.w * vs.m.y, vs.m2.x)",
+                "cv.bounds.y + cv.bounds.w - 1.0",
+                "clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
+                "clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
+            ],
+        ),
+    ];
+    for (path, layout, geometry) in VOLUME_BACKENDS {
+        let source = code_only(&read_src(path));
+        let volume_style = braced_body(&source, "VolumeStyle");
+        let mut last = 0;
+        for member in *layout {
+            let at = volume_style
+                .find(member)
+                .unwrap_or_else(|| panic!("{path}: VolumeStyle is missing `{member}`"));
+            assert!(
+                at >= last,
+                "{path}: VolumeStyle member `{member}` is out of wire-layout order"
+            );
+            last = at;
+        }
+        for token in *geometry {
+            assert!(
+                source.contains(token),
+                "{path}: volume geometry must retain `{token}`"
+            );
+        }
+    }
+
+    const DRAWS: &[(&str, &str, &str)] = &[
+        (
+            "chartdx/candles.rs",
+            "context.DrawInstanced(6, bars, 0, 0);",
+            "context.DrawInstanced(18, self.count, 0, 0);",
+        ),
+        (
+            "chartdx/wgpu_backend/render.rs",
+            "&pipelines.volume_bars",
+            "&pipelines.candles",
+        ),
+        (
+            "chartdx/metal_backend.rs",
+            "&pipelines.volume_bars",
+            "&pipelines.candles",
+        ),
+    ];
+    for (path, volume_draw, candle_draw) in DRAWS {
+        let source = code_only(&read_src(path));
+        let volume_at = source
+            .find(volume_draw)
+            .unwrap_or_else(|| panic!("{path}: missing volume draw"));
+        let candle_at = source
+            .find(candle_draw)
+            .unwrap_or_else(|| panic!("{path}: missing 18-vertex candle draw"));
+        assert!(
+            volume_at < candle_at,
+            "{path}: volume band must draw before the 18-vertex candles"
+        );
+    }
+
+    const TRADE_VOLUME_BACKENDS: &[(&str, &str)] = &[
+        ("chartdx/shaders/crosses.hlsl", "c.side >= 2u"),
+        ("chartdx/shaders/native_crosses.wgsl", "c.side >= 2u"),
+        ("chartdx/shaders/chart_native.metal", "c.side >= 2"),
+    ];
+    for (path, liquidation_cull) in TRADE_VOLUME_BACKENDS {
+        let source = code_only(&read_src(path));
+        let volume = braced_body(&source, "volume_vertex");
+        assert!(
+            volume.contains(liquidation_cull),
+            "{path}: per-trade volume must cull liquidations"
+        );
+    }
+}
+
 /// Moving the visibility guard below `aligned_ticks_ms` makes every hidden time axis resolve,
 /// sort, and discard a complete selected-zone DST grid on each chart text preparation.
 #[test]

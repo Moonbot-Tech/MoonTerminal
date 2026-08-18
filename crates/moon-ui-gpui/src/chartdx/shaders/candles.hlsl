@@ -164,6 +164,125 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     return o;
 }
 
+// ---- Bottom volume band ----------------------------------------------------
+// Reuses the candle instance buffer: `Candle.vol` is already resident, already capacity-managed and
+// already re-uploaded on a series revision, so the band cannot drift out of step with the candles
+// it annotates. Drawn BEFORE the bodies so it sits under them.
+
+cbuffer VolumeStyle : register(b2) {
+    float4 vs_up;    // rising bucket rgb + band opacity
+    float4 vs_down;  // falling bucket rgb + band opacity
+    float4 vs_scale; // reference-line rgb + alpha
+    float4 vs_m;     // x style, y height fraction, z 1/max, w avg/max
+    float4 vs_m2;    // x band cap px, y bar width px, z line px
+};
+
+struct VolumeBarOut {
+    float4 pos : SV_Position;
+    nointerpolation uint up : TEXCOORD0;
+};
+
+// Bucket centre in screen pixels, and the bucket's own width.
+float2 vol_center_px(Candle cd) {
+    float tf_rel = (cd.tf_rel > 0.0) ? cd.tf_rel : cs_tf_rel;
+    float x0 = cv_bounds.x + (cd.t_open - cv_view_time0) * cv_time_to_px;
+    return float2(x0 + tf_rel * cv_time_to_px * 0.5, tf_rel * cv_time_to_px);
+}
+
+float vol_band_h() {
+    return min(cv_bounds.w * vs_m.y, vs_m2.x);
+}
+
+float vol_height_px(Candle cd) {
+    float norm = saturate(cd.vol * vs_m.z);
+    // sqrt matches the per-trade band: a linear scale buries every ordinary bucket under one spike.
+    return sqrt(norm) * vol_band_h();
+}
+
+VolumeBarOut vol_cull() {
+    VolumeBarOut o;
+    o.pos = float4(2.0, 2.0, 0.0, 1.0);
+    o.up = 0u;
+    return o;
+}
+
+VolumeBarOut volume_bars_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+    if (vs_m.x < 0.5) {
+        return vol_cull(); // style OFF
+    }
+    Candle cd = candles[iid];
+    float2 c0 = vol_center_px(cd);
+    float base = cv_bounds.y + cv_bounds.w - 1.0;
+    float h0 = vol_height_px(cd);
+    float2 corner = CORNERS[vid % 6u];
+
+    if (vs_m.x >= 1.5) {
+        // HILLS: a trapezoid from this bucket's centre to the next one's, so consecutive instances
+        // form one continuous filled area. Reading candles[iid + 1] is why the draw is issued with
+        // count - 1 instances. Built directly rather than as p0 + corner * sz, because its two
+        // edges differ in height and a rectangle cannot express that.
+        Candle cd1 = candles[iid + 1];
+        float2 c1 = vol_center_px(cd1);
+        float h1 = vol_height_px(cd1);
+        float x = lerp(c0.x, c1.x, corner.x);
+        float h = lerp(h0, h1, corner.x);
+        float2 pxh = float2(x, base - h * (1.0 - corner.y));
+        pxh.x = clamp(pxh.x, cv_bounds.x, cv_bounds.x + cv_bounds.z);
+        VolumeBarOut oh;
+        oh.pos = float4(pxh.x / cv_resolution.x * 2.0 - 1.0,
+                        1.0 - pxh.y / cv_resolution.y * 2.0, 0.0, 1.0);
+        oh.up = (cd.c >= cd.o) ? 1u : 0u;
+        return oh;
+    }
+
+    // BARS: one thin column per bucket, centred in it.
+    float bw = clamp(c0.y * 0.5, 1.0, vs_m2.y);
+    float2 p0 = float2(round(c0.x - bw * 0.5), base - h0);
+    float2 sz = float2(bw, h0);
+    float2 px = p0 + corner * sz;
+    // Clamp into the plot: the base pass scissor reaches across the price gutter and the order
+    // book, so an unclamped band spills into both.
+    px.x = clamp(px.x, cv_bounds.x, cv_bounds.x + cv_bounds.z);
+    VolumeBarOut o;
+    o.pos = float4(px.x / cv_resolution.x * 2.0 - 1.0,
+                   1.0 - px.y / cv_resolution.y * 2.0, 0.0, 1.0);
+    o.up = (cd.c >= cd.o) ? 1u : 0u;
+    return o;
+}
+
+float4 volume_bars_fragment(VolumeBarOut i) : SV_Target {
+    return (i.up == 1u) ? vs_up : vs_down;
+}
+
+// Two full-width reference lines: instance 0 the visible maximum at the band top, instance 1 the
+// visible average at its proportional height. They are what makes the band a SCALE rather than a
+// decoration.
+struct VolumeScaleOut {
+    float4 pos : SV_Position;
+};
+
+VolumeScaleOut volume_scale_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+    VolumeScaleOut o;
+    if (vs_m.x < 0.5) {
+        o.pos = float4(2.0, 2.0, 0.0, 1.0);
+        return o;
+    }
+    float band = vol_band_h();
+    float frac = (iid == 0u) ? 1.0 : sqrt(saturate(vs_m.w));
+    float base = cv_bounds.y + cv_bounds.w - 1.0;
+    float y = round(base - band * frac);
+    float th = max(vs_m2.z, 1.0);
+    float2 corner = CORNERS[vid % 6u];
+    float2 px = float2(cv_bounds.x, y) + corner * float2(cv_bounds.z, th);
+    o.pos = float4(px.x / cv_resolution.x * 2.0 - 1.0,
+                   1.0 - px.y / cv_resolution.y * 2.0, 0.0, 1.0);
+    return o;
+}
+
+float4 volume_scale_fragment(VolumeScaleOut i) : SV_Target {
+    return vs_scale;
+}
+
 float4 candles_fragment(CandleOut i) : SV_Target {
     if (i.outline > 0.5) {
         float dx = min(i.uv.x, 1.0 - i.uv.x) * i.size_px.x;

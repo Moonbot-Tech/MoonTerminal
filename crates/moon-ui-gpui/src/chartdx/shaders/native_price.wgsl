@@ -22,8 +22,15 @@ fn to_clip(px: vec2<f32>, resolution: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(px.x / resolution.x * 2.0 - 1.0, 1.0 - px.y / resolution.y * 2.0, 0.0, 1.0);
 }
 
+struct PriceStyle {
+    last: vec4<f32>,
+    mark: vec4<f32>,
+    m: vec4<f32>, // x = line half-width in physical px
+};
+
 @group(0) @binding(0) var<uniform> cv: ChartView;
 @group(0) @binding(1) var<storage, read> price_points: array<PricePoint>;
+@group(0) @binding(2) var<uniform> ps: PriceStyle;
 
 struct PriceLineOut {
     @builtin(position) pos: vec4<f32>,
@@ -42,7 +49,7 @@ fn price_line_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) i
     var dir = b - a;
     let len = max(length(dir), 1e-4);
     dir = dir / len;
-    let nrm = vec2<f32>(-dir.y, dir.x) * 0.85;
+    let nrm = vec2<f32>(-dir.y, dir.x) * max(ps.m.x, 0.25);
     let along = array<f32, 6>(0.0, 1.0, 1.0, 0.0, 1.0, 0.0);
     let side = array<f32, 6>(-1.0, -1.0, 1.0, -1.0, 1.0, 1.0);
     let px = mix(a, b, along[vid]) + nrm * side[vid];
@@ -53,10 +60,10 @@ fn price_line_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) i
 
 @fragment
 fn price_last_fragment(_in: PriceLineOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.82, 0.60, 0.36, 0.82);
+    return ps.last;
 }
 
 @fragment
 fn price_mark_fragment(_in: PriceLineOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.42, 0.72, 1.00, 0.78);
+    return ps.mark;
 }

@@ -19,8 +19,8 @@ use super::gpu::{
     device_changed, full_viewport, ring_write_no_overwrite, set_scissor_rect, update_dynamic,
 };
 use super::types::{
-    DEFAULT_VOLUME_ALPHA, append_cross_ring, cross_volume_max, evicted_cross_ranges,
-    ranges_have_entries, ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
+    PriceStyleGpu, append_cross_ring, cross_volume_max, evicted_cross_ranges, ranges_have_entries,
+    ranges_touch_volume_max, reset_cross_ring, update_cross_volume_max,
 };
 
 const MIN_COMBO_CAPACITY: u32 = 1;
@@ -53,6 +53,7 @@ struct CrossPipe {
     mark_line_buf: ID3D11Buffer,
     mark_line_srv: ID3D11ShaderResourceView,
     view_cb: ID3D11Buffer,
+    price_style_cb: ID3D11Buffer,
 }
 
 /// Combo backing bitmap `(W * 1.2) x H`, containing baked history and a UV-scroll anchor.
@@ -72,6 +73,12 @@ struct ComboTex {
     last_price_to_px: f32,
     last_view_price0: f32,
     last_marker_half: f32,
+    /// Trade-volume opacity the texture was baked with.
+    ///
+    /// Part of the cache key because the bars are baked INTO the texture. It was a
+    /// compile-time constant until the theme gained `trade_volume_alpha`, which is why the
+    /// other four fields were once a complete key and no longer are.
+    last_volume_alpha: f32,
     valid: bool,
 }
 
@@ -108,6 +115,11 @@ pub struct ComboLayer {
     volume_scale_dirty: bool,
     volume_data_generation: u64,
     volume_window_cache: Option<(VolumeScaleKey, (f32, f32))>,
+    /// Price-line appearance uploaded with the view uniform on the main pass.
+    ///
+    /// Not part of the combo bake: price lines are drawn straight to the backbuffer, so a
+    /// change here needs no texture invalidation the way `volume_alpha` does.
+    price_style: PriceStyleGpu,
 }
 
 impl ComboLayer {
@@ -134,6 +146,7 @@ impl ComboLayer {
             volume_scale_dirty: false,
             volume_data_generation: 0,
             volume_window_cache: None,
+            price_style: PriceStyleGpu::default(),
         }
     }
 
@@ -181,6 +194,11 @@ impl ComboLayer {
         if !data.is_empty() {
             self.pending_append.extend_from_slice(data);
         }
+    }
+
+    /// Idempotently sets the price-line colours and half-width.
+    pub fn set_price_style(&mut self, style: PriceStyleGpu) {
+        self.price_style = style;
     }
 
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
@@ -275,7 +293,8 @@ impl ComboLayer {
         let transform_changed = tex_ref.last_time_to_px != view.time_to_px
             || tex_ref.last_price_to_px != view.price_to_px
             || tex_ref.last_view_price0 != view.view_price0
-            || tex_ref.last_marker_half != view.marker_half;
+            || tex_ref.last_marker_half != view.marker_half
+            || tex_ref.last_volume_alpha != view.volume_alpha;
         let u_left_px = (view.view_time0 - tex_ref.bake_t0) * ttp;
         let mut need_full =
             transform_changed || !tex_ref.valid || u_left_px < 0.0 || u_left_px > margin_px;
@@ -312,7 +331,7 @@ impl ComboLayer {
             pad: 0.0,
             volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
             volume_sell_inv: 1.0 / self.volume_sell_max.max(1e-6),
-            volume_alpha: DEFAULT_VOLUME_ALPHA,
+            volume_alpha: view.volume_alpha,
             _pad2: 0.0,
         };
         update_dynamic(context, &pipe.view_cb, &[bake_view]);
@@ -350,6 +369,7 @@ impl ComboLayer {
                 tex.last_price_to_px = view.price_to_px;
                 tex.last_view_price0 = view.view_price0;
                 tex.last_marker_half = view.marker_half;
+                tex.last_volume_alpha = view.volume_alpha;
                 tex.valid = true;
             } else if self.head != tex.last_baked_head {
                 // Incrementally draw only new ring ticks in [last_head, head), including wraparound.
@@ -456,6 +476,7 @@ impl ComboLayer {
             return;
         };
         update_dynamic(context, &pipe.view_cb, std::slice::from_ref(view));
+        update_dynamic(context, &pipe.price_style_cb, &[self.price_style]);
         let vp = full_viewport(gpu);
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
@@ -468,8 +489,20 @@ impl ComboLayer {
                 panel_clip[3],
             );
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            context.VSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
-            context.PSSetConstantBuffers(0, Some(&[Some(pipe.view_cb.clone())]));
+            context.VSSetConstantBuffers(
+                0,
+                Some(&[
+                    Some(pipe.view_cb.clone()),
+                    Some(pipe.price_style_cb.clone()),
+                ]),
+            );
+            context.PSSetConstantBuffers(
+                0,
+                Some(&[
+                    Some(pipe.view_cb.clone()),
+                    Some(pipe.price_style_cb.clone()),
+                ]),
+            );
             context.OMSetBlendState(&pipe.blend, None, 0xFFFFFFFF);
             Self::draw_price_lines(context, pipe, self.last_line_count, self.mark_line_count);
         }
@@ -683,6 +716,7 @@ impl ComboLayer {
         );
         let mark_line_srv = create_srv(device, &mark_line_buf);
         let view_cb = create_dynamic_cb(device, std::mem::size_of::<ChartViewGpu>() as u32);
+        let price_style_cb = create_dynamic_cb(device, std::mem::size_of::<PriceStyleGpu>() as u32);
         CrossPipe {
             cross_vs,
             cross_ps,
@@ -700,6 +734,7 @@ impl ComboLayer {
             mark_line_buf,
             mark_line_srv,
             view_cb,
+            price_style_cb,
         }
     }
 
@@ -725,6 +760,7 @@ impl ComboLayer {
             last_price_to_px: f32::NAN,
             last_view_price0: f32::NAN,
             last_marker_half: f32::NAN,
+            last_volume_alpha: f32::NAN,
             valid: false,
         }
     }

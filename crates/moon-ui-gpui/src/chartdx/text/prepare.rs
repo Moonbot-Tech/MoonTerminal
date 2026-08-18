@@ -64,6 +64,11 @@ impl RenderState {
             }
             let cached_last_price = self.panes[idx].cached_last_price;
             let prospective_usd = self.panes[idx].prospective_usd;
+            // Read the band SEMANTICALLY. `volume_style.m` carries a reciprocal and a ratio,
+            // both deliberately quantized for cache stability, so inverting them back into a
+            // number to show the user would print a rounded lie.
+            let volume_style = self.panes[idx].volume_style;
+            let volume_stats = self.panes[idx].volume_stats;
             // Label layout for this frame, used by badges in sync_readout_params. Retain the old
             // layout for comparison: zoom changes Y, so backdrops must move with their text.
             let previous_placed = std::mem::take(&mut self.panes[idx].label_placed);
@@ -77,6 +82,26 @@ impl RenderState {
             let plot_h = view.bounds[3] / sf;
             let plot_bottom = plot_top + plot_h;
             let plot_right = plot_left + plot_w;
+            // Bottom-volume scale readout: the visible maximum against the band's top
+            // reference line and the visible average against its own. Without them the two lines
+            // say "some scale" rather than a quantity, and the band cannot be compared between
+            // coins or across timeframes.
+            if volume_style.m[0] >= 0.5 {
+                if let Some(stats) = volume_stats {
+                    // Band height mirrors the shader exactly, in logical units.
+                    let band = (plot_h * volume_style.m[1]).min(volume_style.m2[0] / sf);
+                    let avg_frac = volume_style.m[3].clamp(0.0, 1.0).sqrt();
+                    for (frac, value) in [(1.0f32, stats.max), (avg_frac, stats.avg)] {
+                        // Too close to the band floor to read: skip rather than overprint.
+                        if band * frac < 6.0 {
+                            continue;
+                        }
+                        let label = super::fmt_amount(value);
+                        let y = plot_bottom - band * frac;
+                        self.draw_text(ctx, &label, plot_left + 4.0, y, 0.0, 0.5, ink)?;
+                    }
+                }
+            }
             // Price-axis side: Left places labels in the gutter left of the plot; Right places
             // them at the panel's right edge (the gutter beyond the order book); Hide omits the
             // axis. All variants anchor text by its right edge (alignment 1.0).

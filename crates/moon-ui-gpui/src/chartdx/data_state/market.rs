@@ -29,6 +29,36 @@ impl ChartDataState {
         let mut st = self.render.borrow_mut();
         let mut container = self.container.borrow_mut();
         let mut pixels_changed = false;
+        // Read the two theme-driven uniform fields once for the whole sync: `view_gpu` is called
+        // for the plot AND the order-book glass, and the cull margin has to be computed from the
+        // same marker scale the shader will use, or trades disappear a frame before their glyph
+        // reaches the edge.
+        let theme_marker_scale = self.theme.marker_scale;
+        let view_style = view::ViewStyle {
+            marker_scale: theme_marker_scale,
+            volume_alpha: self.theme.trade_volume_alpha,
+        };
+        // Price-line colours and thickness. `price_line_px` is LOGICAL, and the shaders offset by
+        // a HALF width either side of the centre line, so the device scale and the halving both
+        // happen exactly once, here. Hoisted out of the per-pane loop below for the same reason
+        // `view_style` is: every input is theme- or DPI-derived, so a multi-pane chart would
+        // otherwise rebuild an identical struct once per pane per sync.
+        let next_price_style = PriceStyleGpu {
+            last: rgba3(self.theme.price_line, self.theme.price_line_alpha),
+            mark: rgba3(self.theme.mark_line, self.theme.mark_line_alpha),
+            m: [
+                (self.theme.price_line_px * self.last_ppp * 0.5).max(0.25),
+                0.0,
+                0.0,
+                0.0,
+            ],
+        };
+        // Likewise theme-only: the band's style id is clamped once, not per pane. The band's
+        // remaining fields stay in the loop because they fold in per-pane `volume_stats`.
+        let volume_style_id = self
+            .theme
+            .candle_volume_style
+            .min(moon_core::market::candles::VOLUME_STYLE_MAX);
         #[cfg(windows)]
         {
             let next_bg_color = rgb4(self.theme.bg);
@@ -141,8 +171,9 @@ impl ChartDataState {
             let cam_px = ((pane.view.right_time_ms - pane.view.epoch_ms)
                 * pane.view.px_per_ms.max(1e-9) as f64)
                 .round() as i64;
-            let marker_margin = view::cross_cull_margin_physical_px(&pane.view, self.last_ppp)
-                / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
+            let marker_margin =
+                view::cross_cull_margin_physical_px(&pane.view, self.last_ppp, theme_marker_scale)
+                    / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             let history_prefetch = (window_ms * 0.20).max(marker_margin);
             let history_from = view_time0 - history_prefetch;
             let history_to = view_time0 + window_ms + history_prefetch;
@@ -361,13 +392,11 @@ impl ChartDataState {
                     &mut pr.history_buffers,
                 );
                 crate::diag::record_us(&crate::diag::CHART_HISTORY_READ_US, read_timer);
-                if force_history_reset {
-                    if let Some(started) = read_timer {
-                        crate::diag::bump_by(
-                            &crate::diag::CHART_HISTORY_RESET_MS,
-                            started.elapsed().as_millis().max(1) as u64,
-                        );
-                    }
+                if let Some(started) = read_timer {
+                    crate::diag::bump_by(
+                        &crate::diag::CHART_HISTORY_RESET_MS,
+                        started.elapsed().as_millis().max(1) as u64,
+                    );
                 }
                 history
             } else {
@@ -493,6 +522,16 @@ impl ChartDataState {
                     crate::diag::bump_by(
                         &crate::diag::CHART_CANDLE_UPLOAD_LEN,
                         pr.candle_upload.len() as u64,
+                    );
+                    // Retain a compact copy for the bottom band's visible-range statistics.
+                    // `history_buffers` is cleared on entry to every read and refilled only when
+                    // the series revision moved, so this block is the only place it is populated -
+                    // and a plain pan, which must rescale the band, does not reach it.
+                    moon_chart::collect_samples(
+                        &pr.history_buffers.candles,
+                        &pr.history_buffers.candle_tf_ms,
+                        candle_tf_ms as f64,
+                        &mut pr.volume_samples,
                     );
                     pr.layers.set_candles(std::mem::take(&mut pr.candle_upload));
                     pr.last_candle_rev = history.candles_revision;
@@ -648,7 +687,8 @@ impl ChartDataState {
             // `pr.view != next_view` permanently true, so every active pane set `pixels_changed`
             // unconditionally and the base texture was rebuilt on every sync forever. Measured at
             // idle on one chart: 25 full base rebuilds a second with nothing on screen moving.
-            let mut next_view = view::view_gpu(&pane.view, area_win, res, self.last_ppp);
+            let mut next_view =
+                view::view_gpu(&pane.view, area_win, res, self.last_ppp, view_style);
             next_view.pad = view_time0
                 + (chart_area.w + glass_w)
                     / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
@@ -704,7 +744,8 @@ impl ChartDataState {
                 w: glass_area.w,
                 h: glass_area.h,
             };
-            let next_orderbook_view = view::view_gpu(&pane.view, glass_win, res, self.last_ppp);
+            let next_orderbook_view =
+                view::view_gpu(&pane.view, glass_win, res, self.last_ppp, view_style);
             if pr.orderbook_view != next_orderbook_view {
                 pr.orderbook_view = next_orderbook_view;
                 pr.gpu_prepare_dirty = true;
@@ -733,6 +774,61 @@ impl ChartDataState {
             if pr.candle_style != next_candle_style {
                 pr.candle_style = next_candle_style;
                 pr.layers.set_candle_style(next_candle_style);
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
+            if pr.price_style != next_price_style {
+                pr.price_style = next_price_style;
+                pr.layers.set_price_style(next_price_style);
+                pr.gpu_prepare_dirty = true;
+                pixels_changed = true;
+            }
+            // Bottom volume band. The window is the VISIBLE one, not the prefetched
+            // `history_from`/`history_to`: those reach past both edges, and a max taken over them
+            // would scale the band against candles the user cannot see.
+            //
+            // `view_time0` is relative to the chart epoch while `ChartCandle::t_open_ms` is
+            // absolute, hence the epoch added back here.
+            let vol_from = view_time0 as f64 + pane.view.epoch_ms;
+            let vol_to = vol_from + window_ms as f64;
+            pr.volume_stats =
+                moon_chart::visible_volume_stats(&pr.volume_samples, vol_from, vol_to);
+            let next_volume_style = match pr.volume_stats {
+                // Nothing visible, or every visible bucket empty: draw no band rather than
+                // normalise against a zero maximum.
+                None => VolumeStyleGpu::default(),
+                Some(stats) => VolumeStyleGpu {
+                    up: rgba3(self.theme.candle_up, self.theme.candle_volume_alpha),
+                    down: rgba3(self.theme.candle_down, self.theme.candle_volume_alpha),
+                    scale: rgba3(
+                        self.theme.candle_volume_scale,
+                        self.theme.candle_volume_alpha,
+                    ),
+                    m: [
+                        volume_style_id as f32,
+                        moon_chart::volume_bars::clamp_band_fraction(
+                            self.theme.candle_volume_height,
+                        ),
+                        // BOTH quantized, and both for the same reason: the live-edge bucket's
+                        // volume grows with every print, so exact values here differ on every
+                        // frame. The band lives in the CACHED base texture and this struct is the
+                        // diff gate, so one raw field is enough to rebake that texture
+                        // continuously while the chart sits still.
+                        moon_chart::volume_bars::quantize_inv_max(1.0 / stats.max),
+                        moon_chart::volume_bars::quantize_ratio(stats.avg / stats.max),
+                    ],
+                    // Logical pixels scaled by the device ratio exactly once, here.
+                    m2: [
+                        moon_chart::volume_bars::VOLUME_BAND_MAX_PX * self.last_ppp,
+                        moon_chart::volume_bars::VOLUME_BAR_W_PX * self.last_ppp,
+                        moon_chart::volume_bars::VOLUME_SCALE_LINE_PX * self.last_ppp,
+                        0.0,
+                    ],
+                },
+            };
+            if pr.volume_style != next_volume_style {
+                pr.volume_style = next_volume_style;
+                pr.layers.set_volume_style(next_volume_style);
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
             }
