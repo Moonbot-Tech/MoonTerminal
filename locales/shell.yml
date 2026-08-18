@@ -601,6 +601,10 @@ chart.fig.cursor:
   ru: "Курсор"
   en: "Cursor"
   es: "Cursor"
+chart.fig.sells_zone:
+  ru: "Продажа в зону"
+  en: "Sells to zone"
+  es: "Ventas a zona"
 chart.fig.tool_settings:
   ru: "Настройки инструмента: цвет, толщина, тип линии, заливка и части фигуры. Те же, что по ПКМ на нарисованной фигуре."
   en: "Tool settings: colour, thickness, line kind, fill and the figure's parts. The same panel a right-click on a drawn figure opens."
@@ -823,7 +827,7 @@ chart.fig_menu.delete_shared:
   en: "Delete for every core"
   es: "Eliminar en todos los núcleos"
 chart.fig_menu.sells_to_zone:
-  ru: "Вписать селы в зону"
+  ru: "Вписать продажи в зону"
   en: "Fit sells into this zone"
   es: "Ajustar ventas a esta zona"
 

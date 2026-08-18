@@ -590,8 +590,8 @@ impl RenderState {
                 }
             }
 
-            // Sells-to-zone mode marker: a badge riding the crosshair while the one-shot draw is
-            // armed, so the mode is visible where the eyes already are — Moonbot marks its own
+            // Sells-to-zone mode marker: a badge riding the crosshair while the mode is armed,
+            // so the mode is visible where the eyes already are — Moonbot marks its own
             // cursor the same way. Deliberately NOT behind the crosshair-label switch: that switch
             // hides readouts of what the cursor is OVER, and this says what the next click DOES.
             let badge = self

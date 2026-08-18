@@ -218,8 +218,16 @@ pub(super) fn mouse_down_left(
     // trading/navigation gesture. Both of its clicks are held to Ctrl/Command — here for the press
     // and in `try_fig_release` for the drag gesture — which is also how Moonbot's own rectangle is
     // drawn.
+    //
+    // While the MODE is armed the click-count gate lifts for the press that STARTS a band: band
+    // after band is drawn in it, and beginning the next one where the last ended lands inside the
+    // system's double-click box, which would otherwise send that press to the trading gestures
+    // below instead of to the figure layer. It does NOT lift for the press that FINISHES one — that
+    // press sends a live bulk move, and an accidental Ctrl+double-click must not be what sends it.
+    let sells_zone_mode = this.sells_zone_armed(cx);
+    let starting_band = sells_zone_mode && this.fig_draft.is_none();
     if within
-        && e.click_count <= 1
+        && (e.click_count <= 1 || starting_band)
         && this.try_fig_click(
             pos,
             e.modifiers.secondary()
@@ -241,11 +249,7 @@ pub(super) fn mouse_down_left(
     // behind would let a press refused here — over the order book, or outside the pane — release
     // into the plot and finish the band, sending a live bulk move.
     //
-    let awaiting_band = this
-        .fig_draft
-        .as_ref()
-        .is_some_and(|draft| draft.needs_modifier());
-    if awaiting_band {
+    if sells_zone_mode {
         this.fig_draw_down = None;
     }
     // The click was not the figure layer's — but a click that landed on no figure still ends the
@@ -261,19 +265,17 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
-    // Second, an unmodified press while a Sells-to-zone band waits for its second corner is a
-    // MISTAKE, not a trade: the badge says the mode is waiting for a click, and letting it through
-    // would place or cancel an order instead. Swallowed at EVERY click count — the trading gestures
-    // below include a double-click buy, and a first press that visibly did nothing is exactly what
-    // provokes a second one. The draft keeps waiting for its Ctrl+click; Ctrl+S or Escape leave.
-    if awaiting_band && within {
-        cx.stop_propagation();
-        return;
-    }
     if within && e.click_count <= 1 {
         this.fig_clear_selection_on_miss(pos, cx);
     }
+    // Second, the TRADING gestures are off while the Sells-to-zone mode is armed: the mode is a
+    // drawing posture — the badge and the tool picker both say so — and a press meant for a band
+    // must not place or cancel an order instead. That covers the order book too, whose click also
+    // reaches `try_place_order_click`. Deliberately narrower than swallowing the press outright:
+    // panning and the open-on-Main double click keep working, so reaching the part of the chart the
+    // next band belongs on does not need leaving the mode.
     if within
+        && !sells_zone_mode
         && clicks.is_some_and(|count| {
             this.try_place_order_click(TradeMouseButton::Left, e.modifiers, count, pos, cx)
         })
@@ -283,7 +285,12 @@ pub(super) fn mouse_down_left(
     }
     // Clicking the start cross of an unfilled entry cancels it before drag handling, so dragging
     // never starts from that cross.
-    if within && clicks.is_some() && e.click_count <= 1 && this.try_cancel_order_click(pos, cx) {
+    if within
+        && !sells_zone_mode
+        && clicks.is_some()
+        && e.click_count <= 1
+        && this.try_cancel_order_click(pos, cx)
+    {
         cx.notify();
         cx.stop_propagation();
         return;
@@ -291,7 +298,8 @@ pub(super) fn mouse_down_left(
     // Not gated on `click_count <= 1` like the branches above: a move gesture may be bound to a
     // double click (`CTRL_Dbl` and friends). The native gate is not dropped, it is passed along —
     // the built-in plain-left grab still requires it, and only double-click gestures pass it.
-    if within && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx) {
+    if within && !sells_zone_mode && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx)
+    {
         return;
     }
     // With separate zones, left clicks in the control area (book/reserved strip) are trading-only.

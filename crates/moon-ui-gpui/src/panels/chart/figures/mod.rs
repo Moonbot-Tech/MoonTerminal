@@ -30,7 +30,7 @@ pub(super) use self::draft::FigDraft;
 /// Figure-line hit-test threshold in pixels before scaling by pixels-per-point, matching order lines.
 const HIT_PX: f32 = 6.0;
 
-/// Glyph shown beside the crosshair while the one-shot Sells-to-zone draw is armed.
+/// Glyph shown beside the crosshair while the Sells-to-zone drawing mode is armed.
 ///
 /// A mark, not a word: it sits ON the chart next to the pointer, where a label would cover price.
 /// Taken from the same geometric/dingbat range as the toolbar's own tool glyphs (`ToolDef::glyph`),
@@ -60,6 +60,12 @@ pub(super) struct FigDrag {
 }
 
 impl ChartPanel {
+    /// Whether the Sells-to-zone drawing mode is armed, for the input paths that must treat the
+    /// chart as modal while it is.
+    pub(super) fn sells_zone_armed(&self, cx: &mut Context<Self>) -> bool {
+        self.backend.read(cx).sells_zone_armed()
+    }
+
     /// Return the `(core, market)` chart key for a pane index.
     fn fig_pane_key(&self, pane: usize) -> Option<(CoreId, String)> {
         self.chart
@@ -99,9 +105,9 @@ impl ChartPanel {
         // With no active draft, modifier-click grabs/selects an existing handle or body first.
         // Empty space, or any click continuing a draft, places a node for the new figure.
         //
-        // NOT while the one-shot Sells-to-zone draw is armed: the mode was entered to place a band,
-        // and letting a click that happens to land within grab range of an old figure drag it
-        // instead would leave the mode armed while the badge still says it is waiting for a click.
+        // NOT while the Sells-to-zone mode is armed: the mode is a drawing posture, so a click that
+        // happens to land within grab range of an old figure must still start a band rather than
+        // silently turn into a drag. Editing figures resumes when the mode ends.
         //
         // Grabbing works with no tool armed — that is what the Cursor entry leaves behind — but
         // PLACING a node needs one. Without this the click would fall through to trading, which is
@@ -168,14 +174,15 @@ impl ChartPanel {
         let finished = draft.place(node);
         if let Some(kind) = finished {
             self.fig_draft = None;
-            // The one-shot Sells-to-zone band ends HERE and goes no further: the prices go to the
-            // core and the figure is dropped, never reaching the store, `figures.json` or the
-            // selection. Moonbot draws the same band as a throwaway `CO_SysRect`.
+            // A Sells-to-zone band ends HERE and goes no further: the prices go to the core and
+            // the figure is dropped, never reaching the store, `figures.json` or the selection.
+            // Moonbot draws the same band as a throwaway `CO_SysRect`.
+            //
+            // The MODE stays armed. Spreading sells over a chart is aiming work — the first band
+            // is rarely the last — so the key turns the mode on and off, and every pair of
+            // Ctrl+clicks in between sends its own band. Ctrl+S again, Escape, or picking a tool
+            // ends it.
             if sells_zone {
-                self.backend.update(cx, |b, bcx| {
-                    b.disarm_sells_zone();
-                    bcx.notify();
-                });
                 match kind.price_band() {
                     Some((a, z)) => self.send_sells_to_zone(core, &market, a, z, cx),
                     // Unreachable while the mode arms the Zone tool, and logged rather than
@@ -211,8 +218,8 @@ impl ChartPanel {
     /// triangle vertex. A release near the press is not a gesture, so the normal click-click flow
     /// continues. Returns whether the release advanced the draft.
     ///
-    /// `draw_mod` reports whether the secondary modifier is still held, and the one-shot
-    /// Sells-to-zone band requires it: its finishing "click" sends a live bulk move, while
+    /// `draw_mod` reports whether the secondary modifier is still held, and a Sells-to-zone band
+    /// requires it: its finishing "click" sends a live bulk move, while
     /// `fig_draw_down` survives from the band's own first click, so an ordinary unmodified
     /// left-drag of the chart would otherwise be measured against that press and complete the band.
     pub(super) fn try_fig_release(
@@ -587,7 +594,7 @@ impl ChartPanel {
                 }),
         );
         // Spreading this market's sells across the band the figure already describes — the standing
-        // counterpart of the one-shot Ctrl+S draw. Offered for any figure that IS a band, with no
+        // counterpart of drawing one in Ctrl+S mode. Offered for any figure that IS a band, with no
         // `core_ready` gate: this is an ordinary trade command that queues on the core's channel
         // like the panic-sell and join hotkeys, unlike the alert entry below, whose upsert is
         // attempted once and never retried. Gating it would also make the two ways of naming a band

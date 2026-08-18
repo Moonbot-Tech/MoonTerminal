@@ -211,8 +211,8 @@ pub struct HotkeysConfig {
     /// instead of the fixed three.
     #[serde(default = "default_split_order_x")]
     pub split_order_x: String,
-    /// Moonbot's "Sells to rectangle": arms a one-shot zone draw whose two clicks give the band the
-    /// market's sells are spread across.
+    /// Moonbot's "Sells to rectangle": toggles a zone-drawing mode in which every pair of clicks
+    /// gives the band the market's sells are spread across.
     #[serde(default = "default_sells_to_rect")]
     pub sells_to_rect: String,
     /// Part count for `Split N` (Moonbot `Hotkeys.SplitParts`), read through

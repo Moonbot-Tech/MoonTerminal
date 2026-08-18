@@ -560,7 +560,7 @@ impl ChartPanel {
     }
 
     /// Spread this chart's sells across a band named on it, for both ways of naming one: the
-    /// one-shot Ctrl+S draw and the right-click entry on a Zone or Rect.
+    /// band drawn in Ctrl+S mode and the right-click entry on a Zone or Rect.
     ///
     /// `a` and `z` are the band's two prices. The authority check is the one its trading siblings
     /// make — this panel may be showing a core the group's Auto rail no longer trades, and this is a

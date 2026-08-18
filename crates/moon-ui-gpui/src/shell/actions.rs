@@ -134,6 +134,12 @@ impl Shell {
     ///     Nothing; handled actions stop event propagation.
     pub(super) fn on_hotkey(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         use crate::hotkeys::HotkeyAction;
+        // Before the bindings are even consulted: Escape leaves the Sells-to-zone mode, whatever
+        // modifier the drawing hand still holds down.
+        if crate::hotkeys::escape_leaves_sells_zone(ev, &self.backend, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let action = {
             let b = self.backend.read(cx);
             let hk = &b.preview.as_ref().unwrap_or(&b.config).hotkeys;

@@ -71,30 +71,47 @@ impl ChartTabs {
 
     /// Render the figure-tool selector and explicitly unscoped tool-default settings surface.
     pub(super) fn render_fig_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (draw_mode, tool) = {
+        let (draw_mode, tool, sells_zone) = {
             let b = self.backend.read(cx);
-            (b.fig_draw_mode, b.fig_tool)
+            (b.fig_draw_mode, b.fig_tool, b.sells_zone_armed())
         };
         // Nothing is the current tool while drawing is off — that IS what "Cursor" means, and the
-        // trigger has to say so rather than showing a tool that no click would use.
-        let current = draw_mode.then_some(tool);
+        // trigger has to say so rather than showing a tool that no click would use. The
+        // Sells-to-zone mode borrows the Zone tool, so while it runs the check mark belongs to the
+        // MODE's entry instead: two ticks would give two answers to "what does a click do", and
+        // clicking a ticked Zone would silently end the mode.
+        let current = (draw_mode && !sells_zone).then_some(tool);
 
-        // Cursor first, then the two groups split on `alertable`. Both groups are built from the
-        // registry in its own order, so this function names no tool.
+        // Cursor first, then the mode, then the two groups split on `alertable`. Both groups are
+        // built from the registry in its own order, so this function names no tool.
         let backend_off = self.backend.clone();
+        let backend_zone = self.backend.clone();
         let mut items = vec![
             MoonMenuItem::with_key(
                 SharedString::new_static("cursor"),
                 SharedString::from(format!("↖  {}", t!("chart.fig.cursor"))),
             )
-            .checked(current.is_none())
+            .checked(current.is_none() && !sells_zone)
             .on_click(move |_, _, app| {
                 backend_off.update(app, |b, bcx| {
-                    // Cursor means "no tool places anything", which an armed one-shot draw would
-                    // contradict on the next click. Restored first so the tool the mode interrupted
+                    // Cursor means "no tool places anything", which an armed Sells-to-zone mode
+                    // would contradict on the next click. Restored first so the tool the mode interrupted
                     // is the one that comes back when drawing is switched on again.
                     b.disarm_sells_zone();
                     b.fig_draw_mode = false;
+                    bcx.notify();
+                });
+            }),
+            // The mode itself, so it can be seen and left with the mouse: the hotkey is not the
+            // only way out, and a ticked entry is what says "this is what a click does now".
+            MoonMenuItem::with_key(
+                SharedString::new_static("sells-zone"),
+                SharedString::from(format!("✎  {}", t!("chart.fig.sells_zone"))),
+            )
+            .checked(sells_zone)
+            .on_click(move |_, _, app| {
+                backend_zone.update(app, |b, bcx| {
+                    b.toggle_sells_zone_arm();
                     bcx.notify();
                 });
             }),
@@ -114,9 +131,13 @@ impl ChartTabs {
         }
 
         let def = tool.def();
-        let trigger = match current {
-            Some(_) => format!("{}  {}", def.glyph, t!(def.locale_key)),
-            None => format!("↖  {}", t!("chart.fig.cursor")),
+        // The Sells-to-zone mode borrows the Zone tool, so the picker must say which of the two is
+        // running: it is the only part of the UI that shows the mode when the pointer is not over a
+        // chart, and the two do very different things with the next pair of Ctrl+clicks.
+        let trigger = match (sells_zone, current) {
+            (true, _) => format!("✎  {}", t!("chart.fig.sells_zone")),
+            (false, Some(_)) => format!("{}  {}", def.glyph, t!(def.locale_key)),
+            (false, None) => format!("↖  {}", t!("chart.fig.cursor")),
         };
         // `MoonDropdown` and not a pill in a popover: a popover always draws its own border and
         // padding AROUND its content, so a menu inside one reads as two frames, the outer one
