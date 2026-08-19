@@ -671,3 +671,155 @@ fn chart_presses_are_counted_per_panel_before_a_gesture_reads_them() {
         );
     }
 }
+
+/// Every per-tab chart setting must reach the tab through `apply_tab_setting`, never by writing the
+/// global default in `layout.toml` directly.
+///
+/// The graphics popup did exactly that until the settings became per tab, and the shape of a
+/// regression is a one-line convenience — "just set `b.layout.chart_graphics` here" — which still
+/// looks correct on the source tab and silently changes every OTHER window's charts.
+#[test]
+fn the_chart_popups_write_their_settings_through_the_tab_spec() {
+    for (module, global) in [
+        ("chart_tabs/graphics_popup.rs", "b.layout.chart_graphics ="),
+        ("chart_tabs/candle_popup.rs", "b.layout.candle_view ="),
+    ] {
+        let source = code_only(&read_src(module));
+        assert!(
+            source.contains("self.apply_tab_setting(StackSetting::"),
+            "{module}: the popup must apply its setting to the target tab, not to a global"
+        );
+        assert!(
+            !source.contains(global),
+            "{module}: only the shared ⧉ walk may write the global default these tabs inherit"
+        );
+    }
+}
+
+/// The durable trade-history query must read the PANEL's effective graphics settings, must NOT be
+/// narrowed by the trade-kind checkboxes, and must skip the round trip when both are clear.
+///
+/// Three rules at one call site. Reading `layout.chart_graphics` would load one tab's answer into
+/// another's chart now that the popup is per tab. Narrowing the SQL by the checkboxes is the subtler
+/// error: the row cap is applied AFTER the predicate, so hiding one kind frees slots under it and
+/// silently changes which trades the history holds — `ChartTradeRecord::emulator` is carried per row
+/// precisely so the drawing filter, and only it, answers to those boxes. And with both boxes clear
+/// nothing would be drawn from the set at all, which is the one case worth not reading.
+#[test]
+fn the_durable_history_query_reads_the_panel_s_own_graphics_settings() {
+    let source = code_only(&read_src("panels/chart/report_trades.rs"));
+    assert!(
+        source.contains("self.effective_chart_graphics(cx)"),
+        "the history query must resolve this panel's override rather than the global default"
+    );
+    assert!(
+        !source.contains("layout.chart_graphics"),
+        "the history query must not reach past the panel to the global default"
+    );
+    assert!(
+        !source.contains("f.emulator = None") && !source.contains(".emulator = Some("),
+        "the trade-kind checkboxes must not narrow the durable query — only the drawing filter \
+         may answer to them"
+    );
+    assert!(
+        source.contains("if !draws_any_kind {"),
+        "both boxes clear must skip the read, or the panel pays for a set nobody draws"
+    );
+    let drawing = code_only(&read_src("chartdx/trade_history_sync.rs"));
+    assert!(
+        drawing.contains("trade_kind_visible(&self.chart_graphics, record.emulator)"),
+        "the drawing filter is where the trade-kind checkboxes apply"
+    );
+}
+
+/// A panel that stops showing its history target must drop it.
+///
+/// Every emptying path matters, but TTL expiry most of all: it is the only AUTOMATIC one, it is what
+/// a retained COMPRESS slot does on a quiet market, and a target left behind there goes on starting a
+/// durable read on every report generation for the rest of the session.
+#[test]
+fn an_emptied_chart_panel_drops_its_trade_history_target() {
+    let refs = code_only(&read_src("panels/chart/refs.rs"));
+    let ttl = braced_body(&refs, "pub(super) fn arm_ttl_timer(");
+    assert!(
+        ttl.contains("this.clear_history_target_if_unused(cx)"),
+        "TTL expiry must drop the history target of a slot that now shows nothing"
+    );
+    let panel = code_only(&read_src("panels/chart/mod.rs"));
+    for signature in ["fn remove_pane(", "pub fn close_all_panes("] {
+        let body = braced_body(&panel, signature);
+        assert!(
+            body.contains("self.clear_history_target_if_unused(cx)"),
+            "{signature}: closing a market must drop the history target it leaves behind"
+        );
+    }
+}
+
+/// Turning the LAST trade kind back on must re-run the durable query, because the read was skipped
+/// entirely while nothing was drawn and those rows are not in memory.
+///
+/// Ticking one box while the other is already on costs no read — the checkboxes filter at drawing
+/// time — so this fires on the one transition that needs data, and on nothing else. TWO paths reach
+/// a panel: its own override through the setter, and — for a panel that follows the global default —
+/// a ⧉ press in another group window, which rewrites that default without ever walking this stack
+/// and is heard only through the backend observer.
+#[test]
+fn a_trade_kind_change_re_runs_the_durable_history_query() {
+    let source = code_only(&read_src("panels/chart/mod.rs"));
+    let body = braced_body(&source, "pub fn set_chart_graphics(");
+    assert!(
+        body.contains("self.requery_trade_history_on_trade_kinds(cx)"),
+        "set_chart_graphics must re-run the history query, or a re-ticked flag shows nothing"
+    );
+    // BOTH constructors carry a copy of this observer — `new_main` for Main panes and `new_addto`
+    // for numbered AddToChart/Custom ones — and the second copy is precisely the ⧉ target. Counting
+    // the branches instead of inspecting the first match is what makes this test see the copy that
+    // was missed when the re-query was first hooked up.
+    let branches = source
+        .matches("if settings_sig != this.settings_sig {")
+        .count();
+    assert_eq!(
+        branches, 2,
+        "both panel constructors must observe the settings signature"
+    );
+    let requeries = source
+        .matches("this.requery_trade_history_on_trade_kinds(cx)")
+        .count();
+    assert_eq!(
+        requeries, branches,
+        "a panel following the global default hears a graphics change only in its observer, so \
+         every copy of that branch must re-run the query"
+    );
+}
+
+/// Every path that puts a market on an AddToChart panel must also point that panel's durable trade
+/// history at it.
+///
+/// The closed-trade arrows come from that history, and for a long time only Main ever asked for one:
+/// the stack tiles showed a market with no history target, so their trade layer was empty and the
+/// graphics popup's trade-kind checkboxes filtered a set that had never been loaded. `add_coin` has
+/// three call paths — a live chart whose TTL is extended, a retained COMPRESS slot taken over by a
+/// new detection, and a freshly created panel — and a fourth added later would reintroduce the gap.
+#[test]
+fn every_addtochart_market_gets_a_trade_history_target() {
+    let source = code_only(&read_src("chart_tabs/add_stack.rs"));
+    let helper = braced_body(&source, "fn show_market_with_history(");
+    assert!(
+        helper.contains(".add_coin(") && helper.contains(".track_history_scope("),
+        "the helper must pair showing a market with requesting its durable history"
+    );
+    // Any receiver name, not just `panel.`: the crate writes this call as `p.`, `s.` and `panel.`
+    // in different files, and a fourth path in another style would slip past a literal match.
+    let outside = source.replace(helper, "");
+    assert!(
+        !outside.contains(".add_coin("),
+        "a market may reach an AddToChart panel only through show_market_with_history, or its \
+         chart draws no closed trades"
+    );
+    // A tile is showing the live edge; the FOCUSING entry point would jump it to the newest closed
+    // trade, and `show_time_range` leaves that view manual for good.
+    assert!(
+        !helper.contains("apply_history_scope"),
+        "a tile must request history without focusing, or a detect arrival tears it off the live edge"
+    );
+}

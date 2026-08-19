@@ -1,11 +1,13 @@
 //! `ChartTabs` per-tab settings controller. It provides active-tab setting getters (`active_*` for
-//! layout, orientation, order book, zone, auto-pin, and scale), applies settings to every group
-//! stack and window through `apply_layout_to_all` plus detached-window request draining, and
-//! implements [`LayoutPopupHost`]. Shared ⚙ popup and single-setting application logic through
-//! `apply_tab_setting` lives in [`super::common`]; popup rendering lives in [`super::layout_popup`].
+//! layout, orientation, order book, zone, auto-pin, and scale), drains detached-window ⧉ requests,
+//! and implements [`LayoutPopupHost`] together with the candle and graphics popup hosts. Each ⧉
+//! press builds its value set here and hands it to the one shared walk in [`super::apply_all`];
+//! shared ⚙ popup and single-setting application through `apply_tab_setting` lives in
+//! [`super::common`]; popup rendering lives in [`super::layout_popup`].
 
 use gpui::*;
 
+use super::apply_all::{self, ApplyAll};
 use super::common::{LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting};
 use super::{AddChartStack, ChartTabs, Tab};
 use crate::Backend;
@@ -198,180 +200,6 @@ impl ChartTabs {
         }
     }
 
-    /// Apply all layout-popup settings plus price scale from a source tab to every group stack.
-    ///
-    /// This deliberately does not copy candle view or X scale. `include_main` controls Main: `true`
-    /// from Main's popup includes it, while `false` from charts leaves it unchanged. Each tab is
-    /// persisted.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn apply_layout_to_all(
-        &mut self,
-        include_main: bool,
-        mode: Option<StackLayoutMode>,
-        height_fit: Option<u16>,
-        height_scroll: Option<u16>,
-        scale: Option<f32>,
-        orderbook: Option<bool>,
-        liquidations: Option<bool>,
-        show_zone: Option<bool>,
-        auto_pin: Option<bool>,
-        orientation: Option<StackOrientation>,
-        cancel_pos: Option<ChartBtnPos>,
-        panic_pos: Option<ChartBtnPos>,
-        price_axis_pos: Option<crate::persistence::chart_persist::PriceAxisPos>,
-        time_axis_visible: Option<bool>,
-        line_labels: Option<bool>,
-        cursor_labels: Option<bool>,
-        cx: &mut Context<Self>,
-    ) {
-        let ob = orderbook.unwrap_or(true);
-        let liq = liquidations.unwrap_or(true);
-        let sz = show_zone.unwrap_or(true);
-        let ap = auto_pin.unwrap_or(false);
-        let axis = price_axis_pos.unwrap_or_default();
-        let time_axis = time_axis_visible.unwrap_or(true);
-        let lbl = line_labels.unwrap_or(true);
-        let curl = cursor_labels.unwrap_or(true);
-        if include_main {
-            self.main.update(cx, |s, c| {
-                s.set_layout(mode, height_fit, height_scroll, c);
-                s.set_scale(scale, c);
-                s.set_orderbook_enabled(Some(ob), c);
-                s.set_liquidations_enabled(Some(liq), c);
-                s.set_show_zone(Some(sz), c);
-                s.set_auto_pin(Some(ap), c);
-                s.set_orientation(orientation, c);
-                s.set_action_btn_pos(cancel_pos, panic_pos, c);
-                s.set_price_axis_pos(Some(axis), c);
-                s.set_time_axis_visible(Some(time_axis), c);
-                s.set_line_labels(Some(lbl), c);
-                s.set_cursor_labels(Some(curl), c);
-            });
-            self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| {
-                s.layout_mode = mode;
-                s.layout_height_fit = height_fit;
-                s.layout_height_scroll = height_scroll;
-                s.scale = scale;
-                s.orderbook_enabled = Some(ob);
-                s.liquidations_enabled = Some(liq);
-                s.show_zone = Some(sz);
-                s.auto_pin = Some(ap);
-                s.layout_orientation = orientation;
-                s.cancel_buy_pos = cancel_pos;
-                s.panic_sell_pos = panic_pos;
-                s.price_axis_pos = Some(axis);
-                s.time_axis_visible = Some(time_axis);
-                s.line_labels = Some(lbl);
-                s.cursor_labels = Some(curl);
-            });
-        }
-        // "Charts" includes Add tabs in the strip, Custom tabs, and window-detached stacks in `self.detached`.
-        let targets: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self
-            .add
-            .iter()
-            .chain(self.custom.iter())
-            .chain(self.detached.iter())
-            .map(|(n, b, p)| (*n, b.clone(), p.clone()))
-            .collect();
-        for (num, bucket, panel) in targets {
-            panel.update(cx, |s, c| {
-                s.set_layout(mode, height_fit, height_scroll, c);
-                s.set_scale(scale, c);
-                s.set_orderbook_enabled(Some(ob), c);
-                s.set_liquidations_enabled(Some(liq), c);
-                s.set_show_zone(Some(sz), c);
-                s.set_auto_pin(Some(ap), c);
-                s.set_orientation(orientation, c);
-                s.set_action_btn_pos(cancel_pos, panic_pos, c);
-                s.set_price_axis_pos(Some(axis), c);
-                s.set_time_axis_visible(Some(time_axis), c);
-                s.set_line_labels(Some(lbl), c);
-                s.set_cursor_labels(Some(curl), c);
-            });
-            self.upsert_spec(cx, num, &bucket, |s| {
-                s.layout_mode = mode;
-                s.layout_height_fit = height_fit;
-                s.layout_height_scroll = height_scroll;
-                s.scale = scale;
-                s.orderbook_enabled = Some(ob);
-                s.liquidations_enabled = Some(liq);
-                s.show_zone = Some(sz);
-                s.auto_pin = Some(ap);
-                s.layout_orientation = orientation;
-                s.cancel_buy_pos = cancel_pos;
-                s.panic_sell_pos = panic_pos;
-                s.price_axis_pos = Some(axis);
-                s.time_axis_visible = Some(time_axis);
-                s.line_labels = Some(lbl);
-                s.cursor_labels = Some(curl);
-            });
-        }
-        self.backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
-        cx.notify();
-    }
-
-    /// Apply candle rendering settings, plus the source window's X scale when set, to ALL group
-    /// tabs and windows through the candlestick popup's ⧉ button, then update the defaults inherited by new
-    /// tabs and windows. As with ⚙, `include_main` changes Main ONLY when its own popup is open;
-    /// otherwise Main is pinned to its current view before the global fallback changes.
-    pub(super) fn apply_candle_view_to_all(
-        &mut self,
-        cfg: moon_core::market::CandleViewCfg,
-        x_ppm: Option<f32>,
-        include_main: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if include_main {
-            self.main.update(cx, |s, c| {
-                s.set_candle_view(Some(cfg), c);
-                if x_ppm.is_some() {
-                    s.set_x_ppm(x_ppm, true, c);
-                }
-            });
-            self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| s.candle_view = Some(cfg));
-        } else if self.main.read(cx).candle_view().is_none() {
-            let pin = self.backend.read(cx).layout.candle_view;
-            self.main.update(cx, |s, c| s.set_candle_view(Some(pin), c));
-            self.upsert_spec(cx, 0, &ChartBucket::Shared, |s| s.candle_view = Some(pin));
-        }
-        let targets: Vec<(u32, ChartBucket, Entity<AddChartStack>)> = self
-            .add
-            .iter()
-            .chain(self.custom.iter())
-            .chain(self.detached.iter())
-            .map(|(n, b, p)| (*n, b.clone(), p.clone()))
-            .collect();
-        for (num, bucket, panel) in targets {
-            panel.update(cx, |s, c| {
-                s.set_candle_view(Some(cfg), c);
-                if x_ppm.is_some() {
-                    s.set_x_ppm(x_ppm, true, c);
-                }
-            });
-            self.upsert_spec(cx, num, &bucket, |s| {
-                s.candle_view = Some(cfg);
-                if x_ppm.is_some() {
-                    s.x_ppm = x_ppm;
-                }
-            });
-        }
-        let group = self.group.clone();
-        self.backend.update(cx, |b, _| {
-            b.layout.candle_view = cfg;
-            if let Some(ppm) = x_ppm {
-                // Store scale for THIS group and every known group window so their new charts
-                // inherit it. Live windows from other groups update their own charts separately.
-                b.layout.chart_x_ppm_by_group.insert(group, ppm);
-                let groups: Vec<String> = b.layout.groups.keys().cloned().collect();
-                for g in groups {
-                    b.layout.chart_x_ppm_by_group.insert(g, ppm);
-                }
-            }
-            b.layout_dirty = true;
-        });
-        cx.notify();
-    }
-
     /// Apply X scale from Shift+middle-click on OUR window's chart to every stack in that window.
     ///
     /// This covers Main and tabs but not the group's detached windows, which have their own scope,
@@ -417,59 +245,63 @@ impl ChartTabs {
     /// Drain "apply to all" requests from detached chart windows in THIS group.
     ///
     /// They send requests through Backend because they cannot access the group's stacks directly.
+    /// Every popup's ⧉ travels in the same queue and runs the same walk; a detached source always
+    /// leaves Main unchanged (`include_main = false`), like ⚙.
     pub(super) fn drain_apply_all(&mut self, cx: &mut Context<Self>) {
-        let group = self.group.clone();
-        let candle_reqs: Vec<(moon_core::market::CandleViewCfg, Option<f32>)> =
-            self.backend.update(cx, |b, _| {
-                let (mine, rest): (Vec<_>, Vec<_>) = b
-                    .chart_candle_apply_all
-                    .drain(..)
-                    .partition(|(g, _, _)| *g == group);
-                b.chart_candle_apply_all = rest;
-                mine.into_iter().map(|(_, c, x)| (c, x)).collect()
-            });
-        for (cfg, x_ppm) in candle_reqs {
-            // A detached-window request leaves Main unchanged, like ⚙ with `include_main=false`.
-            self.apply_candle_view_to_all(cfg, x_ppm, false, cx);
+        if self.backend.read(cx).chart_apply_all.is_empty() {
+            // The common case by a wide margin: this drain is called from the backend observer, so
+            // anything below this line runs on every notification of every group window.
+            return;
         }
-        let reqs: Vec<crate::ChartApplyAll> = self.backend.update(cx, |b, _| {
-            let (mine, rest): (Vec<_>, Vec<_>) =
-                b.chart_apply_all.drain(..).partition(|r| r.group == group);
-            b.chart_apply_all = rest;
-            mine
-        });
+        let group = self.group.clone();
+        let reqs: Vec<crate::chart_tabs::apply_all::ApplyAllRequest> =
+            self.backend.update(cx, |b, _| {
+                let (mine, rest): (Vec<_>, Vec<_>) =
+                    b.chart_apply_all.drain(..).partition(|r| r.group == group);
+                b.chart_apply_all = rest;
+                mine
+            });
         for r in reqs {
-            self.apply_layout_to_all(
-                r.include_main,
-                r.mode,
-                r.height_fit,
-                r.height_scroll,
-                r.scale,
-                r.orderbook,
-                r.liquidations,
-                r.show_zone,
-                r.auto_pin,
-                r.orientation,
-                r.cancel_pos,
-                r.panic_pos,
-                r.price_axis_pos,
-                r.time_axis_visible,
-                r.line_labels,
-                r.cursor_labels,
-                cx,
-            );
+            // A detached-window request leaves Main unchanged, like ⚙ with `include_main = false`.
+            self.apply_all(r.apply, false, cx);
         }
     }
 }
 
-/// Host for the "Chart graphics" palette popup. The settings are global, so the host owns nothing
-/// but its own open flag.
+/// Host for the "Chart graphics" palette popup targeting the ACTIVE tab, like ⚙ and the candle
+/// popup beside it.
+///
+/// Application and persistence use `apply_tab_setting(StackSetting::Graphics)`.
 impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
     fn graphics_popup_open(&self) -> bool {
         self.graphics_popup_open
     }
     fn set_graphics_popup_open(&mut self, open: bool) {
         self.graphics_popup_open = open;
+    }
+    fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
+        match &self.active {
+            Tab::Main => self.main.read(cx).chart_graphics(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).chart_graphics()),
+        }
+    }
+    fn apply_graphics_all(
+        &mut self,
+        cfg: moon_core::config::ChartGraphicsCfg,
+        cx: &mut Context<Self>,
+    ) {
+        // Main receives a copy only when its own popup is open, matching ⚙ and the candle popup.
+        let include_main = matches!(self.active, Tab::Main);
+        self.apply_all(
+            ApplyAll {
+                values: vec![StackSetting::Graphics(cfg)],
+                x_ppm: None,
+            },
+            include_main,
+            cx,
+        );
     }
 }
 
@@ -506,7 +338,14 @@ impl super::candle_popup::CandlePopupHost for ChartTabs {
             .copied();
         // Main receives a copy only when its own popup is open, matching ⚙ behavior.
         let include_main = matches!(self.active, Tab::Main);
-        self.apply_candle_view_to_all(cfg, x_ppm, include_main, cx);
+        self.apply_all(
+            ApplyAll {
+                values: vec![StackSetting::CandleView(cfg)],
+                x_ppm,
+            },
+            include_main,
+            cx,
+        );
     }
 }
 
@@ -594,40 +433,26 @@ impl LayoutPopupHost for ChartTabs {
     }
     /// Apply all active-tab layout-popup settings plus price scale directly to every group stack.
     ///
-    /// Candle view and X scale are not copied. `include_main` indicates that the popup is open on Main.
+    /// Candle view, chart graphics and X scale are not copied: each has its own popup and its own ⧉.
+    /// `include_main` indicates that the popup is open on Main.
     fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
         let include_main = matches!(self.active, Tab::Main);
         let hf = self.read_layout_height(StackLayoutMode::Fit, cx);
         let hs = self.read_layout_height(StackLayoutMode::Scroll, cx);
-        let mode = Some(self.active_layout_mode(cx).unwrap_or(StackLayoutMode::Fit));
-        let scale = self.active_scale_value(cx);
-        let ob = Some(self.active_orderbook_enabled(cx));
-        let liq = Some(self.active_liquidations_enabled(cx));
-        let sz = Some(self.active_show_zone(cx));
-        let ap = Some(self.active_auto_pin(cx));
-        let or = self.active_layout_orientation(cx);
-        let (cp, pp) = self.active_action_btn_pos(cx);
-        let pax = self.active_price_axis_pos(cx);
-        let tax = self.active_time_axis_visible(cx);
-        let ll = self.active_line_labels(cx);
-        let cl = self.active_cursor_labels(cx);
-        self.apply_layout_to_all(
-            include_main,
-            mode,
+        let snap = self.layout_popup_snapshot(cx);
+        let values = apply_all::layout_values(
+            &snap,
             hf,
             hs,
-            scale,
-            ob,
-            liq,
-            sz,
-            ap,
-            or,
-            Some(cp),
-            Some(pp),
-            Some(pax),
-            Some(tax),
-            Some(ll),
-            Some(cl),
+            self.active_scale_value(cx),
+            self.active_layout_orientation(cx),
+        );
+        self.apply_all(
+            ApplyAll {
+                values,
+                x_ppm: None,
+            },
+            include_main,
             cx,
         );
     }

@@ -210,6 +210,12 @@ pub struct ChartTabSpec {
     /// candle popup. None inherits the global `layout.candle_view` default.
     #[serde(default)]
     pub candle_view: Option<moon_core::market::CandleViewCfg>,
+    /// Per-window/tab chart-drawing settings from the palette popup: trade-arrow size, connector
+    /// thickness, which closed trades are drawn, and the closed order's sell line. None inherits the
+    /// global `layout.chart_graphics` default, which is what every file written before this field
+    /// existed does.
+    #[serde(default)]
+    pub chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Detached-window time-axis X scale in pixels per millisecond, synchronized there with
     /// Shift+middle-click. None inherits the group scale or the built-in chart default.
     #[serde(default)]
@@ -247,6 +253,7 @@ impl ChartTabSpec {
             line_labels: None,
             cursor_labels: None,
             candle_view: None,
+            chart_graphics: None,
             x_ppm: None,
         }
     }

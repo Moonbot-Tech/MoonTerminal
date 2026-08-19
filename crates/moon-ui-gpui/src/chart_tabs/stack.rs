@@ -351,6 +351,17 @@ pub(super) fn set_panels_candle_view<S: 'static>(
     }
 }
 
+/// Apply chart-drawing settings to every panel in the stack.
+pub(super) fn set_panels_chart_graphics<S: 'static>(
+    entries: &[ChartStackEntry],
+    cfg: Option<moon_core::config::ChartGraphicsCfg>,
+    cx: &mut Context<S>,
+) {
+    for e in entries {
+        e.panel.update(cx, |p, pcx| p.set_chart_graphics(cfg, pcx));
+    }
+}
+
 /// Apply crosshair-label visibility to every panel in the stack.
 pub(super) fn set_panels_cursor_labels<S: 'static>(
     entries: &[ChartStackEntry],

@@ -30,6 +30,14 @@ const OVERLAY_RIGHT_MARGIN_PX: f32 = 120.0;
 /// button will occupy.
 const RETRY_BUTTON_PX: f32 = 72.0;
 
+/// Narrowest slot, in DEVICE pixels, that still states its durable-history status.
+///
+/// Below it the badge and its Retry button would sit on top of the price action rather than beside
+/// it. Sized against the reserves above — the left control strip plus the right-edge margin plus the
+/// button — so the row only appears where it has somewhere to go.
+const HISTORY_STATUS_MIN_SLOT_W: u32 =
+    ((OVERLAY_LEFT_PX + OVERLAY_RIGHT_MARGIN_PX + RETRY_BUTTON_PX) * 2.0) as u32;
+
 /// Tiny-badge text-size approximation used for measurement because MoonUI does not expose that
 /// component's fitted width.
 ///
@@ -169,14 +177,16 @@ impl Render for ChartPanel {
             let theme = eff.theme.get(palette.is_light()).clone();
             // Candles use the panel's per-tab override or the global layout default.
             let candle_view = self.candle_view.unwrap_or(b.layout.candle_view);
-            // Chart graphics are GLOBAL by design: no per-tab override to fall back through.
+            // Chart graphics follow the same per-tab override as candles: the palette popup writes
+            // the tab's own value, and only a tab without one falls back to the global default.
+            let chart_graphics = self.chart_graphics.unwrap_or(b.layout.chart_graphics);
             (
                 theme,
                 orders,
                 b.follow,
                 prospective,
                 candle_view,
-                b.layout.chart_graphics,
+                chart_graphics,
             )
         };
         // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
@@ -587,7 +597,14 @@ impl Render for ChartPanel {
         // draw — is already visible as the arrows themselves, so a badge counting them spends the
         // row's width on a fact the chart is showing anyway, ahead of the live order figures that
         // nothing else states.
+        // A chart wide enough to carry the badge states its history status. Gating on Main itself
+        // would silence it on a detached or Custom full-window chart, where the chart IS the window
+        // and a failed history read would otherwise be undiscoverable; gating on width silences it
+        // exactly where it does not fit — a stack slot a few centimetres wide, showing a dozen
+        // markets, whose badge would sit on top of the price.
+        let status_fits = self.chart.slot_dev_size().0 >= HISTORY_STATUS_MIN_SLOT_W;
         let trade_status = match self.report_trades.status {
+            _ if !status_fits => None,
             ReportTradesStatus::Idle | ReportTradesStatus::Ready | ReportTradesStatus::Empty => {
                 None
             }
@@ -595,10 +612,11 @@ impl Render for ChartPanel {
             ReportTradesStatus::NotReady => Some(t!("chart.trade_history.not_ready").to_string()),
             ReportTradesStatus::Failed => Some(t!("chart.trade_history.failed").to_string()),
         };
-        let trade_retry = matches!(
-            self.report_trades.status,
-            ReportTradesStatus::NotReady | ReportTradesStatus::Failed
-        );
+        let trade_retry = status_fits
+            && matches!(
+                self.report_trades.status,
+                ReportTradesStatus::NotReady | ReportTradesStatus::Failed
+            );
         let (slot_w, _) = self.chart.slot_dev_size();
         // Live open-order figures for the chart's active pane, assembled beside the closed-trade
         // badge above. The two share a row but nothing else: this reads the live session store,

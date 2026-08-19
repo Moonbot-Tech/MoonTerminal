@@ -453,6 +453,7 @@ impl ChartTabs {
                         bool,
                         Option<chart_persist::PriceAxisPos>,
                         Option<bool>,
+                        Option<moon_core::config::ChartGraphicsCfg>,
                     )> = {
                         let specs = &this.backend.read(cx).chart_specs;
                         specs
@@ -476,6 +477,7 @@ impl ChartTabs {
                                         s.compare_orderbook_only,
                                         s.price_axis_pos,
                                         s.time_axis_visible,
+                                        s.chart_graphics,
                                     )
                                 })
                             })
@@ -492,6 +494,7 @@ impl ChartTabs {
                         broom,
                         axis_pos,
                         time_axis,
+                        chart_graphics,
                     )) = custom
                     {
                         panel.update(cx, |s, c| {
@@ -515,6 +518,13 @@ impl ChartTabs {
                             }
                             if time_axis.is_some() {
                                 s.set_time_axis_visible(time_axis, c);
+                            }
+                            // BEFORE the markets: adding one starts this tile's durable history
+                            // request, and a tab whose own setting draws no trades at all skips that
+                            // read entirely. Applying the override afterwards would pay for a read
+                            // whose result is then hidden.
+                            if chart_graphics.is_some() {
+                                s.set_chart_graphics(chart_graphics, c);
                             }
                             for (core, market) in &coins {
                                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

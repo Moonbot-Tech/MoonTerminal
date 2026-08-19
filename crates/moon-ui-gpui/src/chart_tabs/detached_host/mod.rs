@@ -9,6 +9,7 @@ use moon_ui::{MoonInputEvent, MoonInputState};
 use rust_i18n::t;
 use std::time::Duration;
 
+use super::apply_all::{self, ApplyAll, ApplyAllRequest};
 use super::common::{
     CoinPopupHost, LayoutPopupHost, LayoutPopupSnapshot, StackSetting, set_stack_setting,
 };
@@ -60,7 +61,7 @@ pub(super) struct DetachedChartHost {
     layout_popup_open: bool,
     /// Anchored "Candles and Trades" popup opened by the candlestick button for this window tab.
     candle_popup_open: bool,
-    /// Anchored "Chart graphics" popup opened by the palette button; its settings are global.
+    /// Anchored "Chart graphics" popup opened by the palette button, for THIS window's charts.
     graphics_popup_open: bool,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in THIS window applies scale to its panel
     /// and persists it in the tab spec exactly once.
@@ -205,6 +206,7 @@ impl DetachedChartHost {
                     s.line_labels,
                     s.cursor_labels,
                     s.candle_view,
+                    s.chart_graphics,
                     s.x_ppm,
                 )
             })
@@ -223,6 +225,7 @@ impl DetachedChartHost {
             line_labels,
             cursor_labels,
             candle_view,
+            chart_graphics,
             saved_x_ppm,
         )) = saved
         {
@@ -237,6 +240,9 @@ impl DetachedChartHost {
             }
             if candle_view.is_some() {
                 panel.update(cx, |p, pcx| p.set_candle_view(candle_view, pcx));
+            }
+            if chart_graphics.is_some() {
+                panel.update(cx, |p, pcx| p.set_chart_graphics(chart_graphics, pcx));
             }
             // Window X scale comes from its spec, falling back to the parent group's scale.
             let x_ppm = saved_x_ppm.or_else(|| {
@@ -645,8 +651,10 @@ impl DetachedChartHost {
     }
 }
 
-/// Host for the "Chart graphics" palette popup. The settings are global, so this host owns only
-/// its own open flag.
+/// Host for the "Chart graphics" palette popup targeting THIS window's panel.
+///
+/// "Apply to all" sends a group request through Backend, drained by the tab strip, exactly like the
+/// candle popup's below.
 impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
     fn graphics_popup_open(&self) -> bool {
         self.graphics_popup_open
@@ -654,12 +662,28 @@ impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
     fn set_graphics_popup_open(&mut self, open: bool) {
         self.graphics_popup_open = open;
     }
+    fn graphics_override(&self, cx: &App) -> Option<moon_core::config::ChartGraphicsCfg> {
+        self.panel.read(cx).chart_graphics()
+    }
+    fn apply_graphics_all(
+        &mut self,
+        cfg: moon_core::config::ChartGraphicsCfg,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_graphics(cfg, cx);
+        self.queue_apply_all(
+            ApplyAll {
+                values: vec![StackSetting::Graphics(cfg)],
+                x_ppm: None,
+            },
+            cx,
+        );
+    }
 }
 
 /// Host for the "Candles and Trades" candlestick popup targeting THIS window's panel.
 ///
-/// "Apply to all" sends a group request through Backend, drained by the tab strip like
-/// `ChartApplyAll`.
+/// "Apply to all" sends a group request through Backend, drained by the tab strip.
 impl super::candle_popup::CandlePopupHost for DetachedChartHost {
     fn candle_popup_open(&self) -> bool {
         self.candle_popup_open
@@ -679,11 +703,13 @@ impl super::candle_popup::CandlePopupHost for DetachedChartHost {
         // drain. Copy this window's X scale with the candle settings.
         self.apply_candle_view(cfg, cx);
         let x_ppm = self.panel.read(cx).x_ppm();
-        let group = self.group.clone();
-        self.backend.update(cx, |bk, bcx| {
-            bk.chart_candle_apply_all.push((group, cfg, x_ppm));
-            bcx.notify();
-        });
+        self.queue_apply_all(
+            ApplyAll {
+                values: vec![StackSetting::CandleView(cfg)],
+                x_ppm,
+            },
+            cx,
+        );
     }
 }
 
@@ -763,50 +789,32 @@ impl LayoutPopupHost for DetachedChartHost {
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>) {
         self.panel.update(cx, |s, c| set_stack_setting!(s, c, v));
     }
-    /// Apply this window's settings to all by sending `ChartApplyAll` through Backend for the tab
-    /// strip to drain, because the host cannot access group stacks directly. Copy ALL window
-    /// settings, including scale and order-book toggle, while leaving Main unchanged with
-    /// `include_main=false`.
+    /// Apply this window's settings to all by queueing them through Backend for the tab strip,
+    /// because the host cannot access group stacks directly. Copy ALL window settings, including
+    /// scale and order-book toggle, while leaving Main unchanged.
     fn apply_all_from_popup(&mut self, cx: &mut Context<Self>) {
-        let (mode, _, _) = self.panel_layout(cx);
-        let mode = Some(mode.unwrap_or(StackLayoutMode::Fit));
+        let snap = self.layout_popup_snapshot(cx);
         let height_fit = self.read_layout_height(StackLayoutMode::Fit, cx);
         let height_scroll = self.read_layout_height(StackLayoutMode::Scroll, cx);
-        let group = self.group.clone();
         let scale = self.panel.read(cx).scale();
-        let orderbook = Some(self.panel.read(cx).orderbook_enabled().unwrap_or(true));
-        let liquidations = Some(self.panel.read(cx).liquidations_enabled().unwrap_or(true));
-        let show_zone = Some(self.panel.read(cx).show_zone().unwrap_or(true));
-        let auto_pin = Some(self.panel.read(cx).auto_pin().unwrap_or(false));
         let orientation = self.panel.read(cx).layout_orientation();
-        let (cancel_pos, panic_pos) = {
-            let (c, pp) = self.panel.read(cx).action_btn_pos();
-            (Some(c.unwrap_or_default()), Some(pp.unwrap_or_default()))
-        };
-        let price_axis_pos = Some(self.panel.read(cx).price_axis_pos().unwrap_or_default());
-        let time_axis_visible = Some(self.panel.read(cx).time_axis_visible().unwrap_or(true));
-        let line_labels = Some(self.panel.read(cx).line_labels().unwrap_or(true));
-        let cursor_labels = Some(self.panel.read(cx).cursor_labels().unwrap_or(true));
+        let values = apply_all::layout_values(&snap, height_fit, height_scroll, scale, orientation);
+        self.queue_apply_all(
+            ApplyAll {
+                values,
+                x_ppm: None,
+            },
+            cx,
+        );
+    }
+}
+
+impl DetachedChartHost {
+    /// Queue one ⧉ press for this window's group, for its tab strip to perform.
+    fn queue_apply_all(&mut self, apply: ApplyAll, cx: &mut Context<Self>) {
+        let group = self.group.clone();
         self.backend.update(cx, |bk, bcx| {
-            bk.chart_apply_all.push(crate::ChartApplyAll {
-                group,
-                include_main: false,
-                mode,
-                height_fit,
-                height_scroll,
-                scale,
-                orderbook,
-                liquidations,
-                show_zone,
-                auto_pin,
-                orientation,
-                cancel_pos,
-                panic_pos,
-                price_axis_pos,
-                time_axis_visible,
-                line_labels,
-                cursor_labels,
-            });
+            bk.chart_apply_all.push(ApplyAllRequest { group, apply });
             bcx.notify();
         });
     }

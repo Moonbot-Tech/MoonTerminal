@@ -631,7 +631,8 @@ pub struct WindowLayout {
     /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     #[serde(default)]
     pub candle_view: crate::market::candles::CandleViewCfg,
-    /// Chart drawing settings from the toolbar's palette popup — GLOBAL, with no per-tab override.
+    /// Chart drawing settings from the toolbar's palette popup —
+    /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     #[serde(default, deserialize_with = "de_lenient_graphics")]
     pub chart_graphics: ChartGraphicsCfg,
     // The former `detect_view_by_group` moved to a separate `detects_view.toml`
@@ -770,8 +771,10 @@ fn def_connector_thickness_px() -> f32 {
     2.0
 }
 
-/// Chart drawing settings edited from the toolbar's palette popup — GLOBAL, one set for every
-/// chart in the application.
+/// Chart drawing settings edited from the toolbar's palette popup.
+///
+/// Stored here as the GLOBAL DEFAULT: each chart tab may hold its own set in `charts.json`, and a
+/// tab without one draws with this.
 ///
 /// Deliberately separate from `OrdersStyle` in `orders.toml`: that file describes how each ORDER
 /// LINE is painted (colour, dash, marker sizes), while these five values decide how big the

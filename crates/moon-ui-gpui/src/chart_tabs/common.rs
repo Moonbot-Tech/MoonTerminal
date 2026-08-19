@@ -9,13 +9,13 @@
 
 use gpui::*;
 use moon_ui::{
-    v_flex, MoonAccent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSegmentItem, MoonSegmentedControl,
+    MoonAccent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSegmentItem,
+    MoonSegmentedControl, v_flex,
 };
 
 use super::{layout_popup, stack};
-use crate::design;
 use crate::Backend;
+use crate::design;
 use crate::persistence::chart_persist::{
     self, ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
 };
@@ -77,12 +77,18 @@ pub(super) fn seg_row(
 /// One per-tab chart-stack setting value. It can write itself to a spec (the shared persistence
 /// half); [`set_stack_setting!`] applies it to panels using identically named and typed setters on
 /// `MainChartStack` and `AddChartStack`.
-#[derive(Clone, Copy)]
-pub(super) enum StackSetting {
+///
+/// `pub(crate)` rather than `pub(super)` because a detached window's ⧉ press travels through
+/// Backend as a list of these; see [`super::apply_all`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum StackSetting {
     /// Layout mode plus separate Fit and Scroll heights.
     Layout(Option<StackLayoutMode>, Option<u16>, Option<u16>),
-    /// Stack orientation (vertical/horizontal).
-    Orientation(StackOrientation),
+    /// Stack orientation (vertical/horizontal), where `None` means the Vertical default.
+    ///
+    /// Optional rather than resolved so that ⧉ copies an unset orientation AS unset, the way it did
+    /// before the walk was shared: a spec that never named one keeps naming none.
+    Orientation(Option<StackOrientation>),
     /// Order book enabled/disabled.
     Orderbook(bool),
     /// Liquidation trades enabled/disabled.
@@ -103,9 +109,95 @@ pub(super) enum StackSetting {
     CursorLabels(bool),
     /// Candle/trade display settings (the candlestick popup).
     CandleView(moon_core::market::CandleViewCfg),
+    /// Chart-drawing settings: trade-arrow size, connector thickness, which closed trades are drawn
+    /// and whether a closed order keeps its sell line (the palette popup).
+    Graphics(moon_core::config::ChartGraphicsCfg),
+    /// Price scale, where `None` means Auto. Copied by the ⚙ popup's ⧉ along with the layout.
+    Scale(Option<f32>),
+}
+
+/// A setting that ALSO has a global default in `layout.toml`, inherited by every tab without an
+/// override of its own.
+///
+/// A ⧉ press overwrites that default, which is what makes new tabs — and every tab still following
+/// it — adopt the pressed values. It names the slot only: the VALUE always travels as the
+/// [`StackSetting`] itself, so the two cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlobalSlot {
+    /// `layout.candle_view`, from the "Candles and Trades" popup.
+    CandleView,
+    /// `layout.chart_graphics`, from the "Chart graphics" popup.
+    Graphics,
+}
+
+impl GlobalSlot {
+    /// Read the value this default currently holds, as the setting to apply.
+    ///
+    /// NORMALIZED where the setting has a drawable range: `layout.toml` is hand-editable, and this
+    /// value gets materialized into `charts.json` when Main is pinned, where an out-of-range number
+    /// would then outlive the file it came from.
+    pub(crate) fn read(self, layout: &moon_core::config::WindowLayout) -> StackSetting {
+        match self {
+            GlobalSlot::CandleView => StackSetting::CandleView(layout.candle_view),
+            GlobalSlot::Graphics => {
+                StackSetting::Graphics(moon_chart::normalize_chart_graphics(layout.chart_graphics))
+            }
+        }
+    }
+
+    /// Store a pressed value as the new global default, reporting whether it actually moved.
+    ///
+    /// The caller uses that answer to skip waking every chart in the application for a press that
+    /// stored what was already there.
+    pub(crate) fn write(
+        self,
+        layout: &mut moon_core::config::WindowLayout,
+        value: StackSetting,
+    ) -> bool {
+        match (self, value) {
+            (GlobalSlot::CandleView, StackSetting::CandleView(v)) => {
+                let changed = layout.candle_view != v;
+                layout.candle_view = v;
+                changed
+            }
+            (GlobalSlot::Graphics, StackSetting::Graphics(v)) => {
+                let changed = layout.chart_graphics != v;
+                layout.chart_graphics = v;
+                changed
+            }
+            // Unreachable through `StackSetting::global_slot`, which pairs slot and value by
+            // construction. Storing a mismatched value would be worse than storing none.
+            _ => false,
+        }
+    }
+
+    /// Whether the Main stack holds its own value for this setting rather than following the default.
+    pub(crate) fn main_has_override(self, main: &super::MainChartStack) -> bool {
+        match self {
+            GlobalSlot::CandleView => main.candle_view().is_some(),
+            GlobalSlot::Graphics => main.chart_graphics().is_some(),
+        }
+    }
 }
 
 impl StackSetting {
+    /// The global default this setting inherits from, when it has one.
+    pub(crate) fn global_slot(self) -> Option<GlobalSlot> {
+        match self {
+            StackSetting::CandleView(_) => Some(GlobalSlot::CandleView),
+            StackSetting::Graphics(_) => Some(GlobalSlot::Graphics),
+            _ => None,
+        }
+    }
+
+    /// Whether applying this setting can change which markets need an order book.
+    ///
+    /// One definition for both callers: the single-setting path below and the ⧉ walk, which rebuilds
+    /// demand once for a whole press.
+    pub(crate) fn rebuilds_orderbook_demand(self) -> bool {
+        matches!(self, StackSetting::Orderbook(_))
+    }
+
     /// Write the value to a tab spec (the persistence half of `apply_*`, shared by both hosts).
     pub(super) fn write_spec(self, s: &mut chart_persist::ChartTabSpec) {
         match self {
@@ -114,7 +206,7 @@ impl StackSetting {
                 s.layout_height_fit = hf;
                 s.layout_height_scroll = hs;
             }
-            StackSetting::Orientation(o) => s.layout_orientation = Some(o),
+            StackSetting::Orientation(o) => s.layout_orientation = o,
             StackSetting::Orderbook(v) => s.orderbook_enabled = Some(v),
             StackSetting::Liquidations(v) => s.liquidations_enabled = Some(v),
             StackSetting::ShowZone(v) => s.show_zone = Some(v),
@@ -128,6 +220,8 @@ impl StackSetting {
             StackSetting::LineLabels(v) => s.line_labels = Some(v),
             StackSetting::CursorLabels(v) => s.cursor_labels = Some(v),
             StackSetting::CandleView(v) => s.candle_view = Some(v),
+            StackSetting::Graphics(v) => s.chart_graphics = Some(v),
+            StackSetting::Scale(v) => s.scale = v,
         }
     }
 }
@@ -141,9 +235,7 @@ macro_rules! set_stack_setting {
             crate::chart_tabs::common::StackSetting::Layout(mode, hf, hs) => {
                 $s.set_layout(mode, hf, hs, $c)
             }
-            crate::chart_tabs::common::StackSetting::Orientation(o) => {
-                $s.set_orientation(Some(o), $c)
-            }
+            crate::chart_tabs::common::StackSetting::Orientation(o) => $s.set_orientation(o, $c),
             crate::chart_tabs::common::StackSetting::Orderbook(v) => {
                 $s.set_orderbook_enabled(Some(v), $c)
             }
@@ -170,10 +262,14 @@ macro_rules! set_stack_setting {
             crate::chart_tabs::common::StackSetting::CandleView(v) => {
                 $s.set_candle_view(Some(v), $c)
             }
+            crate::chart_tabs::common::StackSetting::Graphics(v) => {
+                $s.set_chart_graphics(Some(v), $c)
+            }
+            crate::chart_tabs::common::StackSetting::Scale(v) => $s.set_scale(v, $c),
         }
     };
 }
-pub(super) use set_stack_setting;
+pub(crate) use set_stack_setting;
 
 /// Find or create a tab spec by group/number/bucket, apply the mutator, and mark it dirty.
 /// This upsert is shared by the tab strip and detached windows.
@@ -253,7 +349,7 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
         upsert_spec(&backend, self.spec_group(), num, &bucket, cx, move |s| {
             v.write_spec(s)
         });
-        if matches!(v, StackSetting::Orderbook(_)) {
+        if v.rebuilds_orderbook_demand() {
             // Rebuild the set of markets requiring an order book because demand may have changed.
             backend.update(cx, |b, _| b.rebuild_orderbook_wanted());
         }
@@ -279,7 +375,7 @@ pub(super) trait LayoutPopupHost: Sized + 'static {
             O::Vertical => O::Horizontal,
             O::Horizontal => O::Vertical,
         };
-        self.apply_tab_setting(StackSetting::Orientation(next), cx);
+        self.apply_tab_setting(StackSetting::Orientation(Some(next)), cx);
     }
 
     /// Seed height fields with EFFECTIVE values (Fit → 0, Scroll → default); otherwise unset

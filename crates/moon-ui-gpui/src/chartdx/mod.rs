@@ -881,8 +881,9 @@ struct ChartDataState {
     /// Effective candle and trade rendering settings for time frame, mode, and zone, applied to all
     /// engine panels. They may be a per-tab override or the `layout.candle_view` fallback.
     candle_view: moon_core::market::CandleViewCfg,
-    /// Chart graphics settings from `layout.chart_graphics`: trade-history arrow size, connector
-    /// thickness, and which order lines are drawn. GLOBAL — there is no per-tab override.
+    /// Effective chart graphics settings: trade-history arrow size, connector thickness, and which
+    /// order lines are drawn. Like `candle_view` above, a per-tab override or the
+    /// `layout.chart_graphics` fallback.
     chart_graphics: moon_core::config::ChartGraphicsCfg,
     /// Saved X scale in pixels per millisecond from Shift+middle-click sync. NEW panels start with it
     /// instead of the built-in time-window default; `None` uses that default.

@@ -95,6 +95,12 @@ diag_counters!(
     // into the automatic-Y price-scan buffer, so without this a change that removes resets reads
     // as free while that copy goes on unmeasured.
     CHART_HISTORY_READ_US => "history_read_us",
+    // Durable CLOSED-TRADE history reads started per second — a different subject from the three
+    // counters above, which measure the LIVE trade buffer. Each one is an SQLite connection to the
+    // report replica, and every chart tile now owns a target, so this is what says whether a detect
+    // burst or a report generation turned into a read storm. Read it against the number of open
+    // charts: one read per newly shown market is expected, a multiple of that is not.
+    CHART_TRADE_HISTORY_READS => "trade_history_reads",
     CHART_COMBO_UPLOAD_LEN => "combo_upload_len",
     CHART_PRICE_LINE_UPLOAD_LEN => "price_line_upload_len",
     CHART_BOOK_DRAW   => "orderbook_draw",

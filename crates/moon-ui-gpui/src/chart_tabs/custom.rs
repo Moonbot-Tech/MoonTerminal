@@ -456,6 +456,7 @@ impl ChartTabs {
             Option<bool>,
             Option<bool>,
             Option<moon_core::market::CandleViewCfg>,
+            Option<moon_core::config::ChartGraphicsCfg>,
         )> = {
             let all = &self.backend.read(cx).chart_specs;
             all.iter()
@@ -481,6 +482,7 @@ impl ChartTabs {
                             s.line_labels,
                             s.cursor_labels,
                             s.candle_view,
+                            s.chart_graphics,
                         )
                     })
                 })
@@ -505,6 +507,7 @@ impl ChartTabs {
             line_labels,
             cursor_labels,
             candle_view,
+            chart_graphics,
         ) in specs
         {
             let stack = cx.new(|_| {
@@ -550,6 +553,9 @@ impl ChartTabs {
                 }
                 if candle_view.is_some() {
                     s.set_candle_view(candle_view, c);
+                }
+                if chart_graphics.is_some() {
+                    s.set_chart_graphics(chart_graphics, c);
                 }
                 for (core, market) in &coins {
                     s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

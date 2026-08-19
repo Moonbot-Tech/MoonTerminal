@@ -628,8 +628,11 @@ impl ChartEngine {
         true
     }
 
-    /// Applies the global chart graphics settings — trade-history arrow size, connector thickness,
-    /// and trade-kind visibility — to every engine pane. Returns true on change.
+    /// Applies the chart graphics settings — trade-history arrow size, connector thickness, and
+    /// trade-kind visibility — to every engine pane. Returns true on change.
+    ///
+    /// The value is the owning panel's: its own per-tab override, or the `layout.chart_graphics`
+    /// default when it has none.
     ///
     /// The order and trade-history geometry is baked in the userdata layer, so a change has to
     /// invalidate it: `mark_view_dirty` drives the panel's forced resynchronization, and

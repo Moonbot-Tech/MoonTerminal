@@ -205,6 +205,33 @@ pub(crate) fn popup_close_button(
         .render()
 }
 
+/// Builds the ⧉ that copies a popup's settings to every other chart tab and window.
+///
+/// Three popups carry this button (layout, candles, graphics) and each had its own copy of the same
+/// chain; it sits here beside [`popup_close_button`] for the same reason that one does — a popup
+/// header button whose geometry must match the ✕ next to it.
+///
+/// Args:
+///     id: Stable element identity, unique within the hosting popup.
+///     tooltip: Localized description of what this popup's press copies.
+///     on_click: Handler that performs the copy.
+///
+/// Returns:
+///     The rendered apply-to-all button.
+pub(crate) fn popup_apply_all_button(
+    id: impl Into<ElementId>,
+    tooltip: String,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    MoonButton::new(id)
+        .label("⧉")
+        .tooltip(tooltip)
+        .size(MoonButtonSize::Micro)
+        .variant(MoonButtonVariant::Ghost)
+        .on_click(on_click)
+        .render()
+}
+
 /// Builds the ⚙ that OPENS a settings popup, as the popover's own trigger.
 ///
 /// An icon, never a "⚙" label: any label at all costs MoonUI's square icon-only geometry, so a

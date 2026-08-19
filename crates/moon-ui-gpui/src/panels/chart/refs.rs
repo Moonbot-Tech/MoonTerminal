@@ -130,6 +130,10 @@ impl ChartPanel {
                         for (core, market) in removed {
                             this.release_market_ref(core, &market, cx);
                         }
+                        // The one AUTOMATIC way a panel empties: a retained slot that keeps its
+                        // history target would go on re-reading it on every report generation for
+                        // the rest of the session.
+                        this.clear_history_target_if_unused(cx);
                         crate::diag::bump(&crate::diag::CHART_TTL_NOTIFY);
                         cx.notify();
                     }

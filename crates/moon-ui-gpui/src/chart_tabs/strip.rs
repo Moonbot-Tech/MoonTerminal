@@ -245,7 +245,7 @@ impl Render for ChartTabs {
                 .render(),
             cx,
         );
-        // The palette button beside the candles one edits the GLOBAL chart-drawing settings.
+        // The palette button beside the candles one edits the ACTIVE TAB's chart-drawing settings.
         let graphics_popup_open = self.graphics_popup_open;
         let graphics_btn = graphics_popup::graphics_popup_host(
             self,
