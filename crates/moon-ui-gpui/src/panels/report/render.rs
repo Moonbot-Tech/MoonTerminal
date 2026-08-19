@@ -1,6 +1,6 @@
 //! [ReportPanel] table element, sort handling, and the panel and render trait impls.
 
-use super::state::{schedule_report_preference, ReportPreferenceWrite};
+use super::state::{ReportPreferenceWrite, schedule_report_preference};
 use super::*;
 
 impl ReportPanel {
@@ -161,7 +161,7 @@ impl Panel for ReportPanel {
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
         Some(vec![
             crate::persistence::table_persist::reset_button(
@@ -173,6 +173,7 @@ impl Panel for ReportPanel {
                 self.group.clone(),
                 self.backend.clone(),
                 self.dock.clone(),
+                cx,
             ),
         ])
     }

@@ -53,7 +53,8 @@ impl Shell {
             mine
         });
         for panel in panels {
-            self.defer_detach_panel(panel, cx);
+            // No gesture is behind a drained request, so nothing here may take the foreground.
+            self.defer_detach_panel(panel, false, cx);
         }
     }
 
@@ -112,7 +113,18 @@ impl Shell {
     ///
     /// Auto mode rejects the request before and after deferral so a queued action cannot create a
     /// window or mutate Classic detached persistence after a mode transition.
-    pub(super) fn defer_detach_panel(&mut self, panel_name: String, cx: &mut Context<Self>) {
+    ///
+    /// Args:
+    ///     panel_name: Dock panel to move into its own window.
+    ///     activate: Whether a gesture asked for this. The tab double-click raises the new window;
+    ///         the `Backend` drain does not, because no user is waiting to look at it.
+    ///     cx: Shell context used to defer the detach into the owner window's update.
+    pub(super) fn defer_detach_panel(
+        &mut self,
+        panel_name: String,
+        activate: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !crate::workspace::should_persist_normal_dock(
             self.backend.read(cx).workspace_mode(&self.group),
         ) {
@@ -129,6 +141,12 @@ impl Shell {
                 ) {
                     return;
                 }
+                // A detach deferred across the final save would create — and raise — a native window
+                // during teardown, and its spec would never be written. Same gate the repin drain
+                // and the detached respawn already carry.
+                if backend.read(app).quitting {
+                    return;
+                }
                 // Assets detaches like any other panel: open a per-group window, remove its tab,
                 // and repin it when that window closes. Its separate all-cores window opens from
                 // the panel toolbar button rather than a double-click.
@@ -136,9 +154,14 @@ impl Shell {
                     return;
                 }
                 if backend.read(app).is_detached(&group, &panel_name) {
+                    // The panel already has a window, and the user just asked for it again — which
+                    // is what a person does when they cannot see it.
+                    if activate {
+                        detached::raise_existing(&backend, &group, &panel_name, app);
+                    }
                     return;
                 }
-                let spec = detached::DetachedSpec::with_saved_geom(
+                let mut spec = detached::DetachedSpec::with_saved_geom(
                     &backend,
                     app,
                     group.clone(),
@@ -203,16 +226,24 @@ impl Shell {
                     }
                 }
                 let owner = window.window_handle();
+                // Captured here because this runs inside the owner window's update: its slot in
+                // `cx.windows` is taken, so `spawn`'s `owner.update()` fallback resolves nothing and
+                // macOS would place the panel on the primary display instead of this group's.
+                let owner_display = crate::window::windowing::window_display_id(window, app);
                 // `spawn` records the window handle on `Backend` itself, so every detach route
                 // gets it and none has to remember.
-                if let Err(err) = detached::spawn(app, &backend, &spec, Some(owner)) {
-                    log::warn!(
-                        "detach panel failed group={} panel={}: {err:#}",
-                        group,
-                        panel_name
-                    );
-                    return;
-                }
+                let detached_window =
+                    match detached::spawn(app, &backend, &mut spec, Some(owner), owner_display) {
+                        Ok(detached_window) => detached_window,
+                        Err(err) => {
+                            log::warn!(
+                                "detach panel failed group={} panel={}: {err:#}",
+                                group,
+                                panel_name
+                            );
+                            return;
+                        }
+                    };
                 dock.update(app, |area, cx| {
                     area.remove_panel_by_name(&panel_name, window, cx);
                 });
@@ -220,6 +251,12 @@ impl Shell {
                     b.detached.push(spec);
                     b.detached_dirty = true;
                 });
+                // Raised only after the move is complete, so the window the user is about to look at
+                // is already backed by a recorded spec and an emptied dock slot. On macOS a window
+                // created on another display otherwise stays hidden until the next app activation.
+                if activate {
+                    crate::window::windowing::activate_new_window(detached_window.into(), app);
+                }
             });
         });
     }

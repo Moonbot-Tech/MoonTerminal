@@ -338,10 +338,67 @@ fn owned_window_options(
     options
 }
 
+/// Read the display a window currently sits on, as the `DisplayId` its options factory wants.
+///
+/// Every route that opens a secondary window from inside another window's event handler needs this
+/// exact value, because the handle-based [`owner_display_id`] cannot resolve while that window's
+/// slot is borrowed. One spelling so the contract test can name it, and one place to fix when the
+/// fork grows a direct `Window::display_id()` accessor — today's `Window::display` walks every
+/// monitor to hand back an id the window already holds (see `docs-internal/FORK_BUGS.md`).
+///
+/// # Arguments
+///
+/// * `window` - Window whose display should be read.
+/// * `cx` - Application context used to enumerate displays.
+///
+/// # Returns
+///
+/// The window's display, or `None` when the platform reports none.
+pub(crate) fn window_display_id(window: &Window, cx: &App) -> Option<DisplayId> {
+    window.display(cx).map(|display| display.id())
+}
+
+/// Place a first-time window's fallback origin on the display it is about to open on.
+///
+/// A cascade point like (200, 160) is expressed relative to a display, but Windows reads window
+/// coordinates as global: handed a `display_id` whose area does not contain the point, its platform
+/// layer silently discards the whole rectangle and substitutes the display's default bounds — the
+/// window loses its intended SIZE as well as its position (fork: `moon-gpui-windows/src/window.rs`,
+/// `retrieve_window_placement`). Offsetting by the target display's origin keeps the point inside
+/// it. On macOS displays report a zero origin, which is correct there for the opposite reason: its
+/// window coordinates are already display-relative.
+///
+/// # Arguments
+///
+/// * `offset` - Cascade point relative to the target display.
+/// * `display` - Display the window will open on, when one was resolved.
+/// * `cx` - Application context used to enumerate displays.
+///
+/// # Returns
+///
+/// The origin to open with, unchanged when no display resolved.
+pub(crate) fn cascade_origin_on(
+    offset: Point<Pixels>,
+    display: Option<DisplayId>,
+    cx: &App,
+) -> Point<Pixels> {
+    let Some(bounds) = display.and_then(|id| {
+        cx.displays()
+            .into_iter()
+            .find(|d| d.id() == id)
+            .map(|d| d.bounds())
+    }) else {
+        return offset;
+    };
+    bounds.origin + offset
+}
+
 /// Resolve the display currently containing an owner window.
 ///
-/// Tool and detached windows use this to open on the same display as the group window that
-/// launched them.
+/// This is the LAST resort of [`saved_or_owner_display_id`], not its normal route: a caller running
+/// inside the owner window's own update cannot use it at all, because that window's slot in
+/// `cx.windows` is taken and the update below returns `Err`. Such callers capture the display at the
+/// call site instead. This resolves only for a caller running outside any owner-window update.
 ///
 /// # Arguments
 ///
@@ -402,16 +459,25 @@ pub(crate) fn saved_or_owner_display_id(
 
 /// Activate a newly created window in response to an explicit user action.
 ///
-/// On macOS an owned window created on another display may otherwise remain hidden until the next
-/// application activation, making click N+1 reveal the window requested by click N. Do not call
-/// this during bulk startup restoration, where activating each window would steal focus.
+/// On macOS a window created on another display — owned or independent — may otherwise remain
+/// hidden until the next application activation, making click N+1 reveal the window requested by
+/// click N. Do not call this during bulk startup restoration, where activating each window would
+/// steal focus, nor from a machine-driven route that no gesture asked for.
 ///
 /// # Arguments
 ///
 /// * `handle` - Handle of the newly created window.
 /// * `cx` - Application context used to update and activate the window.
 pub(crate) fn activate_new_window(handle: AnyWindowHandle, cx: &mut App) {
-    let _ = handle.update(cx, |_, window, _| window.activate_window());
+    // A closed window is the ordinary case here, not a fault: the user can close a just-opened
+    // window before this runs. Logged rather than dropped so a silently unraised window — the very
+    // defect this helper exists to remove — leaves a trace.
+    if handle
+        .update(cx, |_, window, _| window.activate_window())
+        .is_err()
+    {
+        log::debug!("activate_new_window: window {handle:?} was gone before activation");
+    }
 }
 
 /// Read windowed geometry as logical pixels `(x, y, width, height)`.

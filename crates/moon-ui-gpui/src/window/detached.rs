@@ -49,6 +49,15 @@ pub struct DetachedSpec {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Whether `x`/`y` are the first-detach cascade rather than a position this panel actually had.
+    ///
+    /// Not persisted, and false when read back from `detached.json`: a spec that reached the file
+    /// carries a real position by definition. Only a real one may pick a display — the cascade point
+    /// lies inside the primary display and would answer "primary" for every first detach, hiding the
+    /// owner window's own monitor. `spawn` reads this instead of re-deriving it, so the answer cannot
+    /// disagree with the spec it describes.
+    #[serde(skip)]
+    pub cascade_origin: bool,
 }
 
 impl DetachedSpec {
@@ -61,6 +70,7 @@ impl DetachedSpec {
             y: 160,
             w: 1100,
             h: 520,
+            cascade_origin: true,
         }
     }
 
@@ -84,6 +94,7 @@ impl DetachedSpec {
             spec.y = g.y;
             spec.w = g.w;
             spec.h = g.h;
+            spec.cascade_origin = false;
         }
         spec
     }
@@ -137,6 +148,45 @@ pub(crate) fn take_windows(
 pub(crate) fn prune_requests(b: &mut Backend, gone: impl Fn(&str) -> bool) {
     b.repin_request.retain(|(group, _)| !gone(group));
     b.panel_detach_request.retain(|(group, _)| !gone(group));
+}
+
+/// Raise the live window of an already-detached panel, if the map still names one.
+///
+/// The routes that refuse a second detach end here: a person clicking "detach" on a panel that is
+/// already detached is asking to SEE it, which is what every singleton tool window answers with.
+/// Borrowed keys keep the lookup allocation-free, and `false` means the map named no live window —
+/// the caller has nothing to raise and its own refusal stands.
+pub(crate) fn raise_existing(
+    backend: &Entity<Backend>,
+    group: &str,
+    panel: &str,
+    app: &mut App,
+) -> bool {
+    let Some(handle) = backend
+        .read(app)
+        .detached_panel_windows
+        .iter()
+        .find(|((g, p), _)| g == group && p == panel)
+        .map(|(_, handle)| *handle)
+    else {
+        // The spec says detached but no window answers to it — the gap a group-window rebuild opens
+        // between taking the old windows down and `respawn_all` putting them back. The click cannot
+        // be served, and silence here is what made the original defect so hard to report.
+        log::warn!("panel {group}/{panel} is detached but has no live window to raise");
+        return false;
+    };
+    // `update` doubles as the liveness probe every singleton open() uses: an `Err` is a window that
+    // died without clearing its entry. Both failures are logged HERE rather than returned upward,
+    // because neither caller can do anything about them — the panel's spec is taken, so a second
+    // window is exactly what must not happen — and silence is what made the original defect so hard
+    // to report.
+    let raised = handle
+        .update(app, |_, window, _| window.activate_window())
+        .is_ok();
+    if !raised {
+        log::warn!("panel {group}/{panel} names a window that no longer exists");
+    }
+    raised
 }
 
 /// Whether `window_id` is the window the map currently calls the one for `key`.
@@ -377,6 +427,10 @@ impl DetachedWindow {
                 .iter_mut()
                 .find(|s| s.group == *group && s.panel == *panel)
             {
+                // The window exists at these coordinates, so whatever the spec started as, its
+                // origin is now a real position — including the first-detach case, where leaving the
+                // flag set would make the next reopen discard a position the user chose by dragging.
+                s.cascade_origin = false;
                 if (s.x, s.y, s.w, s.h) != geom {
                     s.x = geom.0;
                     s.y = geom.1;
@@ -496,11 +550,19 @@ impl Render for DetachedWindow {
 
 /// Opens a detached window from a specification, either while restoring each saved specification at
 /// startup or after a new detach action. The content is a fresh panel and geometry comes from `spec`.
+///
+/// `owner_display` is the owner's display captured at the call site with `window.display(cx)`. A
+/// detach action runs INSIDE the owner window's update, where its slot in `cx.windows` is taken and
+/// the `owner.update()` fallback cannot resolve a display; without it macOS falls back to the
+/// primary display and every detached panel opens on the wrong monitor. `respawn_all` is the one
+/// route that runs outside that borrow — after the group window is registered — so it passes `None`
+/// and lets the fallback do the work.
 pub fn spawn(
     app: &mut App,
     backend: &Entity<Backend>,
-    spec: &DetachedSpec,
+    spec: &mut DetachedSpec,
     owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
 ) -> anyhow::Result<WindowHandle<Root>> {
     let owner = owner.or_else(|| {
         backend
@@ -516,8 +578,30 @@ pub fn spawn(
     };
     // On multiple displays, choose by saved position outside macOS or fall back to the owner window.
     // Otherwise the window opens on the primary display, especially on macOS where x/y are display-relative.
-    let display_id =
-        crate::window::windowing::saved_or_owner_display_id(Some(bounds.origin), owner, None, app);
+    //
+    // See `DetachedSpec::cascade_origin` for why a fabricated origin must not pick the display.
+    let saved_origin = (!spec.cascade_origin).then_some(bounds.origin);
+    let display_id = crate::window::windowing::saved_or_owner_display_id(
+        saved_origin,
+        owner,
+        owner_display,
+        app,
+    );
+    // A cascade origin now has to be expressed on the display actually chosen, or Windows drops the
+    // rectangle — size included — as "not inside that display". Written back onto the spec because
+    // the caller persists it: a spec describing a different point than the window opened at would
+    // move that window on the next launch, and the point is a real position now, not the cascade.
+    let bounds = match saved_origin {
+        Some(origin) => Bounds { origin, ..bounds },
+        None => {
+            let origin =
+                crate::window::windowing::cascade_origin_on(bounds.origin, display_id, app);
+            spec.x = f32::from(origin.x) as i32;
+            spec.y = f32::from(origin.y) as i32;
+            spec.cascade_origin = false;
+            Bounds { origin, ..bounds }
+        }
+    };
     let opts = crate::window::windowing::detached_panel_window_options(
         format!(
             "{} — MoonTerminal",
@@ -683,7 +767,11 @@ pub(crate) fn respawn_all(backend: &Entity<Backend>, cx: &mut App) {
                 if !should_reopen_now(backend.read(app), &spec) {
                     return;
                 }
-                if let Err(err) = spawn(app, &backend, &spec, None) {
+                // A clone, because `spawn`'s origin write-back is meaningless on this route: every
+                // spec here comes from `detached.json` or a live detachment, so its origin is real
+                // and the cascade branch that writes back cannot be taken.
+                let mut spec = spec.clone();
+                if let Err(err) = spawn(app, &backend, &mut spec, None, None) {
                     log::warn!(
                         "reopen detached panel failed group={} panel={}: {err:#}",
                         spec.group,

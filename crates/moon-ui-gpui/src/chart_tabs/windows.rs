@@ -21,6 +21,35 @@ pub(super) fn chart_detach_allowed(mode: WorkspaceMode) -> bool {
     mode != WorkspaceMode::AutoTrading
 }
 
+/// Geometry a chart window falls back to the first time its tab is detached.
+///
+/// Its origin is deliberately NOT a display hint: the point lies inside the primary display, so
+/// treating it as a remembered position would answer "primary" for every first detach and hide the
+/// monitor the group window is actually on. [`ChartWindowPlacement::geom`] being `None` is what says
+/// "no real position", and this is materialized only after that question is answered.
+const FIRST_DETACH_GEOM: chart_persist::WinGeom = chart_persist::WinGeom {
+    x: 200,
+    y: 160,
+    w: 900,
+    h: 620,
+};
+
+/// Where and how one detached chart window should be created.
+///
+/// Grouped rather than passed as loose arguments because two of the three answer one question
+/// between them — which monitor this window belongs on — and each is a different partial answer.
+pub(super) struct ChartWindowPlacement {
+    /// Remembered position and size from `charts.json`, or `None` for a tab detached for the first
+    /// time. Only a remembered origin may pick a display; see [`FIRST_DETACH_GEOM`].
+    pub geom: Option<chart_persist::WinGeom>,
+    /// Whether this window is being restored at startup rather than detached by a gesture.
+    /// Restoration must not raise its windows: it opens all of them and would steal focus per window.
+    pub restored: bool,
+    /// Display of the group window, captured by the caller. Inside that window's own update it is
+    /// the ONLY resolvable answer, because its slot in `cx.windows` is taken.
+    pub owner_display: Option<DisplayId>,
+}
+
 impl ChartTabs {
     /// Gather this group's detached chart windows from the Main window's tab-strip control.
     /// Every platform activates them; Windows additionally restores, shows, and cascades them onto
@@ -48,11 +77,18 @@ impl ChartTabs {
     ///
     /// Args:
     ///     tab: Attached AddToChart or Custom tab to move into its own window.
+    ///     owner_display: Display of the tab strip's own window, captured by the event handler
+    ///         because this runs inside that window's update and the owner fallback cannot resolve.
     ///     cx: Parent context used to open the window and synchronize active state.
     ///
     /// Returns:
     ///     Nothing; Auto, Main, missing tabs, and failed window creation are ignored.
-    pub(super) fn detach(&mut self, tab: Tab, cx: &mut Context<Self>) {
+    pub(super) fn detach(
+        &mut self,
+        tab: Tab,
+        owner_display: Option<DisplayId>,
+        cx: &mut Context<Self>,
+    ) {
         if !chart_detach_allowed(self.backend.read(cx).workspace_mode(&self.group)) {
             return;
         }
@@ -69,18 +105,24 @@ impl ChartTabs {
             return;
         };
         let panel = from[pos].2.clone();
-        // Restore previously detached geometry or use the default cascade.
-        let geom = self
-            .spec_geom(cx, n, &bucket)
-            .unwrap_or(chart_persist::WinGeom {
-                x: 200,
-                y: 160,
-                w: 900,
-                h: 620,
-            });
-        if !self.open_chart_window(n, panel.clone(), bucket.clone(), geom, false, cx) {
+        // Previously detached geometry, or `None` so the window falls back to the first-detach cascade.
+        let geom = self.spec_geom(cx, n, &bucket);
+        // The geometry the window ACTUALLY opened with, which is not the requested one for a first
+        // detach: its cascade point is resolved onto the chosen display. Persisting the request
+        // instead would move the window on the next launch.
+        let Some((geom, window)) = self.open_chart_window(
+            n,
+            panel.clone(),
+            bucket.clone(),
+            ChartWindowPlacement {
+                geom,
+                restored: false,
+                owner_display,
+            },
+            cx,
+        ) else {
             return;
-        }
+        };
         // A visible detached tab retains its own order-book demand, so clear the suspend gate.
         panel.update(cx, |p, pcx| {
             p.set_orderbook_suspended(false, pcx);
@@ -107,6 +149,10 @@ impl ChartTabs {
             "[detach] n={n} bucket={bucket:?} → detached=Some({},{},{},{})",
             geom.x, geom.y, geom.w, geom.h
         ));
+        // Raised last, once the tab has left the strip and its spec is recorded — the same order
+        // both panel routes follow. On macOS a window created on another display otherwise stays
+        // hidden until the next application activation.
+        crate::window::windowing::activate_new_window(window.into(), cx);
         cx.notify();
     }
 
@@ -115,19 +161,34 @@ impl ChartTabs {
     /// Custom tabs seed from their specs and the `gpu_canvas` moves with the window's GPUI scene.
     /// `DetachedChartHost` persists geometry and requests repinning on close; group tracking closes
     /// it with the group window.
+    ///
+    /// Returns the geometry the window was created with — which differs from the requested one when
+    /// a first-detach cascade point had to be resolved onto the chosen display — together with its
+    /// handle, or `None` when the window could not be created. The handle goes back to the caller
+    /// rather than being raised here, because only the caller knows whether a gesture asked for this
+    /// window and whether the move it belongs to has finished.
     fn open_chart_window(
         &mut self,
         n: u32,
         panel: Entity<AddChartStack>,
         bucket: ChartBucket,
-        geom: chart_persist::WinGeom,
-        restored: bool,
+        placement: ChartWindowPlacement,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) -> Option<(chart_persist::WinGeom, WindowHandle<Root>)> {
+        let ChartWindowPlacement {
+            geom,
+            restored,
+            owner_display,
+        } = placement;
+        let remembered = geom.is_some();
+        let geom = geom.unwrap_or(FIRST_DETACH_GEOM);
         // Multi-monitor restoration requires `display_id`; otherwise GPUI creates the window on
         // the primary display and rejects bounds outside it. Non-macOS resolves the display from
-        // the saved point, while macOS uses the owning group window because coordinates are
-        // display-relative there.
+        // the saved point — but only a REMEMBERED one, because the first-detach cascade point lies
+        // inside the primary display and would answer for every monitor. macOS skips containment
+        // entirely (its coordinates are display-relative) and relies on the owner. Both detach and
+        // startup restoration run while the group window's slot is borrowed, so `owner_display`
+        // captured by the caller is the only display either of them can resolve.
         let origin = point(px(geom.x as f32), px(geom.y as f32));
         let owner = self
             .backend
@@ -136,8 +197,25 @@ impl ChartTabs {
             .get(&self.group)
             .copied()
             .map(Into::into);
-        let display_id =
-            crate::window::windowing::saved_or_owner_display_id(Some(origin), owner, None, cx);
+        let display_id = crate::window::windowing::saved_or_owner_display_id(
+            remembered.then_some(origin),
+            owner,
+            owner_display,
+            cx,
+        );
+        // The cascade point is relative to a display, and Windows reads window coordinates as
+        // global: left as-is against a non-primary `display_id` it falls outside that display, and
+        // the platform layer replaces the whole rectangle — 900x620 included — with default bounds.
+        let origin = if remembered {
+            origin
+        } else {
+            crate::window::windowing::cascade_origin_on(origin, display_id, cx)
+        };
+        let geom = chart_persist::WinGeom {
+            x: f32::from(origin.x) as i32,
+            y: f32::from(origin.y) as i32,
+            ..geom
+        };
         let mut opts = crate::window::windowing::detached_chart_window_options(
             format!(
                 "MoonTerminal — {}",
@@ -182,7 +260,7 @@ impl ChartTabs {
             self.backend.update(cx, |b, _| {
                 b.detached_chart_windows.push((group, handle));
             });
-            true
+            Some((geom, handle))
         } else {
             log::warn!(
                 "failed to open detached chart window for group={} n={} bucket={:?}",
@@ -190,7 +268,7 @@ impl ChartTabs {
                 n,
                 bucket
             );
-            false
+            None
         }
     }
 
@@ -309,11 +387,20 @@ impl ChartTabs {
     /// the work through `cx.defer` instead.
     ///
     /// Args:
+    ///     owner_display: Display of the group window, read by `ChartTabs::new` from the window it
+    ///         is being built into. The deferred work below cannot ask for it: `group_windows` is
+    ///         filled only after `open_window` returns, so at that point the group window is neither
+    ///         registered nor addressable, and every restored chart would fall back to the primary
+    ///         display.
     ///     cx: Parent context used to defer window creation and retain stack observers.
     ///
     /// Returns:
     ///     Nothing; pending specifications are drained and restored asynchronously.
-    pub(super) fn restore_detached(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn restore_detached(
+        &mut self,
+        owner_display: Option<DisplayId>,
+        cx: &mut Context<Self>,
+    ) {
         if self.restore_pending.is_empty() {
             return;
         }
@@ -436,7 +523,21 @@ impl ChartTabs {
                     } else {
                         this.watch_regular_stack_target(&panel, cx);
                     }
-                    if this.open_chart_window(n, panel.clone(), bucket.clone(), geom, true, cx) {
+                    if this
+                        .open_chart_window(
+                            n,
+                            panel.clone(),
+                            bucket.clone(),
+                            ChartWindowPlacement {
+                                // Restored geometry is remembered by definition: it came from `charts.json`.
+                                geom: Some(geom),
+                                restored: true,
+                                owner_display,
+                            },
+                            cx,
+                        )
+                        .is_some()
+                    {
                         panel.update(cx, |p, pcx| p.set_scene_visible(false, pcx));
                         this.detached.push((n, bucket, panel));
                     }

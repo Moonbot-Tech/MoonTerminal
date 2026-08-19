@@ -1172,13 +1172,14 @@ impl Panel for NewsView {
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
         Some(vec![crate::panels::detach_button(
             PANEL_NAME,
             self.group.clone(),
             self.backend.clone(),
             self.dock.clone(),
+            cx,
         )])
     }
 }

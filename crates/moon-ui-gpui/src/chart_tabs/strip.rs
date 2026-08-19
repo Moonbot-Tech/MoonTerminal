@@ -6,15 +6,15 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{
-    h_flex, v_flex, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput,
-    MoonPalette, MoonRect, MoonTabItem, MoonTabStrip,
+    MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonInput, MoonPalette,
+    MoonRect, MoonTabItem, MoonTabStrip, h_flex, v_flex,
 };
 use rust_i18n::t;
 
 use super::candle_popup;
 use super::common;
 use super::graphics_popup;
-use super::{chart_tab_strip_h, coin_search, ChartTabs, Tab};
+use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
 
 impl Render for ChartTabs {
@@ -83,16 +83,23 @@ impl Render for ChartTabs {
             .on_click({
                 let tab_keys = tab_keys.clone();
                 let view = view.clone();
-                move |ix, event, _window, app| {
+                move |ix, event, window, app| {
                     let Some(tab_id) = tab_keys.get(ix).cloned() else {
                         return;
                     };
+                    // Read before entering the view update: the detached window must open on THIS
+                    // window's display, and `detach` can no longer ask the owner for it from inside
+                    // the owner's own update. Gated on the detaching gesture because the read walks
+                    // every monitor, and a plain tab switch is the common case.
+                    let detaching = matches!(tab_id, Tab::Add(..) | Tab::Custom(..))
+                        && event.click_count() >= 2;
+                    let owner_display = detaching
+                        .then(|| crate::window::windowing::window_display_id(window, app))
+                        .flatten();
                     view.update(app, |this, cx| {
                         // Double-click detaches Add and Custom tabs into OS windows, but never Main.
-                        if matches!(tab_id, Tab::Add(..) | Tab::Custom(..))
-                            && event.click_count() >= 2
-                        {
-                            this.detach(tab_id, cx);
+                        if detaching {
+                            this.detach(tab_id, owner_display, cx);
                             return;
                         }
                         let exists = matches!(tab_id, Tab::Main)

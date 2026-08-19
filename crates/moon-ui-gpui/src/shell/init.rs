@@ -259,7 +259,7 @@ impl Shell {
                         if auto {
                             return;
                         }
-                        this.defer_detach_panel(panel_name.to_string(), cx);
+                        this.defer_detach_panel(panel_name.to_string(), true, cx);
                     }
                     DockEvent::PanelCloseRequested { panel_name } => {
                         if auto {
