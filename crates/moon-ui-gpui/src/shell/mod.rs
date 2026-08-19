@@ -158,6 +158,11 @@ pub(crate) struct Shell {
     /// Window-root focus handle that lets root `on_key_down` receive hotkeys even when Main is empty.
     /// It is focused at startup; chart or input clicks take focus, while F-key events bubble back.
     focus: FocusHandle,
+    /// Reads Caps Lock and lone-modifier presses out of the modifier-change stream.
+    ///
+    /// Per window, because one press spans several events and two windows hold their own keyboards
+    /// state as far as GPUI is concerned. See [`crate::hotkeys::resolve_modifiers`].
+    modifier_watch: moon_ui::MoonHotkeyModifierWatch,
     /// Whether this OS window is active.
     ///
     /// Main inactivity tracking calls `Backend::note_main_input` only for an active window, so

@@ -119,6 +119,17 @@ impl Render for DetachedChartHost {
                 .bottom(px(0.0))
                 .on_mouse_down(MouseButton::Left, common::coin_dismiss_handler(cx))
         });
+        // A modifier held for a MOUSE gesture is a prefix too, and releasing it must not fire a
+        // lone-modifier binding. Window-level and in the capture phase: the chart consumes its own
+        // presses, so a bubble listener on this root would never see them.
+        {
+            let view = cx.entity();
+            window.on_mouse_event::<MouseDownEvent>(move |_e, phase, _window, cx| {
+                if phase == DispatchPhase::Capture {
+                    view.update(cx, |this, _| this.modifier_watch.interrupt());
+                }
+            });
+        }
         // Only detached tab windows have this header; the main dock does not. Scale is on the left,
         // and "close all charts" is on the right.
         v_flex()
@@ -129,6 +140,15 @@ impl Render for DetachedChartHost {
             .on_key_down(
                 cx.listener(|this, ev: &KeyDownEvent, window, cx| this.on_hotkey(ev, window, cx)),
             )
+            // Caps Lock and a lone modifier are bindable too, and neither arrives as a key press.
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, window, cx| {
+                this.on_modifier_hotkey(ev, window, cx)
+            }))
+            // Capture phase: a key a focused field consumes never bubbles to the listener above,
+            // and a modifier held while it was typed must lose its claim to being a binding.
+            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _window, _cx| {
+                this.modifier_watch.interrupt();
+            }))
             .child(
                 h_flex()
                     .h(header_h)

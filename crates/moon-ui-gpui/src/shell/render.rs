@@ -146,6 +146,19 @@ impl Render for Shell {
             });
         }
 
+        // A modifier held for a MOUSE gesture — the Ctrl+Left order move, an Alt drag — is a
+        // prefix too, and releasing it must not fire a lone-modifier binding. Window-level and in
+        // the capture phase for the same reason as the move listener above: the chart consumes its
+        // own presses, so a bubble listener on the root would never see them.
+        {
+            let view = cx.entity();
+            window.on_mouse_event::<MouseDownEvent>(move |_e, phase, _window, cx| {
+                if phase == DispatchPhase::Capture {
+                    view.update(cx, |this, _| this.modifier_watch.interrupt());
+                }
+            });
+        }
+
         v_flex()
             .size_full()
             .relative() // Anchor absolute popup layers over the dock.
@@ -162,6 +175,16 @@ impl Render for Shell {
             .on_key_down(
                 cx.listener(|this, ev: &KeyDownEvent, window, cx| this.on_hotkey(ev, window, cx)),
             )
+            // Caps Lock and a lone modifier are bindable too, and neither arrives as a key press.
+            .on_modifiers_changed(cx.listener(|this, ev: &ModifiersChangedEvent, window, cx| {
+                this.on_modifier_hotkey(ev, window, cx)
+            }))
+            // Capture phase, unlike the hotkey listener above: a key consumed by a focused field
+            // never bubbles here, and a modifier held while it was typed must still lose its claim
+            // to being a binding of its own.
+            .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _window, _cx| {
+                this.modifier_watch.interrupt();
+            }))
             // ── Header ──────────────────────────────────────────────
             .child(terminal_chrome::header(
                 &self.group,

@@ -140,7 +140,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use crate::hotkeys::HotkeyAction;
         // Before the bindings are even consulted: Escape leaves the Sells-to-zone mode, whatever
         // modifier the drawing hand still holds down.
         if crate::hotkeys::escape_leaves_sells_zone(ev, &self.backend, cx) {
@@ -157,10 +156,60 @@ impl Shell {
         };
         // Action-owned policies run before this window's routing: auto-repeat suppression, and the
         // cursor-addressed target that makes Split act on the order under the pointer.
-        if crate::hotkeys::pre_dispatch(action, ev, &self.backend, cx) {
+        if crate::hotkeys::pre_dispatch(action, ev.is_held, &self.backend, cx) {
             cx.stop_propagation();
             return;
         }
+        if self.dispatch_hotkey(action, window, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    /// Route a hotkey bound to Caps Lock or to a lone modifier, which arrive as a modifier change.
+    ///
+    /// Kept apart from [`Self::on_hotkey`] only where the two genuinely differ: there is no
+    /// auto-repeat to suppress and no keystroke to hand the Sells-to-zone escape, so this resolves
+    /// the press and hands it to the same routing every other binding goes through.
+    pub(super) fn on_modifier_hotkey(
+        &mut self,
+        ev: &ModifiersChangedEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let typing = window.is_text_input_active();
+        let action = {
+            let b = self.backend.read(cx);
+            let hk = &b.preview.as_ref().unwrap_or(&b.config).hotkeys;
+            crate::hotkeys::resolve_modifiers(&mut self.modifier_watch, ev, hk, typing)
+        };
+        let Some(action) = action else {
+            return;
+        };
+        if crate::hotkeys::pre_dispatch(action, false, &self.backend, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.dispatch_hotkey(action, window, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    /// Execute one resolved action against this group window.
+    ///
+    /// Args:
+    ///     action: The action a binding resolved to, whichever event carried it.
+    ///     window: The window the binding arrived at.
+    ///     cx: Shell context used to route the action.
+    ///
+    /// Returns:
+    ///     Whether the action was handled here, which is what decides propagation.
+    fn dispatch_hotkey(
+        &mut self,
+        action: crate::hotkeys::HotkeyAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use crate::hotkeys::HotkeyAction;
         let group = self.group.clone();
         let handled = match action {
             // Step the active tab's Y scale and address the revision to this group. Its ChartTabs
@@ -265,9 +314,7 @@ impl Shell {
                 })
             }
         };
-        if handled {
-            cx.stop_propagation();
-        }
+        handled
     }
 }
 

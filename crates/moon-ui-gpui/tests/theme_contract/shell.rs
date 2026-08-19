@@ -1487,3 +1487,51 @@ fn coin_and_orders_settings_menus_keep_fitted_width_routes() {
         "Orders settings must not restore the fixed width that clips translated rows"
     );
 }
+
+/// Protects the two guards that keep a bare-key binding from firing on something the user did not
+/// press.
+///
+/// Caps Lock and a lone modifier reach a window as a change of modifier state, so both windows read
+/// them through `MoonHotkeyModifierWatch`. Two edits break that quietly. Dropping `forget()` from
+/// the activation observer lets the state a window is RE-TOLD when it regains focus read as a
+/// press: Caps Lock flipped in another application, or Alt still held from the Alt+Tab that brought
+/// the window back, would run a trading action nobody asked for. Dropping the capture-phase
+/// `interrupt()` on mouse-down lets the modifier held for a chart gesture — Moonbot's own Ctrl+Left
+/// order move — commit as a binding when the hand comes off it.
+#[test]
+fn bare_key_bindings_ignore_a_refocused_state_and_a_mouse_gesture() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let files = [
+        ("shell/init.rs", root.join("shell").join("init.rs")),
+        ("shell/render.rs", root.join("shell").join("render.rs")),
+        (
+            "detached_host/mod.rs",
+            root.join("chart_tabs").join("detached_host").join("mod.rs"),
+        ),
+        (
+            "detached_host/render.rs",
+            root.join("chart_tabs")
+                .join("detached_host")
+                .join("render.rs"),
+        ),
+    ];
+    for (name, path) in files {
+        let source = fs::read_to_string(&path).unwrap();
+        let observer = name.ends_with("init.rs") || name.ends_with("mod.rs");
+        if observer {
+            assert!(
+                source.contains("modifier_watch.forget()"),
+                "{name} must forget the keyboard state when its window loses focus"
+            );
+        } else {
+            assert!(
+                source.contains("modifier_watch.interrupt()"),
+                "{name} must withdraw a lone-modifier tap when a mouse gesture starts"
+            );
+            assert!(
+                source.contains("on_mouse_event::<MouseDownEvent>"),
+                "{name} must take mouse-down at the window level: the chart consumes its own presses"
+            );
+        }
+    }
+}

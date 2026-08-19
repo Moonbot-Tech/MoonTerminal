@@ -83,6 +83,10 @@ pub(super) struct DetachedChartHost {
     /// The root receives focus on creation. Clicking market input moves focus there, but key events
     /// bubble back to the root. This currently covers Scale +/- for the window panel.
     focus: FocusHandle,
+    /// Reads Caps Lock and lone-modifier presses out of this window's modifier-change stream.
+    ///
+    /// Per window for the same reason the group window keeps its own: a press spans several events.
+    modifier_watch: moon_ui::MoonHotkeyModifierWatch,
     /// Exact cancellation authority for this window's current background taskbar-hide burst.
     taskbar_hide: crate::window::windowing::TaskbarHideTask,
 }
@@ -180,6 +184,10 @@ impl DetachedChartHost {
         cx.observe_window_activation(window, |this, window, cx| {
             this.taskbar_hide.cancel();
             this.taskbar_hide = crate::window::windowing::hide_window_from_taskbar_soon(window);
+            if !window.is_window_active() {
+                // See the group window: the state a returning window is re-told is not a press.
+                this.modifier_watch.forget();
+            }
             if window.is_window_active() {
                 let group = this.group.clone();
                 this.backend
@@ -372,6 +380,7 @@ impl DetachedChartHost {
             coin_query: String::new(),
             coin_popup_open: false,
             focus,
+            modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),
             taskbar_hide,
         }
     }
@@ -406,7 +415,6 @@ impl DetachedChartHost {
     /// Returns:
     ///     Nothing; a handled action stops propagation.
     fn on_hotkey(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::hotkeys::HotkeyAction;
         // Same first rule as the group window: Escape leaves the Sells-to-zone mode regardless of
         // the modifier held with it.
         if crate::hotkeys::escape_leaves_sells_zone(ev, &self.backend, cx) {
@@ -422,10 +430,59 @@ impl DetachedChartHost {
         };
         // Action-owned policies first, exactly as in the group window: auto-repeat suppression and
         // the cursor-addressed Split target, whose market-level fallback lives in `apply`.
-        if crate::hotkeys::pre_dispatch(action, ev, &self.backend, cx) {
+        if crate::hotkeys::pre_dispatch(action, ev.is_held, &self.backend, cx) {
             cx.stop_propagation();
             return;
         }
+        if self.dispatch_hotkey(action, window, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    /// Route a hotkey bound to Caps Lock or to a lone modifier, which arrive as a modifier change.
+    ///
+    /// The group window carries the same pair; see `shell::actions::on_modifier_hotkey` for why the
+    /// two paths differ only in what the event can tell us.
+    fn on_modifier_hotkey(
+        &mut self,
+        ev: &ModifiersChangedEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let typing = window.is_text_input_active();
+        let action = {
+            let b = self.backend.read(cx);
+            let hk = &b.preview.as_ref().unwrap_or(&b.config).hotkeys;
+            crate::hotkeys::resolve_modifiers(&mut self.modifier_watch, ev, hk, typing)
+        };
+        let Some(action) = action else {
+            return;
+        };
+        if crate::hotkeys::pre_dispatch(action, false, &self.backend, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.dispatch_hotkey(action, window, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    /// Execute one resolved action against this detached window.
+    ///
+    /// Args:
+    ///     action: The action a binding resolved to, whichever event carried it.
+    ///     window: The window the binding arrived at.
+    ///     cx: Host context used to route the action.
+    ///
+    /// Returns:
+    ///     Whether the action was handled here, which is what decides propagation.
+    fn dispatch_hotkey(
+        &mut self,
+        action: crate::hotkeys::HotkeyAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use crate::hotkeys::HotkeyAction;
         let handled = match action {
             // Resolved against THIS window's own hover trail, exactly as in the group window: a
             // detached host owns a stack rather than a single chart, so it names no panel either.
@@ -485,9 +542,7 @@ impl DetachedChartHost {
                 })
             }
         };
-        if handled {
-            cx.stop_propagation();
-        }
+        handled
     }
 
     /// Return whether this window is a detached Custom tab whose spec has `custom_coins`.

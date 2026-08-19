@@ -333,6 +333,15 @@ impl Shell {
         // immediately after the user returns.
         cx.observe_window_activation(window, |this, window, cx| {
             this.window_active = window.is_window_active();
+            if !this.window_active {
+                // A window without focus is not told about key-ups, and the platform re-announces
+                // the whole modifier state when it comes back. Forgetting here — never on the way
+                // in, which arrives AFTER that re-announcement — keeps the snapshot from reading as
+                // a Caps Lock press or as a tap of the modifier that Alt+Tab was still holding.
+                // A platform that sends no such re-announcement simply costs the first press after
+                // the window comes back, which is the safe side of this trade.
+                this.modifier_watch.forget();
+            }
             if this.window_active {
                 let group = this.group.clone();
                 this.backend.update(cx, |b, bcx| {
@@ -656,6 +665,7 @@ impl Shell {
             def_strategy_input,
             open_metric_popup: None,
             focus,
+            modifier_watch: moon_ui::MoonHotkeyModifierWatch::default(),
             window_active: true,
             header_core_selector_open: false,
             core_settings_open: false,
