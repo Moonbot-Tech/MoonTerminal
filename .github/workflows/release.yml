@@ -151,6 +151,13 @@ jobs:
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-apple-darwin
       - name: Stage the Intel slice
         run: mv target/x86_64-apple-darwin/release/moonterminal stage/moonterminal-x86_64
+      # Both slices are out of `target/` and nothing downstream reads it: the packaging step works
+      # from `stage/` and publishes `dist/`, and the cache action runs with `save-if: false`, so it
+      # has nothing to store either. Dropping the whole build tree here is what leaves `hdiutil`
+      # room to image the bundle — it has failed with "No space left on device" on this 14 GB
+      # runner while the compiled tree was still sitting there unused.
+      - name: Free the build tree before imaging
+        run: rm -rf target
       - name: Package .app + .dmg
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
