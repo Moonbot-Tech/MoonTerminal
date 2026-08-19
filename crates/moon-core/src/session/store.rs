@@ -13,8 +13,9 @@ use crate::feed::{
     FeedMsg, LevManageState, LicenseState, NewsSnapshot, OrderRow, RuntimeState, StrategyRow,
     StrategySchemaModel, TransferAssetsSnapshot,
 };
+use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
-use crate::util::now_unix_ms_i64;
+use crate::util::{now_unix_ms, now_unix_ms_i64};
 
 /// Maximum number of recent detects retained in memory for each core.
 const MAX_DETECTS: usize = 2000;
@@ -90,6 +91,9 @@ pub struct CoreData {
     pub orders: Vec<OrderRow>,
     /// Retained chart order-line store, including history and up to 5000 closed orders per core.
     pub order_lines: OrderLineStore,
+    /// Per-core clock-skew estimate, applied to every order-row batch before it reaches
+    /// `order_lines` and the table. See `session::clock_skew` for the design.
+    pub clock_skew: CoreClockSkew,
     /// Recent core detects, trimmed as a ring buffer to `MAX_DETECTS`.
     pub detects: VecDeque<DetectRow>,
     /// Latest core strategy snapshot for the Strategies window.
@@ -217,6 +221,7 @@ impl CoreData {
             status: ConnStatus::Connecting,
             orders: Vec::new(),
             order_lines: OrderLineStore::default(),
+            clock_skew: CoreClockSkew::default(),
             detects: VecDeque::new(),
             strategies: Vec::new(),
             schema: None,
@@ -337,6 +342,40 @@ impl CoreData {
         if self.api_expiry.take().is_some() {
             self.api_expiry_rev = self.api_expiry_rev.wrapping_add(1);
         }
+        // A replacement feed may point at a different MoonBot on a different clock, so last
+        // connection's estimate carries no evidence about this one.
+        //
+        // Nothing is unwound here: a retained line's own start is RE-DERIVED from its next row
+        // under the new correction generation, which `reset` bumps, so the store needs no
+        // compensating shift and cannot be moved twice by one estimate.
+        self.clock_skew.reset();
+    }
+
+    /// Applies a fresh combined order-row batch: observes and corrects clock skew in place, then
+    /// updates the retained line store. Shared by the `FeedMsg::Orders` and `FeedMsg::OrderLines`
+    /// arms below, which differ only in what they do with the corrected batch afterward.
+    ///
+    /// Returns:
+    ///     Whether `order_lines` render state changed, from either the batch itself or a
+    ///     newly-adopted skew repairing lines retained before it was known.
+    fn ingest_order_rows(&mut self, orders: &mut Vec<OrderRow>) -> bool {
+        let now_ms = now_unix_ms();
+        let mut changed = false;
+        let order_lines = &self.order_lines;
+        let delta =
+            self.clock_skew
+                .observe(orders.as_slice(), |uid| order_lines.knows(uid), now_ms);
+        if delta.is_some() {
+            // The estimate moved. Every retained line re-derives its own start from its next row
+            // under the bumped correction generation; nothing is delta-shifted, because a shift
+            // cannot tell a real wire time from a `wire_line_start` fold.
+            changed = true;
+        }
+        self.clock_skew.correct(orders.as_mut_slice());
+        changed |= self
+            .order_lines
+            .update(orders.as_slice(), self.clock_skew.generation());
+        changed
     }
 
     /// Apply an account-plane message to this core.
@@ -360,12 +399,12 @@ impl CoreData {
                 }
                 self.status = s;
             }
-            FeedMsg::Orders(orders) => {
-                // Update the retained line store (traces, nodes, and closures) from the fresh
-                // combined row batch before moving it into the table list. Separate revisions gate
-                // the table and chart: every batch matters to the table, while only render-affecting
-                // order-line changes matter to the chart.
-                let changed = self.order_lines.update(&orders);
+            FeedMsg::Orders(mut orders) => {
+                // Observe and correct clock skew, then update the retained line store (traces,
+                // nodes, and closures) from the corrected batch before moving it into the table
+                // list. Separate revisions gate the table and chart: every batch matters to the
+                // table, while only render-affecting order-line changes matter to the chart.
+                let changed = self.ingest_order_rows(&mut orders);
                 self.orders = orders;
                 self.orders_table_rev = self.orders_table_rev.wrapping_add(1);
                 if changed {
@@ -373,8 +412,8 @@ impl CoreData {
                     self.order_lines_rev_ms = now_unix_ms_i64();
                 }
             }
-            FeedMsg::OrderLines(orders) => {
-                let changed = self.order_lines.update(&orders);
+            FeedMsg::OrderLines(mut orders) => {
+                let changed = self.ingest_order_rows(&mut orders);
                 if changed {
                     self.order_lines_rev = self.order_lines_rev.wrapping_add(1);
                     self.order_lines_rev_ms = now_unix_ms_i64();

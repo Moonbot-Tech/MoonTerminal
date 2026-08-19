@@ -154,7 +154,7 @@ fn closed_sell_line_visibility_keeps_live_exit_lines() {
     live.sell_price = 61_202.0;
 
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[closed, live]));
+    assert!(store.update(&[closed, live], 0));
 
     let style = OrdersStyle::default();
     let hidden = draw_order_segments(&store, &style, &ChartGraphicsCfg::default());
@@ -199,7 +199,7 @@ fn an_order_dated_only_by_its_exit_survives_a_window_before_its_creation() {
     row.sell_price = 61_000.0;
 
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[row]));
+    assert!(store.update(&[row], 0));
 
     let mut zones = Vec::new();
     let mut hlines = Vec::new();
@@ -241,7 +241,7 @@ fn moonshot_zone_keeps_moonbot_fixed_opacity() {
     row.fill_pct = 0.0;
 
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[row]));
+    assert!(store.update(&[row], 0));
 
     let mut zones = Vec::new();
     let mut hlines = Vec::new();
@@ -279,7 +279,7 @@ fn moonshot_zone_keeps_moonbot_fixed_opacity() {
 #[test]
 fn server_trace_is_separate_from_active_order_line() {
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[test_order_with_buy_trace()]));
+    assert!(store.update(&[test_order_with_buy_trace()], 0));
 
     let mut zones = Vec::new();
     let mut hlines = Vec::new();
@@ -367,7 +367,7 @@ fn server_trace_is_separate_from_active_order_line() {
 #[test]
 fn dragging_order_keeps_server_trace_visible() {
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[test_order_with_buy_trace()]));
+    assert!(store.update(&[test_order_with_buy_trace()], 0));
 
     let mut zones = Vec::new();
     let mut hlines = Vec::new();
@@ -449,7 +449,7 @@ fn geometry_for_scaled(
     graphics: &ChartGraphicsCfg,
 ) -> (Vec<SegInstance>, Vec<MarkerInstance>) {
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[row]));
+    assert!(store.update(&[row], 0));
 
     let mut zones = Vec::new();
     let mut hlines = Vec::new();
@@ -613,7 +613,7 @@ fn entry_fill_before_a_fallback_creation_is_clamped_to_the_line_start() {
     row.create_time_ms = 0.0;
     row.entry_fill_time_ms = now - 600_000.0;
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[row]));
+    assert!(store.update(&[row], 0));
 
     let mut zones = Vec::new();
     let mut hlines = Vec::new();
@@ -715,7 +715,7 @@ fn future_fill_timestamp_is_adopted_once_without_rebuilding_each_update() {
     row.entry_fill_time_ms = wire_fill_ms;
     let mut store = OrderLineStore::default();
 
-    assert!(store.update(&[row.clone()]));
+    assert!(store.update(&[row.clone()], 0));
     let adopted = retained_fill(&store).expect(
         "a filled entry must adopt a fill date on the first update, folded or not — deleting the \
          adoption block leaves this None while every `changed` flag still looks correct",
@@ -728,7 +728,7 @@ fn future_fill_timestamp_is_adopted_once_without_rebuilding_each_update() {
 
     std::thread::sleep(std::time::Duration::from_millis(5));
     assert!(
-        !store.update(&[row]),
+        !store.update(&[row], 0),
         "the changing local clamp must not make an already-adopted fill look different"
     );
     assert_eq!(
@@ -749,14 +749,14 @@ fn future_fill_timestamp_settles_to_wire_time_after_clock_catches_up() {
     row.entry_fill_time_ms = wire_fill_ms;
     let mut store = OrderLineStore::default();
 
-    assert!(store.update(&[row.clone()]));
+    assert!(store.update(&[row.clone()], 0));
     std::thread::sleep(std::time::Duration::from_millis(150));
     assert!(
         now_unix_ms() > wire_fill_ms,
         "the local clock must have passed the wire fill before the settling update"
     );
     assert!(
-        store.update(&[row]),
+        store.update(&[row], 0),
         "settling a folded fill to the dated wire instant must update the retained order"
     );
     assert_eq!(
@@ -776,12 +776,12 @@ fn filled_repriced_entry_path_stops_at_fill_without_post_fill_risers() {
     let mut row = filled_order_without_trace(now);
     row.buy_price = 60_000.0;
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[row.clone()]));
+    assert!(store.update(&[row.clone()], 0));
 
     row.buy_price = 60_100.0;
-    assert!(store.update(&[row.clone()]));
+    assert!(store.update(&[row.clone()], 0));
     row.buy_price = 60_200.0;
-    assert!(store.update(&[row]));
+    assert!(store.update(&[row], 0));
 
     let mut zones = Vec::new();
     let mut hlines = Vec::new();
@@ -957,7 +957,7 @@ fn moonshot_zone_toggle_hides_only_the_corridor() {
     row.sell_create_time_ms = 2_000.0;
 
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[row]));
+    assert!(store.update(&[row], 0));
 
     let draw = |show_corridor: bool| {
         let mut zones = Vec::new();
@@ -1073,7 +1073,7 @@ fn only_a_live_enabled_exit_answers_the_pin_predicate() {
     };
 
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[row.clone()]));
+    assert!(store.update(&[row.clone()], 0));
     assert!(pinned_kind(&store, LineKind::Sell));
     for kind in [
         LineKind::Buy,
@@ -1091,14 +1091,14 @@ fn only_a_live_enabled_exit_answers_the_pin_predicate() {
     let mut disabled = row.clone();
     disabled.sell_price = 0.0;
     let mut off_store = OrderLineStore::default();
-    assert!(off_store.update(&[row.clone()]));
-    off_store.update(&[disabled]);
+    assert!(off_store.update(&[row.clone()], 0));
+    off_store.update(&[disabled], 0);
     assert!(!pinned_kind(&off_store, LineKind::Sell));
 
     let mut closed = row;
     closed.job_is_done = true;
     let mut closed_store = OrderLineStore::default();
-    assert!(closed_store.update(&[closed]));
+    assert!(closed_store.update(&[closed], 0));
     assert!(!pinned_kind(&closed_store, LineKind::Sell));
 }
 
@@ -1129,7 +1129,7 @@ fn only_a_live_exit_line_is_pinned_to_the_plot() {
     closed.job_is_done = true;
 
     let mut store = OrderLineStore::default();
-    assert!(store.update(&[live, closed]));
+    assert!(store.update(&[live, closed], 0));
 
     let segs = draw_order_segments(
         &store,
