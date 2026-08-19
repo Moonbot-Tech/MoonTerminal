@@ -25,7 +25,10 @@ pub(super) enum ReportTradesStatus {
     /// The SQLite snapshot is being read in the background.
     Loading,
     /// At least one exact-scope closed trade is rendered.
-    Ready { count: usize, truncated: bool },
+    ///
+    /// Carries no count: the marks themselves are what state the history, and a settled read is not
+    /// stated in the overlay row at all, so a tally here would be data assembled for no reader.
+    Ready,
     /// The exact query completed successfully with no closed trades.
     Empty,
     /// The report replica or selected core catalog is not ready.
@@ -307,7 +310,6 @@ impl ChartPanel {
                             this.publish_trade_history(Rc::new(Vec::new()), cx);
                         }
                         Ok(history) => {
-                            let count = history.records.len();
                             if focus
                                 && let Some(record) = focus_record_id
                                     .and_then(|id| {
@@ -320,10 +322,7 @@ impl ChartPanel {
                                     record.close_date as f64 * 1_000.0,
                                 );
                             }
-                            this.report_trades.status = ReportTradesStatus::Ready {
-                                count,
-                                truncated: history.truncated,
-                            };
+                            this.report_trades.status = ReportTradesStatus::Ready;
                             this.publish_trade_history(Rc::new(history.records), cx);
                         }
                         Err(ReadFail::NotReady) => {
@@ -374,9 +373,7 @@ impl ChartPanel {
             && self.report_trades.scope == scope
             && matches!(
                 self.report_trades.status,
-                ReportTradesStatus::Loading
-                    | ReportTradesStatus::Ready { .. }
-                    | ReportTradesStatus::Empty
+                ReportTradesStatus::Loading | ReportTradesStatus::Ready | ReportTradesStatus::Empty
             );
         if settled_same_scope {
             return;

@@ -332,18 +332,6 @@ chart.trade_history.loading:
   ru: "Загрузка истории сделок..."
   en: "Loading trade history..."
   es: "Cargando historial de operaciones..."
-chart.trade_history.ready:
-  ru: "Сделки: %{count}"
-  en: "Trades: %{count}"
-  es: "Operaciones: %{count}"
-chart.trade_history.ready_truncated:
-  ru: "Сделки: %{count}+ (лимит)"
-  en: "Trades: %{count}+ (limit)"
-  es: "Operaciones: %{count}+ (límite)"
-chart.trade_history.empty:
-  ru: "Нет закрытых сделок для этого сервера и монеты"
-  en: "No closed trades for this server and coin"
-  es: "No hay operaciones cerradas para este servidor y moneda"
 chart.trade_history.not_ready:
   ru: "История сделок пока недоступна"
   en: "Trade history is not ready"

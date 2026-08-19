@@ -5,7 +5,7 @@
 
 use moon_core::feed::OrderRow;
 
-use super::{OrderStats, StatTone, order_stats};
+use super::{order_stats, OrderStats, StatTone};
 
 /// Build one open BTC market row with a filled one-unit position.
 ///
@@ -89,27 +89,65 @@ fn exposure_survives_an_order_without_an_entry_price() {
     );
 }
 
+/// Keep `order_stats` assembling the droppable tail as sum, then profit, then percent.
+///
+/// Breakage: swapping the candidate push order back to `pnl, sum, pct`. A user reading the middle
+/// badge as exposure would act on a profit figure.
+#[test]
+fn tail_reads_as_exposure_then_profit_then_percent() {
+    // qty=1, entry=40, mark=100 -> exposure=100, pnl=60, pct=60/40*100=150. Three distinct
+    // amounts computed from the fixture, so a permutation cannot satisfy every index.
+    let facts = stats(&[order(40.0, 100.0)], 20.0);
+
+    assert_eq!(facts.tail.len(), 3);
+    assert_eq!(facts.tail[0].tone, StatTone::Soft);
+    assert!(
+        facts.tail[0].text.contains("100"),
+        "sum: {:?}",
+        facts.tail[0].text
+    );
+    assert!(
+        !facts.tail[0].text.ends_with('%'),
+        "sum is not a percent: {:?}",
+        facts.tail[0].text
+    );
+    assert_eq!(facts.tail[1].tone, StatTone::Positive);
+    assert!(
+        facts.tail[1].text.contains("60"),
+        "pnl: {:?}",
+        facts.tail[1].text
+    );
+    assert!(facts.tail[2].text.ends_with('%'));
+    assert!(
+        facts.tail[2].text.contains("150"),
+        "percent: {:?}",
+        facts.tail[2].text
+    );
+}
+
 /// Keep `order_stats::sum_position` dividing PnL by entry rather than displayed mark notional.
 ///
 /// Breakage: using `mark_notional` as the percentage denominator. A doubled market price would
 /// show a 50% gain instead of the position's independently calculated 100% return.
 #[test]
 fn percentage_uses_entry_notional_even_when_mark_notional_differs() {
+    // qty=1, entry=50, mark=100 -> exposure=100, pnl=50, pct=50/50*100=100. Using mark as the
+    // denominator would yield 50% and the last figure would contain "50" instead of "100".
     let facts = stats(&[order(50.0, 100.0)], 20.0);
 
     assert_eq!(facts.tail.len(), 3);
     assert!(
-        facts.tail[0].text.contains("50"),
-        "PnL: {:?}",
+        facts.tail[0].text.contains("100") && !facts.tail[0].text.ends_with('%'),
+        "sum: {:?}",
         facts.tail[0].text
     );
     assert!(
-        facts.tail[1].text.contains("100"),
-        "sum: {:?}",
+        facts.tail[1].text.contains("50"),
+        "PnL: {:?}",
         facts.tail[1].text
     );
     assert!(
-        facts.tail[2].text.contains("100"),
+        facts.tail[2].text.contains("100") && facts.tail[2].text.ends_with('%'),
         "percent: {:?}",
         facts.tail[2].text
     );
@@ -126,49 +164,84 @@ fn an_empty_active_market_has_no_overlay_facts() {
 
 /// Keep `order_stats::fit` from skipping a too-wide middle fact.
 ///
-/// Breakage: continuing after the current-notional figure fails its width check. The percentage
-/// would appear in the sum's visual slot and mislead a user about which money figure is absent.
+/// Breakage: replacing `break` with `continue` in `fit`. The percentage would appear after a
+/// dropped profit and sit in the profit's visual slot.
 #[test]
 fn width_fit_stops_at_the_first_fact_that_does_not_fit() {
+    // qty=1, entry=100, mark=200 -> sum mentions 200, profit is the signed +100 amount.
+    // A too-wide profit must block the cheaper percent that follows it.
     let facts = order_stats(&[order(100.0, 200.0)], "BTCUSDT", 3.0, &|text| {
-        if text.contains("200") { 10.0 } else { 1.0 }
+        if text.contains('+') && !text.ends_with('%') {
+            10.0
+        } else {
+            1.0
+        }
     })
     .expect("the row is open");
 
     assert_eq!(
         facts.tail.len(),
         1,
-        "the percent must not jump over the sum"
+        "the percent must not jump over the profit"
     );
     assert!(
-        facts.tail[0].text.contains("100"),
+        facts.tail[0].text.contains("200"),
         "got {:?}",
         facts.tail[0].text
     );
-    assert_eq!(facts.tail[0].tone, StatTone::Positive);
+    assert_eq!(facts.tail[0].tone, StatTone::Soft);
+    assert!(!facts.tail[0].text.ends_with('%'));
 }
 
-/// Keep `order_stats` dropping percent, then sum, while retaining PnL and the count.
+/// Keep `order_stats` dropping percent, then profit, while retaining the sum and the count.
 ///
-/// Breakage: changing the candidate priority or allowing the essential count to be dropped. A
-/// narrow chart would discard its most useful live profit first or lose the scope of its figures.
+/// Breakage: restoring the old candidate order `pnl, sum, pct`, or allowing the essential count
+/// to be dropped. A narrow chart would hide the exposure a user needs while keeping a profit
+/// figure in the slot they have learnt to read as size.
 #[test]
 fn narrow_budgets_drop_tail_facts_in_the_declared_priority_order() {
     let row = order(100.0, 200.0);
     let all = stats(&[row.clone()], 4.0);
     let no_percent = stats(&[row.clone()], 3.0);
-    let pnl_only = stats(&[row.clone()], 2.0);
+    let sum_only = stats(&[row.clone()], 2.0);
     let count_only = stats(&[row.clone()], 1.0);
     let negative_budget = stats(&[row], -1.0);
 
     assert_eq!(all.tail.len(), 3);
     assert_eq!(no_percent.tail.len(), 2);
-    assert_eq!(pnl_only.tail.len(), 1);
+    assert_eq!(sum_only.tail.len(), 1);
     assert!(count_only.tail.is_empty() && negative_budget.tail.is_empty());
     assert!(all.tail[2].text.ends_with('%'));
-    assert!(no_percent.tail[1].text.contains("200"));
-    assert!(pnl_only.tail[0].text.contains("100"));
+    assert!(no_percent.tail[0].text.contains("200"));
+    assert!(no_percent.tail[1].text.contains("100"));
+    assert!(
+        sum_only.tail[0].text.contains("200"),
+        "sum must outrank profit: {:?}",
+        sum_only.tail[0].text
+    );
+    assert_eq!(sum_only.tail[0].tone, StatTone::Soft);
     assert_eq!(negative_budget.essential.len(), 1);
+}
+
+/// Keep `StatFact::leads_group` false on the profit percentage.
+///
+/// Breakage: setting `leads_group: true` on the percent candidate (or hard-coding every flag
+/// true). The render file would draw a hairline before the percent and fence it off from the
+/// profit it restates.
+#[test]
+fn profit_percentage_shares_the_profit_group() {
+    let facts = stats(&[order(40.0, 100.0)], 20.0);
+
+    assert!(facts.essential[0].leads_group, "count opens the row");
+    assert!(facts.tail[0].leads_group, "sum opens the exposure group");
+    assert!(
+        facts.tail[1].leads_group,
+        "profit opens the performance group"
+    );
+    assert!(
+        !facts.tail[2].leads_group,
+        "percent restates profit; got leads_group=true"
+    );
 }
 
 /// Keep `order_stats::is_open_here` excluding terminal rows from every overlay figure.
@@ -186,8 +259,8 @@ fn completed_rows_do_not_contribute_to_count_or_aggregates() {
     assert_eq!(facts.essential.len(), 1);
     assert!(facts.essential[0].text.contains('1'));
     assert_eq!(facts.tail.len(), 3);
-    assert!(facts.tail[0].text.contains("100"));
-    assert!(facts.tail[1].text.contains("200"));
+    assert!(facts.tail[0].text.contains("200"));
+    assert!(facts.tail[1].text.contains("100"));
 }
 
 /// Keep `order_stats::is_open_here` matching the feed market key rather than display text.
@@ -218,13 +291,13 @@ fn mixed_direction_positions_add_exposure_and_net_directional_profit() {
 
     assert_eq!(facts.tail.len(), 3);
     assert!(
-        facts.tail[0].text.contains("20"),
-        "PnL: {:?}",
+        facts.tail[0].text.contains("200"),
+        "sum: {:?}",
         facts.tail[0].text
     );
     assert!(
-        facts.tail[1].text.contains("200"),
-        "sum: {:?}",
+        facts.tail[1].text.contains("20"),
+        "PnL: {:?}",
         facts.tail[1].text
     );
     assert!(
@@ -245,11 +318,11 @@ fn a_profitable_short_uses_positive_tone_and_a_plus_signed_amount() {
 
     let facts = stats(&[short], 20.0);
 
-    assert_eq!(facts.tail[0].tone, StatTone::Positive);
+    assert_eq!(facts.tail[1].tone, StatTone::Positive);
     assert!(
-        facts.tail[0].text.contains("+20"),
+        facts.tail[1].text.contains("+20"),
         "got {:?}",
-        facts.tail[0].text
+        facts.tail[1].text
     );
 }
 
@@ -261,11 +334,11 @@ fn a_profitable_short_uses_positive_tone_and_a_plus_signed_amount() {
 fn a_loss_that_rounds_away_is_soft_and_not_minus_signed() {
     let facts = stats(&[order(100.0, 99.996)], 20.0);
 
-    assert_eq!(facts.tail[0].tone, StatTone::Soft);
+    assert_eq!(facts.tail[1].tone, StatTone::Soft);
     assert!(
-        !facts.tail[0].text.contains('-'),
+        !facts.tail[1].text.contains('-'),
         "got {:?}",
-        facts.tail[0].text
+        facts.tail[1].text
     );
 }
 
@@ -288,12 +361,14 @@ fn open_orders_without_positions_state_their_count_and_no_money() {
 
 /// Keep `order_stats` charging the count badge against the whole width budget.
 ///
-/// Breakage: passing the full budget directly to `fit`. A tail fact would be painted even though
-/// the count badge has already consumed the only available overlay space.
+/// Breakage: passing the full budget directly to `fit`, or setting the count's `leads_group` to
+/// false. A tail fact would be painted even though the count badge has already consumed the only
+/// available overlay space, or the first group rule would be lost if another figure later led.
 #[test]
 fn the_essential_count_spends_the_budget_before_tail_facts() {
     let facts = stats(&[order(100.0, 200.0)], 1.0);
 
     assert_eq!(facts.essential.len(), 1);
+    assert!(facts.essential[0].leads_group);
     assert!(facts.tail.is_empty());
 }
