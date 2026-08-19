@@ -30,8 +30,8 @@ use moon_core::figures::{
 };
 
 use crate::layers::{
-    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT, SEG_EXTEND_NONE,
-    SEG_EXTEND_RAY, TIME_UNBOUNDED,
+    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_KNOT, SEG_CLAMP_NONE,
+    SEG_EXTEND_NONE, SEG_EXTEND_RAY, TIME_UNBOUNDED,
 };
 
 /// Opacity of an idle (inactive) figure.
@@ -217,6 +217,7 @@ impl GeomSink for Sink<'_, '_> {
             thickness: stroke.thickness,
             pattern: seg_pattern(stroke.kind),
             extend: SEG_EXTEND_NONE,
+            clamp: SEG_CLAMP_NONE,
             color: stroke.color,
         });
     }
@@ -232,6 +233,7 @@ impl GeomSink for Sink<'_, '_> {
             // The second point stays exactly where the tool put it: it is the DIRECTION, and the
             // shader extrapolates through it to whichever plot edge the ray points at.
             extend: SEG_EXTEND_RAY,
+            clamp: SEG_CLAMP_NONE,
             color: stroke.color,
         });
     }

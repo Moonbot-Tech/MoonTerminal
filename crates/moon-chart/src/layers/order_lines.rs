@@ -69,8 +69,33 @@ pub struct SegInstance {
     pub pattern: f32,
     /// How the far end is found: [`SEG_EXTEND_NONE`], [`SEG_EXTEND_EDGE`] or [`SEG_EXTEND_RAY`].
     pub extend: f32,
+    /// Whether the shader pins the segment to the plot when its price leaves the visible band:
+    /// [`SEG_CLAMP_NONE`] or [`SEG_CLAMP_PLOT`].
+    pub clamp: f32,
     pub color: [f32; 4],
 }
+
+/// The segment keeps whatever Y its prices map to, leaving the plot when they do.
+pub const SEG_CLAMP_NONE: f32 = 0.0;
+/// The segment is pinned to the nearer horizontal edge of the plot once its price leaves the
+/// visible band: each endpoint's Y is clamped into the plot, centre exactly on the boundary.
+///
+/// No inset. Half a thickness would look tidier and was tried first, but the thickness is a
+/// per-style setting the highlight multiplies by 1.7 on hover — the pinned line would step inward
+/// under the pointer, and neither the hit test nor the label column has that number to agree with.
+/// Exactness across four readers beats half a line of tidiness, and the three shaders and
+/// [`crate::order_geometry::pin_line_y`] all say so by pointing here.
+///
+/// Only the Y is touched. The instance still carries the order's REAL price, and so does everything
+/// downstream of it — the store, the labels and the price that reaches the core on a drag. This is a
+/// drawing rule, not a value, which is why it rides the instance instead of being folded into `p0`
+/// and `p1` on the CPU: folding it there would make the whole userdata layer depend on the Y view
+/// and rebuild on every pan, while the shader already holds the transform and re-evaluates it free.
+///
+/// Mirrored by [`crate::order_geometry::pin_line_y`] for the hit test and the label column, which
+/// have to agree with the shader on where a pinned line ended up. Three shader copies implement it —
+/// `order_lines.hlsl`, `native_seg.wgsl`, `chart_native.metal`.
+pub const SEG_CLAMP_PLOT: f32 = 1.0;
 
 /// The segment ends where the tool put it.
 pub const SEG_EXTEND_NONE: f32 = 0.0;

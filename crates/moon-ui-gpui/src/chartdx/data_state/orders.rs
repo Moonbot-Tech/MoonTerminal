@@ -185,6 +185,7 @@ impl ChartDataState {
                         &self.theme,
                         quote_usd,
                         drag_preview,
+                        highlight_uid,
                     );
                     rebuild_order_label_order(&mut pr.order_label_order, &pr.order_labels);
                     refresh_orderbook_label_notionals(
@@ -268,6 +269,11 @@ impl ChartDataState {
 /// plus sell quantity at the sell line, and stop percentage at the stop line. Long versus short
 /// determines whether labels appear above or below the line, matching Moonbot category E. Only
 /// open orders receive labels; closed or completed orders do not.
+// Eight arguments, and they are eight separate facts a label needs: the two sinks, the store and
+// market it reads, the theme it colours from, the rate it converts with, and the two pointer states
+// (`drag_preview`, `highlight_uid`) that decide which labels are privileged. Bundling them would
+// invent a type for one call site. `build_order_geometry` next door carries the same allow.
+#[allow(clippy::too_many_arguments)]
 fn build_order_labels(
     out: &mut Vec<OrderLabel>,
     book_out: &mut Vec<OrderBookLabel>,
@@ -276,6 +282,7 @@ fn build_order_labels(
     theme: &ChartTheme,
     quote_usd: Option<f64>,
     drag_preview: Option<(u64, LineKind, f32)>,
+    highlight_uid: Option<u64>,
 ) {
     out.clear();
     book_out.clear();
@@ -295,8 +302,12 @@ fn build_order_labels(
         };
         let line_forced =
             |kind: LineKind| preview.is_some_and(|(_, preview_kind, _)| preview_kind == kind);
+        // The flags are functions of the LINE and the order, so the caller names the line and not
+        // the flags: `force` is "this is the leg being dragged", `highlighted` is "this order is
+        // under the pointer", and `pinned` is `line_is_pinned`'s answer for it — the same one the
+        // geometry and the hit test get.
         let mut push =
-            |price: f32, text: String, above: bool, color: u32, priority: u8, force: bool| {
+            |kind: LineKind, price: f32, text: String, above: bool, color: u32, priority: u8| {
                 if price.is_finite() && price > 0.0 && !text.is_empty() {
                     out.push(OrderLabel {
                         price,
@@ -304,7 +315,9 @@ fn build_order_labels(
                         above,
                         color,
                         priority,
-                        force,
+                        force: line_forced(kind),
+                        highlighted: highlight_uid == Some(o.uid),
+                        pinned: moon_chart::order_geometry::line_is_pinned(o, kind),
                     });
                 }
             };
@@ -330,7 +343,6 @@ fn build_order_labels(
         // overlap on the same side. For a filled entry, show only [N]. Entry size is always white,
         // independent of line color and order side.
         if let Some(bp) = buy {
-            let forced = line_forced(LineKind::Buy);
             let text = if o.fill_pct <= 0.0 && o.size > 0.0 {
                 let amount = match quote_usd {
                     Some(rate) if rate > 0.0 => fmt_usd(o.size as f64 * bp as f64 * rate),
@@ -340,13 +352,19 @@ fn build_order_labels(
             } else {
                 tag.clone()
             };
-            push(bp, text, !short, ORDER_LABEL_NEUTRAL, PRIO_BUY, forced);
+            push(
+                LineKind::Buy,
+                bp,
+                text,
+                !short,
+                ORDER_LABEL_NEUTRAL,
+                PRIO_BUY,
+            );
         }
         // For a sell line, show profit percentage from entry using a sign-dependent color and the
         // dollar-notional sell size (remaining * sell price * rate) on the opposite side, matching
         // Moonbot. The primary percentage is always drawn; the remaining caption uses YTextFill.
         if let Some(sp) = sell {
-            let forced = line_forced(LineKind::Sell);
             if sp.is_finite() && sp > 0.0 {
                 book_out.push(OrderBookLabel {
                     price: sp,
@@ -358,32 +376,28 @@ fn build_order_labels(
                 if bp > 0.0 {
                     let pct = signed_pct(sp, bp, short);
                     push(
+                        LineKind::Sell,
                         sp,
                         with_tag(fmt_pct(pct)),
                         short,
                         pct_color(theme, pct),
                         PRIO_SELL_PCT,
-                        forced,
                     );
                 }
             }
-            let remaining = if o.remaining_size > 0.0 {
-                o.remaining_size
-            } else {
-                o.size
-            };
+            let remaining = o.exit_size();
             if remaining > 0.0 && sp > 0.0 {
                 let amount = match quote_usd {
                     Some(rate) if rate > 0.0 => fmt_usd(remaining as f64 * sp as f64 * rate),
                     _ => fmt_amount(remaining),
                 };
                 push(
+                    LineKind::Sell,
                     sp,
                     amount,
                     !short,
                     side_color(theme, short),
                     PRIO_SELL_SIZE,
-                    forced,
                 );
             }
         }
@@ -391,15 +405,14 @@ fn build_order_labels(
         // The primary label bypasses YTextFill, matching the Delphi stop-loss label block.
         if let (Some(stp), Some(bp)) = (stop, buy) {
             if bp > 0.0 {
-                let forced = line_forced(LineKind::Stop);
                 let pct = signed_pct(stp, bp, short);
                 push(
+                    LineKind::Stop,
                     stp,
                     with_tag(fmt_pct(pct)),
                     short,
                     pct_color(theme, pct),
                     PRIO_STOP_PCT,
-                    forced,
                 );
             }
         }

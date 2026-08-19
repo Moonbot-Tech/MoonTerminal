@@ -2,6 +2,7 @@
 
 use moon_chart::axes::price_decimals;
 use moon_chart::figures::LabelValue as FigLabelValue;
+use moon_chart::order_geometry::PlotEdge;
 use moon_core::figures::LabelPlace as FigLabelPlace;
 
 use super::*;
@@ -342,6 +343,31 @@ impl RenderState {
             // the order-label column and the figure readouts below it.
             let label_line_h = self.label_font_px() + 4.0;
             if self.line_labels {
+                // Where a label's line ends up, asked once and answered for both passes below —
+                // the Y, whether it moved, and which edge it moved to are one question, and two
+                // spellings of it are how a caption ends up on an edge its line is not on.
+                let pin_of = |price: f32| {
+                    let raw = line_y(price);
+                    let pin = moon_chart::order_geometry::pin_line_y(raw, plot_top, plot_h);
+                    (raw, pin)
+                };
+                // How far off the plot the closest pinned exit is, PER EDGE. Every pinned caption of
+                // every live order would otherwise be shaped and drawn on one row of pixels —
+                // unreadable exactly when the pin is doing its job, and unbounded in the number of
+                // open orders — so only the nearest order's captions survive on each edge. Per edge
+                // and not overall, or one exit pinned just under the bottom would silently take the
+                // caption off a line pinned to the top, which is not a competitor for its pixels.
+                // Costs one pass over a list of dozens.
+                let mut nearest_pinned = [f32::INFINITY; 2];
+                for label in self.panes[idx].order_labels.iter().filter(|l| l.pinned) {
+                    if let (_, Some(pin)) = pin_of(label.price) {
+                        let side = usize::from(pin.edge == PlotEdge::Top);
+                        nearest_pinned[side] = nearest_pinned[side].min(pin.overshoot);
+                    }
+                }
+                // Captions already placed on each edge, so the two an order carries stack inward
+                // instead of printing over each other on the boundary.
+                let mut pinned_rows = [0usize; 2];
                 let mut force_items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
                 for &li in &self.panes[idx].order_label_order {
                     let order_labels = &self.panes[idx].order_labels;
@@ -349,14 +375,48 @@ impl RenderState {
                         continue;
                     }
                     let label = &order_labels[li];
-                    let y = line_y(label.price);
+                    // A pinned exit line is drawn on the plot's nearer edge, so its caption has to
+                    // follow it there rather than be dropped with the rest of the off-screen ones —
+                    // a line with no price beside it is the half of the feature that does not work.
+                    // The text is untouched: it still states the order's real percentage and size.
+                    let (raw_y, pin) = if label.pinned {
+                        pin_of(label.price)
+                    } else {
+                        (line_y(label.price), None)
+                    };
+                    let y = pin.map_or(raw_y, |pin| pin.y);
+                    // The line the user is acting on — dragging (`force`) or merely pointing at
+                    // (`highlighted`) — is never thinned away in favour of a nearer stranger. The
+                    // painter puts that same line on top of the pile, so dropping its caption would
+                    // label it with another order's numbers.
+                    let interacting = label.force || label.highlighted;
+                    if let Some(pin) = pin.filter(|_| !interacting) {
+                        let side = usize::from(pin.edge == PlotEdge::Top);
+                        if pin.overshoot > nearest_pinned[side] {
+                            continue;
+                        }
+                    }
                     if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                         continue;
                     }
-                    let (dy, ay) = if label.above {
-                        (y - LABEL_LINE_GAP, 1.0)
-                    } else {
-                        (y + LABEL_LINE_GAP, 0.0)
+                    let (dy, ay) = match pin {
+                        // The line sits ON the boundary, so the caption's usual side is half of it
+                        // outside the plot, over the time axis or the pane caption. It goes inward
+                        // instead, one row further in for each caption already placed on THIS edge —
+                        // the two edges do not share a stack.
+                        Some(pin) => {
+                            let top = pin.edge == PlotEdge::Top;
+                            let side = usize::from(top);
+                            let step = LABEL_LINE_GAP + pinned_rows[side] as f32 * label_line_h;
+                            pinned_rows[side] += 1;
+                            if top {
+                                (y + step, 0.0)
+                            } else {
+                                (y - step, 1.0)
+                            }
+                        }
+                        None if label.above => (y - LABEL_LINE_GAP, 1.0),
+                        None => (y + LABEL_LINE_GAP, 0.0),
                     };
                     if label.force {
                         force_items.push((dy, ay, label));
