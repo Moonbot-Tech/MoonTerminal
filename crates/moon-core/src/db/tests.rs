@@ -957,7 +957,9 @@ fn union_reader_and_legacy_drop() {
     let legacy_row = t.core_uids.iter().position(|u| *u == 1).unwrap();
     assert_eq!(t.rows[legacy_row][id_ix], Value::Integer(42));
 
-    let totals = query_totals(&conn, &ReportFilter::default()).expect("итоги читаются");
+    let totals = query_totals(&conn, &ReportFilter::default())
+        .expect("итоги читаются")
+        .quotes;
     assert_eq!(totals.orders, 2);
     assert_eq!(totals.unknown_orders, 0);
     assert_eq!(totals.totals.len(), 1);
@@ -1017,11 +1019,14 @@ fn corrupt_replica_fails_report_query_instead_of_truncating() {
     assert_eq!(before.rows.len(), 2000);
 
     // Pin the plan: if the planner stops using this index, the test must fail
-    // loudly rather than quietly stop exercising the damaged page.
+    // loudly rather than quietly stop exercising the damaged page. Mirrors the closed-row shape
+    // `report_read::closed_row_predicate` plus the date window actually emit — a bare
+    // `IS NOT NULL` no longer matches what the reader sends.
     let plan: String = conn
         .query_row(
             "EXPLAIN QUERY PLAN SELECT core_uid FROM orders_rep
-             WHERE closedate IS NOT NULL AND closedate >= 1 AND closedate <= 2
+             WHERE typeof(closedate) IN ('integer','real') AND closedate > 0
+             AND closedate >= 1 AND closedate <= 2
              ORDER BY closedate DESC",
             [],
             |r| r.get(3),
@@ -1075,7 +1080,9 @@ fn corrupt_replica_fails_report_totals_instead_of_zeroing() {
         emulator: Some(false),
         ..Default::default()
     };
-    let totals = query_totals(&conn, &filter).expect("до порчи итоги читаются");
+    let totals = query_totals(&conn, &filter)
+        .expect("до порчи итоги читаются")
+        .quotes;
     assert_eq!(totals.orders, 2000);
 
     test_support::corrupt_leaf_page(conn, &path, "orders_rep");
@@ -1149,7 +1156,9 @@ fn deleted_filter_default_hides_and_only_mode_inverts() {
     // Default: the soft-deleted row is gone from rows and totals alike.
     let visible = ReportFilter::default();
     assert_eq!(coins(&visible), ["KEPT", "LEGACY", "NULLD"]);
-    let totals = query_totals(&conn, &visible).expect("итоги читаются");
+    let totals = query_totals(&conn, &visible)
+        .expect("итоги читаются")
+        .quotes;
     assert_eq!(totals.orders, 3);
     assert_eq!(totals.totals.len(), 1);
     assert_eq!(totals.totals[0].currency.ticker(), "USDT");
@@ -1162,7 +1171,7 @@ fn deleted_filter_default_hides_and_only_mode_inverts() {
         ..Default::default()
     };
     assert_eq!(coins(&only), ["GONE"]);
-    let totals = query_totals(&conn, &only).expect("итоги читаются");
+    let totals = query_totals(&conn, &only).expect("итоги читаются").quotes;
     assert_eq!(totals.orders, 1);
     assert_eq!(totals.totals.len(), 1);
     assert_eq!(totals.totals[0].currency.ticker(), "USDT");

@@ -25,6 +25,7 @@ fn data(groups: Vec<(Option<i64>, f64, i64)>, shown_rows: usize) -> ReportData {
         rows: vec![Vec::new(); shown_rows],
         core_uids: Vec::new(),
         row_keys: Vec::new(),
+        open: Default::default(),
         totals: QuoteBreakdown::from_groups(groups),
         valuation: ValuationMode::Historical,
     }
@@ -816,5 +817,52 @@ fn partial_single_currency_volume_is_stated_and_marked_rather_than_withheld() {
             "Traded volume over the reconstructed trades: 900 USDT + 75 USDC. Orders not accounted for: 1 (USDT)"
         ),
         "only the short bucket names itself, and only its missing row is counted"
+    );
+}
+
+/// `totals.rs:footer_facts` — the open-positions fact must sit AFTER the traded-volume fact in
+/// `tail`, so a narrow dock clips the open tally away first and the traded volume, which the user
+/// asked to keep visible longer, survives.
+///
+/// Breakage: reordering the two independent `if let` pushes back to reading order (open before
+/// volume). Nothing crashes and no number is wrong -- on a narrow dock the volume would then
+/// vanish while the open tally stays, which is the opposite of the stated priority, so only an
+/// ordering assertion catches it.
+#[test]
+fn open_positions_fact_clips_before_traded_volume() {
+    let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
+    let mut snapshot = with_volume(
+        data(vec![(Some(1), 12.5, 2)], 2),
+        TradedVolume {
+            totals: vec![QuoteVolume {
+                currency: usdt,
+                amount: 420.0,
+                orders: 2,
+                reconstructed: 2,
+            }],
+            eligible_orders: 2,
+            reconstructed_orders: 2,
+            valued_orders: 2,
+            usdt: Some(420.0),
+            ..Default::default()
+        },
+    );
+    snapshot.open = moon_core::db::OpenPositions::from_groups(vec![(Some(1), 50.0, 1)]);
+
+    let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
+    let texts: Vec<&str> = facts.tail.iter().map(|fact| fact.text.as_str()).collect();
+    let volume_ix = texts
+        .iter()
+        .position(|text| text.starts_with("Volume"))
+        .unwrap_or_else(|| panic!("the traded-volume fact must be present, got {texts:?}"));
+    let open_ix = texts
+        .iter()
+        .position(|text| text.starts_with("open:"))
+        .unwrap_or_else(|| panic!("the open-positions fact must be present, got {texts:?}"));
+
+    assert!(
+        volume_ix < open_ix,
+        "traded volume must precede the open-positions tally so a narrow dock clips the open \
+         tally away first, got tail = {texts:?}"
     );
 }

@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use rusqlite::types::Value;
 
 use super::{
-    QuoteCurrency, ReportFilter, ReportStrategyKey, SideFilter, distinct_strategies,
+    QuoteCurrency, ReportFilter, ReportStrategyKey, RowScope, SideFilter, distinct_strategies,
     query_chart_trade_history, query_reports, query_totals,
 };
 
@@ -188,7 +188,8 @@ fn totals_tolerate_skeleton_replica_with_valuation_attached() {
         .expect("attach valuation fixture");
 
     let totals = query_totals(&conn, &ReportFilter::default())
-        .expect("query totals before the complete schema arrives");
+        .expect("query totals before the complete schema arrives")
+        .quotes;
     assert_eq!(totals.orders, 1);
     assert_eq!(totals.unknown_orders, 1);
     assert!(totals.totals.is_empty());
@@ -262,7 +263,8 @@ fn totals_restart_from_empty_accumulators_after_valuation_corruption() {
     );
 
     let totals = query_totals(&conn, &ReportFilter::default())
-        .expect("fall back to a complete native totals retry");
+        .expect("fall back to a complete native totals retry")
+        .quotes;
     assert_eq!(totals.orders, 2);
     assert_eq!(totals.unknown_orders, 1);
     assert_eq!(totals.totals.len(), 1);
@@ -307,7 +309,9 @@ fn totals_split_known_quotes_and_quarantine_unknown_money() {
     )
     .expect("seed mixed report totals");
 
-    let totals = query_totals(&conn, &ReportFilter::default()).expect("query split totals");
+    let totals = query_totals(&conn, &ReportFilter::default())
+        .expect("query split totals")
+        .quotes;
 
     assert_eq!(totals.orders, 8);
     assert_eq!(totals.unknown_orders, 4);
@@ -364,7 +368,9 @@ fn traded_volume_report(quote: i64) -> Connection {
             "Buy Price",
             1,
         ),
-        // Report profit/count include these two rows; volume eligibility does not.
+        // Row 3 carries closedate 0, so it is OPEN: it counts in `open`, not in the closed Report
+        // profit/count, and never in volume eligibility either way. Row 4 IS closed and its
+        // profit/count land in the closed totals, but its Funding reason keeps it out of volume.
         (1, 3, 0, 40.0, 3.0, 5.0, 10.0, 20.0, "Sell Price", 0),
         (1, 4, 1_700_000_120, 50.0, 4.0, 4.0, 5.0, 6.0, "Funding", 0),
         // The Report filter excludes this otherwise valid closed trade from every aggregate.
@@ -409,15 +415,24 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
     current_conn
         .execute("UPDATE orders_rep SET profitbtc=NULL WHERE newrecid=2", [])
         .expect("remove profit without changing the short trade's price legs");
-    let current = query_totals(&current_conn, &filter(super::ValuationMode::Current))
+    let current_result = query_totals(&current_conn, &filter(super::ValuationMode::Current))
         .expect("query current-rate traded volume");
+    let current = current_result.quotes;
     assert_eq!(
-        current.orders, 4,
-        "volume eligibility must not change Report count"
+        current.orders, 3,
+        "the still-open row (newrecid 3) no longer counts as a closed Report row"
     );
     assert_eq!(
-        current.totals[0].profit, 110.0,
-        "profit behavior stays unchanged"
+        current.totals[0].profit, 70.0,
+        "closed profit drops the open row's 40.0 (row 2's profit stays NULL and uncounted)"
+    );
+    assert_eq!(
+        current_result.open.orders, 1,
+        "the still-open row is tallied apart from the closed count"
+    );
+    assert_eq!(
+        current_result.open.totals[0].profit, 40.0,
+        "the open row's raw profitbtc reappears as unrealized money, not realized profit"
     );
     assert_eq!(current.traded_volume.eligible_orders, 2);
     assert_eq!(current.traded_volume.reconstructed_orders, 2);
@@ -448,10 +463,26 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
     drop(store);
     let historical_conn = traded_volume_report(8);
     attach_valuation(&historical_conn, &valuation_path);
-    let historical = query_totals(&historical_conn, &filter(super::ValuationMode::Historical))
-        .expect("query historical traded volume");
-    assert_eq!(historical.orders, 4);
-    assert_eq!(historical.totals[0].profit, 140.0);
+    let historical_result =
+        query_totals(&historical_conn, &filter(super::ValuationMode::Historical))
+            .expect("query historical traded volume");
+    let historical = historical_result.quotes;
+    assert_eq!(
+        historical.orders, 3,
+        "the still-open row (newrecid 3) no longer counts as a closed Report row"
+    );
+    assert_eq!(
+        historical.totals[0].profit, 100.0,
+        "closed profit drops the open row's 40.0"
+    );
+    assert_eq!(
+        historical_result.open.orders, 1,
+        "the still-open row is tallied apart from the closed count"
+    );
+    assert_eq!(
+        historical_result.open.totals[0].profit, 40.0,
+        "the open row's raw profitbtc reappears as unrealized money, not realized profit"
+    );
     assert_eq!(historical.traded_volume.totals[0].amount, 870.0);
     assert_eq!(
         historical.traded_volume.usdt,
@@ -461,6 +492,135 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
 
     drop(historical_conn);
     std::fs::remove_dir_all(dir).expect("remove traded-volume fixture directory");
+}
+
+/// `report_read.rs:closed_row_predicate` / `open_row_predicate` — dropping the `typeof(...)` gate
+/// from the closed predicate, or hand-spelling the open one instead of the literal `NOT <closed>`,
+/// breaks the partition every Report money figure depends on: a row can then count as BOTH closed
+/// and open (its money stated twice, once realized and once floating) or as NEITHER (it vanishes
+/// from the footer while still sitting in the grid). `NULL`, zero, a negative, a normal positive
+/// and a non-numeric TEXT `closedate` must each land on exactly one side.
+#[test]
+fn closed_and_open_row_predicates_partition_every_closedate_shape_exactly_once() {
+    let conn = Connection::open_in_memory().expect("open row-scope partition fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (newrecid INTEGER NOT NULL, closedate);
+         INSERT INTO orders_rep (newrecid, closedate) VALUES
+             (1, NULL),
+             (2, 0),
+             (3, -5),
+             (4, 7),
+             (5, 'not-a-date');",
+    )
+    .expect("seed row-scope partition fixture");
+
+    let cols: std::collections::HashSet<String> = ["closedate".to_string()].into_iter().collect();
+    let closed = super::closed_row_predicate(&cols).expect("closed predicate available");
+    let open = super::open_row_predicate(&cols).expect("open predicate available");
+
+    let ids = |predicate: &str| -> Vec<i64> {
+        let sql = format!("SELECT newrecid FROM orders_rep r WHERE {predicate} ORDER BY newrecid");
+        let mut stmt = conn.prepare(&sql).expect("prepare partition query");
+        stmt.query_map([], |r| r.get(0))
+            .expect("run partition query")
+            .map(|r| r.expect("row"))
+            .collect()
+    };
+
+    let closed_ids = ids(&closed);
+    let open_ids = ids(&open);
+
+    assert_eq!(
+        closed_ids,
+        vec![4],
+        "only the usable positive numeric closedate counts as closed"
+    );
+    assert_eq!(
+        open_ids,
+        vec![1, 2, 3, 5],
+        "NULL, zero, a negative and a non-numeric closedate all count as open, \
+         including under SQLite's TEXT-sorts-above-every-number storage-class ordering"
+    );
+
+    let mut all: Vec<i64> = closed_ids.iter().chain(open_ids.iter()).copied().collect();
+    all.sort_unstable();
+    assert_eq!(
+        all,
+        vec![1, 2, 3, 4, 5],
+        "every row must land in exactly one scope -- no double count, no vanish"
+    );
+}
+
+/// `report_read.rs:query_totals_attempt` — folding the closed pass back into the combined
+/// `ClosedAndOpen` scope (what a "save a round trip" simplification looks like) pulls a
+/// still-open row into the same SELECT the valuation coverage aggregate and unified USDT total
+/// are read from. Coverage's `eligible`/`valued` predicates test only whether a row's quote is
+/// KNOWN, never whether it closed (`valuation::coverage_sql`), so an open row with a USDT-quoted
+/// profit is valued through the IDENTITY arm regardless of its close state, and its unrealized
+/// money is silently added to a total the footer promotes as realized and complete.
+#[test]
+fn totals_valuation_coverage_and_usdt_total_cover_the_closed_row_only() {
+    let conn = Connection::open_in_memory().expect("open coverage-scope fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, spentbtc REAL
+         );
+         INSERT INTO orders_rep VALUES
+             -- Closed, quote already USDT (ordinal 1): valued through the IDENTITY arm alone.
+             (1, 1, 1700000000, 1, 100.0, 10.0),
+             -- Still open (closedate 0), same USDT quote: must never enter coverage or the
+             -- unified USDT total, however eligible its quote looks.
+             (1, 2, 0, 1, 9999.0, 10.0);",
+    )
+    .expect("seed coverage-scope fixture");
+
+    let _health = super::super::valuation::test_health_guard();
+    let dir = per_row_dir("coverage-scope");
+    let valuation_path = dir.join("valuation.sqlite");
+    drop(super::super::valuation::open_store(&valuation_path).expect("initialize empty cache"));
+    attach_valuation(&conn, &valuation_path);
+
+    let filter = ReportFilter {
+        core_uids: vec![1],
+        valuation: super::ValuationMode::Historical,
+        ..ReportFilter::default()
+    };
+    let result = query_totals(&conn, &filter).expect("query coverage-scope totals");
+
+    assert_eq!(
+        result.quotes.orders, 1,
+        "the closed pass must select the closed row alone"
+    );
+    let coverage = result
+        .quotes
+        .valuation
+        .as_ref()
+        .expect("historical mode always publishes a coverage aggregate");
+    assert_eq!(
+        coverage.eligible_orders, 1,
+        "the open row's known USDT quote must not enter coverage eligibility"
+    );
+    assert_eq!(
+        coverage.valued_orders, 1,
+        "the open row must not count as valued"
+    );
+    assert_eq!(
+        coverage.usdt.as_ref().map(|u| u.profit),
+        Some(100.0),
+        "the unified USDT total must state the closed row's profit alone"
+    );
+    assert_eq!(
+        result.open.orders, 1,
+        "the open row is tallied apart from the closed pass"
+    );
+    assert_eq!(
+        result.open.totals[0].profit, 9999.0,
+        "the open row's raw profit stays in the open tally, never folded into the closed total"
+    );
+
+    drop(conn);
+    std::fs::remove_dir_all(dir).expect("remove coverage-scope fixture directory");
 }
 
 /// An inverse-denominated row, an explicit liquidation, a missing reason and a source without the
@@ -498,7 +658,9 @@ fn traded_volume_sums_only_provable_rows_and_publishes_its_shortfall() {
     )
     .expect("seed incomplete-volume rows");
 
-    let totals = query_totals(&conn, &ReportFilter::default()).expect("query incomplete volume");
+    let totals = query_totals(&conn, &ReportFilter::default())
+        .expect("query incomplete volume")
+        .quotes;
     assert_eq!(totals.orders, 6);
     assert_eq!(totals.traded_volume.eligible_orders, 6);
     assert_eq!(totals.traded_volume.reconstructed_orders, 1);
@@ -633,7 +795,7 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
             core_uid: 2,
             strategy_id: -7,
         }]),
-        closed_only: true,
+        rows: RowScope::Closed,
         ..ReportFilter::default()
     };
 
@@ -649,7 +811,9 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
     assert_eq!(table.rows.len(), 2);
     assert_eq!(table.rows[0][coin], Value::Text("EXPECTED".to_string()));
     assert_eq!(table.rows[1][coin], Value::Text("ATTRIBUTED".to_string()));
-    let totals = query_totals(&conn, &filter).expect("query filtered totals");
+    let totals = query_totals(&conn, &filter)
+        .expect("query filtered totals")
+        .quotes;
     assert_eq!(totals.orders, 2);
     assert_eq!(totals.unknown_orders, 0);
     assert_eq!(totals.totals.len(), 1);
@@ -682,7 +846,7 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
             core_uid: 2,
             strategy_id: 0,
         }]),
-        closed_only: true,
+        rows: RowScope::Closed,
         ..ReportFilter::default()
     };
     let manual_rows =
@@ -733,7 +897,7 @@ fn strategy_name_mask_is_literal_scoped_and_shared_by_rows_totals() {
     };
     let filter = ReportFilter {
         core_uids: vec![2],
-        closed_only: true,
+        rows: RowScope::Closed,
         strategy_name_mask: " eMa_ ".to_string(),
         ..ReportFilter::default()
     };
@@ -747,7 +911,9 @@ fn strategy_name_mask_is_literal_scoped_and_shared_by_rows_totals() {
             "MASK-UNDER".to_string(),
         ])
     );
-    let totals = query_totals(&conn, &filter).expect("query masked totals");
+    let totals = query_totals(&conn, &filter)
+        .expect("query masked totals")
+        .quotes;
     assert_eq!(totals.orders, 4);
     assert_eq!(totals.totals.len(), 1);
     assert_eq!(totals.totals[0].profit, 38.0);
@@ -849,8 +1015,8 @@ fn strategy_name_mask_is_literal_scoped_and_shared_by_rows_totals() {
 
 /// Removing `build_where` from `report_read:distinct_strategies` must expose one of the core,
 /// date, coin, side, emulator, or deleted decoys. Applying `filter.strategies` there instead must
-/// hide strategy 101, even though it matches every non-strategy predicate. Ignoring `closed_only`
-/// must expose the open strategy 109.
+/// hide strategy 101, even though it matches every non-strategy predicate. Ignoring the filter's
+/// [`RowScope`] must expose the open strategy 109.
 ///
 /// Returns:
 ///     Nothing; exact catalog identities are asserted from independent fixture literals.
@@ -866,7 +1032,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
         side: SideFilter::Long,
         emulator: Some(false),
         deleted_only: false,
-        closed_only: true,
+        rows: RowScope::Closed,
         strategies: Some(vec![ReportStrategyKey {
             core_uid: 2,
             strategy_id: -7,
@@ -896,7 +1062,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
     let open = ReportFilter {
         core_uids: vec![2],
         coin: "OPEN-MATCH".to_string(),
-        closed_only: false,
+        rows: RowScope::ClosedAndOpen,
         ..ReportFilter::default()
     };
     let open_keys = distinct_strategies(&conn, &open)
@@ -909,7 +1075,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
         distinct_strategies(
             &conn,
             &ReportFilter {
-                closed_only: true,
+                rows: RowScope::Closed,
                 ..open
             },
         )
@@ -938,7 +1104,7 @@ fn multiple_and_explicit_empty_strategy_filters_remain_exact() {
                 strategy_id: 8,
             },
         ]),
-        closed_only: true,
+        rows: RowScope::Closed,
         ..ReportFilter::default()
     };
 
@@ -961,7 +1127,9 @@ fn multiple_and_explicit_empty_strategy_filters_remain_exact() {
             Value::Text("WRONG-STRATEGY".to_string()),
         ]
     );
-    let totals = query_totals(&conn, &multiple).expect("query multiple-strategy totals");
+    let totals = query_totals(&conn, &multiple)
+        .expect("query multiple-strategy totals")
+        .quotes;
     assert_eq!(totals.orders, 2);
     assert_eq!(totals.unknown_orders, 0);
     assert_eq!(totals.totals.len(), 1);
@@ -979,7 +1147,9 @@ fn multiple_and_explicit_empty_strategy_filters_remain_exact() {
             .rows
             .is_empty()
     );
-    let empty_totals = query_totals(&conn, &empty).expect("query explicit empty totals");
+    let empty_totals = query_totals(&conn, &empty)
+        .expect("query explicit empty totals")
+        .quotes;
     assert_eq!(empty_totals.orders, 0);
     assert!(empty_totals.totals.is_empty());
 }
@@ -1000,7 +1170,7 @@ fn complete_explicit_strategy_universe_excludes_unidentifiable_sources() {
                 .map(|strategy| strategy.key)
                 .collect(),
         ),
-        closed_only: true,
+        rows: RowScope::Closed,
         ..ReportFilter::default()
     };
     let table = query_reports(&conn, &complete, "closedate", false, 100)
@@ -1543,7 +1713,8 @@ fn current_rate_coverage_survives_an_unavailable_historical_cache() {
         &sources,
         false,
     )
-    .expect("current-rate totals");
+    .expect("current-rate totals")
+    .quotes;
     assert!(
         current.valuation.is_some(),
         "the in-memory conversion does not depend on the derived cache"
@@ -1556,7 +1727,8 @@ fn current_rate_coverage_survives_an_unavailable_historical_cache() {
         &sources,
         false,
     )
-    .expect("historical totals");
+    .expect("historical totals")
+    .quotes;
     assert!(
         historical.valuation.is_none(),
         "the historical conversion has nothing to report without its cache"
@@ -1886,5 +2058,72 @@ fn chart_history_carries_the_emulator_flag_and_defaults_it_to_real() {
     assert!(
         legacy.records.iter().all(|record| !record.emulator),
         "an unknown flag must read as REAL, the recoverable direction"
+    );
+}
+
+/// `report_read.rs:run_row_pass` — the open block carries its OWN leading order, newest opening
+/// first, independent of whatever column the table itself is sorted by, and independent of which
+/// physical source each open row lives in.
+///
+/// Two physical sources (`orders_rep` and the legacy `closed_sell_reports`) each contribute open
+/// rows, so the in-Rust merge — not just each source's own `ORDER BY` — has to interleave them
+/// correctly. `OPEN-LEGACY-MID` lands strictly between the two typed open rows by buydate: a
+/// single-source fixture would stay green even with the merge comparator's direction reversed,
+/// since each source's own SQL order would already be right on its own.
+///
+/// Breakage: dropping the `open_order` override so the open block falls back to the caller's own
+/// sort, or reverting any ONE of its three consumers (the SQL `dir`, the per-source `order`
+/// expression, or the merge comparator's `if desc { o.reverse() } else { o }`) back to the
+/// caller's original `pass.desc`/`pass.sort_col`. Either turns the block that exists to answer
+/// "what is running right now" into one led by the position opened weeks ago, while the closed
+/// rows below it must keep following the caller's own ascending order — proving the open block
+/// has its own rule rather than the whole query having been reversed.
+#[test]
+fn open_block_stays_newest_first_across_both_sources_under_an_ascending_sort() {
+    let conn = Connection::open_in_memory().expect("open row-order fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             coin TEXT, buydate INTEGER, closedate INTEGER,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep (core_uid, core_name, newrecid, coin, buydate, closedate) VALUES
+             -- Open, typed source: the oldest and the newest of the whole open block.
+             (1, 'A', 1, 'OPEN-TYPED-OLD', 50, 0),
+             (1, 'A', 2, 'OPEN-TYPED-NEW', 150, 0),
+             -- Closed, typed source, buydate deliberately not in insertion order.
+             (1, 'A', 3, 'CLOSED-TYPED', 30, 600);
+         CREATE TABLE closed_sell_reports (
+             core_uid INTEGER NOT NULL, db_id INTEGER NOT NULL,
+             coin TEXT, buydate INTEGER, closedate INTEGER
+         );
+         INSERT INTO closed_sell_reports (core_uid, db_id, coin, buydate, closedate) VALUES
+             -- Open, legacy source: buydate sits strictly between the two typed open rows above.
+             (1, 10, 'OPEN-LEGACY-MID', 100, 0),
+             -- Closed, legacy source.
+             (1, 11, 'CLOSED-LEGACY', 90, 500);",
+    )
+    .expect("seed multi-source row-order fixture");
+    super::super::test_support::rep_init(&conn);
+
+    let table = query_reports(&conn, &ReportFilter::default(), "buydate", false, 100)
+        .expect("query reports sorted ascending by buydate");
+
+    let coins: Vec<Option<String>> = (0..table.rows.len())
+        .map(|row| text(&table, row, "coin"))
+        .collect();
+
+    assert_eq!(
+        coins,
+        vec![
+            Some("OPEN-TYPED-NEW".to_string()),
+            Some("OPEN-LEGACY-MID".to_string()),
+            Some("OPEN-TYPED-OLD".to_string()),
+            Some("CLOSED-TYPED".to_string()),
+            Some("CLOSED-LEGACY".to_string()),
+        ],
+        "the open block, interleaved across both physical sources newest-opening-first, must \
+         lead, followed by the closed rows still in the caller's own ascending buydate order — \
+         proving the closed rows were never reversed, only the open block"
     );
 }

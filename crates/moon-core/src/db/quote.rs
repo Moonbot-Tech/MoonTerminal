@@ -725,6 +725,81 @@ pub struct ValuationCoverage {
     pub usdt: Option<UsdtTotal>,
 }
 
+/// Bucket `(ordinal, profit, orders)` aggregates by known quote currency.
+///
+/// The single grouping authority behind both [`QuoteBreakdown::from_groups`] and
+/// [`OpenPositions::from_groups`]: realized and unrealized money are different facts, but the way
+/// rows fold into currencies is the same one, and two copies of it would eventually disagree about
+/// what an unknown ordinal means.
+///
+/// Args:
+///     groups: Source aggregates. `None` represents NULL or a missing column.
+///
+/// Returns:
+///     Ordinal-sorted known buckets, the unknown-currency row count, and the complete row count.
+fn group_quotes(
+    groups: impl IntoIterator<Item = (Option<i64>, f64, i64)>,
+) -> (Vec<QuoteTotal>, i64, i64) {
+    let mut known: BTreeMap<QuoteCurrency, (f64, i64)> = BTreeMap::new();
+    let mut unknown_orders = 0;
+    let mut all_orders = 0;
+    for (ordinal, profit, orders) in groups {
+        all_orders += orders;
+        match ordinal.and_then(QuoteCurrency::from_report_ordinal) {
+            Some(currency) => {
+                let bucket = known.entry(currency).or_default();
+                bucket.0 += profit;
+                bucket.1 += orders;
+            }
+            None => unknown_orders += orders,
+        }
+    }
+    let totals = known
+        .into_iter()
+        .map(|(currency, (profit, orders))| QuoteTotal {
+            currency,
+            profit,
+            orders,
+        })
+        .collect();
+    (totals, unknown_orders, all_orders)
+}
+
+/// Still-running positions and the money they are showing right now.
+///
+/// Every figure here is UNREALIZED: it moves with the market and becomes a fact only when the
+/// position closes. It is a separate type from [`QuoteBreakdown`] for exactly that reason — the
+/// two must never be summed — and the surfaces that state it are required to say so rather than
+/// letting it sit beside realized profit in the same visual weight.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OpenPositions {
+    /// Floating money per known currency.
+    pub totals: Vec<QuoteTotal>,
+    /// Open rows whose currency is absent, invalid, placeholder, or unknown.
+    pub unknown_orders: i64,
+    /// Complete open-row count, including unknown-currency rows.
+    pub orders: i64,
+}
+
+impl OpenPositions {
+    /// Build a floating tally from grouped `(ordinal, profit, orders)` inputs.
+    ///
+    /// Args:
+    ///     groups: Source aggregates over OPEN rows only. `None` represents NULL or a missing
+    ///         column.
+    ///
+    /// Returns:
+    ///     Known quote buckets plus unknown and complete open-row counts.
+    pub fn from_groups(groups: impl IntoIterator<Item = (Option<i64>, f64, i64)>) -> Self {
+        let (totals, unknown_orders, orders) = group_quotes(groups);
+        Self {
+            totals,
+            unknown_orders,
+            orders,
+        }
+    }
+}
+
 /// Safe raw-money totals split by quote currency.
 ///
 /// Unknown rows retain only their count. Their amounts are deliberately not
@@ -753,28 +828,13 @@ impl QuoteBreakdown {
     /// Returns:
     ///     Known quote buckets plus unknown and complete row counts.
     pub fn from_groups(groups: impl IntoIterator<Item = (Option<i64>, f64, i64)>) -> Self {
-        let mut known: BTreeMap<QuoteCurrency, (f64, i64)> = BTreeMap::new();
-        let mut out = Self::default();
-        for (ordinal, profit, orders) in groups {
-            out.orders += orders;
-            match ordinal.and_then(QuoteCurrency::from_report_ordinal) {
-                Some(currency) => {
-                    let bucket = known.entry(currency).or_default();
-                    bucket.0 += profit;
-                    bucket.1 += orders;
-                }
-                None => out.unknown_orders += orders,
-            }
+        let (totals, unknown_orders, orders) = group_quotes(groups);
+        Self {
+            totals,
+            unknown_orders,
+            orders,
+            ..Self::default()
         }
-        out.totals = known
-            .into_iter()
-            .map(|(currency, (profit, orders))| QuoteTotal {
-                currency,
-                profit,
-                orders,
-            })
-            .collect();
-        out
     }
 
     /// Attach historical valuation coverage computed over the exact same read snapshot.

@@ -1,6 +1,8 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
-//! It displays closed trades from the local SQLite database, with core, coin, exact-strategy,
+//! It displays trades from the local SQLite database — closed ones within the selected period,
+//! plus the still-running positions whenever that period reaches the present ([`RowScope`], whose
+//! money the footer states apart from the realized total) — with core, coin, exact-strategy,
 //! Auto strategy-name, and date filters, one merged scope field (side, order kind, deleted trades,
 //! comment pane) plus column selection above the table, the current row's comment and exact period
 //! totals below it. The
@@ -182,21 +184,6 @@ impl Period {
         .to_string()
     }
 
-    /// Return inclusive `(from, to)` Unix-second bounds in one display time zone.
-    ///
-    /// Args:
-    ///     zone: User-selected display time zone.
-    ///
-    /// Returns:
-    ///     Inclusive absolute bounds; `None` leaves that edge unbounded.
-    fn range(self, zone: Tz) -> (Option<i64>, Option<i64>) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        self.range_at(now, zone)
-    }
-
     /// Return inclusive preset bounds at one pinned UTC instant.
     ///
     /// Args:
@@ -245,6 +232,33 @@ pub(super) enum ReportPeriodBucket {
     Overview,
     /// Classic and every Auto single-server scope, which share the legacy stored period.
     Single,
+}
+
+/// Resolve which trades the panel's current controls ask the database for.
+///
+/// Two authorities meet here and their precedence is fixed rather than incidental. `closed_only`
+/// is a QUERY predicate the caller set deliberately — today only the Analytics-owned scoped
+/// window, tomorrow possibly a control on an ordinary Report — so it wins outright: someone who
+/// asked for closed trades gets closed trades whatever period is showing. Only when nobody asked
+/// does the period decide, and it decides on its upper bound alone
+/// ([`db::open_rows_for_bound`]).
+///
+/// Written as one named function rather than a field threaded through, so the two facts compose
+/// in exactly one place instead of at every construction site.
+///
+/// Args:
+///     closed_only: Whether this panel deliberately excludes still-running positions.
+///     date_to: Inclusive upper bound the filter ended up with, preset or manual.
+///     now: Current Unix timestamp in seconds, read once for the whole filter.
+///
+/// Returns:
+///     The row scope the database filter carries.
+pub(super) fn row_scope_for(closed_only: bool, date_to: Option<i64>, now: i64) -> db::RowScope {
+    if closed_only {
+        db::RowScope::Closed
+    } else {
+        db::open_rows_for_bound(date_to, now)
+    }
 }
 
 /// Resolve the durable period slot for one effective workspace scope.

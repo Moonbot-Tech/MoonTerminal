@@ -100,7 +100,7 @@ fn populated_filter() -> ReportFilter {
         side: SideFilter::Long,
         emulator: Some(false),
         deleted_only: false,
-        closed_only: true,
+        rows: db::RowScope::Closed,
         strategies: Some(vec![ReportStrategyKey {
             core_uid: 7,
             strategy_id: -11,
@@ -175,7 +175,7 @@ fn every_catalog_predicate_and_periodic_tick_refreshes() {
     deleted.deleted_only = true;
     changed.push(deleted);
     let mut closed = filter.clone();
-    closed.closed_only = false;
+    closed.rows = db::RowScope::ClosedAndOpen;
     changed.push(closed);
 
     for candidate in changed {
@@ -223,6 +223,7 @@ fn report_query_window_contains_five_hundred_rows() {
     assert_eq!(
         db::query_totals(&conn, &ReportFilter::default())
             .unwrap()
+            .quotes
             .orders,
         505
     );
