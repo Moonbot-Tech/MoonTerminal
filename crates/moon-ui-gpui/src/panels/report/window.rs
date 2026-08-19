@@ -228,8 +228,13 @@ pub fn open_scoped(
             .into_iter()
             .any(|display| display.bounds().contains(&origin))
     });
-    let display_id =
-        crate::window::windowing::saved_or_owner_display_id(saved_origin, owner, owner_display, cx);
+    let display_id = crate::window::windowing::saved_or_owner_display_id(
+        saved.and_then(|geometry| geometry.display_uuid),
+        saved_origin,
+        owner,
+        owner_display,
+        cx,
+    );
     let display = display_id
         .and_then(|display_id| cx.find_display(display_id))
         .or_else(|| cx.primary_display());

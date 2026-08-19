@@ -668,6 +668,7 @@ fn report_window_geometry_survives_restart_without_endangering_layout() {
             y: 180,
             w: 1640,
             h: 1100,
+            display_uuid: None,
         }),
         ..WindowLayout::default()
     };
@@ -708,6 +709,7 @@ fn profit_monitor_preferences_round_trip_without_endangering_layout() {
             y: 160,
             w: 720,
             h: 520,
+            display_uuid: None,
         }),
         profit_monitor_period: Some("m-week".to_string()),
         profit_monitor_group: Some("core".to_string()),
@@ -1131,4 +1133,76 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
     });
     assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
     assert!(decoded.report_filters.is_empty());
+}
+
+/// A `layout.toml` written before window geometry carried a display identity must still load, and a
+/// geometry that has none must not start writing the key back out.
+///
+/// This is the compatibility half of persisting the monitor: the field is a HINT added to a struct
+/// that ships in everyone's config, so an older file has to decode to `None` rather than fail the
+/// whole document — a failed decode here loses every window position in the file, not just the
+/// display.
+#[test]
+fn window_geometry_without_a_display_identity_still_loads() {
+    let legacy = "[report_window]\nx = 120\ny = 180\nw = 1640\nh = 1100\n";
+    let decoded: WindowLayout = toml::from_str(legacy).expect("a pre-display layout must decode");
+    let geom = decoded.report_window.expect("the rectangle must survive");
+    assert_eq!((geom.x, geom.y, geom.w, geom.h), (120, 180, 1640, 1100));
+    assert_eq!(
+        geom.display_uuid, None,
+        "an older file names no display, and inventing one would move the window"
+    );
+
+    let round_tripped = toml::to_string(&decoded).expect("layout must re-encode");
+    assert!(
+        !round_tripped.contains("display_uuid"),
+        "a geometry with no display must not grow the key: an untouched config should keep its shape"
+    );
+
+    let identity = uuid::Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
+    let with_display = WindowLayout {
+        report_window: Some(GeomRect {
+            x: 10,
+            y: 20,
+            w: 800,
+            h: 600,
+            display_uuid: Some(identity),
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&with_display).expect("layout must encode");
+    let back: WindowLayout = toml::from_str(&encoded).expect("layout must decode");
+    assert_eq!(
+        back.report_window.and_then(|g| g.display_uuid),
+        Some(identity),
+        "a saved display identity must survive the round trip that restores the window"
+    );
+}
+
+/// A malformed display identity must cost only that identity, never the surrounding document.
+///
+/// `layout.toml` carries every window position, column width and dock slot, and six of its geometry
+/// fields decode strictly — so a `display_uuid` mangled by a hand edit or a half-written file must
+/// not be able to fail the struct. This is the same stance the other lenient fields in this file
+/// take, and the reason the field decodes through the shared `de_lenient`.
+#[test]
+fn a_malformed_display_identity_costs_only_itself() {
+    let mangled =
+        "[report_window]\nx = 120\ny = 180\nw = 1640\nh = 1100\ndisplay_uuid = \"not-a-uuid\"\n";
+    let decoded: WindowLayout =
+        toml::from_str(mangled).expect("a malformed identity must not fail the whole layout");
+    let geom = decoded
+        .report_window
+        .expect("the window rectangle must survive a malformed identity");
+    assert_eq!((geom.x, geom.y, geom.w, geom.h), (120, 180, 1640, 1100));
+    assert_eq!(geom.display_uuid, None);
+
+    // Not a string at all — the shape a truncated or machine-mangled write leaves behind.
+    let wrong_type = "[settings_window]\nx = 1\ny = 2\nw = 3\nh = 4\ndisplay_uuid = 7\n";
+    let decoded: WindowLayout =
+        toml::from_str(wrong_type).expect("a non-string identity must not fail the whole layout");
+    assert_eq!(
+        decoded.settings_window.map(|g| (g.w, g.h, g.display_uuid)),
+        Some((3, 4, None))
+    );
 }

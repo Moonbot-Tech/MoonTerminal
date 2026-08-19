@@ -16,6 +16,9 @@ moonproto-diagnostics = ["moonproto/diagnostics"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Display identity persisted alongside window geometry; `serde` so it round-trips
+# through the config files as a plain string.
+uuid = { version = "1", features = ["serde"] }
 sha2 = "0.10"
 toml = "0.8"
 anyhow = "1"

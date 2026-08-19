@@ -175,6 +175,7 @@ fn open_window(
                 },
             );
             let display_id = crate::window::windowing::saved_or_owner_display_id(
+                saved.and_then(|geometry| geometry.display_uuid),
                 saved.map(|geometry| point(px(geometry.x as f32), px(geometry.y as f32))),
                 owner,
                 owner_display,

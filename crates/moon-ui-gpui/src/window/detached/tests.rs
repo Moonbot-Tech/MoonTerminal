@@ -263,3 +263,39 @@ fn detached_respawn_refuses_native_creation_during_shutdown() {
     assert!(guard.contains("if backend.quitting"));
     assert!(guard.contains("return false;"));
 }
+
+/// A `detached.json` written before panel geometry carried a display identity must still load, and
+/// a spec that names no display must not start writing the key.
+///
+/// The file is the authority for "this panel is detached": a decode that failed on the new field
+/// would not just lose a monitor, it would silently return every detached panel to the dock.
+#[test]
+fn a_detached_spec_without_a_display_identity_still_loads() {
+    let legacy = r#"[{"group":"G1","panel":"Orders","x":300,"y":220,"w":900,"h":500}]"#;
+    let specs: Vec<DetachedSpec> =
+        serde_json::from_str(legacy).expect("a pre-display detached.json must decode");
+    let spec = specs.first().expect("the spec must survive");
+    assert_eq!((spec.x, spec.y, spec.w, spec.h), (300, 220, 900, 500));
+    assert_eq!(spec.display_uuid, None);
+    assert!(
+        !spec.cascade_origin,
+        "a spec that reached the file carries a real position, so it may pick a display"
+    );
+
+    let re_encoded = serde_json::to_string(&specs).expect("specs must re-encode");
+    assert!(
+        !re_encoded.contains("display_uuid") && !re_encoded.contains("cascade_origin"),
+        "neither the absent display nor the in-memory cascade flag may appear in the file"
+    );
+
+    let identity = uuid::Uuid::from_u128(0xfeed_face_dead_beef_feed_face_dead_beef);
+    let mut saved = DetachedSpec::new("G1".to_string(), "Orders".to_string());
+    saved.display_uuid = Some(identity);
+    let encoded = serde_json::to_string(&vec![saved]).expect("spec must encode");
+    let back: Vec<DetachedSpec> = serde_json::from_str(&encoded).expect("spec must decode");
+    assert_eq!(
+        back.first().and_then(|s| s.display_uuid),
+        Some(identity),
+        "the monitor a panel was left on must survive a restart"
+    );
+}

@@ -207,12 +207,59 @@ impl Default for StratColsByMode {
 }
 
 /// Window rectangle (outer position + inner size, physical pixels).
-#[derive(Clone, Copy, Serialize, Deserialize)]
+///
+/// Compared as a whole when deciding whether a move is worth persisting: the display is part of the
+/// placement, and on macOS — where coordinates are relative to the window's own screen — the same
+/// x/y on a different monitor is a real move that a coordinates-only comparison would discard.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GeomRect {
     pub x: i32,
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Display this window was last seen on, when the platform could name one.
+    ///
+    /// `x`/`y` alone identify a monitor only where window coordinates are global — Windows and X11.
+    /// macOS reports them RELATIVE to the window's own screen and reports a zero origin for every
+    /// display, so there the saved point cannot say which monitor it belongs to and the window comes
+    /// back on whichever display the app happens to open it on. This is that missing half; it is a
+    /// hint, never a requirement — an unplugged or renumbered monitor simply fails to resolve and
+    /// the caller falls back to the coordinate and owner-window routes it used before.
+    ///
+    /// Absent from older config files and from a window whose platform reports no display id, hence
+    /// `Option` plus `serde(default)`; it is not written out when absent so an untouched file keeps
+    /// its previous shape.
+    #[serde(
+        default,
+        deserialize_with = "de_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub display_uuid: Option<uuid::Uuid>,
+}
+
+impl GeomRect {
+    /// Keep a previously known display when the platform cannot name one right now.
+    ///
+    /// `None` from the platform means "unknown", not "moved to nowhere": off macOS it is the normal
+    /// answer (the identity is not read there at all), and even on macOS a window mid-move can
+    /// briefly report no display. Treating that as a change would erase a good identity — and,
+    /// because the comparison that decides whether to save is now whole-struct, would also dirty
+    /// the layout on every such blip.
+    ///
+    /// # Arguments
+    ///
+    /// * `previous` - Geometry this window was last saved with, if any.
+    ///
+    /// # Returns
+    ///
+    /// This rectangle, keeping the earlier identity when it has none of its own.
+    #[must_use]
+    pub fn keeping_display_of(mut self, previous: Option<GeomRect>) -> Self {
+        self.display_uuid = self
+            .display_uuid
+            .or_else(|| previous.and_then(|previous| previous.display_uuid));
+        self
+    }
 }
 
 /// Legacy egui detached-tab compatibility record; live detached state uses `detached.json`.
@@ -1028,11 +1075,12 @@ where
 /// reads as "unset" instead of taking every window position and column width down with it. Reach
 /// for it whenever a new `Option<T>` field lands in this hand-edited file and needs no coercion
 /// of its own — `analytics_tuner_fields` written as a bare `"lev"` instead of `["lev"]` is the
-/// shape it is there for.
+/// shape it is there for. `pub` because the same salvaging applies to the geometry records in
+/// `charts.json` and `detached.json`, which are hand-editable for the same reasons.
 ///
 /// Note that it runs only when the key is PRESENT: `#[serde(default)]` answers an absent key with
 /// `None` without deserializing, which is what keeps "absent" and "present but empty" distinct.
-fn de_lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+pub fn de_lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,

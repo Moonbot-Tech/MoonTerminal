@@ -614,7 +614,13 @@ impl DetachedChartHost {
             ));
             return;
         };
-        let geom = chart_persist::WinGeom { x, y, w, h };
+        let mut geom = chart_persist::WinGeom {
+            x,
+            y,
+            w,
+            h,
+            display_uuid: crate::window::windowing::window_display_uuid(window, cx),
+        };
         let (group, num, bucket) = (self.group.clone(), self.num, self.bucket.clone());
         let found = self.backend.update(cx, |bk, _| {
             if let Some(s) = bk
@@ -622,8 +628,8 @@ impl DetachedChartHost {
                 .iter_mut()
                 .find(|s| s.matches(&group, num, &bucket))
             {
-                let cur = s.detached.map(|g| (g.x, g.y, g.w, g.h));
-                if cur != Some((geom.x, geom.y, geom.w, geom.h)) {
+                geom = geom.keeping_display_of(s.detached);
+                if s.detached != Some(geom) {
                     s.detached = Some(geom);
                     bk.chart_specs_dirty = true;
                 }

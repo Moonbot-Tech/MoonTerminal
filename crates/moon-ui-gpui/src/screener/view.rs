@@ -127,13 +127,13 @@ impl ScreenerView {
 
         // Persist window position and size in the layout so the window reopens in the same geometry.
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
+            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
                 return;
             };
             this.backend.update(cx, |b, _| {
-                if b.layout.screener_window.map(|g| (g.x, g.y, g.w, g.h)) != Some((x, y, w, h)) {
-                    b.layout.screener_window =
-                        Some(moon_core::config::layout::GeomRect { x, y, w, h });
+                let geom = geom.keeping_display_of(b.layout.screener_window);
+                if b.layout.screener_window != Some(geom) {
+                    b.layout.screener_window = Some(geom);
                     b.layout_dirty = true;
                 }
             });
@@ -666,6 +666,7 @@ pub fn open(
     );
     // Choose a display from saved geometry when supported, otherwise fall back to the owner display.
     let display_id = crate::window::windowing::saved_or_owner_display_id(
+        saved.and_then(|g| g.display_uuid),
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,
         owner_display,

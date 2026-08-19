@@ -3785,6 +3785,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "unicode-casefold",
  "ureq",
+ "uuid",
  "windows-sys 0.61.2",
  "zeroize",
 ]
@@ -4299,6 +4300,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "uuid",
  "wgpu 29.0.3",
  "windows 0.61.3",
  "winresource",

@@ -341,10 +341,22 @@ impl Shell {
         };
         // Identify the window's display by stable UUID. On macOS, x/y are relative to each screen
         // and cannot identify the display during restoration; see `GroupLayout::display_uuid`.
+        // An unknown display means "unknown", not "moved to nowhere": macOS reports none for a
+        // window whose screen is gone or mid-move, and persisting that erases the monitor memory
+        // this very field exists to keep. Same rule the other window classes carry as
+        // `GeomRect::keeping_display_of`.
         let display_uuid = window
             .display(cx)
             .and_then(|d| d.uuid().ok())
-            .map(|u| u.to_string());
+            .map(|u| u.to_string())
+            .or_else(|| {
+                self.backend
+                    .read(cx)
+                    .layout
+                    .groups
+                    .get(&self.group)
+                    .and_then(|previous| previous.display_uuid.clone())
+            });
         let layout = GroupLayout {
             x: f32::from(bounds.origin.x) as i32,
             y: f32::from(bounds.origin.y) as i32,
