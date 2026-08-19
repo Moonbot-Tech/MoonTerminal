@@ -1,0 +1,53 @@
+# Publishes the interactive tour (docs/tour) to GitHub Pages.
+#
+# `docs/tour` is uploaded as the SITE ROOT, so the page is served at the
+# repository Pages root: https://moonbot-tech.github.io/MoonTerminal/
+# Nothing else under docs/ is published — those files are developer prose and
+# would be served raw, unrendered.
+#
+# This job compiles nothing, so it deliberately uses no cache: the repository
+# Actions cache is a shared 10 GB budget, and an extra cached job evicts the
+# build gates' caches by least-recent-use.
+#
+# Requires a one-time repository setting (Settings -> Pages -> Build and
+# deployment -> Source: "GitHub Actions"). Until that is set, this workflow
+# fails at the deploy step; it cannot enable Pages by itself.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/tour/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; never cancel one in flight, a half-applied
+# deployment would leave the live site on a partial upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy tour
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/tour
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
