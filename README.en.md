@@ -31,6 +31,10 @@
   <a href="#documentation">Documentation</a>
 </p>
 
+<p align="center">
+  <a href="https://moonbot-tech.github.io/MoonTerminal/"><b>User guide</b></a> — an interactive tour of the terminal interface
+</p>
+
 MoonTerminal is a native desktop trading terminal for the **[Moonbot](https://moonbot.pro)** cryptocurrency-trading kernel. It renders live charts, order books, orders, reports, and strategies for one or more Moonbot cores from a single GPU-accelerated window on Windows, macOS, and Linux.
 
 > **Work in progress.** This is the active development workspace for the terminal — a GPUI shell, MoonUI integration, the MoonProto live feed, per-platform GPU chart rendering, and debug tooling. It is not a finished, packaged product yet.
@@ -169,6 +173,7 @@ Runtime config lives next to the executable. Server credentials are stored in en
 
 | Guide | What's inside |
 |---|---|
+| [User guide](https://moonbot-tech.github.io/MoonTerminal/) | Interactive tour: the main-window map, first connection, panels, hotkeys |
 | [Architecture](docs/ARCHITECTURE.md) | Crates, per-platform GPU rendering, and the live data path |
 | [FireTest](docs/FIRETEST.md) | The built-in `chart-smoke` live probe |
 | [macOS & Linux build](docs/MAC_LINUX_BUILD.md) | Metal validation and Linux setup |
