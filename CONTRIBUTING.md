@@ -198,3 +198,8 @@ make build | run | release | check | fmt
 
 LF, UTF-8, 4-space indent, trailing newline (`.gitattributes` + `.editorconfig`).
 A CRLF write shows up as a whole-file diff.
+
+`docs/tour/index.html` is **generated**, not written: it is built from `locales/*.yml`
+and `tools/tour/content/*.yml` by `make tour`, and a CI job fails the PR when the
+committed page does not match its sources. Edit the content files, then re-run and
+commit the result. See [`tools/tour/README.md`](tools/tour/README.md).

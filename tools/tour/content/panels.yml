@@ -1,0 +1,65 @@
+# The dock panels. `panel_name` is the persistence key inside docks.json and is
+# deliberately NOT a display label: the label is localized, the key never changes.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.panels.v1
+panels:
+- panel_name: Orders
+  label:
+    ref: tab.orders
+  description:
+    ru: 'Таблица открытых ордеров группы: фильтры, сортировка, переход на график по строке.'
+    en: 'The group''s open-order table: filters, sorting, jump to the chart from a row.'
+- panel_name: Assets
+  label:
+    ref: tab.assets
+  description:
+    ru: Балансы и позиции группы, переводы между кошельками. Внизу — сумма видимых строк и капитал по
+      области.
+    en: The group's balances and positions, plus wallet transfers. The footer carries the visible-row
+      sum and the scope's equity.
+- panel_name: Report
+  label:
+    ref: tab.report
+  description:
+    ru: Закрытые сделки из локальной базы с фильтрами и выгрузкой в CSV, плюс ещё открытые позиции.
+    en: Closed trades from the local database with filters and CSV export, plus still-open positions.
+- panel_name: Alerts
+  label:
+    ref: tab.alerts
+  description:
+    ru: Все фигуры на графиках группы — и свои, и нарисованные ядром. Отсюда фигура ставится на сигнал.
+    en: Every chart figure across the group — yours and the ones the core drew. This is where a figure
+      gets armed as an alert.
+- panel_name: News
+  label:
+    ref: tab.news
+  description:
+    ru: Новостная лента группы, склеенная и очищенная от дублей по всем ядрам.
+    en: The group's news feed, merged and deduplicated across every core.
+- panel_name: CoreStatus
+  label:
+    ref: tab.core_status
+  description:
+    ru: 'Состояние подключения и ресурсы по каждому ядру: что именно делает запуск и сколько он занял.'
+    en: 'Connection state and resources per core: what startup is doing and how long it took.'
+- panel_name: Log
+  label:
+    ref: tab.log
+  description:
+    ru: 'Лог: живой или из файла, поиск, режим «только ошибки», выбор источника — локальный, группа, все
+      ядра.'
+    en: 'Log: live or file-backed, search, an errors-only mode, and a source picker — local, group, all
+      cores.'
+- panel_name: Detects
+  label:
+    ref: tab.detects
+  description:
+    ru: Лента детектов карточками. Живёт только в доке — открепить нельзя.
+    en: The detection ribbon as cards. Docked only — it cannot be detached.
+- panel_name: ChartTabs
+  label:
+    ref: tab.charts
+  description:
+    ru: Центральная область графиков. Вкладки откалываются в отдельные окна как и панели.
+    en: The central chart area. Its tabs pop out into separate windows just like panels.

@@ -20,6 +20,20 @@ PKG := -p moon-ui-gpui --bin moonterminal
 # cargo may not be in PATH (common on macOS: it is in ~/.cargo/bin, but Terminal does not
 # load ~/.cargo/env). Search PATH first, then fall back to rustup's default path.
 CARGO := $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
+MOONUI ?= ../MoonUI
+MOONUI_THEME := $(MOONUI)/crates/moon-ui-components/themes/moon-terminal.toml
+TOUR_SNAPSHOT := tools/tour/theme.snapshot.toml
+
+# Windows ships a `python3` STUB in WindowsApps that opens the Store instead of
+# running anything, and it shadows the real interpreter on PATH. So the name is
+# chosen by platform rather than discovered.
+ifeq ($(OS),Windows_NT)
+  PYTHON ?= python
+else
+  PYTHON ?= python3
+endif
+# tools/ is the import root: the generator is the package tools/tour.
+TOUR := PYTHONPATH=tools $(PYTHON) -m tour
 
 ifeq ($(OS),Windows_NT)
   TARGET := --target x86_64-pc-windows-msvc
@@ -43,11 +57,12 @@ else
   SIGN = @true
 endif
 
-.PHONY: run build release check fmt clean update-moon-ui update-moonproto update-all update-forks codesign-setup help
+.PHONY: run build release check fmt clean update-moon-ui update-moonproto update-all update-forks codesign-setup help tour tour-check tour-theme tour-test
 
 help:
 	@echo "make run | build | release | check | fmt | clean | codesign-setup"
 	@echo "deps: update-moon-ui (MoonUI pin) | update-moonproto (deliberate) | update-all (moves EVERYTHING)"
+	@echo "docs: tour (regenerate the user tour) | tour-check (verify it is current) | tour-theme (refresh the palette)"
 	@echo "bin: $(BIN)"
 
 # macOS: create the self-signed code-signing certificate once (otherwise it will be created
@@ -100,3 +115,30 @@ update-all:
 # Backward-compatible alias for old local scripts. It has always meant "move everything", and it
 # still does — which now also means it lifts the version freeze. Prefer naming `update-all`.
 update-forks: update-all
+
+# --- the user tour (docs/tour/index.html) ------------------------------------
+# The page is GENERATED from locales/*.yml plus a committed snapshot of MoonUI's
+# theme, and the generated file is committed. Needs PyYAML:
+#   pip install -r tools/requirements.txt
+
+# Regenerate the page. Always renders from the COMMITTED snapshot, so the output
+# never depends on whether a MoonUI checkout happens to sit beside this one —
+# otherwise CI, which has none, could not reproduce what a developer committed.
+tour:
+	$(TOUR)
+
+# Fail if the committed page is not what the sources produce. This is the CI gate.
+tour-check:
+	$(TOUR) --check
+
+tour-test:
+	$(PYTHON) -m unittest discover -s tools/tour/tests -v
+
+# Refresh the palette from a MoonUI checkout, recording the revision it came
+# from. Deliberately SEPARATE from `tour`: folding it in would let one
+# developer's sibling revision rewrite the palette inside an unrelated pull
+# request. Expect this to be its own commit, like `update-moonproto`.
+tour-theme:
+	@test -f "$(MOONUI_THEME)" || { 	  echo "no MoonUI theme at $(MOONUI_THEME)"; 	  echo "set MOONUI=<path to a MoonUI checkout>"; exit 1; }
+	@{ 	  echo "# moonui-rev: $$(git -C $(MOONUI) rev-parse HEAD)"; 	  echo "# moonui-blob: $$(git hash-object $(MOONUI_THEME))"; 	  echo "# source: crates/moon-ui-components/themes/moon-terminal.toml"; 	  echo "#"; 	  echo "# Snapshot of MoonUI's terminal theme, committed so the tour generator can run"; 	  echo "# without a MoonUI checkout (CI has none - MoonUI is a cargo git dependency)."; 	  echo "# Refreshed ONLY by \`make tour-theme\`, deliberately and in its own commit."; 	  echo "# DO NOT hand-edit: the upstream file is the source of truth."; 	  cat "$(MOONUI_THEME)"; 	} > $(TOUR_SNAPSHOT)
+	@echo "[OK] $(TOUR_SNAPSHOT) refreshed - now run: make tour"

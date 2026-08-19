@@ -1,0 +1,42 @@
+# The five windows opened from the buttons at the right of the trading toolbar.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.windows.v1
+windows:
+- title:
+    ru: Монитор прибыли
+    en: Profit Monitor
+  body:
+    ru: Отдельное независимое окно с прибылью. Не имеет кнопки на панели задач — вернуться к нему можно
+      кнопкой в тулбаре или через Alt+Tab.
+    en: A standalone independent window showing profit. It carries no taskbar button — return to it from
+      the toolbar button or via Alt+Tab.
+- title:
+    ru: Скринер
+    en: Screener
+  body:
+    ru: Одно окно с таблицей всех рынков подключённых бирж. Фильтры по монете и объёму — в подвале.
+    en: A single window with a table of every market on the connected exchanges. Coin and volume filters
+      live in the footer.
+- title:
+    ru: Стратегии
+    en: Strategies
+  body:
+    ru: 'Дерево стратегий каждого подключённого ядра: версии, разделы схемы, параметры. Дерево фильтруется
+      по бирже, причём фильтр отбирает ядра, а не строки.'
+    en: 'The strategy tree of every connected core: versions, schema sections, parameters. The tree filters
+      by exchange — and that filter picks cores, not rows.'
+- title:
+    ru: Аналитика
+    en: Analytics
+  body:
+    ru: Сводка, Календарь и Тюнинг стратегий. Тюнер всегда работает в пределах выбранных серверов и стратегий
+      — по всему отчёту он не ищет принципиально.
+    en: Summary, Calendar and Strategy Tuning. The tuner is always scoped to the selected servers and
+      strategies — searching the whole report is deliberately not a thing.
+- title:
+    ru: Настройки
+    en: Settings
+  body:
+    ru: 'Семь вкладок: Подключения, Общие, Хоткеи, Интерфейс, Линии, Бейджи, Хранилище.'
+    en: 'Seven tabs: Connections, General, Hotkeys, Interface, Lines, Badges, Storage.'

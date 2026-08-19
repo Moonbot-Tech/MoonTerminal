@@ -40,3 +40,8 @@ render_diag.log
 /.claude/settings.local.json
 /.claude/scheduled_tasks.lock
 /.claude/skills/
+# Python byte-cache and test scratch from the tools/ scripts (tools/tour). The
+# generated page itself IS committed — only these artefacts are not.
+__pycache__/
+*.py[cod]
+/.pytest_cache/

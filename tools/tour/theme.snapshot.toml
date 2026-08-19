@@ -1,0 +1,145 @@
+# moonui-rev: 999e34744dcee8534855bf3b5c79e94100d450fd
+# moonui-blob: 2ff118e3d3a0c3608d96c579d9689e1e3d83de10
+# source: crates/moon-ui-components/themes/moon-terminal.toml
+#
+# Snapshot of MoonUI's terminal theme, committed so the tour generator can run
+# without a MoonUI checkout (CI has none — MoonUI is a cargo git dependency).
+# Refreshed ONLY by `make tour-theme`, deliberately and in its own commit.
+# DO NOT hand-edit: the upstream file is the source of truth.
+mode = "Dark"
+
+[dark.palette]
+shell = 0x131416
+shell_high = 0x1A1C1F
+window = 0x131416
+surface = 0x16181B
+panel = 0x20232A
+panel_high = 0x22252B
+chrome = 0x1A1C1F
+tabbar = 0x1A1C1F
+panel_head = 0x22252B
+gutter = 0x0F1012
+chart_bg = 0x16181B
+card = 0x1A1C1F
+row_alt = 0x1A1C1F
+head_row = 0x20232A
+border = 0x2A2D31
+border_soft = 0x2A2D31
+border_card = 0x2A2D31
+border_hover = 0x343840
+row_line = 0x2A2D31
+shadow = 0x000000
+overlay = 0xFFFFFF
+on_accent = 0xFFFFFF
+text = 0xE8E4DC
+text_soft = 0x97928A
+text_dim = 0xE8E4DC
+text_muted = 0x7D7669
+text_faint = 0x7D7669
+table_head = 0x20232A
+table_body = 0x1A1C1F
+table_selected = 0xFFB347
+green = 0x1E8C5B
+green_btn = 0x1E8C5B
+green_text = 0x1E8C5B
+red = 0xE5484D
+red_text = 0xE5484D
+red_soft_bd = 0xE5484D
+orange = 0xFF8E5A
+amber = 0xFFB347
+blue = 0x7FC9FF
+accent = 0xFFB347
+accent_fg = 0xFFCF94
+accent_tint_a = 0.11
+yellow = 0xFFD93D
+
+[dark.metrics]
+header_top_h = 32.0
+toolbar_h = 32.0
+status_h = 22.0
+dock_tab_h = 26.0
+table_header_h = 26.0
+table_row_h = 25.0
+button_radius = 4.0
+container_radius = 8.0
+hairline = 1.0
+
+[dark.scale]
+ui = 1.0
+font = 1.0
+font_delta = 0.0
+
+[dark.typography]
+font_family = "Inter"
+mono_font_family = "Geist Mono"
+font_size = 12.0
+mono_font_size = 11.0
+rem_size = 16.0
+
+[light.palette]
+shell = 0xF3F5F7
+shell_high = 0xFAFBFC
+window = 0xF7F8FA
+surface = 0xFFFFFF
+panel = 0xF8FAFC
+panel_high = 0xFFFFFF
+chrome = 0xF5F7FA
+tabbar = 0xF2F5F8
+panel_head = 0xF5F7FA
+gutter = 0xEEF2F6
+chart_bg = 0xFFFFFF
+card = 0xFFFFFF
+row_alt = 0xFCFDFE
+head_row = 0xF3F6F8
+border = 0xD5DBE1
+border_soft = 0xE1E5EA
+border_card = 0xDCE2E8
+border_hover = 0xB8C2CC
+row_line = 0xECEFF2
+shadow = 0x000000
+overlay = 0x000000
+on_accent = 0xFFFFFF
+text = 0x17202A
+text_soft = 0x4B5865
+text_dim = 0x2D3945
+text_muted = 0x768391
+text_faint = 0x98A3AE
+table_head = 0xF3F6F8
+table_body = 0xFFFFFF
+table_selected = 0x009DFF
+green = 0x178A57
+green_btn = 0x178A57
+green_text = 0x0E6E45
+red = 0xD2483F
+red_text = 0xB7352F
+red_soft_bd = 0xE1B5B0
+orange = 0xD18A2B
+amber = 0xB97824
+blue = 0x2B6F9E
+accent = 0x009DFF
+accent_fg = 0x0A3F68
+accent_tint_a = 0.08
+yellow = 0xB8860B
+
+[light.metrics]
+header_top_h = 32.0
+toolbar_h = 32.0
+status_h = 22.0
+dock_tab_h = 26.0
+table_header_h = 26.0
+table_row_h = 25.0
+button_radius = 4.0
+container_radius = 8.0
+hairline = 1.0
+
+[light.scale]
+ui = 1.0
+font = 1.0
+font_delta = 0.0
+
+[light.typography]
+font_family = "Inter"
+mono_font_family = "Geist Mono"
+font_size = 12.0
+mono_font_size = 11.0
+rem_size = 16.0

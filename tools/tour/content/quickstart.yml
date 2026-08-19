@@ -1,0 +1,58 @@
+# Five steps from download to a connected core. The bodies carry markup on
+# purpose (`<code>`, `<a>`, `<b>`), which is what `html: true` declares — every
+# other slot is escaped at render time.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.quickstart.v1
+steps:
+- title:
+    ru: Скачайте терминал
+    en: Download the terminal
+  body:
+    ru: 'На странице <a href="https://github.com/Moonbot-Tech/MoonTerminal/releases/latest" target="_blank"
+      rel="noopener">Releases</a> лежат готовые сборки: <code>MoonTerminal.exe</code> для Windows и <code>.dmg</code>
+      для macOS. Под Linux пока только сборка из исходников — <code>make build</code>.'
+    en: 'Ready builds live on the <a href="https://github.com/Moonbot-Tech/MoonTerminal/releases/latest"
+      target="_blank" rel="noopener">Releases</a> page: <code>MoonTerminal.exe</code> for Windows and
+      a <code>.dmg</code> for macOS. Linux is build-from-source for now — <code>make build</code>.'
+    html: true
+- title:
+    ru: Откройте Настройки → Подключения
+    en: Open Settings → Connections
+  body:
+    ru: Кнопка «Настройки» — справа в торговом тулбаре. Первая вкладка окна и есть та, что нужна.
+    en: The Settings button sits at the right of the trading toolbar. The first tab of that window is
+      the one you need.
+    html: true
+- title:
+    ru: Добавьте ядро и вставьте ключ
+    en: Add a core and paste the key
+  body:
+    ru: 'Кнопка <code>+ Добавить ядро (в «default»)</code> создаёт строку. Хост и порт отдельно вводить
+      не надо: они зашиты в сам ключ Moonbot — вставьте его в поле «Ключ» кнопкой из буфера.'
+    en: 'The <code>+ Add core (to "default")</code> button creates a row. There is no separate host or
+      port field: both are encoded in the Moonbot key itself — paste it into the Key field with the clipboard
+      button.'
+    html: true
+- title:
+    ru: Отметьте, что принимать
+    en: Choose what to accept
+  body:
+    ru: <b>Акт</b> — подключаться вообще. <b>Окн</b> — рисовать окно ядра; выключенное «Окн» при включённом
+      «Акт» даёт headless-ядро. Колонки <b>Данные</b> (Ord / Det / Rep / Bal / Str / Log / Alr / Arb)
+      фильтруют, что вы принимаете от этого ядра.
+    en: <b>Act</b> — connect at all. <b>Win</b> — draw the core's window; Win off with Act on gives you
+      a headless core. The <b>Data</b> columns (Ord / Det / Rep / Bal / Str / Log / Alr / Arb) filter
+      what you accept from that core.
+    html: true
+- title:
+    ru: Нажмите «Сохранить»
+    en: Press Save
+  body:
+    ru: До сохранения ядро честно пишет «Нет данных (сохраните настройки для подключения)». После — статус
+      проходит «Подключение…» и становится зелёным «Подключено». Ключи уезжают в <code>servers.enc</code>,
+      зашифрованные ключом из хранилища ОС.
+    en: Until you save, the core plainly reports "No data (save settings to connect)". After that the
+      status moves through "Connecting…" to a green "Connected". Keys go into <code>servers.enc</code>,
+      encrypted with a key from the OS keyring.
+    html: true
