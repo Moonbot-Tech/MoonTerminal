@@ -78,6 +78,11 @@ fn price_eps(p: f32) -> f32 {
 /// and the lower one wins there: a line drawn before the order it belongs to would be a plain lie,
 /// while one drawn past a rewound right edge is a cosmetic artifact of the clock jump.
 ///
+/// This fold is now the RESIDUAL guard behind `CoreClockSkew`: that estimator corrects a core's
+/// wire times before they ever reach here, so this only still fires for a sub-threshold or
+/// implausible skew, the pre-estimate window before two samples have agreed, or a core whose clock
+/// never settles into an adoptable bucket.
+///
 /// Args:
 ///     wire_ms: Leg time from the core in Unix milliseconds; zero, negative, NaN, or infinite
 ///         means absent.
@@ -125,8 +130,22 @@ impl LineTrace {
     /// `start_ms` is the first step time: order creation for the entry line and fill time for stop
     /// lines. Returns `true` when a step is added, the line is disabled, or a disabled line is
     /// re-enabled, including at the same price, so the store can bump its revision.
-    fn update(&mut self, price: Option<f32>, start_ms: f64, now_ms: f64) -> bool {
-        match price {
+    fn update(&mut self, price: Option<f32>, start_ms: f64, now_ms: f64, rebase: bool) -> bool {
+        // A correction that lands AFTER this line was first drawn moves the line's own start, and
+        // the first step is where that start lives. It is REWRITTEN from the freshly derived
+        // `start_ms` rather than shifted by a delta, for the same reason `create_ms` is: the value
+        // sitting there may be a `wire_line_start` fold — a stand-in for a time the core had not
+        // credibly supplied — and moving a stand-in by the skew lands it somewhere meaningless.
+        let mut rebased = false;
+        if rebase && start_ms > 1.0 {
+            if let Some(first) = self.steps.first_mut() {
+                if first.0 != start_ms {
+                    first.0 = start_ms;
+                    rebased = true;
+                }
+            }
+        }
+        let changed = match price {
             Some(p) if p.is_finite() && p > 0.0 => {
                 let was_off = self.off_ms.take().is_some();
                 match self.steps.last().copied() {
@@ -153,7 +172,8 @@ impl LineTrace {
                     false
                 }
             }
-        }
+        };
+        changed || rebased
     }
 
     fn update_server(&mut self, trace: Option<&OrderTrace>) -> bool {
@@ -251,6 +271,12 @@ pub struct RetainedOrder {
     /// Comparing this marker while iterating `OrderLineStore::open_uids` replaces a per-update
     /// `HashSet` lookup for every retained closed order.
     seen_generation: u64,
+    /// `CoreClockSkew::generation` this order's `create_ms` / `entry_fill_ms` were last derived
+    /// under. When a fresh batch's generation does not match, `OrderLineStore::update` RE-DERIVES
+    /// both from the current (already corrected) row through `wire_line_start`, exactly as `new`
+    /// would — rather than delta-shifting a value that may have been a folded stand-in rather than
+    /// a real wire time. Unrelated to `seen_generation` above, which tracks snapshot presence.
+    correction_gen: u64,
     /// Order appearance sequence.
     pub seq: u64,
     /// Traces by line kind, indexed by `LineKind as usize`.
@@ -295,7 +321,7 @@ impl RetainedOrder {
         }
     }
 
-    fn new(r: &OrderRow, now_ms: f64, seq: u64) -> Self {
+    fn new(r: &OrderRow, now_ms: f64, seq: u64, correction_gen: u64) -> Self {
         // The start cannot be in the future because the core clock may lead the local clock;
         // otherwise the line segment degenerates or moves beyond the right edge. An order the core
         // dates not at all — a sale from an already-held asset, which has no buy leg — begins here
@@ -328,6 +354,7 @@ impl RetainedOrder {
             closed_rev: None,
             last_seen_ms: now_ms,
             seen_generation: 0,
+            correction_gen,
             seq,
             lines: Default::default(),
             liq: None,
@@ -367,7 +394,14 @@ impl OrderLineStore {
     /// Active orders are updated, repricings record knots, explicit terminal rows close immediately,
     /// and missing orders close after the grace period. Geometry, label, and zone changes increment
     /// `rev`.
-    pub fn update(&mut self, rows: &[OrderRow]) -> bool {
+    ///
+    /// Args:
+    ///     rows: Combined order-row batch, already skew-corrected by the caller.
+    ///     skew_generation: `CoreClockSkew::generation` this batch was corrected under. A retained
+    ///         order whose own `correction_gen` lags this value has its `create_ms` and
+    ///         `entry_fill_ms` RE-DERIVED from its row in this batch, if it has one — see
+    ///         `RetainedOrder::correction_gen`.
+    pub fn update(&mut self, rows: &[OrderRow], skew_generation: u64) -> bool {
         let now_ms = now_unix_ms();
         self.update_generation = self.update_generation.wrapping_add(1);
         let generation = self.update_generation;
@@ -417,7 +451,7 @@ impl OrderLineStore {
                     let seq = self.seq_counter;
                     self.seq_counter = self.seq_counter.wrapping_add(1);
                     changed = true;
-                    let mut ro = RetainedOrder::new(r, now_ms, seq);
+                    let mut ro = RetainedOrder::new(r, now_ms, seq, skew_generation);
                     ro.chart_num = new_nums.get(&r.uid).copied().unwrap_or(0);
                     became_open = true;
                     entry.insert(ro)
@@ -425,6 +459,28 @@ impl OrderLineStore {
             };
             order.last_seen_ms = now_ms;
             order.seen_generation = generation;
+            // Correction-generation catch-up: this order's `create_ms` may have been derived under
+            // an OLDER (or no) skew estimate — either because the estimate just changed this batch,
+            // or because this order was absent from the feed across an earlier change. RE-DERIVE it
+            // from the current (already corrected) row rather than trusting a delta-shift, which
+            // cannot tell a real wire time from a folded stand-in (`wire_line_start`'s own guard
+            // against a leading core clock). `entry_fill_ms`'s recompute below joins this same
+            // catch-up, and so does each line's FIRST STEP, rebased from its freshly derived start
+            // by the `stale_correction` flag handed to `LineTrace::update`. `server_points` need no
+            // catch-up at all: `update_server` overwrites them wholesale from the corrected row.
+            //
+            // An order absent from this batch keeps its old start until it appears again — a
+            // closed line therefore stays where the previous estimate put it, which is the honest
+            // outcome for a line the core no longer reports.
+            let stale_correction = order.correction_gen != skew_generation;
+            if stale_correction {
+                order.correction_gen = skew_generation;
+                let wire_create_ms = wire_line_start(r.create_time_ms, 0.0, now_ms);
+                if wire_create_ms > 1.0 {
+                    order.create_ms = wire_create_ms;
+                }
+                changed = true;
+            }
             // Revive a previously closed UID only when it is active again, without `job_is_done`.
             // A terminal order may remain in snapshots throughout the core's deferred-removal
             // window; reviving it would make the line flicker from closed to open on every update.
@@ -494,7 +550,11 @@ impl OrderLineStore {
                 // fill, every stop would be drawn back across the pre-fill window, claiming a stop
                 // existed where none did. A late start says less than it could; an early one lies.
                 let fill = wire_line_start(r.entry_fill_time_ms, floor_ms, now_ms);
-                if fill > 1.0 { fill } else { sell_start_ms }
+                if fill > 1.0 {
+                    fill
+                } else {
+                    sell_start_ms
+                }
             };
             // The same wire fill, kept as the ENTRY line's own END so the chart can stop that line
             // where the leg ceased instead of running it on to the pane edge. Gated on `f`:
@@ -513,11 +573,12 @@ impl OrderLineStore {
             // The other callers never face the choice: they feed the value to a line's FIRST step
             // and never read it again.
             let folded = r.entry_fill_time_ms > now_ms;
-            let adopt = match (order.entry_fill_ms, entry_fill_ms) {
-                (stored, fresh) if stored.is_some() != fresh.is_some() => true,
-                (Some(stored), Some(fresh)) => !folded && stored != fresh,
-                _ => false,
-            };
+            let adopt = stale_correction
+                || match (order.entry_fill_ms, entry_fill_ms) {
+                    (stored, fresh) if stored.is_some() != fresh.is_some() => true,
+                    (Some(stored), Some(fresh)) => !folded && stored != fresh,
+                    _ => false,
+                };
             if adopt {
                 order.entry_fill_ms = entry_fill_ms;
                 changed = true;
@@ -535,12 +596,14 @@ impl OrderLineStore {
                 g(true, r.buy_price),
                 order.create_ms,
                 now_ms,
+                stale_correction,
             );
             changed |= order.lines[LineKind::Sell as usize].update_server(r.sell_trace.as_ref());
             changed |= order.lines[LineKind::Sell as usize].update(
                 g(f, r.sell_price),
                 sell_start_ms,
                 now_ms,
+                stale_correction,
             );
 
             let vals: [(Option<f32>, f64, usize); TRACED_KINDS - 2] = [
@@ -564,7 +627,7 @@ impl OrderLineStore {
                 ),
             ];
             for (v, start_ms, i) in vals {
-                changed |= order.lines[i].update(v, start_ms, now_ms);
+                changed |= order.lines[i].update(v, start_ms, now_ms, stale_correction);
             }
             // The explicit core flag `job_is_done` means the order is terminal, either filled or
             // cancelled, and awaits deferred removal. Mark it closed immediately while it remains
@@ -775,6 +838,16 @@ impl OrderLineStore {
             .lines
             .get(kind as usize)
             .and_then(LineTrace::current_price)
+    }
+
+    /// Whether this uid has already been retained from an earlier batch.
+    ///
+    /// The clock-skew estimator gates its TIGHT sample class on this: a uid retained for the first
+    /// time is either a genuinely new order or, on the very first post-connect batch, merely new to
+    /// this process — the estimator tells those apart itself via its own warmup, so this only needs
+    /// to answer "have we ever seen it before", not "is it new".
+    pub fn knows(&self, uid: u64) -> bool {
+        self.orders.contains_key(&uid)
     }
 }
 

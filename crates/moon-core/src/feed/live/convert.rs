@@ -474,6 +474,13 @@ pub(super) fn apply_lev_manage_edit(l: &mut moonproto::LevManage, edit: LevManag
     }
 }
 
+/// Builds the chart's server-provided trace from the core's own polyline.
+///
+/// `points[0]` opens the trace at the leg's RAW `create_time` (moonproto
+/// `state/orders/apply_helpers.rs`), while every later point (`points[1..]`) is corrected there
+/// against `ServerTimeDelta`. That asymmetry now matters on our side too:
+/// `session::clock_skew::CoreClockSkew::correct` shifts ONLY `points[0]` for exactly this reason —
+/// shifting an already-corrected `points[1..]` again would double-correct it.
 fn order_trace(line: &OrderTraceLine) -> Option<OrderTrace> {
     let points: Vec<OrderTracePoint> = line.points.iter().copied().map(trace_point).collect();
     if !points.iter().any(valid_trace_point) {
@@ -831,10 +838,12 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // sections, so they arrive with the very first snapshot after a restart.
     //
     // These are absolute UTC milliseconds off the wire (`i64` into `MoonTime::from_unix_millis`),
-    // which is why no `ServerTimeDelta` correction belongs here. That correction exists for the
-    // LEGACY side — an order trace point carries a Delphi `TDateTime` read off the core's own
-    // clock, and moonproto adjusts exactly those. Mixing the two conventions would shift a line
-    // against its own trace by the clock skew between the machines.
+    // but that does NOT mean they need no correction: they are read off the CORE's own clock, and a
+    // core running ahead of or behind true UTC ships them raw. moonproto's own `ServerTimeDelta`
+    // correction cannot reach this path at all — its accessor is `#[cfg(test)] pub(crate)` — so
+    // `session::clock_skew::CoreClockSkew` estimates the same skew from these very fields
+    // (`create_time_ms`, `sell_create_time_ms`, `entry_fill_time_ms`) and corrects them once they
+    // reach `CoreData::apply`, before the retained line store or the chart ever sees them raw.
     let sell_create_time_ms = moon_time_to_unix_millis_f64(o.sell_order.create_time());
     let entry_fill_time_ms = moon_time_to_unix_millis_f64(o.buy_order.close_time());
     // EFFECTIVE stop flags: the order's own flag from the wire, plus — only while the order has no
