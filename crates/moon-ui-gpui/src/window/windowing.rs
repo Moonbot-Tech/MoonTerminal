@@ -17,6 +17,16 @@ use crate::design;
 
 pub(crate) const APP_ID: &str = "MoonTerminal";
 
+/// Whether this platform reports window coordinates in one desktop-wide space.
+///
+/// The whole display-identity feature turns on this one fact. Where it holds — Windows, X11 — a
+/// saved `x`/`y` already says which monitor a window was on, so containment answers the question
+/// for free. macOS reports coordinates RELATIVE to the window's own screen and a zero origin for
+/// every display, so there the saved point cannot name a monitor and a separate identity is the
+/// only answer. Naming it once keeps the rule from being restated as a bare OS check at each of the
+/// places that depend on it.
+pub(crate) const WINDOW_COORDS_ARE_GLOBAL: bool = cfg!(not(target_os = "macos"));
+
 /// Close every window in `handles`, ignoring the ones already gone.
 ///
 /// `WindowHandle::update` returns `Err` for a window that has been removed, which is the normal
@@ -429,6 +439,7 @@ pub(crate) fn owner_display_id(owner: Option<AnyWindowHandle>, cx: &mut App) -> 
 ///
 /// # Arguments
 ///
+/// * `saved_uuid` - Display identity saved beside the geometry, tried before anything else.
 /// * `saved_origin` - Saved window origin used for display containment outside macOS.
 /// * `owner` - Optional owner handle used as the final fallback.
 /// * `owner_display` - Owner display captured by the caller when direct owner access is unavailable.
@@ -438,12 +449,21 @@ pub(crate) fn owner_display_id(owner: Option<AnyWindowHandle>, cx: &mut App) -> 
 ///
 /// The display selected from saved geometry or owner state, or `None` when neither resolves.
 pub(crate) fn saved_or_owner_display_id(
+    saved_uuid: Option<uuid::Uuid>,
     saved_origin: Option<Point<Pixels>>,
     owner: Option<AnyWindowHandle>,
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) -> Option<DisplayId> {
-    if cfg!(not(target_os = "macos")) {
+    // The identity comes first because it is the only one that means the same thing on every
+    // platform and survives the monitors being rearranged. It is also the ONLY answer macOS can
+    // give: there the saved point is relative to the window's own screen, so the containment pass
+    // below is skipped entirely. Failing to resolve — an unplugged or replaced monitor — falls
+    // through to exactly the routes that ran before this existed.
+    if let Some(id) = saved_uuid.and_then(|saved| display_id_for_uuid(saved, cx)) {
+        return Some(id);
+    }
+    if WINDOW_COORDS_ARE_GLOBAL {
         if let Some(origin) = saved_origin {
             if let Some(d) = cx
                 .displays()
@@ -455,6 +475,104 @@ pub(crate) fn saved_or_owner_display_id(
         }
     }
     owner_display.or_else(|| owner_display_id(owner, cx))
+}
+
+/// Resolve a saved display identity against the monitors attached right now.
+///
+/// # Arguments
+///
+/// * `saved` - Display identity read from persisted geometry.
+/// * `cx` - Application context used to enumerate displays.
+///
+/// # Returns
+///
+/// The matching display, or `None` when that monitor is no longer present.
+pub(crate) fn display_id_for_uuid(saved: uuid::Uuid, cx: &App) -> Option<DisplayId> {
+    cx.displays()
+        .into_iter()
+        .find(|d| d.uuid().is_ok_and(|current| current == saved))
+        .map(|d| d.id())
+}
+
+/// Read the identity of the display a window currently sits on, where that identity is needed.
+///
+/// Persisted beside the window's geometry so a later launch can put it back on the SAME monitor —
+/// but ONLY on macOS, and the platform gate is a cost decision, not a portability one. Every caller
+/// sits in an `observe_window_bounds` callback, which fires continuously while a window is dragged,
+/// and `Window::display` walks every monitor to answer (on Windows: `EnumDisplayMonitors` plus a
+/// `GetMonitorInfoW`/`GetDpiForMonitor` pair and an allocation per monitor). Where window
+/// coordinates are global — Windows, X11 — the saved x/y ALREADY name the monitor and
+/// [`saved_or_owner_display_id`] resolves it by containment, so paying that sweep per drag event
+/// would buy exactly nothing. macOS reports coordinates relative to the window's own screen and a
+/// zero origin for every display, so there the identity is the only answer and worth its cost.
+///
+/// `None` is therefore the ordinary result off macOS, and also what a platform that cannot name the
+/// display returns; neither is an error — the geometry is still saved and still places the window.
+///
+/// # Arguments
+///
+/// * `window` - Window whose display should be identified.
+/// * `cx` - Application context used to enumerate displays.
+///
+/// # Returns
+///
+/// The display's stable identity where it is needed to restore the window, otherwise `None`.
+pub(crate) fn window_display_uuid(window: &Window, cx: &App) -> Option<uuid::Uuid> {
+    if WINDOW_COORDS_ARE_GLOBAL {
+        return None;
+    }
+    window.display(cx).and_then(|d| d.uuid().ok())
+}
+
+/// Identity of a display chosen for a window that does not exist yet.
+///
+/// The open-time counterpart of [`window_display_uuid`], and gated for the same reason: off macOS
+/// the saved coordinates already name the monitor, so recording an identity there would only make
+/// the first bounds event overwrite it with `None`.
+///
+/// # Arguments
+///
+/// * `display` - Display resolved for the window about to open.
+/// * `cx` - Application context used to look the display up.
+///
+/// # Returns
+///
+/// The display's stable identity where it is needed to restore the window, otherwise `None`.
+pub(crate) fn display_identity(display: Option<DisplayId>, cx: &App) -> Option<uuid::Uuid> {
+    if WINDOW_COORDS_ARE_GLOBAL {
+        return None;
+    }
+    display
+        .and_then(|id| cx.find_display(id))
+        .and_then(|d| d.uuid().ok())
+}
+
+/// Read a window's geometry together with the display it sits on.
+///
+/// Every tool window persists this same pair, so it is built in one place: a saved rectangle whose
+/// display identity was forgotten reopens on the wrong monitor, and that is invisible until someone
+/// runs two of them.
+///
+/// # Arguments
+///
+/// * `window` - Window whose placement should be captured.
+/// * `cx` - Application context used to enumerate displays.
+///
+/// # Returns
+///
+/// The persistable rectangle, or `None` for a fullscreen or maximized window.
+pub(crate) fn window_geom_rect(
+    window: &Window,
+    cx: &App,
+) -> Option<moon_core::config::layout::GeomRect> {
+    let (x, y, w, h) = window_geom(window)?;
+    Some(moon_core::config::layout::GeomRect {
+        x,
+        y,
+        w,
+        h,
+        display_uuid: window_display_uuid(window, cx),
+    })
 }
 
 /// Activate a newly created window in response to an explicit user action.

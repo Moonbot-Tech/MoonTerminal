@@ -1220,18 +1220,13 @@ impl ReportPanel {
         self.mark_table_detached(cx);
         self.standalone = true;
         cx.observe_window_bounds(window, |this, window, cx| {
-            let Some((x, y, w, h)) = crate::window::windowing::window_geom(window) else {
+            let Some(geom) = crate::window::windowing::window_geom_rect(window, cx) else {
                 return;
             };
             this.backend.update(cx, |backend, _| {
-                if backend
-                    .layout
-                    .report_window
-                    .map(|geometry| (geometry.x, geometry.y, geometry.w, geometry.h))
-                    != Some((x, y, w, h))
-                {
-                    backend.layout.report_window =
-                        Some(moon_core::config::layout::GeomRect { x, y, w, h });
+                let geom = geom.keeping_display_of(backend.layout.report_window);
+                if backend.layout.report_window != Some(geom) {
+                    backend.layout.report_window = Some(geom);
                     backend.layout_dirty = true;
                 }
             });

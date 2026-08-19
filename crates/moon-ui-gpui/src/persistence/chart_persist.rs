@@ -13,12 +13,51 @@ use moon_core::session::CoreId;
 use serde::{Deserialize, Serialize};
 
 /// Geometry of a detached chart-tab window.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+///
+/// Compared as a whole where "did this window move?" is asked: the display is part of the placement,
+/// and on macOS the same x/y on another monitor is a real move (coordinates there are relative to
+/// the window's own screen).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WinGeom {
     pub x: i32,
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Display this window was last seen on, when the platform could name one.
+    ///
+    /// Without it a restored chart lands on whichever display its group window occupies, because
+    /// x/y identify a monitor only where window coordinates are global. Absent from older
+    /// `charts.json` files and from a platform that reports no display, so it stays optional and
+    /// unresolvable identities fall back to the previous coordinate/owner routes.
+    ///
+    /// Decoded leniently: charts.json holds every chart tab; a malformed identity must not cost the user all of them.
+    #[serde(
+        default,
+        deserialize_with = "moon_core::config::layout::de_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub display_uuid: Option<uuid::Uuid>,
+}
+
+impl WinGeom {
+    /// Keep a previously known display when the platform cannot name one right now.
+    ///
+    /// The `WinGeom` mirror of [`moon_core::config::layout::GeomRect::keeping_display_of`], carrying
+    /// the same rule for the same reason: an unknown display means "unknown", not "moved to
+    /// nowhere".
+    ///
+    /// Args:
+    ///     previous: Geometry this window was last saved with, if any.
+    ///
+    /// Returns:
+    ///     This geometry, keeping the earlier identity when it has none of its own.
+    #[must_use]
+    pub fn keeping_display_of(mut self, previous: Option<WinGeom>) -> Self {
+        self.display_uuid = self
+            .display_uuid
+            .or_else(|| previous.and_then(|previous| previous.display_uuid));
+        self
+    }
 }
 
 /// Per-tab chart-stack layout mode:
@@ -342,3 +381,6 @@ pub fn save_all(list: &[ChartTabSpec]) {
         Err(e) => log::warn!("не сериализовал charts.json: {e}"),
     }
 }
+
+#[cfg(test)]
+mod tests;

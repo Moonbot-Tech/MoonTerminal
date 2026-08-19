@@ -226,6 +226,7 @@ pub fn open(
     // Choose a display from the saved position where supported, otherwise from the owner. Without a
     // display id, GPUI creates the window on the primary display and may discard off-screen bounds.
     let display_id = crate::window::windowing::saved_or_owner_display_id(
+        saved.and_then(|g| g.display_uuid),
         saved.map(|g| point(px(g.x as f32), px(g.y as f32))),
         owner,
         owner_display,

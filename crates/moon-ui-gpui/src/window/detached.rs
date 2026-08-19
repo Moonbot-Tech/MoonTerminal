@@ -49,6 +49,20 @@ pub struct DetachedSpec {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+    /// Display this window was last seen on, when the platform could name one.
+    ///
+    /// Persisted because `x`/`y` identify a monitor only where window coordinates are global. On
+    /// macOS they are relative to the window's own screen, so without this the panel comes back on
+    /// the group window's display rather than its own. A monitor that is gone simply fails to
+    /// resolve and the previous coordinate/owner routes place the window.
+    ///
+    /// Decoded leniently: detached.json holds every detachment; a malformed identity must not cost the user all of them.
+    #[serde(
+        default,
+        deserialize_with = "moon_core::config::layout::de_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub display_uuid: Option<uuid::Uuid>,
     /// Whether `x`/`y` are the first-detach cascade rather than a position this panel actually had.
     ///
     /// Not persisted, and false when read back from `detached.json`: a spec that reached the file
@@ -70,6 +84,7 @@ impl DetachedSpec {
             y: 160,
             w: 1100,
             h: 520,
+            display_uuid: None,
             cascade_origin: true,
         }
     }
@@ -94,6 +109,7 @@ impl DetachedSpec {
             spec.y = g.y;
             spec.w = g.w;
             spec.h = g.h;
+            spec.display_uuid = g.display_uuid;
             spec.cascade_origin = false;
         }
         spec
@@ -410,7 +426,7 @@ impl DetachedWindow {
     }
 
     fn persist_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(geom) = crate::window::windowing::window_geom(window) else {
+        let Some(mut geom) = crate::window::windowing::window_geom_rect(window, cx) else {
             return;
         };
         let key = (self.group.clone(), self.panel.clone());
@@ -422,6 +438,23 @@ impl DetachedWindow {
                 return;
             }
             let (group, panel) = (&key.0, &key.1);
+            let geom_memory_key = geom_key(group, panel);
+            // An unknown display must not erase a known one; see `GeomRect::keeping_display_of`.
+            // The spec is asked FIRST because it is the store that can already hold an identity the
+            // geometry memory does not: a first detach records the chosen display on the spec, and
+            // `detached_geom` only learns it from the write below.
+            let remembered = bk
+                .detached
+                .iter()
+                .find(|s| s.group == *group && s.panel == *panel)
+                .and_then(|s| s.display_uuid)
+                .or_else(|| {
+                    bk.layout
+                        .detached_geom
+                        .get(&geom_memory_key)
+                        .and_then(|previous| previous.display_uuid)
+                });
+            geom.display_uuid = geom.display_uuid.or(remembered);
             if let Some(s) = bk
                 .detached
                 .iter_mut()
@@ -431,33 +464,22 @@ impl DetachedWindow {
                 // origin is now a real position — including the first-detach case, where leaving the
                 // flag set would make the next reopen discard a position the user chose by dragging.
                 s.cascade_origin = false;
-                if (s.x, s.y, s.w, s.h) != geom {
-                    s.x = geom.0;
-                    s.y = geom.1;
-                    s.w = geom.2;
-                    s.h = geom.3;
+                if (s.x, s.y, s.w, s.h, s.display_uuid)
+                    != (geom.x, geom.y, geom.w, geom.h, geom.display_uuid)
+                {
+                    s.x = geom.x;
+                    s.y = geom.y;
+                    s.w = geom.w;
+                    s.h = geom.h;
+                    s.display_uuid = geom.display_uuid;
                     bk.detached_dirty = true;
                 }
             }
             // Retain geometry independently of the detached specification. Repinning removes the
             // specification but keeps this memory, so the next detachment restores the same bounds.
-            let geom_key = geom_key(group, panel);
-            let changed = bk
-                .layout
-                .detached_geom
-                .get(&geom_key)
-                .map(|g| (g.x, g.y, g.w, g.h) != geom)
-                .unwrap_or(true);
+            let changed = bk.layout.detached_geom.get(&geom_memory_key) != Some(&geom);
             if changed {
-                bk.layout.detached_geom.insert(
-                    geom_key,
-                    moon_core::config::layout::GeomRect {
-                        x: geom.0,
-                        y: geom.1,
-                        w: geom.2,
-                        h: geom.3,
-                    },
-                );
+                bk.layout.detached_geom.insert(geom_memory_key, geom);
                 bk.layout_dirty = true;
             }
         });
@@ -582,6 +604,7 @@ pub fn spawn(
     // See `DetachedSpec::cascade_origin` for why a fabricated origin must not pick the display.
     let saved_origin = (!spec.cascade_origin).then_some(bounds.origin);
     let display_id = crate::window::windowing::saved_or_owner_display_id(
+        spec.display_uuid,
         saved_origin,
         owner,
         owner_display,
@@ -602,6 +625,11 @@ pub fn spawn(
             Bounds { origin, ..bounds }
         }
     };
+    // Record the display this window is opening on, so a panel detached and left alone until quit
+    // still knows its monitor. A known identity is never replaced by an unknown one — off macOS the
+    // lookup always answers `None`, and a spec carried over from a Mac must survive that.
+    spec.display_uuid =
+        crate::window::windowing::display_identity(display_id, app).or(spec.display_uuid);
     let opts = crate::window::windowing::detached_panel_window_options(
         format!(
             "{} — MoonTerminal",

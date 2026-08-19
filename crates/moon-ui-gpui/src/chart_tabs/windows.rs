@@ -32,6 +32,8 @@ const FIRST_DETACH_GEOM: chart_persist::WinGeom = chart_persist::WinGeom {
     y: 160,
     w: 900,
     h: 620,
+    // A window nobody has opened yet belongs to no display; the owner's is chosen instead.
+    display_uuid: None,
 };
 
 /// Where and how one detached chart window should be created.
@@ -198,6 +200,7 @@ impl ChartTabs {
             .copied()
             .map(Into::into);
         let display_id = crate::window::windowing::saved_or_owner_display_id(
+            geom.display_uuid,
             remembered.then_some(origin),
             owner,
             owner_display,
@@ -211,9 +214,17 @@ impl ChartTabs {
         } else {
             crate::window::windowing::cascade_origin_on(origin, display_id, cx)
         };
+        // The identity of the display finally chosen, so what gets persisted names the monitor the
+        // window is on rather than the one it was last remembered on.
         let geom = chart_persist::WinGeom {
             x: f32::from(origin.x) as i32,
             y: f32::from(origin.y) as i32,
+            // The display actually chosen, falling back to what was remembered — the one rule the
+            // panel and tool windows carry as `keeping_display_of`. An unknown identity is not
+            // evidence the window moved: off macOS it is the ordinary answer, so overwriting here
+            // would wipe a `charts.json` carried over from a Mac on the first detach.
+            display_uuid: crate::window::windowing::display_identity(display_id, cx)
+                .or(geom.display_uuid),
             ..geom
         };
         let mut opts = crate::window::windowing::detached_chart_window_options(

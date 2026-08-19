@@ -665,3 +665,62 @@ fn detach_routes_capture_the_owner_display_and_raise_what_they_open() {
         "a detach deferred across shutdown must not create or raise a native window"
     );
 }
+
+/// Persisted window geometry must name its display, and that identity must be tried BEFORE the
+/// coordinate route — never instead of it.
+///
+/// The order is the whole compatibility argument. Windows and X11 report global window coordinates,
+/// so containment already resolves the right monitor there and has done so for every release; the
+/// identity is added in front of it because it is the only answer macOS can give (its coordinates
+/// are relative to the window's own screen, and every display reports a zero origin). Dropping the
+/// containment pass would regress the platforms that work today; putting it first would leave a
+/// resolvable identity unused after the monitors were rearranged.
+#[test]
+fn saved_geometry_names_its_display_and_identity_outranks_coordinates() {
+    let windowing = code_only(&read_src("window/windowing.rs"));
+    let resolve = braced_body(&windowing, "pub(crate) fn saved_or_owner_display_id(");
+    let by_uuid = resolve
+        .find("display_id_for_uuid(")
+        .expect("a saved display identity must be resolved");
+    let by_origin = resolve
+        .find("WINDOW_COORDS_ARE_GLOBAL")
+        .expect("the coordinate route must survive for platforms with global coordinates");
+    let by_owner = resolve
+        .find("owner_display.or_else(")
+        .expect("the owner window must remain the final fallback");
+    assert!(
+        by_uuid < by_origin && by_origin < by_owner,
+        "identity first, then coordinate containment, then the owner window"
+    );
+
+    // The platform gate is the whole cost story: both readers walk every monitor, and they sit in
+    // `observe_window_bounds` callbacks that fire per step of a window drag. Off macOS the saved
+    // coordinates already name the monitor, so that sweep would buy nothing — and removing either
+    // gate silently puts a per-monitor Win32 enumeration on every WM_MOVE.
+    for reader in ["fn window_display_uuid(", "fn display_identity("] {
+        let body = braced_body(&windowing, reader);
+        assert!(
+            body.contains("if WINDOW_COORDS_ARE_GLOBAL {") && body.contains("return None;"),
+            "{reader} must return early where coordinates already name the monitor, since reading the identity there costs a monitor sweep per drag event and buys nothing"
+        );
+    }
+
+    // Every window that persists geometry must persist the display with it, through the one helper
+    // that reads both — a rectangle saved without its monitor reopens on the wrong one.
+    for module in [
+        "analytics/mod.rs",
+        "analytics/profit_monitor/mod.rs",
+        "panels/assets/mod.rs",
+        "panels/report/state.rs",
+        "screener/view.rs",
+        "settings/mod.rs",
+        "strategies/state.rs",
+        "window/detached.rs",
+    ] {
+        let source = code_only(&read_src(module));
+        assert!(
+            source.contains("window_geom_rect(window, cx)"),
+            "{module} must capture geometry and display together"
+        );
+    }
+}

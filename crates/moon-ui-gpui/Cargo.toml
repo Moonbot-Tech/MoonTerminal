@@ -78,6 +78,9 @@ rusqlite = "0.40.1"
 # Serialization of dock and detached-window layouts (-> docks.json / detached.json).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Display identity persisted alongside window geometry; `serde` so it round-trips
+# through the config files as a plain string.
+uuid = { version = "1", features = ["serde"] }
 sha2 = "0.10"
 getrandom = "0.2"
 # Excel (.xlsx) export from the Report panel's save menu (report/export.rs).
