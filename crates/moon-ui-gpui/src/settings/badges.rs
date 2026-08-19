@@ -38,8 +38,6 @@ pub(super) struct BadgeRowEd {
 
 /// Editor state for the Badges tab.
 pub(super) struct BadgesEd {
-    /// Whether this editor state was built for the saved light UI mode.
-    is_light: bool,
     rows: Vec<BadgeRowEd>,
 }
 
@@ -75,24 +73,29 @@ fn entry_color(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
     idx: usize,
-    get: impl Fn(&BadgeEntry) -> [u8; 3] + Copy + 'static,
-    set: impl Fn(&mut BadgeEntry, [u8; 3]) + 'static,
+    get: impl Fn(&BadgeEntry, bool) -> [u8; 3] + Copy + 'static,
+    set: impl Fn(&mut BadgeEntry, bool, [u8; 3]) + 'static,
 ) -> Entity<MoonColorPickerState> {
+    // A badge entry holds one colour per UI mode, so which half these closures address depends on
+    // the mode that is LIVE at the moment of the read or the write — never on the mode that was
+    // saved when this editor was built. The entry itself cannot answer that, so the mode is
+    // resolved here, where the draft is in scope, and handed down: in the getter from the same
+    // snapshot the entry is read out of, in the setter from the draft being written.
     let init = {
         let b = backend.read(cx);
-        b.preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .badges
+        let cfg = b.preview.as_ref().unwrap_or(&b.config);
+        let is_light = cfg.ui_theme_mode == UiThemeMode::Light;
+        cfg.badges
             .entries
             .get(idx)
-            .map(get)
+            .map(|e| get(e, is_light))
             .unwrap_or([0x97, 0x92, 0x8A])
     };
     super::draft_color(window, cx, init, move |p, cc| {
+        let is_light = p.ui_theme_mode == UiThemeMode::Light;
         if let Some(e) = p.badges.entries.get_mut(idx) {
-            if get(e) != cc {
-                set(e, cc);
+            if get(e, is_light) != cc {
+                set(e, is_light, cc);
                 return true;
             }
         }
@@ -108,9 +111,6 @@ pub(super) fn build(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
 ) -> BadgesEd {
-    // Select badge color fields from saved `backend.config.ui_theme_mode`, as in Lines. An
-    // unsaved General or import-preview mode change may therefore differ from this editor state.
-    let is_light = backend.read(cx).config.ui_theme_mode == UiThemeMode::Light;
     let entries = {
         let b = backend.read(cx);
         b.preview
@@ -145,8 +145,8 @@ pub(super) fn build(
                 window,
                 cx,
                 idx,
-                move |e| e.color(is_light),
-                move |e, cc| {
+                move |e, is_light| e.color(is_light),
+                move |e, is_light, cc| {
                     if is_light {
                         e.color_light = cc;
                     } else {
@@ -159,14 +159,14 @@ pub(super) fn build(
                 window,
                 cx,
                 idx,
-                move |e| {
+                move |e, is_light| {
                     if is_light {
                         e.outline_long_light
                     } else {
                         e.outline_long_dark
                     }
                 },
-                move |e, cc| {
+                move |e, is_light, cc| {
                     if is_light {
                         e.outline_long_light = cc;
                     } else {
@@ -179,14 +179,14 @@ pub(super) fn build(
                 window,
                 cx,
                 idx,
-                move |e| {
+                move |e, is_light| {
                     if is_light {
                         e.outline_short_light
                     } else {
                         e.outline_short_dark
                     }
                 },
-                move |e, cc| {
+                move |e, is_light, cc| {
                     if is_light {
                         e.outline_short_light = cc;
                     } else {
@@ -197,7 +197,7 @@ pub(super) fn build(
         })
         .collect();
 
-    BadgesEd { is_light, rows }
+    BadgesEd { rows }
 }
 
 impl SettingsView {
@@ -249,9 +249,10 @@ impl SettingsView {
     /// outline controls with optional long/short colors, and delete action.
     fn badge_row(&self, cx: &Context<Self>, idx: usize, row: &BadgeRowEd) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let is_light = self.badges.is_light;
         let (active, distinguish, outline, code, color) = {
             let b = self.backend.read(cx);
+            let is_light =
+                b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
             let bcfg = &b.preview.as_ref().unwrap_or(&b.config).badges;
             bcfg.entries
                 .get(idx)

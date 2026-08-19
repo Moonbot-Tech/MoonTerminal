@@ -240,7 +240,7 @@ impl SettingsView {
                         }
                         .to_string(),
                     )
-                    .on_change(cx.listener(|this, checked: &bool, _window, cx| {
+                    .on_change(cx.listener(|this, checked: &bool, window, cx| {
                         let mode = if *checked {
                             UiThemeMode::Light
                         } else {
@@ -259,6 +259,15 @@ impl SettingsView {
                             true
                         });
                         if changed {
+                            // The per-mode editors hold a SNAPSHOT of the variant that was live
+                            // when their widgets were built: a slider or colour picker keeps its
+                            // own state entity and does not re-read the draft on render. The write
+                            // side now resolves the mode live, so leaving those snapshots in place
+                            // would show one variant's numbers while the next edit wrote them into
+                            // the other. Rebuild them here, exactly as paste and import already do.
+                            this.iface = super::interface::build(&this.backend, window, cx);
+                            this.lines = super::lines::build(&this.backend, window, cx);
+                            this.badges = super::badges::build(&this.backend, window, cx);
                             cx.notify();
                         }
                     })),

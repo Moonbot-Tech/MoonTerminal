@@ -21,14 +21,8 @@
 //! Every constant below is in LOGICAL pixels and is multiplied by the device scale exactly once, at
 //! the point of use in the chartdx adapter — the same rule [`crate::trade_marks`] states.
 
-use moon_core::market::candles::candle_intersects_window;
 use moon_core::market::ChartCandle;
-
-/// Largest band height in logical pixels, whatever the height fraction asks for.
-///
-/// Matches the cap the per-trade band has always used, so the two stay visually related on a tall
-/// chart instead of one growing without bound.
-pub const VOLUME_BAND_MAX_PX: f32 = 72.0;
+use moon_core::market::candles::candle_intersects_window;
 
 /// Widest single bar in the `BARS` style, logical pixels.
 pub const VOLUME_BAR_W_PX: f32 = 3.0;
@@ -161,7 +155,7 @@ pub fn quantize_inv_max(inv_max: f32) -> f32 {
 /// frame, the diff gate still fires, and the base texture still rebakes. Absolute steps rather than
 /// relative ones, because this is a bounded fraction and not a magnitude.
 ///
-/// 1/256 of a band capped at [`VOLUME_BAND_MAX_PX`] is well under one pixel, so the average line
+/// 1/256 of a band is well under one pixel at any height a pane can give it, so the average line
 /// does not visibly move.
 pub fn quantize_ratio(ratio: f32) -> f32 {
     if !ratio.is_finite() {

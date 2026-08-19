@@ -124,7 +124,7 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
                 "vs_m.x < 0.5",
                 "vs_m.x >= 1.5",
                 "sqrt(norm)",
-                "min(cv_bounds.w * vs_m.y, vs_m2.x)",
+                "cv_bounds.w * vs_m.y",
                 "cv_bounds.y + cv_bounds.w - 1.0",
                 "clamp(pxh.x, cv_bounds.x, cv_bounds.x + cv_bounds.z)",
                 "clamp(px.x, cv_bounds.x, cv_bounds.x + cv_bounds.z)",
@@ -143,7 +143,7 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
                 "vs.m.x < 0.5",
                 "vs.m.x < 1.5",
                 "sqrt(norm)",
-                "min(cv.bounds.w * vs.m.y, vs.m2.x)",
+                "cv.bounds.w * vs.m.y",
                 "cv.bounds.y + cv.bounds.w - 1.0",
                 "clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
                 "clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
@@ -162,7 +162,7 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
                 "vs.m.x < 0.5",
                 "vs.m.x < 1.5",
                 "sqrt(norm)",
-                "min(cv.bounds.w * vs.m.y, vs.m2.x)",
+                "cv.bounds.w * vs.m.y",
                 "cv.bounds.y + cv.bounds.w - 1.0",
                 "clamp(pxh.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
                 "clamp(px.x, cv.bounds.x, cv.bounds.x + cv.bounds.z)",
@@ -233,6 +233,47 @@ fn chart_appearance_contracts_stay_identical_across_shader_backends() {
         assert!(
             volume.contains(liquidation_cull),
             "{path}: per-trade volume must cull liquidations"
+        );
+    }
+}
+
+/// `chartdx` `vol_band_h` — wrapping the pane-height * fraction product in
+/// `min(..., cap_px)` again (or in only one backend) makes the height slider inert
+/// on any pane taller than a few hundred pixels, and leaves Windows and macOS
+/// drawing different band heights. Nothing in this repo compiles a shader, so only
+/// this text contract can catch it.
+///
+/// `braced_body` returns comments too, and the new comments name the removed cap, so
+/// a naive substring on "cap" or `vs_m2.x` would pass with the code deleted. Comments
+/// are stripped first; the return is matched as a statement a comment cannot contain.
+#[test]
+fn every_backend_sizes_the_candle_volume_band_from_the_pane_fraction_only() {
+    const BACKENDS: &[(&str, &str, &str)] = &[
+        (
+            "chartdx/shaders/candles.hlsl",
+            "float vol_band_h()",
+            "return cv_bounds.w * vs_m.y;",
+        ),
+        (
+            "chartdx/shaders/native_candles.wgsl",
+            "fn vol_band_h()",
+            "return cv.bounds.w * vs.m.y;",
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            "float vol_band_h(",
+            "return cv.bounds.w * vs.m.y;",
+        ),
+    ];
+    for (path, signature, expected_return) in BACKENDS {
+        let body = code_only(braced_body(&read_src(path), signature));
+        assert!(
+            body.contains(expected_return),
+            "{path}: vol_band_h must return pane height times the height fraction, with no pixel ceiling"
+        );
+        assert!(
+            !body.contains("min("),
+            "{path}: vol_band_h must not reintroduce a fixed pixel ceiling"
         );
     }
 }

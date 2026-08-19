@@ -89,6 +89,33 @@ fn visible_stats_refuse_empty_and_zero_volume_windows() {
     assert_eq!(visible_volume_stats(&zeros, 0.0, 10.0), None);
 }
 
+/// `volume_bars.rs:clamp_band_fraction` — returning `frac` unchanged (dropping the clamp)
+/// lets a hand-edited `theme.toml` push the band past half the plot, so the footer swallows
+/// the price action it is supposed to annotate. With the pixel ceiling gone this clamp is
+/// the only remaining bound on band height.
+#[test]
+fn clamp_band_fraction_holds_a_hand_edited_height_inside_the_named_footer_range() {
+    // Boundary pair: at each named limit the fraction is unchanged.
+    assert_eq!(clamp_band_fraction(VOLUME_HEIGHT_MIN), VOLUME_HEIGHT_MIN);
+    assert_eq!(clamp_band_fraction(VOLUME_HEIGHT_MAX), VOLUME_HEIGHT_MAX);
+    // Boundary pair: one step past each limit is pulled back.
+    assert_eq!(
+        clamp_band_fraction(VOLUME_HEIGHT_MIN - 0.001),
+        VOLUME_HEIGHT_MIN
+    );
+    assert_eq!(
+        clamp_band_fraction(VOLUME_HEIGHT_MAX + 0.001),
+        VOLUME_HEIGHT_MAX
+    );
+    // A value strictly inside is unchanged — the clamp is not a snap-to-bound.
+    let inside = (VOLUME_HEIGHT_MIN + VOLUME_HEIGHT_MAX) * 0.5;
+    assert_eq!(clamp_band_fraction(inside), inside);
+    // Non-finite input must not leak a NaN/Inf height into the shader.
+    assert_eq!(clamp_band_fraction(f32::NAN), VOLUME_HEIGHT_MIN);
+    assert_eq!(clamp_band_fraction(f32::INFINITY), VOLUME_HEIGHT_MIN);
+    assert_eq!(clamp_band_fraction(f32::NEG_INFINITY), VOLUME_HEIGHT_MIN);
+}
+
 /// `volume_bars.rs:quantize_inv_max` — removing relative quantization or its positive-input
 /// guard would either rebake on ordinary live ticks or send a zero/NaN scale to the shader.
 #[test]

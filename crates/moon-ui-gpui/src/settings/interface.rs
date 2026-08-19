@@ -53,15 +53,16 @@ fn color_field(
     backend: &Entity<Backend>,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
-    is_light: bool,
     get: fn(&ChartTheme) -> [u8; 3],
     set: fn(&mut ChartTheme, [u8; 3]),
 ) -> Entity<MoonColorPickerState> {
     let cur = {
         let b = backend.read(cx);
+        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
         get(b.preview.as_ref().unwrap_or(&b.config).theme.get(is_light))
     };
     super::draft_color(window, cx, cur, move |p, c| {
+        let is_light = p.ui_theme_mode == UiThemeMode::Light;
         if get(p.theme.get(is_light)) != c {
             set(p.theme.get_mut(is_light), c);
             true
@@ -76,7 +77,6 @@ fn color_field(
 fn num_field(
     backend: &Entity<Backend>,
     cx: &mut Context<SettingsView>,
-    is_light: bool,
     get: fn(&ChartTheme) -> f32,
     set: fn(&mut ChartTheme, f32),
     min: f32,
@@ -85,9 +85,11 @@ fn num_field(
 ) -> Entity<MoonSliderState> {
     let cur = {
         let b = backend.read(cx);
+        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
         get(b.preview.as_ref().unwrap_or(&b.config).theme.get(is_light))
     };
     super::draft_slider(cx, min, max, step, cur, move |p, f, _bcx| {
+        let is_light = p.ui_theme_mode == UiThemeMode::Light;
         if get(p.theme.get(is_light)) != f {
             set(p.theme.get_mut(is_light), f);
             true
@@ -105,10 +107,10 @@ fn style_field(
     backend: &Entity<Backend>,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
-    is_light: bool,
 ) -> Entity<MoonSelectState<u8>> {
     let cur = {
         let b = backend.read(cx);
+        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
         b.preview
             .as_ref()
             .unwrap_or(&b.config)
@@ -122,6 +124,7 @@ fn style_field(
         (VOLUME_STYLE_OFF, t!("iface.volume_style_off").into()),
     ];
     draft_select(window, cx, items, &cur, move |p, v| {
+        let is_light = p.ui_theme_mode == UiThemeMode::Light;
         let t = p.theme.get_mut(is_light);
         if t.candle_volume_style != *v {
             t.candle_volume_style = *v;
@@ -140,42 +143,31 @@ pub(super) fn build(
 ) -> Iface {
     // Bind controls to the saved UI mode that was active when Settings opened, as in Lines. Saving
     // a mode change and reopening Settings builds controls for the other variant.
-    let is_light = backend.read(cx).config.ui_theme_mode == UiThemeMode::Light;
     Iface {
         label_font_delta: num_field(
             backend,
             cx,
-            is_light,
             |t| t.label_font_delta,
             |t, v| t.label_font_delta = v,
             -4.0,
             12.0,
             0.5,
         ),
-        bg: color_field(backend, window, cx, is_light, |t| t.bg, |t, v| t.bg = v),
-        grid: color_field(backend, window, cx, is_light, |t| t.grid, |t, v| t.grid = v),
+        bg: color_field(backend, window, cx, |t| t.bg, |t, v| t.bg = v),
+        grid: color_field(backend, window, cx, |t| t.grid, |t, v| t.grid = v),
         grid_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.grid_alpha,
             |t, v| t.grid_alpha = v,
             0.0,
             1.0,
             0.01,
         ),
-        cross: color_field(
-            backend,
-            window,
-            cx,
-            is_light,
-            |t| t.cross,
-            |t, v| t.cross = v,
-        ),
+        cross: color_field(backend, window, cx, |t| t.cross, |t, v| t.cross = v),
         cross_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.cross_alpha,
             |t, v| t.cross_alpha = v,
             0.0,
@@ -185,26 +177,17 @@ pub(super) fn build(
         cross_thickness: num_field(
             backend,
             cx,
-            is_light,
             |t| t.cross_thickness,
             |t, v| t.cross_thickness = v,
             0.5,
             4.0,
             0.1,
         ),
-        candle_up: color_field(
-            backend,
-            window,
-            cx,
-            is_light,
-            |t| t.candle_up,
-            |t, v| t.candle_up = v,
-        ),
+        candle_up: color_field(backend, window, cx, |t| t.candle_up, |t, v| t.candle_up = v),
         candle_down: color_field(
             backend,
             window,
             cx,
-            is_light,
             |t| t.candle_down,
             |t, v| t.candle_down = v,
         ),
@@ -212,14 +195,12 @@ pub(super) fn build(
             backend,
             window,
             cx,
-            is_light,
             |t| t.candle_neutral,
             |t, v| t.candle_neutral = v,
         ),
         candle_fill_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.candle_fill_alpha,
             |t, v| t.candle_fill_alpha = v,
             0.0,
@@ -230,32 +211,22 @@ pub(super) fn build(
             backend,
             window,
             cx,
-            is_light,
             |t| t.price_line,
             |t, v| t.price_line = v,
         ),
         price_line_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.price_line_alpha,
             |t, v| t.price_line_alpha = v,
             0.0,
             1.0,
             0.01,
         ),
-        mark_line: color_field(
-            backend,
-            window,
-            cx,
-            is_light,
-            |t| t.mark_line,
-            |t, v| t.mark_line = v,
-        ),
+        mark_line: color_field(backend, window, cx, |t| t.mark_line, |t, v| t.mark_line = v),
         mark_line_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.mark_line_alpha,
             |t, v| t.mark_line_alpha = v,
             0.0,
@@ -266,7 +237,6 @@ pub(super) fn build(
         price_line_px: num_field(
             backend,
             cx,
-            is_light,
             |t| t.price_line_px,
             |t, v| t.price_line_px = v,
             0.5,
@@ -276,7 +246,6 @@ pub(super) fn build(
         marker_scale: num_field(
             backend,
             cx,
-            is_light,
             |t| t.marker_scale,
             |t, v| t.marker_scale = v,
             0.5,
@@ -286,18 +255,16 @@ pub(super) fn build(
         trade_volume_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.trade_volume_alpha,
             |t, v| t.trade_volume_alpha = v,
             0.0,
             1.0,
             0.01,
         ),
-        candle_volume_style: style_field(backend, window, cx, is_light),
+        candle_volume_style: style_field(backend, window, cx),
         candle_volume_height: num_field(
             backend,
             cx,
-            is_light,
             |t| t.candle_volume_height,
             |t, v| t.candle_volume_height = v,
             0.05,
@@ -307,7 +274,6 @@ pub(super) fn build(
         candle_volume_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.candle_volume_alpha,
             |t, v| t.candle_volume_alpha = v,
             0.0,
@@ -318,23 +284,14 @@ pub(super) fn build(
             backend,
             window,
             cx,
-            is_light,
             |t| t.candle_volume_scale,
             |t, v| t.candle_volume_scale = v,
         ),
-        book_bg: color_field(
-            backend,
-            window,
-            cx,
-            is_light,
-            |t| t.book_bg,
-            |t, v| t.book_bg = v,
-        ),
+        book_bg: color_field(backend, window, cx, |t| t.book_bg, |t, v| t.book_bg = v),
         book_bg_ask: color_field(
             backend,
             window,
             cx,
-            is_light,
             |t| t.book_bg_ask,
             |t, v| t.book_bg_ask = v,
         ),
@@ -342,44 +299,21 @@ pub(super) fn build(
             backend,
             window,
             cx,
-            is_light,
             |t| t.book_bg_bid,
             |t, v| t.book_bg_bid = v,
         ),
-        book_bid: color_field(
-            backend,
-            window,
-            cx,
-            is_light,
-            |t| t.book_bid,
-            |t, v| t.book_bid = v,
-        ),
-        book_ask: color_field(
-            backend,
-            window,
-            cx,
-            is_light,
-            |t| t.book_ask,
-            |t, v| t.book_ask = v,
-        ),
+        book_bid: color_field(backend, window, cx, |t| t.book_bid, |t, v| t.book_bid = v),
+        book_ask: color_field(backend, window, cx, |t| t.book_ask, |t, v| t.book_ask = v),
         book_level_alpha: num_field(
             backend,
             cx,
-            is_light,
             |t| t.book_level_alpha,
             |t, v| t.book_level_alpha = v,
             0.0,
             1.0,
             0.01,
         ),
-        panel_bg: color_field(
-            backend,
-            window,
-            cx,
-            is_light,
-            |t| t.panel_bg,
-            |t, v| t.panel_bg = v,
-        ),
+        panel_bg: color_field(backend, window, cx, |t| t.panel_bg, |t, v| t.panel_bg = v),
     }
 }
 

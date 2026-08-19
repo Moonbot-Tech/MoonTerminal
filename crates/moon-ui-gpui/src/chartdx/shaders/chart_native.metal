@@ -350,7 +350,7 @@ struct VolumeStyle {
     float4 down;
     float4 scale;
     float4 m;  // x style, y height fraction, z 1/max, w avg/max
-    float4 m2; // x band cap px, y bar width px, z line px
+    float4 m2; // x retired band cap, y bar width px, z line px
 };
 
 struct VolumeBarOut {
@@ -365,7 +365,9 @@ static inline float2 vol_center_px(constant ChartView& cv, constant CandleStyle&
 }
 
 static inline float vol_band_h(constant ChartView& cv, constant VolumeStyle& vs) {
-    return min(cv.bounds.w * vs.m.y, vs.m2.x);
+    // See candles.hlsl: the height fraction is the whole answer, and the fixed pixel ceiling that
+    // once stood beside it made the setting inert on any ordinary pane.
+    return cv.bounds.w * vs.m.y;
 }
 
 static inline float vol_height_px(constant ChartView& cv, constant VolumeStyle& vs, Candle cd) {
