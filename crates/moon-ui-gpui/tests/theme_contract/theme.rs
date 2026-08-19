@@ -193,6 +193,13 @@ fn main_chart_stack_rmb_toggle_uses_full_chart_area_not_plot_only() {
         !main_stack.contains("window_pos_in_chart_plot(event.position)"),
         "Main stack RMB fullscreen/stack toggle must not regress to plot-only hit-test"
     );
+    // Ctrl+right-click is a trading gesture slot, and on macOS the OS-style Ctrl+LEFT click used to
+    // arrive here as a plain right click: without this guard the stack collapsed under a user who
+    // was moving an order. Moonbot toggles on the unmodified click too.
+    assert!(
+        main_stack.contains("!event.modifiers.modified()"),
+        "Main stack RMB fullscreen/stack toggle must ignore a right-click carrying a modifier"
+    );
 }
 
 /// Settings-popup contents hosted by `MoonPopover` must not paint a second surface inside it.

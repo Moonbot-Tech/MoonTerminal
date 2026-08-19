@@ -1265,8 +1265,14 @@ impl MainChartStack {
                 // A short right-click in the panel area exits fullscreen. In the control zone
                 // (order book or reserved strip), right-click remains trading-only, while a
                 // right-button price drag remains zoom and does not toggle the stack.
+                //
+                // Only a CLEAN right-click: with a modifier held the press belongs to a trading
+                // gesture, and Moonbot's own fullscreen toggle is the unmodified click too. A
+                // gesture the chart recognised already suppresses this release, but an unbound
+                // Ctrl+right-click reached here and collapsed the stack under the user's hand.
                 let panel = panel_for_event.read(app);
-                if panel.window_pos_allows_main_stack_toggle(event.position)
+                if !event.modifiers.modified()
+                    && panel.window_pos_allows_main_stack_toggle(event.position)
                     && !panel.window_pos_in_control_zone(event.position, app)
                     && !panel.rmb_was_moved()
                 {

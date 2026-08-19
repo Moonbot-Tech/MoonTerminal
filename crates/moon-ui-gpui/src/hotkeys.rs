@@ -20,11 +20,12 @@ mod layout;
 #[cfg(test)]
 mod tests;
 
-use gpui::{App, Context, Entity, KeyDownEvent, Keystroke, Modifiers};
+use gpui::{App, Context, Entity, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent};
 use moon_core::config::{HotkeysConfig, SHIFT_PERCENT, SPLIT_ORDER_PARTS};
 use moon_core::feed::ClientSettingsEdit;
 use moon_core::figures::FigureTool;
 use moon_core::session::CoreId;
+use moon_ui::{MoonHotkeyCapture, MoonHotkeyModifierWatch};
 
 use crate::Backend;
 
@@ -130,7 +131,7 @@ pub enum HotkeyAction {
 ///
 /// A letter is compared against the PHYSICAL key as well as the name the platform gave it, so a
 /// binding does not die when the keyboard layout changes — see [`layout::us_letter`].
-fn pressed(raw: &str, ev: &KeyDownEvent) -> bool {
+fn pressed(raw: &str, event: &Keystroke) -> bool {
     let raw = raw.trim();
     if raw.is_empty() {
         return false;
@@ -138,14 +139,47 @@ fn pressed(raw: &str, ev: &KeyDownEvent) -> bool {
     let Ok(k) = Keystroke::parse(raw) else {
         return false;
     };
-    k.modifiers == ev.keystroke.modifiers
-        && (k.key == ev.keystroke.key
-            || layout::us_letter(&ev.keystroke.key).is_some_and(|physical| k.key == physical))
+    k.modifiers == event.modifiers
+        && (k.key == event.key
+            || layout::us_letter(&event.key).is_some_and(|physical| k.key == physical))
 }
 
 /// Resolve a key-down event to the action bound to it.
 pub fn resolve(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
-    resolve_binding(ev, hk)
+    resolve_binding(&ev.keystroke, hk)
+}
+
+/// Resolve a modifiers-changed event to the action bound to Caps Lock or to a lone modifier.
+///
+/// Neither key reaches an application as a key press: both platforms report them as a change of
+/// modifier state, so `resolve` alone can never see them and a binding on Alt or Caps Lock would be
+/// dead however it was recorded. [`MoonHotkeyModifierWatch`] turns the event stream back into a
+/// press — Caps Lock on its state flip, a lone modifier on the release that follows nothing else —
+/// and this reads that press against the same bindings as every other key.
+///
+/// `typing` suppresses the binding while the focused element is taking text: Caps Lock is a
+/// perfectly ordinary key to press mid-word, and running a market order instead of shifting the
+/// case is the one failure this feature can cause. The watch is still fed, so it stays in step with
+/// the keyboard and the first press after the field is left is read correctly.
+///
+/// Args:
+///     watch: Per-window watch state; one press spans several events, so it cannot be local.
+///     ev: The modifiers-changed event as delivered to the window root.
+///     hk: The window's effective hotkey configuration.
+///     typing: Whether the focused element is taking typed text right now.
+///
+/// Returns:
+///     The bound action, or `None` when the event is not a press or nothing is bound to it.
+pub fn resolve_modifiers(
+    watch: &mut MoonHotkeyModifierWatch,
+    ev: &ModifiersChangedEvent,
+    hk: &HotkeysConfig,
+    typing: bool,
+) -> Option<HotkeyAction> {
+    match watch.modifiers_changed(ev.modifiers, ev.capslock, !typing) {
+        MoonHotkeyCapture::Commit(keystroke) => resolve_binding(&keystroke, hk),
+        _ => None,
+    }
 }
 
 impl HotkeyAction {
@@ -195,9 +229,9 @@ impl HotkeyAction {
 /// Escape, reset, and Tab/Delete; configured scale actions and the chart shot; order-size and
 /// fixed-sell presets; active-market and active-core trading actions; configured `switch_charts`;
 /// then manual strategies. Returns `None` when no binding matches.
-fn resolve_binding(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     use HotkeyAction as A;
-    let p = |raw: &str| pressed(raw, ev);
+    let p = |raw: &str| pressed(raw, event);
 
     // Drawing-layer bindings take precedence over built-ins and trading bindings.
     if p(&hk.draw_hline) {
@@ -222,24 +256,22 @@ fn resolve_binding(ev: &KeyDownEvent, hk: &HotkeysConfig) -> Option<HotkeyAction
         return Some(A::FigAlert);
     }
     // Shift-only Escape closes all Main stacks; the next branch matches modifier-free Escape.
-    if ev.keystroke.key == "escape"
-        && ev.keystroke.modifiers.shift
-        && !ev.keystroke.modifiers.control
-        && !ev.keystroke.modifiers.alt
-        && !ev.keystroke.modifiers.platform
+    if event.key == "escape"
+        && event.modifiers.shift
+        && !event.modifiers.control
+        && !event.modifiers.alt
+        && !event.modifiers.platform
     {
         return Some(A::CloseAllCharts);
     }
-    if ev.keystroke.key == "escape" && ev.keystroke.modifiers == Modifiers::default() {
+    if event.key == "escape" && event.modifiers == Modifiers::default() {
         return Some(A::CloseActiveChart);
     }
     // Remaining built-in, non-configurable bindings.
     if p("ctrl-shift-f10") {
         return Some(A::ResetWindows);
     }
-    if (ev.keystroke.key == "tab" || ev.keystroke.key == "delete")
-        && ev.keystroke.modifiers == Modifiers::default()
-    {
+    if (event.key == "tab" || event.key == "delete") && event.modifiers == Modifiers::default() {
         return Some(A::CancelHoveredOrder);
     }
 
@@ -396,11 +428,11 @@ fn with_hovered_chart(
 /// Escape's own rule lives in [`escape_leaves_sells_zone`], which the same callers run first.
 pub fn pre_dispatch(
     action: HotkeyAction,
-    ev: &KeyDownEvent,
+    is_held: bool,
     backend: &Entity<Backend>,
     cx: &mut App,
 ) -> bool {
-    if ev.is_held && action.suppress_on_repeat() {
+    if is_held && action.suppress_on_repeat() {
         return true;
     }
     match action {
@@ -421,7 +453,11 @@ pub fn pre_dispatch(
 /// Consumes the press when it disarms, so the SECOND Escape closes the chart exactly as before.
 /// Every window calls this ahead of its own routing, which is why it takes the event and not an
 /// action.
-pub fn escape_leaves_sells_zone(ev: &KeyDownEvent, backend: &Entity<Backend>, cx: &mut App) -> bool {
+pub fn escape_leaves_sells_zone(
+    ev: &KeyDownEvent,
+    backend: &Entity<Backend>,
+    cx: &mut App,
+) -> bool {
     if ev.keystroke.key != "escape" {
         return false;
     }
