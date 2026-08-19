@@ -332,9 +332,8 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // `args_os`: a non-UTF-8 argument makes `std::env::args` panic, and this call sits before the
     // panic hook. It is not the only such call — `update::dispatch_process_mode` collects `args()`
     // in `main` before startup is entered at all — but there is no reason to add a second one.
-    let fixture = fixture::bootstrap(
-        std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()),
-    )?;
+    let fixture =
+        fixture::bootstrap(std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()))?;
 
     // Diagnostics BEFORE the logger: the `[log]` areas in `cfg/diagnostics.toml` decide the
     // logger's filter, so they have to be known before it is built. Reading that file this early is
@@ -445,6 +444,12 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     let app = gpui_platform::application().with_assets(moon_ui::MoonAssets);
     app.run(move |cx| {
         init_moon_ui(cx);
+        // Say it out loud rather than relying on the default: on macOS this switch decides whether
+        // a Control+left press is delivered as a right click with Control erased. Moonbot's
+        // default move gesture for a sell line IS Ctrl+Left, so the terminal needs the raw press;
+        // Control-click stops opening context menus on a Mac in exchange, which is the trade the
+        // reference makes too.
+        gpui::set_macos_control_click_as_secondary(false);
         cx.text_system()
             .add_fonts(embedded_fonts())
             .expect("failed to add embedded Moonbot fonts");

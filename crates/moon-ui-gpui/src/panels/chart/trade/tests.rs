@@ -72,9 +72,10 @@ fn move_gestures_split_entry_exit_and_direction() {
 
 /// Pins gesture recognition: button, modifiers and click count must all be read.
 ///
-/// Plausible breakage: letting a Ctrl+RIGHT press satisfy a `CTRL_Click` binding — tried once for
-/// macOS, where the fork in fact delivers Control-click as the LEFT button — makes one press match
-/// both the buy-set and short-set bindings in `try_place_order_click`, which shares this matcher.
+/// Plausible breakage: letting a Ctrl+RIGHT press satisfy a `CTRL_Click` binding — tried once as a
+/// macOS workaround, before the fork stopped rewriting Control-click into a right click — makes one
+/// press match both the buy-set and short-set bindings in `try_place_order_click`, which shares
+/// this matcher.
 #[test]
 fn gesture_matching_reads_button_modifiers_and_click_count() {
     let m = |binding, button, modifiers, clicks| {

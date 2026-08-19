@@ -120,12 +120,17 @@ impl ChartPanel {
     ) -> bool {
         let dbl = click_count >= 2;
         let clear = !modifiers.modified();
-        // Ctrl+Left needs no macOS special case: the mac backend derives the button from
-        // `NSEvent.buttonNumber` (`moon-gpui-macos/src/events.rs`), which stays 0 for a
-        // Control-click, so the press arrives as Left carrying Control exactly as on Windows.
-        // Matching a Ctrl+RIGHT press against a Ctrl+Left binding there was tried and removed: this
-        // same matcher decides order PLACEMENT, where it would let one press satisfy both the
-        // buy-set and short-set bindings and open the wrong side.
+        // Ctrl+Left needs no macOS special case HERE, but it did need one in the fork: Zed's mac
+        // backend rewrote a Control+left press into a right click and erased the Control flag, so
+        // the default Ctrl+Left move gesture could not fire on a Mac at all and the press fell
+        // through to the fullscreen toggle instead. MoonUI now passes it through unless an
+        // application opts into that convention (`gpui::set_macos_control_click_as_secondary`,
+        // which `startup::run` explicitly leaves off), and the press arrives as Left carrying
+        // Control exactly as on Windows.
+        //
+        // Matching a Ctrl+RIGHT press against a Ctrl+Left binding was tried as a workaround and
+        // removed: this same matcher decides order PLACEMENT, where it would let one press satisfy
+        // both the buy-set and short-set bindings and open the wrong side.
         match binding {
             MouseGestureBinding::None => false,
             MouseGestureBinding::LeftDouble => button == TradeMouseButton::Left && dbl && clear,
