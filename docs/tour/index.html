@@ -1,0 +1,1072 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Интерактивный тур по MoonTerminal: карта главного окна, быстрый старт, панели дока, отдельные окна и горячие клавиши.">
+<meta name="color-scheme" content="dark light">
+<title>MoonTerminal Tour</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap">
+
+<style>
+/* ============================================================
+   Палитра — дословно из MoonUI/crates/moon-ui-components/themes/moon-terminal.toml
+   [light.palette] на :root, [dark.palette] в переопределениях.
+   ============================================================ */
+:root{
+  --shell:#F3F5F7; --shell-high:#FAFBFC; --surface:#FFFFFF; --panel:#F8FAFC;
+  --chrome:#F5F7FA; --tabbar:#F2F5F8; --panel-head:#F5F7FA; --gutter:#EEF2F6;
+  --chart-bg:#FFFFFF; --card:#FFFFFF; --row-alt:#FCFDFE; --head-row:#F3F6F8;
+  --border:#D5DBE1; --border-soft:#E1E5EA; --border-hover:#B8C2CC; --row-line:#ECEFF2;
+  --text:#17202A; --text-soft:#4B5865; --text-muted:#768391; --text-faint:#98A3AE;
+  --green:#178A57; --green-text:#0E6E45; --red:#D2483F; --red-text:#B7352F;
+  --orange:#D18A2B; --amber:#B97824; --blue:#2B6F9E; --yellow:#B8860B;
+  --accent:#009DFF; --accent-fg:#0A3F68; --on-accent:#FFFFFF; --accent-tint:rgba(0,157,255,.08);
+  --sel-ring:rgba(0,157,255,.55);
+
+  /* [*.metrics] — реальные высоты интерфейса, × --k для читаемости на вебе.
+     --k должен остаться БЕЗРАЗМЕРНЫМ: он умножается на px в calc().
+     Ступени ниже держат торговый тулбар целиком в кадре на любой ширине. */
+  --k:1.34;
+  --h-header:calc(32px * var(--k));
+  --h-toolbar:calc(32px * var(--k));
+  --h-status:calc(22px * var(--k));
+  --h-docktab:calc(26px * var(--k));
+  --h-thead:calc(26px * var(--k));
+  --h-row:calc(25px * var(--k));
+  --r-btn:4px; --r-box:8px;
+
+  --ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'Geist Mono',ui-monospace,'Cascadia Mono','Consolas',monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --shell:#131416; --shell-high:#1A1C1F; --surface:#16181B; --panel:#20232A;
+    --chrome:#1A1C1F; --tabbar:#1A1C1F; --panel-head:#22252B; --gutter:#0F1012;
+    --chart-bg:#16181B; --card:#1A1C1F; --row-alt:#1A1C1F; --head-row:#20232A;
+    --border:#2A2D31; --border-soft:#2A2D31; --border-hover:#343840; --row-line:#2A2D31;
+    --text:#E8E4DC; --text-soft:#97928A; --text-muted:#7D7669; --text-faint:#7D7669;
+    --green:#1E8C5B; --green-text:#1E8C5B; --red:#E5484D; --red-text:#E5484D;
+    --orange:#FF8E5A; --amber:#FFB347; --blue:#7FC9FF; --yellow:#FFD93D;
+    --accent:#FFB347; --accent-fg:#FFCF94; --on-accent:#0F1012; --accent-tint:rgba(255,179,71,.11);
+    --sel-ring:rgba(255,179,71,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --shell:#131416; --shell-high:#1A1C1F; --surface:#16181B; --panel:#20232A;
+  --chrome:#1A1C1F; --tabbar:#1A1C1F; --panel-head:#22252B; --gutter:#0F1012;
+  --chart-bg:#16181B; --card:#1A1C1F; --row-alt:#1A1C1F; --head-row:#20232A;
+  --border:#2A2D31; --border-soft:#2A2D31; --border-hover:#343840; --row-line:#2A2D31;
+  --text:#E8E4DC; --text-soft:#97928A; --text-muted:#7D7669; --text-faint:#7D7669;
+  --green:#1E8C5B; --green-text:#1E8C5B; --red:#E5484D; --red-text:#E5484D;
+  --orange:#FF8E5A; --amber:#FFB347; --blue:#7FC9FF; --yellow:#FFD93D;
+  --accent:#FFB347; --accent-fg:#FFCF94; --on-accent:#0F1012; --accent-tint:rgba(255,179,71,.11);
+  --sel-ring:rgba(255,179,71,.6);
+}
+
+@media(max-width:1600px){:root{--k:1.20}}
+@media(max-width:1400px){:root{--k:1.08}}
+@media(max-width:1150px){:root{--k:0.98}}
+@media(max-width:900px) {:root{--k:0.90}}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--shell); color:var(--text);
+  font-family:var(--ui); font-size:15px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1620px;margin:0 auto;padding:0 28px}
+
+/* ---------- шапка страницы ---------- */
+.top{
+  position:sticky;top:0;z-index:50;background:var(--chrome);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:16px;
+  padding:10px 24px;flex-wrap:wrap;
+}
+.mark{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.015em;font-size:16px}
+.moon{width:18px;height:18px;flex:none}
+.top .spacer{flex:1 1 auto;min-width:8px}
+.seg{display:flex;border:1px solid var(--border);border-radius:var(--r-btn);overflow:hidden}
+.seg button{
+  appearance:none;border:0;background:transparent;color:var(--text-soft);
+  font:600 12px/1 var(--ui);letter-spacing:.04em;padding:8px 13px;cursor:pointer;
+}
+.seg button+button{border-left:1px solid var(--border)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button:focus-visible{outline:2px solid var(--sel-ring);outline-offset:-2px}
+
+/* ---------- титул ---------- */
+.hero{
+  padding:56px 0 34px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:18px
+}
+.hero h1{
+  margin:0;font-size:clamp(32px,4.4vw,52px);line-height:1.02;
+  letter-spacing:-.03em;font-weight:700;text-wrap:balance;max-width:20ch
+}
+.hero p{margin:0;max-width:70ch;color:var(--text-soft);font-size:16px}
+.hero .accent{color:var(--accent)}
+.stats{
+  align-self:stretch;display:flex;justify-content:center;gap:44px;flex-wrap:wrap;
+  margin-top:12px;padding-top:24px;border-top:1px solid var(--border-soft);text-align:left
+}
+.stat{display:flex;flex-direction:column;gap:3px}
+.stat b{font:600 26px/1 var(--mono);letter-spacing:-.02em;color:var(--text);font-variant-numeric:tabular-nums}
+.stat span{font:500 11px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted)}
+
+/* ---------- секции ---------- */
+section{padding:52px 0;border-top:1px solid var(--border-soft)}
+.shead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:0 0 8px}
+.snum{font:600 11px/1 var(--mono);color:var(--accent);letter-spacing:.12em}
+h2{margin:0;font-size:clamp(22px,3vw,30px);letter-spacing:-.02em;font-weight:650;text-wrap:balance}
+.slead{margin:0 0 28px;color:var(--text-soft);max-width:64ch}
+
+/* ============================================================
+   РЕПЛИКА ОКНА
+   ============================================================ */
+.tourgrid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+
+.app{
+  border:1px solid var(--border);border-radius:var(--r-box);overflow:hidden;
+  background:var(--shell);font-family:var(--ui);
+  font-size:calc(12px * var(--k) * .78);
+  box-shadow:0 18px 48px -24px rgba(0,0,0,.55);
+}
+.z{position:relative;cursor:pointer;border:0;background:transparent;color:inherit;font:inherit;text-align:left}
+.z::after{
+  content:"";position:absolute;inset:0;border-radius:3px;
+  outline:1.5px solid transparent;transition:outline-color .13s,background-color .13s;pointer-events:none
+}
+/* наведение на окно проявляет границы кликабельных зон — до этого реплика чистая */
+.app:hover .z::after{outline-color:var(--border-hover)}
+.z:hover::after{outline-color:var(--accent-fg);background:var(--accent-tint)}
+.z[aria-current="true"]::after{outline-color:var(--accent);background:var(--accent-tint)}
+.z:focus-visible{outline:none}
+.z:focus-visible::after{outline-color:var(--accent);outline-width:2px}
+.zn{
+  position:absolute;top:1px;left:1px;z-index:3;
+  min-width:16px;height:16px;padding:0 4px;border-radius:8px;
+  background:var(--accent);color:var(--on-accent);
+  font:600 10px/16px var(--mono);text-align:center;
+  box-shadow:0 0 0 2px var(--shell);
+  opacity:0;transform:scale(.7);transition:opacity .13s,transform .13s;pointer-events:none
+}
+.app.reveal .zn,.z:hover .zn,.z[aria-current="true"] .zn{opacity:1;transform:scale(1)}
+/* в режиме «все номера» реплика приглушается — читаем карту, не интерфейс */
+.app.reveal .z::after{outline-color:var(--border-hover)}
+
+.maphead{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin:0 0 22px}
+.maphead .slead{margin:0}
+.toggle{
+  margin-left:auto;appearance:none;cursor:pointer;
+  border:1px solid var(--border);border-radius:var(--r-btn);background:transparent;
+  color:var(--text-soft);font:600 11px/1 var(--mono);letter-spacing:.06em;padding:8px 12px
+}
+.toggle[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.toggle:focus-visible{outline:2px solid var(--sel-ring);outline-offset:2px}
+
+/* — шапка окна — */
+.hdr{
+  height:var(--h-header);background:var(--chrome);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:calc(6px * var(--k));padding:0 calc(6px * var(--k))
+}
+.hdr .brand{display:flex;align-items:center;gap:6px;font-weight:700;padding:0 6px;height:100%}
+.pill{
+  display:inline-flex;align-items:center;gap:5px;height:calc(20px * var(--k));
+  padding:0 calc(7px * var(--k));border:1px solid var(--border);border-radius:var(--r-btn);
+  background:var(--surface);white-space:nowrap
+}
+.pill.ghost{background:transparent}
+.caret{opacity:.5;font-size:.85em}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex:none}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.grow{flex:1 1 auto;min-width:4px;height:100%}
+.wctl{display:flex;gap:calc(9px * var(--k));padding:0 calc(8px * var(--k));color:var(--text-muted)}
+
+/* — торговый тулбар — */
+.tb{
+  height:var(--h-toolbar);background:var(--chrome);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:calc(5px * var(--k));padding:0 calc(6px * var(--k));
+  overflow:hidden
+}
+.tb .grp{display:flex;align-items:center;gap:calc(4px * var(--k));height:100%}
+.k{
+  display:inline-flex;align-items:center;height:calc(20px * var(--k));padding:0 calc(6px * var(--k));
+  border-radius:var(--r-btn);color:var(--text-soft);white-space:nowrap
+}
+.k.on{background:var(--accent-tint);color:var(--accent-fg);border:1px solid var(--accent)}
+.k.lab{color:var(--text-muted)}
+.vr{width:1px;height:calc(16px * var(--k));background:var(--border);flex:none}
+.sw{width:calc(22px * var(--k));height:calc(11px * var(--k));border-radius:99px;background:var(--border);position:relative;flex:none}
+.sw::after{content:"";position:absolute;top:1px;left:1px;width:calc(9px * var(--k));height:calc(9px * var(--k));border-radius:50%;background:var(--text-muted)}
+
+/* — центральная зона — */
+.mid{display:flex;min-height:calc(210px * var(--k))}
+.chartcol{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;background:var(--chart-bg)}
+.ctabs{
+  height:var(--h-docktab);background:var(--tabbar);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:calc(4px * var(--k));padding:0 calc(6px * var(--k))
+}
+.ctab{padding:0 calc(8px * var(--k));height:100%;display:flex;align-items:center;font-weight:600}
+.ctab.sel{box-shadow:inset 0 -2px 0 var(--accent);color:var(--text)}
+.canvas{flex:1 1 auto;position:relative;display:flex;min-height:calc(180px * var(--k))}
+.plot{flex:1 1 auto;min-width:0;position:relative}
+.plot svg{position:absolute;inset:0;width:100%;height:100%}
+.book{width:calc(74px * var(--k));flex:none;position:relative;border-left:1px solid transparent}
+.book svg{position:absolute;inset:0;width:100%;height:100%}
+.rail{
+  width:calc(88px * var(--k));flex:none;background:var(--shell);border-left:1px solid var(--border);
+  padding:calc(5px * var(--k));display:flex;flex-direction:column;gap:calc(5px * var(--k))
+}
+.dcard{
+  border:1px solid var(--border);border-radius:var(--r-btn);background:var(--card);
+  padding:calc(4px * var(--k)) calc(5px * var(--k));display:flex;flex-direction:column;gap:2px
+}
+.dcard b{color:var(--amber);font-weight:600;letter-spacing:.02em}
+.dcard span{font-size:.85em;color:var(--text-muted)}
+.badge{
+  align-self:flex-start;font-size:.8em;padding:0 4px;border-radius:3px;
+  background:var(--accent-tint);color:var(--accent-fg);border:1px solid var(--border)
+}
+
+/* — нижний док — */
+.dock{border-top:1px solid var(--border);background:var(--surface)}
+.dtabs{
+  height:var(--h-docktab);background:var(--tabbar);border-bottom:1px solid var(--border);
+  display:flex;align-items:stretch;gap:calc(2px * var(--k));padding:0 calc(4px * var(--k));
+  overflow:hidden
+}
+.dtab{display:flex;align-items:center;padding:0 calc(9px * var(--k));color:var(--text-muted);white-space:nowrap}
+.dtab.sel{color:var(--text);font-weight:600;box-shadow:inset 0 -2px 0 var(--accent)}
+.dbody{display:grid;grid-template-columns:1fr 1fr}
+@media(max-width:760px){.dbody{grid-template-columns:1fr}.dbody>*+*{border-top:1px solid var(--border)}}
+.dpane+.dpane{border-left:1px solid var(--border)}
+.dpane{min-width:0}
+.filters{display:flex;align-items:center;gap:calc(5px * var(--k));padding:calc(5px * var(--k));flex-wrap:wrap}
+table.t{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.92em;font-variant-numeric:tabular-nums}
+table.t th{
+  height:var(--h-thead);background:var(--head-row);color:var(--text-muted);
+  font-weight:500;text-align:right;padding:0 calc(6px * var(--k));white-space:nowrap;
+  border-bottom:1px solid var(--border)
+}
+table.t th:first-child,table.t td:first-child{text-align:left}
+table.t td{height:var(--h-row);padding:0 calc(6px * var(--k));text-align:right;white-space:nowrap;border-bottom:1px solid var(--row-line)}
+table.t tbody tr:nth-child(even){background:var(--row-alt)}
+.buy{color:var(--green-text);font-weight:600}
+.sell{color:var(--red-text);font-weight:600}
+.neg{color:var(--red-text)}
+.on{color:var(--green-text)}
+.off{color:var(--text-faint)}
+
+/* — статус-бар — */
+.sb{
+  height:var(--h-status);background:var(--gutter);border-top:1px solid var(--border);
+  display:flex;align-items:center;gap:calc(9px * var(--k));padding:0 calc(8px * var(--k));
+  font-family:var(--mono);font-size:.9em;color:var(--text-muted);overflow:hidden;white-space:nowrap
+}
+.sb b{color:var(--green-text);font-weight:600}
+
+/* ---------- рельс объяснений ---------- */
+.explain{
+  border:1px solid var(--border);border-radius:var(--r-box);background:var(--card);
+  padding:18px 22px;display:grid;
+  grid-template-columns:132px minmax(0,1fr) minmax(180px,270px);
+  gap:8px 28px;align-items:start;min-height:104px
+}
+@media(max-width:900px){
+  .explain{grid-template-columns:minmax(0,1fr);gap:10px;min-height:0}
+}
+.explain .tag{
+  font:600 10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--text-muted);display:flex;align-items:center;gap:8px;margin:2px 0 0
+}
+.explain .tag i{
+  font-style:normal;min-width:19px;height:19px;padding:0 5px;border-radius:10px;
+  background:var(--accent);color:var(--on-accent);font-size:11px;line-height:19px;text-align:center
+}
+.explain .body{min-width:0}
+.explain h3{margin:0 0 6px;font-size:19px;letter-spacing:-.015em;font-weight:650;text-wrap:balance}
+.explain p{margin:0;color:var(--text-soft);font-size:15px;max-width:78ch}
+.explain .src{
+  margin:2px 0 0;font-family:var(--mono);font-size:11.5px;line-height:1.5;
+  color:var(--text-faint);overflow-wrap:anywhere;
+  padding-left:20px;border-left:1px solid var(--border-soft)
+}
+@media(max-width:900px){
+  .explain .src{padding:10px 0 0;border-left:0;border-top:1px solid var(--border-soft)}
+}
+.explain .src em{font-style:normal;color:var(--text-muted);display:block;margin-bottom:2px}
+.nav{display:flex;gap:6px;margin-top:10px}
+.nav button{
+  appearance:none;cursor:pointer;width:30px;height:26px;border-radius:var(--r-btn);
+  border:1px solid var(--border);background:transparent;color:var(--text-soft);
+  font:600 13px/1 var(--mono)
+}
+.nav button:hover{border-color:var(--border-hover);color:var(--text)}
+.nav button:focus-visible{outline:2px solid var(--sel-ring);outline-offset:1px}
+
+/* ---------- быстрый старт ---------- */
+.steps{display:grid;gap:2px;border:1px solid var(--border);border-radius:var(--r-box);overflow:hidden}
+.step{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;padding:20px 22px;background:var(--card)}
+.step+.step{border-top:1px solid var(--border-soft)}
+.step .n{
+  font:600 12px/26px var(--mono);width:26px;height:26px;border-radius:50%;text-align:center;
+  background:var(--accent);color:var(--on-accent)
+}
+.step h4{margin:2px 0 6px;font-size:16px;font-weight:650;letter-spacing:-.01em}
+.step p{margin:0;color:var(--text-soft);font-size:14.5px}
+.step a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-tint)}
+.step a:hover{border-bottom-color:currentColor}
+.step a:focus-visible{outline:2px solid var(--sel-ring);outline-offset:2px;border-radius:2px}
+.step code{
+  font-family:var(--mono);font-size:.88em;background:var(--accent-tint);
+  color:var(--accent-fg);padding:1px 5px;border-radius:3px
+}
+
+/* ---------- карточки ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:2px;
+  border:1px solid var(--border);border-radius:var(--r-box);overflow:hidden;background:var(--border-soft)}
+.card{background:var(--card);padding:18px 20px}
+.card h4{margin:0 0 4px;font-size:15px;font-weight:650;display:flex;align-items:center;gap:8px}
+.card .key{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);font-weight:400}
+.card p{margin:0;color:var(--text-soft);font-size:14px}
+
+/* ---------- хоткеи ---------- */
+.keys{border:1px solid var(--border);border-radius:var(--r-box);overflow:hidden}
+.hkg+.hkg{border-top:1px solid var(--border)}
+.hkg>summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:12px;
+  padding:14px 18px;background:var(--head-row);
+  font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--text-soft)
+}
+.hkg>summary::-webkit-details-marker{display:none}
+/* каретка слева, поворачивается при раскрытии */
+.hkg>summary::before{
+  content:"";width:0;height:0;flex:none;
+  border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;
+  transition:transform .15s;transform-origin:25% 50%
+}
+.hkg[open]>summary::before{transform:rotate(90deg)}
+.hkg>summary:hover{color:var(--text)}
+.hkg>summary:focus-visible{outline:2px solid var(--sel-ring);outline-offset:-2px}
+.hkg .cap{flex:1 1 auto;min-width:0}
+.hkg .cnt{
+  flex:none;font-size:10px;letter-spacing:0;color:var(--text-faint);
+  border:1px solid var(--border);border-radius:99px;padding:2px 8px
+}
+.hkg>table{border-top:1px solid var(--border)}
+table.hk{width:100%;border-collapse:collapse;font-size:14px}
+table.hk td{padding:9px 18px;border-bottom:1px solid var(--row-line);vertical-align:baseline}
+table.hk tr:last-child td{border-bottom:0}
+kbd{
+  font-family:var(--mono);font-size:12px;background:var(--panel);color:var(--text);
+  border:1px solid var(--border);border-bottom-width:2px;border-radius:var(--r-btn);
+  padding:2px 6px;white-space:nowrap
+}
+/* ---------- подвал ---------- */
+footer{padding:44px 0 64px;border-top:1px solid var(--border-soft);color:var(--text-muted);font-size:13.5px}
+footer a{color:var(--accent);text-decoration:none}
+footer a:hover{text-decoration:underline}
+footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(--text-faint)}
+
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="mark">
+    <svg class="moon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M20.5 14.6A8.6 8.6 0 1 1 9.9 3.9a6.9 6.9 0 0 0 10.6 10.7Z" fill="currentColor"/>
+    </svg>
+    MoonTerminal
+  </span>
+  <span class="spacer"></span>
+  <div class="seg" role="group" aria-label="Язык / Language">
+    <button type="button" data-lang="ru" aria-pressed="true">RU</button>
+    <button type="button" data-lang="en" aria-pressed="false">EN</button>
+  </div>
+  <div class="seg" role="group" aria-label="Тема / Theme">
+    <button type="button" data-theme-set="dark"  aria-pressed="false" data-i18n="th.dark">Тёмная</button>
+    <button type="button" data-theme-set="light" aria-pressed="false" data-i18n="th.light">Светлая</button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero">
+    <h1 data-i18n="hero.h1">Терминал за один экран</h1>
+    <p data-i18n="hero.lead">Ниже — настоящее главное окно MoonTerminal, собранное из палитры, метрик и локалей самого приложения. Нажмите любую зону: объяснение придёт той же строкой подсказки, которую вы увидите, наведя мышь в терминале.</p>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <!-- ==================== 01. КАРТА ОКНА ==================== -->
+  <section id="map">
+    <div class="shead"><span class="snum">01</span><h2 data-i18n="map.h">Карта окна</h2></div>
+    <div class="maphead">
+      <p class="slead" data-i18n="map.lead">Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.</p>
+      <button class="toggle" id="showall" type="button" aria-pressed="true" data-i18n="map.all">Все номера</button>
+    </div>
+
+    <div class="tourgrid">
+      <div class="app reveal" id="app">
+
+        <!-- шапка -->
+        <div class="hdr">
+          <button class="z brand" data-zone="brand" type="button"><i class="zn">1</i>
+            <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.6A8.6 8.6 0 1 1 9.9 3.9a6.9 6.9 0 0 0 10.6 10.7Z" fill="currentColor"/></svg>
+          </button>
+          <button class="z pill ghost" data-zone="ws" type="button"><i class="zn">2</i><span data-i18n="ui.ws">Авто</span><span class="caret">▾</span></button>
+          <button class="z pill" data-zone="core" type="button"><i class="zn">3</i><span class="dot"></span><span class="mono">BinF1</span><span class="caret">▾</span><span style="opacity:.5">⚙</span></button>
+          <button class="z" data-zone="balance" type="button" style="padding:0 6px"><i class="zn">4</i>
+            <span style="color:var(--text-muted)" data-i18n="ui.balance">Баланс:</span>
+            <span class="mono" style="font-weight:600"> 975.45</span><span class="mono" style="color:var(--text-muted)">/2492 USDT</span>
+          </button>
+          <span class="grow"></span>
+          <button class="z" data-zone="ticker" type="button" style="padding:0 6px"><i class="zn">5</i>
+            <span class="mono">1 BTC = <b>62 773$</b></span>
+            <span class="mono" style="color:var(--green-text)"> +0.1%</span>
+            <span class="mono" style="color:var(--red-text)"> −0.2%</span>
+          </button>
+          <span class="vr"></span>
+          <button class="z" data-zone="clock" type="button" style="padding:0 6px"><i class="zn">6</i>
+            <span class="mono">15:16:35</span> <span class="mono" style="color:var(--text-muted)">(WAW)</span>
+          </button>
+          <span class="wctl mono">− □ ✕</span>
+        </div>
+
+        <!-- тулбар -->
+        <div class="tb">
+          <button class="z grp" data-zone="size" type="button"><i class="zn">7</i>
+            <span class="k lab mono" data-i18n="ui.size">size</span>
+            <span class="k mono">50</span><span class="k mono">100</span>
+            <span class="k on mono">250</span><span class="k mono">500</span>
+            <span class="k mono">1000</span><span class="k mono">2500</span>
+          </button>
+          <span class="vr"></span>
+          <button class="z grp" data-zone="lev" type="button"><i class="zn">8</i>
+            <span class="k on mono">Lev ×5</span>
+          </button>
+          <span class="vr"></span>
+          <button class="z grp" data-zone="risk" type="button"><i class="zn">9</i>
+            <span class="k lab mono">SL</span><span class="sw"></span>
+            <span class="k mono" style="color:var(--red-text)">−2.25%</span>
+          </button>
+          <span class="vr"></span>
+          <button class="z grp" data-zone="exit" type="button"><i class="zn">10</i>
+            <span class="k on mono">TP 2.00%</span>
+            <span class="k mono">+1%</span><span class="k mono">+3%</span>
+            <span class="k mono">+5%</span><span class="k mono">+10%</span><span class="k mono">+100%</span>
+          </button>
+          <span class="vr"></span>
+          <button class="z grp" data-zone="live" type="button"><i class="zn">11</i>
+            <span class="k mono" style="color:var(--green-text)">● Live</span>
+          </button>
+          <span class="grow"></span>
+          <button class="z grp" data-zone="launch" type="button"><i class="zn">12</i>
+            <span class="pill ghost" data-i18n="ui.pm">Монитор прибыли</span>
+            <span class="pill ghost" data-i18n="ui.scr">Скринер</span>
+            <span class="pill ghost" data-i18n="ui.str">Стратегии</span>
+            <span class="pill ghost" data-i18n="ui.an">Аналитика</span>
+            <span class="pill ghost" data-i18n="ui.set">Настройки</span>
+          </button>
+        </div>
+
+        <!-- центр -->
+        <div class="mid">
+          <div class="chartcol">
+            <div class="ctabs">
+              <button class="z ctab sel" data-zone="ctabs" type="button"><i class="zn">13</i>Main</button>
+              <span class="grow"></span>
+              <span class="pill ghost mono" data-i18n="ui.coin">Монета…</span>
+              <span class="pill ghost mono">🔍 20%</span>
+            </div>
+            <div class="canvas">
+              <button class="z plot" data-zone="chart" type="button" aria-label="Chart"><i class="zn">14</i>
+                <svg viewBox="0 0 420 200" preserveAspectRatio="none" aria-hidden="true" id="chartsvg"></svg>
+              </button>
+              <button class="z book" data-zone="book" type="button" aria-label="Order book"><i class="zn">15</i>
+                <svg viewBox="0 0 60 200" preserveAspectRatio="none" aria-hidden="true">
+                  <g fill="var(--red)" opacity=".85">
+                    <rect x="26" y="6"  width="34" height="3.4"/><rect x="14" y="12" width="46" height="3.4"/>
+                    <rect x="32" y="18" width="28" height="3.4"/><rect x="8"  y="24" width="52" height="3.4"/>
+                    <rect x="38" y="30" width="22" height="3.4"/><rect x="20" y="36" width="40" height="3.4"/>
+                    <rect x="30" y="42" width="30" height="3.4"/><rect x="42" y="48" width="18" height="3.4"/>
+                    <rect x="24" y="54" width="36" height="3.4"/><rect x="36" y="60" width="24" height="3.4"/>
+                    <rect x="16" y="66" width="44" height="3.4"/><rect x="44" y="72" width="16" height="3.4"/>
+                    <rect x="30" y="78" width="30" height="3.4"/><rect x="40" y="84" width="20" height="3.4"/>
+                    <rect x="34" y="90" width="26" height="3.4"/>
+                  </g>
+                  <g fill="var(--green)" opacity=".85">
+                    <rect x="34" y="106" width="26" height="3.4"/><rect x="22" y="112" width="38" height="3.4"/>
+                    <rect x="42" y="118" width="18" height="3.4"/><rect x="12" y="124" width="48" height="3.4"/>
+                    <rect x="30" y="130" width="30" height="3.4"/><rect x="38" y="136" width="22" height="3.4"/>
+                    <rect x="18" y="142" width="42" height="3.4"/><rect x="26" y="148" width="34" height="3.4"/>
+                    <rect x="40" y="154" width="20" height="3.4"/><rect x="10" y="160" width="50" height="3.4"/>
+                    <rect x="32" y="166" width="28" height="3.4"/><rect x="24" y="172" width="36" height="3.4"/>
+                    <rect x="36" y="178" width="24" height="3.4"/><rect x="16" y="184" width="44" height="3.4"/>
+                    <rect x="28" y="190" width="32" height="3.4"/>
+                  </g>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <button class="z rail" data-zone="detects" type="button"><i class="zn">16</i>
+            <span class="dcard"><b>NAKA_</b><span class="mono">52s</span><span class="badge">Gate</span></span>
+            <span class="dcard"><b>ES</b><span class="mono">18s</span><span class="badge">BybitSlava</span></span>
+            <span class="dcard"><b>ULTIMA_</b><span class="mono">10s</span><span class="badge">Gate</span></span>
+            <span class="dcard"><b>TLM</b><span class="mono">46s</span><span class="badge">BybitSlava</span></span>
+          </button>
+        </div>
+
+        <!-- док -->
+        <div class="dock">
+          <button class="z dtabs" data-zone="dtabs" type="button" style="width:100%"><i class="zn">17</i>
+            <span class="dtab sel" data-i18n="tab.orders">Ордера</span>
+            <span class="dtab" data-i18n="tab.assets">Активы</span>
+            <span class="dtab" data-i18n="tab.report">Отчёт</span>
+            <span class="dtab" data-i18n="tab.alerts">Фигуры</span>
+            <span class="dtab" data-i18n="tab.news">Новости</span>
+            <span class="dtab" data-i18n="tab.core_status">Статус ядер</span>
+            <span class="dtab" data-i18n="tab.log">Лог</span>
+            <span class="dtab" data-i18n="tab.detects">Детекты</span>
+          </button>
+          <div class="z dbody" data-zone="table" role="button" tabindex="0"><i class="zn">18</i>
+            <div class="dpane">
+              <span class="filters">
+                <span class="pill ghost" data-i18n="ui.allcores">Все ядра ▾</span>
+                <span class="pill ghost" data-i18n="ui.real">Реальные ▾</span>
+                <span class="pill ghost" data-i18n="ui.fields">Поля ▾</span>
+                <span class="mono" style="color:var(--text-muted)">852</span>
+              </span>
+              <table class="t">
+                <thead><tr>
+                  <th data-i18n="col.core">Ядро</th><th data-i18n="col.side">Сторона</th>
+                  <th data-i18n="col.token">Токен</th><th data-i18n="col.size">Size</th>
+                  <th>SL</th><th data-i18n="col.pnl">PNL %</th>
+                </tr></thead>
+                <tbody>
+                  <tr><td>BinF1</td><td class="buy">BUY</td><td>ACT</td><td>42593</td><td class="on">ON</td><td>—</td></tr>
+                  <tr><td>BB1</td><td class="sell">Short-B</td><td>TA</td><td>840</td><td class="on">ON</td><td class="neg">−0.05%</td></tr>
+                  <tr><td>BinF3</td><td class="sell">SELL</td><td>PYTH</td><td>9933</td><td class="on">ON</td><td class="neg">−1.88%</td></tr>
+                  <tr><td>Bitget1</td><td class="sell">SELL</td><td>MAPO</td><td>35483</td><td class="off">OFF</td><td class="neg">−0.61%</td></tr>
+                  <tr><td>F5</td><td class="buy">BUY</td><td>SYN</td><td>2681</td><td class="on">ON</td><td>—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="dpane">
+              <span class="filters">
+                <span class="mono" style="font-weight:600" data-i18n="tab.assets">Активы</span>
+                <span class="grow"></span>
+                <span class="mono" style="color:var(--text-muted)">Σ 10 244,63$</span>
+              </span>
+              <table class="t">
+                <thead><tr><th data-i18n="col.core">Ядро</th><th data-i18n="col.asset">Актив</th><th data-i18n="col.qty">Кол-во</th><th data-i18n="col.val">Стоим.$</th></tr></thead>
+                <tbody>
+                  <tr><td>BinKEAUSDC</td><td>BTC</td><td>0.162</td><td>10 185,83$</td></tr>
+                  <tr><td>BinKEAUSDC</td><td>BNB</td><td>0.077</td><td>45,39$</td></tr>
+                  <tr><td>Bitget1</td><td>BGB</td><td>7.797</td><td>13,4$</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- статус -->
+        <button class="z sb" data-zone="status" type="button" style="width:100%"><i class="zn">19</i>
+          <span><span data-i18n="ui.conn">Соединение:</span> <b>OK</b></span>
+          <span>Binance Futures</span><span>ping 32ms</span>
+          <span data-i18n="ui.mode">Режим: Demo</span><span>PRO</span>
+          <span>book 1384</span><span>25 fps</span>
+          <span>CPU 2%/5%</span><span>GPU 6%</span><span>RAM 6363 MB</span>
+        </button>
+      </div>
+
+      <aside class="explain" id="rail" aria-live="polite">
+        <div>
+          <p class="tag" id="rail-tag"><span data-i18n="rail.pick">Выберите зону</span></p>
+          <div class="nav">
+            <button type="button" id="prev" aria-label="Предыдущая зона">←</button>
+            <button type="button" id="next" aria-label="Следующая зона">→</button>
+          </div>
+        </div>
+        <div class="body">
+          <h3 id="rail-h" data-i18n="rail.h">Наведите или кликните</h3>
+          <p id="rail-p" data-i18n="rail.p">Каждая зона объясняется той же строкой, что живёт в подсказках приложения.</p>
+        </div>
+        <p class="src" id="rail-src"></p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ==================== 02. БЫСТРЫЙ СТАРТ ==================== -->
+  <section id="start">
+    <div class="shead"><span class="snum">02</span><h2 data-i18n="qs.h">Быстрый старт</h2></div>
+    <p class="slead" data-i18n="qs.lead">Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока настройки не сохранены.</p>
+    <div class="steps" id="steps"></div>
+  </section>
+
+  <!-- ==================== 03. ПАНЕЛИ ==================== -->
+  <section id="panels">
+    <div class="shead"><span class="snum">03</span><h2 data-i18n="pn.h">Панели дока</h2></div>
+    <p class="slead" data-i18n="pn.lead">Двойной клик по вкладке или перетаскивание — панель уезжает в отдельное окно. Двойной клик ещё раз — возвращается.</p>
+    <div class="cards" id="panels-cards"></div>
+  </section>
+
+  <!-- ==================== 04. ОКНА ==================== -->
+  <section id="windows">
+    <div class="shead"><span class="snum">04</span><h2 data-i18n="wn.h">Отдельные окна</h2></div>
+    <p class="slead" data-i18n="wn.lead">Пять окон открываются кнопками справа в торговом тулбаре.</p>
+    <div class="cards" id="windows-cards"></div>
+  </section>
+
+  <!-- ==================== 05. ХОТКЕИ ==================== -->
+  <section id="keys">
+    <div class="shead"><span class="snum">05</span><h2 data-i18n="hk.h">Горячие клавиши</h2></div>
+    <p class="slead" data-i18n="hk.lead">Всё, кроме встроенных, переназначается в Настройки → Хоткеи. Раскройте нужную группу.</p>
+    <div class="keys" id="hk-body"></div>
+  </section>
+
+  <footer>
+    <p data-i18n="ft.p">MoonTerminal — десктопный торговый терминал для ядра Moonbot. Windows · macOS · Linux.</p>
+    <p class="built" data-i18n="ft.built">Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи и пояснения — locales/*.yml.</p>
+  </footer>
+</main>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------
+   СЛОВАРЬ.
+   Строки с пометкой [locale] взяты из locales/*.yml дословно —
+   это те же тексты, что показывает приложение.
+   ------------------------------------------------------------------ */
+const T = {
+  "th.dark":       {ru:"Тёмная", en:"Dark"},
+  "th.light":      {ru:"Светлая", en:"Light"},
+
+  "hero.h1":       {ru:"Терминал за один экран", en:"The terminal in one screen"},
+  "hero.lead":     {ru:"Ниже — настоящее главное окно MoonTerminal, собранное из палитры, метрик и локалей самого приложения. Нажмите любую зону: объяснение придёт той же строкой подсказки, которую вы увидите, наведя мышь в терминале.",
+                    en:"Below is the real MoonTerminal main window, assembled from the application's own palette, metrics and locale files. Click any zone: the explanation is the very tooltip you get by hovering it in the terminal."},
+
+  "map.h":         {ru:"Карта окна", en:"Window map"},
+  "map.lead":      {ru:"Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их клавишей Tab.",
+                    en:"Nineteen zones. Hover the window and their outlines appear; click any of them, or walk through with Tab."},
+  "map.all":       {ru:"Все номера", en:"All numbers"},
+  "rail.pick":     {ru:"Выберите зону", en:"Pick a zone"},
+  "rail.h":        {ru:"Наведите или кликните", en:"Hover or click"},
+  "rail.p":        {ru:"Каждая зона объясняется той же строкой, что живёт в подсказках приложения.",
+                    en:"Every zone is explained by the same string that lives in the application's tooltips."},
+
+  "qs.h":          {ru:"Быстрый старт", en:"Quick start"},
+  "qs.lead":       {ru:"Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока настройки не сохранены.",
+                    en:"Five steps from an empty window to a green indicator. Order matters: the terminal does not connect until settings are saved."},
+  "pn.h":          {ru:"Панели дока", en:"Dock panels"},
+  "pn.lead":       {ru:"Двойной клик по вкладке или перетаскивание — панель уезжает в отдельное окно. Двойной клик ещё раз — возвращается.",
+                    en:"Double-click a tab or drag it — the panel pops out into its own window. Double-click again to bring it back."},
+  "wn.h":          {ru:"Отдельные окна", en:"Separate windows"},
+  "wn.lead":       {ru:"Пять окон открываются кнопками справа в торговом тулбаре.",
+                    en:"Five windows open from the buttons on the right of the trading toolbar."},
+  "hk.h":          {ru:"Горячие клавиши", en:"Hotkeys"},
+  "hk.lead":       {ru:"Всё, кроме встроенных, переназначается в Настройки → Хоткеи. Раскройте нужную группу.",
+                    en:"Everything except the built-ins is rebindable in Settings → Hotkeys. Open the group you need."},
+
+  "ft.p":          {ru:"MoonTerminal — десктопный торговый терминал для ядра Moonbot. Windows · macOS · Linux.",
+                    en:"MoonTerminal — desktop trading terminal for the Moonbot core. Windows · macOS · Linux."},
+  "ft.built":      {ru:"Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи и пояснения — locales/*.yml.",
+                    en:"This page is assembled from repository data: palette and metrics from themes/moon-terminal.toml, every label and explanation from locales/*.yml."},
+
+  /* --- подписи внутри реплики --- */
+  "ui.ws":         {ru:"Авто", en:"Auto"},
+  "ui.balance":    {ru:"Баланс:", en:"Balance:"},
+  "ui.size":       {ru:"размер", en:"size"},
+  "ui.pm":         {ru:"Монитор прибыли", en:"Profit Monitor"},   // [locale] analytics.yml
+  "ui.scr":        {ru:"Скринер", en:"Screener"},                 // [locale] shell.yml toolbar.screener
+  "ui.str":        {ru:"Стратегии", en:"Strategies"},             // [locale] shell.yml toolbar.strategies
+  "ui.an":         {ru:"Аналитика", en:"Analytics"},              // [locale] analytics.yml
+  "ui.set":        {ru:"Настройки", en:"Settings"},               // [locale] shell.yml shell.settings_btn
+  "ui.coin":       {ru:"Монета…", en:"Coin…"},
+  "ui.allcores":   {ru:"Все ядра ▾", en:"All cores ▾"},           // [locale] dock.yml log.source.all
+  "ui.real":       {ru:"Реальные ▾", en:"Real ▾"},
+  "ui.fields":     {ru:"Поля ▾", en:"Fields ▾"},                  // [locale] dock.yml detects.cfg.frame_fields
+  "ui.conn":       {ru:"Соединение:", en:"Connection:"},          // [locale] shell.yml status.connection
+  "ui.mode":       {ru:"Режим: Demo", en:"Mode: Demo"},
+
+  "tab.orders":      {ru:"Ордера", en:"Orders"},                  // [locale] dock.yml
+  "tab.assets":      {ru:"Активы", en:"Assets"},
+  "tab.report":      {ru:"Отчёт", en:"Report"},
+  "tab.alerts":      {ru:"Фигуры", en:"Figures"},
+  "tab.news":        {ru:"Новости", en:"News"},
+  "tab.core_status": {ru:"Статус ядер", en:"Core status"},
+  "tab.log":         {ru:"Лог", en:"Log"},
+  "tab.detects":     {ru:"Детекты", en:"Detects"},
+  "tab.charts":      {ru:"Чарты", en:"Charts"},
+
+  "col.core":  {ru:"Ядро", en:"Core"},   "col.side": {ru:"Сторона", en:"Side"},
+  "col.token": {ru:"Токен", en:"Token"}, "col.size": {ru:"Размер", en:"Size"},
+  "col.pnl":   {ru:"PNL %", en:"PNL %"}, "col.asset":{ru:"Актив", en:"Asset"},
+  "col.qty":   {ru:"Кол-во", en:"Qty"},  "col.val":  {ru:"Стоим.$", en:"Value $"}
+};
+
+/* ------------------------------------------------------------------
+   ЗОНЫ. `src` — ключ локали, откуда взято пояснение.
+   ------------------------------------------------------------------ */
+const ZONES = {
+  brand:{n:1,
+    ru:["Бренд и перетаскивание","Логотип Moonbot и зона захвата окна: за неё окно таскается по экрану. Правее логотипа MoonUI сам рисует разделитель — поэтому второго терминал не добавляет."],
+    en:["Brand and window drag","The Moonbot logo doubles as the window's drag handle. MoonUI draws its own separator right of it, which is why the terminal never adds a second one."],
+    src:"chrome/terminal_chrome.rs — brand_cluster"},
+  ws:{n:2,
+    ru:["Режим воркспейса","Переключает рабочее пространство группы. В режиме «Авто» терминал сам держит на графике монету активного ядра."],
+    en:["Workspace mode","Switches the group's workspace. In Auto mode the terminal keeps the active core's coin on the chart for you."],
+    src:"locales/workspace.yml"},
+  core:{n:3,
+    ru:["Активное ядро и его шестерёнка","Выбор ядра, к которому относятся баланс, торговые кнопки и график. Шестерёнка открывает настройки именно этого ядра — блэклист, плечо, режим позиции."],
+    en:["Active core and its gear","Picks the core that the balance, the trading buttons and the chart belong to. The gear opens that core's own settings — blacklist, leverage, position mode."],
+    src:"shell/core_settings_popup.rs"},
+  balance:{n:4,
+    ru:["Баланс ядра","Свободный и общий USDT активного торгового ядра, как их отдаёт сервер. Если число устарело или курс посчитать не удалось, терминал показывает это, а не выдаёт старую цифру за живую."],
+    en:["Core balance","Free and total USDT of the active trading core, as the server reports them. When the figure is stale or a rate could not be priced, the terminal says so instead of passing an old number off as live."],
+    src:"moon-core — CoreData::balance_state()"},
+  ticker:{n:5,
+    ru:["Тикер курса","Курс и дельты за 1ч / 24ч. Клик — открыть график, двойной — выбрать монету и ядро."],
+    en:["Rate ticker","Price and 1h / 24h deltas. Click opens the chart, double-click picks coin and core."],
+    src:"locales/shell.yml — header.ticker_tip"},
+  clock:{n:6,
+    ru:["Часы","Часы выбранного часового пояса. Клик — сменить пояс; переход на летнее время автоматический."],
+    en:["Clock","Clock in the selected time zone. Click to change it; daylight-saving changes are automatic."],
+    src:"locales/shell.yml — header.clock_tip"},
+  size:{n:7,
+    ru:["Размер ордера F1–F6","Размер ордера F1–F6 · клик — выбрать · двойной клик — правка · Ctrl+колесо — изменить. Те же слоты висят на клавишах F1…F6."],
+    en:["Order size F1–F6","Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots sit on the F1…F6 keys."],
+    src:"locales/shell.yml — toolbar.size_hint"},
+  lev:{n:8,
+    ru:["Плечо","Плечо для рынка активного ядра. Смена отправляется на биржу как отдельная команда — в логе она появится строкой «Плечо … ×N»."],
+    en:["Leverage","Leverage for the active core's market. A change is sent to the exchange as its own command and shows up in the log as \"Leverage … ×N\"."],
+    src:"locales/shell.yml — toolbar.lev_title"},
+  risk:{n:9,
+    ru:["Риск: стоп-лосс","Тумблер защиты от провала цены и значение стоп-лосса. Значение правится во всплывашке рядом."],
+    en:["Risk: stop loss","The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside it."],
+    src:"locales/shell.yml — toolbar.sl_title"},
+  exit:{n:10,
+    ru:["Выход: TP и фикс-продажи","Тейк-профит и полоса фиксированных продаж S1–S6. Фиксированная продажа S · клик — задействовать · двойной клик — правка · Ctrl+колесо — изменить."],
+    en:["Exit: TP and fixed sells","Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to edit · Ctrl+wheel to change."],
+    src:"locales/shell.yml — toolbar.tp_title, toolbar.sell_hint"},
+  live:{n:11,
+    ru:["Live / Пауза","Live: график бежит за рынком. Пауза: заморожен, можно листать (ЛКМ-перетаскивание, колесо)."],
+    en:["Live / Pause","Live: the chart follows the market. Pause: frozen, you can scroll (LMB drag, wheel)."],
+    src:"locales/shell.yml — toolbar.live_tip"},
+  launch:{n:12,
+    ru:["Запуск отдельных окон","Монитор прибыли · Скринер · Стратегии · Аналитика · Настройки. Каждое — отдельное окно ОС; Аналитика открывается сама один раз при старте."],
+    en:["Separate-window launchers","Profit Monitor · Screener · Strategies · Analytics · Settings. Each is its own OS window; Analytics opens itself once at startup."],
+    src:"controls/toolbar.rs"},
+  ctabs:{n:13,
+    ru:["Вкладки графиков","Открытые графики группы. Escape закрывает активный Main-график, Shift+Escape — все Main-графики во всех группах."],
+    en:["Chart tabs","The group's open charts. Escape closes the active Main chart, Shift+Escape closes every Main chart in every group."],
+    src:"locales/hotkeys.yml — встроенные"},
+  chart:{n:14,
+    ru:["Область графика","Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на ордерной линии отменяет этот ордер."],
+    en:["Chart area","Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift or Alt + wheel pans left/right. Tab or Delete over an order line cancels that order."],
+    src:"locales/hotkeys.yml — встроенные"},
+  book:{n:15,
+    ru:["Стакан","Глубина рынка справа от графика. По нему же работают мышиные жесты: двойной клик — поставить лонг, Shift+клик — двинуть открытый лонг, Ctrl+клик — двинуть линии выхода."],
+    en:["Order book","Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click moves an open long, Ctrl+click moves the exit lines."],
+    src:"locales/hotkeys.yml — жесты стакана"},
+  detects:{n:16,
+    ru:["Лента детектов","Карточки сработавших детектов по паре «ядро — монета». Вид настраивается шестерёнкой: размер, поля, мини-график, цветная полоса сервера."],
+    en:["Detect ribbon","Cards for fired detections per core-and-coin pair. The gear configures the look: size, fields, mini-chart, coloured server strip."],
+    src:"locales/dock.yml — detects.cfg.*"},
+  dtabs:{n:17,
+    ru:["Вкладки дока","Клик — выбрать · двойной клик или перетаскивание — открепить в окно. Правый клик по вкладке включает счётчики непрочитанного."],
+    en:["Dock tabs","Click to select · double-click or drag to pop out into a window. Right-click a tab to turn on unread counters."],
+    src:"locales/dock.yml — dock.tab.hint_docked"},
+  table:{n:18,
+    ru:["Тело панели","Таблица активной вкладки. Ширины колонок, их видимость и сортировка запоминаются отдельно для дока и для открепленного окна — одна панель в двух местах не спорит сама с собой."],
+    en:["Panel body","The active tab's table. Column widths, visibility and sorting are remembered separately for the dock and for the detached window, so one panel in two places never fights itself."],
+    src:"persistence/table_persist.rs"},
+  status:{n:19,
+    ru:["Статус-бар","Соединение: зелёный — все ядра готовы, красный — хотя бы одно отвалилось, жёлтый — ещё подключаются. Дальше лицензия, глубина стакана, FPS и расход CPU / GPU / RAM."],
+    en:["Status bar","Connection: green when every core is ready, red when one failed, amber while they are still connecting. Then licence, order-book depth, FPS and CPU / GPU / RAM usage."],
+    src:"shell/status_bar.rs"}
+};
+
+const STEPS = [
+  {ru:["Скачайте терминал","На странице <a href=\"https://github.com/Moonbot-Tech/MoonTerminal/releases/latest\" target=\"_blank\" rel=\"noopener\">Releases</a> лежат готовые сборки: <code>MoonTerminal.exe</code> для Windows и <code>.dmg</code> для macOS. Под Linux пока только сборка из исходников — <code>make build</code>."],
+   en:["Download the terminal","Ready builds live on the <a href=\"https://github.com/Moonbot-Tech/MoonTerminal/releases/latest\" target=\"_blank\" rel=\"noopener\">Releases</a> page: <code>MoonTerminal.exe</code> for Windows and a <code>.dmg</code> for macOS. Linux is build-from-source for now — <code>make build</code>."]},
+  {ru:["Откройте Настройки → Подключения","Кнопка «Настройки» — справа в торговом тулбаре. Первая вкладка окна и есть та, что нужна."],
+   en:["Open Settings → Connections","The Settings button sits at the right of the trading toolbar. The first tab of that window is the one you need."]},
+  {ru:["Добавьте ядро и вставьте ключ","Кнопка <code>+ Добавить ядро (в «default»)</code> создаёт строку. Хост и порт отдельно вводить не надо: они зашиты в сам ключ Moonbot — вставьте его в поле «Ключ» кнопкой из буфера."],
+   en:["Add a core and paste the key","The <code>+ Add core (to \"default\")</code> button creates a row. There is no separate host or port field: both are encoded in the Moonbot key itself — paste it into the Key field with the clipboard button."]},
+  {ru:["Отметьте, что принимать","<b>Акт</b> — подключаться вообще. <b>Окн</b> — рисовать окно ядра; выключенное «Окн» при включённом «Акт» даёт headless-ядро. Колонки <b>Данные</b> (Ord / Det / Rep / Bal / Str / Log / Alr / Arb) фильтруют, что вы принимаете от этого ядра."],
+   en:["Choose what to accept","<b>Act</b> — connect at all. <b>Win</b> — draw the core's window; Win off with Act on gives you a headless core. The <b>Data</b> columns (Ord / Det / Rep / Bal / Str / Log / Alr / Arb) filter what you accept from that core."]},
+  {ru:["Нажмите «Сохранить»","До сохранения ядро честно пишет «Нет данных (сохраните настройки для подключения)». После — статус проходит «Подключение…» и становится зелёным «Подключено». Ключи уезжают в <code>servers.enc</code>, зашифрованные ключом из хранилища ОС."],
+   en:["Press Save","Until you save, the core plainly reports \"No data (save settings to connect)\". After that the status moves through \"Connecting…\" to a green \"Connected\". Keys go into <code>servers.enc</code>, encrypted with a key from the OS keyring."]}
+];
+
+const PANELS = [
+  {k:"Orders",     t:"tab.orders",      ru:"Таблица открытых ордеров группы: фильтры, сортировка, переход на график по строке.", en:"The group's open-order table: filters, sorting, jump to the chart from a row."},
+  {k:"Assets",     t:"tab.assets",      ru:"Балансы и позиции группы, переводы между кошельками. Внизу — сумма видимых строк и капитал по области.", en:"The group's balances and positions, plus wallet transfers. The footer carries the visible-row sum and the scope's equity."},
+  {k:"Report",     t:"tab.report",      ru:"Закрытые сделки из локальной базы с фильтрами и выгрузкой в CSV, плюс ещё открытые позиции.", en:"Closed trades from the local database with filters and CSV export, plus still-open positions."},
+  {k:"Alerts",     t:"tab.alerts",      ru:"Все фигуры на графиках группы — и свои, и нарисованные ядром. Отсюда фигура ставится на сигнал.", en:"Every chart figure across the group — yours and the ones the core drew. This is where a figure gets armed as an alert."},
+  {k:"News",       t:"tab.news",        ru:"Новостная лента группы, склеенная и очищенная от дублей по всем ядрам.", en:"The group's news feed, merged and deduplicated across every core."},
+  {k:"CoreStatus", t:"tab.core_status", ru:"Состояние подключения и ресурсы по каждому ядру: что именно делает запуск и сколько он занял.", en:"Connection state and resources per core: what startup is doing and how long it took."},
+  {k:"Log",        t:"tab.log",         ru:"Лог: живой или из файла, поиск, режим «только ошибки», выбор источника — локальный, группа, все ядра.", en:"Log: live or file-backed, search, an errors-only mode, and a source picker — local, group, all cores."},
+  {k:"Detects",    t:"tab.detects",     ru:"Лента детектов карточками. Живёт только в доке — открепить нельзя.", en:"The detection ribbon as cards. Docked only — it cannot be detached."},
+  {k:"ChartTabs",  t:"tab.charts",      ru:"Центральная область графиков. Вкладки откалываются в отдельные окна как и панели.", en:"The central chart area. Its tabs pop out into separate windows just like panels."}
+];
+
+const WINDOWS = [
+  {ru:["Монитор прибыли","Отдельное независимое окно с прибылью. Не имеет кнопки на панели задач — вернуться к нему можно кнопкой в тулбаре или через Alt+Tab."],
+   en:["Profit Monitor","A standalone independent window showing profit. It carries no taskbar button — return to it from the toolbar button or via Alt+Tab."]},
+  {ru:["Скринер","Одно окно с таблицей всех рынков подключённых бирж. Фильтры по монете и объёму — в подвале."],
+   en:["Screener","A single window with a table of every market on the connected exchanges. Coin and volume filters live in the footer."]},
+  {ru:["Стратегии","Дерево стратегий каждого подключённого ядра: версии, разделы схемы, параметры. Дерево фильтруется по бирже, причём фильтр отбирает ядра, а не строки."],
+   en:["Strategies","The strategy tree of every connected core: versions, schema sections, parameters. The tree filters by exchange — and that filter picks cores, not rows."]},
+  {ru:["Аналитика","Сводка, Календарь и Тюнинг стратегий. Тюнер всегда работает в пределах выбранных серверов и стратегий — по всему отчёту он не ищет принципиально."],
+   en:["Analytics","Summary, Calendar and Strategy Tuning. The tuner is always scoped to the selected servers and strategies — searching the whole report is deliberately not a thing."]},
+  {ru:["Настройки","Семь вкладок: Подключения, Общие, Хоткеи, Интерфейс, Линии, Бейджи, Хранилище."],
+   en:["Settings","Seven tabs: Connections, General, Hotkeys, Interface, Lines, Badges, Storage."]}
+];
+
+const HOTKEYS = [
+  {cat:{ru:"Размеры и продажи",en:"Sizes and sells"}, rows:[
+    ["F1 … F6",{ru:"Выбрать размер ручного ордера 1–6",en:"Select manual order size 1–6"}],
+    ["Shift+F7 … Shift+F12",{ru:"Выбрать фиксированную продажу S1–S6",en:"Select fixed sell S1–S6"}]]},
+  {cat:{ru:"Торговые команды",en:"Trading commands"}, rows:[
+    ["Alt+1",{ru:"Новый лонг",en:"New Long"}],
+    ["Alt+3",{ru:"Новый шорт",en:"New Short"}],
+    ["Alt+Z",{ru:"Отменить покупку",en:"Cancel Buy"}],
+    ["Alt+A",{ru:"Отменить все покупки",en:"Cancel All Buys"}],
+    ["Alt+5",{ru:"Паник-селл одной позиции",en:"Panic Sell One"}],
+    ["Alt+6",{ru:"Паник-селл",en:"Panic Sell"}],
+    ["Alt+E",{ru:"Объединить продажи",en:"Join Sells"}],
+    ["Alt+C",{ru:"Разбить ордер на 3 части",en:"Split order into 3 parts"}],
+    ["Ctrl+X",{ru:"Разбить ордер на N частей",en:"Split order into N parts"}],
+    ["Ctrl+S",{ru:"Продажи в прямоугольник",en:"Sells to rectangle"}]]},
+  {cat:{ru:"Сдвиг ордеров",en:"Shifting orders"}, rows:[
+    ["Shift+↑ / Shift+↓",{ru:"Сдвинуть покупку на ±1%",en:"Shift buy by ±1%"}],
+    ["Alt+↑ / Alt+↓",{ru:"Сдвинуть продажу на ±1%",en:"Shift sell by ±1%"}]]},
+  {cat:{ru:"График и фигуры",en:"Chart and figures"}, rows:[
+    ["Alt+F",{ru:"Переключить графики",en:"Switch charts"}],
+    ["Ctrl+Q / Ctrl+W",{ru:"Масштаб + / −",en:"Scale + / −"}],
+    ["Ctrl+H",{ru:"Горизонтальная линия",en:"Draw horizontal line"}],
+    ["Ctrl+L",{ru:"Отрезок",en:"Draw segment"}],
+    ["Ctrl+T",{ru:"Треугольник",en:"Draw triangle"}],
+    ["Ctrl+K",{ru:"Канал",en:"Draw channel"}],
+    ["Alt+D",{ru:"Следующий инструмент рисования, режим не выключается",en:"Next drawing tool, the mode stays on"}],
+    ["Ctrl+B",{ru:"Поставить фигуру на сигнал",en:"Arm the figure as an alert"}],
+    ["Ctrl+F10",{ru:"Скопировать график в буфер — только Windows, на диск ничего не пишется",en:"Copy the chart to the clipboard — Windows only, nothing is written to disk"}]]},
+  {cat:{ru:"Встроенные, не переназначаются",en:"Built-in, not rebindable"}, rows:[
+    ["Wheel",{ru:"Зум по времени",en:"Zoom by time"}],
+    ["Shift+Wheel / Alt+Wheel",{ru:"Прокрутка графика влево-вправо",en:"Pan the chart left and right"}],
+    ["Escape",{ru:"Закрыть активный Main-график (режим рисования не выключает)",en:"Close the active Main chart (does not leave draw mode)"}],
+    ["Shift+Escape",{ru:"Закрыть все Main-графики во всех группах",en:"Close every Main chart in every group"}],
+    ["Tab / Delete",{ru:"На ордерной линии — отменить ордер; с выделенной фигурой Delete удаляет фигуру",en:"Over an order line — cancel that order; with a figure selected, Delete removes the figure"}],
+    ["Ctrl+Shift+F10",{ru:"Вернуть все окна на экран",en:"Reset every window position onscreen"}]]}
+];
+
+/* ------------------------------------------------------------------
+   Свечи. Детерминированный ряд (свой LCG вместо Math.random),
+   чтобы картинка не прыгала между перерисовками.
+   ------------------------------------------------------------------ */
+function drawChart(){
+  const svg = document.getElementById("chartsvg");
+  if(!svg) return;
+  const W=420, PLOT_TOP=6, PLOT_BOT=168, VOL_TOP=176, VOL_BOT=198;
+  const N=54, step=W/N, bw=Math.max(2, step*0.56);
+
+  let seed=20240917;
+  const rnd=()=>{ seed=(seed*1664525+1013904223)>>>0; return seed/4294967296; };
+
+  // случайное блуждание с восходящим трендом; нормируется на всю высоту плота
+  const raw=[]; let px=0.5;
+  for(let i=0;i<N;i++){
+    const o=px;
+    const c=o + 0.0055 + (rnd()-0.5)*0.075 + 0.022*Math.sin(i/6.3);
+    raw.push({o,c,hi:Math.max(o,c)+rnd()*0.034,lo:Math.min(o,c)-rnd()*0.034,v:0.22+rnd()*0.78});
+    px=c;
+  }
+  let lo=Infinity, hi=-Infinity;
+  raw.forEach(b=>{ lo=Math.min(lo,b.lo); hi=Math.max(hi,b.hi); });
+  const pad=(hi-lo)*0.06, span=(hi-lo)+pad*2;
+  const norm=v=>(v-(lo-pad))/span;
+  const bars=raw.map(b=>({o:norm(b.o),c:norm(b.c),hi:norm(b.hi),lo:norm(b.lo),v:b.v}));
+
+  const y = t => PLOT_BOT - t*(PLOT_BOT-PLOT_TOP);
+
+  let s = `<g stroke="var(--row-line)" stroke-width=".5">`;
+  for(let g=1; g<=4; g++){ const gy=PLOT_TOP+(PLOT_BOT-PLOT_TOP)*g/5; s+=`<line x1="0" y1="${gy}" x2="${W}" y2="${gy}"/>`; }
+  s += `</g>`;
+
+  // объёмы
+  s += `<g>`;
+  bars.forEach((b,i)=>{
+    const x=i*step+(step-bw)/2, h=(VOL_BOT-VOL_TOP)*b.v;
+    s+=`<rect x="${x.toFixed(1)}" y="${(VOL_BOT-h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="var(--${b.c>=b.o?'green':'red'})" opacity=".45"/>`;
+  });
+  s += `</g>`;
+
+  // свечи
+  s += `<g>`;
+  bars.forEach((b,i)=>{
+    const cx=i*step+step/2, x=i*step+(step-bw)/2;
+    const col=`var(--${b.c>=b.o?'green':'red'})`;
+    const yo=y(b.o), yc=y(b.c);
+    const top=Math.min(yo,yc), h=Math.max(1, Math.abs(yc-yo));
+    s+=`<line x1="${cx.toFixed(1)}" y1="${y(b.hi).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${y(b.lo).toFixed(1)}" stroke="${col}" stroke-width=".8"/>`;
+    s+=`<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
+  });
+  s += `</g>`;
+
+  // ордерные линии: покупка, тейк, стоп
+  const last = bars[bars.length-1].c;
+  s += `<line x1="0" y1="${y(last).toFixed(1)}" x2="${W}" y2="${y(last).toFixed(1)}" stroke="var(--amber)" stroke-width="1" stroke-dasharray="4 3"/>`;
+  s += `<line x1="${(W*0.42).toFixed(0)}" y1="${y(0.72).toFixed(1)}" x2="${W}" y2="${y(0.72).toFixed(1)}" stroke="var(--text-soft)" stroke-width="1"/>`;
+  s += `<line x1="${(W*0.58).toFixed(0)}" y1="${y(0.16).toFixed(1)}" x2="${W}" y2="${y(0.16).toFixed(1)}" stroke="var(--yellow)" stroke-width="1"/>`;
+
+  // закрытые сделки: вверх — покупка, вниз — продажа
+  const marks=[[7,1],[13,0],[21,1],[27,0],[34,1],[41,0],[46,1]];
+  marks.forEach(([i,buy])=>{
+    const b=bars[i], cx=i*step+step/2;
+    const yy = buy ? y(b.lo)+7 : y(b.hi)-7;
+    s += buy
+      ? `<path d="M${cx.toFixed(1)} ${(yy-5).toFixed(1)} l4 6 -8 0 z" fill="var(--green)"/>`
+      : `<path d="M${cx.toFixed(1)} ${(yy+5).toFixed(1)} l4 -6 -8 0 z" fill="var(--orange)"/>`;
+  });
+
+  svg.innerHTML = s;
+}
+
+/* ------------------------------------------------------------------ */
+let lang = "ru";
+let picked = null;
+const ORDER = Object.keys(ZONES);
+
+const $  = (s,r)=> (r||document).querySelector(s);
+const $$ = (s,r)=> Array.from((r||document).querySelectorAll(s));
+
+function render(){
+  document.documentElement.lang = lang;
+
+  $$("[data-i18n]").forEach(el=>{
+    const v = T[el.dataset.i18n];
+    if(v) el.textContent = v[lang];
+  });
+  $$("[data-lang]").forEach(b=> b.setAttribute("aria-pressed", String(b.dataset.lang===lang)));
+
+  // факты в шапке
+  const STATS = [
+    ["9",   {ru:"панелей дока",   en:"dock panels"}],
+    ["5",   {ru:"отдельных окон", en:"separate windows"}],
+    ["30+", {ru:"горячих клавиш", en:"hotkeys"}],
+    ["3",   {ru:"языка интерфейса", en:"interface languages"}]
+  ];
+  $("#stats").innerHTML = STATS.map(([v,l])=>
+    `<div class="stat"><b>${v}</b><span>${l[lang]}</span></div>`
+  ).join("");
+
+  // шаги
+  $("#steps").innerHTML = STEPS.map((s,i)=>
+    `<div class="step"><div class="n">${i+1}</div><div><h4>${s[lang][0]}</h4><p>${s[lang][1]}</p></div></div>`
+  ).join("");
+
+  // панели
+  $("#panels-cards").innerHTML = PANELS.map(p=>
+    `<div class="card"><h4>${T[p.t][lang]} <span class="key">${p.k}</span></h4><p>${p[lang]}</p></div>`
+  ).join("");
+
+  // окна
+  $("#windows-cards").innerHTML = WINDOWS.map(w=>
+    `<div class="card"><h4>${w[lang][0]}</h4><p>${w[lang][1]}</p></div>`
+  ).join("");
+
+  // хоткеи — по группам, свёрнуто; открытые группы переживают смену языка
+  const open = new Set(
+    $$("#hk-body details[open]").map(d=> d.dataset.g)
+  );
+  $("#hk-body").innerHTML = HOTKEYS.map((g,i)=>
+    `<details class="hkg" data-g="${i}"${open.has(String(i)) ? " open" : ""}>` +
+      `<summary><span class="cap">${g.cat[lang]}</span>` +
+      `<span class="cnt">${g.rows.length}</span></summary>` +
+      `<table class="hk"><tbody>` +
+      g.rows.map(r=>`<tr><td style="width:1%"><kbd>${r[0]}</kbd></td><td>${r[1][lang]}</td></tr>`).join("") +
+      `</tbody></table>` +
+    `</details>`
+  ).join("");
+
+  showZone(picked);
+}
+
+function showZone(key){
+  if(!key || !ZONES[key]){
+    $("#rail-tag").innerHTML = `<span>${T["rail.pick"][lang]}</span>`;
+    $("#rail-h").textContent = T["rail.h"][lang];
+    $("#rail-p").textContent = T["rail.p"][lang];
+    $("#rail-src").textContent = "";
+    return;
+  }
+  const z = ZONES[key];
+  $("#rail-tag").innerHTML = `<i>${z.n}</i><span>${lang==="ru"?"Зона":"Zone"} ${z.n} / 19</span>`;
+  $("#rail-h").textContent = z[lang][0];
+  $("#rail-p").textContent = z[lang][1];
+  $("#rail-src").innerHTML = `<em>${lang==="ru"?"источник":"source"}:</em> ${z.src}`;
+}
+
+function pick(key){
+  picked = key;
+  $$(".z").forEach(el=> el.setAttribute("aria-current", String(el.dataset.zone===key)));
+  showZone(key);
+}
+
+/* наведение показывает зону, не закрепляя её; уход возвращает закреплённую */
+$$(".z").forEach(el=>{
+  const k = el.dataset.zone;
+  el.addEventListener("click", ()=> pick(k));
+  el.addEventListener("focus", ()=> pick(k));
+  el.addEventListener("mouseenter", ()=> showZone(k));
+  el.addEventListener("mouseleave", ()=> showZone(picked));
+  if(el.tagName !== "BUTTON"){
+    el.addEventListener("keydown", e=>{
+      if(e.key === "Enter" || e.key === " "){ e.preventDefault(); pick(k); }
+    });
+  }
+});
+
+function stepZone(d){
+  const i = picked ? ORDER.indexOf(picked) : -1;
+  const n = (i + d + ORDER.length * 2) % ORDER.length;
+  pick(ORDER[d > 0 && i < 0 ? 0 : n]);
+  const el = document.querySelector('.z[data-zone="' + picked + '"]');
+  if(el && el.focus) el.focus({preventScroll:true});
+}
+$("#prev").addEventListener("click", ()=> stepZone(-1));
+$("#next").addEventListener("click", ()=> stepZone(1));
+
+$("#showall").addEventListener("click", e=>{
+  const on = $("#app").classList.toggle("reveal");
+  e.currentTarget.setAttribute("aria-pressed", String(on));
+});
+
+$$("[data-lang]").forEach(b=> b.addEventListener("click", ()=>{ lang=b.dataset.lang; render(); }));
+
+$$("[data-theme-set]").forEach(b=> b.addEventListener("click", ()=>{
+  const want = b.dataset.themeSet;
+  const cur  = document.documentElement.getAttribute("data-theme");
+  if(cur === want){ document.documentElement.removeAttribute("data-theme"); }
+  else { document.documentElement.setAttribute("data-theme", want); }
+  syncTheme();
+}));
+
+function syncTheme(){
+  const cur = document.documentElement.getAttribute("data-theme");
+  $$("[data-theme-set]").forEach(b=> b.setAttribute("aria-pressed", String(b.dataset.themeSet===cur)));
+}
+
+syncTheme();
+drawChart();
+render();
+</script>
+
+</body>
+</html>
