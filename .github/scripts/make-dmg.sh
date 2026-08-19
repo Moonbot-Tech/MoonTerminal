@@ -5,11 +5,18 @@
 # Expects BOTH slices to be staged already: release.yml builds them in two steps and moves each
 # out of its target dir, because the runner cannot hold two `--release` trees at once. They are
 # joined here so Apple Silicon and Intel Macs share one download.
+#
+# Disk is the scarce resource on this runner, not time — `hdiutil` has failed with "No space left
+# on device" on a tree that merely LOOKED finished. So the bundle is assembled directly inside the
+# DMG staging root (never built beside it and copied, which held two universal binaries at once),
+# and every input is deleted the moment it has been consumed.
 set -euo pipefail
 
 BIN_ARM64="stage/moonterminal-arm64"
 BIN_X86_64="stage/moonterminal-x86_64"
-APP="dist/MoonTerminal.app"
+# The bundle IS the one that gets imaged: `dmg-root` is what `hdiutil` reads at the end.
+DMG_ROOT="dist/dmg-root"
+APP="$DMG_ROOT/MoonTerminal.app"
 DMG="dist/MoonTerminal.dmg"
 SRC_ICON="assets/icons/0.png"
 
@@ -29,6 +36,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 EXE="$APP/Contents/MacOS/moonterminal"
 lipo -create "$BIN_ARM64" "$BIN_X86_64" -output "$EXE"
 chmod +x "$EXE"
+# Both slices now live inside the universal binary; keeping them costs the size of a third copy.
+rm -rf stage
 
 # Build a multi-resolution .icns from the single PNG app icon.
 ICONSET="dist/AppIcon.iconset"
@@ -39,6 +48,8 @@ for size in 16 32 128 256 512; do
   sips -z "$retina" "$retina" "$SRC_ICON" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+# The .icns is written; the intermediate PNG set is only an input to it.
+rm -rf "$ICONSET"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -68,15 +79,11 @@ PLIST
 # ships one download that starts on the Intel half of the audience and is killed on the other.
 codesign --force --deep --sign - "$APP"
 
-# Assemble a Finder-friendly DMG staging root instead of imaging the bare .app:
-# the app, a drag-to-install alias to /Applications, and a short RU readme. The
+# Finish the Finder-friendly DMG staging root instead of imaging the bare .app: the app (already
+# assembled in place above), a drag-to-install alias to /Applications, and a short RU readme. The
 # image is built from this folder so the user sees the familiar "drag into
 # Applications" layout. (Background image / .DS_Store window layout intentionally
 # omitted for now — can be layered on later.)
-DMG_ROOT="dist/dmg-root"
-rm -rf "$DMG_ROOT"
-mkdir -p "$DMG_ROOT"
-cp -R "$APP" "$DMG_ROOT/MoonTerminal.app"
 ln -s /Applications "$DMG_ROOT/Applications"
 
 cat > "$DMG_ROOT/README.txt" <<'README'
@@ -99,10 +106,11 @@ Your cores and settings are preserved — they live OUTSIDE the app, in
 ~/Library/Application Support/com.moonbot.moonterminal/.
 README
 
-# Check the bundle that actually gets imaged, not the one assembled further up — this one is a
-# copy. Both properties are the ones a user meets on first launch and neither has a second chance
-# once the .dmg is on the Releases page: every architecture present, and a signature that verifies.
-STAGED_APP="$DMG_ROOT/MoonTerminal.app"
+# Check the bundle that actually gets imaged — which is this one, assembled inside `dmg-root` from
+# the start rather than copied in. Both properties are the ones a user meets on first launch and
+# neither has a second chance once the .dmg is on the Releases page: every architecture present,
+# and a signature that verifies.
+STAGED_APP="$APP"
 ARCHS="$(lipo -archs "$STAGED_APP/Contents/MacOS/moonterminal")"
 for want in arm64 x86_64; do
   case " $ARCHS " in
