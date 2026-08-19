@@ -3,7 +3,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use moon_core::feed::{ConnStatus, CoreEndpoint};
-use moon_core::session::CoreSysStatus;
+use moon_core::session::{CoreStartupState, CoreStartupStatus, CoreSysStatus};
 
 use super::{CoreStatusRow, ServerConnectivity, ServerKey, aggregate_servers};
 
@@ -30,6 +30,7 @@ fn row(
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
+        startup: CoreStartupStatus::default(),
     }
 }
 
@@ -413,4 +414,86 @@ fn a_count_without_a_date_reaches_the_column() {
         super::ApiKeyState::of(Some(dateless), 40 * 86_400_000),
         super::ApiKeyState::Days(2)
     );
+}
+
+/// Build one core row for `group_startup` tests, varying only connection status and the startup
+/// snapshot.
+fn startup_row(status: ConnStatus, startup: CoreStartupStatus) -> CoreStatusRow {
+    CoreStatusRow {
+        id: 1,
+        name: "Core 1".to_string(),
+        status,
+        sys: CoreSysStatus::default(),
+        endpoint: None,
+        ping_warn: false,
+        exch_warn: false,
+        ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
+        exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
+        api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
+        api_warn: false,
+        startup,
+    }
+}
+
+/// `group_startup`: one still-starting core among otherwise-`Ready` ones reports THAT core's
+/// progress — the unfinished core must not be averaged or overwritten away by its finished
+/// siblings.
+#[test]
+fn one_still_starting_core_reports_its_own_progress() {
+    let rows = [
+        startup_row(
+            ConnStatus::Ready,
+            CoreStartupStatus {
+                state: CoreStartupState::Ready,
+                elapsed_ms: 9_000,
+                ..Default::default()
+            },
+        ),
+        startup_row(
+            ConnStatus::Stage("connecting…".to_string()),
+            CoreStartupStatus {
+                state: CoreStartupState::Connecting,
+                completed_mask: 0b0000_0011,
+                elapsed_ms: 3_000,
+                ..Default::default()
+            },
+        ),
+    ];
+
+    let cell = super::group_startup(&rows);
+    assert_eq!(
+        cell,
+        Some(super::StartupCell::Progress {
+            done: 2,
+            total: moon_core::session::INIT_STEPS_TOTAL,
+            elapsed_ms: 3_000,
+        })
+    );
+}
+
+/// `group_startup`: once every core has settled, the group reports the LONGEST elapsed time any of
+/// them took, not the first or the shortest.
+#[test]
+fn an_all_ready_group_reports_the_maximum_elapsed() {
+    let rows = [
+        startup_row(
+            ConnStatus::Ready,
+            CoreStartupStatus {
+                state: CoreStartupState::Ready,
+                elapsed_ms: 4_000,
+                ..Default::default()
+            },
+        ),
+        startup_row(
+            ConnStatus::Ready,
+            CoreStartupStatus {
+                state: CoreStartupState::Ready,
+                elapsed_ms: 11_000,
+                ..Default::default()
+            },
+        ),
+    ];
+
+    let cell = super::group_startup(&rows);
+    assert_eq!(cell, Some(super::StartupCell::Done { elapsed_ms: 11_000 }));
 }

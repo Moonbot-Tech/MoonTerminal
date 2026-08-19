@@ -11,6 +11,7 @@ use moon_core::session::CoreSysStatus;
 use rust_i18n::t;
 
 use super::model::{CoreStatusRow, ServerStatusGroup};
+use super::startup::{StartupCell, startup_cell};
 
 /// Which By IP column the server list is sorted on. Warnings always pin to the top regardless of the
 /// field (handled by the caller), so this only orders within the warned and the quiet partitions.
@@ -31,6 +32,9 @@ pub(super) enum GroupSortField {
     /// The server's most urgent API key, by [`ApiKeyState::urgency`] — which may be a day count,
     /// or neither when nothing is known or every key is unlimited.
     ApiKey,
+    /// Startup: still-coming-up servers first, then the ones that took longest. One header click
+    /// answers "which machines are slow to come up", which is the question the column exists for.
+    Startup,
 }
 
 impl GroupSortField {
@@ -44,6 +48,7 @@ impl GroupSortField {
             Self::Exch => "exch",
             Self::Cores => "cores",
             Self::ApiKey => "api_key",
+            Self::Startup => "startup",
         }
     }
 
@@ -57,6 +62,7 @@ impl GroupSortField {
             "exch" => Some(Self::Exch),
             "cores" => Some(Self::Cores),
             "api_key" => Some(Self::ApiKey),
+            "startup" => Some(Self::Startup),
             _ => None,
         }
     }
@@ -66,7 +72,7 @@ impl GroupSortField {
 pub(super) fn restore_flat_sort(
     preference: Option<moon_core::config::TableSortPreference>,
 ) -> Option<(String, bool)> {
-    const KEYS: [&str; 11] = [
+    const KEYS: [&str; 12] = [
         "server",
         "core",
         "status",
@@ -78,6 +84,7 @@ pub(super) fn restore_flat_sort(
         "ping_exch",
         "cpus",
         "api_key",
+        "startup",
     ];
     preference.and_then(|preference| {
         KEYS.contains(&preference.column.as_str())
@@ -156,8 +163,33 @@ pub(super) fn compare_groups(
         // one thing and show another. Not Ready-gated, unlike the latencies: a key keeps ageing
         // while its core is down.
         GroupSortField::ApiKey => a.api_key.urgency().cmp(&b.api_key.urgency()),
+        // Rank on the SAME cell the server row displays, so the column cannot sort by one thing and
+        // show another. `startup_rank` puts unfinished startups first because they are the ones
+        // still costing the user time.
+        GroupSortField::Startup => startup_rank(a.startup).cmp(&startup_rank(b.startup)),
     }
     .then_with(|| natural_cmp(&a.display_name, &b.display_name))
+}
+
+/// Rank one startup cell for sorting: unfinished startups first (least progress, then longest
+/// running), then finished ones by how long they took, then rows with nothing to report.
+///
+/// A single total key rather than a comparator, so the ordering stays transitive however the cell
+/// variants grow.
+fn startup_rank(cell: Option<StartupCell>) -> (u8, i64, i64) {
+    match cell {
+        Some(StartupCell::Progress {
+            done,
+            total,
+            elapsed_ms,
+        }) => {
+            // Share of the work still outstanding, scaled so a fractional comparison stays integral.
+            let remaining = i64::from(total.saturating_sub(done)) * 1000 / i64::from(total.max(1));
+            (0, -remaining, -(elapsed_ms as i64))
+        }
+        Some(StartupCell::Done { elapsed_ms }) => (1, -(elapsed_ms as i64), 0),
+        Some(StartupCell::Absent) | None => (2, 0, 0),
+    }
 }
 
 /// Fill each group's display name from a custom name or a stable `Server N` ordinal.
@@ -304,6 +336,10 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
         // an expired key leads, and the two states with no number must trail the counts rather than
         // heading the column — a dash and an infinity are the LAST things to look at here.
         "api_key" => a.api_key.urgency().cmp(&b.api_key.urgency()),
+        // Same rank the By-IP column sorts by, over the per-core cell, so the two modes cannot
+        // disagree about which core is slower to come up.
+        "startup" => startup_rank(Some(startup_cell(&a.status, &a.startup)))
+            .cmp(&startup_rank(Some(startup_cell(&b.status, &b.startup)))),
         // "core" and any unknown key sort by name.
         _ => a.name.cmp(&b.name),
     }

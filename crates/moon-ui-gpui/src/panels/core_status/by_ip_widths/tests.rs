@@ -98,6 +98,7 @@ fn a_narrow_row_shrinks_every_column_by_the_same_factor() {
         (narrow.ping, base.ping),
         (narrow.api, base.api),
         (narrow.cores, base.cores),
+        (narrow.startup, base.startup),
         (narrow.icon, base.icon),
         (narrow.indent, base.indent),
     ] {

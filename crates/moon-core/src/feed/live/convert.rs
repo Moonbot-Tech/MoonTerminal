@@ -9,9 +9,10 @@ use moonproto::{Event, MoonClient};
 use crate::config::TakeProfitMode;
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
-    ApiKeyExpiry, ClientSettings, ClientSettingsEdit, CoreSysStatus, EngineActionKind,
-    EngineActionResult, LevManageEdit, LevManageState, LicenseState, NewsSnapshot, OrderRow,
-    OrderTrace, OrderTracePoint, RuntimeState, WalletKind,
+    ApiKeyExpiry, ClientSettings, ClientSettingsEdit, CoreInitStep, CoreStartupState,
+    CoreStartupStatus, CoreSysStatus, EngineActionKind, EngineActionResult, LevManageEdit,
+    LevManageState, LicenseState, NewsSnapshot, OrderRow, OrderTrace, OrderTracePoint,
+    RuntimeState, WalletKind,
 };
 
 /// Project moonproto's retained `NewsState` into a moonproto-free [`NewsSnapshot`]: reduce its flat
@@ -181,6 +182,77 @@ pub(super) fn sys_status_from_proto(
         round_trip_ms: h.core_round_trip_ms,
         order_api_latency_ms: h.order_api_latency_ms,
         updated_ms,
+    }
+}
+
+/// Project one moonproto `StartupState` into the terminal's own phase.
+///
+/// The wildcard is load-bearing, not defensive padding: moonproto's enum is `#[non_exhaustive]`, so
+/// a newer library can report a phase this build has never seen. Mapping it onto a known phase
+/// would render a guess as fact, so it lands on `Unknown` and the UI shows no progress for it.
+fn startup_state_from_proto(state: moonproto::StartupState) -> CoreStartupState {
+    match state {
+        moonproto::StartupState::Connecting => CoreStartupState::Connecting,
+        moonproto::StartupState::Initializing => CoreStartupState::Initializing,
+        moonproto::StartupState::Ready => CoreStartupState::Ready,
+        moonproto::StartupState::Reconnecting => CoreStartupState::Reconnecting,
+        moonproto::StartupState::Failed => CoreStartupState::Failed,
+        moonproto::StartupState::Disconnected => CoreStartupState::Disconnected,
+        _ => CoreStartupState::Unknown,
+    }
+}
+
+/// Project one moonproto `InitStep` into the terminal's own step.
+///
+/// Same `#[non_exhaustive]` reasoning as [`startup_state_from_proto`]: an unrecognised step becomes
+/// `None` — "the core is between steps we can name" — rather than being folded onto a real one,
+/// which would report the wrong step as current.
+fn init_step_from_proto(step: moonproto::InitStep) -> Option<CoreInitStep> {
+    Some(match step {
+        moonproto::InitStep::BaseCheck => CoreInitStep::BaseCheck,
+        moonproto::InitStep::AuthCheck => CoreInitStep::AuthCheck,
+        moonproto::InitStep::GetMarketsList => CoreInitStep::GetMarketsList,
+        moonproto::InitStep::UpdateMarketsList => CoreInitStep::UpdateMarketsList,
+        moonproto::InitStep::StrategySchema => CoreInitStep::StrategySchema,
+        moonproto::InitStep::PostInitFlush => CoreInitStep::PostInitFlush,
+        moonproto::InitStep::StartupSnapshot => CoreInitStep::StartupSnapshot,
+        moonproto::InitStep::StartupEvents => CoreInitStep::StartupEvents,
+        _ => return None,
+    })
+}
+
+/// Convert moonproto's passive startup snapshot into moonproto-free terminal state.
+///
+/// The completed-step SET is re-encoded as our own bitmask rather than carried across, because
+/// moonproto's `InitStepSet` can only be read, never built, outside its crate — so a mirror the
+/// terminal can construct in a test needs its own representation. Steps this build does not
+/// recognise are dropped from the mask instead of shifting the ones it does.
+pub(super) fn startup_status_from_proto(s: moonproto::StartupStatus) -> CoreStartupStatus {
+    let mut completed_mask = 0u16;
+    for step in s.completed_steps.iter() {
+        if let Some(step) = init_step_from_proto(step) {
+            completed_mask |= 1 << step as u8;
+        }
+    }
+    CoreStartupStatus {
+        state: startup_state_from_proto(s.state),
+        current_step: s.current_step.and_then(init_step_from_proto),
+        completed_mask,
+        elapsed_ms: s.elapsed_ms,
+        received_sliced_bytes: s.received_sliced_bytes,
+        receive_rate_bytes_per_sec: s.receive_rate_bytes_per_sec,
+        active_sliced_transfers: s.active_sliced_transfers,
+        received_sliced_blocks: s.received_sliced_blocks,
+        duplicate_sliced_blocks: s.duplicate_sliced_blocks,
+        active_received_blocks: s.active_received_blocks,
+        active_expected_blocks: s.active_expected_blocks,
+        idle_for_ms: s.idle_for_ms,
+        current_step_retries: s.current_step_retries,
+        total_init_retries: s.total_init_retries,
+        reconnect_count: s.reconnect_count,
+        round_trip_ms: s.round_trip_ms,
+        path_mtu_bytes: s.path_mtu_bytes,
+        downlink_delivery_percent: s.downlink_delivery_percent,
     }
 }
 

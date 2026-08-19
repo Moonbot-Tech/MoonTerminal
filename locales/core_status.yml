@@ -375,3 +375,157 @@ core_status.api_expired:
   ru: "истёк"
   en: "expired"
   es: "vencida"
+
+# --- Startup telemetry (polled MoonProto StartupStatus) ---
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.startup:
+  ru: "Старт"
+  en: "Startup"
+  es: "Inicio"
+# Completed init steps out of the total, while the core is still coming up.
+core_status.startup.progress:
+  ru: "%{done}/%{total}"
+  en: "%{done}/%{total}"
+  es: "%{done}/%{total}"
+# Seconds with one decimal. The unit is here so the number and its unit stay one token.
+core_status.startup.secs:
+  ru: "%{t} с"
+  en: "%{t} s"
+  es: "%{t} s"
+# The FROZEN figure once the core is up. The past-tense preposition is what stops a settled
+# number from reading as a running clock; do not reduce this to a bare duration.
+core_status.startup.took:
+  ru: "за %{t}"
+  en: "in %{t}"
+  es: "en %{t}"
+core_status.startup.rate:
+  ru: "%{v}/с"
+  en: "%{v}/s"
+  es: "%{v}/s"
+core_status.startup.b:
+  ru: "Б"
+  en: "B"
+  es: "B"
+core_status.startup.kb:
+  ru: "КБ"
+  en: "KB"
+  es: "KB"
+core_status.startup.mb:
+  ru: "МБ"
+  en: "MB"
+  es: "MB"
+# Startup phases.
+core_status.startup.state.connecting:
+  ru: "Подключение"
+  en: "Connecting"
+  es: "Conectando"
+core_status.startup.state.initializing:
+  ru: "Инициализация"
+  en: "Initializing"
+  es: "Inicializando"
+core_status.startup.state.ready:
+  ru: "Готово"
+  en: "Ready"
+  es: "Listo"
+core_status.startup.state.reconnecting:
+  ru: "Переподключение"
+  en: "Reconnecting"
+  es: "Reconectando"
+core_status.startup.state.failed:
+  ru: "Ошибка"
+  en: "Failed"
+  es: "Error"
+core_status.startup.state.disconnected:
+  ru: "Отключено"
+  en: "Disconnected"
+  es: "Desconectado"
+core_status.startup.state.unknown:
+  ru: "Неизвестно"
+  en: "Unknown"
+  es: "Desconocido"
+# Init steps, in the order the core runs them.
+core_status.startup.step.base_check:
+  ru: "Проверка совместимости"
+  en: "Base check"
+  es: "Verificacion base"
+core_status.startup.step.auth_check:
+  ru: "Проверка доступа"
+  en: "Auth check"
+  es: "Verificacion de acceso"
+core_status.startup.step.markets_list:
+  ru: "Список рынков"
+  en: "Markets list"
+  es: "Lista de mercados"
+core_status.startup.step.markets_update:
+  ru: "Цены и индексы"
+  en: "Prices and indexes"
+  es: "Precios e indices"
+core_status.startup.step.strategy_schema:
+  ru: "Схема стратегий"
+  en: "Strategy schema"
+  es: "Esquema de estrategias"
+core_status.startup.step.post_init_flush:
+  ru: "Первичные запросы"
+  en: "Initial refreshes"
+  es: "Solicitudes iniciales"
+core_status.startup.step.snapshot:
+  ru: "Первый снимок"
+  en: "First snapshot"
+  es: "Primera instantanea"
+core_status.startup.step.events:
+  ru: "Стартовые события"
+  en: "Startup events"
+  es: "Eventos de inicio"
+# Hover fact labels. RTT and MTU stay untranslated per locales/README.md.
+core_status.startup.f.phase:
+  ru: "Фаза"
+  en: "Phase"
+  es: "Fase"
+core_status.startup.f.step:
+  ru: "Шаг"
+  en: "Step"
+  es: "Paso"
+core_status.startup.f.elapsed:
+  ru: "Прошло"
+  en: "Elapsed"
+  es: "Transcurrido"
+core_status.startup.f.received:
+  ru: "Принято"
+  en: "Received"
+  es: "Recibido"
+core_status.startup.f.blocks:
+  ru: "Блоки"
+  en: "Blocks"
+  es: "Bloques"
+core_status.startup.f.dupes:
+  ru: "дубли"
+  en: "duplicates"
+  es: "duplicados"
+core_status.startup.f.transfers:
+  ru: "Передачи"
+  en: "Transfers"
+  es: "Transferencias"
+core_status.startup.f.idle:
+  ru: "Тишина"
+  en: "Idle"
+  es: "Inactivo"
+core_status.startup.f.retries:
+  ru: "Повторы (шаг · всего)"
+  en: "Retries (step · total)"
+  es: "Reintentos (paso · total)"
+core_status.startup.f.reconnects:
+  ru: "Переподключений"
+  en: "Reconnects"
+  es: "Reconexiones"
+core_status.startup.f.rtt:
+  ru: "RTT"
+  en: "RTT"
+  es: "RTT"
+core_status.startup.f.mtu:
+  ru: "MTU"
+  en: "MTU"
+  es: "MTU"
+core_status.startup.f.delivery:
+  ru: "Доставка"
+  en: "Delivery"
+  es: "Entrega"

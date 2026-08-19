@@ -35,12 +35,44 @@ use super::strategies::{
     strat_kind_name,
 };
 use super::{
-    ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, DetectRow, ExchangeId, FeedMsg, FeedTx,
-    LatestMarketRole, SharedMoonClient, StrategyRow,
+    ConnStatus, CoreCmd, CoreEndpoint, CoreLogLine, CoreStartupStatus, DetectRow, ExchangeId,
+    FeedMsg, FeedTx, LatestMarketRole, SharedMoonClient, StrategyRow,
 };
 use crate::config::ServerConfig;
 use crate::db::{DbMsg, ReportStart, ReportTx};
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
+
+/// How often a still-starting core's startup snapshot is read.
+///
+/// Fast enough that the progress figure visibly advances, slow enough that the store's own
+/// whole-second gate on `elapsed_ms` dominates it rather than the other way round. It costs nothing
+/// on a settled core: the poll is gated on the core still coming up. If MoonProto publishes more
+/// slowly than this, the extra reads simply return the same snapshot and
+/// `CoreStartupStatus::progress_eq` suppresses the send — the cadence can be too fast, never wrong.
+const STARTUP_POLL: Duration = Duration::from_millis(500);
+
+/// Whether the startup poll may stop for this core.
+///
+/// BOTH halves are required and each has already caused its own bug. Dropping the snapshot half
+/// re-opens a real race: MoonProto fires `Connected{fresh:false}` from inside `run_protocol_step`
+/// but publishes the matching `Ready` status LATER in the same iteration, so this thread — woken by
+/// that event — can read a stale non-terminal snapshot, and stopping there would freeze the UI
+/// showing progress on a core that is actually up, forever. Dropping the `is_ready` half makes it
+/// LATCH: `Ready` is terminal forever, so a later reconnect episode would never be polled again.
+///
+/// Extracted so both the poll gate and the wake-deadline fold read ONE predicate: two hand-written
+/// copies could drift, and a loop that sleeps past a poll it means to make is invisible until a
+/// core is slow to start.
+///
+/// Args:
+///     is_ready: Whether the lifecycle side currently reports `ConnStatus::Ready`.
+///     sent: The last startup snapshot actually sent, if any.
+///
+/// Returns:
+///     Whether the poll may stop.
+fn startup_poll_settled(is_ready: bool, sent: Option<CoreStartupStatus>) -> bool {
+    is_ready && sent.is_some_and(|prev| prev.state.is_terminal())
+}
 
 /// Return whether one normalized strategy generation still needs database delivery.
 fn strategy_db_export_due(
@@ -355,6 +387,12 @@ pub(super) fn run(
     // noise. The first failure is worth seeing; the rest are not.
     let mut is_ready = false;
     let mut api_expiry_failed_before = false;
+    // Startup telemetry is POLLED, not pushed: MoonProto publishes it as a passive snapshot behind
+    // a lock at its own bounded rate, so nothing wakes us when it advances. `startup_sent` is the
+    // last snapshot that actually left, so the send gate compares against what the store holds
+    // rather than re-sending an unchanged one.
+    let mut last_startup = Instant::now();
+    let mut startup_sent: Option<CoreStartupStatus> = None;
     loop {
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
@@ -434,6 +472,11 @@ pub(super) fn run(
         let mut connect_failed: Option<String> = None;
         lifecycle_events.clear();
         event_queue.drain_lifecycle_events_into(&mut lifecycle_events);
+        // `is_ready` is overwritten INSIDE the drain below, so the transition into a settled core
+        // is only observable against a value captured before it. Without this the one final
+        // startup send would never fire, and because the poll gate is `!is_ready` it could never
+        // re-open either — the cell would freeze at its last in-progress figure forever.
+        let was_ready = is_ready;
         for ev in lifecycle_events.drain(..) {
             log::info!("lifecycle: {ev:?}");
             let request_license_state = match &ev {
@@ -455,8 +498,13 @@ pub(super) fn run(
                         ConnStatus::Ready
                     }
                 }
-                LifecycleEvent::InitStepCompleted { step, .. } => {
-                    ConnStatus::Stage(format!("init: {step}"))
+                // The per-step fact now travels typed on `FeedMsg::StartupStatus`, where the UI can
+                // localize it and show it against a denominator. This badge keeps only the coarse
+                // phase, so the two can never disagree about what the core is doing — and it stops
+                // emitting a raw English step name that no locale could ever translate, since
+                // `ConnStatus` lives in this crate and `i18n!` is declared in the UI one.
+                LifecycleEvent::InitStepCompleted { .. } => {
+                    ConnStatus::Stage("connected, init…".into())
                 }
                 LifecycleEvent::Ready => ConnStatus::Ready,
                 LifecycleEvent::Reconnecting => ConnStatus::Stage("reconnecting…".into()),
@@ -614,6 +662,34 @@ pub(super) fn run(
                 );
             }
             account_reconciliation.mark_spot_wallet_attempt(account_now);
+        }
+        // Startup progress: polled while the core is still coming up, and stopped only once the
+        // SNAPSHOT ITSELF reports a terminal phase. A settled core then costs nothing at all here —
+        // no lock read, no message, no revision bump.
+        //
+        // The stop condition deliberately reads the snapshot rather than the lifecycle events,
+        // because MoonProto publishes the two in the opposite order on its two paths. First startup
+        // writes the status and THEN fires `Ready` (`runtime_loop`'s `mark_ready` sits immediately
+        // before that `fire_lifecycle`), so there the event implies the write. An internal reconnect
+        // does the reverse: `Connected{fresh:false}` is fired from inside `run_protocol_step`, while
+        // the `publish` that flips the status to `Ready` runs later in the same iteration. This is a
+        // different thread, woken BY that event, so it can read the pre-reconnect `Reconnecting`
+        // snapshot — and stopping on `is_ready` would close the poll forever and freeze the cell
+        // showing progress on a core that is actually up.
+        //
+        // BOTH halves are required. The snapshot alone would latch: once a core reports `Ready` that
+        // phase is terminal forever, so a later reconnect episode — which MoonProto does re-publish,
+        // and which its own `reconnect_count` exists to report — would never be polled for again.
+        // The lifecycle side supplies the RESUME edge, the snapshot side supplies the honest STOP.
+        let settled = startup_poll_settled(is_ready, startup_sent);
+        let startup_edge = !was_ready && is_ready;
+        if !settled && (startup_edge || last_startup.elapsed() >= STARTUP_POLL) {
+            last_startup = Instant::now();
+            let snap = convert::startup_status_from_proto(client.startup_status());
+            if startup_sent.is_none_or(|prev| !prev.progress_eq(&snap)) {
+                startup_sent = Some(snap);
+                let _ = tx.send(FeedMsg::StartupStatus(snap));
+            }
         }
         // API-key expiration: a pure poll, since no event announces that a key aged a day. Gated on
         // Ready — a request to a core that is not connected only buys a pending timeout — and the
@@ -1487,7 +1563,14 @@ pub(super) fn run(
         // loop therefore no longer blocks indefinitely, and the former unbounded `recv()` arm is
         // gone with it.
         let poll_wait = account_reconciliation.api_expiry_wait(wait_now);
-        let wake_wait = [order_wait, account_wait]
+        // Without this the feature silently half-works: a core that is still starting but whose
+        // event stream went quiet would sleep past its next poll on the API-key deadline (minutes),
+        // freezing the progress figure mid-startup — the exact symptom this telemetry exists to
+        // explain.
+        let startup_settled = startup_poll_settled(is_ready, startup_sent);
+        let startup_wait =
+            (!startup_settled).then(|| STARTUP_POLL.saturating_sub(last_startup.elapsed()));
+        let wake_wait = [order_wait, account_wait, startup_wait]
             .into_iter()
             .flatten()
             .fold(poll_wait, Duration::min);

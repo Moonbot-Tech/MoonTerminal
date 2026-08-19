@@ -19,6 +19,7 @@ mod model;
 mod ordering;
 mod presentation;
 mod server_view;
+mod startup;
 mod table;
 #[cfg(test)]
 mod tests;

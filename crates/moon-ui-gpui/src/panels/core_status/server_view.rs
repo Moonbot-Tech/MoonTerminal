@@ -26,6 +26,9 @@ use super::presentation::{
     LoadLevel, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level, lat_level,
     level_color, memory_free, memory_u16, percent, ping_plain,
 };
+use super::startup::{
+    StartupCell, startup_cell, startup_cell_text, startup_facts, startup_tooltip,
+};
 
 /// IP mask shown until the eye reveals the address; a fixed run avoids leaking the address length.
 const IP_MASK: &str = "************";
@@ -384,6 +387,13 @@ fn server_row(
                     group.api_warn,
                     p,
                 ))
+                // Rolled up from this server's cores so a COLLAPSED group still tells the
+                // truth: an unfinished core wins, otherwise the longest any of them took.
+                .child(startup_text_cell(
+                    group.startup.unwrap_or(StartupCell::Absent),
+                    w.startup,
+                    p,
+                ))
                 .child(
                     div()
                         .w(px(w.cores))
@@ -532,6 +542,14 @@ fn core_row(
                     core.api_warn,
                     p,
                 ))
+                // The per-core cell carries the full detail behind it; the server row above only
+                // summarises, so the hover lives here where there is one snapshot to describe.
+                .child(
+                    startup_text_cell(startup_cell(&core.status, &core.startup), w.startup, p)
+                        .tooltip(crate::panels::common::text_tooltip(startup_tooltip(
+                            &startup_facts(&core.startup),
+                        ))),
+                )
                 // Empty ratio, warning, dot and scrollbar slots, matching the server row's trailing
                 // width so `key` aligns.
                 .child(div().w(px(w.cores)).flex_none())
@@ -749,6 +767,37 @@ fn eye_action(
 ///
 /// Returns:
 ///     A compact metric cell with a stable footprint.
+/// One startup cell: fixed width, clipped, never wrapping.
+///
+/// Deliberately NOT a [`metric_cell`]: that helper reserves a warning-icon lead driven by a
+/// `WarnAxis`, and startup has none — the lead would be space that can never light. This follows
+/// the core-ratio cell instead, which is sized the same way for the same reason.
+///
+/// Args:
+///     cell: The decision from `startup::startup_cell`, or a group's rolled-up equivalent.
+///     value_w: Current column width from [`ByIpWidths`].
+///     p: Active Moon palette.
+///
+/// Returns:
+///     A compact startup cell with a stable footprint.
+fn startup_text_cell(cell: StartupCell, value_w: f32, p: MoonPalette) -> Stateful<Div> {
+    // A finished figure is subordinate to the live metrics beside it: it is frozen history, and
+    // the past-tense wording in the text carries the meaning. Colour is only the second cue.
+    let color = match cell {
+        StartupCell::Progress { .. } => p.amber,
+        StartupCell::Done { .. } => p.text_soft,
+        StartupCell::Absent => p.text_muted,
+    };
+    div()
+        .id("core-status-startup")
+        .w(px(value_w))
+        .flex_none()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_color(rgb(color))
+        .child(startup_cell_text(cell))
+}
+
 fn metric_cell(
     value: String,
     value_w: f32,

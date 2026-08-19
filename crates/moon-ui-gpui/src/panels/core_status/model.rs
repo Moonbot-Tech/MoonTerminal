@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use moon_core::feed::{ConnStatus, CoreEndpoint};
-use moon_core::session::{ApiKeyExpiry, CoreId, CoreSysStatus};
+use moon_core::session::{ApiKeyExpiry, CoreId, CoreStartupStatus, CoreSysStatus};
+
+use super::startup::{StartupCell, startup_cell};
 
 /// Cached display data for one core before server aggregation.
 #[derive(Clone)]
@@ -21,6 +23,9 @@ pub(super) struct CoreStatusRow {
     pub(super) status: ConnStatus,
     /// Latest MoonProto process and machine telemetry.
     pub(super) sys: CoreSysStatus,
+    /// Latest polled startup telemetry. It FREEZES once the core settles, so after a successful
+    /// startup it describes how long that core took to come up rather than a running clock.
+    pub(super) startup: CoreStartupStatus,
     /// Endpoint decoded by the feed without exposing the exported key.
     pub(super) endpoint: Option<CoreEndpoint>,
     /// Whether this specific core has a sustained above-baseline client↔core ping (the per-core ping
@@ -222,6 +227,9 @@ pub(super) struct ServerStatusGroup {
     pub(super) free_physical_memory_mb: Option<u16>,
     /// Freshest available logical-CPU count.
     pub(super) logical_cpu_count: Option<u8>,
+    /// What this server's startup column shows, rolled up from its cores — see [`group_startup`].
+    /// A collapsed group must still tell the truth, so this is not merely the first core's value.
+    pub(super) startup: Option<StartupCell>,
 }
 
 impl ServerStatusGroup {
@@ -278,6 +286,7 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
                 process_memory_mb: None,
                 free_physical_memory_mb: None,
                 logical_cpu_count: None,
+                startup: None,
             });
             position
         });
@@ -292,6 +301,56 @@ pub(super) fn aggregate_servers(rows: &[CoreStatusRow]) -> Vec<ServerStatusGroup
     // unknown-endpoint servers last.
     groups.sort_by_key(|group| (group.address.is_none(), group.address));
     groups
+}
+
+/// Roll one server's startup column up from its cores.
+///
+/// A collapsed group hides its rows, so this cannot be "whatever the first core says". Two rules,
+/// in order:
+///
+/// 1. If ANY core is still coming up, show THAT core's progress — the unfinished one is the reason
+///    somebody opened this panel, and it must not be averaged away by its finished siblings. Ties
+///    break on the least progress, then the longest elapsed, so the worst case wins.
+/// 2. Otherwise, if every core has finished, show the LONGEST time any of them took: "this machine
+///    took N seconds to come up". A mean would understate the slow core and a first-match would be
+///    arbitrary.
+///
+/// Args:
+///     cores: The group's core rows, already collected.
+///
+/// Returns:
+///     The cell to render on the server row, or `None` when no core reports anything.
+pub(super) fn group_startup(cores: &[CoreStatusRow]) -> Option<StartupCell> {
+    let cells: Vec<StartupCell> = cores
+        .iter()
+        .map(|core| startup_cell(&core.status, &core.startup))
+        .collect();
+    let worst_progress = cells
+        .iter()
+        .filter_map(|cell| match *cell {
+            StartupCell::Progress {
+                done,
+                total,
+                elapsed_ms,
+            } => Some((done, total, elapsed_ms)),
+            _ => None,
+        })
+        .min_by_key(|(done, _, elapsed_ms)| (*done, std::cmp::Reverse(*elapsed_ms)));
+    if let Some((done, total, elapsed_ms)) = worst_progress {
+        return Some(StartupCell::Progress {
+            done,
+            total,
+            elapsed_ms,
+        });
+    }
+    cells
+        .iter()
+        .filter_map(|cell| match *cell {
+            StartupCell::Done { elapsed_ms } => Some(elapsed_ms),
+            _ => None,
+        })
+        .max()
+        .map(|elapsed_ms| StartupCell::Done { elapsed_ms })
 }
 
 /// Order flat-mode rows attention-first.
@@ -332,6 +391,7 @@ fn finish_group(group: &mut ServerStatusGroup) {
     // are decided together — the displayed key and the flag beside it cannot drift apart.
     group.api_key = soonest_key(&group.cores);
     group.api_warn = group.cores.iter().any(|core| core.api_warn);
+    group.startup = group_startup(&group.cores);
 
     let mut has_process_memory = false;
     let mut process_memory_mb = 0u64;

@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 
 use moon_core::config::TableSortPreference;
 use moon_core::feed::ConnStatus;
-use moon_core::session::CoreSysStatus;
+use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
 use super::{
     GroupSortField, compare_flat_rows, compare_groups, restore_flat_sort, restore_group_sort,
@@ -32,6 +32,7 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         exch_sev: LatencySeverity::Normal,
         api_key: days.map_or(ApiKeyState::Unknown, ApiKeyState::Days),
         api_warn: false,
+        startup: CoreStartupStatus::default(),
     }
 }
 
@@ -66,6 +67,7 @@ fn group(
             exch_sev: LatencySeverity::Normal,
             api_key: ApiKeyState::Unknown,
             api_warn: false,
+            startup: CoreStartupStatus::default(),
         })
         .collect::<Vec<_>>();
     let ready_count = cores
@@ -90,6 +92,7 @@ fn group(
         process_memory_mb: proc_mb,
         free_physical_memory_mb: free_mb,
         logical_cpu_count: None,
+        startup: None,
     }
 }
 

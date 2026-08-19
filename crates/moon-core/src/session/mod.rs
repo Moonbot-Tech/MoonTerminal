@@ -21,7 +21,10 @@ mod rec_ranges;
 
 /// Re-exported from `feed` (its producer): `CoreData::sys` is this type, so the
 /// session facade keeps `session::CoreSysStatus` valid for the "Core status" panel.
-pub use crate::feed::{ApiKeyExpiry, CoreSysStatus};
+pub use crate::feed::{
+    ApiKeyExpiry, CoreInitStep, CoreStartupState, CoreStartupStatus, CoreSysStatus,
+    INIT_STEPS_TOTAL,
+};
 pub use store::{BalanceState, CoreId, CoreStore};
 
 use std::collections::{HashMap, HashSet};

@@ -39,6 +39,7 @@ rust-i18n мёржит **все** файлы в этой папке в одно 
     Size · Sell · SL · TP · Lev · TS · VStop · Buy · Fill · Strat · Host · Port
     USDT eq. в подписи Size, USDT eq. — техническое обозначение эквивалента
     PRO · FREE (названия тарифов)
+    RTT · MTU (сетевые аббревиатуры в телеметрии старта ядра)
     строку метрик статус-бара (ticks / book / fps / present / CPU / RAM)
     вкладка Настройки → «Линии» целиком (Buy/Sell/Stop/dashed/knots/…)
     технические колонки «Отчёта»: ID · TaskID · ExOrderID · Strat · BaseCur · Sell set
