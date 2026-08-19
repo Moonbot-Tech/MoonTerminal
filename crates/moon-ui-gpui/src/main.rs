@@ -70,29 +70,6 @@ use moon_core::session::{CoreId, SessionManager};
 // shared with MoonUI. Fall back to English when the selected locale has no matching key.
 rust_i18n::i18n!("../../locales", fallback = "en");
 
-/// Request to apply a layout to every tab and window in a group, originating from a detached chart.
-pub(crate) struct ChartApplyAll {
-    pub group: String,
-    /// Whether to include the Main tab: `true` from its popup for every window, `false` from charts.
-    pub include_main: bool,
-    pub mode: Option<chart_persist::StackLayoutMode>,
-    pub height_fit: Option<u16>,
-    pub height_scroll: Option<u16>,
-    /// Copy every relevant setting from the source tab, including price scale and order book state.
-    pub scale: Option<f32>,
-    pub orderbook: Option<bool>,
-    pub liquidations: Option<bool>,
-    pub show_zone: Option<bool>,
-    pub auto_pin: Option<bool>,
-    pub orientation: Option<chart_persist::StackOrientation>,
-    pub cancel_pos: Option<chart_persist::ChartBtnPos>,
-    pub panic_pos: Option<chart_persist::ChartBtnPos>,
-    pub price_axis_pos: Option<chart_persist::PriceAxisPos>,
-    pub time_axis_visible: Option<bool>,
-    pub line_labels: Option<bool>,
-    pub cursor_labels: Option<bool>,
-}
-
 /// Shared backend stored in one `Entity`, drained by coordination loops, and notifying UI observers.
 struct Backend {
     /// Process-wide self-update state shared by every group window.
@@ -411,13 +388,11 @@ struct Backend {
     /// Requests to return a chart tab to its strip after its detached window closes, as
     /// `(group, number, bucket)`. The group's `ChartTabs` consumes each request and reattaches it.
     chart_repin_request: Vec<(String, u32, moon_core::config::ChartBucket)>,
-    /// Apply-layout-to-all requests from detached chart windows, which cannot access group stacks.
-    /// The group's `ChartTabs` consumes them. Chart-originated requests use `include_main = false`;
-    /// requests originating within `ChartTabs` are applied directly without this queue.
-    chart_apply_all: Vec<ChartApplyAll>,
-    /// Apply-candle-settings-to-all requests from detached windows, carrying
-    /// `(group, config, source-window X scale)` and consumed by the group's tab strip.
-    chart_candle_apply_all: Vec<(String, moon_core::market::CandleViewCfg, Option<f32>)>,
+    /// ⧉ "apply to all" requests from detached chart windows, which cannot access group stacks.
+    /// The group's `ChartTabs` consumes them. ONE queue for every popup that has the button, because
+    /// each press is fully described by its value set; requests originating within `ChartTabs` are
+    /// applied directly without this queue.
+    chart_apply_all: Vec<chart_tabs::apply_all::ApplyAllRequest>,
     /// X-scale synchronization request from Shift+middle-click on a chart, carrying the source
     /// OS window and pixels per millisecond. The owner of that same window, either group `ChartTabs`
     /// or `DetachedChartHost`, applies and saves the scale only for charts in that window.

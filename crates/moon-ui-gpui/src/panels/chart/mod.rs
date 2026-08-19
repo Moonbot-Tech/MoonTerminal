@@ -85,13 +85,31 @@ struct ChartSettingsSig {
     theme: ChartTheme,
     orders: OrdersStyleSet,
     follow: bool,
-    /// Global chart-drawing settings. In the signature because the graphics popup writes them into
-    /// `Backend` from a DIFFERENT entity: without this, a chart that is otherwise idle never
-    /// re-renders, and `render` is the only place the value reaches the engine.
+    /// The panel's EFFECTIVE chart-drawing settings. In the signature because a panel following the
+    /// global default is changed from a DIFFERENT entity — the popup writes `layout.chart_graphics`
+    /// — and without this, an otherwise idle chart never re-renders, while `render` is the only
+    /// place the value reaches the engine.
+    ///
+    /// Effective rather than global so that a panel with its OWN override is not woken by every
+    /// edit of a default it does not follow. Its own edits arrive through `set_chart_graphics`.
     chart_graphics: moon_core::config::ChartGraphicsCfg,
+    /// The panel's EFFECTIVE candle settings, in the signature for exactly the same reason.
+    candle_view: moon_core::market::CandleViewCfg,
 }
 
-fn chart_settings_sig(backend: &Backend) -> ChartSettingsSig {
+/// Build the settings signature for a panel whose chart-graphics override is `graphics`.
+///
+/// Args:
+///     backend: Shared backend holding the theme, order styles and the global default.
+///     graphics: The panel's per-tab override, or `None` when it follows the global default.
+///
+/// Returns:
+///     The signature to compare against the panel's stored one.
+fn chart_settings_sig(
+    backend: &Backend,
+    graphics: Option<moon_core::config::ChartGraphicsCfg>,
+    candles: Option<moon_core::market::CandleViewCfg>,
+) -> ChartSettingsSig {
     let effective = backend.preview.as_ref().unwrap_or(&backend.config);
     ChartSettingsSig {
         theme: effective.chart_theme().clone(),
@@ -100,7 +118,10 @@ fn chart_settings_sig(backend: &Backend) -> ChartSettingsSig {
         // From `layout`, not from the previewed config: layout.toml has no Settings-window draft.
         // NORMALIZED, because this value is COMPARED: a hand-edited `nan` never equals itself and
         // would make every backend notification look like a settings change.
-        chart_graphics: moon_chart::normalize_chart_graphics(backend.layout.chart_graphics),
+        chart_graphics: moon_chart::normalize_chart_graphics(
+            graphics.unwrap_or(backend.layout.chart_graphics),
+        ),
+        candle_view: candles.unwrap_or(backend.layout.candle_view),
     }
 }
 
@@ -123,6 +144,10 @@ pub struct ChartPanel {
     /// Per-window/tab candle and trade display settings. `None` follows the global
     /// `layout.candle_view` default; the effective value is applied during rendering.
     candle_view: Option<moon_core::market::CandleViewCfg>,
+    /// Per-window/tab chart-drawing settings: trade-arrow size, connector thickness, which closed
+    /// trades are drawn, and the closed order's sell line. `None` follows the global
+    /// `layout.chart_graphics` default; the effective value is applied during rendering.
+    chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Whether to dim-fill the reserved control zone when zones are separate and the order book is
     /// hidden. This is per window/tab, applied during rendering, and enabled by default.
     show_zone: bool,
@@ -338,9 +363,10 @@ impl ChartPanel {
                 b.retain_chart_orderbook(core, &m);
             });
         }
+        // A fresh panel holds no override yet, so its effective values ARE the global defaults.
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b)
+            chart_settings_sig(&b, None, None)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -364,12 +390,17 @@ impl ChartPanel {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
-                    chart_settings_sig(&b),
+                    chart_settings_sig(&b, this.chart_graphics, this.candle_view),
                 )
             };
             if settings_sig != this.settings_sig {
                 this.settings_sig = settings_sig;
                 this.view_dirty = true;
+                // A panel with NO override follows `layout.chart_graphics`, which a ⧉ press in
+                // another group window rewrites without ever walking this stack. This is the only
+                // place such a panel hears about it, so the trade-kind re-query hangs here too; it
+                // returns immediately unless that pair actually moved.
+                this.requery_trade_history_on_trade_kinds(cx);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -415,6 +446,7 @@ impl ChartPanel {
             orderbook_enabled: true,
             liquidations_enabled: true,
             candle_view: None,
+            chart_graphics: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -504,9 +536,10 @@ impl ChartPanel {
         chart.set_market_source(Some(backend.read(cx).session.market_source()));
         chart.set_figures_store(backend.read(cx).figures.clone());
         let market_ref_epoch = backend.read(cx).chart_market_refs_epoch;
+        // A fresh panel holds no override yet, so its effective values ARE the global defaults.
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b)
+            chart_settings_sig(&b, None, None)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -515,18 +548,30 @@ impl ChartPanel {
             cx.notify();
         })
         .detach();
+        // Stack tiles carry durable trade history too, so they need the same refresh edge Main
+        // has: without it a tile's arrows are a snapshot taken when the tile appeared, and a trade
+        // closing while it is on screen — on the very market a detect flagged — never draws.
+        let report_revision = backend.read(cx).report_revision.clone();
+        cx.observe(&report_revision, |this, _revision, cx| {
+            this.requery_trade_history_on_generation(cx);
+        })
+        .detach();
         cx.observe(&backend, |this, backend, cx| {
             let now = Instant::now();
             let (sig, settings_sig) = {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
-                    chart_settings_sig(&b),
+                    chart_settings_sig(&b, this.chart_graphics, this.candle_view),
                 )
             };
             if settings_sig != this.settings_sig {
                 this.settings_sig = settings_sig;
                 this.view_dirty = true;
+                // Same reason as the twin observer in `new_main`: a panel with no override of its
+                // own hears a ⧉ press from another group window only here, and the durable history
+                // query was narrowed by the previous trade-kind pair.
+                this.requery_trade_history_on_trade_kinds(cx);
                 crate::diag::bump(&crate::diag::CHART_OBS_NOTIFY);
                 cx.notify();
             }
@@ -566,6 +611,7 @@ impl ChartPanel {
             orderbook_enabled: true,
             liquidations_enabled: true,
             candle_view: None,
+            chart_graphics: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -739,8 +785,52 @@ impl ChartPanel {
         if self.candle_view != cfg {
             self.candle_view = cfg;
             self.view_dirty = true;
+            // Restamp for the same reason `set_chart_graphics` does: the signature is derived from
+            // this value, and a stale one turns the next backend notify into a phantom change.
+            self.settings_sig = {
+                let b = self.backend.read(cx);
+                chart_settings_sig(&b, self.chart_graphics, cfg)
+            };
             cx.notify();
         }
+    }
+
+    /// Sets this window/tab's chart-drawing settings. `None` uses the global default; rendering
+    /// applies the effective value through the engine's `set_chart_graphics`.
+    ///
+    /// A change to the two trade-kind flags also re-runs the durable history query: the SQL that
+    /// loads closed trades is narrowed by them, so the set already in memory answers to the PREVIOUS
+    /// pair and re-ticking a flag would otherwise show nothing until the next target change.
+    pub fn set_chart_graphics(
+        &mut self,
+        cfg: Option<moon_core::config::ChartGraphicsCfg>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chart_graphics == cfg {
+            return;
+        }
+        self.chart_graphics = cfg;
+        self.view_dirty = true;
+        // Restamp the signature: it is derived from this very value, so leaving it stale would make
+        // the next backend notification report a settings change that has already been applied.
+        self.settings_sig = {
+            let b = self.backend.read(cx);
+            chart_settings_sig(&b, cfg, self.candle_view)
+        };
+        self.requery_trade_history_on_trade_kinds(cx);
+        cx.notify();
+    }
+
+    /// Returns this panel's EFFECTIVE chart-drawing settings: its own override or the global
+    /// default, NORMALIZED to what the chart actually draws.
+    ///
+    /// Normalized because `layout.toml` is hand-editable and every reader of this config has to see
+    /// the same clamped value the drawing path uses.
+    pub(super) fn effective_chart_graphics(&self, cx: &App) -> moon_core::config::ChartGraphicsCfg {
+        moon_chart::normalize_chart_graphics(
+            self.chart_graphics
+                .unwrap_or(self.backend.read(cx).layout.chart_graphics),
+        )
     }
 
     /// Handles Shift+middle-click by requesting Moonbot-style time-axis synchronization within this
@@ -1032,6 +1122,7 @@ impl ChartPanel {
         if !self.chart.uses_market(core, &market) {
             self.release_market_ref(core, &market, cx);
         }
+        self.clear_history_target_if_unused(cx);
         cx.notify();
     }
 
@@ -1055,6 +1146,7 @@ impl ChartPanel {
         for (core, market) in removed {
             self.release_market_ref(core, &market, cx);
         }
+        self.clear_history_target_if_unused(cx);
         cx.notify();
     }
 

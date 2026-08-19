@@ -430,9 +430,9 @@ chart.layout.height_scroll_hint:
   en: "≥20 — fixed height"
   es: "≥20 — altura fija"
 chart.layout.tip:
-  ru: "Настройки раскладки этой вкладки"
-  en: "This tab's layout settings"
-  es: "Ajustes de disposición de esta pestaña"
+  ru: "Настройки раскладки"
+  en: "Layout settings"
+  es: "Ajustes de disposición"
 chart.layout.apply_all_windows:
   ru: "Применить ко всем окнам"
   en: "Apply to all windows"
@@ -450,9 +450,9 @@ chart.graphics.title:
   en: "Chart graphics"
   es: "Gráficos del chart"
 chart.graphics.tip:
-  ru: "Настройки отрисовки чарта (общее для всех чартов)"
-  en: "Chart drawing settings (global for all charts)"
-  es: "Ajustes de dibujo del chart (global para todos los charts)"
+  ru: "Настройки отрисовки чарта"
+  en: "Chart drawing settings"
+  es: "Ajustes de dibujo del chart"
 chart.graphics.frame_history:
   ru: "История сделок"
   en: "Trade history"
@@ -485,22 +485,18 @@ chart.graphics.hide_closed_sell_hint:
   ru: "Живые ордера всегда показывают свою линию продажи"
   en: "Live orders always keep their sell line"
   es: "Las órdenes activas siempre conservan su línea de venta"
-chart.graphics.global_hint:
-  ru: "Настройки общие для всех чартов и окон"
-  en: "These settings are shared by every chart and window"
-  es: "Estos ajustes son comunes a todos los charts y ventanas"
+chart.apply_all_tabs_windows:
+  ru: "Применить ко всем вкладкам и окнам"
+  en: "Apply to all tabs and windows"
+  es: "Aplicar a todas las pestañas y ventanas"
 chart.candles.title:
   ru: "Свечи и трейды"
   en: "Candles & trades"
   es: "Velas y trades"
-chart.candles.apply_all:
-  ru: "Применить ко всем вкладкам и окнам"
-  en: "Apply to all tabs and windows"
-  es: "Aplicar a todas las pestañas y ventanas"
 chart.candles.tip:
-  ru: "Настройки свечей и сделок (общее для всех чартов)"
-  en: "Candles and trades settings (global for all charts)"
-  es: "Ajustes de velas y operaciones (global)"
+  ru: "Настройки свечей и сделок"
+  en: "Candles and trades settings"
+  es: "Ajustes de velas y operaciones"
 chart.candles.frame_candles:
   ru: "Свечи"
   en: "Candles"

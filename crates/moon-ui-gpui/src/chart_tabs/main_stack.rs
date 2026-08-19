@@ -14,10 +14,10 @@ use moon_ui::{
 use super::stack::{
     ChartStackEntry, apply_setting, chart_stack_card, compare_role, render_chart_stack,
     resolve_layout, retain_nonempty_panels, set_panels_action_btn_pos, set_panels_auto_pin,
-    set_panels_candle_view, set_panels_cursor_labels, set_panels_line_labels,
-    set_panels_liquidations, set_panels_orderbook_enabled, set_panels_price_axis_pos,
-    set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
-    tile_gutter,
+    set_panels_candle_view, set_panels_chart_graphics, set_panels_cursor_labels,
+    set_panels_line_labels, set_panels_liquidations, set_panels_orderbook_enabled,
+    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
+    set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -52,6 +52,8 @@ pub(crate) struct MainChartStack {
     liquidations_enabled: Option<bool>,
     /// Candle and trade display settings for the tab; `None` uses the global default.
     candle_view: Option<moon_core::market::CandleViewCfg>,
+    /// Chart-drawing settings for the tab; `None` uses the global `layout.chart_graphics` default.
+    chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Window X scale in px/ms, synchronized with Shift+middle-click; `None` uses the built-in default.
     /// New charts inherit it, and synchronization applies it to every chart.
     x_ppm: Option<f32>,
@@ -191,6 +193,7 @@ impl MainChartStack {
             orderbook_enabled: None,
             liquidations_enabled: None,
             candle_view: None,
+            chart_graphics: None,
             x_ppm: None,
             show_zone: None,
             auto_pin: None,
@@ -267,6 +270,10 @@ impl MainChartStack {
         if self.candle_view.is_some() {
             let cv = self.candle_view;
             panel.update(cx, |panel, pcx| panel.set_candle_view(cv, pcx));
+        }
+        if self.chart_graphics.is_some() {
+            let cg = self.chart_graphics;
+            panel.update(cx, |panel, pcx| panel.set_chart_graphics(cg, pcx));
         }
         if self.x_ppm.is_some() {
             let ppm = self.x_ppm;
@@ -838,6 +845,21 @@ impl MainChartStack {
     ) {
         apply_setting(&mut self.candle_view, cfg, &self.charts, cx, |c, cx| {
             set_panels_candle_view(c, cfg, cx)
+        });
+    }
+
+    pub(crate) fn chart_graphics(&self) -> Option<moon_core::config::ChartGraphicsCfg> {
+        self.chart_graphics
+    }
+
+    /// Set chart-drawing settings for every chart in this stack and window.
+    pub(crate) fn set_chart_graphics(
+        &mut self,
+        cfg: Option<moon_core::config::ChartGraphicsCfg>,
+        cx: &mut Context<Self>,
+    ) {
+        apply_setting(&mut self.chart_graphics, cfg, &self.charts, cx, |c, cx| {
+            set_panels_chart_graphics(c, cfg, cx)
         });
     }
 

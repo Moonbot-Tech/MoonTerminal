@@ -11,10 +11,10 @@ use moon_ui::MoonVirtualListScrollHandle;
 use super::stack::{
     COMPACT_STABLE, ChartStackEntry, apply_setting, chart_stack_card, compare_role,
     render_chart_stack, resolve_layout, set_panels_action_btn_pos, set_panels_auto_pin,
-    set_panels_candle_view, set_panels_cursor_labels, set_panels_line_labels,
-    set_panels_liquidations, set_panels_orderbook_enabled, set_panels_price_axis_pos,
-    set_panels_scale, set_panels_show_zone, set_panels_time_axis_visible, sync_compare,
-    tile_gutter,
+    set_panels_candle_view, set_panels_chart_graphics, set_panels_cursor_labels,
+    set_panels_line_labels, set_panels_liquidations, set_panels_orderbook_enabled,
+    set_panels_price_axis_pos, set_panels_scale, set_panels_show_zone,
+    set_panels_time_axis_visible, sync_compare, tile_gutter,
 };
 use crate::Backend;
 use crate::panels::ChartPanel;
@@ -49,6 +49,8 @@ pub(crate) struct AddChartStack {
     liquidations_enabled: Option<bool>,
     /// Tab candle/trade display settings (`None` = global default).
     candle_view: Option<moon_core::market::CandleViewCfg>,
+    /// Tab chart-drawing settings (`None` = the global `layout.chart_graphics` default).
+    chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Window X scale (px/ms, synchronized with Shift+middle-click; `None` = built-in default).
     /// New charts inherit it, and synchronization applies it to all charts.
     x_ppm: Option<f32>,
@@ -133,6 +135,7 @@ impl AddChartStack {
             orderbook_enabled: None,
             liquidations_enabled: None,
             candle_view: None,
+            chart_graphics: None,
             x_ppm: None,
             show_zone: None,
             auto_pin: None,
@@ -267,6 +270,41 @@ impl AddChartStack {
         );
     }
 
+    /// Show a market on a panel AND point that panel's durable trade history at it.
+    ///
+    /// The two belong together: the closed-trade arrows are drawn from the durable history, so a
+    /// panel that shows a market without a history target has an empty record set and draws nothing
+    /// — the graphics popup's trade-kind checkboxes then filter a set that was never loaded. Main
+    /// requests its own history in `MainChartStack::open_or_focus`, which is where a tab that opens
+    /// a market explicitly does it.
+    ///
+    /// `track_history_scope`, NOT `apply_history_scope`: a tile put on screen by a detect is showing
+    /// the live edge, and the focusing variant would jump it to the newest closed trade and leave it
+    /// there permanently. The scope is always `Default` (every closed trade for this exact target):
+    /// a Report-refined scope belongs to the Main chart a Report row opens, not to a stack tile.
+    ///
+    /// Args:
+    ///     panel: Panel that will show the market.
+    ///     core: Core the market belongs to.
+    ///     market: Canonical market name.
+    ///     ttl_ms: Idle lifetime for an automatically added chart.
+    ///     cx: Stack context.
+    fn show_market_with_history(
+        panel: &Entity<ChartPanel>,
+        core: CoreId,
+        market: &str,
+        ttl_ms: f64,
+        cx: &mut Context<Self>,
+    ) {
+        panel.update(cx, |panel, pcx| {
+            panel.add_coin(core, market, ttl_ms, pcx);
+            // Re-requesting the same target is nearly free: the request is dropped once the load has
+            // settled, and rate-limited while it is failing — which is what keeps a TTL-extending
+            // re-add, the common case on a busy detect feed, from starting a second read.
+            panel.track_history_scope(core, market.to_string(), pcx);
+        });
+    }
+
     pub(super) fn add_coin(
         &mut self,
         core: CoreId,
@@ -293,7 +331,7 @@ impl AddChartStack {
                 self.flash_arrival(i, cx);
             }
             let panel = self.charts[i].panel.clone();
-            panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
+            Self::show_market_with_history(&panel, core, market, ttl_ms, cx);
             cx.notify();
             return;
         }
@@ -310,7 +348,7 @@ impl AddChartStack {
                 self.touch_count_change(); // A chart reused an empty slot; reset the debounce.
                 self.flash_arrival(i, cx);
                 let panel = self.charts[i].panel.clone();
-                panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
+                Self::show_market_with_history(&panel, core, market, ttl_ms, cx);
                 cx.notify();
                 return;
             }
@@ -375,11 +413,15 @@ impl AddChartStack {
             let cv = self.candle_view;
             panel.update(cx, |panel, pcx| panel.set_candle_view(cv, pcx));
         }
+        {
+            let cg = self.chart_graphics;
+            panel.update(cx, |panel, pcx| panel.set_chart_graphics(cg, pcx));
+        }
         if self.x_ppm.is_some() {
             let ppm = self.x_ppm;
             panel.update(cx, |panel, _| panel.set_default_x_ppm(ppm));
         }
-        panel.update(cx, |panel, pcx| panel.add_coin(core, market, ttl_ms, pcx));
+        Self::show_market_with_history(&panel, core, market, ttl_ms, cx);
         self.charts
             .push(ChartStackEntry::new(core, market.to_string(), panel));
         self.touch_count_change(); // A new chart appeared; reset the debounce interval.
@@ -591,6 +633,10 @@ impl AddChartStack {
         self.candle_view
     }
 
+    pub(crate) fn chart_graphics(&self) -> Option<moon_core::config::ChartGraphicsCfg> {
+        self.chart_graphics
+    }
+
     pub(crate) fn x_ppm(&self) -> Option<f32> {
         self.x_ppm
     }
@@ -622,6 +668,17 @@ impl AddChartStack {
     ) {
         apply_setting(&mut self.candle_view, cfg, &self.charts, cx, |c, cx| {
             set_panels_candle_view(c, cfg, cx)
+        });
+    }
+
+    /// Set chart-drawing settings for every stack chart (per window).
+    pub(crate) fn set_chart_graphics(
+        &mut self,
+        cfg: Option<moon_core::config::ChartGraphicsCfg>,
+        cx: &mut Context<Self>,
+    ) {
+        apply_setting(&mut self.chart_graphics, cfg, &self.charts, cx, |c, cx| {
+            set_panels_chart_graphics(c, cfg, cx)
         });
     }
 

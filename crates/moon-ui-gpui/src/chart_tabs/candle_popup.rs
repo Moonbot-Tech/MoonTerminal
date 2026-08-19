@@ -14,14 +14,15 @@ use moon_core::market::candles::{
     CandleViewCfg,
 };
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
+    MoonCheckbox, MoonCheckboxSize, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
 };
 use rust_i18n::t;
 
-use super::common::{seg_row, LayoutPopupHost, StackSetting};
+use super::common::{LayoutPopupHost, StackSetting, seg_row};
 use crate::design;
-use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup_title};
+use crate::panels::{
+    popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
+};
 
 /// Time-frame labels kept in sync with `CANDLE_TF_CHOICES_MIN`.
 ///
@@ -308,18 +309,16 @@ fn render_candle_popup<T: CandlePopupHost>(
     // default inherited by new tabs.
     let apply_all_btn = {
         let entity = entity.clone();
-        MoonButton::new(SharedString::from(format!("{id}-apply-all")))
-            .label("⧉")
-            .tooltip(t!("chart.candles.apply_all").to_string())
-            .size(MoonButtonSize::Micro)
-            .variant(MoonButtonVariant::Ghost)
-            .on_click(move |_, _w, app| {
+        popup_apply_all_button(
+            SharedString::from(format!("{id}-apply-all")),
+            t!("chart.apply_all_tabs_windows").to_string(),
+            move |_, _w, app: &mut App| {
                 entity.update(app, |this, cx| {
                     let cfg = this.candle_view_current(cx);
                     this.apply_candle_view_all(cfg, cx);
                 });
-            })
-            .render()
+            },
+        )
     };
 
     // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.

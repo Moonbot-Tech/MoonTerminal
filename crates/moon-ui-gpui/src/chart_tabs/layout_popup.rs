@@ -14,7 +14,9 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::design;
-use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup_title};
+use crate::panels::{
+    popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
+};
 use crate::persistence::chart_persist::{
     ChartBtnPos, PriceAxisPos, StackLayoutMode, StackOrientation,
 };
@@ -380,14 +382,13 @@ where
         .render();
 
     // Symbol-only "apply to all" icon with tooltip at the right of the header row. The scope text
-    // distinguishes all windows from charts only.
-    let apply_all_btn = MoonButton::new(SharedString::from(format!("{id}-apply-all")))
-        .label("⧉")
-        .tooltip(apply_all_label)
-        .size(MoonButtonSize::Micro)
-        .variant(MoonButtonVariant::Ghost)
-        .on_click(move |_, _w, app| on_apply_all(app))
-        .render();
+    // distinguishes all windows from charts only, which is why the label is passed in rather than
+    // read from one key like the candle and graphics popups do.
+    let apply_all_btn = popup_apply_all_button(
+        SharedString::from(format!("{id}-apply-all")),
+        apply_all_label,
+        move |_, _w, app: &mut App| on_apply_all(app),
+    );
 
     // Name field only for custom tabs (`rename_input = Some`). The caller owns the input subscription
     // that commits on Blur or Enter.

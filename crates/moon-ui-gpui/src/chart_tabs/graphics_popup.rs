@@ -2,11 +2,12 @@
 //! chart DRAWS: the size of the closed-trade history arrows, the thickness of their entry-to-exit
 //! connector, which closed TRADES appear at all, and whether a closed order keeps its sell line.
 //!
-//! Unlike the layout and candle popups beside it, these settings are GLOBAL: one set for every
-//! chart in the application, stored in `layout.toml` as `WindowLayout::chart_graphics`. There is
-//! deliberately no per-tab override and therefore no "apply to all" button — every chart already
-//! shows the same values. Writing follows the usual global-setting idiom (mutate `b.layout`, raise
-//! `layout_dirty`), and the persistence coordinator saves the file on its next tick.
+//! Like the layout and candle popups beside it, these settings are PER TAB: the target is the tab
+//! strip's active tab or the detached window's panel. The tab spec persists them to `charts.json`
+//! through `ChartTabSpec::chart_graphics`, and a tab without an override follows the global
+//! `layout.chart_graphics` default. The ⧉ button distributes this target's settings to all
+//! Add/Custom tabs and detached windows and updates that default; it includes Main only when Main is
+//! the source, exactly as the candle popup's does.
 //!
 //! All controls are stateless: they are re-derived from the stored config on every render, which is
 //! what lets the popup live in a chart host that repaints constantly.
@@ -18,9 +19,11 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::common::{LayoutPopupHost, seg_row};
+use super::common::{LayoutPopupHost, StackSetting, seg_row};
 use crate::design;
-use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup_title};
+use crate::panels::{
+    popup_apply_all_button, popup_close_button, popup_group, popup_group_inset_px, popup_title,
+};
 
 /// Selectable arrow-size multipliers, inside `moon_chart::trade_marks`'s clamp range.
 ///
@@ -66,7 +69,7 @@ fn nearest(steps: &[f32], value: f32) -> usize {
     best
 }
 
-/// Edit the global config by loading it, mutating it, and writing it back through the host.
+/// Edit the target's config by loading its current value, mutating it, and applying it to the tab.
 fn write_cfg<T: GraphicsPopupHost>(
     entity: &Entity<T>,
     app: &mut App,
@@ -173,10 +176,23 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         .text_size(design::t_caption(cx))
         .text_color(rgb(p.text_muted))
         .child(t!("chart.graphics.hide_closed_sell_hint").to_string());
-    let global_hint = div()
-        .text_size(design::t_caption(cx))
-        .text_color(rgb(p.text_muted))
-        .child(t!("chart.graphics.global_hint").to_string());
+
+    // The ⧉ "apply to all" icon mirrors the candle popup beside it: distribute THIS target's
+    // settings to all non-Main tabs and windows, include Main only when it is the source, then
+    // update the global default inherited by new tabs.
+    let apply_all_btn = {
+        let entity = entity.clone();
+        popup_apply_all_button(
+            SharedString::from(format!("{id}-apply-all")),
+            t!("chart.apply_all_tabs_windows").to_string(),
+            move |_, _w, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    let cfg = this.graphics_cfg(cx);
+                    this.apply_graphics_all(cfg, cx);
+                });
+            },
+        )
+    };
 
     // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     v_flex()
@@ -188,7 +204,7 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                 .w_full()
                 .items_center()
                 .child(popup_title(t!("chart.graphics.title"), p, cx))
-                // No "apply to all" button: the settings are already global.
+                .child(apply_all_btn)
                 .child(popup_close_button(
                     SharedString::from(format!("{id}-close")),
                     {
@@ -221,41 +237,39 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     .child(hide_sell_hint),
             ),
         )
-        .child(global_hint)
         .into_any_element()
 }
 
 /// Host for the graphics popup in either the tab strip or a detached-window header.
 ///
-/// The host supplies only its own open flag and its `Backend` handle: the settings themselves are
-/// global, so unlike [`super::candle_popup::CandlePopupHost`] there is no target tab to resolve and
-/// no per-host "apply to all".
+/// The target is the strip's active tab or the window panel, resolved by the host. Applying and
+/// persisting go through [`LayoutPopupHost::apply_tab_setting`]; each host implements its own
+/// "apply to all", exactly as [`super::candle_popup::CandlePopupHost`] does.
 pub(super) trait GraphicsPopupHost: LayoutPopupHost {
     fn graphics_popup_open(&self) -> bool;
     fn set_graphics_popup_open(&mut self, open: bool);
+    /// Return the target's per-tab override, or `None` to follow the global default.
+    fn graphics_override(&self, cx: &App) -> Option<ChartGraphicsCfg>;
+    /// Apply settings to all non-Main tabs and windows and update the global default. Include Main
+    /// only when the host's source is Main; Add, Custom, and detached sources leave it unchanged.
+    fn apply_graphics_all(&mut self, cfg: ChartGraphicsCfg, cx: &mut Context<Self>);
 
-    /// Read the global settings, NORMALIZED to what the chart actually draws.
+    /// Read the target's effective settings, NORMALIZED to what the chart actually draws.
     ///
     /// The engine normalizes before it stores, so a hand-edited `layout.toml` value outside the
     /// drawable range is rendered as its clamp. Reading the raw value here would light a segment
     /// the chart is not using — and, because a write starts from this value, would also persist
     /// the out-of-range number back untouched.
     fn graphics_cfg(&self, cx: &App) -> ChartGraphicsCfg {
-        moon_chart::normalize_chart_graphics(self.backend().read(cx).layout.chart_graphics)
+        let effective = self
+            .graphics_override(cx)
+            .unwrap_or(self.backend().read(cx).layout.chart_graphics);
+        moon_chart::normalize_chart_graphics(effective)
     }
 
-    /// Store the global settings and mark `layout.toml` dirty for the persistence coordinator.
+    /// Apply settings to the target stacks and persist them in the tab spec.
     fn apply_graphics(&mut self, cfg: ChartGraphicsCfg, cx: &mut Context<Self>) {
-        self.backend().update(cx, |b, bcx| {
-            if b.layout.chart_graphics != cfg {
-                b.layout.chart_graphics = cfg;
-                b.layout_dirty = true;
-                // Every chart panel observes Backend; this is what re-renders them, and their
-                // render pass pushes the new value into the engine.
-                bcx.notify();
-            }
-        });
-        cx.notify();
+        self.apply_tab_setting(StackSetting::Graphics(cfg), cx);
     }
 
     /// Close the popup.

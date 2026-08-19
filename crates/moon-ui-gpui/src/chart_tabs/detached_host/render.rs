@@ -180,8 +180,8 @@ impl Render for DetachedChartHost {
                                     .render(),
                                 cx,
                             ))
-                            // The palette button edits the GLOBAL chart-drawing settings, so a
-                            // detached window reaches exactly the same values as the dock strip.
+                            // The palette button edits THIS window's chart-drawing settings, the
+                            // way the candle button beside it edits this window's candles.
                             .child(graphics_popup::graphics_popup_host(
                                 self,
                                 "detached-chart-graphics",

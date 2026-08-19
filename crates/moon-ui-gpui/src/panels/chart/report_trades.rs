@@ -16,6 +16,13 @@ const HISTORY_LIMIT: usize = 1_000;
 /// Minimum interval between durable refresh reads triggered by report commits.
 const HISTORY_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Minimum spacing between report-generation refreshes on a BACKGROUND chart tile.
+///
+/// One report generation would otherwise start one durable read per open tile, and a stack can hold
+/// dozens. The foreground chart keeps the 5 s edge because it is the one being read; a tile in the
+/// corner of a stack is not worth a fresh SQLite connection six times a minute.
+const HISTORY_REFRESH_INTERVAL_BACKGROUND: Duration = Duration::from_secs(30);
+
 /// Visible durable-history load state for a Main chart.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) enum ReportTradesStatus {
@@ -46,64 +53,31 @@ pub(super) struct ReportTradesState {
     last_refresh_start: Option<Instant>,
     refresh_timer_armed: bool,
     refresh_timer_token: u64,
-    /// The `(show_real_trades, show_emulator_trades)` pair the current history was read with.
+    /// Whether the settings behind the current history admitted ANY trade kind.
     ///
-    /// The two checkboxes narrow the durable read itself rather than the drawing, because the
-    /// real-vs-emulator flag never reaches the terminal per row — it exists only as a predicate on
-    /// the report replica — so a toggle has to re-read. Remembering the pair is what makes that
-    /// re-read fire on a real change and on nothing else.
-    last_trade_kinds: Option<(bool, bool)>,
+    /// The checkboxes filter at DRAWING time (`ChartTradeRecord::emulator` is carried per row), so
+    /// ticking one costs no read at all. The one transition that does is between "nothing is drawn"
+    /// — where the read is skipped outright, because a set nobody will draw is not worth a round
+    /// trip — and "something is drawn", which needs the set that was never fetched. Remembering the
+    /// single boolean is what makes that re-read fire on that transition and on nothing else.
+    last_admitted_any: Option<bool>,
     pub(super) status: ReportTradesStatus,
 }
 
-/// Which emulator kinds one durable-history read may return.
+/// Whether a panel's settings admit ANY closed trade at all.
 ///
-/// Three-valued because `ReportFilter::emulator` is an `Option<bool>` and cannot say "neither", while
-/// both checkboxes off is a legal and reachable UI state. Collapsing that onto `None` would show
-/// EVERY trade at the exact moment the user asked for none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum EmulatorAdmission {
-    /// No predicate at all: real and emulator alike.
-    All,
-    /// Emulator only (`true`) or real only (`false`).
-    Only(bool),
-    /// No row can match, so the read is skipped entirely.
-    Nothing,
-}
-
-/// Intersect the chart's two trade-kind checkboxes with the Report scope's own emulator predicate.
-///
-/// Both are independent narrowings of one set, so the answer is their CONJUNCTION. A chart opened
-/// from a Report pinned to emulator trades, with the emulator checkbox unticked, admits nothing —
-/// answering `Some(true)` there would put back on the chart precisely the rows the user just hid,
-/// and answering `Some(false)` would show rows the Report scope excluded. Neither widening is
-/// acceptable, so the contradiction is named instead of resolved.
+/// Both checkboxes clear is the one setting that changes what is READ rather than what is drawn:
+/// with nothing to draw, the durable query is skipped outright instead of fetching a set that would
+/// be filtered away to nothing. Every other combination reads the same set and differs only in the
+/// drawing filter, which is why ticking a single box costs no database work.
 ///
 /// Args:
-///     show_real: Whether real (non-emulator) trades are drawn.
-///     show_emulator: Whether emulator trades are drawn.
-///     scope: The published Report scope's own emulator predicate, if it carries one.
+///     graphics: The panel's effective chart-drawing settings.
 ///
 /// Returns:
-///     The predicate one read must carry, or [`EmulatorAdmission::Nothing`].
-fn admitted_emulator_kinds(
-    show_real: bool,
-    show_emulator: bool,
-    scope: Option<bool>,
-) -> EmulatorAdmission {
-    // The scope expressed as the same pair, so the intersection is one boolean AND per kind rather
-    // than a nine-arm match over two different encodings of the same fact.
-    let (scope_real, scope_emulator) = match scope {
-        None => (true, true),
-        Some(false) => (true, false),
-        Some(true) => (false, true),
-    };
-    match (show_real && scope_real, show_emulator && scope_emulator) {
-        (true, true) => EmulatorAdmission::All,
-        (true, false) => EmulatorAdmission::Only(false),
-        (false, true) => EmulatorAdmission::Only(true),
-        (false, false) => EmulatorAdmission::Nothing,
-    }
+///     Whether at least one trade kind is drawn.
+fn draws_any_trade_kind(graphics: &moon_core::config::ChartGraphicsCfg) -> bool {
+    graphics.show_real_trades || graphics.show_emulator_trades
 }
 
 /// Read one durable history snapshot without touching GPUI state.
@@ -211,7 +185,7 @@ impl ChartPanel {
         {
             exact_coins.push(label_coin);
         }
-        let (mut filter, report_coin, focus_record_id) = match &scope {
+        let (filter, report_coin, focus_record_id) = match &scope {
             ChartHistoryScope::Default => (None, None, None),
             ChartHistoryScope::Report {
                 filter,
@@ -231,47 +205,41 @@ impl ChartPanel {
             exact_coins.push(report_coin);
         }
 
-        // Which trade kinds the graphics popup admits, intersected with whatever the Report scope
-        // already asked for. Normalized first, for the same reason every other reader of this config
-        // normalizes: `layout.toml` is hand-editable.
-        let graphics =
-            moon_chart::normalize_chart_graphics(self.backend.read(cx).layout.chart_graphics);
-        let trade_kinds = (graphics.show_real_trades, graphics.show_emulator_trades);
-        let admitted = admitted_emulator_kinds(
-            trade_kinds.0,
-            trade_kinds.1,
-            filter.as_ref().and_then(|f| f.emulator),
-        );
+        // THIS panel's effective settings: the popup is per tab, so two tabs on the same market can
+        // legitimately draw different sets.
+        //
+        // The trade-kind checkboxes deliberately do NOT narrow this query — see
+        // `ChartTradeRecord::emulator`: the row cap is applied after the predicate, so filtering
+        // here would let a checkbox decide which trades the history CONTAINS, freeing slots under
+        // the cap and surfacing older trades of the kept kind that had been truncated away. The
+        // price of that choice is the mirror image: with one box clear, the drawn set is that
+        // kind's share of the newest rows rather than a full cap of them. The drawing filter
+        // in `chartdx/trade_history_sync.rs` is the one place that reads them. The Report scope's
+        // own `filter.emulator` is a different thing and travels untouched: it says which rows the
+        // user asked to see, not how they are drawn.
+        let draws_any_kind = {
+            let graphics = self.effective_chart_graphics(cx);
+            draws_any_trade_kind(&graphics)
+        };
 
         self.report_trades.sequence = self.report_trades.sequence.wrapping_add(1);
         let sequence = self.report_trades.sequence;
         self.report_trades.target = Some((core, market.clone()));
         self.report_trades.scope = scope.clone();
-        self.report_trades.last_trade_kinds = Some(trade_kinds);
-        if admitted == EmulatorAdmission::Nothing {
-            // Nothing can match, so no SQL round trip is worth making. The visible set is cleared
-            // whatever `replace_visible` says: the user asked for no trades, and leaving the previous
-            // ones drawn would answer the opposite.
+        self.report_trades.last_admitted_any = Some(draws_any_kind);
+        self.report_trades.last_refresh_start = Some(Instant::now());
+        if !draws_any_kind {
+            // Both checkboxes are clear, so nothing would be drawn from this set: skip the round
+            // trip entirely. The visible set is cleared whatever `replace_visible` says — the user
+            // asked for no trades, and leaving the previous ones drawn would answer the opposite.
             self.report_trades.status = ReportTradesStatus::Empty;
             self.publish_trade_history(Rc::new(Vec::new()), cx);
             cx.notify();
             return;
         }
-        // A manufactured filter is not a widening: `query_chart_trade_history` itself does
-        // `filter.cloned().unwrap_or_default()`, so `Some(ReportFilter::default())` and `None` are the
-        // same query. Only `emulator` is being set here.
-        match admitted {
-            EmulatorAdmission::All => {
-                if let Some(f) = filter.as_mut() {
-                    f.emulator = None;
-                }
-            }
-            EmulatorAdmission::Only(emulator) => {
-                filter.get_or_insert_with(ReportFilter::default).emulator = Some(emulator);
-            }
-            EmulatorAdmission::Nothing => unreachable!("returned above"),
-        }
         if default_needs_catalog && !catalog_ready {
+            // Stamped before the early return as well, or the NotReady rate limit below is inert and
+            // every re-add repeats the label lookup and the republish.
             self.report_trades.status = ReportTradesStatus::NotReady;
             if replace_visible {
                 self.publish_trade_history(Rc::new(Vec::new()), cx);
@@ -279,7 +247,6 @@ impl ChartPanel {
             cx.notify();
             return;
         }
-        self.report_trades.last_refresh_start = Some(Instant::now());
         self.report_trades.refresh_timer_armed = false;
         self.report_trades.refresh_timer_token =
             self.report_trades.refresh_timer_token.wrapping_add(1);
@@ -289,6 +256,7 @@ impl ChartPanel {
             cx.notify();
         }
 
+        crate::diag::bump(&crate::diag::CHART_TRADE_HISTORY_READS);
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
@@ -326,6 +294,9 @@ impl ChartPanel {
                             this.publish_trade_history(Rc::new(history.records), cx);
                         }
                         Err(ReadFail::NotReady) => {
+                            // Re-stamped at the FAILURE, not at the request: a read slower than the
+                            // interval would otherwise leave the retry guard already expired.
+                            this.report_trades.last_refresh_start = Some(Instant::now());
                             this.report_trades.status = ReportTradesStatus::NotReady;
                             if replace_visible {
                                 this.publish_trade_history(Rc::new(Vec::new()), cx);
@@ -333,6 +304,7 @@ impl ChartPanel {
                         }
                         Err(error) => {
                             log::warn!("chart trade history read failed: {error}");
+                            this.report_trades.last_refresh_start = Some(Instant::now());
                             this.report_trades.status = ReportTradesStatus::Failed;
                             if replace_visible {
                                 this.publish_trade_history(Rc::new(Vec::new()), cx);
@@ -364,21 +336,71 @@ impl ChartPanel {
         scope: ChartHistoryScope,
         cx: &mut Context<Self>,
     ) {
+        if self.history_request_is_redundant(core, &market, &scope) {
+            return;
+        }
+        self.load_history_scope(core, market, scope, true, true, cx);
+    }
+
+    /// Point this panel's durable history at a market WITHOUT moving its camera.
+    ///
+    /// The focusing variant above belongs to an explicit user action — opening a market on Main, or
+    /// clicking a Report row — where jumping the view to the trade being inspected IS the request.
+    /// A chart tile that a detect just put on screen is the opposite case: it is showing the live
+    /// edge, and focusing it on the newest closed trade would pull it off the live edge permanently
+    /// (`show_time_range` ends in a persistent manual view).
+    ///
+    /// Args:
+    ///     core: Core that owns the market.
+    ///     market: Canonical market name.
+    ///     cx: Panel context used to start the load.
+    ///
+    /// Returns:
+    ///     Nothing; a redundant request for the settled target does no work.
+    pub(crate) fn track_history_scope(
+        &mut self,
+        core: CoreId,
+        market: String,
+        cx: &mut Context<Self>,
+    ) {
+        let scope = ChartHistoryScope::Default;
+        if self.history_request_is_redundant(core, &market, &scope) {
+            return;
+        }
+        self.load_history_scope(core, market, scope, true, false, cx);
+    }
+
+    /// Whether a history request for this target would repeat work already done or under way.
+    ///
+    /// `Loading | Ready | Empty` are settled: the answer is either in hand or on its way. The two
+    /// FAILURE states are not settled — they must be retried — but not on demand: an unavailable
+    /// replica would otherwise turn a busy detect feed, which re-adds the same market to extend its
+    /// TTL, into one `open_reader` per detection. They are rate-limited to the same interval a
+    /// report-generation refresh uses, and the report-revision observer retries them anyway.
+    fn history_request_is_redundant(
+        &self,
+        core: CoreId,
+        market: &str,
+        scope: &ChartHistoryScope,
+    ) -> bool {
         let same_target = self
             .report_trades
             .target
             .as_ref()
             .is_some_and(|target| target.0 == core && target.1 == market);
-        let settled_same_scope = same_target
-            && self.report_trades.scope == scope
-            && matches!(
-                self.report_trades.status,
-                ReportTradesStatus::Loading | ReportTradesStatus::Ready | ReportTradesStatus::Empty
-            );
-        if settled_same_scope {
-            return;
+        if !same_target || &self.report_trades.scope != scope {
+            return false;
         }
-        self.load_history_scope(core, market, scope, true, true, cx);
+        match self.report_trades.status {
+            ReportTradesStatus::Loading | ReportTradesStatus::Ready | ReportTradesStatus::Empty => {
+                true
+            }
+            ReportTradesStatus::NotReady | ReportTradesStatus::Failed => self
+                .report_trades
+                .last_refresh_start
+                .is_some_and(|started| started.elapsed() < HISTORY_REFRESH_INTERVAL),
+            ReportTradesStatus::Idle => false,
+        }
     }
 
     /// Coalesce report-generation refreshes to at most one durable read every five seconds.
@@ -392,19 +414,25 @@ impl ChartPanel {
         if self.report_trades.target.is_none() {
             return;
         }
+        // A panel drawing no trade kind at all has nothing to refresh: its set is empty by request,
+        // and re-running the skip would only wake the panel once per generation.
+        if self.report_trades.last_admitted_any == Some(false) {
+            return;
+        }
+        let interval = self.history_refresh_interval();
         let elapsed = self
             .report_trades
             .last_refresh_start
             .map(|started| started.elapsed())
-            .unwrap_or(HISTORY_REFRESH_INTERVAL);
-        if elapsed >= HISTORY_REFRESH_INTERVAL {
+            .unwrap_or(interval);
+        if elapsed >= interval {
             self.refresh_trade_history(cx);
             return;
         }
         if self.report_trades.refresh_timer_armed {
             return;
         }
-        let wait = HISTORY_REFRESH_INTERVAL.saturating_sub(elapsed);
+        let wait = interval.saturating_sub(elapsed);
         self.report_trades.refresh_timer_armed = true;
         self.report_trades.refresh_timer_token =
             self.report_trades.refresh_timer_token.wrapping_add(1);
@@ -427,6 +455,18 @@ impl ChartPanel {
         .detach();
     }
 
+    /// How often this panel re-reads durable history when report generations commit.
+    ///
+    /// The foreground chart is the one the user is reading; background tiles trade freshness for the
+    /// per-tile cost of a durable read, because a generation reaches every one of them at once.
+    fn history_refresh_interval(&self) -> Duration {
+        if self.fast {
+            HISTORY_REFRESH_INTERVAL
+        } else {
+            HISTORY_REFRESH_INTERVAL_BACKGROUND
+        }
+    }
+
     /// Re-read durable history when the graphics popup changes which trade kinds are drawn.
     ///
     /// Guarded on the PAIR itself rather than on the settings signature: that signature also moves for
@@ -447,14 +487,44 @@ impl ChartPanel {
         if self.report_trades.target.is_none() {
             return;
         }
-        let graphics =
-            moon_chart::normalize_chart_graphics(self.backend.read(cx).layout.chart_graphics);
-        let kinds = (graphics.show_real_trades, graphics.show_emulator_trades);
-        // `None` means no read has settled yet, and the read that does will stamp the pair itself.
-        if self.report_trades.last_trade_kinds == Some(kinds) {
+        let graphics = self.effective_chart_graphics(cx);
+        let admits_any = draws_any_trade_kind(&graphics);
+        // `None` means no read has settled yet, and the read that does will stamp this itself.
+        // Ticking one box while the other is already on changes only the drawing filter, so the
+        // common case leaves here without touching the database.
+        if self.report_trades.last_admitted_any == Some(admits_any) {
             return;
         }
         self.refresh_trade_history(cx);
+    }
+
+    /// Drop the history target when this panel no longer shows the market it belongs to.
+    ///
+    /// A stale target is not inert: every refresh edge — a report generation, a trade-kind change —
+    /// would start a read for a market this panel stopped drawing, and the records would sit in
+    /// memory for the panel's whole life. A retained COMPRESS slot is exactly this case: it keeps
+    /// its panel while showing nothing.
+    ///
+    /// Args:
+    ///     cx: Panel context used to clear the drawn set.
+    ///
+    /// Returns:
+    ///     Nothing; a target the panel still shows is left alone.
+    pub(super) fn clear_history_target_if_unused(&mut self, cx: &mut Context<Self>) {
+        let Some((core, market)) = self.report_trades.target.clone() else {
+            return;
+        };
+        if self.chart.uses_market(core, &market) {
+            return;
+        }
+        self.report_trades.target = None;
+        self.report_trades.scope = ChartHistoryScope::Default;
+        self.report_trades.last_admitted_any = None;
+        self.report_trades.status = ReportTradesStatus::Idle;
+        // Bump the sequence so a read still in flight for that market cannot land afterwards.
+        self.report_trades.sequence = self.report_trades.sequence.wrapping_add(1);
+        self.publish_trade_history(Rc::new(Vec::new()), cx);
+        cx.notify();
     }
 
     /// Refresh the current exact history after a committed Report generation without refocusing.

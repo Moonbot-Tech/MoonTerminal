@@ -8,6 +8,8 @@
 //! `DetachedChartHost`, lives in [`windows`].
 
 mod add_stack;
+// `pub(crate)` because Backend queues a detached window's ⧉ press as `ApplyAllRequest`.
+pub(crate) mod apply_all;
 mod candle_popup;
 mod graphics_popup;
 // `pub(crate)` because the header price ticker reuses `search` and `render_popup`.
@@ -326,7 +328,7 @@ pub struct ChartTabs {
     layout_popup_open: bool,
     /// Anchored Candles and Trades popup for global candle-display settings.
     candle_popup_open: bool,
-    /// Anchored Chart graphics popup for the global chart-drawing settings.
+    /// Anchored Chart graphics popup for the ACTIVE TAB's chart-drawing settings.
     graphics_popup_open: bool,
     /// Fit-mode height field.
     layout_fit_input: Entity<MoonInputState>,
@@ -406,6 +408,7 @@ impl ChartTabs {
             main_line_labels,
             main_cursor_labels,
             main_candle_view,
+            main_chart_graphics,
             restore_pending,
         ): (
             Option<f32>,
@@ -423,6 +426,7 @@ impl ChartTabs {
             Option<bool>,
             Option<bool>,
             Option<moon_core::market::CandleViewCfg>,
+            Option<moon_core::config::ChartGraphicsCfg>,
             Vec<_>,
         ) = {
             let specs = &backend.read(cx).chart_specs;
@@ -442,6 +446,7 @@ impl ChartTabs {
             let main_line_labels = main_spec.and_then(|s| s.line_labels);
             let main_cursor_labels = main_spec.and_then(|s| s.cursor_labels);
             let main_candle_view = main_spec.and_then(|s| s.candle_view);
+            let main_chart_graphics = main_spec.and_then(|s| s.chart_graphics);
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -460,6 +465,7 @@ impl ChartTabs {
                 main_line_labels,
                 main_cursor_labels,
                 main_candle_view,
+                main_chart_graphics,
                 pending,
             )
         };
@@ -481,6 +487,9 @@ impl ChartTabs {
         }
         if main_candle_view.is_some() {
             main.update(cx, |p, pcx| p.set_candle_view(main_candle_view, pcx));
+        }
+        if main_chart_graphics.is_some() {
+            main.update(cx, |p, pcx| p.set_chart_graphics(main_chart_graphics, pcx));
         }
         if main_show_zone.is_some() {
             main.update(cx, |p, pcx| p.set_show_zone(main_show_zone, pcx));

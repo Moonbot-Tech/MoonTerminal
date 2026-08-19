@@ -27,16 +27,16 @@
 //! is what made the previous design collapse into blobs.
 //!
 //! The arrow size and the connector thickness ARE user-settable, through the chart toolbar's
-//! graphics popup, and arrive per call in [`TradeGeometryCtx`] — a global `layout.toml` setting
-//! that is still independent of zoom. It is deliberately NOT the `orders.toml` one:
+//! graphics popup, and arrive per call in [`TradeGeometryCtx`] — a per-tab setting (with a
+//! `layout.toml` default) that is still independent of zoom. It is deliberately NOT the `orders.toml` one:
 //! `marker_size`/`knot_size` there belong to order lines, and making one slider move both
 //! surfaces is exactly what this layer refused to do.
 
 use moon_core::config::ChartGraphicsCfg;
 
 use crate::layers::{
-    rgb_with_alpha as rgba, MarkerInstance, SegInstance, MARKER_SHAPE_ARROW_DOWN,
-    MARKER_SHAPE_ARROW_UP, SEG_CLAMP_NONE, SEG_EXTEND_NONE, SEG_PATTERN_DASH,
+    MARKER_SHAPE_ARROW_DOWN, MARKER_SHAPE_ARROW_UP, MarkerInstance, SEG_CLAMP_NONE,
+    SEG_EXTEND_NONE, SEG_PATTERN_DASH, SegInstance, rgb_with_alpha as rgba,
 };
 
 /// Half height of an arrow, in logical px. The apex sits ON the trade's price and the body hangs
