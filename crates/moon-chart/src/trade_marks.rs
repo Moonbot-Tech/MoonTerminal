@@ -36,7 +36,7 @@ use moon_core::config::ChartGraphicsCfg;
 
 use crate::layers::{
     rgb_with_alpha as rgba, MarkerInstance, SegInstance, MARKER_SHAPE_ARROW_DOWN,
-    MARKER_SHAPE_ARROW_UP, SEG_EXTEND_NONE, SEG_PATTERN_DASH,
+    MARKER_SHAPE_ARROW_UP, SEG_CLAMP_NONE, SEG_EXTEND_NONE, SEG_PATTERN_DASH,
 };
 
 /// Half height of an arrow, in logical px. The apex sits ON the trade's price and the body hangs
@@ -579,6 +579,7 @@ pub fn build_trade_geometry(
                 thickness,
                 pattern: SEG_PATTERN_DASH,
                 extend: SEG_EXTEND_NONE,
+                clamp: SEG_CLAMP_NONE,
                 color: rgba(rgb, CONNECTOR_ALPHA),
             });
         }

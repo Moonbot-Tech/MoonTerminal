@@ -462,6 +462,53 @@ fn every_backend_draws_all_five_line_styles() {
     }
 }
 
+/// All three backends must PIN a flagged segment to the plot.
+///
+/// The exit line a running position is managed by is drawn on the plot's edge once its price leaves
+/// the visible band, so it stays visible and grabbable at any zoom. The flag rides a spare slot of
+/// an instance every backend already uploads, so a backend that never learned the branch compiles,
+/// uploads and draws exactly as before — and silently clips the line away again on that platform
+/// alone, while the hit test on the same platform still grabs at the edge. Nothing else catches it:
+/// no test here compiles a shader, and DX11 is the only backend anyone runs daily.
+#[test]
+fn every_backend_pins_a_flagged_segment_to_the_plot() {
+    // Each backend spells the plot's top edge in its own syntax, and the bound is asserted in full:
+    // the CPU mirror (`order_geometry::pin_line_y`) subtracts NOTHING from it, on purpose, because
+    // the only thing available to inset by is the thickness — a user setting the highlight scales by
+    // 1.7 — and neither the hit test nor the label column has that number. A backend that insets
+    // moves the line away from where both of them look for it.
+    const BACKENDS: &[(&str, &str)] = &[
+        (
+            "chartdx/shaders/order_lines.hlsl",
+            "float lo = cv_bounds.y;",
+        ),
+        (
+            "chartdx/shaders/chart_native.metal",
+            "float lo = cv.bounds.y;",
+        ),
+        ("chartdx/shaders/native_seg.wgsl", "let lo = cv.bounds.y;"),
+    ];
+    for (path, low_bound) in BACKENDS {
+        // Comments stripped, as the sibling style test does: every one of these shaders carries a
+        // paragraph about the pin, and a test that greps prose passes on a deleted branch.
+        let src = code_only(&read_src(path));
+        assert!(
+            src.contains("s.m.w >= 0.5"),
+            "{path}: no pin branch — a flagged exit line is clipped away instead of held at the edge"
+        );
+        for endpoint in ["clamp(a.y", "clamp(b.y"] {
+            assert!(
+                src.contains(endpoint),
+                "{path}: `{endpoint}` is not pinned — both ends must be, or a pinned line tilts                  instead of staying flat"
+            );
+        }
+        assert!(
+            src.contains(low_bound),
+            "{path}: the pin must hold the line at the plot's own edge (`{low_bound}`), with no              inset the hit test and the labels cannot match"
+        );
+    }
+}
+
 /// All three backends must extend a RAY along its own direction.
 ///
 /// The instance carries three extend modes, and two of them look alike from Rust: `1` moves the far

@@ -556,7 +556,9 @@ pub fn seg_of(s: &SegInstance) -> SegGpu {
     SegGpu {
         pts: [s.t0_rel, s.p0, s.t1_rel, s.p1],
         color: s.color,
-        m: [s.thickness, s.pattern, s.extend, 0.0],
+        // m.w carries the pin flag: the seg shaders clamp a `SEG_CLAMP_PLOT` segment's endpoints
+        // into the plot instead of letting an off-band price take it off screen.
+        m: [s.thickness, s.pattern, s.extend, s.clamp],
     }
 }
 

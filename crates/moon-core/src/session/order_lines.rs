@@ -277,6 +277,24 @@ impl RetainedOrder {
             .fold(self.create_ms, f64::min)
     }
 
+    /// Size the EXIT leg still stands for, in base currency.
+    ///
+    /// The exit shrinks as it fills, so what is left to sell is the honest figure; a leg reporting
+    /// nothing left falls back to the entry size rather than reading as a position of zero, which is
+    /// what a sale from an already-held asset looks like on the wire. Non-positive or non-finite
+    /// input yields zero, so a comparator reading this cannot be handed a NaN.
+    ///
+    /// Lives here rather than beside either of its two readers — the sell-line caption in the label
+    /// column and the tie-break that decides which pinned exit a drag grabs — because they are in
+    /// different crates and were, between them, the third copy of this rule.
+    pub fn exit_size(&self) -> f32 {
+        if self.remaining_size > 0.0 {
+            self.remaining_size
+        } else {
+            self.size.max(0.0)
+        }
+    }
+
     fn new(r: &OrderRow, now_ms: f64, seq: u64) -> Self {
         // The start cannot be in the future because the core clock may lead the local clock;
         // otherwise the line segment degenerates or moves beyond the right edge. An order the core

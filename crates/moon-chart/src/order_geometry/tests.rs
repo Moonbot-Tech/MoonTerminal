@@ -1021,3 +1021,148 @@ fn moonshot_zone_toggle_hides_only_the_corridor() {
         "the order's own lines are untouched by the corridor toggle"
     );
 }
+
+/// `order_geometry.rs:pin_line_y` is the CPU mirror of the seg shaders' `SEG_CLAMP_PLOT` branch.
+/// The hit test and the label column both read it, so a line that leaves the price band is drawn,
+/// grabbed and captioned at one Y or at none — and it answers "did it move", "which edge" and "by
+/// how far" together, so the readers cannot disagree about those either.
+#[test]
+fn pin_line_y_pins_an_off_band_line_to_the_nearer_edge() {
+    // On screen: nothing moves, and the caller is told so.
+    assert_eq!(pin_line_y(150.0, 100.0, 200.0), None);
+    // Above the plot and below it: pinned to that edge, centre exactly on the boundary.
+    let top = pin_line_y(-500.0, 100.0, 200.0).expect("a price above the band is pinned");
+    assert!(near(top.y, 100.0));
+    assert_eq!(top.edge, PlotEdge::Top);
+    assert!(near(top.overshoot, 600.0));
+    let bottom = pin_line_y(5_000.0, 100.0, 200.0).expect("a price below the band is pinned");
+    assert!(near(bottom.y, 300.0));
+    assert_eq!(bottom.edge, PlotEdge::Bottom);
+    assert!(near(bottom.overshoot, 4_700.0));
+    // Both edges of a degenerate plot collapse onto one Y instead of inverting.
+    assert!(near(
+        pin_line_y(5_000.0, 100.0, 0.0).expect("still pinned").y,
+        100.0
+    ));
+    // A NaN layout must not panic on the frame path, which `f32::clamp` would: `max`/`min` ignore
+    // the NaN operand, so the line simply stays where its price put it and reports no pin.
+    assert_eq!(pin_line_y(150.0, f32::NAN, 200.0), None);
+    assert_eq!(pin_line_y(150.0, 100.0, f32::NAN), None);
+}
+
+/// `order_geometry.rs:line_is_pinned` is the single answer to "is this line drawn on the edge",
+/// asked by the geometry, the hit test and the label column alike. It takes the ORDER, so no caller
+/// can reassemble that state wrongly. A line that is disabled or belongs to a closed order has no
+/// current price for the other two to find, so pinning it would leave a stripe on the edge that
+/// cannot be grabbed and carries no caption.
+#[test]
+fn only_a_live_enabled_exit_answers_the_pin_predicate() {
+    let mut row = test_order_with_buy_trace();
+    row.buy_trace = None;
+    row.filled = true;
+    row.fill_pct = 100.0;
+    row.sell_create_time_ms = 2_000.0;
+    row.sell_price = 61_000.0;
+    row.stop_loss = Some(59_000.0);
+    let pinned_kind = |store: &OrderLineStore, kind| {
+        let order = store
+            .iter_market("BTCUSDT")
+            .next()
+            .expect("the fixture order is retained");
+        line_is_pinned(order, kind)
+    };
+
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[row.clone()]));
+    assert!(pinned_kind(&store, LineKind::Sell));
+    for kind in [
+        LineKind::Buy,
+        LineKind::Stop,
+        LineKind::Trailing,
+        LineKind::TakeProfit,
+        LineKind::VStop,
+        LineKind::PendingCond,
+    ] {
+        assert!(!pinned_kind(&store, kind), "{kind:?} must not pin");
+    }
+
+    // The same exit once the core stops reporting it: the line is disabled, has no current price,
+    // and neither the hit test nor the label column would find the stripe pinning would draw.
+    let mut disabled = row.clone();
+    disabled.sell_price = 0.0;
+    let mut off_store = OrderLineStore::default();
+    assert!(off_store.update(&[row.clone()]));
+    off_store.update(&[disabled]);
+    assert!(!pinned_kind(&off_store, LineKind::Sell));
+
+    let mut closed = row;
+    closed.job_is_done = true;
+    let mut closed_store = OrderLineStore::default();
+    assert!(closed_store.update(&[closed]));
+    assert!(!pinned_kind(&closed_store, LineKind::Sell));
+}
+
+/// Only a LIVE exit line is pinned to the plot. The entry and the stop keep their own Y — the pin
+/// exists for the line a running position is managed by, and every extra kind on the edge is one
+/// more line to tell apart there. A closed order's exit is excluded for the same reason its stripe
+/// is hidden by default: it is history, and it would bury the live line under it.
+#[test]
+fn only_a_live_exit_line_is_pinned_to_the_plot() {
+    let mut live = test_order_with_buy_trace();
+    live.uid = 303;
+    live.buy_trace = None;
+    live.buy_price = 60_303.0;
+    live.filled = true;
+    live.fill_pct = 100.0;
+    live.sell_create_time_ms = 2_000.0;
+    live.sell_price = 61_303.0;
+    live.stop_loss = Some(59_303.0);
+
+    let mut closed = test_order_with_buy_trace();
+    closed.uid = 404;
+    closed.buy_trace = None;
+    closed.buy_price = 60_404.0;
+    closed.filled = true;
+    closed.fill_pct = 100.0;
+    closed.sell_create_time_ms = 2_000.0;
+    closed.sell_price = 61_404.0;
+    closed.job_is_done = true;
+
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[live, closed]));
+
+    let segs = draw_order_segments(
+        &store,
+        &OrdersStyle::default(),
+        &ChartGraphicsCfg {
+            // The closed exit has to be DRAWN before its pin flag can be asserted about.
+            hide_closed_sell_line: false,
+            ..ChartGraphicsCfg::default()
+        },
+    );
+    let clamp_at = |price: f32| {
+        segs.iter()
+            .find(|seg| near(seg.p0, price) && near(seg.p1, price))
+            .map(|seg| seg.clamp)
+    };
+    assert_eq!(
+        clamp_at(61_303.0),
+        Some(SEG_CLAMP_PLOT),
+        "a live exit line must be pinned"
+    );
+    assert_eq!(
+        clamp_at(60_303.0),
+        Some(SEG_CLAMP_NONE),
+        "the entry line must keep its own Y"
+    );
+    assert_eq!(
+        clamp_at(59_303.0),
+        Some(SEG_CLAMP_NONE),
+        "the stop line must keep its own Y"
+    );
+    assert_eq!(
+        clamp_at(61_404.0),
+        Some(SEG_CLAMP_NONE),
+        "a closed order's exit must not be pinned"
+    );
+}

@@ -668,6 +668,17 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
         float reach = length(cv.bounds.zw) + length(d) + 1.0;
         b = a + normalize(d + float2(1e-6, 0.0)) * reach;
     }
+    // m.w = SEG_CLAMP_PLOT pins the segment to the plot once its price leaves the visible band, so
+    // an exit line a few percent away stays visible and grabbable at any zoom instead of being
+    // clipped away. Only Y moves; the instance still carries the order's real price. Why there is no
+    // inset, and what mirrors this on the CPU, is on `SEG_CLAMP_PLOT` in moon-chart's
+    // layers/order_lines.rs — stated once, there, for all three backends.
+    if (s.m.w >= 0.5) {
+        float lo = cv.bounds.y;
+        float hi = max(cv.bounds.y + cv.bounds.w, lo);
+        a.y = clamp(a.y, lo, hi);
+        b.y = clamp(b.y, lo, hi);
+    }
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;

@@ -96,7 +96,7 @@ float4 hline_fragment(HOut i) : SV_Target {
     return float4(i.color.rgb, i.color.a);
 }
 
-// ── Segment (SegInstance: pts=(t0,p0,t1,p1), color, m=(thickness,pattern,_,_)) ─
+// ── Segment (SegInstance: pts=(t0,p0,t1,p1), color, m=(thickness,pattern,extend,clamp)) ─
 struct Seg { float4 pts; float4 color; float4 m; };
 StructuredBuffer<Seg> segs : register(t1);
 struct SOut { float4 pos : SV_Position; float4 color : COLOR0; nointerpolation float pattern : TEXCOORD0; float dist : TEXCOORD1; };
@@ -123,6 +123,17 @@ SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
         float2 d = b_raw - a_raw;
         float reach = length(cv_bounds.zw) + length(d) + 1.0;
         b = a + normalize(d + float2(1e-6, 0.0)) * reach;
+    }
+    // m.w = SEG_CLAMP_PLOT pins the segment to the plot once its price leaves the visible band, so
+    // an exit line a few percent away stays visible and grabbable at any zoom instead of being
+    // clipped away. Only Y moves; the instance still carries the order's real price. Why there is no
+    // inset, and what mirrors this on the CPU, is on `SEG_CLAMP_PLOT` in moon-chart's
+    // layers/order_lines.rs — stated once, there, for all three backends.
+    if (s.m.w >= 0.5) {
+        float lo = cv_bounds.y;
+        float hi = max(cv_bounds.y + cv_bounds.w, lo);
+        a.y = clamp(a.y, lo, hi);
+        b.y = clamp(b.y, lo, hi);
     }
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);

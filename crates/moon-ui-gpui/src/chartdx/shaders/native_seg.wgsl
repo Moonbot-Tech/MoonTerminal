@@ -59,11 +59,22 @@ fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32
     let b_raw = data_to_px(cv, t1, s.pts.w);
     // Snap endpoint Y coordinates to whole pixels; otherwise a horizontal order line flickers
     // in thickness/brightness as view_price0 drifts by subpixels (matching hline's round()).
-    let a = vec2<f32>(a_raw.x, round(a_raw.y));
+    var a = vec2<f32>(a_raw.x, round(a_raw.y));
     let b_snapped = vec2<f32>(b_raw.x, round(b_raw.y));
     let d = b_raw - a_raw;
     let reach = length(cv.bounds.zw) + length(d) + 1.0;
-    let b = select(b_snapped, a + normalize(d + vec2<f32>(1e-6, 0.0)) * reach, ray);
+    var b = select(b_snapped, a + normalize(d + vec2<f32>(1e-6, 0.0)) * reach, ray);
+    // m.w = SEG_CLAMP_PLOT pins the segment to the plot once its price leaves the visible band, so
+    // an exit line a few percent away stays visible and grabbable at any zoom instead of being
+    // clipped away. Only Y moves; the instance still carries the order's real price. Why there is no
+    // inset, and what mirrors this on the CPU, is on `SEG_CLAMP_PLOT` in moon-chart's
+    // layers/order_lines.rs — stated once, there, for all three backends.
+    if (s.m.w >= 0.5) {
+        let lo = cv.bounds.y;
+        let hi = max(cv.bounds.y + cv.bounds.w, lo);
+        a.y = clamp(a.y, lo, hi);
+        b.y = clamp(b.y, lo, hi);
+    }
     var dir = b - a;
     let len = max(length(dir), 1e-4);
     dir = dir / len;

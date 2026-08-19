@@ -13,6 +13,9 @@ use moon_core::session::order_lines::LineKind;
 
 use super::ChartPanel;
 
+mod pick;
+use pick::OrderCandidate;
+
 const ORDER_DRAG_PREVIEW_HOLD: Duration = Duration::from_millis(3_000);
 
 /// Cursor movement thresholds for repeating order-line hit testing.
@@ -52,7 +55,23 @@ pub(super) struct OrderDrag {
     button: TradeMouseButton,
     start_price: f64,
     current_price: f64,
+    /// Pointer Y the grab started at, and whether the drag may reprice yet.
+    ///
+    /// A grab on a PINNED line is the one case where the pointer starts nowhere near the price it
+    /// holds: the line is drawn on the plot's edge while its order sits a long way outside the band.
+    /// The drag maps the pointer absolutely — which is what the feature is for, you pull the line
+    /// back onto the scale you are looking at — so without this the first pixel of jitter would
+    /// rewrite the order from, say, +27% to the price at the edge of the visible window and the
+    /// release would send it. Arming costs an intentional drag nothing and makes a twitch a no-op.
+    /// It latches: once the drag is armed, wandering back under the threshold must not snap the
+    /// price back to where it started. An ordinary grab starts armed, since there the pointer IS on
+    /// the price.
+    start_y: f32,
+    armed: bool,
 }
+
+/// Pointer travel that arms a grab on a pinned line, in the hit test's own pixel units.
+const ORDER_PIN_DRAG_ARM_PX: f32 = 4.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct PendingOrderDrag {
@@ -82,6 +101,10 @@ struct OrderHit {
     market: String,
     /// Order position direction used by the join-sells action.
     short: bool,
+    /// Whether the grabbed line was actually MOVED to the plot's edge by the clamp, which decides
+    /// whether the drag has to be armed before it may reprice anything. An exit still on screen is
+    /// grabbed exactly as before — arming it would put a dead zone on an ordinary drag.
+    pinned: bool,
     /// Whether the cursor is on the start cross of an unfilled Buy line.
     ///
     /// Clicking this target cancels the order, as in Moonbot, instead of starting a drag.
@@ -322,8 +345,13 @@ impl ChartPanel {
         let x_of_time =
             |t_ms: f64| plot.x + ((t_ms - epoch_ms) as f32 - left_rel) / window_ms * plot.w;
         let threshold = (6.0 * self.last_ppp).max(6.0);
-        let mut best: Option<(u64, LineKind, f32, bool, f32, f32, f32)> = None;
+        let mut best: Option<OrderCandidate> = None;
         if let Some(core_data) = self.backend.read(cx).session.store().core(core) {
+            // Iterated, not collected: this runs on every mouse-move past the probe threshold, and
+            // the ranking below ends on a unique `seq`, so the winner does not depend on the order
+            // the store hands them over in. What the arbitrary `HashMap` order DOES decide is which
+            // pinned line is painted on top, and that is settled where the painting happens, in
+            // `build_order_geometry`.
             for order in core_data
                 .order_lines
                 .iter_market(&market)
@@ -370,25 +398,62 @@ impl ChartPanel {
                         continue;
                     }
                     let rel_y = 0.5 - (price - center) / range;
-                    let y = plot.y + rel_y * plot.h;
+                    let mut y = plot.y + rel_y * plot.h;
+                    // A pinned exit is drawn on the plot's nearer edge, so that is where the pointer
+                    // must find it. Eligibility is `line_is_pinned`'s to say — the geometry that drew
+                    // it and the labels that caption it ask the same function about the same order —
+                    // while whether it actually MOVED is the pin's own answer: an exit whose price is
+                    // on screen is an ordinary line and keeps every ordinary behaviour.
+                    let pin = moon_chart::order_geometry::line_is_pinned(order, kind)
+                        .then(|| moon_chart::order_geometry::pin_line_y(y, plot.y, plot.h))
+                        .flatten();
+                    if let Some(pin) = pin {
+                        y = pin.y;
+                        // The tolerance below reaches PAST the plot, and under its bottom edge lies
+                        // the time axis. Without this a press meant for the axis would grab an exit
+                        // whose price is nowhere near the pointer — and a pinned grab reprices to
+                        // wherever it is dropped, so a stray one is not a cosmetic mistake.
+                        if pos.1 < plot.y || pos.1 > plot.y + plot.h {
+                            continue;
+                        }
+                    }
                     let dist = (y - pos.1).abs();
-                    if dist <= threshold
-                        && best.is_none_or(|(_, _, _, _, best_dist, _, _)| dist < best_dist)
-                    {
-                        best = Some((
-                            order.uid,
-                            kind,
-                            price,
-                            order.is_short,
-                            dist,
-                            start_x.unwrap_or(f32::NEG_INFINITY),
-                            order.fill_pct,
-                        ));
+                    if dist > threshold {
+                        continue;
+                    }
+                    let candidate = OrderCandidate {
+                        uid: order.uid,
+                        kind,
+                        price,
+                        short: order.is_short,
+                        dist,
+                        start_x: start_x.unwrap_or(f32::NEG_INFINITY),
+                        fill_pct: order.fill_pct,
+                        // How far past the plot the line's own Y sat — zero while it is on screen.
+                        // The same measure the label column ranks pinned captions by, taken from the
+                        // same call, rather than a second derivation in price units to keep in sync.
+                        overshoot: pin.map_or(0.0, |pin| pin.overshoot),
+                        size: order.exit_size(),
+                        seq: order.seq,
+                        pinned: pin.is_some(),
+                    };
+                    if best.as_ref().is_none_or(|best| candidate.beats(best)) {
+                        best = Some(candidate);
                     }
                 }
             }
         }
-        let (uid, kind, price, short, dist, start_x, fill_pct) = best?;
+        let OrderCandidate {
+            uid,
+            kind,
+            price,
+            short,
+            dist,
+            start_x,
+            fill_pct,
+            pinned,
+            ..
+        } = best?;
         // The unfilled entry's start cross is a cancel target using the same roughly seven-pixel
         // threshold. Only an unfilled Buy entry, including short, can be cancelled; a filled entry's
         // cross is historical.
@@ -405,6 +470,7 @@ impl ChartPanel {
             price,
             market,
             short,
+            pinned,
             on_start_cross,
         })
     }
@@ -805,6 +871,8 @@ impl ChartPanel {
             button,
             start_price: price,
             current_price: price,
+            start_y: pos.1,
+            armed: !hit.pinned,
         });
         let visual_changed = self.set_order_interaction(
             Some(OrderHoverKey {
@@ -827,10 +895,17 @@ impl ChartPanel {
         }) else {
             return false;
         };
+        let arm_px = (ORDER_PIN_DRAG_ARM_PX * self.last_ppp).max(ORDER_PIN_DRAG_ARM_PX);
         let mut price_changed = false;
         if let Some(drag) = &mut self.order_drag {
-            price_changed = (drag.current_price - price).abs() > 1e-9;
-            drag.current_price = price;
+            if !drag.armed && (pos.1 - drag.start_y).abs() >= arm_px {
+                drag.armed = true;
+            }
+            // Until it arms, a grab on a pinned line holds the order's real price: the preview must
+            // not show a move the release would not send either.
+            let next = if drag.armed { price } else { drag.start_price };
+            price_changed = (drag.current_price - next).abs() > 1e-9;
+            drag.current_price = next;
         }
         if price_changed {
             self.apply_order_visual(cx);

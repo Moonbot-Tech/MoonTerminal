@@ -223,8 +223,22 @@ pub(super) struct OrderLabel {
     /// Draw-order priority at intersections: lower values draw first and higher values on top.
     /// A true Moonbot-style Y bucket for secondary captions still requires a separate pass.
     pub priority: u8,
-    /// Whether a drag or hover label must render on top without overlap suppression.
+    /// Whether a DRAG label must render on top without overlap suppression. Hover does not set it —
+    /// hovering feeds `order_highlight`, and [`OrderLabel::highlighted`] is that half.
     pub force: bool,
+    /// Whether this label belongs to the order under the pointer.
+    ///
+    /// Only the pinned column reads it, and only to keep the caption: several exits pinned to one
+    /// edge are thinned down to the nearest one's captions, and the painter puts the HIGHLIGHTED
+    /// order's line on top of that pile — thinning its caption away would leave the highlighted
+    /// line labelled with a stranger's numbers.
+    pub highlighted: bool,
+    /// Whether the label follows a line that is PINNED to the plot's edge when its price leaves the
+    /// visible band, and must therefore be clamped the same way instead of dropped off screen.
+    ///
+    /// The text is unaffected: it states the order's real price, percentage and size wherever the
+    /// line ended up, which is the whole point of pinning the drawing and nothing else.
+    pub pinned: bool,
 }
 
 #[derive(Clone)]

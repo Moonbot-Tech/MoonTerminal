@@ -7,9 +7,9 @@ const MB_TRACE_LIGHT_RANGE_MS: f32 = 0.02 * 86_400_000.0;
 const MB_MOONSHOT_ZONE_ALPHA: f32 = 0.15;
 
 use crate::layers::{
-    LineInstance, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT, MarkerInstance, SEG_EXTEND_EDGE,
-    SEG_EXTEND_NONE, SEG_PATTERN_DASH_DOT_DOT, SEG_PATTERN_DOT, SEG_PATTERN_SOLID, SegInstance,
-    ZoneInstance,
+    LineInstance, MarkerInstance, SegInstance, ZoneInstance, MARKER_SHAPE_CROSS, MARKER_SHAPE_KNOT,
+    SEG_CLAMP_NONE, SEG_CLAMP_PLOT, SEG_EXTEND_EDGE, SEG_EXTEND_NONE, SEG_PATTERN_DASH_DOT_DOT,
+    SEG_PATTERN_DOT, SEG_PATTERN_SOLID,
 };
 
 use moon_core::config::{ChartGraphicsCfg, LineStyle, OrdersStyle};
@@ -36,16 +36,113 @@ use crate::trade_marks::{ARROW_HALF_H, ARROW_HALF_W, clamp_arrow_scale};
 /// over a position that is actually held, which is the opposite of what the segment is for.
 const POSITION_HOLD_RGB: [u8; 3] = moon_core::palette::ORANGE;
 
-/// Traced line kinds: (style, index into RetainedOrder::lines).
-fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, usize); 7] {
+/// Which horizontal edge of the plot a line was pinned to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlotEdge {
+    Top,
+    Bottom,
+}
+
+/// Where a line off the price band ends up once pinned.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PinnedLine {
+    /// Y the line is drawn at: the plot boundary it was pinned to.
+    pub y: f32,
+    /// Which boundary that was.
+    pub edge: PlotEdge,
+    /// How far past the plot the line's own Y sat, in the caller's pixels. It ranks pinned lines
+    /// against each other: the smallest overshoot is the one nearest the price on screen.
+    pub overshoot: f32,
+}
+
+/// Pins a line's Y into the plot, or `None` when its price is on screen and nothing moves.
+///
+/// This is the CPU mirror of the [`crate::layers::SEG_CLAMP_PLOT`] branch the three seg shaders
+/// implement, and it exists because a pinned line has to be found by the hit test and labelled by
+/// the text layer at the place it was actually DRAWN, not at the place its price maps to. Two
+/// readers plus three shaders agreeing by hand is how a line ends up visible but not grabbable, so
+/// the arithmetic lives here once and is tested here.
+///
+/// It answers "did it move", "to which edge" and "by how far" TOGETHER, rather than returning a
+/// bare Y for each reader to re-derive those three from float comparisons of its own — the readers
+/// disagreeing about them is the same failure as disagreeing about the Y.
+///
+/// The pin keeps no inset; [`crate::layers::SEG_CLAMP_PLOT`] says why.
+///
+/// `min`/`max` rather than [`f32::clamp`], which PANICS when its bounds are not ordered — and NaN
+/// bounds are exactly that. This sits on the frame path and the hit-test path, where a degenerate
+/// layout must not take the app down. `f32::max`/`min` also IGNORE a NaN operand rather than
+/// propagating it, so a NaN plot leaves the line where its price put it, which is the harmless
+/// direction: the callers already reject a non-finite price before asking, so the only way in is a
+/// broken layout, and an unpinned line under one is better than a panic under one.
+///
+/// Args:
+///     y: Y the price maps to, unclamped.
+///     plot_top: Top edge of the plot.
+///     plot_h: Plot height.
+///
+/// Returns:
+///     Where the line was pinned, or `None` when it already was inside the plot.
+#[inline]
+pub fn pin_line_y(y: f32, plot_top: f32, plot_h: f32) -> Option<PinnedLine> {
+    let pinned = y.max(plot_top).min(plot_top + plot_h);
+    if pinned == y {
+        return None;
+    }
+    Some(PinnedLine {
+        y: pinned,
+        edge: if pinned > y {
+            PlotEdge::Top
+        } else {
+            PlotEdge::Bottom
+        },
+        overshoot: (y - pinned).abs(),
+    })
+}
+
+/// Whether this line of this order is drawn pinned to the plot when its price leaves the band.
+///
+/// The predicate itself, not just the arithmetic: the geometry, the hit test and the label column
+/// each decide independently whether a line is pinned, and three copies of "is it a live exit" is
+/// how one of them keeps drawing a stripe the other two will not grab or caption. It takes the
+/// ORDER rather than the two facts it needs, so no caller can reassemble that state wrongly.
+///
+/// Only the EXIT leg qualifies. The auto-fit admits an order's prices only inside a bounded
+/// expansion of the candle span ([`crate::view::admit_order_band`]), so on a zoomed-in chart a sell
+/// a few percent away is simply off screen — and the exit is exactly the line a user reaches for
+/// while a position is running. Entry, stops and take-profit are deliberately left where their price
+/// puts them: the request was the exit, and every extra kind on the same edge is one more line to
+/// tell apart there.
+///
+/// A CLOSED order's exit is excluded — it is a pale stripe of history, usually hidden outright
+/// (`ChartGraphicsCfg::hide_closed_sell_line`) — and so is a DISABLED line, which has no current
+/// price at all ([`RetainedOrder::lines`] / `LineTrace::current_price` yields `None`): the hit test
+/// and the labels skip it, so pinning it would put a stripe on the edge that cannot be grabbed and
+/// carries no caption.
+///
+/// Args:
+///     order: The order the line belongs to.
+///     kind: Which leg of it.
+///
+/// Returns:
+///     Whether that line is drawn pinned to the plot's nearer edge when off band.
+#[inline]
+pub fn line_is_pinned(order: &RetainedOrder, kind: LineKind) -> bool {
+    kind == LineKind::Sell
+        && order.closed_ms.is_none()
+        && order.lines[kind as usize].off_ms.is_none()
+}
+
+/// Traced line kinds: the style each is drawn with, paired with the leg it belongs to.
+fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
     [
-        (&s.buy, LineKind::Buy as usize),
-        (&s.sell, LineKind::Sell as usize),
-        (&s.stop, LineKind::Stop as usize),
-        (&s.trailing, LineKind::Trailing as usize),
-        (&s.take_profit, LineKind::TakeProfit as usize),
-        (&s.vstop, LineKind::VStop as usize),
-        (&s.pending_cond, LineKind::PendingCond as usize),
+        (&s.buy, LineKind::Buy),
+        (&s.sell, LineKind::Sell),
+        (&s.stop, LineKind::Stop),
+        (&s.trailing, LineKind::Trailing),
+        (&s.take_profit, LineKind::TakeProfit),
+        (&s.vstop, LineKind::VStop),
+        (&s.pending_cond, LineKind::PendingCond),
     ]
 }
 
@@ -94,8 +191,26 @@ pub fn build_order_geometry(
 
     // Visible set: open orders plus the newest max_closed_orders closed orders, in store-ring
     // order (without sorting; the store itself caps closed orders). Then cull by time window.
-    let visible: Vec<&RetainedOrder> =
+    let mut visible: Vec<&RetainedOrder> =
         store.market_draw_orders(market, style.max_closed_orders as usize);
+    // Painter's order, and it has to be decided here: the store is a `HashMap` and hands them over
+    // in whatever order it happens to hold them. It never showed while every line sat at its own
+    // price; pinned exits share one row of pixels, so it now decides which of them the user actually
+    // SEES on top, and an arbitrary order would swap that between frames.
+    //
+    // Only the OPEN prefix is sorted — `market_draw_orders` returns open orders followed by the
+    // closed ring, no closed order can be pinned, and the ring's own order is deliberate. Within the
+    // prefix: the HIGHLIGHTED order last, so the line the pointer is about to grab is the line drawn
+    // on top (the hit test ranks pinned lines by how far off band they are and by position size,
+    // which this side cannot know without the price band, and the highlight is what makes the two
+    // agree where it is visible), then arrival, so among equals the last one is on top. Unstable is
+    // enough and allocates nothing: the key ends in a unique `seq`.
+    let open = visible
+        .iter()
+        .position(|ord| ord.closed_ms.is_some())
+        .unwrap_or(visible.len());
+    visible[..open].sort_unstable_by_key(|ord| (highlight_uid == Some(ord.uid), ord.seq));
+
     for ord in visible {
         let closed = ord.closed_ms.is_some();
         let highlighted = highlight_uid == Some(ord.uid) && !closed;
@@ -179,37 +294,34 @@ pub fn build_order_geometry(
             SEG_PATTERN_SOLID
         };
 
-        for (st, idx) in kinds {
+        for (st, kind) in kinds {
             // After an order closes (filled/cancelled), ONLY its entry/exit (Buy/Sell) remain
             // on the chart, translucent (`closed_alpha`). Remove stop/trailing/vstop/take-profit/
             // pending lines and their server traces for a closed order.
-            if closed && idx != LineKind::Buy as usize && idx != LineKind::Sell as usize {
+            if closed && kind != LineKind::Buy && kind != LineKind::Sell {
                 continue;
             }
             // A closed order's sell line is the pale stripe left behind after the exit filled: it
             // reads as a price the terminal is still tracking when nothing is tracking it any more.
             // Hidden by default, and only for CLOSED orders — a live order always keeps its exit.
-            if closed && graphics.hide_closed_sell_line && idx == LineKind::Sell as usize {
+            if closed && graphics.hide_closed_sell_line && kind == LineKind::Sell {
                 continue;
             }
             // Color a short order's entry/exit with separate styles (like long/short in Moonbot:
             // BuyShort/SellShort): Buy → `buy_short`, Sell → `sell_short`.
-            let st = if ord.is_short && idx == LineKind::Buy as usize {
+            let st = if ord.is_short && kind == LineKind::Buy {
                 &style.buy_short
-            } else if ord.is_short && idx == LineKind::Sell as usize {
+            } else if ord.is_short && kind == LineKind::Sell {
                 &style.sell_short
             } else {
                 st
             };
-            let line = &ord.lines[idx];
+            let line = &ord.lines[kind as usize];
             // A DISABLED line of a live order (off_ms: stop/TP/vstop removed) is not drawn
             // AT ALL: its "history until removal" looked like a fragment artifact at the right
             // edge/in the order book (Mac tester report, 2026-07-09). Order lifetime history is
             // needed only for entry/exit (Buy/Sell), which are never disabled.
-            if line.off_ms.is_some()
-                && idx != LineKind::Buy as usize
-                && idx != LineKind::Sell as usize
-            {
+            if line.off_ms.is_some() && kind != LineKind::Buy && kind != LineKind::Sell {
                 continue;
             }
             let ended = line.off_ms.is_some() || closed;
@@ -220,16 +332,16 @@ pub fn build_order_geometry(
             // `fill_ms` at `None` by construction and its geometry is untouched. A `None` here is
             // also what an order the core never dated a fill for gets, and that one keeps drawing
             // exactly as before rather than being marked at a guessed position.
-            let fill_ms = if idx == LineKind::Buy as usize {
+            let fill_ms = if kind == LineKind::Buy {
                 ord.entry_fill_ms
             } else {
                 None
             };
             let dashed =
-                st.dashed || (idx == LineKind::Buy as usize && ord.pending && style.pending_dashed);
+                st.dashed || (kind == LineKind::Buy && ord.pending && style.pending_dashed);
             // The entry line of a PLACED (not yet filled) order may have its own color
             // (`pending_color`); after filling, it uses the primary `color`. Buy line only (entry).
-            let line_color = if idx == LineKind::Buy as usize && ord.fill_pct <= 0.0 {
+            let line_color = if kind == LineKind::Buy && ord.fill_pct <= 0.0 {
                 st.pending_color.unwrap_or(st.color)
             } else {
                 st.color
@@ -242,7 +354,7 @@ pub fn build_order_geometry(
             };
             let thickness = st.thickness * highlight_thickness_mul;
             let preview_price = drag_preview
-                .filter(|(_, kind, _)| *kind as usize == idx)
+                .filter(|(_, preview_kind, _)| *preview_kind == kind)
                 .map(|(_, _, price)| price);
 
             let trace_points = &line.server_points;
@@ -300,7 +412,8 @@ pub fn build_order_geometry(
                             p1: p1.1,
                             thickness: trace_thickness,
                             pattern: trace_dash,
-                            extend: 0.0,
+                            extend: SEG_EXTEND_NONE,
+                            clamp: SEG_CLAMP_NONE,
                             color: trace_color,
                         });
                     }
@@ -312,7 +425,8 @@ pub fn build_order_geometry(
                             p1: p3.1,
                             thickness: trace_thickness,
                             pattern: trace_dash,
-                            extend: 0.0,
+                            extend: SEG_EXTEND_NONE,
+                            clamp: SEG_CLAMP_NONE,
                             color: trace_color,
                         });
                     }
@@ -324,7 +438,8 @@ pub fn build_order_geometry(
                             p1: p2.1,
                             thickness: 1.0,
                             pattern: trace_inner_dash,
-                            extend: 0.0,
+                            extend: SEG_EXTEND_NONE,
+                            clamp: SEG_CLAMP_NONE,
                             color: trace_color,
                         });
                     }
@@ -344,7 +459,8 @@ pub fn build_order_geometry(
                                 p1: tmp_p,
                                 thickness: 1.0,
                                 pattern: SEG_PATTERN_DOT,
-                                extend: 0.0,
+                                extend: SEG_EXTEND_NONE,
+                                clamp: SEG_CLAMP_NONE,
                                 color: trace_color,
                             });
                         }
@@ -368,7 +484,8 @@ pub fn build_order_geometry(
                             p1: stop_price,
                             thickness: 2.0,
                             pattern: SEG_PATTERN_DOT,
-                            extend: 0.0,
+                            extend: SEG_EXTEND_NONE,
+                            clamp: SEG_CLAMP_NONE,
                             color: rgba(style.stop.color, trace_alpha),
                         });
                     }
@@ -387,7 +504,8 @@ pub fn build_order_geometry(
                         p1: preview_price,
                         thickness,
                         pattern: dash,
-                        extend: 1.0,
+                        extend: SEG_EXTEND_EDGE,
+                        clamp: SEG_CLAMP_NONE,
                         color: col,
                     });
                     if st.start_marker {
@@ -462,7 +580,8 @@ pub fn build_order_geometry(
                             p1: p,
                             thickness: path.thickness,
                             pattern: path_dash,
-                            extend: 0.0,
+                            extend: SEG_EXTEND_NONE,
+                            clamp: SEG_CLAMP_NONE,
                             color: path_col,
                         });
                     }
@@ -480,7 +599,8 @@ pub fn build_order_geometry(
                             p1: p2,
                             thickness: path.thickness,
                             pattern: path_dash,
-                            extend: 0.0,
+                            extend: SEG_EXTEND_NONE,
+                            clamp: SEG_CLAMP_NONE,
                             color: path_col,
                         });
                     }
@@ -488,6 +608,19 @@ pub fn build_order_geometry(
             }
 
             // Main straight line at the current price.
+            //
+            // Pinned to the plot's nearer edge when its price leaves the visible band, so the
+            // line a running position is managed by stays visible and grabbable at any zoom. Only
+            // this segment carries the flag, not the repricing staircase or the server trace beside
+            // it: those are history, and pinning them would smear a whole trace onto one row of
+            // pixels. This is the line the hit test grabs, so this is the line that must be there to
+            // grab. Which lines qualify is `line_is_pinned`'s to say, not this call site's — the hit
+            // test and the label column ask the same function about the same order.
+            let clamp = if line_is_pinned(ord, kind) {
+                SEG_CLAMP_PLOT
+            } else {
+                SEG_CLAMP_NONE
+            };
             segs.push(SegInstance {
                 t0_rel,
                 p0: cur_p,
@@ -500,6 +633,7 @@ pub fn build_order_geometry(
                 } else {
                     SEG_EXTEND_EDGE
                 },
+                clamp,
                 color: col,
             });
 
@@ -509,11 +643,11 @@ pub fn build_order_geometry(
             // This picks the price up at the arrow and carries it to the pane edge in a colour the
             // entry line never uses, and it ENDS when the order closes, since `closed` is the one
             // fact that says the position is no longer held. Entry only: `fill_rel` is `None` for
-            // every other kind by construction (see `fill_ms` above), and the explicit `idx` test
+            // every other kind by construction (see `fill_ms` above), and the explicit kind test
             // keeps it that way should that ever change, so Sell/Stop/Trailing/TakeProfit/VStop are
             // untouched. `SEG_EXTEND_EDGE` is how a live line already reaches the edge, so this one
             // follows the pane's own edge uniform rather than a `t1_rel` computed here.
-            if idx == LineKind::Buy as usize && fill_rel.is_some() && !closed {
+            if kind == LineKind::Buy && fill_rel.is_some() && !closed {
                 segs.push(SegInstance {
                     t0_rel: t1_rel,
                     p0: cur_p,
@@ -522,6 +656,7 @@ pub fn build_order_geometry(
                     thickness,
                     pattern: SEG_PATTERN_SOLID,
                     extend: SEG_EXTEND_EDGE,
+                    clamp: SEG_CLAMP_NONE,
                     color: rgba(POSITION_HOLD_RGB, line_alpha),
                 });
             }
