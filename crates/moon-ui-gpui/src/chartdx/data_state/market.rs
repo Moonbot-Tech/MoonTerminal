@@ -434,9 +434,7 @@ impl ChartDataState {
                     &mut pr.history_buffers,
                 );
                 crate::diag::record_us(&crate::diag::CHART_HISTORY_READ_US, read_timer);
-                if force_history_reset
-                    && let Some(started) = read_timer
-                {
+                if force_history_reset && let Some(started) = read_timer {
                     crate::diag::bump_by(
                         &crate::diag::CHART_HISTORY_RESET_MS,
                         started.elapsed().as_millis().max(1) as u64,
@@ -861,7 +859,8 @@ impl ChartDataState {
                     ],
                     // Logical pixels scaled by the device ratio exactly once, here.
                     m2: [
-                        moon_chart::volume_bars::VOLUME_BAND_MAX_PX * self.last_ppp,
+                        // Once the band-height cap; the height fraction alone decides that now.
+                        0.0,
                         moon_chart::volume_bars::VOLUME_BAR_W_PX * self.last_ppp,
                         moon_chart::volume_bars::VOLUME_SCALE_LINE_PX * self.last_ppp,
                         0.0,

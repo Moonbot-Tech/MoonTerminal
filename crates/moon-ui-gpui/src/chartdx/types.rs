@@ -161,8 +161,12 @@ pub struct VolumeStyleGpu {
     /// `x` style (0 off, 1 bars, 2 hills) - `y` band height as a fraction of the plot -
     /// `z` 1/visible_max, quantized - `w` visible average over visible max, 0..1.
     pub m: [f32; 4],
-    /// `x` band height cap in physical px - `y` max bar width in physical px -
+    /// `x` unused, once a fixed band-height cap - `y` max bar width in physical px -
     /// `z` reference-line thickness in physical px - `w` unused.
+    ///
+    /// `x` is kept rather than repacked: the wire layout of this struct is pinned by
+    /// `theme_contract`, and shifting three live fields to reclaim one dead slot would rewrite
+    /// every shader's member list for nothing.
     pub m2: [f32; 4],
 }
 

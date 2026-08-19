@@ -177,7 +177,7 @@ struct VolumeStyle {
     down: vec4<f32>,
     scale: vec4<f32>,
     m: vec4<f32>,  // x style, y height fraction, z 1/max, w avg/max
-    m2: vec4<f32>, // x band cap px, y bar width px, z line px
+    m2: vec4<f32>, // x retired band cap, y bar width px, z line px
 };
 
 @group(0) @binding(3) var<uniform> vs: VolumeStyle;
@@ -197,7 +197,9 @@ fn vol_center_px(cd: Candle) -> vec2<f32> {
 }
 
 fn vol_band_h() -> f32 {
-    return min(cv.bounds.w * vs.m.y, vs.m2.x);
+    // See candles.hlsl: the height fraction is the whole answer, and the fixed pixel ceiling that
+    // once stood beside it made the setting inert on any ordinary pane.
+    return cv.bounds.w * vs.m.y;
 }
 
 fn vol_height_px(cd: Candle) -> f32 {

@@ -89,8 +89,11 @@ impl RenderState {
             // coins or across timeframes.
             if volume_style.m[0] >= 0.5 {
                 if let Some(stats) = volume_stats {
-                    // Band height mirrors the shader exactly, in logical units.
-                    let band = (plot_h * volume_style.m[1]).min(volume_style.m2[0] / sf);
+                    // Band height mirrors the shader exactly, in logical units. `vol_band_h()` is
+                    // the pane height times the fraction and nothing else — the fixed pixel ceiling
+                    // that once stood beside it is gone, and reading the retired `m2.x` slot here
+                    // would pin every label's height to zero and silently stop drawing them.
+                    let band = plot_h * volume_style.m[1];
                     let avg_frac = volume_style.m[3].clamp(0.0, 1.0).sqrt();
                     for (frac, value) in [(1.0f32, stats.max), (avg_frac, stats.avg)] {
                         // Too close to the band floor to read: skip rather than overprint.

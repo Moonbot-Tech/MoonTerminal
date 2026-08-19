@@ -40,15 +40,16 @@ fn ord_color(
     backend: &Entity<Backend>,
     window: &mut Window,
     cx: &mut Context<SettingsView>,
-    is_light: bool,
     get: fn(&OrdersStyle) -> [u8; 3],
     set: fn(&mut OrdersStyle, [u8; 3]),
 ) -> Entity<MoonColorPickerState> {
     let cur = {
         let b = backend.read(cx);
+        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
         get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
     };
     super::draft_color(window, cx, cur, move |p, c| {
+        let is_light = p.ui_theme_mode == UiThemeMode::Light;
         if get(p.orders.get(is_light)) != c {
             set(p.orders.get_mut(is_light), c);
             true
@@ -63,7 +64,6 @@ fn ord_color(
 fn ord_slider(
     backend: &Entity<Backend>,
     cx: &mut Context<SettingsView>,
-    is_light: bool,
     get: fn(&OrdersStyle) -> f32,
     set: fn(&mut OrdersStyle, f32),
     min: f32,
@@ -72,9 +72,11 @@ fn ord_slider(
 ) -> Entity<MoonSliderState> {
     let cur = {
         let b = backend.read(cx);
+        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
         get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
     };
     super::draft_slider(cx, min, max, step, cur, move |p, f, _bcx| {
+        let is_light = p.ui_theme_mode == UiThemeMode::Light;
         if get(p.orders.get(is_light)) != f {
             set(p.orders.get_mut(is_light), f);
             true
@@ -86,20 +88,12 @@ fn ord_slider(
 
 /// Build a [`LineEd`] for an `OrdersStyle` line field using function-pointer accessors.
 macro_rules! line_ed {
-    ($b:expr, $w:expr, $cx:expr, $il:expr, $line:ident) => {
+    ($b:expr, $w:expr, $cx:expr, $line:ident) => {
         LineEd {
-            color: ord_color(
-                $b,
-                $w,
-                $cx,
-                $il,
-                |o| o.$line.color,
-                |o, v| o.$line.color = v,
-            ),
+            color: ord_color($b, $w, $cx, |o| o.$line.color, |o, v| o.$line.color = v),
             thickness: ord_slider(
                 $b,
                 $cx,
-                $il,
                 |o| o.$line.thickness,
                 |o, v| o.$line.thickness = v,
                 0.5,
@@ -109,7 +103,6 @@ macro_rules! line_ed {
             marker_size: ord_slider(
                 $b,
                 $cx,
-                $il,
                 |o| o.$line.marker_size,
                 |o, v| o.$line.marker_size = v,
                 2.0,
@@ -119,7 +112,6 @@ macro_rules! line_ed {
             marker_thickness: ord_slider(
                 $b,
                 $cx,
-                $il,
                 |o| o.$line.marker_thickness,
                 |o, v| o.$line.marker_thickness = v,
                 0.5,
@@ -129,7 +121,6 @@ macro_rules! line_ed {
             knot_size: ord_slider(
                 $b,
                 $cx,
-                $il,
                 |o| o.$line.knot_size,
                 |o, v| o.$line.knot_size = v,
                 1.0,
@@ -139,7 +130,6 @@ macro_rules! line_ed {
             pending_alpha: ord_slider(
                 $b,
                 $cx,
-                $il,
                 |o| o.$line.pending_alpha,
                 |o, v| o.$line.pending_alpha = v,
                 0.0,
@@ -150,7 +140,6 @@ macro_rules! line_ed {
                 $b,
                 $w,
                 $cx,
-                $il,
                 |o| o.$line.pending_color.unwrap_or(o.$line.color),
                 |o, v| o.$line.pending_color = Some(v),
             ),
@@ -160,9 +149,6 @@ macro_rules! line_ed {
 
 /// Order-line editor state.
 pub(super) struct Lines {
-    /// Theme variant selected when Settings opened: `true` for light and `false` for dark.
-    /// `ord_check` uses it to update the matching draft order-style set.
-    is_light: bool,
     buy: LineEd,
     buy_short: LineEd,
     sell: LineEd,
@@ -188,31 +174,27 @@ pub(super) fn build(
 ) -> Lines {
     // Edit the line set for the application's saved UI mode when Settings opens. Saving a mode
     // change from General makes the other theme's line set active the next time Settings opens.
-    let is_light = backend.read(cx).config.ui_theme_mode == UiThemeMode::Light;
     Lines {
-        is_light,
-        buy: line_ed!(backend, window, cx, is_light, buy),
-        buy_short: line_ed!(backend, window, cx, is_light, buy_short),
-        sell: line_ed!(backend, window, cx, is_light, sell),
-        sell_short: line_ed!(backend, window, cx, is_light, sell_short),
-        stop: line_ed!(backend, window, cx, is_light, stop),
-        trailing: line_ed!(backend, window, cx, is_light, trailing),
-        take_profit: line_ed!(backend, window, cx, is_light, take_profit),
-        vstop: line_ed!(backend, window, cx, is_light, vstop),
-        pending_cond: line_ed!(backend, window, cx, is_light, pending_cond),
-        liq: line_ed!(backend, window, cx, is_light, liq),
+        buy: line_ed!(backend, window, cx, buy),
+        buy_short: line_ed!(backend, window, cx, buy_short),
+        sell: line_ed!(backend, window, cx, sell),
+        sell_short: line_ed!(backend, window, cx, sell_short),
+        stop: line_ed!(backend, window, cx, stop),
+        trailing: line_ed!(backend, window, cx, trailing),
+        take_profit: line_ed!(backend, window, cx, take_profit),
+        vstop: line_ed!(backend, window, cx, vstop),
+        pending_cond: line_ed!(backend, window, cx, pending_cond),
+        liq: line_ed!(backend, window, cx, liq),
         path_color: ord_color(
             backend,
             window,
             cx,
-            is_light,
             |o| o.path.color,
             |o, v| o.path.color = v,
         ),
         path_thickness: ord_slider(
             backend,
             cx,
-            is_light,
             |o| o.path.thickness,
             |o, v| o.path.thickness = v,
             0.5,
@@ -222,7 +204,6 @@ pub(super) fn build(
         active_alpha: ord_slider(
             backend,
             cx,
-            is_light,
             |o| o.active_alpha,
             |o, v| o.active_alpha = v,
             0.05,
@@ -232,7 +213,6 @@ pub(super) fn build(
         closed_alpha: ord_slider(
             backend,
             cx,
-            is_light,
             |o| o.closed_alpha,
             |o, v| o.closed_alpha = v,
             0.0,
@@ -242,7 +222,6 @@ pub(super) fn build(
         max_closed: ord_slider(
             backend,
             cx,
-            is_light,
             |o| o.max_closed_orders as f32,
             |o, v| o.max_closed_orders = v as u32,
             0.0,
@@ -262,12 +241,14 @@ impl SettingsView {
         get: fn(&OrdersStyle) -> bool,
         set: fn(&mut OrdersStyle, bool),
     ) -> impl IntoElement {
-        let is_light = self.lines.is_light;
         let cur = {
             let b = self.backend.read(cx);
+            let is_light =
+                b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
             get(b.preview.as_ref().unwrap_or(&b.config).orders.get(is_light))
         };
         self.draft_checkbox(cx, id, cur, move |p, v| {
+            let is_light = p.ui_theme_mode == UiThemeMode::Light;
             if get(p.orders.get(is_light)) != v {
                 set(p.orders.get_mut(is_light), v);
                 true

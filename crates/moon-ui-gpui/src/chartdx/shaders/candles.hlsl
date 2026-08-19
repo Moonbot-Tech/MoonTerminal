@@ -174,7 +174,7 @@ cbuffer VolumeStyle : register(b2) {
     float4 vs_down;  // falling bucket rgb + band opacity
     float4 vs_scale; // reference-line rgb + alpha
     float4 vs_m;     // x style, y height fraction, z 1/max, w avg/max
-    float4 vs_m2;    // x band cap px, y bar width px, z line px
+    float4 vs_m2;    // x retired band cap, y bar width px, z line px
 };
 
 struct VolumeBarOut {
@@ -190,7 +190,11 @@ float2 vol_center_px(Candle cd) {
 }
 
 float vol_band_h() {
-    return min(cv_bounds.w * vs_m.y, vs_m2.x);
+    // The height fraction is the WHOLE answer. A fixed pixel ceiling used to stand beside it and
+    // silently won on any pane taller than a few hundred pixels, which made the height setting
+    // inert exactly where a user would reach for it. The fraction is already clamped on the Rust
+    // side, so the band cannot grow without bound.
+    return cv_bounds.w * vs_m.y;
 }
 
 float vol_height_px(Candle cd) {
