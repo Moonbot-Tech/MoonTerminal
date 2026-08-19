@@ -3,7 +3,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use moon_core::feed::{ConnStatus, CoreEndpoint};
-use moon_core::session::CoreSysStatus;
+use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
 use super::tree_items;
 use crate::panels::core_status::model::{CoreStatusRow, aggregate_servers};
@@ -22,6 +22,7 @@ fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
         exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
         api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
         api_warn: false,
+        startup: CoreStartupStatus::default(),
     }
 }
 

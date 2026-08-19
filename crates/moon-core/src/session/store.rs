@@ -143,6 +143,11 @@ pub struct CoreData {
     /// Latest typed core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// The Core Status panel observes it through `sys_rev`.
     pub sys: crate::feed::CoreSysStatus,
+    /// Latest startup progress and channel measurements polled from the moonproto client.
+    /// The Core Status panel observes it through `startup_rev`. It FREEZES once the core settles,
+    /// so after a successful startup `elapsed_ms` is how long that core took to come up, not a
+    /// running clock.
+    pub startup: crate::feed::CoreStartupStatus,
     /// Endpoint decoded by the live feed from the exported key.
     ///
     /// It is stored beside health telemetry because the Core Status panel groups processes by the
@@ -194,6 +199,12 @@ pub struct CoreData {
     /// Advances when typed `KernelHealth` metric values or the decoded endpoint change, gating
     /// Core Status without repainting for receipt-time-only updates.
     pub sys_rev: u64,
+    /// Advances when the polled startup snapshot reports different PROGRESS, per
+    /// `CoreStartupStatus::progress_eq`. Deliberately separate from `sys_rev`: that counter is
+    /// documented as covering `KernelHealth` metrics and the decoded endpoint, its field is CLEARED
+    /// on a new connection attempt while startup is RESTARTED, and a compound counter could not be
+    /// gated on selectively by a later consumer.
+    pub startup_rev: u64,
     /// Advances only when the reduced news snapshot changes, gating the News panel without
     /// repainting for duplicate frames that reduce to the same logical set.
     pub news_rev: u64,
@@ -222,6 +233,7 @@ impl CoreData {
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
             sys: crate::feed::CoreSysStatus::default(),
+            startup: crate::feed::CoreStartupStatus::default(),
             endpoint: None,
             news: NewsSnapshot::default(),
             news_seen_at: HashMap::new(),
@@ -245,6 +257,7 @@ impl CoreData {
             log_seq: 0,
             chart_alerts_rev: 0,
             sys_rev: 0,
+            startup_rev: 0,
             news_rev: 0,
         }
     }
@@ -309,6 +322,14 @@ impl CoreData {
         self.sys = crate::feed::CoreSysStatus::default();
         if inputs_changed {
             self.sys_rev = self.sys_rev.wrapping_add(1);
+        }
+        // Startup is RESTARTED by a replacement feed, not merely stale: the previous connection's
+        // "came up in 8.4 s" describes a startup that is over, and carrying it would render a
+        // finished figure beside a core that is connecting again. Unlike `sys` this returns to the
+        // DEFAULT `Connecting` snapshot rather than an absence, because that is what is now true.
+        if self.startup != crate::feed::CoreStartupStatus::default() {
+            self.startup = crate::feed::CoreStartupStatus::default();
+            self.startup_rev = self.startup_rev.wrapping_add(1);
         }
         // The API key belongs to the MoonBot behind the endpoint, and a replacement feed may point
         // at a different one. Keeping the previous host's day count would warn — or stay silent —
@@ -440,6 +461,18 @@ impl CoreData {
                 self.sys = sys;
                 if metrics_changed {
                     self.sys_rev = self.sys_rev.wrapping_add(1);
+                }
+            }
+            FeedMsg::StartupStatus(startup) => {
+                // Same shape as `SysStatus` above and for the same reason: retain every snapshot so
+                // the panel reads the freshest figures, but bump the repaint signature ONLY when
+                // the progress a reader can actually see changed. `progress_eq` also treats two
+                // snapshots in the same terminal phase as equal, so a core that has finished
+                // starting stops costing bumps entirely.
+                let progress_changed = !self.startup.progress_eq(&startup);
+                self.startup = startup;
+                if progress_changed {
+                    self.startup_rev = self.startup_rev.wrapping_add(1);
                 }
             }
             FeedMsg::HedgeMode(on) => {

@@ -12,7 +12,7 @@ use super::ordering::{assign_server_names, compare_flat_rows, compare_groups, na
 use super::{CoreStatusView, server_view};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
-use moon_core::session::CoreSysStatus;
+use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 
 impl CoreStatusView {
     /// Collect filtered core rows for the group scope in canonical order.
@@ -33,9 +33,13 @@ impl CoreStatusView {
             let core = store.core(id);
             let endpoint = core.and_then(|core| core.endpoint);
             let api_expiry = core.and_then(|core| core.api_expiry);
-            let (status, mut sys) = core
-                .map(|c| (c.status.clone(), c.sys))
-                .unwrap_or((ConnStatus::Disconnected, CoreSysStatus::default()));
+            let (status, mut sys, startup) = core
+                .map(|c| (c.status.clone(), c.sys, c.startup))
+                .unwrap_or((
+                    ConnStatus::Disconnected,
+                    CoreSysStatus::default(),
+                    CoreStartupStatus::default(),
+                ));
             // Smooth the displayed CPU with the engine's rolling average (computed backend-side).
             let (proc, system) = b.warn.avg_cpu(id);
             if let Some(proc) = proc {
@@ -49,6 +53,7 @@ impl CoreStatusView {
                 name,
                 status,
                 sys,
+                startup,
                 endpoint,
                 ping_warn: b.warn.core_ping_warn(id),
                 exch_warn: b.warn.core_exch_warn(id),

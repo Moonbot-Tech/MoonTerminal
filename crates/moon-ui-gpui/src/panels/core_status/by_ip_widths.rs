@@ -33,6 +33,9 @@ pub(super) struct ByIpWidths {
     pub(super) api: f32,
     /// Ready/total core-count cell.
     pub(super) cores: f32,
+    /// Startup-progress cell. Like `cores` it carries NO warning-icon lead: startup has no
+    /// `WarnAxis` behind it, so reserving a lead here would be space that can never light.
+    pub(super) startup: f32,
     /// Warning-icon lead inside a metric cell; a header reserves the same lead.
     pub(super) icon: f32,
     /// Extra left indent of a core name under its server.
@@ -66,9 +69,10 @@ pub(super) const TREE_SCROLLBAR_W: f32 = 16.0;
 /// same unit — so the two stay aligned at every font setting instead of at exactly one of them.
 pub(super) const ROW_INSET_REMS: f32 = 0.75;
 
-/// Number of `ROW_GAP_W` gaps in one row: the outer chevron↔body gap plus the nine between the
-/// body's ten children (name · ip · spacer · cpu · mem · ping · exch · key · cores · dot).
-const ROW_GAPS: f32 = 10.0;
+/// Number of `ROW_GAP_W` gaps in one row: the outer chevron↔body gap plus the ten between the
+/// body's eleven children
+/// (name · ip · spacer · cpu · mem · ping · exch · key · startup · cores · dot).
+const ROW_GAPS: f32 = 11.0;
 
 /// Number of `CELL_GAP_W` gaps: one inside each of the five metric cells.
 const CELL_GAPS: f32 = 5.0;
@@ -88,6 +92,7 @@ impl ByIpWidths {
         ping: 64.0,
         api: 84.0,
         cores: 40.0,
+        startup: 84.0,
         icon: 12.0,
         indent: 16.0,
     };
@@ -105,6 +110,7 @@ impl ByIpWidths {
             + self.ping * 2.0
             + self.api
             + self.cores
+            + self.startup
             + self.icon * 5.0
     }
 
@@ -158,6 +164,7 @@ impl ByIpWidths {
             ping: self.ping * k,
             api: self.api * k,
             cores: self.cores * k,
+            startup: self.startup * k,
             icon: self.icon * k,
             indent: self.indent * k,
         }

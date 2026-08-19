@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use super::model::ServerKey;
 use super::presentation::{api_expiry_text, connection_presentation, memory_u16, percent, ping};
+use super::startup::{startup_cell, startup_cell_text};
 use super::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
@@ -50,6 +51,10 @@ fn columns() -> Vec<MoonDataTableColumn> {
         // numbers has to align on the digit. The three word forms ("-", "∞", "истёк") are short
         // enough to sit right without reading oddly.
         numeric("api_key", t!("core_status.col.api_key").to_string(), 96.0),
+        // Left-aligned, unlike the metrics around it: the cell is a phrase ("за 8.4 с", "3/8 · 12.4 с"),
+        // not a figure to align on the digit.
+        MoonDataTableColumn::new("startup", t!("core_status.col.startup").to_string(), 110.0)
+            .sortable(true),
     ]
 }
 
@@ -124,6 +129,7 @@ fn core_status_row(r: &CoreStatusRow, server_names: &HashMap<ServerKey, String>)
         MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from))),
         MoonDataCell::text(count(sys.logical_cpu_count)),
         MoonDataCell::text(api_expiry_text(r.api_key)),
+        MoonDataCell::text(startup_cell_text(startup_cell(&r.status, &r.startup))),
     ])
 }
 

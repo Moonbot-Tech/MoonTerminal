@@ -1,4 +1,4 @@
-use super::ApiKeyExpiry;
+use super::{ApiKeyExpiry, CoreStartupState, CoreStartupStatus};
 
 /// Milliseconds in a day, for readable fixtures.
 const DAY_MS: i64 = 86_400_000;
@@ -188,4 +188,83 @@ fn every_hip3_dex_name_keys_its_own_venue() {
         super::ExchangeId::with_dex(13, "ventuals"),
         super::ExchangeId::with_dex(13, "ventuals")
     );
+}
+
+/// Two snapshots in the SAME terminal phase compare equal even when every byte/block counter
+/// differs — without this a config of 200 already-started cores would bump `startup_rev` forever.
+///
+/// Breakage: dropping the terminal short-circuit makes the full field-by-field comparison run
+/// instead, so two `Ready` snapshots whose counters merely kept accumulating after settling would
+/// compare unequal.
+#[test]
+fn two_snapshots_in_the_same_terminal_phase_compare_equal_regardless_of_counters() {
+    let a = CoreStartupStatus {
+        state: CoreStartupState::Ready,
+        received_sliced_bytes: 1_000,
+        received_sliced_blocks: 10,
+        ..Default::default()
+    };
+    let b = CoreStartupStatus {
+        state: CoreStartupState::Ready,
+        received_sliced_bytes: 99_999,
+        received_sliced_blocks: 500,
+        ..Default::default()
+    };
+    assert!(a.progress_eq(&b));
+}
+
+/// `elapsed_ms` compares at WHOLE-SECOND resolution while the core is still starting.
+///
+/// Breakage: comparing `elapsed_ms` exactly instead of by whole second would bump the panel at
+/// poll rate (every 500 ms) instead of once a second.
+#[test]
+fn elapsed_ms_in_the_same_second_counts_as_equal_progress() {
+    let a = CoreStartupStatus {
+        state: CoreStartupState::Connecting,
+        elapsed_ms: 1_200,
+        ..Default::default()
+    };
+    let b = CoreStartupStatus {
+        state: CoreStartupState::Connecting,
+        elapsed_ms: 1_800,
+        ..Default::default()
+    };
+    assert!(a.progress_eq(&b));
+}
+
+/// Crossing a whole-second boundary still counts as changed progress — the resolution above must
+/// not collapse into "elapsed never matters".
+#[test]
+fn elapsed_ms_crossing_a_second_counts_as_different_progress() {
+    let a = CoreStartupStatus {
+        state: CoreStartupState::Connecting,
+        elapsed_ms: 1_900,
+        ..Default::default()
+    };
+    let b = CoreStartupStatus {
+        state: CoreStartupState::Connecting,
+        elapsed_ms: 2_000,
+        ..Default::default()
+    };
+    assert!(!a.progress_eq(&b));
+}
+
+/// A `current_step` change while non-terminal compares unequal — the panel must repaint when the
+/// core moves from one startup step to the next.
+///
+/// Breakage: dropping `current_step` from the comparison would silently freeze the "step" line in
+/// the hover while the core keeps advancing.
+#[test]
+fn a_current_step_change_counts_as_different_progress() {
+    let a = CoreStartupStatus {
+        state: CoreStartupState::Initializing,
+        current_step: Some(super::CoreInitStep::BaseCheck),
+        ..Default::default()
+    };
+    let b = CoreStartupStatus {
+        state: CoreStartupState::Initializing,
+        current_step: Some(super::CoreInitStep::AuthCheck),
+        ..Default::default()
+    };
+    assert!(!a.progress_eq(&b));
 }

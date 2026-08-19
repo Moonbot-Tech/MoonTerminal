@@ -1,5 +1,5 @@
 use super::*;
-use crate::feed::{CoreCmdTx, LatestMarketRole};
+use crate::feed::{CoreCmdTx, CoreStartupState, LatestMarketRole};
 use moonproto::state::BalanceEvent;
 use moonproto::{ImportedIpVersion, ImportedNetworkConfig};
 
@@ -259,4 +259,46 @@ fn a_failed_strategy_commit_keeps_the_same_generation_due() {
     assert!(retry_due);
     assert!(initial);
     assert!(strategy_db_export_due(true, 7, 42, delivered));
+}
+
+/// `startup_poll_settled` must keep polling while `is_ready` is already true but MoonProto's own
+/// status write has not yet caught up — the `Connected{fresh:false}` / status-write reordering
+/// described on its docstring. Dropping the snapshot half (`is_ready` alone) reddens this: a stale
+/// non-terminal snapshot would incorrectly report settled.
+#[test]
+fn startup_poll_never_stops_on_is_ready_alone_while_the_snapshot_is_still_mid_transition() {
+    let stale = CoreStartupStatus {
+        state: CoreStartupState::Reconnecting,
+        ..Default::default()
+    };
+    assert!(!startup_poll_settled(true, Some(stale)));
+}
+
+/// `startup_poll_settled` must resume polling once a reconnect drops `is_ready`, even though the
+/// last sent snapshot is still the stale terminal `Ready` from the previous episode. Dropping the
+/// `is_ready` half (snapshot alone) reddens this: the stale `Ready` snapshot would latch settled
+/// forever and this reconnect episode would never be polled again.
+#[test]
+fn startup_poll_resumes_on_reconnect_even_with_a_stale_terminal_snapshot() {
+    let stale_ready = CoreStartupStatus {
+        state: CoreStartupState::Ready,
+        ..Default::default()
+    };
+    assert!(!startup_poll_settled(false, Some(stale_ready)));
+}
+
+/// The positive case: once both signals agree the core is up, the poll may stop.
+#[test]
+fn startup_poll_settles_once_both_signals_agree() {
+    let ready = CoreStartupStatus {
+        state: CoreStartupState::Ready,
+        ..Default::default()
+    };
+    assert!(startup_poll_settled(true, Some(ready)));
+}
+
+/// No snapshot has ever been sent yet: the poll must not settle regardless of `is_ready`.
+#[test]
+fn startup_poll_never_settles_before_any_snapshot_was_sent() {
+    assert!(!startup_poll_settled(true, None));
 }

@@ -125,6 +125,16 @@ pub(super) fn server_header(
                     p,
                     weak_view,
                 ))
+                // No icon lead: startup has no `WarnAxis` behind it, so it uses the plain
+                // heading like the core ratio rather than a metric heading whose lead never lights.
+                .child(col_sort_header(
+                    t!("core_status.col.startup").to_string(),
+                    GroupSortField::Startup,
+                    w.startup,
+                    sort,
+                    p,
+                    weak_view,
+                ))
                 .child(col_sort_header(
                     t!("core_status.cores").to_string(),
                     GroupSortField::Cores,
