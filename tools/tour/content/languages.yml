@@ -1,0 +1,12 @@
+# Languages the page ships. Adding one starts here: append an entry, then the
+# generator names every content slot still missing that language.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.languages.v1
+languages:
+- code: ru
+  label: RU
+  html_lang: ru
+- code: en
+  label: EN
+  html_lang: en

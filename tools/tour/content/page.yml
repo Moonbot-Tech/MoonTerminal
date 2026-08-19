@@ -1,0 +1,174 @@
+# Page chrome: headings, leads, and the micro-labels inside the window replica.
+# A slot spelled `{locale: some.key}` is pulled from locales/*.yml — that is the
+# application's own string, in every language, and it is never retyped here.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.page.v1
+strings:
+  th.dark:
+    ru: Тёмная
+    en: Dark
+  th.light:
+    ru: Светлая
+    en: Light
+  hero.h1:
+    ru: Терминал за один экран
+    en: The terminal in one screen
+  hero.lead:
+    ru: 'Ниже — настоящее главное окно MoonTerminal, собранное из палитры, метрик и локалей самого приложения.
+      Нажмите любую зону: объяснение придёт той же строкой подсказки, которую вы увидите, наведя мышь
+      в терминале.'
+    en: 'Below is the real MoonTerminal main window, assembled from the application''s own palette, metrics
+      and locale files. Click any zone: the explanation is the very tooltip you get by hovering it in
+      the terminal.'
+  map.h:
+    ru: Карта окна
+    en: Window map
+  map.lead:
+    ru: Девятнадцать зон. Наведите мышь на окно — границы зон проявятся; кликните любую или пройдите их
+      клавишей Tab.
+    en: Nineteen zones. Hover the window and their outlines appear; click any of them, or walk through
+      with Tab.
+  map.all:
+    ru: Все номера
+    en: All numbers
+  rail.pick:
+    ru: Выберите зону
+    en: Pick a zone
+  rail.h:
+    ru: Наведите или кликните
+    en: Hover or click
+  rail.p:
+    ru: Каждая зона объясняется той же строкой, что живёт в подсказках приложения.
+    en: Every zone is explained by the same string that lives in the application's tooltips.
+  qs.h:
+    ru: Быстрый старт
+    en: Quick start
+  qs.lead:
+    ru: 'Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока
+      настройки не сохранены.'
+    en: 'Five steps from an empty window to a green indicator. Order matters: the terminal does not connect
+      until settings are saved.'
+  pn.h:
+    ru: Панели дока
+    en: Dock panels
+  pn.lead:
+    ru: Двойной клик по вкладке или перетаскивание — панель уезжает в отдельное окно. Двойной клик ещё
+      раз — возвращается.
+    en: Double-click a tab or drag it — the panel pops out into its own window. Double-click again to
+      bring it back.
+  wn.h:
+    ru: Отдельные окна
+    en: Separate windows
+  wn.lead:
+    ru: Пять окон открываются кнопками справа в торговом тулбаре.
+    en: Five windows open from the buttons on the right of the trading toolbar.
+  hk.h:
+    ru: Горячие клавиши
+    en: Hotkeys
+  hk.lead:
+    ru: Всё, кроме встроенных, переназначается в Настройки → Хоткеи. Раскройте нужную группу.
+    en: Everything except the built-ins is rebindable in Settings → Hotkeys. Open the group you need.
+  ft.p:
+    ru: MoonTerminal — десктопный торговый терминал для ядра Moonbot. Windows · macOS · Linux.
+    en: MoonTerminal — desktop trading terminal for the Moonbot core. Windows · macOS · Linux.
+  ft.built:
+    ru: 'Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи
+      и пояснения — locales/*.yml.'
+    en: 'This page is assembled from repository data: palette and metrics from themes/moon-terminal.toml,
+      every label and explanation from locales/*.yml.'
+  ui.ws:
+    locale: workspace.mode.auto
+  ui.balance:
+    ru: 'Баланс:'
+    en: 'Balance:'
+  ui.size:
+    ru: размер
+    en: size
+  ui.pm:
+    locale: toolbar.profit_monitor
+  ui.scr:
+    locale: toolbar.screener
+  ui.str:
+    locale: toolbar.strategies
+  ui.an:
+    locale: toolbar.analytics
+  ui.set:
+    locale: shell.settings_btn
+  ui.coin:
+    locale: chart.coin.search
+  ui.allcores:
+    ru: Все ядра ▾
+    en: All cores ▾
+  ui.real:
+    ru: Реальные ▾
+    en: Real ▾
+  ui.fields:
+    ru: Поля ▾
+    en: Fields ▾
+  ui.conn:
+    ru: 'Соединение:'
+    en: 'Connection:'
+  ui.mode:
+    ru: 'Режим: Demo'
+    en: 'Mode: Demo'
+  tab.orders:
+    locale: dock.tab.orders
+  tab.assets:
+    locale: dock.tab.assets
+  tab.report:
+    locale: dock.tab.report
+  tab.alerts:
+    locale: dock.tab.alerts
+  tab.news:
+    locale: dock.tab.news
+  tab.core_status:
+    locale: dock.tab.core_status
+  tab.log:
+    locale: dock.tab.log
+  tab.detects:
+    locale: dock.tab.detects
+  tab.charts:
+    locale: dock.tab.charts
+  col.core:
+    ru: Ядро
+    en: Core
+  col.side:
+    ru: Сторона
+    en: Side
+  col.token:
+    ru: Токен
+    en: Token
+  col.size:
+    ru: Размер
+    en: Size
+  col.pnl:
+    ru: PNL %
+    en: PNL %
+  col.asset:
+    ru: Актив
+    en: Asset
+  col.qty:
+    ru: Кол-во
+    en: Qty
+  col.val:
+    ru: Стоим.$
+    en: Value $
+  rail.zone:
+    ru: Зона
+    en: Zone
+  rail.source:
+    ru: источник
+    en: source
+  stats.panels:
+    ru: панелей дока
+    en: dock panels
+  stats.windows:
+    ru: отдельных окон
+    en: separate windows
+  stats.hotkeys:
+    ru: горячих клавиш
+    en: hotkeys
+  stats.languages:
+    ru: языка интерфейса
+    en: interface languages

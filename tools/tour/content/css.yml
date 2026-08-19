@@ -1,0 +1,70 @@
+# What the theme does NOT supply.
+#
+# `palette_vars` is an ALLOWLIST, not a filter: MoonUI's theme carries 43 palette
+# tokens and this page uses 31. Emitting all of them would grow CSS variables
+# nothing references, and make the generated diff unreadable.
+#
+# `scale` is a web-only decision with no upstream source: the terminal renders at
+# its native size, a browser page needs it larger. The steps keep the trading
+# toolbar inside the frame instead of letting it clip.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.css.v1
+palette_vars:
+- shell
+- shell-high
+- surface
+- panel
+- chrome
+- tabbar
+- panel-head
+- gutter
+- chart-bg
+- card
+- row-alt
+- head-row
+- border
+- border-soft
+- border-hover
+- row-line
+- text
+- text-soft
+- text-muted
+- text-faint
+- green
+- green-text
+- red
+- red-text
+- orange
+- amber
+- blue
+- yellow
+- accent
+- accent-fg
+- on-accent
+metric_vars:
+  h-header: header_top_h
+  h-toolbar: toolbar_h
+  h-status: status_h
+  h-docktab: dock_tab_h
+  h-thead: table_header_h
+  h-row: table_row_h
+  r-btn: button_radius
+  r-box: container_radius
+scale:
+  base: 1.34
+  steps:
+  - max_width: 1600
+    k: 1.2
+  - max_width: 1400
+    k: 1.08
+  - max_width: 1150
+    k: 0.98
+  - max_width: 900
+    k: 0.9
+selection_ring_alpha:
+  dark: 0.6
+  light: 0.55
+font_stacks:
+  ui: system-ui,-apple-system,'Segoe UI',sans-serif
+  mono: ui-monospace,'Cascadia Mono','Consolas',monospace

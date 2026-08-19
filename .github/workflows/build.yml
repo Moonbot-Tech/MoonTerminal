@@ -198,3 +198,26 @@ jobs:
           # licence allow-list over a 920-package graph is a separate project that would redden
           # this job for reasons that have nothing to do with a compromised release.
           command: check advisories bans sources
+
+  tour:
+    name: Tour page is current
+    runs-on: ubuntu-latest
+    # docs/tour/index.html is GENERATED from locales/*.yml, tools/tour/content/*.yml and a
+    # committed snapshot of MoonUI's theme. Editing a source and forgetting to regenerate is
+    # the failure this gate exists to catch, and it is the one that will actually happen.
+    #
+    # What it CANNOT prove: that the committed theme snapshot still matches MoonUI. MoonUI is a
+    # cargo git dependency with no file path on a runner, so nothing here can read it. The
+    # snapshot is refreshed deliberately by `make tour-theme`, in its own commit.
+    #
+    # Deliberately NOT cached, for the same reason the audit job is not: it compiles nothing,
+    # and a fourth cache writer would evict the live gate caches from the repository's shared
+    # 10 GB Actions quota.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install -r tools/requirements.txt
+      - run: make tour-check
+      - run: make tour-test

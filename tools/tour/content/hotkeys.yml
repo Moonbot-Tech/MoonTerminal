@@ -1,0 +1,142 @@
+# Hotkeys, grouped. `combo` is a literal key combination and is never translated;
+# only the action description is.
+# Edited by hand; rendered into docs/tour/index.html by `make tour`.
+
+_schema: tour.hotkeys.v1
+groups:
+- caption:
+    ru: Размеры и продажи
+    en: Sizes and sells
+  rows:
+  - combo: F1 … F6
+    action:
+      ru: Выбрать размер ручного ордера 1–6
+      en: Select manual order size 1–6
+  - combo: Shift+F7 … Shift+F12
+    action:
+      ru: Выбрать фиксированную продажу S1–S6
+      en: Select fixed sell S1–S6
+- caption:
+    ru: Торговые команды
+    en: Trading commands
+  rows:
+  - combo: Alt+1
+    action:
+      ru: Новый лонг
+      en: New Long
+  - combo: Alt+3
+    action:
+      ru: Новый шорт
+      en: New Short
+  - combo: Alt+Z
+    action:
+      ru: Отменить покупку
+      en: Cancel Buy
+  - combo: Alt+A
+    action:
+      ru: Отменить все покупки
+      en: Cancel All Buys
+  - combo: Alt+5
+    action:
+      ru: Паник-селл одной позиции
+      en: Panic Sell One
+  - combo: Alt+6
+    action:
+      ru: Паник-селл
+      en: Panic Sell
+  - combo: Alt+E
+    action:
+      ru: Объединить продажи
+      en: Join Sells
+  - combo: Alt+C
+    action:
+      ru: Разбить ордер на 3 части
+      en: Split order into 3 parts
+  - combo: Ctrl+X
+    action:
+      ru: Разбить ордер на N частей
+      en: Split order into N parts
+  - combo: Ctrl+S
+    action:
+      ru: Продажи в прямоугольник
+      en: Sells to rectangle
+- caption:
+    ru: Сдвиг ордеров
+    en: Shifting orders
+  rows:
+  - combo: Shift+↑ / Shift+↓
+    action:
+      ru: Сдвинуть покупку на ±1%
+      en: Shift buy by ±1%
+  - combo: Alt+↑ / Alt+↓
+    action:
+      ru: Сдвинуть продажу на ±1%
+      en: Shift sell by ±1%
+- caption:
+    ru: График и фигуры
+    en: Chart and figures
+  rows:
+  - combo: Alt+F
+    action:
+      ru: Переключить графики
+      en: Switch charts
+  - combo: Ctrl+Q / Ctrl+W
+    action:
+      ru: Масштаб + / −
+      en: Scale + / −
+  - combo: Ctrl+H
+    action:
+      ru: Горизонтальная линия
+      en: Draw horizontal line
+  - combo: Ctrl+L
+    action:
+      ru: Отрезок
+      en: Draw segment
+  - combo: Ctrl+T
+    action:
+      ru: Треугольник
+      en: Draw triangle
+  - combo: Ctrl+K
+    action:
+      ru: Канал
+      en: Draw channel
+  - combo: Alt+D
+    action:
+      ru: Следующий инструмент рисования, режим не выключается
+      en: Next drawing tool, the mode stays on
+  - combo: Ctrl+B
+    action:
+      ru: Поставить фигуру на сигнал
+      en: Arm the figure as an alert
+  - combo: Ctrl+F10
+    action:
+      ru: Скопировать график в буфер — только Windows, на диск ничего не пишется
+      en: Copy the chart to the clipboard — Windows only, nothing is written to disk
+- caption:
+    ru: Встроенные, не переназначаются
+    en: Built-in, not rebindable
+  rows:
+  - combo: Wheel
+    action:
+      ru: Зум по времени
+      en: Zoom by time
+  - combo: Shift+Wheel / Alt+Wheel
+    action:
+      ru: Прокрутка графика влево-вправо
+      en: Pan the chart left and right
+  - combo: Escape
+    action:
+      ru: Закрыть активный Main-график (режим рисования не выключает)
+      en: Close the active Main chart (does not leave draw mode)
+  - combo: Shift+Escape
+    action:
+      ru: Закрыть все Main-графики во всех группах
+      en: Close every Main chart in every group
+  - combo: Tab / Delete
+    action:
+      ru: На ордерной линии — отменить ордер; с выделенной фигурой Delete удаляет фигуру
+      en: Over an order line — cancel that order; with a figure selected, Delete removes the figure
+  - combo: Ctrl+Shift+F10
+    action:
+      ru: Вернуть все окна на экран
+      en: Reset every window position onscreen
