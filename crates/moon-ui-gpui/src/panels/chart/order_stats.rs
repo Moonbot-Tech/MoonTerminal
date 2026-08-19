@@ -45,6 +45,13 @@ pub(super) struct StatFact {
     pub(super) text: String,
     /// Colour role.
     pub(super) tone: StatTone,
+    /// Whether this figure opens a new group of related figures.
+    ///
+    /// The render file draws a hairline rule before every such figure but the first one on screen,
+    /// so the row reads as groups rather than as one undifferentiated run of badges. It lives here
+    /// rather than in the render file because grouping is a property of what the figures MEAN — the
+    /// profit and its percentage are one quantity stated twice — and that is this module's subject.
+    pub(super) leads_group: bool,
 }
 
 /// The overlay's figures split by what a narrow chart may drop.
@@ -112,8 +119,12 @@ fn is_open_here(row: &OrderRow, market: &str) -> bool {
 ///
 /// Returns:
 ///     A figure ready for the essential head or the droppable tail.
-fn fact(text: String, tone: StatTone) -> StatFact {
-    StatFact { text, tone }
+fn fact(text: String, tone: StatTone, leads_group: bool) -> StatFact {
+    StatFact {
+        text,
+        tone,
+        leads_group,
+    }
 }
 
 /// Choose a money colour role from the sign of the ROUNDED display amount.
@@ -169,12 +180,13 @@ fn sum_position<'a>(rows: impl Iterator<Item = &'a OrderRow>) -> Position {
 
 /// Assemble every figure the chart overlay states about this market's open orders.
 ///
-/// The tail order is the priority order and is deliberate. Unrealized profit leads it because it
-/// answers "how is this position doing right now" and is recoverable from nothing else drawn on the
-/// chart. The current notional follows: it is why a given profit matters, but the user chose it
-/// when opening the position and it moves slowly. The percentage closes the tail and is therefore
-/// the first figure to go: its denominator is a different quantity from the visible sum, so a
-/// percentage read against that sum is a misreading the narrow case should not invite.
+/// The tail order is BOTH the reading order and the priority order, and the two are deliberately the
+/// same list: a figure that survives a narrower chart must not also move sideways on it, or the
+/// position a user has learnt to read a number from would depend on the window width. It runs from
+/// what the position IS to how it is doing — the exposed notional first, then the unrealized profit,
+/// then that profit as a percentage. The percentage closes the tail and is therefore the first
+/// figure to go: its denominator is the ENTRY notional, a different quantity from the visible sum,
+/// so a percentage read against that sum is a misreading the narrow case should not invite.
 ///
 /// Args:
 ///     rows: Every order row of the chart's core; terminal rows and other markets are filtered here.
@@ -205,6 +217,7 @@ pub(super) fn order_stats(
     let essential = vec![fact(
         t!("chart.order_stats.count", n = position.open).to_string(),
         StatTone::Soft,
+        true,
     )];
     // The head is built HERE, so the caller could not have charged for it: it knows the room the
     // row has, not the strings this function chose to put in it. Charging it here is what keeps
@@ -220,13 +233,6 @@ pub(super) fn order_stats(
     // Orders that are working but hold nothing state their count alone. A `0.00` sum beside a live
     // order count is true but reads as "flat", and a `0.00%` asserts a position that does not
     // exist; absence is the honest rendering of a figure that has no value yet.
-    if position.valued > 0 {
-        let (amount, sign) = fmt::signed_amount(position.pnl, MONEY_DECIMALS);
-        candidates.push(fact(
-            t!("chart.order_stats.pnl", v = amount).to_string(),
-            money_tone(sign),
-        ));
-    }
     if position.exposed > 0 {
         candidates.push(fact(
             t!(
@@ -235,14 +241,25 @@ pub(super) fn order_stats(
             )
             .to_string(),
             StatTone::Soft,
+            true,
+        ));
+    }
+    if position.valued > 0 {
+        let (amount, sign) = fmt::signed_amount(position.pnl, MONEY_DECIMALS);
+        candidates.push(fact(
+            t!("chart.order_stats.pnl", v = amount).to_string(),
+            money_tone(sign),
+            true,
         ));
     }
     if position.valued > 0 && position.entry_notional > 0.0 {
         let pct = position.pnl / position.entry_notional * 100.0;
         if let Some((text, sign)) = fmt::signed_pct(pct, MONEY_DECIMALS) {
+            // Same group as the profit it restates: one quantity, two units, no rule between them.
             candidates.push(fact(
                 t!("chart.order_stats.pnl_pct", v = text).to_string(),
                 money_tone(sign),
+                false,
             ));
         }
     }

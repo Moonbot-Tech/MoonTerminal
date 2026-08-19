@@ -48,6 +48,16 @@ const OVERLAY_TEXT_PX: f32 = 11.0;
 /// clipped mid-number reads as a plausible wrong number.
 const BADGE_CHROME_PX: f32 = 18.0;
 
+/// Height of the hairline rule standing between two groups of overlay figures, on the UI scale.
+const STAT_DIVIDER_H: f32 = 12.0;
+
+/// Width charged for one group rule plus the gap it adds to the row.
+const STAT_DIVIDER_PX: f32 = 9.0;
+
+/// Rules drawn BETWEEN the order figures themselves: the row holds three groups — the order count,
+/// the exposure, and the profit with its percentage — so two boundaries stand between them.
+const MAX_STAT_DIVIDERS: f32 = 2.0;
+
 /// Market-action button type for the chart overlay.
 #[derive(Clone, Copy)]
 enum ActKind {
@@ -573,21 +583,15 @@ impl Render for ChartPanel {
         });
 
         let show_empty_logo = axis_panes.is_empty();
+        // Only the states the user can ACT on are stated. A settled read — trades drawn, or none to
+        // draw — is already visible as the arrows themselves, so a badge counting them spends the
+        // row's width on a fact the chart is showing anyway, ahead of the live order figures that
+        // nothing else states.
         let trade_status = match self.report_trades.status {
-            ReportTradesStatus::Idle => None,
+            ReportTradesStatus::Idle | ReportTradesStatus::Ready | ReportTradesStatus::Empty => {
+                None
+            }
             ReportTradesStatus::Loading => Some(t!("chart.trade_history.loading").to_string()),
-            ReportTradesStatus::Ready { count, truncated } => Some(
-                t!(
-                    if truncated {
-                        "chart.trade_history.ready_truncated"
-                    } else {
-                        "chart.trade_history.ready"
-                    },
-                    count = count
-                )
-                .to_string(),
-            ),
-            ReportTradesStatus::Empty => Some(t!("chart.trade_history.empty").to_string()),
             ReportTradesStatus::NotReady => Some(t!("chart.trade_history.not_ready").to_string()),
             ReportTradesStatus::Failed => Some(t!("chart.trade_history.failed").to_string()),
         };
@@ -613,6 +617,12 @@ impl Render for ChartPanel {
             let claimed = OVERLAY_LEFT_PX
                 + OVERLAY_RIGHT_MARGIN_PX
                 + if trade_retry { RETRY_BUTTON_PX } else { 0.0 }
+                // Group rules are drawn between the figures and are charged here at the maximum
+                // count, since which figures survive is exactly what this budget decides. The
+                // trade-history badge is a group of its own, so its presence adds the boundary
+                // standing between it and the order count — charged here for the same reason.
+                + (MAX_STAT_DIVIDERS + if trade_status.is_some() { 1.0 } else { 0.0 })
+                    * STAT_DIVIDER_PX
                 // The closed-trade badge is drawn first and spends from the same row.
                 + trade_status.as_deref().map_or(0.0, &measure);
             (logical_w - claimed).max(0.0)
@@ -622,6 +632,46 @@ impl Render for ChartPanel {
             let core_state = backend.session.store().core(core)?;
             order_stats::order_stats(&core_state.orders, &market, stats_budget, &measure)
         });
+        // Built HERE rather than inside the element tree: the row's leading chrome — the
+        // trade-history badge and its retry button — are earlier children, so whether a figure is
+        // the first thing DRAWN cannot be answered by an index local to the order figures. Placing
+        // the loop here also keeps it out of a `move` closure, which would have to capture `cx`.
+        let leading_chrome = trade_status.is_some();
+        let stat_badges: Vec<AnyElement> = order_stats
+            .iter()
+            .flat_map(|stats| stats.iter())
+            .enumerate()
+            .map(|(idx, stat)| {
+                // Through MoonUI's own tone tokens rather than a hand-picked colour: this is the
+                // same route the Orders table's PNL cells take, so one quantity keeps one colour
+                // convention across both surfaces, and the light theme's legibility stays MoonUI's
+                // problem instead of being re-solved here.
+                let tone = match stat.tone {
+                    order_stats::StatTone::Soft => MoonTone::Muted,
+                    order_stats::StatTone::Positive => MoonTone::Positive,
+                    order_stats::StatTone::Negative => MoonTone::Danger,
+                };
+                let badge = MoonBadge::new(stat.text.clone())
+                    .variant(MoonBadgeVariant::Soft)
+                    .size(MoonBadgeSize::Tiny)
+                    .tone(tone)
+                    .render();
+                // A rule OPENS a group, so the first thing drawn on the row never gets one: there
+                // is nothing to its left to separate it from.
+                if stat.leads_group && (idx > 0 || leading_chrome) {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(crate::design::vline(cx, STAT_DIVIDER_H, palette.border))
+                        .child(badge)
+                        .into_any_element()
+                } else {
+                    badge.into_any_element()
+                }
+            })
+            .collect();
+        let stat_badges_present = !stat_badges.is_empty();
         let logo_w = ((slot_w as f32 / ppp) * 0.28).clamp(180.0, 280.0);
         div()
             .id("chart-slot")
@@ -686,7 +736,7 @@ impl Render for ChartPanel {
             // Top-left status row. The container is hoisted out of the trade-history status so the
             // live order figures still appear while that durable read is Idle; it is rendered only
             // when at least one of the two sources produced something.
-            .children((trade_status.is_some() || order_stats.is_some()).then(|| {
+            .children((trade_status.is_some() || stat_badges_present).then(|| {
                 let entity = cx.entity();
                 div()
                     .absolute()
@@ -718,25 +768,7 @@ impl Render for ChartPanel {
                                 .render(),
                         )
                     })
-                    .children(order_stats.iter().flat_map(|stats| {
-                        stats.iter().map(|stat| {
-                            // Through MoonUI's own tone tokens rather than a hand-picked
-                            // colour: this is the same route the Orders table's PNL cells
-                            // take, so one quantity keeps one colour convention across both
-                            // surfaces, and the light theme's legibility stays MoonUI's
-                            // problem instead of being re-solved here.
-                            let tone = match stat.tone {
-                                order_stats::StatTone::Soft => MoonTone::Muted,
-                                order_stats::StatTone::Positive => MoonTone::Positive,
-                                order_stats::StatTone::Negative => MoonTone::Danger,
-                            };
-                            MoonBadge::new(stat.text.clone())
-                                .variant(MoonBadgeVariant::Soft)
-                                .size(MoonBadgeSize::Tiny)
-                                .tone(tone)
-                                .render()
-                        })
-                    }))
+                    .children(stat_badges)
             }))
             .when(show_empty_logo, |this| {
                 // Cover the own pass with an opaque chart background in an empty slot so its logo
