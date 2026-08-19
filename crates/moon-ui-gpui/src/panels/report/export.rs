@@ -3,7 +3,12 @@
 //! (period preset or manual From/To dates, cores, exact strategy keys, strategy-name mask, coin,
 //! side, emulator, and the deleted-trades checkbox) and current sort. It does
 //! not use the table's `MAX_REPORT_ROWS` cap: the panel shows the top 500 rows, while export writes
-//! every matching row up to [`EXPORT_MAX_ROWS`]. Cell values retain their RAW database
+//! every matching row up to [`EXPORT_MAX_ROWS`]. Whatever the grid is showing, the file shows —
+//! including the leading block of still-running positions when the period reaches the present, so
+//! the two cannot disagree about what the filter matched. Those rows carry an empty `closedate`,
+//! and a spreadsheet summing the profit column will therefore mix unrealized money into realized:
+//! the one place this export cannot enforce the closed-only rule the panel's own footer states.
+//! Cell values retain their RAW database
 //! representation (`isshort` and `emulator` remain 0/1, and numbers receive no presentation
 //! formatting or localized value labels), making this a machine-readable extract rather than a
 //! snapshot of the table. Date columns are formatted as `YYYY-MM-DD HH:MM` text in the selected

@@ -9,7 +9,7 @@
 //!   figure is armed as an alert;
 //! - [`log`] provides virtualized live and file-backed log browsing;
 //! - [`news`] shows the group's news feed, merged and deduplicated across cores by `meta.id`;
-//! - [`report`] queries and filters closed trades from SQLite;
+//! - [`report`] queries and filters closed trades from SQLite, plus the positions still open;
 //! - [`core_status`] renders per-core connection and resource telemetry;
 //! - [`order_edit`] opens the active-order editor;
 //! - [`common`] contains shared panel controls and rendering helpers;

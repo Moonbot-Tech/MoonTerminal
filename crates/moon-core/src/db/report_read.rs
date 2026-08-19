@@ -9,7 +9,7 @@ use super::read_fail::read_fail;
 use super::rep;
 use super::valuation::ValuationMode;
 use super::{
-    read_sources_res, table_columns_res, QuoteBreakdown, QuoteCurrency, ReadResult, ReadSource,
+    QuoteBreakdown, QuoteCurrency, ReadResult, ReadSource, read_sources_res, table_columns_res,
 };
 
 /// Columns and ordering displayed in the Reports window; the window owns titles and widths.
@@ -151,6 +151,21 @@ pub struct ReportTable {
     pub rec_ids: Vec<i64>,
 }
 
+/// Everything one Report totals read states: realized money, and the open positions beside it.
+///
+/// The two are separate FIELDS rather than one merged figure because they answer different
+/// questions and must never be added together — [`Self::quotes`] is settled history, while
+/// [`Self::open`] is what the market is showing right now and will change before it is a fact.
+/// They also live here rather than as a field on [`QuoteBreakdown`], which Analytics builds for
+/// its own surfaces and would carry an eternally empty open tally.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReportTotals {
+    /// Realized profit per known currency over CLOSED rows only, plus traded volume and coverage.
+    pub quotes: QuoteBreakdown,
+    /// Unrealized money on the positions still running, counted apart from every figure above.
+    pub open: super::OpenPositions,
+}
+
 /// One durable closed trade projected for an exact chart core and market.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartTradeRecord {
@@ -240,6 +255,32 @@ pub enum ProfitMetric {
     Percent,
 }
 
+/// Which trades one report query returns: closed, open, or both.
+///
+/// A trade is CLOSED once it carries a usable positive `closedate`, and OPEN until then. The two
+/// are not the same kind of fact and that is why this is an enum rather than a pair of flags: a
+/// closed trade is a historical event that a date window can contain, while an open one is the
+/// present state of a position and belongs to no window at all. Representing both as booleans
+/// would admit the meaningless "closed only, but include the open ones" state.
+///
+/// The default is [`Self::ClosedAndOpen`], which is what an unset filter has always meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowScope {
+    /// Only trades with a usable positive `closedate` — Analytics' closed-trade universe.
+    ///
+    /// Every boundary that publishes durable history takes this arm: chart trade history, the
+    /// strategy purge scan, and the Analytics-owned scoped Report window.
+    Closed,
+    /// Closed trades inside the date window, plus every open position regardless of the window.
+    #[default]
+    ClosedAndOpen,
+    /// Only trades still running. The date window never applies to them.
+    ///
+    /// Reached through the Report's second row pass and its totals aggregate; a caller asking for
+    /// the present state alone would set it too.
+    Open,
+}
+
 /// Complete filter shared by Report rows, totals, export, and strategy discovery.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReportFilter {
@@ -261,8 +302,8 @@ pub struct ReportFilter {
     /// `true` shows ONLY them. A NULL column value counts as not deleted, matching
     /// the analytics filter; a source without the column holds no soft-deleted rows.
     pub deleted_only: bool,
-    /// Require a positive close timestamp, matching Analytics' closed-trade universe.
-    pub closed_only: bool,
+    /// Which trades this query returns — see [`RowScope`].
+    pub rows: RowScope,
     /// Exact strategy identities; `None` selects all strategies, while `Some` remains constrained.
     ///
     /// The core is part of every key because strategy ids repeat across cores. An explicit empty
@@ -514,6 +555,122 @@ fn source_sort_expression(
     }
 }
 
+/// Return the canonical "this row is closed" test for one aliased source.
+///
+/// The type check is load-bearing rather than decorative: SQLite orders TEXT above every number,
+/// so a bare `closedate > 0` counts an unparseable timestamp as a close time. An unparseable
+/// value is not a close time, so it reads as still open — the same judgement the traded-volume
+/// eligibility test has always made, and this is now the ONE place either of them spells it.
+///
+/// Args:
+///     cols: Columns available on this source.
+///
+/// Returns:
+///     The predicate, or `None` when the source cannot express `closedate` at all.
+fn closed_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String> {
+    cols.contains("closedate").then(|| {
+        "(typeof(r.\"closedate\") IN ('integer','real') AND r.\"closedate\" > 0)".to_string()
+    })
+}
+
+/// Return the canonical "this row is still open" test for one aliased source.
+///
+/// Built as the literal negation of [`closed_row_predicate`] so the two partition every row
+/// exactly once by construction rather than by two spellings agreeing. `typeof(NULL)` is
+/// `'null'`, so the inner expression is FALSE rather than NULL for an absent close time and no
+/// three-valued logic escapes into the surrounding `OR`.
+///
+/// Args:
+///     cols: Columns available on this source.
+///
+/// Returns:
+///     The predicate, or `None` when the source cannot express `closedate` at all.
+fn open_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String> {
+    closed_row_predicate(cols).map(|closed| format!("(NOT {closed})"))
+}
+
+/// Decide whether a report period reaches the present, and therefore admits open positions.
+///
+/// An open position has no `closedate`, so no date window can contain it as an event. What
+/// decides its membership is whether the window reaches NOW: a period ending in the past is a
+/// retrospective, where a still-running position would be a statement about a time it did not
+/// hold. The period's LOWER bound is deliberately not consulted — a position opened last week and
+/// still running belongs in "today" precisely because it is present state rather than history.
+///
+/// Args:
+///     date_to: Inclusive upper bound of the period, or `None` for an unbounded one.
+///     now: Current Unix timestamp in seconds.
+///
+/// Returns:
+///     [`RowScope::ClosedAndOpen`] for a period reaching the present, [`RowScope::Closed`] for one
+///     that has already ended.
+pub fn open_rows_for_bound(date_to: Option<i64>, now: i64) -> RowScope {
+    match date_to {
+        Some(to) if to < now => RowScope::Closed,
+        _ => RowScope::ClosedAndOpen,
+    }
+}
+
+/// Append the row-scope predicate and the date window, which are ONE decision.
+///
+/// They are appended together because the window only ever applied to closed rows: an open
+/// position carries no `closedate` to compare, so binding it to the window is what used to drop
+/// it from every bounded period. Under [`RowScope::ClosedAndOpen`] the window therefore
+/// constrains the closed side alone and the open side rides past it.
+///
+/// A source that cannot express `closedate` degrades per arm, and the asymmetry is deliberate.
+/// `Closed` and `Open` both fail CLOSED — a source that cannot prove a row's state must not
+/// assert it — while `ClosedAndOpen` emits nothing at all, which is exactly what an unset filter
+/// did before this predicate existed and keeps a pre-schema replica showing its rows.
+///
+/// Args:
+///     sql: Predicate buffer being built.
+///     params: Ordered bound values being built.
+///     f: Complete Report filter.
+///     cols: Columns available on this source.
+fn append_row_scope(
+    sql: &mut String,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    f: &ReportFilter,
+    cols: &std::collections::HashSet<String>,
+) {
+    // One buffer for the window so each arm decides whether it applies at all, instead of the
+    // bounds being appended before the arm that has no use for them.
+    let mut window = String::new();
+    let mut bounds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(from) = f.date_from {
+        window.push_str(" AND r.\"closedate\" >= ?");
+        bounds.push(Box::new(from));
+    }
+    if let Some(to) = f.date_to {
+        window.push_str(" AND r.\"closedate\" <= ?");
+        bounds.push(Box::new(to));
+    }
+    match f.rows {
+        RowScope::Closed => match closed_row_predicate(cols) {
+            Some(closed) => {
+                sql.push_str(&format!(" AND {closed}{window}"));
+                params.append(&mut bounds);
+            }
+            None => sql.push_str(" AND 1=0"),
+        },
+        RowScope::Open => match open_row_predicate(cols) {
+            Some(open) => sql.push_str(&format!(" AND {open}")),
+            None => sql.push_str(" AND 1=0"),
+        },
+        RowScope::ClosedAndOpen => {
+            match (closed_row_predicate(cols), open_row_predicate(cols)) {
+                (Some(closed), Some(open)) => {
+                    sql.push_str(&format!(" AND (({closed}{window}) OR {open})"));
+                    params.append(&mut bounds);
+                }
+                // Without the column there is no row state to test and no window to apply.
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Apply report predicates to one aliased source.
 ///
 /// Before the core schema arrives, the replica may lack `closedate`, `coin`,
@@ -548,23 +705,7 @@ fn build_where(
     }
     append_strategy_filter(&mut sql, f, cols, has_strategy_names);
     append_strategy_name_mask(&mut sql, &mut params, f, cols, has_strategy_names);
-    if f.closed_only {
-        if has("closedate") {
-            sql.push_str(" AND r.closedate > 0");
-        } else {
-            sql.push_str(" AND 1=0");
-        }
-    }
-    if has("closedate") {
-        if let Some(from) = f.date_from {
-            sql.push_str(" AND r.closedate IS NOT NULL AND r.closedate >= ?");
-            params.push(Box::new(from));
-        }
-        if let Some(to) = f.date_to {
-            sql.push_str(" AND r.closedate IS NOT NULL AND r.closedate <= ?");
-            params.push(Box::new(to));
-        }
-    }
+    append_row_scope(&mut sql, &mut params, f, cols);
     let coin = f.coin.trim();
     if let Some(coins) = &f.exact_coins {
         if coins.is_empty() || !has("coin") {
@@ -823,7 +964,7 @@ pub fn strategy_purge_rows(
     let has_strategy_names = super::analytics::strategies_attached(conn);
     let filter = ReportFilter {
         strategies: Some(vec![key]),
-        closed_only: true,
+        rows: RowScope::Closed,
         ..ReportFilter::default()
     };
 
@@ -877,13 +1018,13 @@ pub fn strategy_purge_rows(
 ///     f: Complete Report filter.
 ///
 /// Returns:
-///     Exact known-currency profit buckets, unknown and complete row counts, closed non-Funding
-///     traded volume with its per-quote reconstruction counts, and optional complete active-mode
-///     USDT coverage.
+///     Exact known-currency profit buckets over CLOSED rows, unknown and complete row counts,
+///     closed non-Funding traded volume with its per-quote reconstruction counts, optional complete
+///     active-mode USDT coverage, and the still-running positions counted separately beside them.
 ///
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
-pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<QuoteBreakdown> {
+pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<ReportTotals> {
     install_strategy_name_mask_function(conn, f)
         .map_err(|error| read_fail("reports: install strategy mask", error))?;
     let sources = read_sources_res(conn)?;
@@ -983,6 +1124,27 @@ impl TradedVolumeSql {
     }
 }
 
+/// Build the settled-profit aggregate for one source, or a literal zero when it cannot carry one.
+///
+/// Shared by the closed and open totals passes: what differs between them is WHICH rows the
+/// `WHERE` admits, never how their money is summed, so the sum is written once.
+///
+/// Args:
+///     src: Physical Report source and its discovered columns.
+///
+/// Returns:
+///     A `SUM` expression over the settled amount, or `0.0` on a source without `profitbtc`.
+fn profit_sum_sql(src: &ReadSource) -> String {
+    if src.cols.contains("profitbtc") {
+        format!(
+            "COALESCE(SUM({}),0.0)",
+            super::quote::settled_amount_expr("r", &src.cols, "profitbtc")
+        )
+    } else {
+        "0.0".to_string()
+    }
+}
+
 /// Build two-sided volume SQL without changing the Report's row/profit filter.
 ///
 /// Args:
@@ -993,15 +1155,18 @@ impl TradedVolumeSql {
 ///     Fail-closed eligibility, reconstruction, native-notional, and valuation expressions.
 fn traded_volume_sql(src: &ReadSource, rate: Option<&str>) -> TradedVolumeSql {
     let has = |column: &str| src.cols.contains(column);
-    let eligible = if has("closedate") {
-        let funding = if has("sellreason") {
-            " AND COALESCE(r.\"sellreason\", '') <> 'Funding'"
-        } else {
-            ""
-        };
-        format!("(typeof(r.\"closedate\") IN ('integer','real') AND r.\"closedate\" > 0{funding})")
-    } else {
-        "0".to_string()
+    // Volume eligibility IS the closed-row test plus the Funding exclusion, and it reads through
+    // the shared predicate so a row can never count as closed for profit and open for volume.
+    let eligible = match closed_row_predicate(&src.cols) {
+        Some(closed) => {
+            let funding = if has("sellreason") {
+                " AND COALESCE(r.\"sellreason\", '') <> 'Funding'"
+            } else {
+                ""
+            };
+            format!("({closed}{funding})")
+        }
+        None => "0".to_string(),
     };
     let has_price_legs = has("boughtq") && has("buyprice") && has("sellprice");
     let native = if has_price_legs {
@@ -1044,8 +1209,9 @@ fn traded_volume_sql(src: &ReadSource, rate: Option<&str>) -> TradedVolumeSql {
 ///         current-rate mode does not depend on it.
 ///
 /// Returns:
-///     Exact quote profit totals and two-sided traded volume over the reconstructed rows of each
-///     quote, optionally carrying active-mode USDT coverage for each metric.
+///     Exact quote profit totals over closed rows and two-sided traded volume over the
+///     reconstructed rows of each quote, optionally carrying active-mode USDT coverage for each
+///     metric, plus the unrealized tally of the rows still open.
 ///
 /// Errors:
 ///     Returns the underlying SQLite error from any physical-source aggregate.
@@ -1054,8 +1220,9 @@ fn query_totals_attempt(
     f: &ReportFilter,
     sources: &[ReadSource],
     include_valuation: bool,
-) -> rusqlite::Result<QuoteBreakdown> {
+) -> rusqlite::Result<ReportTotals> {
     let mut groups = Vec::new();
+    let mut open_groups = Vec::new();
     let mut volume_groups = Vec::new();
     let mut coverage = super::valuation::CoverageAggregate::default();
     let has_strategy_names =
@@ -1063,16 +1230,32 @@ fn query_totals_attempt(
     // Loop-invariant: `projection` yields a builder for the current-rate mode whatever the cache is
     // doing, and for the historical one exactly when the cache may be joined.
     let valuation_present = f.valuation == ValuationMode::Current || include_valuation;
+    // The two scopes are aggregated by SEPARATE statements rather than one query sliced by CASE.
+    // Two independent reasons, and either alone would be enough. Correctness: the valuation
+    // coverage columns test only whether a row's quote is known, never whether it closed, so a
+    // combined result set folds unrealized money into the USDT coverage and breaks its own
+    // "every eligible row is valued" completeness rule. Speed: the combined arm's
+    // `((closed AND window) OR open)` puts a non-sargable disjunct beside the window, and SQLite
+    // will not use `idx_rep_core_close` for an OR unless every branch is indexable — which would
+    // cost the footer its index on the DEFAULT period, the hottest read in the panel.
+    //
+    // The realized pass FAILS OPEN on a source that cannot express `closedate`: it asks for the
+    // combined scope there, which emits no row predicate at all, so a replica whose schema has not
+    // arrived yet keeps stating its money instead of reporting an empty period. That degradation
+    // is the OPPOSITE of the row query's, and deliberately: withholding a row the user has no
+    // other way to see is a smaller harm than blanking the figure they are reading. The open pass
+    // still fails CLOSED on the same source — an unprovable position must never be invented.
     for src in sources {
-        let (where_sql, params) = build_where(f, &src.cols, has_strategy_names);
-        let profit = if src.cols.contains("profitbtc") {
-            format!(
-                "COALESCE(SUM({}),0.0)",
-                super::quote::settled_amount_expr("r", &src.cols, "profitbtc")
-            )
-        } else {
-            "0.0".to_string()
+        let closed_scope = ReportFilter {
+            rows: if src.cols.contains("closedate") {
+                RowScope::Closed
+            } else {
+                RowScope::ClosedAndOpen
+            },
+            ..f.clone()
         };
+        let (where_sql, params) = build_where(&closed_scope, &src.cols, has_strategy_names);
+        let profit = profit_sum_sql(src);
         let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
         let valuation = super::valuation::projection(
             f.valuation,
@@ -1124,14 +1307,44 @@ fn query_totals_attempt(
             ));
         }
     }
-    let totals = QuoteBreakdown::from_groups(groups)
+    // The open pass: a plain per-quote tally, with no window, no coverage and no volume — none of
+    // those mean anything for a position that has not closed. Skipped entirely for a caller that
+    // asked for closed rows, which is what keeps chart history and the purge scan on one query.
+    if f.rows != RowScope::Closed {
+        let open_scope = ReportFilter {
+            rows: RowScope::Open,
+            ..f.clone()
+        };
+        for src in sources {
+            let (where_sql, params) = build_where(&open_scope, &src.cols, has_strategy_names);
+            let profit = profit_sum_sql(src);
+            let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
+            let sql = format!(
+                "SELECT {quote}, {profit}, COUNT(*) FROM {} r{where_sql}{group_by}",
+                src.table,
+            );
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let mut rows = stmt.query(refs.as_slice())?;
+            while let Some(row) = rows.next()? {
+                let raw = row.get::<_, Value>(0)?;
+                let ordinal = super::quote::report_ordinal_from_value(&raw);
+                open_groups.push((ordinal, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?));
+            }
+        }
+    }
+    let quotes = QuoteBreakdown::from_groups(groups)
         .with_traded_volume(super::TradedVolume::from_groups(volume_groups));
     // Publish coverage whenever the selected mode can build a projection: always for current rates,
     // and only with an attached cache for historical rates.
-    Ok(if valuation_present {
-        totals.with_valuation(coverage.finish())
-    } else {
-        totals
+    Ok(ReportTotals {
+        quotes: if valuation_present {
+            quotes.with_valuation(coverage.finish())
+        } else {
+            quotes
+        },
+        open: super::OpenPositions::from_groups(open_groups),
     })
 }
 
@@ -1156,10 +1369,17 @@ struct ReportPass<'a> {
     has_strategy_names: bool,
 }
 
-/// Execute one complete Report row pass and return its merged, truncated rows.
+/// Execute one complete Report row request: the closed rows, and the open ones ahead of them.
 ///
 /// Each entry is `(core_uid, rec_id, data)`; `rec_id` is the replica `newrecid`, or 0 for a legacy
 /// row that has none.
+///
+/// The two scopes are queried SEPARATELY, each with its own limit, rather than merged into one
+/// truncated pass. Open positions are a handful of rows against a ledger of tens of thousands, so
+/// under any sort the user actually picks — profit, spent, coin — a shared limit would push every
+/// one of them past the cut and the period would look as though nothing were running. Their block
+/// leads the result for the same reason: an open row has no close time to be ordered by, and
+/// scattering it through a realized ledger is how it gets read as realized.
 ///
 /// Args:
 ///     conn: Open report reader or snapshot.
@@ -1168,7 +1388,7 @@ struct ReportPass<'a> {
 ///         current-rate mode does not depend on it.
 ///
 /// Returns:
-///     Globally sorted rows, truncated to the requested limit.
+///     The open block followed by the globally sorted closed rows, at most `limit` rows in total.
 ///
 /// Errors:
 ///     Returns the underlying SQLite error from any physical-source query.
@@ -1177,12 +1397,72 @@ fn query_reports_attempt(
     pass: &ReportPass,
     include_valuation: bool,
 ) -> rusqlite::Result<Vec<(u64, i64, Vec<Value>)>> {
-    let dir = if pass.desc { "DESC" } else { "ASC" };
-    let sort_ix = pass.cols.iter().position(|c| c == pass.sort_col);
+    // A single-scope request runs exactly one query; only the combined scope pays for two.
+    match pass.filter.rows {
+        RowScope::Closed => {
+            run_row_pass(conn, pass, include_valuation, RowScope::Closed, pass.limit)
+        }
+        RowScope::Open => run_row_pass(conn, pass, include_valuation, RowScope::Open, pass.limit),
+        RowScope::ClosedAndOpen => {
+            let mut open = run_row_pass(conn, pass, include_valuation, RowScope::Open, pass.limit)?;
+            // The open block SPENDS from the caller's budget rather than sitting outside it, so the
+            // result is still at most `limit` rows and every consumer sized by that cap stays
+            // correct. The second pass does not buy EXTRA rows, it buys GUARANTEED ones: a handful
+            // of running positions can no longer be sorted out of the head by tens of thousands of
+            // closed trades.
+            let remaining = pass.limit.saturating_sub(open.len());
+            let closed = run_row_pass(conn, pass, include_valuation, RowScope::Closed, remaining)?;
+            open.extend(closed);
+            Ok(open)
+        }
+    }
+}
+
+/// Execute ONE row pass over every physical source at one row scope, then merge and truncate.
+///
+/// Args:
+///     conn: Open report reader or snapshot.
+///     pass: The request, identical across both attempts.
+///     include_valuation: Whether the historical mode may join the attached derived cache.
+///     rows: The scope this pass alone selects, overriding the request's own.
+///     limit: Maximum merged rows for this pass.
+///
+/// Returns:
+///     Globally sorted rows of that scope, truncated to `limit`.
+///
+/// Errors:
+///     Returns the underlying SQLite error from any physical-source query.
+fn run_row_pass(
+    conn: &Connection,
+    pass: &ReportPass,
+    include_valuation: bool,
+    rows: RowScope,
+    limit: usize,
+) -> rusqlite::Result<Vec<(u64, i64, Vec<Value>)>> {
+    // The open block carries its OWN order, newest opening first, and does not follow the column
+    // the table is sorted by. It is not part of that ordering to begin with — it is a separate
+    // leading block of present state — and the question it answers is "what is running right
+    // now", whose natural reading is most-recent-first. Following an ascending sort would put the
+    // position opened weeks ago at the top of the panel, which is the least interesting row in
+    // the block. Falls back to the caller's own sort on a source too early in its schema to have
+    // `buydate`.
+    let open_order = rows == RowScope::Open && pass.cols.iter().any(|col| col == "buydate");
+    let (sort_col, desc) = if open_order {
+        ("buydate", true)
+    } else {
+        (pass.sort_col, pass.desc)
+    };
+    let dir = if desc { "DESC" } else { "ASC" };
+    let sort_ix = pass.cols.iter().position(|c| c == sort_col);
+    // This pass's own scope; every other predicate stays exactly as the caller built it.
+    let scoped = ReportFilter {
+        rows,
+        ..pass.filter.clone()
+    };
     // Query the top N from EACH source separately so indexes work, then merge below.
     let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
     for src in pass.sources {
-        let (where_sql, mut params) = build_where(pass.filter, &src.cols, pass.has_strategy_names);
+        let (where_sql, mut params) = build_where(&scoped, &src.cols, pass.has_strategy_names);
         let valuation = super::valuation::projection(
             pass.filter.valuation,
             include_valuation,
@@ -1198,7 +1478,7 @@ fn query_reports_attempt(
         let rec_id_select = rec_id_expr(src);
         // Sort in SQL only if this source can express the column; otherwise source order is
         // irrelevant, because the merge below reorders everything anyway.
-        let order = match source_sort_expression(src, pass.sort_col, valuation.as_ref()) {
+        let order = match source_sort_expression(src, sort_col, valuation.as_ref()) {
             Some(expression) => format!("({expression}) IS NULL, {expression} {dir}"),
             None => "1".to_string(),
         };
@@ -1206,7 +1486,7 @@ fn query_reports_attempt(
             "SELECT r.core_uid, {rec_id_select}, {select} FROM {} r{joins}{where_sql} ORDER BY {order} LIMIT ?",
             src.table
         );
-        params.push(Box::new(pass.limit as i64));
+        params.push(Box::new(limit as i64));
         let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let mut stmt = conn.prepare(&sql)?;
         let n = pass.cols.len();
@@ -1236,15 +1516,15 @@ fn query_reports_attempt(
             (false, true) => std::cmp::Ordering::Less,
             _ => {
                 let o = cmp_values(va, vb);
-                if pass.desc {
-                    o.reverse()
-                } else {
-                    o
-                }
+                // `desc`, not `pass.desc`: this merge decides the ORDER THE USER SEES, so it must
+                // follow the same direction the pass just selected its rows by. Reading the
+                // caller's direction here would let SQL fetch the newest open positions and the
+                // merge then hand them back oldest-first.
+                if desc { o.reverse() } else { o }
             }
         }
     });
-    merged.truncate(pass.limit);
+    merged.truncate(limit);
     Ok(merged)
 }
 
@@ -1320,7 +1600,9 @@ pub fn query_reports(
 ///
 /// The caller may provide a published Report filter to retain its date, side, emulator, deletion,
 /// and strategy predicates. This boundary always overwrites the core, substring coin, exact coin,
-/// and closed-only fields so a stale or global filter cannot widen the chart scope.
+/// and row-scope fields so a stale or global filter cannot widen the chart scope. The row scope in
+/// particular must keep being overwritten now that a published Report filter admits open positions
+/// by default: chart history draws closed trades and nothing else.
 ///
 /// Args:
 ///     conn: Open report reader or pinned snapshot.
@@ -1356,7 +1638,7 @@ pub fn query_chart_trade_history(
     scope.core_uids = vec![core_uid];
     scope.coin.clear();
     scope.exact_coins = Some(exact_coins.to_vec());
-    scope.closed_only = true;
+    scope.rows = RowScope::Closed;
 
     let requested = limit.saturating_add(1);
     install_strategy_name_mask_function(conn, &scope).map_err(|error| read_fail(CONTEXT, error))?;

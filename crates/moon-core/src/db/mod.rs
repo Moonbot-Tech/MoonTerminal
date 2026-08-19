@@ -35,8 +35,8 @@ pub mod valuation;
 
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
 pub use quote::{
-    ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal, QuoteVolume,
-    TradedVolume, UsdtTotal, ValuationCoverage,
+    OpenPositions, ProfitScope, ProfitUnit, QuoteBreakdown, QuoteCurrency, QuoteScope, QuoteTotal,
+    QuoteVolume, TradedVolume, UsdtTotal, ValuationCoverage,
 };
 pub use read_cancel::{with_read_cancellation, ReadCancellation};
 pub use read_fail::{FailKind, ReadFail, ReadResult};
@@ -44,11 +44,11 @@ pub(crate) use rep::ReportStart;
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use report_read::max_core_uid_in;
 pub use report_read::{
-    display_columns, distinct_cores, distinct_strategies, max_core_uid, query_chart_trade_history,
-    query_reports, query_totals, strategy_purge_rows, ChartTradeHistory, ChartTradeRecord,
-    ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable, SideFilter,
-    StrategyPurgeRows, COLUMNS_ADDED_SINCE_V2, DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN,
-    VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN,
+    display_columns, distinct_cores, distinct_strategies, max_core_uid, open_rows_for_bound,
+    query_chart_trade_history, query_reports, query_totals, strategy_purge_rows, ChartTradeHistory,
+    ChartTradeRecord, ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable,
+    ReportTotals, RowScope, SideFilter, StrategyPurgeRows, COLUMNS_ADDED_SINCE_V2, DISPLAY_COLUMNS,
+    PROFIT_PERCENT_COLUMN, VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN,
 };
 
 use read_fail::read_fail;

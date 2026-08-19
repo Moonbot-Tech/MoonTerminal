@@ -129,6 +129,12 @@ pub(super) struct ReportData {
     pub(super) row_keys: Vec<Option<selection::ReportRowKey>>,
     /// Exact per-quote totals over the full filter, not the displayed top N.
     pub(super) totals: db::QuoteBreakdown,
+    /// Still-running positions under the same filter, counted apart from `totals`.
+    ///
+    /// Empty whenever the period does not reach the present, which is the same condition that
+    /// keeps those rows out of the grid — so the footer can never name positions the table above
+    /// it is not showing.
+    pub(super) open: db::OpenPositions,
     /// The conversion these figures were computed under.
     ///
     /// Travels WITH the data rather than being read live at render: a mode change requeries, and
@@ -271,7 +277,8 @@ fn run_report_query(
             rows: table.rows,
             core_uids: table.core_uids,
             row_keys,
-            totals,
+            totals: totals.quotes,
+            open: totals.open,
             valuation: filter.valuation,
         },
     })
@@ -289,7 +296,11 @@ impl ReportPanel {
         // A preset overrides the manual date only on the edge it SETS itself. Every preset
         // but "All" sets the lower one; only "Yesterday" sets the upper one — for the rest
         // `to = None`, and then the upper edge comes from the "To:" field if it holds a date.
-        let (pfrom, pto) = self.period.range(self.display_zone);
+        // ONE clock reading for the whole filter: the period bounds and the decision about whether
+        // that period still reaches the present must not straddle a second boundary, or a query can
+        // ask for a window ending before the instant it just judged to be inside it.
+        let now = moon_core::util::time::now_unix_secs() as i64;
+        let (pfrom, pto) = self.period.range_at(now, self.display_zone);
         let date_from = pfrom.or(self.from_query);
         // The upper field names a whole minute and the SQL bound is inclusive, so it reaches that
         // minute's last second: "from 04.08 00:00 to 04.08 23:59" is the whole day, and an equal
@@ -312,7 +323,7 @@ impl ReportPanel {
             side: self.side,
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,
-            closed_only: self.closed_only,
+            rows: super::row_scope_for(self.closed_only, date_to, now),
             strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
             strategy_name_mask,
             // Read from the backend at build time rather than mirrored into the panel: the rows,

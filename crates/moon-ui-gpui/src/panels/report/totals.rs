@@ -274,14 +274,66 @@ fn health_fact(status: &ValuationStatus, now_ms: i64) -> Option<FooterFact> {
     })
 }
 
+/// State the still-running positions as ONE fact, or nothing when none are open.
+///
+/// Count and money share a single fact deliberately, the way the traded-volume shortfall shares
+/// one with its figure: a dock narrow enough to clip half of this pair would leave either a count
+/// of positions with no money or an amount with nothing saying what it belongs to, and the second
+/// reads exactly like realized profit.
+///
+/// The tone is ALWAYS [`FactTone::Soft`], never a sign colour. In this row the sign colours belong
+/// to settled money; an unrealized figure wearing green is how it gets read as earned.
+///
+/// Args:
+///     open: Unrealized tally computed over the same filter and snapshot as the totals.
+///
+/// Returns:
+///     The assembled fact, or `None` when nothing is open.
+fn open_positions_fact(open: &db::OpenPositions) -> Option<FooterFact> {
+    if open.orders <= 0 {
+        return None;
+    }
+    // Per known currency, mirroring the quote breakdown above rather than inventing a unified
+    // figure: converting floating money would state a second estimate on top of an estimate.
+    let amount = open
+        .totals
+        .iter()
+        .map(|total| total.signed_display().0)
+        .collect::<Vec<_>>()
+        .join(" + ");
+    // With every open row's currency unknown there is no amount to show, so the count stands
+    // alone rather than the fact disappearing — positions ARE running and the row must say so.
+    let text = if amount.is_empty() {
+        t!("report.open_positions_bare", n = open.orders).to_string()
+    } else {
+        t!("report.open_positions", n = open.orders, amount = amount).to_string()
+    };
+    let mut open_fact = fact(text, FactTone::Soft, false);
+    open_fact.spelled = Some(if open.unknown_orders > 0 {
+        t!(
+            "report.open_positions_tip_unknown",
+            n = open.orders,
+            unknown = open.unknown_orders
+        )
+        .to_string()
+    } else {
+        t!("report.open_positions_tip", n = open.orders).to_string()
+    });
+    Some(open_fact)
+}
+
 /// Assemble every fact the totals row states, split by whether it may be clipped.
 ///
 /// The tail order is the priority order and is deliberate. A valuation stall leads it because it
 /// warns that a number already on screen may be wrong, and that outranks any tally. The remaining
 /// quote totals come next because a missing currency total silently changes what the row appears to
-/// sum, whereas a missing row count only withholds a tally the table itself shows. The shown-rows
-/// count therefore closes the tail and is the first to go; the ORDER count is not here at all, it
-/// rides in the never-clipped caption.
+/// sum, whereas a missing row count only withholds a tally the table itself shows. Everything ahead
+/// of the traded volume QUALIFIES the realized figure in the never-clipped head, so losing one of
+/// them changes what that head appears to mean. The open-positions fact closes the tail because it
+/// is the one entry that names itself completely — it can never be misread as part of the head, and
+/// the grid above already shows those rows — so it is the cheapest thing to lose to a narrow dock.
+/// The shown-rows count is not in the tail at all; it is pinned right, and the ORDER count rides in
+/// the never-clipped caption.
 ///
 /// Args:
 ///     data: Current report snapshot, or `None` while none is renderable.
@@ -492,6 +544,10 @@ pub(super) fn footer_facts(
         };
         volume.section_start = true;
         tail.push(volume);
+    }
+    if let Some(mut open) = open_positions_fact(&data.open) {
+        open.section_start = true;
+        tail.push(open);
     }
     let trailing = vec![fact(
         t!("report.shown_top", n = data.rows.len()).to_string(),

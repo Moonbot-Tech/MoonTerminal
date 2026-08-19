@@ -40,6 +40,7 @@ fn fixture() -> (Vec<String>, ReportData) {
             rows,
             core_uids,
             row_keys,
+            open: db::OpenPositions::default(),
             totals: db::QuoteBreakdown {
                 orders: 3,
                 ..Default::default()

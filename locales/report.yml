@@ -201,6 +201,27 @@ report.totals_n_tip:
   ru: "Итого (%{n} ордеров)"
   en: "Total (%{n} orders)"
   es: "Total (%{n} órdenes)"
+# Still-running positions under the same filter. The amount is UNREALIZED and is deliberately NOT
+# part of the total above it, which covers closed trades only.
+report.open_positions:
+  ru: "открыто: %{n} (%{amount})"
+  en: "open: %{n} (%{amount})"
+  es: "abiertas: %{n} (%{amount})"
+# The same fact when no open row has a known currency, so there is no amount to state.
+report.open_positions_bare:
+  ru: "открыто: %{n}"
+  en: "open: %{n}"
+  es: "abiertas: %{n}"
+# Fully spelled recovery text used by the shared footer tooltip when the compact fact is clipped.
+report.open_positions_tip:
+  ru: "Открытых позиций: %{n}. Плавающая прибыль, в итог не входит"
+  en: "Open positions: %{n}. Floating P&L, not included in the total"
+  es: "Posiciones abiertas: %{n}. P&L flotante, no incluido en el total"
+# The same tooltip when some open rows carry no known currency and are absent from the amount.
+report.open_positions_tip_unknown:
+  ru: "Открытых позиций: %{n}. Плавающая прибыль, в итог не входит; без известной валюты: %{unknown}"
+  en: "Open positions: %{n}. Floating P&L, not included in the total; unknown quote: %{unknown}"
+  es: "Posiciones abiertas: %{n}. P&L flotante, no incluido en el total; moneda desconocida: %{unknown}"
 # Unsigned entry-plus-exit notional over the exact loaded Report filter.
 report.traded_volume:
   ru: "Объём: %{amount}"
