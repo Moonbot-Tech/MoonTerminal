@@ -465,3 +465,198 @@ fn candle_view_survives_a_save_and_reload_round_trip() {
         serde_json::from_str(&serde_json::to_string(&cfg).expect("serializes")).expect("reloads");
     assert_eq!(json_back, cfg);
 }
+
+/// `candles::first_full_bucket_ms` must refuse only a leading partial bucket; replacing its
+/// ceil-and-boundary body with the former plain floor would overwrite a complete cached candle
+/// with the tail of a restarted trade ring.
+#[test]
+fn first_full_bucket_refuses_a_partial_leading_bucket_without_losing_aligned_ones() {
+    let tf = 5 * 60_000;
+
+    assert_eq!(
+        first_full_bucket_ms(300_001.0, tf),
+        600_000,
+        "a source starting inside a bucket cannot seal that bucket"
+    );
+    assert_eq!(
+        first_full_bucket_ms(600_000.0, tf),
+        600_000,
+        "a source starting on a boundary already covers a whole bucket"
+    );
+    assert_eq!(
+        first_full_bucket_ms(-600_000.0, tf),
+        -600_000,
+        "a negative boundary must not move toward zero"
+    );
+    assert_eq!(
+        first_full_bucket_ms(0.0, tf),
+        0,
+        "the epoch boundary must remain the epoch"
+    );
+}
+
+/// `candles::compose_with_coarse` must fill an interior cache hole; deleting interior-hole
+/// discovery makes a fragmented chart leave its cached minutes undrawn after a restart.
+#[test]
+fn compose_with_coarse_fills_interior_holes_in_ascending_gpu_order() {
+    let minute = 60_000.0;
+    let series = [
+        candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0),
+        candle(10.0 * minute, 11.0, 12.0, 10.0, 11.5, 1.0),
+    ];
+    let five_minute_rows = [candle(5.0 * minute, 20.0, 21.0, 19.0, 20.5, 1.0)];
+    let mut out = Vec::new();
+
+    compose_with_coarse(
+        &series,
+        minute,
+        &[CoarseLayer {
+            rows: &five_minute_rows,
+            tf_ms: 5.0 * minute,
+        }],
+        &mut out,
+    );
+
+    assert!(
+        out.iter()
+            .any(|(c, tf)| c.t_open_ms == 5.0 * minute && *tf == 5.0 * minute as f32),
+        "the five-minute cache row must appear inside the missing one-minute stretch"
+    );
+    assert!(
+        out.windows(2)
+            .all(|pair| pair[0].0.t_open_ms <= pair[1].0.t_open_ms),
+        "GPU consumers require candles in ascending opening-time order"
+    );
+    assert!(
+        out.iter().all(|(_, tf)| *tf > 0.0),
+        "each candle needs a positive drawing width"
+    );
+}
+
+/// `candles::compose_with_coarse` must use only layers that fit and must pass each residual hole
+/// to the next layer; changing the inclusive width check to `>` drops an exactly-fitting cache
+/// bucket and leaves a visible chart gap.
+#[test]
+fn compose_with_coarse_uses_inclusive_width_and_only_the_remaining_holes() {
+    let minute = 60_000.0;
+    let series = [
+        candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0),
+        candle(6.0 * minute, 11.0, 12.0, 10.0, 11.5, 1.0),
+    ];
+    let exact_fit = [candle(0.0, 20.0, 21.0, 19.0, 20.5, 1.0)];
+    let mut out = Vec::new();
+    compose_with_coarse(
+        &series,
+        minute,
+        &[CoarseLayer {
+            rows: &exact_fit,
+            tf_ms: 5.0 * minute,
+        }],
+        &mut out,
+    );
+    assert!(
+        out.iter()
+            .any(|(c, tf)| c.t_open_ms == 0.0 && *tf == 5.0 * minute as f32),
+        "a hole exactly one coarse period wide accepts its aligned coarse bucket"
+    );
+
+    let wide_series = [
+        candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0),
+        candle(332.0 * minute, 11.0, 12.0, 10.0, 11.5, 1.0),
+    ];
+    let daily_rows = [candle(0.0, 30.0, 31.0, 29.0, 30.5, 1.0)];
+    compose_with_coarse(
+        &wide_series,
+        minute,
+        &[CoarseLayer {
+            rows: &daily_rows,
+            tf_ms: 1_440.0 * minute,
+        }],
+        &mut out,
+    );
+    assert_eq!(
+        out.len(),
+        wide_series.len(),
+        "a daily bucket cannot represent the measured 331-minute hole"
+    );
+
+    let five_minute_rows = [candle(5.0 * minute, 20.0, 21.0, 19.0, 20.5, 1.0)];
+    let twenty_minute_rows = [
+        candle(0.0, 30.0, 31.0, 29.0, 30.5, 1.0),
+        candle(20.0 * minute, 31.0, 32.0, 30.0, 31.5, 1.0),
+        candle(40.0 * minute, 32.0, 33.0, 31.0, 32.5, 1.0),
+    ];
+    let series = [
+        candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0),
+        candle(60.0 * minute, 11.0, 12.0, 10.0, 11.5, 1.0),
+    ];
+    compose_with_coarse(
+        &series,
+        minute,
+        &[
+            CoarseLayer {
+                rows: &five_minute_rows,
+                tf_ms: 5.0 * minute,
+            },
+            CoarseLayer {
+                rows: &twenty_minute_rows,
+                tf_ms: 20.0 * minute,
+            },
+        ],
+        &mut out,
+    );
+    assert_eq!(
+        out.iter()
+            .filter(|(c, tf)| c.t_open_ms == 5.0 * minute && *tf == 5.0 * minute as f32)
+            .count(),
+        1,
+        "the finer row is emitted once while the coarser layer reaches its uncovered neighbours"
+    );
+    assert!(
+        out.iter()
+            .any(|(c, tf)| c.t_open_ms == 20.0 * minute && *tf == 20.0 * minute as f32),
+        "the coarser layer reaches the five-minute layer's long internal residual"
+    );
+}
+
+/// `candles::compose_with_coarse` must preserve its degenerate input contract; dropping those
+/// branches can blank a newly opened chart or duplicate an already continuous one.
+#[test]
+fn compose_with_coarse_preserves_empty_single_and_contiguous_series_inputs() {
+    let minute = 60_000.0;
+    let rows = [
+        candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0),
+        candle(5.0 * minute, 11.0, 12.0, 10.0, 11.5, 1.0),
+    ];
+    let layer = [CoarseLayer {
+        rows: &rows,
+        tf_ms: 5.0 * minute,
+    }];
+    let mut out = Vec::new();
+    compose_with_coarse(&[], minute, &layer, &mut out);
+    assert_eq!(
+        out.iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+        rows,
+        "an empty fine series falls back to every available coarse row"
+    );
+
+    let single = [candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0)];
+    compose_with_coarse(&single, minute, &[], &mut out);
+    assert_eq!(out, vec![(single[0], minute as f32)]);
+
+    let contiguous = [
+        candle(0.0, 10.0, 11.0, 9.0, 10.5, 1.0),
+        candle(minute, 11.0, 12.0, 10.0, 11.5, 1.0),
+        candle(2.0 * minute, 12.0, 13.0, 11.0, 12.5, 1.0),
+    ];
+    compose_with_coarse(&contiguous, minute, &[], &mut out);
+    assert_eq!(
+        out,
+        contiguous
+            .iter()
+            .copied()
+            .map(|c| (c, minute as f32))
+            .collect::<Vec<_>>(),
+        "empty layers leave an already complete fine series untouched"
+    );
+}

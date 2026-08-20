@@ -191,7 +191,9 @@ impl ChartFixture {
         // six 5-minute rows that survive a mid-bucket cut opens at the wrong price and reports a
         // truncated high and low. Aligning to the base would leave exactly that cut in place.
         let aligned_from = from_ms.div_euclid(tf_ms) * tf_ms;
-        let base = cache.read_range(&self.exchange, &self.market, base_kind, aligned_from, to_ms);
+        let base = cache
+            .read_range(&self.exchange, &self.market, base_kind, aligned_from, to_ms)
+            .unwrap_or_default();
         if base.is_empty() || tf_ms <= base_tf_ms {
             return base;
         }

@@ -348,6 +348,12 @@ struct PaneRender {
     pane_bounds: [f32; 4],
     book_style: BookStyle,
     resident_left_rel: f32,
+    /// Relative time of the OLDEST trade cross actually resident in the combo ring.
+    ///
+    /// `NaN` while none are. Distinct from `resident_left_rel`, which records what the read ASKED
+    /// for: the hide-candles zone needs what the ring actually HAS, so it never blanks a bucket
+    /// with no crosses to draw in its place.
+    combo_left_rel: f32,
     /// Camera position, in pixels, at this pane's last history reset.
     ///
     /// A pan is covered by the prefetch the last read already fetched, so the next reset is owed
@@ -518,6 +524,7 @@ impl PaneRender {
             pane_bounds: [0.0, 0.0, 1.0, 1.0],
             book_style: BookStyle::default(),
             resident_left_rel: f32::NAN,
+            combo_left_rel: f32::NAN,
             pan_reset_cam_px: i64::MIN,
             last_device_gen: 0,
             last_book_rev: u64::MAX,
