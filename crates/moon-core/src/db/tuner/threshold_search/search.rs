@@ -71,9 +71,23 @@ pub(super) fn logical_cores() -> usize {
     })
 }
 
-/// Threads the search may use: every logical CPU but one, and never fewer than one.
+/// Share of the machine's logical CPUs the search may occupy, in percent.
+///
+/// The whole point is that the rest of the PC stays usable while a search runs: a pool sized to
+/// every core but one is 98% of a 56-core machine, which is indistinguishable from all of it.
+/// A proportional cap keeps a fixed fraction of the machine free instead of a fixed single core,
+/// so a big box gives back proportionally more.
+const WORKER_CORE_PCT: usize = 90;
+
+/// Threads the search may use: [`WORKER_CORE_PCT`] of the logical CPUs, at most every CPU but
+/// one, and never fewer than one.
+///
+/// Both bounds bind: the percentage is what keeps a large machine responsive, and the
+/// leave-one-free rule still covers the small end, where 90% of two cores rounds back up to
+/// both of them.
 pub(super) fn worker_cores() -> usize {
-    logical_cores().saturating_sub(1).max(1)
+    let pct = logical_cores() * WORKER_CORE_PCT / 100;
+    pct.min(logical_cores().saturating_sub(1)).max(1)
 }
 
 /// Logical cores a machine must have before the tuner offers its most expensive settings.
@@ -97,8 +111,8 @@ pub fn heavy_search_supported() -> bool {
 
 /// Worker pool for the restart fan-out, or `None` when one could not be built.
 ///
-/// A pool of its own rather than rayon's global one, sized to leave a core free: the search is
-/// started from a window that must keep repainting and answering the Stop button while it runs,
+/// A pool of its own rather than rayon's global one, sized to leave part of the machine
+/// free: the search is started from a window that must keep repainting and answering the Stop button while it runs,
 /// and saturating every core makes that window stutter for the whole run.
 ///
 /// `None` means the fan-out falls back to rayon's GLOBAL pool, which is sized to every logical
