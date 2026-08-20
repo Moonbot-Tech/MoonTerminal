@@ -157,6 +157,138 @@ pub struct MarketTickerReadout {
     pub delta_24h_pct: f64,
 }
 
+/// Where a market's maximum order size came from.
+///
+/// The two non-absent cases behave DIFFERENTLY in front of a user and must stay distinguishable:
+/// a stated cap is a fixed exchange figure, while a derived one is recomputed from the current ask
+/// and therefore drifts as the price moves. A readout that cannot tell them apart either explains
+/// nothing or explains the wrong thing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaxOrderSource {
+    /// The exchange stated a notional cap directly.
+    Stated,
+    /// No notional cap was stated, so the quantity cap was converted into quote currency.
+    Derived,
+    /// A quantity cap EXISTS but what it takes to convert it has not arrived — on a linear market
+    /// that is the ask price, which is zero until the market's first price update lands.
+    ///
+    /// Distinct from [`Self::Absent`] and never merged with it: this is "not known yet", while
+    /// `Absent` is "the exchange says there is no cap". Telling an operator a market has no maximum
+    /// order size when the truth is that its price has not loaded is the exact misstatement the
+    /// two-level unknown in [`MarketLimits`] exists to prevent.
+    Pending,
+    /// The exchange stated no cap of either kind.
+    #[default]
+    Absent,
+}
+
+/// A market's maximum order size together with how it was obtained.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MaxOrder {
+    /// The cap in the quote currency; `0.0` while its source is pending or absent.
+    pub value: f64,
+    /// Provenance of `value`, so a readout can say WHY the figure moves — or why there is none.
+    pub source: MaxOrderSource,
+}
+
+/// One market's exchange-imposed trading limits, for the leverage control.
+///
+/// Every field carries its own "unknown", and those unknowns are DIFFERENT facts the UI states
+/// differently: an absent [`MarketDataSource::market_limits`] result means no provider, snapshot or
+/// market has arrived yet, while [`MaxOrderSource::Absent`] or a zero `max_leverage` here means the
+/// exchange itself stated no cap (or the market is spot, which has no leverage). Collapsing the two
+/// would tell an operator "this coin has no limit" when the truth is "nothing has loaded".
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MarketLimits {
+    /// Exchange maximum order size in the quote currency, with its provenance.
+    ///
+    /// FLAT: it does not vary with the selected leverage and is the same figure at x1 and at x50.
+    pub max_order: MaxOrder,
+    /// Maximum market leverage; `0` means spot or unknown.
+    pub max_leverage: i32,
+}
+
+/// The exchange maximum order size in the quote currency, from the figures a market carries.
+///
+/// The stated notional cap wins. Only when the exchange gave none is the QUANTITY cap converted,
+/// and that conversion is not one formula but two, because a quantity does not mean the same thing
+/// on every market:
+///
+/// - **Inverse (coin-margined) futures report quantity in CONTRACTS**, each worth a fixed amount of
+///   quote currency (`contract_size` — BTCUSD is $100, other `*USD` contracts $10). The notional is
+///   therefore `max_qty * contract_size` and needs no price at all. `feed/live/convert.rs` derives
+///   position sizes from the same fact; multiplying a contract COUNT by a coin PRICE instead would
+///   be off by roughly the contract size.
+/// - **Linear markets report quantity in the base coin**, so the notional is `max_qty * ask`. This
+///   is why that fallback MOVES with the price while a stated cap stands still — a distinction the
+///   returned [`MaxOrderSource`] preserves so the UI can say so instead of hiding it.
+///
+/// An EMPTY QUOTE in the market name is what separates the two, NOT `contract_size != 1` on its
+/// own: linear QUANTO futures also carry a contract size (Gate's `ASTEROID_USDT` has 10000) while
+/// still reporting quantity in coins. Same guard, same reason, as `convert.rs`. That test is made
+/// HERE, from the market name and its exchange, rather than by each caller: it is half of this one
+/// rule — it chooses which formula applies — and a copy of it at every call site is a second place
+/// to get coin-margined detection wrong.
+///
+/// A quantity cap whose conversion cannot be completed yet — a linear market before its first price
+/// tick, where `ask` is still zero — is [`MaxOrderSource::Pending`], NOT `Absent`. Only a market
+/// stating neither cap is `Absent`. Both render as a dash, and they explain themselves differently.
+///
+/// Takes the market's FIGURES as primitives rather than the market itself, because `moonproto`'s
+/// `Market` is not re-exported at its crate root and cannot be named here. Both readers of the rule
+/// — `screener_rows` and [`MarketDataSource::market_limits`] — go through this function, so the
+/// Screener's `Max.Order` column and the trading toolbar can never print two different caps for one
+/// coin.
+///
+/// Args:
+///     market: Canonical market name used to distinguish linear from inverse contracts.
+///     exchange: Market exchange used when resolving the market's quote token.
+///     max_notional: Exchange-stated maximum order size in quote currency, when available.
+///     max_qty: Exchange-stated maximum quantity, used only when no notional cap exists.
+///     ask: Current best ask used to convert a linear-market quantity cap.
+///     contract_size: Fixed quote-currency value of one inverse contract.
+///
+/// Returns:
+///     A stated, derived, pending, or absent quote-currency cap with its provenance.
+pub(crate) fn max_order_notional(
+    market: &str,
+    exchange: crate::symbol::Exchange,
+    max_notional: f64,
+    max_qty: f64,
+    ask: f64,
+    contract_size: f64,
+) -> MaxOrder {
+    if max_notional.is_finite() && max_notional > 0.0 {
+        return MaxOrder {
+            value: max_notional,
+            source: MaxOrderSource::Stated,
+        };
+    }
+    if !max_qty.is_finite() || max_qty <= 0.0 {
+        return MaxOrder::default();
+    }
+    let inverse = crate::symbol::resolve_quote_on(market, exchange).is_empty()
+        && contract_size.is_finite()
+        && contract_size > 0.0
+        && contract_size != 1.0;
+    let value = if inverse {
+        max_qty * contract_size
+    } else {
+        max_qty * ask
+    };
+    if !value.is_finite() || value <= 0.0 {
+        // The cap exists; what converts it does not yet. Never report that as "no cap".
+        return MaxOrder {
+            value: 0.0,
+            source: MaxOrderSource::Pending,
+        };
+    }
+    MaxOrder {
+        value,
+        source: MaxOrderSource::Derived,
+    }
+}
+
 /// Frozen snapshot for a detection card, built exactly once when the detection occurs.
 ///
 /// The mini-chart combines recent 5-minute candles from the provider's retained

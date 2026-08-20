@@ -26,6 +26,7 @@ use moon_core::config::{
 };
 use moon_core::db::valuation::ValuationMode;
 use moon_core::feed::{ClientSettingsEdit, StrategyRow};
+use moon_core::market::MarketLimits;
 use moon_core::session::CoreId;
 use moon_ui::{DockAreaState, DockTopologyByName};
 
@@ -1190,6 +1191,25 @@ impl Backend {
             .get(group)
             .filter(|(core, _)| self.core_belongs_to_group(group, *core))
             .cloned()
+    }
+
+    /// Return one market's exchange trading limits, for the leverage control.
+    ///
+    /// Takes the core and market EXPLICITLY rather than resolving a group's current chart, because
+    /// its two consumers ask different questions: the toolbar readout wants the market on screen
+    /// now, while an open leverage popup must ask about the address it was SEEDED from — the chart
+    /// can move to another coin while that popup stands open, and answering with the new coin's cap
+    /// is how a limit gets read against the wrong market. A group-shaped convenience here would
+    /// make the wrong call the easy one.
+    ///
+    /// Args:
+    ///     core: Core whose provider owns the market data.
+    ///     market: Canonical market name.
+    ///
+    /// Returns:
+    ///     The limits, or `None` while the provider snapshot or the market has not arrived.
+    pub(crate) fn market_limits(&self, core: CoreId, market: &str) -> Option<MarketLimits> {
+        self.session.market_source().market_limits(core, market)
     }
 
     /// Publish the markets open in a group's Main stack from `MainChartStack`.

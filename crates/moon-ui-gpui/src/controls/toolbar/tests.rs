@@ -1,10 +1,13 @@
 //! Adaptive-fit and manual-strategy target regressions for the trading toolbar.
 
-use super::{label_ladder, manual_strategy_core, LabelLadder, LabelWidths};
+use super::{LabelLadder, LabelWidths, label_ladder, manual_strategy_core};
 
 #[test]
-/// Regression target: changing an inclusive ladder boundary to strict comparison either hides a
-/// complete launcher label that exactly fits or retains it one pixel after the row starts clipping.
+/// Regression target: `controls/toolbar.rs:label_ladder` changing an inclusive boundary to a
+/// strict comparison hides a complete caption that exactly fits or retains it after clipping.
+///
+/// The user-visible consequence is a toolbar caption disappearing at its exact fit width or
+/// remaining after the trailing window controls begin to clip.
 fn adaptive_label_ladder_honors_every_exact_boundary() {
     let widths = LabelWidths {
         icon_only: 100.0,
@@ -14,6 +17,7 @@ fn adaptive_label_ladder_honors_every_exact_boundary() {
         strategies: 40.0,
         analytics: 50.0,
         sell: 60.0,
+        max_order_caption: 70.0,
     };
     let expected = |rungs: usize| LabelLadder {
         size_unit: rungs >= 1,
@@ -22,10 +26,11 @@ fn adaptive_label_ladder_honors_every_exact_boundary() {
         strategies: rungs >= 4,
         analytics: rungs >= 5,
         sell: rungs >= 6,
+        max_order_caption: rungs >= 7,
     };
 
     assert_eq!(label_ladder(100.0, widths), expected(0));
-    for (index, boundary) in [110.0, 130.0, 160.0, 200.0, 250.0, 310.0]
+    for (index, boundary) in [110.0, 130.0, 160.0, 200.0, 250.0, 310.0, 380.0]
         .into_iter()
         .enumerate()
     {
@@ -40,7 +45,7 @@ fn adaptive_label_ladder_honors_every_exact_boundary() {
             "exact boundary {boundary}"
         );
     }
-    assert_eq!(label_ladder(500.0, widths), expected(6));
+    assert_eq!(label_ladder(500.0, widths), expected(7));
 }
 
 #[test]

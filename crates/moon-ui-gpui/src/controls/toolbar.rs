@@ -1,4 +1,5 @@
-//! Compose the trading toolbar: size, leverage, stop loss, TP/S slots, and Live controls.
+//! Compose the trading toolbar: size, leverage with an exchange max-order readout, stop loss, TP/S
+//! slots, and Live controls.
 
 use gpui::*;
 use moon_core::session::CoreId;
@@ -11,9 +12,10 @@ use moon_ui::{
 
 use super::metric::{metric_button, sl_toggle};
 use super::strips::{self, sell_strip, size_strip};
-use super::{TradeMetric, fmt_field2, fmt_field2_signed};
+use super::{MaxOrderReadout, TradeMetric, fmt_field2, fmt_field2_signed};
 use crate::shell::Shell;
 use crate::{Backend, design};
+use moon_core::util::fmt;
 
 #[cfg(test)]
 mod tests;
@@ -32,10 +34,26 @@ const CAPTION_SIZE: f32 = 10.0;
 /// (`locales/README.md`), as are the neighbouring `Lev`/`SL`/`TP`. The tooltip is translated, the
 /// caption is not. The appended `USDT eq.` is a deliberately-untranslated technical unit.
 fn strip_caption(text: impl Into<SharedString>, p: MoonPalette) -> impl IntoElement {
+    strip_text(text, p.text_muted)
+}
+
+/// The row's caption-scale text recipe, shared by every label and readout on it.
+///
+/// One home for the MoonUI call so a second text cell cannot drift to a different family, size or
+/// casing while looking the same in the source. `color` is the only thing that legitimately varies:
+/// a caption NAMES something and is muted, while a readout STATES something and is not.
+///
+/// Args:
+///     text: Caption or readout text rendered at the toolbar's shared text scale.
+///     color: Active palette color for the text's semantic role.
+///
+/// Returns:
+///     A non-shrinking monospaced toolbar text element.
+fn strip_text(text: impl Into<SharedString>, color: u32) -> impl IntoElement {
     div().flex_none().child(
         MoonLabel::new(text)
             .mono(true)
-            .color(p.text_muted)
+            .color(color)
             .font_size(CAPTION_SIZE)
             .uppercase(false)
             .render(),
@@ -139,6 +157,17 @@ fn launcher_label_width(cx: &App, label: &str) -> f32 {
     (text + chrome).max(ICON_BTN_W)
 }
 
+/// The localized labels of the three singleton-window launchers at the row's trailing edge.
+///
+/// Grouped because they are ONE fact — the trailing cluster's text — and the budget reads all
+/// three or none of them. Passing them separately also pushed [`row_fit`] past the argument count
+/// where a reader stops tracking which string is which.
+struct LauncherLabels<'a> {
+    analytics: &'a str,
+    strategies: &'a str,
+    settings: &'a str,
+}
+
 /// Incremental widths of the optional labels above the icon-only row.
 #[derive(Clone, Copy, Debug)]
 struct LabelWidths {
@@ -156,6 +185,11 @@ struct LabelWidths {
     analytics: f32,
     /// Width of the Sell caption.
     sell: f32,
+    /// Extra width of the caption naming the exchange max-order value.
+    ///
+    /// The VALUE itself is not on this ladder: it is permanently visible and therefore part of the
+    /// unsheddable `controls` budget instead — only the word naming it may go.
+    max_order_caption: f32,
 }
 
 /// Visibility of every optional label at one available row width.
@@ -167,6 +201,7 @@ struct LabelLadder {
     strategies: bool,
     analytics: bool,
     sell: bool,
+    max_order_caption: bool,
 }
 
 /// Resolve the cumulative label ladder without any rendering or theme dependency.
@@ -179,7 +214,7 @@ struct LabelLadder {
 ///     widths: Icon-only base and incremental optional-label widths.
 ///
 /// Returns:
-///     Visibility flags for the six ordered ladder rungs.
+///     Visibility flags for the seven ordered ladder rungs.
 fn label_ladder(available: f32, widths: LabelWidths) -> LabelLadder {
     let size_unit = widths.icon_only + widths.size_unit;
     let size_noun = size_unit + widths.size_noun;
@@ -187,6 +222,7 @@ fn label_ladder(available: f32, widths: LabelWidths) -> LabelLadder {
     let strategies = settings + widths.strategies;
     let analytics = strategies + widths.analytics;
     let sell = analytics + widths.sell;
+    let max_order_caption = sell + widths.max_order_caption;
 
     LabelLadder {
         size_unit: available >= size_unit,
@@ -195,6 +231,7 @@ fn label_ladder(available: f32, widths: LabelWidths) -> LabelLadder {
         strategies: available >= strategies,
         analytics: available >= analytics,
         sell: available >= sell,
+        max_order_caption: available >= max_order_caption,
     }
 }
 
@@ -205,18 +242,23 @@ fn label_ladder(available: f32, widths: LabelWidths) -> LabelLadder {
 /// so nothing downstream can reach a different conclusion.
 ///
 /// The thresholds nest by construction: each rung adds one optional label to the unsheddable row
-/// budget. Six direct comparisons therefore decide the six-rung ladder without enumerating
+/// budget. Seven direct comparisons therefore decide the seven-rung ladder without enumerating
 /// combinations of visible labels.
 ///
 /// Yield order, most expendable first. Every rung sheds a LABEL; no control ever leaves the row.
-/// 1. **the `Sell` caption** — its strip stands against the `TP` button, which names the same
+/// The exchange max-order VALUE is deliberately absent from this ladder: it is a permanent readout,
+/// so it sits in the unsheddable budget and never leaves the row. Only the word naming it yields —
+/// and it yields FIRST, because the value it labels keeps a tooltip that says what the figure is.
+///
+/// 1. **the max-order caption** — the value stays, and its tooltip already names it;
+/// 2. **the `Sell` caption** — its strip stands against the `TP` button, which names the same
 ///    concept one control away;
-/// 2. **the Analytics button's label** — its dashboard glyph keeps the full tooltip;
-/// 3. **the Strategies button's label** — its bot glyph keeps the full tooltip;
-/// 4. **the Settings button's label** — the gear glyph keeps the full tooltip;
-/// 5. **the `Size, ` noun** — six numeric presets at the head of a trading toolbar are recognisable
+/// 3. **the Analytics button's label** — its dashboard glyph keeps the full tooltip;
+/// 4. **the Strategies button's label** — its bot glyph keeps the full tooltip;
+/// 5. **the Settings button's label** — the gear glyph keeps the full tooltip;
+/// 6. **the `Size, ` noun** — six numeric presets at the head of a trading toolbar are recognisable
 ///    without being named;
-/// 6. **the unit** — last, because it is the one fact the digits cannot carry themselves. Even
+/// 7. **the unit** — last, because it is the one fact the digits cannot carry themselves. Even
 ///    then the cell tooltip still spells it out.
 ///
 /// Measured from the REAL cell widths, which depend on the preset values and the font size, rather
@@ -229,9 +271,9 @@ fn label_ladder(available: f32, widths: LabelWidths) -> LabelLadder {
 ///     chrome_width: Available toolbar width in logical pixels.
 ///     size: Pre-fitted manual-size cells.
 ///     sell: Pre-fitted sell-percentage cells.
-///     analytics_label: Localized Analytics launcher label.
-///     strategies_label: Localized Strategies launcher label.
-///     settings_label: Localized Settings launcher label.
+///     launchers: Localized labels of the three trailing singleton-window launchers.
+///     max_order_caption: Localized caption naming the exchange max-order readout.
+///     max_order_value: The max-order figure as it will actually be rendered, measured verbatim.
 ///
 /// Returns:
 ///     Optional captions and complete launcher widths for the current row.
@@ -240,9 +282,9 @@ fn row_fit(
     chrome_width: f32,
     size: &strips::FittedCells,
     sell: &strips::FittedCells,
-    analytics_label: &str,
-    strategies_label: &str,
-    settings_label: &str,
+    launchers: LauncherLabels<'_>,
+    max_order_caption: &str,
+    max_order_value: &str,
 ) -> RowFit {
     let gap = design::ui_value(cx, design::CHROME_GAP);
     let fw = |v: f32| design::font_w(cx, v);
@@ -257,27 +299,37 @@ fn row_fit(
         + design::ui_value(cx, SL_TOGGLE_TRACK_W)
         + fw(SL_TOGGLE_LABEL_W)
         + fw(LIVE_W)
-        + ICON_BTN_W * 5.0;
+        + ICON_BTN_W * 5.0
+        // The exchange max-order VALUE is permanent — outcome 4 asks for a readout that is always
+        // on the row — so it belongs in the unsheddable budget rather than on the ladder. Measured
+        // from the REAL rendered string: a coin's cap runs from three digits to nine.
+        + design::ui_text_width(cx, max_order_value, CAPTION_SIZE, 400.0, true);
     // Seven 1px rules — the hairline is deliberately NOT font-scaled (see `design::vline`). Pinned
     // against the row itself by `toolbar_row_budget_counts_every_rule_it_draws` in
     // `tests/theme_contract/shell.rs`: adding a section here without updating this count is invisible
     // until the trailing cluster clips off the edge of some narrow window.
     let rules = 7.0;
     // Row gaps: 15 between the 16 root children (both sides of the zero-width spacer included)
-    // plus 4 inside sections — one in Risk, one in Exit, one between Profit Monitor and Screener,
-    // and one between Analytics and Strategies. Settings is a one-child section and adds none.
+    // plus 5 inside sections — one in Leverage, one in Risk, one in Exit, one between Profit
+    // Monitor and Screener, and one between Analytics and Strategies. Settings is a one-child
+    // section and adds none.
     // Count them ALL: an undercount moves every threshold, so a label stays visible after the row's
     // fixed part has already outgrown the window — and the spacer cannot shrink past zero.
-    let gaps = gap * 19.0;
+    //
+    // LEVERAGE earned its in-section gap when the permanent max-order value joined the metric
+    // button there. That gap is counted HERE rather than on the ladder because the value never
+    // sheds; the max-order CAPTION does shed, and its own preceding gap travels inside its ladder
+    // width (see `caption_w`), so counting it again here would double it.
+    let gaps = gap * 20.0;
     let base = design::ui_value(cx, design::HEADER_PAD_X) * 2.0 + controls + rules + gaps;
     // A caption costs its own width plus the gap separating it from its strip.
     let caption_w = |text: &str| design::ui_text_width(cx, text, CAPTION_SIZE, 400.0, true) + gap;
     let full_caption = size_caption_text();
     let unit_caption_width = caption_w(SIZE_UNIT);
     let full_caption_width = caption_w(&full_caption);
-    let analytics_width = launcher_label_width(cx, analytics_label);
-    let strategies_width = launcher_label_width(cx, strategies_label);
-    let settings_width = launcher_label_width(cx, settings_label);
+    let analytics_width = launcher_label_width(cx, launchers.analytics);
+    let strategies_width = launcher_label_width(cx, launchers.strategies);
+    let settings_width = launcher_label_width(cx, launchers.settings);
     let ladder = label_ladder(
         chrome_width,
         LabelWidths {
@@ -288,6 +340,9 @@ fn row_fit(
             strategies: strategies_width - ICON_BTN_W,
             analytics: analytics_width - ICON_BTN_W,
             sell: caption_w(SELL_CAPTION),
+            // Measured from the REAL rendered strings, not a constant: the digit count of a max
+            // order differs by orders of magnitude between coins, and the caption is localized.
+            max_order_caption: caption_w(max_order_caption),
         },
     );
 
@@ -302,6 +357,9 @@ fn row_fit(
         analytics_width: ladder.analytics.then_some(analytics_width),
         strategies_width: ladder.strategies.then_some(strategies_width),
         settings_width: ladder.settings.then_some(settings_width),
+        max_order_caption: ladder
+            .max_order_caption
+            .then(|| SharedString::from(max_order_caption.to_string())),
     }
 }
 
@@ -316,6 +374,8 @@ struct RowFit {
     strategies_width: Option<f32>,
     /// Complete Settings-button width when its label fits; `None` renders it icon-only.
     settings_width: Option<f32>,
+    /// The caption naming the permanent max-order figure; `None` leaves the value identified by its tooltip.
+    max_order_caption: Option<SharedString>,
 }
 
 /// Caption of the order-size group together with its unit.
@@ -379,6 +439,8 @@ pub(crate) fn effective_manual_strategy_core(
 ///     sell_input: Shared input state for the active sell editor.
 ///     shell: Owning shell entity receiving toolbar actions.
 ///     metric_popup: Active trade metric and its popup contents, when open.
+///     max_order: Exchange maximum-order readout for the active leverage target.
+///     quote: Quote token displayed beside a present maximum-order value.
 ///     chrome_width: Available toolbar width in logical pixels.
 ///     cx: Application context used for state reads and rendering.
 ///
@@ -394,6 +456,8 @@ pub fn toolbar(
     sell_input: &Entity<MoonInputState>,
     shell: &Entity<Shell>,
     metric_popup: Option<(TradeMetric, AnyElement)>,
+    max_order: MaxOrderReadout,
+    quote: &str,
     chrome_width: f32,
     cx: &App,
 ) -> impl IntoElement {
@@ -489,6 +553,13 @@ pub fn toolbar(
     // labels' fate read them. One computation, one source.
     let size_cells = strips::FittedCells::fit(cx, strips::size_labels(size_values));
     let sell_cells = strips::FittedCells::fit(cx, strips::sell_labels(sell_pcts));
+    // The exchange's own cap on a single order, kept permanently on the row rather than only inside
+    // the leverage popover: it bounds every order the row above it composes, and a cap you have to
+    // open a popup to see is a cap you check after sizing rather than before. Compact here, exact in
+    // the popover — one value from one read, at two precisions.
+    let max_order_caption = t!("toolbar.max_order_short").to_string();
+    let max_order_value = max_order.format_compact(fmt::compact_si, quote);
+    let max_order_tip = t!(max_order.tooltip_key()).to_string();
     let analytics_label = t!("toolbar.analytics").to_string();
     let strategies_label = t!("toolbar.strategies").to_string();
     let settings_label = t!("shell.settings_btn").to_string();
@@ -497,9 +568,13 @@ pub fn toolbar(
         chrome_width,
         &size_cells,
         &sell_cells,
-        &analytics_label,
-        &strategies_label,
-        &settings_label,
+        LauncherLabels {
+            analytics: &analytics_label,
+            strategies: &strategies_label,
+            settings: &settings_label,
+        },
+        &max_order_caption,
+        &max_order_value,
     );
 
     // A section carries the gap INSIDE it; the boundary between two sections is drawn by the RULE
@@ -549,19 +624,39 @@ pub fn toolbar(
         // whereas an order size is a local preset in the config. Different blast radius, different
         // group.
         .child(design::chrome_divider(cx, p))
-        .child(section().child(metric_button(
-            TradeMetric::Lev,
-            lev_str,
-            p.text,
-            design::font_w(cx, LEV_W),
-            lev_popup.is_some(),
-            false,
-            lev_available,
-            lev_popup,
-            shell.clone(),
-            p,
-            cx,
-        )))
+        .child(
+            section()
+                .child(metric_button(
+                    TradeMetric::Lev,
+                    lev_str,
+                    p.text,
+                    design::font_w(cx, LEV_W),
+                    lev_popup.is_some(),
+                    false,
+                    lev_available,
+                    lev_popup,
+                    shell.clone(),
+                    p,
+                    cx,
+                ))
+                // The exchange max order joins THIS section rather than opening one of its own: it
+                // constrains the same "how large, at what leverage" decision the section already
+                // owns, and a section of its own would need a rule plus a root gap — the rule is
+                // pinned by `toolbar_row_budget_counts_every_rule_it_draws` and the gap count is
+                // guarded by nothing at all.
+                .children(fit.max_order_caption.map(|text| strip_caption(text, p)))
+                // The VALUE is unconditional: this readout exists so the exchange's cap is on
+                // screen while an order is being sized, and a figure that disappears on a narrow
+                // window is not that. Only its caption yields to width — the tooltip below still
+                // names the figure once the word is gone.
+                .child(
+                    div()
+                        .id("toolbar-max-order")
+                        .flex_none()
+                        .child(strip_text(max_order_value, p.text))
+                        .tooltip(crate::panels::common::text_tooltip(max_order_tip)),
+                ),
+        )
         // §3 RISK: the on/off toggle (`panic_if_price_drop`) plus the value button and its popup.
         .child(design::chrome_divider(cx, p))
         .child(
@@ -675,7 +770,7 @@ pub fn toolbar(
                 .child(open_window_button(
                     "toolbar-profit-monitor",
                     t!("toolbar.profit_monitor").to_string(),
-                    "icons/chart-candlestick.svg",
+                    "icons/trending-up.svg",
                     None,
                     None,
                     backend.clone(),

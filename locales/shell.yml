@@ -162,6 +162,81 @@ toolbar.apply:
   en: "Apply"
   es: "Aplicar"
 
+# --- Exchange limits for the coin on the Main chart (leverage popup + toolbar readout) ---
+# Row label for the exchange's maximum order size, denominated in the market's quote currency.
+toolbar.max_order:
+  ru: "Макс. ордер"
+  en: "Max order"
+  es: "Orden máx."
+# Toolbar caption for the same figure, where the row competes for width with every trading control.
+# Deliberately untranslated: it is the industry abbreviation, like BUY/SELL and LONG/SHORT in
+# `locales/README.md`'s untranslated list, and a translated word here would be the longest thing on
+# the row. The full label above stays in the popover, where there is room to say it properly.
+toolbar.max_order_short:
+  ru: "MAX"
+  en: "MAX"
+  es: "MAX"
+# Row label for the coin's maximum leverage as stated by the exchange.
+toolbar.lev_max:
+  ru: "Макс. плечо"
+  en: "Max leverage"
+  es: "Apalancamiento máx."
+# Hover text when the exchange stated the order cap directly: a fixed figure that does not drift.
+toolbar.max_order_tip:
+  ru: "Максимальный размер ордера по правилам биржи. Не зависит от выбранного плеча."
+  en: "Exchange maximum order size. It does not depend on the selected leverage."
+  es: "Tamaño máximo de orden de la bolsa. No depende del apalancamiento elegido."
+# Hover text when no notional cap was stated and the figure was converted from the quantity cap.
+toolbar.max_order_derived:
+  ru: "Биржа не назвала предел в деньгах: величина пересчитана из лимита количества по текущему аску, поэтому меняется вместе с ценой."
+  en: "The exchange stated no cash cap: this is the quantity limit converted at the current ask, so it moves with the price."
+  es: "La bolsa no indicó un límite en dinero: es el límite de cantidad convertido al ask actual, por lo que varía con el precio."
+# Hover text when the exchange stated no maximum order size at all for this market.
+toolbar.max_order_none:
+  ru: "Биржа не задала максимальный размер ордера для этого рынка."
+  en: "The exchange states no maximum order size for this market."
+  es: "La bolsa no define un tamaño máximo de orden para este mercado."
+# Hover text while nothing has loaded yet: no provider, no snapshot, or no such market.
+toolbar.limits_unknown:
+  ru: "Лимиты биржи ещё не загружены для этого рынка."
+  en: "Exchange limits have not loaded for this market yet."
+  es: "Los límites de la bolsa aún no se han cargado para este mercado."
+# Hover text on a known maximum leverage.
+toolbar.lev_max_tip:
+  ru: "Максимальное плечо этой монеты по данным биржи."
+  en: "This coin's maximum leverage as stated by the exchange."
+  es: "Apalancamiento máximo de esta moneda según la bolsa."
+# Hover text on the dash when the exchange stated no maximum leverage for this market.
+toolbar.lev_max_none:
+  ru: "Биржа не задала максимальное плечо для этого рынка."
+  en: "The exchange states no maximum leverage for this market."
+  es: "La bolsa no define un apalancamiento máximo para este mercado."
+# Shown when the coin's maximum is unknown: the 1..125 range is a terminal default, not a limit.
+toolbar.lev_max_unknown:
+  ru: "Максимум для этой монеты неизвестен — диапазон 1–125 взят по умолчанию и не является её пределом."
+  en: "This coin's maximum is unknown — the 1-125 range is a default, not its limit."
+  es: "Se desconoce el máximo de esta moneda: el rango 1-125 es un valor por defecto, no su límite."
+# Shown when the value about to be applied is above the coin's stated cap. Not corrected silently.
+toolbar.lev_max_exceeded:
+  ru: "Значение выше предела биржи (×%{max}) — она такое плечо отклонит."
+  en: "Above the exchange limit (x%{max}) — it will reject this leverage."
+  es: "Por encima del límite de la bolsa (x%{max}): rechazará este apalancamiento."
+# Shown when the exchange revised the cap while the popup stood open; the slider range is frozen.
+toolbar.lev_range_stale:
+  ru: "Биржа изменила предел этой монеты — откройте окно заново, чтобы обновить шкалу."
+  en: "The exchange revised this coin's limit — reopen to refresh the slider range."
+  es: "La bolsa cambió el límite de esta moneda: reabre para actualizar la escala."
+# Hover text on an available leverage preset. It only fills the field; Apply sends it.
+toolbar.lev_preset_tip:
+  ru: "Подставить плечо ×%{x}. Отправит его только «Применить»."
+  en: "Set leverage to x%{x}. Only Apply sends it."
+  es: "Fijar apalancamiento en x%{x}. Solo Aplicar lo envía."
+# Hover text on a preset above the coin's maximum, which is offered as unavailable.
+toolbar.lev_preset_blocked:
+  ru: "×%{x} недоступно: максимум этой монеты — ×%{max}."
+  en: "x%{x} is unavailable: this coin's maximum is x%{max}."
+  es: "x%{x} no está disponible: el máximo de esta moneda es x%{max}."
+
 # --- Core-settings popup (⚙ button beside the core selector) ---
 core_settings.title:
   ru: "Настройки ядра"

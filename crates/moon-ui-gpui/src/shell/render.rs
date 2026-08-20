@@ -12,6 +12,36 @@ use crate::chrome::terminal_chrome;
 use crate::{controls, design};
 
 impl Shell {
+    /// Resolve one leverage address into the exchange limits for it and the quote token they are
+    /// denominated in.
+    ///
+    /// THE reason this is a function and not two similar blocks: the toolbar row and the open
+    /// popover must never state different caps for one coin, and they ask about slightly different
+    /// addresses — the row asks about the target the group resolves to NOW, the popover about the
+    /// target it was SEEDED from. Sharing the resolution makes that the ONLY difference between
+    /// them; two hand-copied blocks would leave the guarantee resting on them staying in sync.
+    ///
+    /// Args:
+    ///     target: The leverage address to describe, or `None` when there is none.
+    ///     cx: Context used to read the backend.
+    ///
+    /// Returns:
+    ///     A limits-and-quote tuple; its limits element is `None` and its quote token is empty when the
+    ///     address is absent or incomplete.
+    pub(super) fn limits_for(
+        &self,
+        target: Option<&controls::MetricTarget>,
+        cx: &App,
+    ) -> (Option<moon_core::market::MarketLimits>, String) {
+        match target.map(|t| (t.core, t.market.as_deref())) {
+            Some((Some(core), Some(market))) => (
+                self.backend.read(cx).market_limits(core, market),
+                moon_core::symbol::resolve_quote(market),
+            ),
+            _ => (None, String::new()),
+        }
+    }
+
     /// Build the CONTENT of the open trading-metric popup (TP/SL/leverage), or `None` when closed.
     ///
     /// Content only. The box around it — frame, background, width, and above all its POSITION —
@@ -19,8 +49,9 @@ impl Shell {
     /// metric button. That is the whole point of the arrangement: the popup follows its trigger by
     /// construction, so no layout term in the toolbar can desync it.
     fn open_metric_content(&self, p: MoonPalette, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (metric, target) = self.open_metric_popup.clone()?;
+        let open = self.open_metric_popup.clone()?;
         use controls::TradeMetric;
+        let metric = open.metric;
         let extended = self.active_tp_extended(cx);
         let (slider, input) = match metric {
             TradeMetric::Tp => (
@@ -41,9 +72,14 @@ impl Shell {
                 .and_then(|d| d.hedge_mode)
                 .unwrap_or(false)
         };
+        // Read against the popup's SEEDED address, not the group's current one: the Main chart can
+        // move to another coin while this popup stands open, and answering with the new coin's cap
+        // would print one market's limit over another market's editor.
+        let (limits, quote) = self.limits_for(Some(&open.target), cx);
         Some(controls::metric_popup_content(
-            metric,
-            &target,
+            &open,
+            limits,
+            &quote,
             slider,
             &self.tp_fine_slider,
             input,
@@ -106,8 +142,23 @@ impl Render for Shell {
         let metric_popup = self
             .open_metric_popup
             .as_ref()
-            .map(|(metric, _)| *metric)
+            .map(|open| open.metric)
             .zip(self.open_metric_content(p, cx));
+
+        // Exchange limits for the coin the row is trading NOW. Read once, here, through the same
+        // accessor the popup uses, so the row and the popover can never state different caps for
+        // one coin — an open popup still asks about the address it was SEEDED from, which is the
+        // one difference between them and a deliberate one.
+        //
+        // Resolved through `TradeMetric::Lev.target`, NOT through `main_chart_target` directly.
+        // That method is the one place that decides which (core, market) a leverage edit is
+        // addressed to, and its core comes from `active_trade_core` while only the MARKET comes
+        // from the chart — in Auto mode those can be different exchanges. Reading the row's cap
+        // from the chart's core would let the toolbar state exchange B's limit for an order that
+        // Apply then sends to core A. One identity for the readout, the popup and the command.
+        let row_target = controls::TradeMetric::Lev.target(self.backend.read(cx), &self.group);
+        let (row_limits, toolbar_quote) = self.limits_for(row_target.as_ref(), cx);
+        let toolbar_max_order = controls::MaxOrderReadout::of(row_limits);
 
         // Drop the gear popup before building its content if the core it was seeded from is no
         // longer the active one — its editors hold that core's values, not this one's.
@@ -212,6 +263,8 @@ impl Render for Shell {
                 &self.sell_input,
                 &cx.entity(),
                 metric_popup,
+                toolbar_max_order,
+                &toolbar_quote,
                 chrome_width,
                 cx,
             ))

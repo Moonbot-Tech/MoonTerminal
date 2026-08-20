@@ -31,14 +31,11 @@ impl Shell {
     pub(super) fn reconcile_metric_popup(&mut self, cx: &App) {
         let manual_core =
             controls::toolbar::effective_manual_strategy_core(&self.backend, &self.group, cx);
-        let stale = self
-            .open_metric_popup
-            .as_ref()
-            .is_some_and(|(metric, target)| {
-                let b = self.backend.read(cx);
-                !target.is_live(*metric, b, &self.group)
-                    || !metric.available(b, &self.group, manual_core)
-            });
+        let stale = self.open_metric_popup.as_ref().is_some_and(|open| {
+            let b = self.backend.read(cx);
+            !open.target.is_live(open.metric, b, &self.group)
+                || !open.metric.available(b, &self.group, manual_core)
+        });
         if stale {
             self.open_metric_popup = None;
         }
@@ -60,12 +57,12 @@ impl Shell {
         edit: ClientSettingsEdit,
         cx: &mut Context<Self>,
     ) {
-        let Some((open, target)) = self.open_metric_popup.as_ref() else {
+        let Some(open) = self.open_metric_popup.as_ref() else {
             return;
         };
         let is_live = {
             let b = self.backend.read(cx);
-            *open == metric && target.is_live(metric, b, &self.group)
+            open.metric == metric && open.target.is_live(metric, b, &self.group)
         };
         if !is_live {
             return;
@@ -113,9 +110,28 @@ impl Shell {
             if metric.seed_value(b, &self.group).is_none() {
                 return;
             }
+            // The coin's stated maximum leverage, read ONCE here so the range the slider is seeded
+            // with and the figure the popup later compares against cannot come from two different
+            // reads. Zero for TP and SL, which have no coin, and zero when the exchange has stated
+            // no maximum for this market.
+            //
+            // Through the SAME resolver the row and the popover use, so all three agree by
+            // construction rather than by three matching copies of one match.
+            let lev_coin_max = match metric {
+                controls::TradeMetric::Lev => self
+                    .limits_for(Some(&target), cx)
+                    .0
+                    .map(|limits| limits.max_leverage)
+                    .unwrap_or(0),
+                _ => 0,
+            };
             // Recorded BEFORE the seed and before any edit goes out, so both address the same place
             // — see [`Self::reconcile_metric_popup`] and [`Self::commit_metric_edit`].
-            self.open_metric_popup = Some((metric, target));
+            self.open_metric_popup = Some(controls::OpenMetricPopup {
+                metric,
+                target,
+                lev_coin_max,
+            });
             // Clicking TP hands control back to the main take profit (extinguishing the active S
             // slot) without changing the TP value itself.
             if metric == controls::TradeMetric::Tp {
@@ -125,7 +141,7 @@ impl Shell {
         } else if self
             .open_metric_popup
             .as_ref()
-            .is_some_and(|(m, _)| *m == metric)
+            .is_some_and(|open| open.metric == metric)
         {
             self.open_metric_popup = None;
         }
@@ -195,8 +211,23 @@ impl Shell {
                 });
             }
             TradeMetric::Lev => {
-                self.lev_slider
-                    .update(cx, |st, c| st.set_value(val, window, c));
+                // The slider stops at THIS COIN's maximum, not at the terminal's 1..125 fallback.
+                // Taken from the maximum recorded when the popup opened, so the range the slider
+                // gets and the figure the popup later compares against come from one read.
+                let coin_max = self
+                    .open_metric_popup
+                    .as_ref()
+                    .map(|open| open.lev_coin_max)
+                    .unwrap_or(0);
+                let (lo, hi, step) = controls::lev_bounds_for(coin_max);
+                self.lev_slider.update(cx, |st, c| {
+                    // Replace the state's VALUE in place; never `cx.new(..)` a fresh entity here.
+                    // `Shell::init` registers a subscription on THIS entity that mirrors drags into
+                    // the leverage field, and a replacement entity drops it silently — the slider
+                    // would keep moving while the field, which is what Apply actually sends, froze.
+                    *st = MoonSliderState::new().min(lo).max(hi).step(step);
+                    st.set_value(val, window, c);
+                });
                 self.lev_input.update(cx, |st, c| {
                     st.set_value(format!("{}", val as i32), window, c)
                 });
