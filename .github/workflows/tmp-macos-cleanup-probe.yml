@@ -5,8 +5,11 @@ name: tmp macOS cleanup probe
 # do it: its jobs check out the validated TAG's commit, so a script that exists only on a branch is
 # not there yet. Delete this file before merging.
 
+# Push-triggered on this branch only: `workflow_dispatch` is offered solely for workflows that
+# already exist on the default branch, which this one deliberately never will.
 on:
-  workflow_dispatch:
+  push:
+    branches: [ci/split-macos-release-jobs]
 
 jobs:
   probe:
