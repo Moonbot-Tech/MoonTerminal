@@ -154,7 +154,7 @@ pub(crate) struct Shell {
     /// opened; comparing both prevents a stale editor from continuing to write to an old core or
     /// market after the visible context moves.
     /// `None` means all three anchored popovers are closed.
-    open_metric_popup: Option<(controls::TradeMetric, controls::MetricTarget)>,
+    open_metric_popup: Option<controls::OpenMetricPopup>,
     /// Window-root focus handle that lets root `on_key_down` receive hotkeys even when Main is empty.
     /// It is focused at startup; chart or input clicks take focus, while F-key events bubble back.
     focus: FocusHandle,

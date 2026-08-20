@@ -15,7 +15,7 @@ use moonproto::{state::DerivedDeltaSnapshot, MoonTime};
 
 use crate::session::CoreId;
 
-use super::source::MarketDataSource;
+use super::source::{MarketDataSource, max_order_notional};
 
 /// Screener row combining provider market data with an overlay from the supplied members.
 #[derive(Clone, Debug, Default)]
@@ -40,8 +40,13 @@ pub struct ScreenerRow {
     pub ask: f64,
     /// Highest price in the last hour across 5-minute candles and the current candle.
     pub high_1h: f64,
-    /// Exchange maximum order size in the quote currency (Moonbot Max.Order):
-    /// `max_notional`, falling back to `max_qty * ask`. Zero means no exchange limit was provided.
+    /// Exchange maximum order size in the quote currency (Moonbot Max.Order).
+    ///
+    /// Derived by [`max_order_notional`], which is also what the trading toolbar's readout uses, so
+    /// this column and that readout cannot disagree: a stated `max_notional` wins, and otherwise the
+    /// quantity cap is converted — through `contract_size` on a coin-margined market, where quantity
+    /// counts CONTRACTS, and through the ask elsewhere. Zero means no cap was provided, or that the
+    /// price needed to convert one has not arrived yet.
     pub max_order: f64,
     /// Unsigned retained-history movement magnitudes matching the Moonbot Screener table.
     ///
@@ -118,6 +123,7 @@ impl MarketDataSource {
 
         let markets = snap.markets();
         let mut rows = Vec::with_capacity(markets.market_count());
+        let exchange = self.exchange_of(provider);
         for handle in markets.iter() {
             let name = handle.name();
             let mut row = handle.with(|m| ScreenerRow {
@@ -126,11 +132,15 @@ impl MarketDataSource {
                 coin: m.market_currency.clone(),
                 vol_24h: m.volume,
                 ask: m.price.ask,
-                max_order: if m.max_notional() > 0.0 {
-                    m.max_notional()
-                } else {
-                    m.max_qty() * m.price.ask
-                },
+                max_order: max_order_notional(
+                    name,
+                    exchange,
+                    m.max_notional(),
+                    m.max_qty(),
+                    m.price.ask,
+                    m.contract_size(),
+                )
+                .value,
                 funding_pct: m.funding_rate * 100.0,
                 mark_delta_pct: (m.price.mark_price_found
                     && m.price.p_last > 0.0

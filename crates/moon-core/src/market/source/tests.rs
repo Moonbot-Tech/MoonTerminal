@@ -77,3 +77,101 @@ fn all_dirty_flags_exclude_the_chart_archive() {
     assert!(!MarketDirtyFlags::ALL.contains(MarketDirtyFlags::HISTORY_ARCHIVE));
     assert!(MarketDirtyFlags::ALL.contains(MarketDirtyFlags::HISTORY));
 }
+
+/// Regression target: `market/source/mod.rs:max_order_notional` must keep a stated cap ahead of
+/// the quantity fallback, or the Screener and trading toolbar show an order size the exchange did
+/// not state and an operator can size an order against the wrong limit.
+#[test]
+fn stated_max_order_notional_precedes_the_quantity_fallback() {
+    assert_eq!(
+        max_order_notional(
+            "BTCUSDT",
+            crate::symbol::Exchange::Binance,
+            250.0,
+            4.0,
+            100.0,
+            10.0
+        ),
+        MaxOrder {
+            value: 250.0,
+            source: MaxOrderSource::Stated,
+        }
+    );
+}
+
+/// Regression target: `market/source/mod.rs:max_order_notional` must multiply a linear quantity
+/// cap by its ask, not by a QUANTO contract size, or the toolbar reports a maximum far above the
+/// exchange limit and its order is rejected.
+#[test]
+fn linear_quantity_cap_uses_the_current_ask_even_with_a_contract_size() {
+    assert_eq!(
+        max_order_notional(
+            "ASTEROID_USDT",
+            crate::symbol::Exchange::Gate,
+            0.0,
+            6.0,
+            2.0,
+            10_000.0,
+        ),
+        MaxOrder {
+            value: 12.0,
+            source: MaxOrderSource::Derived,
+        }
+    );
+}
+
+/// Regression target: `market/source/mod.rs:max_order_notional` must convert a quote-less
+/// coin-margined contract through contract size, or an operator sees a cap wrong by the price
+/// factor and submits an invalid order.
+#[test]
+fn inverse_quantity_cap_uses_contract_size_without_an_ask() {
+    assert_eq!(
+        max_order_notional(
+            "AAVEPERP",
+            crate::symbol::Exchange::Bybit,
+            0.0,
+            7.0,
+            50.0,
+            10.0,
+        ),
+        MaxOrder {
+            value: 70.0,
+            source: MaxOrderSource::Derived,
+        }
+    );
+}
+
+/// Regression target: `market/source/mod.rs:max_order_notional` must distinguish no exchange cap
+/// from a linear cap waiting for its first ask, or the UI tells an operator that a known limit is
+/// absent instead of still loading.
+#[test]
+fn max_order_notional_distinguishes_absent_from_pending_conversion() {
+    assert_eq!(
+        max_order_notional(
+            "BTCUSDT",
+            crate::symbol::Exchange::Binance,
+            0.0,
+            0.0,
+            100.0,
+            1.0
+        ),
+        MaxOrder {
+            value: 0.0,
+            source: MaxOrderSource::Absent,
+        }
+    );
+    assert_eq!(
+        max_order_notional(
+            "BTCUSDT",
+            crate::symbol::Exchange::Binance,
+            0.0,
+            4.0,
+            0.0,
+            1.0
+        ),
+        MaxOrder {
+            value: 0.0,
+            source: MaxOrderSource::Pending,
+        }
+    );
+}

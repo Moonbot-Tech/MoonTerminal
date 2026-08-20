@@ -2,7 +2,7 @@
 
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
-use crate::market::source::MarketLabel;
+use crate::market::source::{MarketLabel, MarketLimits, max_order_notional};
 use crate::session::CoreId;
 
 use std::collections::{HashMap, HashSet};
@@ -524,6 +524,50 @@ impl MarketDataSource {
             delta_1h_pct: delta.coin_1h_delta,
             delta_24h_pct: delta.coin_24h_delta,
         })
+    }
+
+    /// Return one market's exchange-imposed trading limits for a consumer core.
+    ///
+    /// Shaped after [`MarketDataSource::price_step`]: resolve the consumer core's provider, take
+    /// its client, then read a SINGLE market out of the snapshot. This is the cheap counterpart to
+    /// `screener_rows`, which builds a row for every market on the exchange and does retained
+    /// history work per row — far too heavy for a control that renders every frame.
+    ///
+    /// `max_order` goes through the shared [`max_order_notional`] rule rather than repeating it,
+    /// so the Screener's `Max.Order` column and the trading toolbar cannot disagree about one
+    /// coin's cap.
+    ///
+    /// Args:
+    ///     core: Consumer core whose provider owns the market data.
+    ///     market: Canonical market name from `MarketHandle::name()`.
+    ///
+    /// Returns:
+    ///     The market's limits, or `None` when the provider, its client, the snapshot, or the
+    ///     market itself has not arrived yet. That is NOT the same as the exchange stating no
+    ///     limit, which is carried inside the value — see [`MarketLimits`].
+    pub fn market_limits(&self, core: CoreId, market: &str) -> Option<MarketLimits> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let handle = snapshot.markets().get(market)?;
+        let exchange = self.exchange_of(core);
+        Some(handle.with(|m| MarketLimits {
+            max_order: max_order_notional(
+                market,
+                exchange,
+                m.max_notional(),
+                m.max_qty(),
+                m.price.ask,
+                m.contract_size(),
+            ),
+            max_leverage: m.max_leverage,
+        }))
     }
 
     /// Build a frozen snapshot for a detection card.

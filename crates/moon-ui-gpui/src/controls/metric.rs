@@ -5,17 +5,19 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
+    h_flex, v_flex, MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonCheckboxSize, MoonInput, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonSlider, MoonSliderState, MoonToggle, MoonToggleLabelSide, MoonToggleSize, h_flex, v_flex,
+    MoonSlider, MoonSliderState, MoonToggle, MoonToggleLabelSide, MoonToggleSize,
 };
 
 use moon_core::feed::ClientSettingsEdit;
+use moon_core::market::MarketLimits;
 use moon_core::session::CoreId;
 
-use super::TP_FINE_MAX;
+use super::{DASH, LEV_PRESETS, MaxOrderReadout, TP_FINE_MAX, lev_preset_available};
 use crate::shell::Shell;
 use crate::{Backend, design};
+use moon_core::util::fmt;
 
 /// Toolbar trading metric with its own slider-and-input popup.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -193,6 +195,90 @@ impl MetricTarget {
     }
 }
 
+/// The open metric popup: which metric, where its edits are addressed, and what the leverage
+/// slider's range was seeded from.
+///
+/// ONE struct rather than the metric and its address in separate fields, because the seeded slider
+/// range must die at exactly the moment the popup does. Three related values cleared together in three
+/// different places is precisely the drift [`MetricTarget`]'s own comment warns about.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OpenMetricPopup {
+    /// The metric whose editor is on screen.
+    pub metric: TradeMetric,
+    /// Where this popup's edits are addressed — re-checked before every write.
+    pub target: MetricTarget,
+    /// The coin maximum leverage the slider range was seeded from; `0` when it was unknown.
+    ///
+    /// Recorded because the range is seeded ONCE, at open: rewriting a slider's bounds underneath a
+    /// live drag is worse than leaving them, so when the exchange revises this coin's cap while the
+    /// popup stands open the popup SAYS the range is stale instead of silently moving. Everything
+    /// else in the popup — the printed limits and which presets are offered — is read per render
+    /// and stays current.
+    pub lev_coin_max: i32,
+}
+
+/// One `label ... value` line of the limits readout, with the reason on hover.
+///
+/// Composed from the popup's own `h_flex` + `div` idiom rather than a list widget, so the two lines
+/// sit in the same visual system as the title and unit rows already beside them.
+///
+/// Args:
+///     label: Localized label naming the limit.
+///     value: Formatted limit value displayed opposite the label.
+///     tooltip: Localized explanation of the value's provenance.
+///     p: Active palette supplying caption and value colors.
+///     cx: Application context supplying the caption size and UI scale.
+///
+/// Returns:
+///     One flex row with a hover explanation for the displayed limit.
+fn limit_row(
+    label: String,
+    value: String,
+    tooltip: String,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .id(SharedString::from(format!("metric-limit-{label}")))
+        .justify_between()
+        .gap(design::ui_px(cx, 6.0))
+        .text_size(design::t_caption(cx))
+        .child(div().text_color(rgb(p.text_muted)).child(label))
+        .child(div().text_color(rgb(p.text)).child(value))
+        .tooltip(crate::panels::common::text_tooltip(tooltip))
+}
+
+/// A wrapped caption stating something the numbers above cannot say for themselves.
+///
+/// Args:
+///     text: Localized explanation of the limit state.
+///     p: Active palette supplying the muted caption color.
+///     cx: Application context supplying the caption size and UI scale.
+///
+/// Returns:
+///     A muted caption element for the limits readout.
+fn limit_note(text: String, p: MoonPalette, cx: &App) -> impl IntoElement {
+    div()
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        .child(text)
+}
+
+/// The leverage currently in the popup's field, which is what Apply would send.
+///
+/// Read from the FIELD rather than from account state because that is the value at risk: the
+/// over-limit caption must describe what pressing Apply would do, not what the exchange last said.
+///
+/// Args:
+///     input: Popup field containing the leverage value Apply would send.
+///     cx: Application context used to read the field state.
+///
+/// Returns:
+///     The parsed leverage, or zero when the field is not a valid number.
+fn current_lev(input: &Entity<MoonInputState>, cx: &App) -> f32 {
+    input.read(cx).value().trim().parse::<f32>().unwrap_or(0.0)
+}
+
 /// Base width of a metric popup's content — slider, field, checkboxes.
 ///
 /// Unscaled: `MoonPopover::content_width_font` applies the font scale before it adds the
@@ -304,13 +390,31 @@ pub(super) fn sl_toggle(
 /// This returns content only. `MoonPopover` supplies the background, border, radius, padding, and
 /// width; drawing them here would create a second frame inside the anchored popup.
 ///
-/// `target` is the address the popup was seeded from. Every control re-checks that address before
+/// `open` carries the address the popup was seeded from. Every control re-checks that address before
 /// writing, so group exits survive a core switch while leverage drops a stale event — see
 /// [`MetricTarget`].
+///
+/// Args:
+///     open: Recorded metric, edit address, and seeded leverage slider cap.
+///     limits: Fresh exchange limits for the popup's seeded leverage address.
+///     quote: Quote token used beside a displayed maximum order size.
+///     slider: Main slider state for the selected metric.
+///     fine_slider: Fine TP slider state used only by TP.
+///     input: Numeric field state whose leverage value Apply sends.
+///     extended: Whether TP uses its extended range.
+///     hedge_on: Current hedge-mode state for the leverage popup.
+///     backend: Shared terminal state used by popup controls.
+///     group: Window group receiving group-local metric edits.
+///     p: Active palette for popup elements.
+///     cx: Application context used to render and read state.
+///
+/// Returns:
+///     The configured popup content for the recorded metric.
 #[allow(clippy::too_many_arguments)]
 pub fn metric_popup_content(
-    metric: TradeMetric,
-    target: &MetricTarget,
+    open: &OpenMetricPopup,
+    limits: Option<MarketLimits>,
+    quote: &str,
     slider: &Entity<MoonSliderState>,
     fine_slider: &Entity<MoonSliderState>,
     input: &Entity<MoonInputState>,
@@ -321,6 +425,135 @@ pub fn metric_popup_content(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
+    let metric = open.metric;
+    let target = &open.target;
+    let is_lev = matches!(metric, TradeMetric::Lev);
+    // The coin's own maximum, read fresh every render. Only the SLIDER RANGE is frozen at open
+    // (`OpenMetricPopup::lev_coin_max`); what the popup STATES and which presets it offers stay
+    // current, so a revised exchange limit is never presented as still applying.
+    let coin_max = limits.map(|l| l.max_leverage).unwrap_or(0);
+
+    // Exchange limits for the coin on screen: what it may be traded at, above the control that
+    // chooses it. Placed before the slider on purpose — a cap read AFTER moving the slider is a
+    // cap read too late.
+    let lev_limits = is_lev.then(|| {
+        let readout = MaxOrderReadout::of(limits);
+        let max_order_text = readout.format(fmt::usd_grouped, quote);
+        let (lev_text, lev_tip) = if coin_max > 0 {
+            (format!("×{coin_max}"), "toolbar.lev_max_tip")
+        } else if limits.is_some() {
+            // The row states the FACT — the exchange named no maximum. The note below states the
+            // CONSEQUENCE, that the slider therefore falls back to a default range. Two different
+            // sentences on purpose: repeating one of them in both places reads as a stutter.
+            (DASH.to_string(), "toolbar.lev_max_none")
+        } else {
+            (DASH.to_string(), "toolbar.limits_unknown")
+        };
+        v_flex()
+            .gap(design::ui_px(cx, 2.0))
+            .child(limit_row(
+                t!("toolbar.max_order").to_string(),
+                max_order_text,
+                t!(readout.tooltip_key()).to_string(),
+                p,
+                cx,
+            ))
+            .child(limit_row(
+                t!("toolbar.lev_max").to_string(),
+                lev_text,
+                t!(lev_tip).to_string(),
+                p,
+                cx,
+            ))
+            // Said out loud rather than left to be inferred from a slider that happens to end at
+            // 125: without a stated maximum the range is a TERMINAL DEFAULT, not this coin's limit.
+            //
+            // Keyed on the SEEDED maximum, not the live one, because this sentence describes the
+            // SLIDER — and the slider's range is whatever it was seeded with.
+            .children(
+                (open.lev_coin_max <= 0)
+                    .then(|| limit_note(t!("toolbar.lev_max_unknown").to_string(), p, cx)),
+            )
+            // The value about to be applied is above the coin's stated cap. NOT an error and NOT
+            // corrected here: clamping the display would misstate live position risk, and clamping
+            // the value would make Apply send a leverage change nobody requested.
+            //
+            // Deliberately does NOT require the popup to have been SEEDED with a known cap. A popup
+            // opened before the limits loaded carries a 1..125 fallback slider, and if the cap then
+            // arrives at 20 a drag to 50 is exactly the case that needs saying — gating this on the
+            // seeded value silenced the warning in the one situation it exists for.
+            .children(
+                (coin_max > 0 && current_lev(input, cx) > coin_max as f32).then(|| {
+                    limit_note(
+                        t!("toolbar.lev_max_exceeded", max = coin_max.to_string()).to_string(),
+                        p,
+                        cx,
+                    )
+                }),
+            )
+            // The coin's cap is no longer the one the slider was seeded with — the exchange revised
+            // it, or it simply loaded after the popup opened. The slider keeps its seeded range,
+            // because rewriting bounds under a live drag is worse than leaving them, so the popup
+            // states the divergence instead of moving silently.
+            //
+            // A plain inequality on the two CAPS, so it also catches the transitions through the
+            // unknown sentinel — 0 -> 20 when the limits load after the popup opened, and 20 -> 0
+            // when the exchange withdraws a cap. Requiring both sides to be known excluded exactly
+            // those, which are the common cases.
+            //
+            // Gated on the read having SUCCEEDED, though: `market_limits` returns `None` while the
+            // provider client, its snapshot or the market lookup is momentarily unavailable — a
+            // brief reconnect is enough — and `coin_max` then drops to 0 without anything having
+            // been revised. Without this gate the popup accuses the exchange of changing a limit
+            // every time the connection blinks.
+            .children(
+                (limits.is_some() && coin_max != open.lev_coin_max)
+                    .then(|| limit_note(t!("toolbar.lev_range_stale").to_string(), p, cx)),
+            )
+    });
+
+    // One-click presets. They choose a VALUE exactly as a slider drag does and send nothing: this
+    // popup's contract is that only Apply reaches the exchange, and a one-click unconfirmed
+    // leverage write would be a new and worse money surface.
+    let lev_presets = is_lev.then(|| {
+        let mut row = h_flex().gap(design::ui_px(cx, 4.0));
+        for preset in LEV_PRESETS {
+            let available = lev_preset_available(preset, coin_max);
+            let tip = if available {
+                t!("toolbar.lev_preset_tip", x = preset.to_string()).to_string()
+            } else {
+                t!(
+                    "toolbar.lev_preset_blocked",
+                    x = preset.to_string(),
+                    max = coin_max.to_string()
+                )
+                .to_string()
+            };
+            let backend = backend.clone();
+            let group = group.to_string();
+            let target = target.clone();
+            let slider = slider.clone();
+            let input = input.clone();
+            row = row.child(
+                MoonButton::new(SharedString::from(format!("toolbar-lev-x{preset}")))
+                    .label(format!("×{preset}"))
+                    .variant(MoonButtonVariant::Neutral)
+                    .size(MoonButtonSize::ToolbarCompact)
+                    .disabled(!available)
+                    .tooltip(tip)
+                    .on_click(move |_, window, app| {
+                        let b = backend.read(app);
+                        if !target.is_live(TradeMetric::Lev, b, &group) {
+                            return;
+                        }
+                        slider.update(app, |st, c| st.set_value(preset as f32, window, c));
+                        input.update(app, |st, c| st.set_value(format!("{preset}"), window, c));
+                    })
+                    .render(),
+            );
+        }
+        row
+    });
     // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     let mut content = v_flex()
         .id("metric-popup-content")
@@ -331,11 +564,13 @@ pub fn metric_popup_content(
                 .text_color(rgb(p.text_muted))
                 .child(metric.title()),
         )
+        .children(lev_limits)
         .child(
             MoonSlider::new(slider)
                 .id(format!("{}-slider", metric.id()))
                 .height(18.0),
         )
+        .children(lev_presets)
         .child(
             h_flex()
                 .gap(design::ui_px(cx, 6.0))

@@ -852,6 +852,54 @@ fn toolbar_row_budget_counts_every_rule_it_draws() {
     );
 }
 
+/// `controls/mod.rs:lev_bounds_for` must preserve the terminal fallback only for an unknown cap
+/// and otherwise end at the coin cap; restoring an account-current maximum lets users choose
+/// leverage the exchange rejects.
+#[test]
+fn leverage_slider_bounds_end_at_the_known_coin_maximum() {
+    let controls = read_src("controls/mod.rs");
+    let bounds = code_only(fn_body(&controls, "pub fn lev_bounds_for("));
+
+    assert!(
+        bounds.contains("if coin_max <= 0 {\n        return LEV_BOUNDS;\n    }"),
+        "an unknown or spot coin must retain the exact terminal fallback bounds"
+    );
+    assert!(
+        bounds.contains("(min, coin_max as f32, step)"),
+        "a known coin maximum must be the slider upper bound"
+    );
+    assert!(
+        !bounds.contains(".max("),
+        "the upper bound must not grow to preserve an above-cap current leverage"
+    );
+}
+
+/// `controls/metric.rs:metric_popup_content` must keep its only `set_leverage` call in the Apply
+/// button; adding one to a preset makes a single x50 click change real account leverage without
+/// confirmation.
+#[test]
+fn leverage_presets_only_stage_values_until_apply() {
+    let metric = code_only(braced_body(
+        &read_src("controls/metric.rs"),
+        "pub fn metric_popup_content(",
+    ));
+    assert_eq!(
+        metric.matches("b.session.set_leverage(").count(),
+        1,
+        "metric_popup_content must contain exactly one exchange leverage write"
+    );
+    let apply = chain_between(
+        &metric,
+        "MoonButton::new(\"toolbar-lev-apply\")",
+        ".render(),",
+        "leverage Apply button",
+    );
+    assert!(
+        apply.contains("b.session.set_leverage("),
+        "the only exchange leverage write must remain inside toolbar-lev-apply"
+    );
+}
+
 /// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its fixed icon
 /// multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
 /// Main-window widths.
@@ -861,15 +909,13 @@ fn toolbar_budget_includes_every_singleton_launcher() {
     let budget = fn_body(&text, "fn row_fit(");
     let toolbar = fn_body(&text, "pub fn toolbar(");
     let drawn = toolbar.matches("open_window_button(").count();
-    let budgeted = budget
-        .split_once("ICON_BTN_W * ")
-        .and_then(|(_, rest)| rest.split_once(';'))
-        .and_then(|(value, _)| value.trim().parse::<f32>().ok())
-        .expect("row_fit must state its launcher multiplier after `ICON_BTN_W *`");
-
     assert_eq!(
-        budgeted, drawn as f32,
+        drawn, 5,
         "row_fit must budget every open_window_button rendered by toolbar"
+    );
+    assert!(
+        budget.contains("ICON_BTN_W * 5.0"),
+        "row_fit must reserve icon width for every open_window_button rendered by toolbar"
     );
     assert!(toolbar.contains("\"toolbar-profit-monitor\""));
     assert!(toolbar.contains("crate::analytics::profit_monitor::open"));
@@ -945,9 +991,9 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     );
     assert!(measure.contains(".max(ICON_BTN_W)"));
     for (label, width) in [
-        ("analytics_label", "fit.analytics_width"),
-        ("strategies_label", "fit.strategies_width"),
-        ("settings_label", "fit.settings_width"),
+        ("launchers.analytics", "fit.analytics_width"),
+        ("launchers.strategies", "fit.strategies_width"),
+        ("launchers.settings", "fit.settings_width"),
     ] {
         assert!(
             fit.contains(&format!("launcher_label_width(cx, {label})")),
