@@ -42,6 +42,7 @@ use rusqlite::Connection;
 use rust_i18n::t;
 
 use super::AnalyticsView;
+use super::refresh::RefreshUrgency;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use crate::strategies::tree::ops::{has_row_under, join_path, split_path};
@@ -898,7 +899,7 @@ impl AnalyticsView {
                             // is now gone; ask for the refresh that drops it rather than waiting
                             // for the next periodic one.
                             this.mark_report_data_stale();
-                            this.request_report_refresh(false, cx);
+                            this.request_report_refresh(RefreshUrgency::User, false, cx);
                         }
                         Err(PurgeStop::Abandoned) => {}
                         Err(PurgeStop::ScopeMoved) => {
@@ -913,7 +914,7 @@ impl AnalyticsView {
                                 op.state = PurgeState::FolderSendFailed;
                             });
                             this.mark_report_data_stale();
-                            this.request_report_refresh(false, cx);
+                            this.request_report_refresh(RefreshUrgency::User, false, cx);
                         }
                         Err(PurgeStop::Failed(step, fail)) => {
                             this.publish_purge(seq, cx, |op| {

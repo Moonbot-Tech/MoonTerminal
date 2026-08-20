@@ -1375,9 +1375,15 @@ fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
         manual.contains("self.reload_strategy_base(false, true, true, cx)"),
         "manual scope refresh must retire values from the previous scope"
     );
+    let preserve_snapshot = "let preserve_snapshot =
+                    after_report && !matches!(this.strategy_data, ProfitLoadState::Loading);";
+    assert!(
+        reload.contains(preserve_snapshot),
+        "only a settled strategy snapshot may survive an automatic report refresh"
+    );
     let automatic_result = chain_between(
         reload,
-        "if !after_report || data_error.is_none() {",
+        "if !preserve_snapshot || data_error.is_none() {",
         "this.strategy_dirty = refresh::report_result_is_stale(",
         "automatic strategy result publication",
     );

@@ -3,6 +3,12 @@
 //! The report generation is the source of truth. This gate turns its potentially bursty commit
 //! stream into one trailing refresh after a quiet period, while a maximum interval prevents a
 //! continuous stream from starving the visible window forever.
+//!
+//! That shedding is for the WRITER's stream and for nothing else. A refresh a PERSON asked for —
+//! entering a tab, switching a tuning axis, purging rows — is one event, not a burst, and it
+//! runs immediately: [`RefreshUrgency`] is what separates the two, and it is the difference
+//! between a tuner tab that opens now and one that opens a second from now. The `db_active`
+//! interlock is unaffected: nothing here ever overlaps work already in flight.
 
 use std::time::{Duration, Instant};
 
@@ -62,6 +68,17 @@ impl BusyRetryBudget {
     pub(super) fn reset(&mut self) {
         self.resolve();
     }
+}
+
+/// Who asked for a refresh, and therefore whether it may be debounced.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefreshUrgency {
+    /// The report writer committed. Coalesce it: commits arrive in bursts and every one of them
+    /// would otherwise start a full-period scan of the visible surface.
+    Writer,
+    /// A person is waiting on this refresh. Never debounce it — the quiet period would charge
+    /// them for another producer's load shedding.
+    User,
 }
 
 /// Report-derived work required for the currently visible Analytics surface.
@@ -172,6 +189,11 @@ pub(super) struct RefreshGate {
     pending_since: Option<Instant>,
     pending: bool,
     pending_overlay: bool,
+    /// Whether anything coalesced into the pending refresh was asked for by a person.
+    ///
+    /// Accumulated exactly like `pending_overlay`: a user request folded in beside writer
+    /// commits must win, or the click is charged for the commits it happened to land among.
+    pending_user: bool,
     timer_armed: bool,
 }
 
@@ -191,6 +213,7 @@ impl RefreshGate {
             pending_since: None,
             pending: false,
             pending_overlay: false,
+            pending_user: false,
             timer_armed: false,
         }
     }
@@ -211,6 +234,7 @@ impl RefreshGate {
         if !self.pending {
             self.pending_since = Some(now);
             self.pending_overlay = false;
+            self.pending_user = false;
         }
         self.last_change_at = now;
         self.pending = true;
@@ -231,6 +255,7 @@ impl RefreshGate {
         self.pending_since = None;
         self.pending = false;
         self.pending_overlay = false;
+        self.pending_user = false;
     }
 
     /// Queue refresh work without requiring another writer generation.
@@ -241,13 +266,20 @@ impl RefreshGate {
     /// Args:
     ///     now: Failure completion time used as the retry debounce baseline.
     ///     show_overlay: Whether any coalesced user action requires blocking feedback.
-    pub(super) fn request_refresh(&mut self, now: Instant, show_overlay: bool) {
+    ///     urgency: Who asked; only [`RefreshUrgency::Writer`] may be debounced.
+    pub(super) fn request_refresh(
+        &mut self,
+        now: Instant,
+        show_overlay: bool,
+        urgency: RefreshUrgency,
+    ) {
         if !self.pending {
             self.pending_since = Some(now);
         }
         self.last_change_at = now;
         self.pending = true;
         self.pending_overlay |= show_overlay;
+        self.pending_user |= urgency == RefreshUrgency::User;
     }
 
     /// Choose whether to refresh now, arm one timer, or wait for active database work.
@@ -259,13 +291,23 @@ impl RefreshGate {
     /// Returns:
     ///     The single action the view should take.
     pub(super) fn plan(&mut self, now: Instant, db_active: bool) -> RefreshPlan {
-        if !self.pending || db_active || self.timer_armed {
+        // An armed timer normally owns the next decision — but only for the writer's stream that
+        // armed it. A click arriving while that timer runs must not wait out a second it had no
+        // part in, so a pending USER request overrides the interlock. The timer stays armed; when
+        // it fires it re-plans, finds nothing pending, and exits, which is exactly what
+        // `refresh_started` already documents.
+        if !self.pending || db_active || (self.timer_armed && !self.pending_user) {
             return RefreshPlan::Idle;
         }
 
         let quiet_due = self.last_change_at + QUIET_PERIOD;
         let maximum_due = self.pending_since.unwrap_or(self.last_change_at) + MAX_REFRESH_INTERVAL;
-        let due = quiet_due.min(maximum_due);
+        // A person is waiting: due now. Only the writer's commits are coalesced.
+        let due = if self.pending_user {
+            now
+        } else {
+            quiet_due.min(maximum_due)
+        };
         if now >= due {
             RefreshPlan::Now {
                 show_overlay: self.pending_overlay,

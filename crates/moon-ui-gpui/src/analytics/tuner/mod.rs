@@ -70,6 +70,7 @@ pub(in crate::analytics::tuner) use strat_columns::{
 pub(super) use strat_columns::{STRAT_COLS_ALL, STRAT_COLS_DEFAULT, STRAT_COLS_DEFAULT_COINS};
 
 use super::AnalyticsView;
+use super::refresh::RefreshUrgency;
 use crate::design;
 use moon_core::config::layout::StratColsByMode;
 
@@ -764,7 +765,7 @@ impl AnalyticsView {
     pub(super) fn request_axis_if_stale(&mut self, mode: StratMode, cx: &mut Context<Self>) {
         if self.axis_needs_reload(mode) {
             self.report_busy_retries.reset();
-            self.request_report_refresh(true, cx);
+            self.request_report_refresh(RefreshUrgency::User, true, cx);
         }
     }
 

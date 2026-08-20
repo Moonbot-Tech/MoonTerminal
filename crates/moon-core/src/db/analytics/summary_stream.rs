@@ -7,7 +7,8 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{types::Value, Connection};
 
-use super::groups::{count_list, group_quote_scope};
+use super::groups::group_quote_scope;
+use super::strategy_meta::{read_metadata, StrategyMetadata, SummaryMetadata};
 use super::{CoreSeries, DayPoint, GroupStat, KindCore, KindStat, PeriodStats, Query, TopTrade};
 use crate::db::metrics::profit_factor;
 use crate::db::read_fail::{read_fail, read_fail_on};
@@ -162,26 +163,6 @@ struct TradeRow {
 struct CoreAccumulator {
     name: String,
     buckets: HashMap<i64, (f64, i64)>,
-}
-
-/// Strategy metadata loaded once per Summary rather than once per trade or group.
-#[derive(Clone, Debug, Default)]
-struct StrategyMetadata {
-    name: Option<String>,
-    alive: i64,
-    has_head: bool,
-    deleted: bool,
-    kind: String,
-    lastedit: String,
-    blacklist: Option<String>,
-    whitelist: Option<String>,
-}
-
-/// Metadata split by the historical fallback boundary between top rows and groups.
-#[derive(Clone, Debug, Default)]
-struct SummaryMetadata {
-    heads: HashMap<(i64, i64), StrategyMetadata>,
-    groups: Option<HashMap<(i64, i64), StrategyMetadata>>,
 }
 
 /// Intermediate current-period state filled by one chronological row stream.
@@ -545,157 +526,6 @@ fn read_raw_groups(
     Ok((strategies, coins))
 }
 
-/// Load current strategy heads and versions once for the pairs present in the Summary.
-///
-/// Args:
-///     conn: Pinned report snapshot with the strategy database attached.
-///     pairs: Numeric strategy/core identities eligible for enrichment.
-///
-/// Returns:
-///     Head metadata plus all-or-nothing version-enriched group metadata.
-fn read_metadata(conn: &Connection, pairs: &HashSet<(i64, i64)>) -> ReadResult<SummaryMetadata> {
-    const CTX: &str = "analytics: summary strategy metadata";
-    if pairs.is_empty() {
-        return Ok(SummaryMetadata::default());
-    }
-    let mut metadata = HashMap::<(i64, i64), StrategyMetadata>::new();
-    let pairs = pairs.iter().copied().collect::<Vec<_>>();
-    for chunk in pairs.chunks(400) {
-        let (filter, params) = metadata_filter(chunk);
-        let heads_sql = format!(
-            "SELECT core_uid, strategy_id, name, deleted, checked
-             FROM strat.strategies
-             WHERE (core_uid, strategy_id) IN ({filter})"
-        );
-        let mut heads = conn
-            .prepare(&heads_sql)
-            .map_err(|error| read_fail_on(conn, CTX, error))?;
-        let rows = heads
-            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                ))
-            })
-            .map_err(|error| read_fail_on(conn, CTX, error))?;
-        for row in rows {
-            let (core_uid, strategy_id, name, deleted, checked) =
-                row.map_err(|error| read_fail_on(conn, CTX, error))?;
-            let pair = (strategy_id, core_uid);
-            metadata.entry(pair).or_insert_with(|| StrategyMetadata {
-                name,
-                alive: if deleted != 0 {
-                    0
-                } else if checked != 0 {
-                    2
-                } else {
-                    1
-                },
-                has_head: true,
-                deleted: deleted != 0,
-                ..StrategyMetadata::default()
-            });
-        }
-        drop(heads);
-    }
-
-    let heads = metadata.clone();
-    if let Err(error) = read_version_metadata(conn, &pairs, &mut metadata) {
-        log::warn!(
-            "analytics: strategy versions unavailable, keeping head names for top rows: {error}"
-        );
-        return Ok(SummaryMetadata {
-            heads,
-            groups: None,
-        });
-    }
-    Ok(SummaryMetadata {
-        heads,
-        groups: Some(metadata),
-    })
-}
-
-/// Add current-version fields to already loaded strategy heads.
-///
-/// Args:
-///     conn: Pinned report snapshot with the strategy database attached.
-///     pairs: Numeric strategy/core identities to query in bounded chunks.
-///     metadata: Head map updated with the first current version for each pair.
-///
-/// Returns:
-///     Success when every version row was decoded and applied.
-fn read_version_metadata(
-    conn: &Connection,
-    pairs: &[(i64, i64)],
-    metadata: &mut HashMap<(i64, i64), StrategyMetadata>,
-) -> ReadResult<()> {
-    const CTX: &str = "analytics: summary strategy versions";
-    let mut seen_versions = HashSet::new();
-    for chunk in pairs.chunks(400) {
-        let (filter, params) = metadata_filter(chunk);
-        let versions_sql = format!(
-            "SELECT core_uid, strategy_id,
-                    json_extract(raw_json, '$.SignalType'),
-                    json_extract(raw_json, '$.LastEditDate'),
-                    CAST(json_extract(raw_json, '$.CoinsBlackList') AS TEXT),
-                    CAST(json_extract(raw_json, '$.CoinsWhiteList') AS TEXT)
-             FROM strat.strategy_versions
-             WHERE valid_to IS NULL
-               AND (core_uid, strategy_id) IN ({filter})"
-        );
-        let mut versions = conn
-            .prepare(&versions_sql)
-            .map_err(|error| read_fail_on(conn, CTX, error))?;
-        let rows = versions
-            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            })
-            .map_err(|error| read_fail_on(conn, CTX, error))?;
-        for row in rows {
-            let (core_uid, strategy_id, kind, lastedit, blacklist, whitelist) =
-                row.map_err(|error| read_fail_on(conn, CTX, error))?;
-            let pair = (strategy_id, core_uid);
-            if !seen_versions.insert(pair) {
-                continue;
-            }
-            let item = metadata.entry(pair).or_default();
-            item.kind = kind;
-            item.lastedit = lastedit;
-            item.blacklist = blacklist;
-            item.whitelist = whitelist;
-        }
-    }
-    Ok(())
-}
-
-/// Build one bounded row-value filter and its `(core_uid, strategy_id)` parameters.
-///
-/// Args:
-///     pairs: Strategy/core identities in strategy-first Rust tuple order.
-///
-/// Returns:
-///     SQL row placeholders and core-first parameter values matching them.
-fn metadata_filter(pairs: &[(i64, i64)]) -> (String, Vec<Value>) {
-    let mut filter = Vec::with_capacity(pairs.len());
-    let mut params = Vec::with_capacity(pairs.len() * 2);
-    for (strategy_id, core_uid) in pairs {
-        filter.push("(?, ?)");
-        params.push(Value::Integer(*core_uid));
-        params.push(Value::Integer(*strategy_id));
-    }
-    (filter.join(", "), params)
-}
-
 /// Align each core's sparse buckets to the already-filled Summary time grid.
 ///
 /// Args:
@@ -793,14 +623,8 @@ fn finish_groups(
                 lastedit: details
                     .map(|item| item.lastedit.clone())
                     .unwrap_or_default(),
-                bl: details
-                    .filter(|item| item.has_head && !item.deleted)
-                    .map(|item| count_list(item.blacklist.clone()))
-                    .unwrap_or(0),
-                wl: details
-                    .filter(|item| item.has_head && !item.deleted)
-                    .map(|item| count_list(item.whitelist.clone()))
-                    .unwrap_or(0),
+                bl: details.map_or(0, StrategyMetadata::blacklist_count),
+                wl: details.map_or(0, StrategyMetadata::whitelist_count),
             }
         })
         .collect::<Vec<_>>();

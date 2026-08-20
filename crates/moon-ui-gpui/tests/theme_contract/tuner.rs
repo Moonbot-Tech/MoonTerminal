@@ -1129,7 +1129,7 @@ fn strategy_purge_refreshes_after_an_empty_folder_queue_failure() {
 
     assert!(
         arm.contains("this.mark_report_data_stale()")
-            && arm.contains("this.request_report_refresh(false, cx)"),
+            && arm.contains("this.request_report_refresh(RefreshUrgency::User, false, cx)"),
         "a folder queue failure still needs the successful purge's Analytics refresh"
     );
 }

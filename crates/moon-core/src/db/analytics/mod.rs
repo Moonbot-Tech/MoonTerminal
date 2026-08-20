@@ -27,6 +27,7 @@ mod calendar;
 mod groups;
 mod profit_monitor;
 mod query;
+mod strategy_meta;
 mod summary_stream;
 pub(crate) mod time_zone;
 
@@ -527,17 +528,15 @@ fn strategy_base_on(
         return Err(ReadFail::NotReady);
     };
     let raw_src = groups::raw_source(conn, &q)?;
-    let mut names = has_strat_names;
-    let strategies = with_name_fallback(&mut names, |enabled| {
-        groups(conn, &src, raw_src.as_deref(), &q, enabled, true)
-    })?;
+    // No name-fallback retry here any more: `groups` labels rows in a separate batched pass.
+    // Unreadable heads leave bare ids, while an unreadable version query retains readable heads;
+    // neither case warrants a second full scan of the period.
+    let strategies = groups(conn, &src, raw_src.as_deref(), &q, has_strat_names, true)?;
     let trades = strategies.iter().map(|strategy| strategy.n).sum();
     let data = StrategyBase {
         strategies,
         trades,
-        coins: with_name_fallback(&mut names, |enabled| {
-            groups(conn, &src, raw_src.as_deref(), &q, enabled, false)
-        })?,
+        coins: groups(conn, &src, raw_src.as_deref(), &q, has_strat_names, false)?,
         from: q.from,
         to: q.to,
     };
@@ -740,34 +739,6 @@ fn previous_period_start(q: &Query, len: i64) -> i64 {
             .unwrap_or(q.from.saturating_sub(len)),
     }
 }
-
-/// Run a query that may join the ATTACHed strategies DB, retrying WITHOUT names
-/// if it fails while names were in play.
-///
-/// `strategies.sqlite` is optional enrichment: a successful ATTACH does not
-/// prove it is readable, and a failing scalar subquery against it must degrade
-/// strategy labels to bare ids — not sink an otherwise healthy Strategies base.
-/// A failure of the reports DB itself simply fails again on the retry.
-fn with_name_fallback<T>(
-    names: &mut bool,
-    mut run: impl FnMut(bool) -> ReadResult<T>,
-) -> ReadResult<T> {
-    match run(*names) {
-        // Retry on ANY failure while names are in play, permanent included:
-        // these statements also read the ATTACHed strategies DB, and the error
-        // carries no database provenance, so corruption first met there would
-        // otherwise sink a perfectly readable reports summary. The latch below
-        // caps the cost at one retry for this Strategies-base batch.
-        Err(e) if *names => {
-            log::warn!("analytics: strategy names unavailable, retrying with bare ids: {e}");
-            // Latch it off so the remaining grouping does not repeat the failed enrichment.
-            *names = false;
-            run(false)
-        }
-        other => other,
-    }
-}
-
 /// Find the earliest `closedate` across both sources for the all-time period.
 ///
 /// A failed probe remains an error; `1` is reserved for a genuinely empty history.
