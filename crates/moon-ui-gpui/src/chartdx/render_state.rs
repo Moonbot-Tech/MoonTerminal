@@ -241,6 +241,12 @@ impl RenderState {
             return false;
         }
         self.compare_ref_price = price;
+        // The delta is FORMATTED on a sync, not on a frame, and the anchor's tick is not this
+        // pane's revision: without re-resolving here a quiet follower would keep printing the
+        // percentage it computed against an older anchor price while the anchor moved.
+        for idx in 0..self.panes.len() {
+            self.refresh_pane_labels(idx);
+        }
         self.needs_present = true;
         true
     }

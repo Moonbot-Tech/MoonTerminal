@@ -285,7 +285,18 @@ struct PaneRender {
     /// book's left edge, the core name's. Measuring each drawn row separately is what let the plate
     /// drift away from the text it sits under; a single plate spanning both columns would instead
     /// darken the candles lying between them.
-    caption_plates: [[f32; 4]; 2],
+    caption_plates: [[f32; 4]; text::CAPTION_PLATES],
+    /// Captions this pane resolved from the configuration, and the inputs they were built from.
+    labels: text::LabelState,
+    /// Venue label for the pane's core, resolved during order sync beside `core_name`.
+    venue: String,
+    /// Strategy name of the newest open order on this market, from the same sync.
+    label_strategy: String,
+    /// Open-position figures per basis, from the same sync.
+    label_basis: [text::BasisStats; 3],
+    /// Signed one-hour and 24-hour changes, refreshed with the market snapshot.
+    delta_1h: Option<f64>,
+    delta_24h: Option<f64>,
     view: ChartViewGpu,
     layers: PlatformLayers,
     background_params: BackgroundParams,
@@ -489,7 +500,13 @@ impl PaneRender {
             ticker_catalog_key: 0,
             ticker_resolved: false,
             scale_badge: None,
-            caption_plates: [[0.0; 4]; 2],
+            caption_plates: [[0.0; 4]; text::CAPTION_PLATES],
+            labels: text::LabelState::default(),
+            venue: String::new(),
+            label_strategy: String::new(),
+            label_basis: [text::BasisStats::default(); 3],
+            delta_1h: None,
+            delta_24h: None,
             view: ChartViewGpu::default(),
             layers: PlatformLayers::new(),
             background_params: BackgroundParams::default(),
@@ -653,6 +670,17 @@ struct RenderState {
     last_gpu_prepare_generation: u64,
     text_runs: Vec<GpuCanvasTextRun>,
     text_run_cursor: usize,
+    /// Retained runs for the configured captions, addressed by `pane * CHART_LABEL_SLOTS + slot`
+    /// rather than by a running cursor.
+    ///
+    /// A separate pool precisely BECAUSE the cursor above is shared across panes and label kinds:
+    /// an index from it moves whenever anything earlier in the frame stops drawing, and a run
+    /// handed a different string reshapes it. A caption that appears and disappears — the scale
+    /// badge, the comparison delta — would otherwise reshape its neighbours for free.
+    caption_runs: Vec<GpuCanvasTextRun>,
+    /// Effective caption configuration, mirrored from `ChartDataState` so the text pass can read it
+    /// without borrowing the data state during a frame.
+    chart_labels: moon_core::config::ChartLabelsCfg,
     firetest_text_labels: Vec<String>,
     firetest_text_runs: Vec<GpuCanvasTextRun>,
     firetest_text_layer: GpuCanvasRetainedTextLayer,
@@ -918,6 +946,9 @@ struct ChartDataState {
     /// order lines are drawn. Like `candle_view` above, a per-tab override or the
     /// `layout.chart_graphics` fallback.
     chart_graphics: moon_core::config::ChartGraphicsCfg,
+    /// Effective chart caption configuration: which figures print beside the plot, in which corner
+    /// and style. A per-tab override or the `layout.chart_labels` fallback, like the two above.
+    chart_labels: moon_core::config::ChartLabelsCfg,
     /// Saved X scale in pixels per millisecond from Shift+middle-click sync. NEW panels start with it
     /// instead of the built-in time-window default; `None` uses that default.
     default_x_ppm: Option<f32>,

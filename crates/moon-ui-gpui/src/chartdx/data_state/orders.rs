@@ -1,6 +1,7 @@
 //! Synchronizes session orders and order-line labels.
 
 use super::*;
+use moon_core::config::ChartLabelField;
 
 use crate::chartdx::text::fmt_pct;
 
@@ -46,6 +47,7 @@ impl ChartDataState {
         st.panes
             .resize_with(container.pane_count(), PaneRender::new);
 
+        let labels_cfg = st.chart_labels;
         for (idx, _) in &layout {
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
@@ -70,6 +72,40 @@ impl ChartDataState {
                 pr.core_name = core_name;
                 pixels_changed = true;
             }
+            // Caption inputs that only the SESSION can answer: the venue behind the core, the open
+            // orders on this market and the strategy that placed the newest of them. Collected here
+            // for the same reason the core name is — this is where the session is in hand — and
+            // formatted only if the caption configuration actually asks for any of it.
+            // Through the shared label helper, never a local spelling: naming a venue lives in one
+            // place so the caption, the Orders picker and the detect card cannot disagree.
+            // Gated on the configuration: a caption nobody asked for must not cost a venue lookup
+            // or a walk over the core's whole order array on every order revision.
+            let wants_venue = labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
+            let venue = wants_venue
+                .then(|| {
+                    session
+                        .core_venues()
+                        .get(&pane.core)
+                        .map(crate::controls::venue_label)
+                })
+                .flatten()
+                .unwrap_or_default();
+            pr.venue = venue;
+            let wants_position =
+                labels_cfg.any_drawn(|f| f.uses_pnl_basis() || f == ChartLabelField::OrderStrategy);
+            let (basis, strategy) = wants_position
+                .then(|| {
+                    session.store().core(pane.core).map(|core_st| {
+                        crate::chartdx::text::collect_open_stats(&core_st.orders, &pane.market)
+                    })
+                })
+                .flatten()
+                .unwrap_or_default();
+            // Deliberately NOT `pixels_changed`: these move with every mark tick, while the caption
+            // they feed is printed to two decimals. `refresh_pane_labels` below compares the
+            // FORMATTED result and is the one that decides whether anything has to repaint.
+            pr.label_basis = basis;
+            pr.label_strategy = strategy;
             let device_gen = pr.layers.device_gen();
             let device_lost = pr.last_device_gen != device_gen;
             if device_lost {
@@ -260,6 +296,12 @@ impl ChartDataState {
             pr.last_device_gen = device_gen;
         }
 
+        // Captions read both the session and the market, and this is the session half's revision.
+        for (idx, _) in &layout {
+            if st.refresh_pane_labels(*idx) {
+                pixels_changed = true;
+            }
+        }
         if base_changed {
             st.base_dirty = true;
         }

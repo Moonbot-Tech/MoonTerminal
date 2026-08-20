@@ -162,7 +162,15 @@ impl Render for ChartPanel {
         // IMPORTANT: there is no request_animation_frame or continuous present. `gpu_canvas.frame()`
         // decides whether to present on the platform tick without dirtying the GPUI tree, and
         // `draw()` renders during that same tick.
-        let (theme, orders_style, follow, prospective_usd, candle_view, chart_graphics) = {
+        let (
+            theme,
+            orders_style,
+            follow,
+            prospective_usd,
+            candle_view,
+            chart_graphics,
+            chart_labels,
+        ) = {
             let b = self.backend.read(cx);
             let eff = b.preview.as_ref().unwrap_or(&b.config);
             // Prospective F1-F6 order size in dollars for the active coin's crosshair label.
@@ -180,6 +188,13 @@ impl Render for ChartPanel {
             // Chart graphics follow the same per-tab override as candles: the palette popup writes
             // the tab's own value, and only a tab without one falls back to the global default.
             let chart_graphics = self.chart_graphics.unwrap_or(b.layout.chart_graphics);
+            // Captions follow the same per-tab override, sanitized here so the engine stores the
+            // same value every reader compares against.
+            let chart_labels = {
+                let mut cfg = self.chart_labels.unwrap_or(b.layout.chart_labels);
+                cfg.sanitize();
+                cfg
+            };
             (
                 theme,
                 orders,
@@ -187,6 +202,7 @@ impl Render for ChartPanel {
                 prospective,
                 candle_view,
                 chart_graphics,
+                chart_labels,
             )
         };
         // The cursor's mode badge is published by `sync_fig_visual` off the backend observer, which
@@ -204,6 +220,7 @@ impl Render for ChartPanel {
             | self.chart.set_orderbook_only(self.orderbook_only)
             | self.chart.set_candle_view(candle_view)
             | self.chart.set_chart_graphics(chart_graphics)
+            | self.chart.set_chart_labels(chart_labels)
             | self.chart.set_price_axis_pos(self.price_axis_pos)
             | self.chart.set_time_axis_visible(self.time_axis_visible)
             | self.chart.set_line_labels(self.line_labels)

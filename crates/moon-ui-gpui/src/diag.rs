@@ -132,6 +132,18 @@ diag_counters!(
     // per second. Each change requests a present, although multiple writes can coalesce before the
     // draw. Compare this with `chart_cursor_update` on the hovered chart.
     CHART_GHOST_UPDATE => "chart_ghost_update",
+    // Configured chart captions actually DRAWN per second, summed over every pane, and how many of
+    // those had to be re-formatted because their inputs moved.
+    //
+    // Read them against each other. `chart_caption_draw` divided by `chart_present` is how many
+    // captions each frame paints — near zero means the corner is empty, which the drawn picture
+    // cannot tell apart from "the pane has nothing to say". `chart_caption_rebuild` is the
+    // expensive half: it counts REVISIONS that changed a string, so it must stay orders of
+    // magnitude below the draw count. The two moving together means a caption is being rebuilt on
+    // every frame — a value formatted below its own printed precision, and a reshape of its
+    // retained GPU run each time.
+    CHART_CAPTION_DRAW => "chart_caption_draw",
+    CHART_CAPTION_REBUILD => "chart_caption_rebuild",
     FIRETEST_MOUSE_SENT => "firetest_mouse_sent",
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",

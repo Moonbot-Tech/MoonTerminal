@@ -215,19 +215,6 @@ pub(super) fn caption_layout(g: &CaptionGeom, plot_left: f32) -> CaptionLayout {
     }
 }
 
-/// Pick the column a run belongs to.
-///
-/// Unsplit, the coin's column IS the caption, so every run lands there and one plate covers the
-/// whole block. Split, the core name and scale badge use the left column. Written once because the
-/// run and plate decisions must agree even though their call sites are far apart.
-pub(super) fn column<'a>(
-    split: bool,
-    coin: &'a mut CaptionBox,
-    core: &'a mut CaptionBox,
-) -> &'a mut CaptionBox {
-    if split { core } else { coin }
-}
-
 /// Bounding box of the runs actually drawn in one caption column, in LOGICAL pixels.
 ///
 /// The plate under the caption is measured from what was DRAWN rather than computed from an
@@ -268,11 +255,6 @@ impl CaptionBox {
         self.right = self.right.max(left + width);
         self.top = self.top.min(top);
         self.bottom = self.bottom.max(top + height);
-    }
-
-    /// The column's left edge, or `fallback` when nothing was drawn in it.
-    pub(super) fn left_or(&self, fallback: f32) -> f32 {
-        if self.any { self.left } else { fallback }
     }
 
     /// The padded plate rectangle in DEVICE pixels, or an empty one for a column with no runs.

@@ -1152,3 +1152,239 @@ quiet.charts_tip:
   ru: "Номера через запятую (например 3, 5). Детекты стратегий с полем AddToChart = этому номеру звучат даже во сне."
   en: "Numbers separated by commas (for example 3, 5). Detects from strategies whose AddToChart equals one of them sound even while asleep."
   es: "Números separados por comas (por ejemplo 3, 5). Las detecciones de estrategias cuyo AddToChart coincida suenan incluso en reposo."
+chart_labels.title:
+  ru: "Подписи чарта"
+  en: "Chart labels"
+  es: "Etiquetas del chart"
+chart_labels.tip:
+  ru: "Настройка подписей на чарте"
+  en: "Chart label settings"
+  es: "Ajustes de etiquetas del chart"
+chart_labels.frame_list:
+  ru: "Подписи"
+  en: "Labels"
+  es: "Etiquetas"
+chart_labels.empty:
+  ru: "Ни одной подписи — добавьте ниже"
+  en: "No labels yet — add one below"
+  es: "Sin etiquetas — añada una abajo"
+chart_labels.add:
+  ru: "＋ Добавить подпись"
+  en: "＋ Add label"
+  es: "＋ Añadir etiqueta"
+chart_labels.reset:
+  ru: "Сбросить"
+  en: "Reset"
+  es: "Restablecer"
+chart_labels.reset_tip:
+  ru: "Вернуть стандартный набор подписей"
+  en: "Restore the default set of labels"
+  es: "Restaurar el conjunto de etiquetas por defecto"
+chart_labels.move_up:
+  ru: "Выше"
+  en: "Move up"
+  es: "Subir"
+chart_labels.move_down:
+  ru: "Ниже"
+  en: "Move down"
+  es: "Bajar"
+chart_labels.hide:
+  ru: "Скрыть (настройки сохранятся)"
+  en: "Hide (keeps its settings)"
+  es: "Ocultar (conserva sus ajustes)"
+chart_labels.show:
+  ru: "Показать"
+  en: "Show"
+  es: "Mostrar"
+chart_labels.inline_on:
+  ru: "В строку с предыдущей — выключить"
+  en: "Sharing the previous row — turn off"
+  es: "Comparte la fila anterior — desactivar"
+chart_labels.inline_off:
+  ru: "Поставить в строку с предыдущей"
+  en: "Put on the previous label's row"
+  es: "Poner en la fila de la etiqueta anterior"
+chart_labels.zone_inherited:
+  ru: "в строке"
+  en: "in row"
+  es: "en fila"
+chart_labels.style:
+  ru: "Стиль"
+  en: "Style"
+  es: "Estilo"
+chart_labels.style_reset:
+  ru: "По умолчанию"
+  en: "Defaults"
+  es: "Por defecto"
+chart_labels.remove:
+  ru: "Удалить подпись"
+  en: "Remove label"
+  es: "Eliminar etiqueta"
+chart_labels.size:
+  ru: "Кегль"
+  en: "Size"
+  es: "Tamaño"
+chart_labels.color:
+  ru: "Цвет"
+  en: "Color"
+  es: "Color"
+chart_labels.color_theme:
+  ru: "Тема"
+  en: "Theme"
+  es: "Tema"
+chart_labels.color_sign:
+  ru: "По профиту"
+  en: "By profit"
+  es: "Por beneficio"
+chart_labels.color_fixed:
+  ru: "Свой"
+  en: "Custom"
+  es: "Propio"
+chart_labels.plate:
+  ru: "Подложка"
+  en: "Backing plate"
+  es: "Fondo"
+chart_labels.caption:
+  ru: "Заголовок"
+  en: "Caption"
+  es: "Título"
+chart_labels.basis:
+  ru: "Считать по"
+  en: "Count"
+  es: "Contar"
+chart_labels.basis.all:
+  ru: "Всем"
+  en: "All"
+  es: "Todas"
+chart_labels.basis.real:
+  ru: "Реальным"
+  en: "Real"
+  es: "Reales"
+chart_labels.basis.emulator:
+  ru: "Эмулятору"
+  en: "Emulator"
+  es: "Emulador"
+chart_labels.group.instrument:
+  ru: "Инструмент"
+  en: "Instrument"
+  es: "Instrumento"
+chart_labels.group.market:
+  ru: "Рынок"
+  en: "Market"
+  es: "Mercado"
+chart_labels.group.position:
+  ru: "Позиция"
+  en: "Position"
+  es: "Posición"
+chart_labels.group.strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+chart_labels.field.none:
+  ru: "—"
+  en: "—"
+  es: "—"
+chart_labels.field.coin:
+  ru: "Монета"
+  en: "Coin"
+  es: "Moneda"
+chart_labels.field.core:
+  ru: "Ядро"
+  en: "Core"
+  es: "Núcleo"
+chart_labels.field.venue:
+  ru: "Биржа"
+  en: "Exchange"
+  es: "Exchange"
+chart_labels.field.scale_badge:
+  ru: "Масштаб Y"
+  en: "Y scale"
+  es: "Escala Y"
+chart_labels.field.compare_delta:
+  ru: "Дельта сравнения"
+  en: "Comparison delta"
+  es: "Delta de comparación"
+chart_labels.field.last_price:
+  ru: "Цена"
+  en: "Price"
+  es: "Precio"
+chart_labels.field.delta_1h:
+  ru: "Δ 1ч"
+  en: "Δ 1h"
+  es: "Δ 1h"
+chart_labels.field.delta_24h:
+  ru: "Δ 24ч"
+  en: "Δ 24h"
+  es: "Δ 24h"
+chart_labels.field.open_pnl_pct:
+  ru: "PnL открытых, %"
+  en: "Open PnL, %"
+  es: "PnL abierto, %"
+chart_labels.field.open_pnl_money:
+  ru: "PnL открытых, деньги"
+  en: "Open PnL, money"
+  es: "PnL abierto, dinero"
+chart_labels.field.open_orders:
+  ru: "Ордеров"
+  en: "Orders"
+  es: "Órdenes"
+chart_labels.field.pos_size:
+  ru: "Размер позиции"
+  en: "Position size"
+  es: "Tamaño de posición"
+chart_labels.field.order_strategy:
+  ru: "Стратегия ордера"
+  en: "Order strategy"
+  es: "Estrategia de la orden"
+chart_labels.zone.top_left:
+  ru: "Чарт: слева вверху"
+  en: "Chart: top left"
+  es: "Chart: arriba izq."
+chart_labels.zone.top_center:
+  ru: "Чарт: по центру вверху"
+  en: "Chart: top center"
+  es: "Chart: arriba centro"
+chart_labels.zone.top_right:
+  ru: "Чарт: справа вверху"
+  en: "Chart: top right"
+  es: "Chart: arriba der."
+chart_labels.zone.bottom_left:
+  ru: "Чарт: слева внизу"
+  en: "Chart: bottom left"
+  es: "Chart: abajo izq."
+chart_labels.zone.bottom_center:
+  ru: "Чарт: по центру внизу"
+  en: "Chart: bottom center"
+  es: "Chart: abajo centro"
+chart_labels.zone.bottom_right:
+  ru: "Чарт: справа внизу"
+  en: "Chart: bottom right"
+  es: "Chart: abajo der."
+chart_labels.zone.zone_top:
+  ru: "Зона: вверху"
+  en: "Zone: top"
+  es: "Zona: arriba"
+chart_labels.zone.zone_bottom:
+  ru: "Зона: внизу"
+  en: "Zone: bottom"
+  es: "Zona: abajo"
+chart_labels.short.delta_1h:
+  ru: "Δ1ч"
+  en: "Δ1h"
+  es: "Δ1h"
+chart_labels.short.delta_24h:
+  ru: "Δ24ч"
+  en: "Δ24h"
+  es: "Δ24h"
+chart_labels.short.pnl:
+  ru: "PnL"
+  en: "PnL"
+  es: "PnL"
+chart_labels.short.orders:
+  ru: "Ордеров"
+  en: "Orders"
+  es: "Órdenes"
+chart_labels.short.position:
+  ru: "Позиция"
+  en: "Position"
+  es: "Posición"

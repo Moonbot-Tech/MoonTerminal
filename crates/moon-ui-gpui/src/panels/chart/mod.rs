@@ -95,6 +95,9 @@ struct ChartSettingsSig {
     chart_graphics: moon_core::config::ChartGraphicsCfg,
     /// The panel's EFFECTIVE candle settings, in the signature for exactly the same reason.
     candle_view: moon_core::market::CandleViewCfg,
+    /// The panel's EFFECTIVE caption labels, in the signature for exactly the same reason: a panel
+    /// following `layout.chart_labels` learns of a ⧉ press in another window only through here.
+    chart_labels: moon_core::config::ChartLabelsCfg,
 }
 
 /// Build the settings signature for a panel whose chart-graphics override is `graphics`.
@@ -109,6 +112,7 @@ fn chart_settings_sig(
     backend: &Backend,
     graphics: Option<moon_core::config::ChartGraphicsCfg>,
     candles: Option<moon_core::market::CandleViewCfg>,
+    labels: Option<moon_core::config::ChartLabelsCfg>,
 ) -> ChartSettingsSig {
     let effective = backend.preview.as_ref().unwrap_or(&backend.config);
     ChartSettingsSig {
@@ -122,6 +126,14 @@ fn chart_settings_sig(
             graphics.unwrap_or(backend.layout.chart_graphics),
         ),
         candle_view: candles.unwrap_or(backend.layout.candle_view),
+        // SANITIZED for the same reason graphics is normalized: this value is COMPARED, and a
+        // hand-edited file can state an inline label that opens its zone — repaired on read, it
+        // would differ from the stored one on every notification.
+        chart_labels: {
+            let mut cfg = labels.unwrap_or(backend.layout.chart_labels);
+            cfg.sanitize();
+            cfg
+        },
     }
 }
 
@@ -148,6 +160,10 @@ pub struct ChartPanel {
     /// trades are drawn, and the closed order's sell line. `None` follows the global
     /// `layout.chart_graphics` default; the effective value is applied during rendering.
     chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
+    /// Per-window/tab chart captions: which figures print beside the plot, where and how. `None`
+    /// follows the global `layout.chart_labels` default; the effective value is applied during
+    /// rendering.
+    chart_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Whether to dim-fill the reserved control zone when zones are separate and the order book is
     /// hidden. This is per window/tab, applied during rendering, and enabled by default.
     show_zone: bool,
@@ -363,7 +379,7 @@ impl ChartPanel {
         // A fresh panel holds no override yet, so its effective values ARE the global defaults.
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b, None, None)
+            chart_settings_sig(&b, None, None, None)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -387,7 +403,7 @@ impl ChartPanel {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
-                    chart_settings_sig(&b, this.chart_graphics, this.candle_view),
+                    chart_settings_sig(&b, this.chart_graphics, this.candle_view, this.chart_labels),
                 )
             };
             if settings_sig != this.settings_sig {
@@ -444,6 +460,7 @@ impl ChartPanel {
             liquidations_enabled: true,
             candle_view: None,
             chart_graphics: None,
+            chart_labels: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -535,7 +552,7 @@ impl ChartPanel {
         // A fresh panel holds no override yet, so its effective values ARE the global defaults.
         let settings_sig = {
             let b = backend.read(cx);
-            chart_settings_sig(&b, None, None)
+            chart_settings_sig(&b, None, None, None)
         };
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
@@ -558,7 +575,7 @@ impl ChartPanel {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
-                    chart_settings_sig(&b, this.chart_graphics, this.candle_view),
+                    chart_settings_sig(&b, this.chart_graphics, this.candle_view, this.chart_labels),
                 )
             };
             if settings_sig != this.settings_sig {
@@ -608,6 +625,7 @@ impl ChartPanel {
             liquidations_enabled: true,
             candle_view: None,
             chart_graphics: None,
+            chart_labels: None,
             show_zone: true,
             auto_pin: false,
             cancel_buy_pos: Default::default(),
@@ -784,7 +802,7 @@ impl ChartPanel {
             // this value, and a stale one turns the next backend notify into a phantom change.
             self.settings_sig = {
                 let b = self.backend.read(cx);
-                chart_settings_sig(&b, self.chart_graphics, cfg)
+                chart_settings_sig(&b, self.chart_graphics, cfg, self.chart_labels)
             };
             cx.notify();
         }
@@ -810,9 +828,30 @@ impl ChartPanel {
         // the next backend notification report a settings change that has already been applied.
         self.settings_sig = {
             let b = self.backend.read(cx);
-            chart_settings_sig(&b, cfg, self.candle_view)
+            chart_settings_sig(&b, cfg, self.candle_view, self.chart_labels)
         };
         self.requery_trade_history_on_trade_kinds(cx);
+        cx.notify();
+    }
+
+    /// Sets this window/tab's chart captions. `None` uses the global default; rendering applies
+    /// the effective value through the engine's `set_chart_labels`.
+    pub fn set_chart_labels(
+        &mut self,
+        cfg: Option<moon_core::config::ChartLabelsCfg>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chart_labels == cfg {
+            return;
+        }
+        self.chart_labels = cfg;
+        self.view_dirty = true;
+        // Restamp for the same reason `set_chart_graphics` does: the signature carries this value,
+        // and a stale one turns the next backend notify into a phantom settings change.
+        self.settings_sig = {
+            let b = self.backend.read(cx);
+            chart_settings_sig(&b, self.chart_graphics, self.candle_view, cfg)
+        };
         cx.notify();
     }
 

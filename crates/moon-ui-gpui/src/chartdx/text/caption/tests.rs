@@ -207,12 +207,6 @@ fn a_plate_is_measured_from_the_runs_that_were_drawn() {
         [0.0; 4],
         "a column with no runs has no plate"
     );
-    assert_eq!(
-        empty.left_or(42.0),
-        42.0,
-        "and reports the caller's fallback"
-    );
-
     // One row at x=100 width 60, a second below it starting further left and running wider.
     empty.add(100.0, 60.0, 10.0, 16.0);
     empty.add(80.0, 100.0, 26.0, 14.0);

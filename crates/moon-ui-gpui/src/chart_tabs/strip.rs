@@ -14,6 +14,7 @@ use rust_i18n::t;
 use super::candle_popup;
 use super::common;
 use super::graphics_popup;
+use super::labels_popup;
 use super::{ChartTabs, Tab, chart_tab_strip_h, coin_search};
 use crate::design;
 
@@ -263,6 +264,24 @@ impl Render for ChartTabs {
                 .render(),
             cx,
         );
+        // The labels button beside the palette one edits the ACTIVE TAB's chart captions.
+        let labels_popup_open = self.labels_popup_open;
+        let labels_btn = labels_popup::labels_popup_host(
+            self,
+            "chart-labels",
+            MoonButton::new("chart-labels-settings")
+                .leading_icon(MoonButtonIconSlot::new("icons/a-large-small.svg"))
+                .tooltip(t!("chart_labels.tip").to_string())
+                .size(MoonButtonSize::Micro)
+                .variant(if labels_popup_open {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Ghost
+                })
+                .selected(labels_popup_open)
+                .render(),
+            cx,
+        );
         // The per-window market search sits left of scale and queries the active tab's cores.
         // Absolutely position matches below its wrapper and place the cluster outside the strip's
         // clipping layer so `overflow_hidden` cannot cut off the dropdown.
@@ -381,6 +400,7 @@ impl Render for ChartTabs {
                             .children(gather_btn)
                             .child(candle_btn)
                             .child(graphics_btn)
+                            .child(labels_btn)
                             .child(settings_btn),
                     ),
             );
