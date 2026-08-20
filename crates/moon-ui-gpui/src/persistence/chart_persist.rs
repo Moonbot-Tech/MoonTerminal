@@ -220,6 +220,11 @@ pub struct ChartTabSpec {
     /// carried only the original five values; `startup::graphics_migration` back-filled the other
     /// six once, from the user's old `theme.toml`.
     pub chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
+    /// Per-window/tab chart captions from the labels popup: which figures the chart prints beside
+    /// its plot, in which corner and style. None inherits the global `layout.chart_labels` default,
+    /// which is what every file written before this field existed does.
+    #[serde(default)]
+    pub chart_labels: Option<moon_core::config::ChartLabelsCfg>,
     /// Detached-window time-axis X scale in pixels per millisecond, synchronized there with
     /// Shift+middle-click. None inherits the group scale or the built-in chart default.
     #[serde(default)]
@@ -258,6 +263,7 @@ impl ChartTabSpec {
             cursor_labels: None,
             candle_view: None,
             chart_graphics: None,
+            chart_labels: None,
             x_ppm: None,
         }
     }

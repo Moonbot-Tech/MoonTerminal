@@ -653,6 +653,13 @@ pub struct WindowLayout {
     /// even when no tab spec exists yet.
     #[serde(default)]
     pub chart_graphics_from_theme_migrated: bool,
+    /// Chart caption labels — which figures the chart prints beside its plot, where, and how —
+    /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
+    ///
+    /// The default reproduces the caption the chart drew before this was configurable, so a profile
+    /// written before this key existed opens on exactly the corner it had.
+    #[serde(default, deserialize_with = "de_lenient_chart_labels")]
+    pub chart_labels: super::chart_labels::ChartLabelsCfg,
     // The former `detect_view_by_group` moved to a separate `detects_view.toml`
     // (see `detect_view::DetectViewFile`); the old layout.toml key is simply ignored.
     /// Chart X time scale (pixels per millisecond) BY GROUP WINDOW: [Shift+middle click] on a chart
@@ -1305,6 +1312,21 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(de_lenient::<D, ChartGraphicsCfg>(d)?.unwrap_or_default())
+}
+
+/// Read [`super::chart_labels::ChartLabelsCfg`] leniently, repairing what a hand-edited file states.
+///
+/// Two failures are handled here rather than downstream: an unusable table costs the labels only
+/// and not every window position in the document, and a usable one is still sanitized, because the
+/// drawing pass has no way to honour an inline label that opens its zone.
+fn de_lenient_chart_labels<'de, D>(d: D) -> Result<super::chart_labels::ChartLabelsCfg, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut cfg =
+        de_lenient::<D, super::chart_labels::ChartLabelsCfg>(d)?.unwrap_or_default();
+    cfg.sanitize();
+    Ok(cfg)
 }
 
 /// Read a hand-editable map without allowing one malformed preference to reject the layout.

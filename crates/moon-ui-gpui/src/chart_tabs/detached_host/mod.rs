@@ -63,6 +63,9 @@ pub(super) struct DetachedChartHost {
     candle_popup_open: bool,
     /// Anchored "Chart graphics" popup opened by the palette button, for THIS window's charts.
     graphics_popup_open: bool,
+    /// Whether the chart-labels popup is open, and which row has its style panel expanded.
+    labels_popup_open: bool,
+    labels_style_open: Option<usize>,
     /// Last observed `chart_x_sync_rev`; Shift+middle-click in THIS window applies scale to its panel
     /// and persists it in the tab spec exactly once.
     last_x_sync_rev: u64,
@@ -372,6 +375,8 @@ impl DetachedChartHost {
             layout_popup_open: false,
             candle_popup_open: false,
             graphics_popup_open: false,
+            labels_popup_open: false,
+            labels_style_open: None,
             last_x_sync_rev: initial_x_sync_rev,
             layout_fit_input,
             layout_scroll_input,
@@ -729,6 +734,42 @@ impl super::graphics_popup::GraphicsPopupHost for DetachedChartHost {
         self.queue_apply_all(
             ApplyAll {
                 values: vec![StackSetting::Graphics(cfg)],
+                x_ppm: None,
+            },
+            cx,
+        );
+    }
+}
+
+/// Host for the "Chart labels" popup targeting THIS window's panel.
+///
+/// "Apply to all" sends a group request through Backend, drained by the tab strip, exactly like the
+/// graphics popup's above.
+impl super::labels_popup::LabelsPopupHost for DetachedChartHost {
+    fn labels_popup_open(&self) -> bool {
+        self.labels_popup_open
+    }
+    fn set_labels_popup_open(&mut self, open: bool) {
+        self.labels_popup_open = open;
+    }
+    fn labels_style_open(&self) -> Option<usize> {
+        self.labels_style_open
+    }
+    fn set_labels_style_open(&mut self, ix: Option<usize>) {
+        self.labels_style_open = ix;
+    }
+    fn labels_override(&self, cx: &App) -> Option<moon_core::config::ChartLabelsCfg> {
+        self.panel.read(cx).chart_labels()
+    }
+    fn apply_labels_all(
+        &mut self,
+        cfg: moon_core::config::ChartLabelsCfg,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_labels(cfg, cx);
+        self.queue_apply_all(
+            ApplyAll {
+                values: vec![StackSetting::Labels(cfg)],
                 x_ppm: None,
             },
             cx,

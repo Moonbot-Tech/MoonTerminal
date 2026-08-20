@@ -19,6 +19,7 @@ mod custom;
 mod detached_host;
 mod fig_tools;
 mod ingest;
+mod labels_popup;
 mod layout_popup;
 mod main_stack;
 mod settings;
@@ -330,6 +331,9 @@ pub struct ChartTabs {
     candle_popup_open: bool,
     /// Anchored Chart graphics popup for the ACTIVE TAB's chart-drawing settings.
     graphics_popup_open: bool,
+    /// Whether the chart-labels popup is open, and which row has its style panel expanded.
+    labels_popup_open: bool,
+    labels_style_open: Option<usize>,
     /// Fit-mode height field.
     layout_fit_input: Entity<MoonInputState>,
     /// Scroll-mode height field.
@@ -409,6 +413,7 @@ impl ChartTabs {
             main_cursor_labels,
             main_candle_view,
             main_chart_graphics,
+            main_chart_labels,
             restore_pending,
         ): (
             Option<f32>,
@@ -427,6 +432,7 @@ impl ChartTabs {
             Option<bool>,
             Option<moon_core::market::CandleViewCfg>,
             Option<moon_core::config::ChartGraphicsCfg>,
+            Option<moon_core::config::ChartLabelsCfg>,
             Vec<_>,
         ) = {
             let specs = &backend.read(cx).chart_specs;
@@ -447,6 +453,7 @@ impl ChartTabs {
             let main_cursor_labels = main_spec.and_then(|s| s.cursor_labels);
             let main_candle_view = main_spec.and_then(|s| s.candle_view);
             let main_chart_graphics = main_spec.and_then(|s| s.chart_graphics);
+            let main_chart_labels = main_spec.and_then(|s| s.chart_labels);
             let pending = specs
                 .iter()
                 .filter(|s| s.group == group && s.num >= 1 && s.detached.is_some())
@@ -466,6 +473,7 @@ impl ChartTabs {
                 main_cursor_labels,
                 main_candle_view,
                 main_chart_graphics,
+                main_chart_labels,
                 pending,
             )
         };
@@ -490,6 +498,9 @@ impl ChartTabs {
         }
         if main_chart_graphics.is_some() {
             main.update(cx, |p, pcx| p.set_chart_graphics(main_chart_graphics, pcx));
+        }
+        if main_chart_labels.is_some() {
+            main.update(cx, |p, pcx| p.set_chart_labels(main_chart_labels, pcx));
         }
         if main_show_zone.is_some() {
             main.update(cx, |p, pcx| p.set_show_zone(main_show_zone, pcx));
@@ -716,6 +727,8 @@ impl ChartTabs {
             layout_popup_open: false,
             candle_popup_open: false,
             graphics_popup_open: false,
+            labels_popup_open: false,
+            labels_style_open: None,
             layout_fit_input,
             layout_scroll_input,
             custom_name_input,

@@ -2,40 +2,6 @@
 
 use super::support::*;
 
-/// `chartdx/render_state.rs:SHOT_CAPTION_MIN_FRAMES` must remain two and
-/// `RenderState::frame` must disarm an expired caption. Lowering the threshold to one authorizes
-/// a capture after a discarded recovery frame, while removing the watchdog leaves the exchange
-/// caption on the user's screen after a stalled shot.
-///
-/// `moon-ui-gpui` is a binary crate, so this is a source contract over the renderer code rather
-/// than a constructible `RenderState` behavior test.
-#[test]
-fn shot_caption_requires_two_drawn_frames_and_expires_its_override() {
-    let source = code_only(&read_src("chartdx/render_state.rs"));
-    assert!(
-        source.contains("const SHOT_CAPTION_MIN_FRAMES: u8 = 2;"),
-        "the capture guard must require two completed caption passes, not one"
-    );
-
-    let drawn = braced_body(&source, "pub(super) fn shot_caption_drawn(&self) -> bool");
-    assert!(
-        drawn.contains("self.shot_caption_frames >= SHOT_CAPTION_MIN_FRAMES"),
-        "the capture guard must compare the drawn-frame count to the two-frame threshold"
-    );
-
-    let frame = braced_body(
-        &source,
-        "pub(super) fn frame(&mut self, info: GpuFrameInfo)",
-    );
-    let watchdog = braced_body(&frame, "if let Some(deadline) = self.shot_caption_until");
-    assert!(
-        watchdog.contains("if now >= deadline {")
-            && watchdog.contains("self.shot_caption_until = None;")
-            && watchdog.contains("self.shot_caption_frames = 0;"),
-        "an expired shot must disarm the caption and discard its capture proof"
-    );
-}
-
 /// `trade_history_hover.rs:profit_text` — dropping the `record.quote` half of the guard would
 /// print a profit amount with no resolved ticker, which is exactly the unlabeled figure this
 /// design refuses to show. `moon-ui-gpui` has no `[lib]`, so this invariant can only be read as

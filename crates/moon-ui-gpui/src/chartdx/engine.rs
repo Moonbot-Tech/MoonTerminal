@@ -109,15 +109,13 @@ impl ChartEngine {
             last_gpu_prepare_generation: 0,
             text_runs: Vec::new(),
             text_run_cursor: 0,
+            caption_runs: Vec::new(),
+            chart_labels: moon_core::config::ChartLabelsCfg::default(),
             firetest_text_labels: Vec::new(),
             firetest_text_runs: Vec::new(),
             firetest_text_layer: GpuCanvasRetainedTextLayer::default(),
             firetest_text_revision: 0,
             firetest_force_present: false,
-            shot_caption_until: None,
-            shot_caption_frames: 0,
-            shot_caption_device_gen: 0,
-            shot_caption_gen: 0,
             ui_palette: initial_palette_from_theme(&theme),
             slot_origin: [0.0, 0.0],
             cursor: None,
@@ -657,6 +655,32 @@ impl ChartEngine {
         true
     }
 
+    /// Applies the chart caption configuration — which figures print beside the plot, where and in
+    /// which style — to every engine pane. Returns true on change.
+    ///
+    /// The value is the owning panel's: its own per-tab override, or the `layout.chart_labels`
+    /// default when it has none, already sanitized by the caller.
+    ///
+    /// Unlike the graphics settings beside it, nothing baked into a GPU layer depends on this: the
+    /// captions are drawn by the text pass from resolved strings, so a change only has to make the
+    /// panes re-resolve and repaint. `mark_view_dirty` does both.
+    pub fn set_chart_labels(&mut self, cfg: moon_core::config::ChartLabelsCfg) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.chart_labels == cfg {
+            return false;
+        }
+        data.chart_labels = cfg;
+        // Mirrored into the text pass, which reads it every frame and must not borrow the data
+        // state to do so.
+        data.render.borrow_mut().chart_labels = cfg;
+        // The captions are re-resolved by the SYNC paths, and those short-circuit on an unchanged
+        // signature. Invalidating it here is what makes a configuration change reach a chart whose
+        // market and orders have not moved — the same reason `set_chart_graphics` resets it.
+        data.last_order_sig = u64::MAX;
+        data.mark_view_dirty();
+        true
+    }
+
     /// The graphics settings the currently uploaded geometry was built with.
     ///
     /// The hit test reads THIS rather than the backend config: the arrows on screen were baked
@@ -722,34 +746,6 @@ impl ChartEngine {
         st.line_labels = show;
         st.needs_present = true;
         true
-    }
-
-    /// Arms or clears the shot's exchange caption. Returns true on change.
-    ///
-    /// Args:
-    ///     until: Deadline past which the caption returns to the core name by itself, or `None` to
-    ///         restore it now.
-    ///
-    /// Returns:
-    ///     Whether anything changed.
-    pub(crate) fn arm_shot_caption(&mut self, until: Option<Instant>) -> bool {
-        self.state.borrow_mut().arm_shot_caption(until)
-    }
-
-    /// Whether the armed exchange caption has satisfied the renderer-side pre-capture proof.
-    ///
-    /// Returns:
-    ///     `true` once enough completed text passes have drawn the substituted caption since arming.
-    pub(crate) fn shot_caption_drawn(&self) -> bool {
-        self.state.borrow().shot_caption_drawn()
-    }
-
-    /// Which arming of the shot caption is in force.
-    ///
-    /// Returns:
-    ///     The current arming generation.
-    pub(crate) fn shot_caption_gen(&self) -> u64 {
-        self.state.borrow().shot_caption_gen()
     }
 
     /// Toggles crosshair cursor readout labels. Returns true on change.

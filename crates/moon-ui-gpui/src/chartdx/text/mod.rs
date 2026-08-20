@@ -24,8 +24,6 @@ const LABEL_LINE_GAP: f32 = 4.0;
 // text from hiding underneath.
 pub(super) const CAPTION_PAD_X: f32 = 30.0;
 pub(super) const CAPTION_PAD_Y: f32 = 4.0;
-// Gap between the current Y-scale badge and the corner-caption block (badge on the left).
-pub(super) const CAPTION_SCALE_GAP: f32 = 8.0;
 const FIRETEST_TEXT_FONT_SIZE: f32 = 9.0;
 const FIRETEST_TEXT_LINE_H: f32 = 11.0;
 
@@ -176,39 +174,6 @@ fn draw_text_run(
     )
 }
 
-/// Draws a `draw_text_run` with a custom font size and line height of `size + 4`.
-///
-/// Used for the large delta from the anchor in broom mode. The externally supplied size is
-/// scaled by the settings slider through `label_font_px`.
-#[allow(clippy::too_many_arguments)]
-fn draw_sized_text_run(
-    runs: &mut Vec<GpuCanvasTextRun>,
-    cursor: &mut usize,
-    ctx: &mut GpuCanvasTextContext<'_>,
-    text: &str,
-    size: f32,
-    x: f32,
-    y: f32,
-    ax: f32,
-    ay: f32,
-    color: Hsla,
-) -> anyhow::Result<GpuCanvasTextMetrics> {
-    ensure_text_run(runs, *cursor);
-    let run = &mut runs[*cursor];
-    *cursor += 1;
-    run.draw_aligned(
-        ctx,
-        point(px(x), px(y)),
-        text,
-        gpui::font(crate::design::mono()),
-        px(size),
-        px(size + 4.0),
-        color,
-        ax,
-        ay,
-    )
-}
-
 fn measure_text_run(
     runs: &mut Vec<GpuCanvasTextRun>,
     cursor: usize,
@@ -327,13 +292,17 @@ fn nearest_orderbook_notional(
 // Split by responsibility: runs contains RenderState draw/measure helpers, FireTest text, and
 // the ghost cursor; prepare contains the main prepare_text implementation.
 mod caption;
+mod captions;
+mod labels;
 mod prepare;
 mod runs;
 
 #[cfg(test)]
 mod tests;
 
-use caption::{CaptionBox, book_zone_left, caption_geom, caption_layout, column};
+use caption::book_zone_left;
+pub(in crate::chartdx) use captions::{CaptionGeomInput, CAPTION_PLATES};
+pub(in crate::chartdx) use labels::{collect_open_stats, BasisStats, LabelInputs, LabelState};
 
 /// Width of `text` at `size` in the caption font, without touching the retained run list.
 ///

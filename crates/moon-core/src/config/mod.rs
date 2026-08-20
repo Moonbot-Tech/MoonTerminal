@@ -17,6 +17,7 @@
 //! - `uid_counter` requires every counter construction path to name the optional store floor.
 
 pub mod badges;
+pub mod chart_labels;
 pub mod core_groups;
 pub mod crypto;
 pub mod detect_view;
@@ -48,6 +49,11 @@ mod uid_counter;
 mod tests;
 
 pub use badges::{BadgeEntry, BadgesConfig};
+pub use chart_labels::{
+    ChartLabelField, ChartLabelGroup, ChartLabelSlot, ChartLabelsCfg, LabelColor, LabelStyle,
+    LabelZone, PnlBasis, ResolvedLabelStyle, CHART_LABEL_SLOTS, LABEL_SIZE_MULT_MAX,
+    LABEL_SIZE_MULT_MIN,
+};
 pub use core_groups::{
     move_group, sanitize_core_groups, unique_group_name, CoreGroup, CORE_GROUPS_MAX,
     CORE_GROUP_MEMBERS_MAX, CORE_GROUP_NAME_MAX,

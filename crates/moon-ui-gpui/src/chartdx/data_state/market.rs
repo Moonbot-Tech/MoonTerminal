@@ -1035,6 +1035,38 @@ impl ChartDataState {
             pr.last_device_gen = device_gen;
             pr.active = true;
         }
+        // Caption inputs that come from the market snapshot. The readout is only READ when a
+        // caption actually asks for it: `market_ticker` takes the source lock and a versioned
+        // snapshot, and this sync runs on market revisions — which on a busy coin is several times
+        // a second, per pane.
+        let wants_deltas = st.chart_labels.any_drawn(|f| {
+            matches!(
+                f,
+                moon_core::config::ChartLabelField::Delta1h
+                    | moon_core::config::ChartLabelField::Delta24h
+            )
+        });
+        for (idx, _) in &layout {
+            // The market name is cloned only when a caption is actually going to read the snapshot;
+            // this loop runs per pane on every market revision.
+            let readout = wants_deltas
+                .then(|| {
+                    let target = st
+                        .panes
+                        .get(*idx)
+                        .and_then(|pr| pr.core.map(|core| (core, pr.market.clone())))?;
+                    source.market_ticker(target.0, &target.1)
+                })
+                .flatten();
+            if let Some(pr) = st.panes.get_mut(*idx) {
+                pr.delta_1h = readout.map(|r| r.delta_1h_pct);
+                pr.delta_24h = readout.map(|r| r.delta_24h_pct);
+            }
+            // Captions are formatted HERE, on a revision, and never in the frame path.
+            if st.refresh_pane_labels(*idx) {
+                text_changed = true;
+            }
+        }
         for (idx, was_active) in was_active.into_iter().enumerate() {
             if was_active && !st.panes.get(idx).is_some_and(|pr| pr.active) {
                 pixels_changed = true;

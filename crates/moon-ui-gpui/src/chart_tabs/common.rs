@@ -113,6 +113,8 @@ pub(crate) enum StackSetting {
     /// whether a closed order keeps its sell line, the trade-mark size and the bottom volume band
     /// (the palette popup).
     Graphics(moon_core::config::ChartGraphicsCfg),
+    /// Which captions the chart prints beside its plot, where, and in which style (the labels popup).
+    Labels(moon_core::config::ChartLabelsCfg),
     /// Price scale, where `None` means Auto. Copied by the ⚙ popup's ⧉ along with the layout.
     Scale(Option<f32>),
 }
@@ -129,6 +131,8 @@ pub(crate) enum GlobalSlot {
     CandleView,
     /// `layout.chart_graphics`, from the "Chart graphics" popup.
     Graphics,
+    /// `layout.chart_labels`, from the "Chart labels" popup.
+    Labels,
 }
 
 impl GlobalSlot {
@@ -142,6 +146,11 @@ impl GlobalSlot {
             GlobalSlot::CandleView => StackSetting::CandleView(layout.candle_view),
             GlobalSlot::Graphics => {
                 StackSetting::Graphics(moon_chart::normalize_chart_graphics(layout.chart_graphics))
+            }
+            GlobalSlot::Labels => {
+                let mut cfg = layout.chart_labels;
+                cfg.sanitize();
+                StackSetting::Labels(cfg)
             }
         }
     }
@@ -166,6 +175,11 @@ impl GlobalSlot {
                 layout.chart_graphics = v;
                 changed
             }
+            (GlobalSlot::Labels, StackSetting::Labels(v)) => {
+                let changed = layout.chart_labels != v;
+                layout.chart_labels = v;
+                changed
+            }
             // Unreachable through `StackSetting::global_slot`, which pairs slot and value by
             // construction. Storing a mismatched value would be worse than storing none.
             _ => false,
@@ -177,6 +191,7 @@ impl GlobalSlot {
         match self {
             GlobalSlot::CandleView => main.candle_view().is_some(),
             GlobalSlot::Graphics => main.chart_graphics().is_some(),
+            GlobalSlot::Labels => main.chart_labels().is_some(),
         }
     }
 }
@@ -187,6 +202,7 @@ impl StackSetting {
         match self {
             StackSetting::CandleView(_) => Some(GlobalSlot::CandleView),
             StackSetting::Graphics(_) => Some(GlobalSlot::Graphics),
+            StackSetting::Labels(_) => Some(GlobalSlot::Labels),
             _ => None,
         }
     }
@@ -222,6 +238,7 @@ impl StackSetting {
             StackSetting::CursorLabels(v) => s.cursor_labels = Some(v),
             StackSetting::CandleView(v) => s.candle_view = Some(v),
             StackSetting::Graphics(v) => s.chart_graphics = Some(v),
+            StackSetting::Labels(v) => s.chart_labels = Some(v),
             StackSetting::Scale(v) => s.scale = v,
         }
     }
@@ -266,6 +283,7 @@ macro_rules! set_stack_setting {
             crate::chart_tabs::common::StackSetting::Graphics(v) => {
                 $s.set_chart_graphics(Some(v), $c)
             }
+            crate::chart_tabs::common::StackSetting::Labels(v) => $s.set_chart_labels(Some(v), $c),
             crate::chart_tabs::common::StackSetting::Scale(v) => $s.set_scale(v, $c),
         }
     };
