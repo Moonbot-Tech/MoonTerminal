@@ -873,7 +873,9 @@ pub(super) fn drain_commands(
             }
             Ok(CoreCmd::SetHedgeMode(on)) => {
                 // This performs a REAL exchange action through the Engine API. Ignore the ticket;
-                // the result arrives in a HedgeModeUpdated event that updates the store.
+                // its outcome arrives as an `Event::EngineAction`, NOT as a HedgeModeUpdated —
+                // only `refresh_hedge_mode` produces that one. The event loop therefore re-reads
+                // the mode when the action reports success; see the `Event::EngineAction` arm.
                 match client.account().set_hedge_mode(on) {
                     Ok(_ticket) => log::info!(
                         "core {} set hedge mode -> {on}",
