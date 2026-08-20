@@ -478,6 +478,19 @@ pub enum CoreCmd {
         sell: bool,
         percent: f64,
     },
+    /// Move a market's orders of one side onto a clicked price — Moonbot's Move Open / Move TP
+    /// mouse gestures.
+    ///
+    /// The core selects the orders and lays them out; this live action carries the market, which
+    /// half of the book to take, the arrangement (Moonbot's "Move kind"), the destination price and
+    /// the position side. Nothing about the layout is computed here.
+    MoveOrdersToPrice {
+        market: String,
+        sell: bool,
+        kind: crate::config::MoveKind,
+        price: f64,
+        side: crate::config::MoveSide,
+    },
     /// Spread a market's sell orders across a price zone — Moonbot's "sells to rectangle".
     /// The core performs the spreading; this live action carries only the market, the two prices
     /// already ordered low to high, and the position side whose exits are addressed.

@@ -10,8 +10,9 @@
 //! `MoonOrders::cancel` (TOrderCancelCommand, CmdId=10).
 
 use moonproto::{
-    ClosePositionParams, MoonClient, MoveAllBuysParams, MoveAllSellsParams, NewOrderParams,
-    OrderSide, OrderWorkerStatus, PositionFilter, SellOrderParams, SplitOrderParams, VStopParams,
+    BulkMoveKind, ClosePositionParams, MoonClient, MoveAllBuysParams, MoveAllSellsParams,
+    NewOrderParams, OrderSide, OrderWorkerStatus, PositionFilter, SellOrderParams,
+    SplitOrderParams, VStopParams,
 };
 
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
@@ -57,10 +58,14 @@ pub(super) fn place_order(
     );
     match client.trade().new_order(params) {
         Ok(_ticket) => log::info!(
-            "core {} place order {market} short={short} price={price} size={size} strat={strategy_id:?}"
-        , crate::feed::core_label(server_id)),
+            "core {} place order {market} short={short} price={price} size={size} strat={strategy_id:?}",
+            crate::feed::core_label(server_id)
+        ),
         Err(error) => {
-            log::warn!("core {} place order {market} failed: {error}", crate::feed::core_label(server_id))
+            log::warn!(
+                "core {} place order {market} failed: {error}",
+                crate::feed::core_label(server_id)
+            )
         }
     }
 }
@@ -254,6 +259,66 @@ pub(super) fn shift_orders_percent(
     }
 }
 
+/// Move a market's orders of one side onto a clicked price — Moonbot's Move Open / Move TP.
+///
+/// Everything about WHICH orders move and where each one lands is the core's: the wire carries the
+/// arrangement (`ReplaceMultiKind`), one destination price and the position side. That is the whole
+/// reason this is a bulk command rather than a per-order replace — Moonbot's "Parallel Shift to
+/// cursor" puts the nearest line on the click and keeps the spacing of the rest, arithmetic the
+/// terminal has no orders list precise enough to reproduce.
+///
+/// Like every other bulk send here, the log line says the intent was QUEUED, not that the core
+/// acted on it.
+pub(super) fn move_orders_to_price(
+    client: &MoonClient,
+    server_id: u64,
+    market: String,
+    sell: bool,
+    kind: crate::config::MoveKind,
+    price: f64,
+    side: crate::config::MoveSide,
+) {
+    use crate::config::{MoveKind, MoveSide};
+    let move_kind = match kind {
+        // The caller drops a `None` kind before it gets here: Moonbot leaves such a gesture inert
+        // rather than sending a command with no arrangement.
+        MoveKind::None => return,
+        MoveKind::ParallelShift => BulkMoveKind::Shift,
+        MoveKind::TopVolume => BulkMoveKind::TopVolume,
+        MoveKind::LowVolume => BulkMoveKind::LowVolume,
+        MoveKind::TopProfit => BulkMoveKind::TopProfit,
+        MoveKind::AllToOnePrice => BulkMoveKind::All,
+        MoveKind::LastSet => BulkMoveKind::LastSet,
+        MoveKind::LastMoved => BulkMoveKind::LastMoved,
+    };
+    let filter = match side {
+        MoveSide::Long => PositionFilter::Long,
+        MoveSide::Short => PositionFilter::Short,
+        MoveSide::Both => PositionFilter::Both,
+    };
+    let what = if sell { "sells" } else { "buys" };
+    let ctx = format!("move {what} {market} to {price:.8} kind={kind:?} side={side:?}");
+    if sell {
+        report(
+            server_id,
+            ctx,
+            client.trade().move_all_sells(
+                market,
+                MoveAllSellsParams::replace_kind(move_kind, price, filter),
+            ),
+        );
+    } else {
+        report(
+            server_id,
+            ctx,
+            client.trade().move_all_buys(
+                market,
+                MoveAllBuysParams::replace_kind(move_kind, price, filter),
+            ),
+        );
+    }
+}
+
 /// Spread a market's sell orders evenly across a price zone — Moonbot's "sells to rectangle".
 ///
 /// The core does the spreading; this only names the market and the two prices.
@@ -426,7 +491,8 @@ pub(super) fn set_order_stop(
         .unwrap_or((0.0, 0.0));
     log::info!(
         "core {} set order stop {uid} {kind:?}->{on}: found order emulator={} sl={} ts={} vstop={} \
-         strat_id={} eff_strat={} has_strat={} cs={} price_drop={cs_sl} trailing_drop={cs_ts}", crate::feed::core_label(server_id),
+         strat_id={} eff_strat={} has_strat={} cs={} price_drop={cs_sl} trailing_drop={cs_ts}",
+        crate::feed::core_label(server_id),
         o.emulator_mode,
         o.stops.stop_loss_enabled(),
         o.stops.trailing_enabled(),
@@ -434,7 +500,8 @@ pub(super) fn set_order_stop(
         o.strat_id,
         strat_id,
         has_strat,
-        cs.is_some());
+        cs.is_some()
+    );
     let result = match kind {
         OrderStopKind::StopLoss | OrderStopKind::Trailing => {
             let stops = o.stops;
@@ -503,8 +570,9 @@ pub(super) fn set_order_stop(
             // TS too, the log will show it and wire ts will remain false.
             if kind == OrderStopKind::Trailing && on && ts.is_none() {
                 log::info!(
-                    "core {} set order stop {uid} Trailing->on: уровень не найден — пробуем enable с level=0 (дефолт ядра)"
-                , crate::feed::core_label(server_id));
+                    "core {} set order stop {uid} Trailing->on: уровень не найден — пробуем enable с level=0 (дефолт ядра)",
+                    crate::feed::core_label(server_id)
+                );
                 ts = Some((true, false, 0.0, 0.0));
             }
             // The toggled group must resolve, or nothing is sent. If the neighboring group has no
@@ -516,14 +584,16 @@ pub(super) fn set_order_stop(
             };
             if on && target.is_none() {
                 log::warn!(
-                    "core {} set order stop {uid} {kind:?}->on: нет уровня (провод/память/стратегия/дефолт пусты), не шлём"
-                , crate::feed::core_label(server_id));
+                    "core {} set order stop {uid} {kind:?}->on: нет уровня (провод/память/стратегия/дефолт пусты), не шлём",
+                    crate::feed::core_label(server_id)
+                );
                 return;
             }
             if other.is_none() {
                 log::warn!(
-                    "core {} set order stop {uid} {kind:?}: у соседнего стопа нет уровня — его страта может погаснуть"
-                , crate::feed::core_label(server_id));
+                    "core {} set order stop {uid} {kind:?}: у соседнего стопа нет уровня — его страта может погаснуть",
+                    crate::feed::core_label(server_id)
+                );
             }
             let apply_sl = |s: moonproto::StopSettings, g: &Option<(bool, bool, f64, f64)>| match g
             {
@@ -571,8 +641,9 @@ pub(super) fn set_order_stop(
                     );
                 } else {
                     log::warn!(
-                        "core {} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
-                    , crate::feed::core_label(server_id));
+                        "core {} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed",
+                        crate::feed::core_label(server_id)
+                    );
                 }
             }
             if !on {
@@ -593,8 +664,9 @@ pub(super) fn set_order_stop(
                     o.vstop_vol,
                 ) else {
                     log::warn!(
-                        "core {} set order stop {uid} {kind:?}->on: нет уровня (провод/память пусты), не шлём"
-                    , crate::feed::core_label(server_id));
+                        "core {} set order stop {uid} {kind:?}->on: нет уровня (провод/память пусты), не шлём",
+                        crate::feed::core_label(server_id)
+                    );
                     return;
                 };
                 if fixed {
@@ -627,8 +699,9 @@ pub(super) fn set_order_stop(
                         );
                     } else {
                         log::warn!(
-                            "core {} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed"
-                        , crate::feed::core_label(server_id));
+                            "core {} set order stop {uid} {kind:?}->off: праймер без уровня — первый OFF может заглушиться send-if-changed",
+                            crate::feed::core_label(server_id)
+                        );
                     }
                 }
                 remember_stop_params(

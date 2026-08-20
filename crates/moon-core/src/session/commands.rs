@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 
+use crate::config::{MoveKind, MoveSide};
 use crate::data::OrderBookModel;
 use crate::feed::{
     ClientSettingsEdit, CoreCmd, FeedWakeTx, LevManageEdit, NewStrategySpec, OrderLinePriceKind,
@@ -401,6 +402,46 @@ impl SessionManager {
                 percent,
             },
             "shift orders percent",
+        )
+    }
+
+    /// Move a market's orders of one side onto a clicked price — Moonbot's Move Open / Move TP.
+    ///
+    /// The core picks the orders and lays them out according to `kind`; nothing here computes a
+    /// destination for an individual order. A market with no name, a price that is not a finite
+    /// positive number, or an inert `MoveKind::None` sends nothing — a bulk move is the one command
+    /// on this list that can rewrite every order of a side at once, so a malformed one is dropped
+    /// here rather than handed to the core to interpret.
+    ///
+    /// Args:
+    ///     core: Core the market belongs to.
+    ///     market: Market whose orders are addressed.
+    ///     sell: Whether the sell half of the book moves, rather than the buy half.
+    ///     kind: Moonbot's "Move kind" — which orders and in what arrangement.
+    ///     price: Destination price, taken from where the pointer was.
+    ///     side: Position side the orders belong to.
+    pub fn move_orders_to_price(
+        &self,
+        core: CoreId,
+        market: String,
+        sell: bool,
+        kind: MoveKind,
+        price: f64,
+        side: MoveSide,
+    ) -> Result<()> {
+        if market.is_empty() || !price.is_finite() || price <= 0.0 || kind == MoveKind::None {
+            return Ok(());
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::MoveOrdersToPrice {
+                market,
+                sell,
+                kind,
+                price,
+                side,
+            },
+            "move orders to price",
         )
     }
 

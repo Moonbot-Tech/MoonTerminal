@@ -7,7 +7,7 @@
 mod tab;
 
 use gpui::*;
-use moon_core::config::{HotkeysConfig, MouseGestureBinding};
+use moon_core::config::{HotkeysConfig, MouseGestureBinding, MoveKind};
 use rust_i18n::t;
 
 #[derive(Clone, Copy)]
@@ -113,7 +113,7 @@ enum MouseSlot {
 /// Returns whether runtime does not yet consume this mouse gesture.
 ///
 /// Placement reads BuySet/ShortSet in `ChartPanel::try_place_order_click`, and the eight Move
-/// gestures are read by `ChartPanel::try_start_order_drag`. Only the two pending slots remain
+/// gestures are read by `ChartPanel::try_move_orders_click`. Only the two pending slots remain
 /// unconsumed, and not for want of wiring: moonproto's `NewOrderParams` carries no pending
 /// condition, so there is no command to send (see `moonbot_import` and the order-line notes).
 fn mouse_slot_wip(slot: MouseSlot) -> bool {
@@ -177,6 +177,54 @@ fn set_slot_value(hotkeys: &mut HotkeysConfig, slot: HotkeySlot, value: String) 
     } else {
         *target = value;
         true
+    }
+}
+
+/// The four "Move kind" settings, one per move gesture row that owns one.
+///
+/// Only the long rows carry a kind: Moonbot keeps a single kind per row and lets the Long and
+/// Short columns share it, which is why the short rows show none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::settings) enum MoveKindSlot {
+    BuyMove,
+    SellMove,
+    BuyMove2,
+    SellMove2,
+}
+
+fn move_kind_slot_value(hotkeys: &HotkeysConfig, slot: MoveKindSlot) -> MoveKind {
+    match slot {
+        MoveKindSlot::BuyMove => hotkeys.buy_move_kind,
+        MoveKindSlot::SellMove => hotkeys.sell_move_kind,
+        MoveKindSlot::BuyMove2 => hotkeys.buy_move_kind2,
+        MoveKindSlot::SellMove2 => hotkeys.sell_move_kind2,
+    }
+}
+
+fn set_move_kind_slot_value(
+    hotkeys: &mut HotkeysConfig,
+    slot: MoveKindSlot,
+    value: MoveKind,
+) -> bool {
+    let field = match slot {
+        MoveKindSlot::BuyMove => &mut hotkeys.buy_move_kind,
+        MoveKindSlot::SellMove => &mut hotkeys.sell_move_kind,
+        MoveKindSlot::BuyMove2 => &mut hotkeys.buy_move_kind2,
+        MoveKindSlot::SellMove2 => &mut hotkeys.sell_move_kind2,
+    };
+    if *field == value {
+        return false;
+    }
+    *field = value;
+    true
+}
+
+fn move_kind_slot_id(slot: MoveKindSlot) -> &'static str {
+    match slot {
+        MoveKindSlot::BuyMove => "buy-move",
+        MoveKindSlot::SellMove => "sell-move",
+        MoveKindSlot::BuyMove2 => "buy-move2",
+        MoveKindSlot::SellMove2 => "sell-move2",
     }
 }
 

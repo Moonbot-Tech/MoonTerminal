@@ -823,3 +823,33 @@ fn every_addtochart_market_gets_a_trade_history_target() {
         "a tile must request history without focusing, or a detect arrival tears it off the live edge"
     );
 }
+
+/// Protects the Moonbot shape of the order-move gestures: a CLICK on a price, on every button.
+///
+/// Two edits break it silently. Dropping the call from one button's press handler leaves that
+/// button's binding recognised in the settings and dead on the chart — the defect this feature was
+/// reported for. And routing the gesture back through `try_start_order_drag` makes it grab a line
+/// when the press happens to land on one and move the whole side when it does not: two different
+/// live trades behind the same hand movement, chosen by a few pixels.
+#[test]
+fn move_gestures_stay_a_click_on_every_button() {
+    let source = code_only(&read_src("panels/chart/render_input.rs"));
+    for button in ["Left", "Middle", "Right"] {
+        assert!(
+            source.contains(&format!("try_move_orders_click(TradeMouseButton::{button}")),
+            "the {button} button must offer its press to the move gestures"
+        );
+    }
+    let trade = code_only(&read_src("panels/chart/trade.rs"));
+    let drag = braced_body(&trade, "pub(super) fn try_start_order_drag(");
+    assert!(
+        !drag.contains("gesture_matches") && !drag.contains("move_gestures"),
+        "dragging is the plain left grab; the gestures are the bulk move-to-price"
+    );
+    // The command itself: the terminal must not compute a destination per order.
+    let click = braced_body(&trade, "pub(super) fn try_move_orders_click(");
+    assert!(
+        click.contains("resolve_move_gesture") && click.contains("move_orders_to_price"),
+        "the gesture resolves against the bindings and sends one bulk command"
+    );
+}
