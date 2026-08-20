@@ -30,7 +30,7 @@ pub const VOLUME_BAR_W_PX: f32 = 3.0;
 /// Thickness of the max and average reference lines, logical pixels.
 pub const VOLUME_SCALE_LINE_PX: f32 = 1.0;
 
-/// Narrowest band fraction a hand-edited `theme.toml` can ask for.
+/// Narrowest band fraction a hand-edited chart configuration can ask for.
 pub const VOLUME_HEIGHT_MIN: f32 = 0.02;
 /// Widest band fraction. Beyond roughly half the plot the band stops being a footer and starts
 /// competing with the price action it is supposed to annotate.
@@ -118,7 +118,33 @@ pub fn visible_volume_stats(
     })
 }
 
-/// Clamp a band height fraction read from a hand-edited `theme.toml`.
+/// Clamp a configured bottom-volume style id to a style that exists.
+///
+/// Lives here rather than beside the other `ChartGraphicsCfg` clamps because this module owns the
+/// bottom band; `moon_core::market::candles` owns the ids themselves and is the only place the
+/// ceiling is defined.
+///
+/// Args:
+///     style: Configured style id from a hand-editable config.
+///
+/// Returns:
+///     The id, saturated at the highest defined style.
+pub fn clamp_volume_style(style: u8) -> u8 {
+    style.min(moon_core::market::candles::VOLUME_STYLE_MAX)
+}
+
+/// Clamp a bottom-volume band height from a hand-editable chart configuration.
+///
+/// The ONE authority for this number: `moon_chart::trade_marks::normalize_chart_graphics` calls it
+/// rather than declaring a range of its own, and the renderer calls it directly. A second range
+/// anywhere would rewrite stored values the chart already draws correctly.
+///
+/// Args:
+///     frac: Configured band-height fraction; a non-finite value is unusable.
+///
+/// Returns:
+///     The fraction in `[VOLUME_HEIGHT_MIN, VOLUME_HEIGHT_MAX]`, or the minimum when it is not
+///     finite.
 pub fn clamp_band_fraction(frac: f32) -> f32 {
     if frac.is_finite() {
         frac.clamp(VOLUME_HEIGHT_MIN, VOLUME_HEIGHT_MAX)

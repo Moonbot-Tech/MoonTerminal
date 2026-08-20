@@ -7,9 +7,8 @@ use std::collections::HashSet;
 
 use gpui::*;
 use moon_ui::{
-    IndexPath, MoonAccordion, MoonButtonSize, MoonColorPicker, MoonColorPickerEvent,
-    MoonColorPickerState, MoonMenuSize, MoonPalette, MoonSelect, MoonSelectEvent, MoonSelectItem,
-    MoonSelectState, MoonSlider, MoonSliderEvent, MoonSliderState, h_flex, rgba_from, v_flex,
+    MoonAccordion, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonPalette,
+    MoonSlider, MoonSliderEvent, MoonSliderState, h_flex, rgba_from, v_flex,
 };
 
 use super::SettingsView;
@@ -157,77 +156,6 @@ pub(super) fn draft_color(
     })
     .detach();
     st
-}
-
-/// Bind a MoonUI select to the live Settings draft, the enum counterpart of [`draft_color`].
-///
-/// `items` are `(value, label)` pairs in menu order; the control opens on whichever one equals
-/// `init`, falling back to the first. On `Confirm`, `apply` detects and performs the change in
-/// `Backend.preview`, and the backend is notified only when it returns true — the same contract the
-/// colour and slider binders use, so a tab can mix all three without thinking about it.
-///
-/// The General tab's `labeled_select` writes the saved config directly instead; it predates the
-/// draft and is not a model for a theme field, which must preview live.
-pub(super) fn draft_select<T: Clone + PartialEq + 'static>(
-    window: &mut Window,
-    cx: &mut Context<SettingsView>,
-    items: Vec<(T, SharedString)>,
-    init: &T,
-    apply: impl Fn(&mut AppConfig, &T) -> bool + 'static,
-) -> Entity<MoonSelectState<T>> {
-    let idx = items.iter().position(|(v, _)| v == init).unwrap_or(0);
-    let entries = items
-        .into_iter()
-        .map(|(v, label)| MoonSelectItem::new(v, label))
-        .collect::<Vec<_>>();
-    let st = cx.new(|cx| MoonSelectState::new(entries, Some(IndexPath::new(idx)), window, cx));
-    cx.subscribe(&st, move |this, _emitter, ev: &MoonSelectEvent<T>, cx| {
-        let MoonSelectEvent::Confirm(Some(value)) = ev else {
-            return;
-        };
-        let value = value.clone();
-        this.backend.update(cx, |b, bcx| {
-            if let Some(p) = b.preview.as_mut() {
-                if apply(p, &value) {
-                    bcx.notify();
-                }
-            }
-        });
-    })
-    .detach();
-    st
-}
-
-/// Build a labeled select row matching [`slider_row`]'s label-above-control shape.
-pub(super) fn select_row<T: Clone + PartialEq + 'static>(
-    label: &str,
-    st: &Entity<MoonSelectState<T>>,
-    cx: &App,
-) -> impl IntoElement {
-    let p = MoonPalette::active(cx);
-    v_flex()
-        .w_full()
-        .child(
-            div()
-                .text_color(rgba_from(p.text_soft, 1.0))
-                .child(label.to_string()),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
-                .items_center()
-                .child(
-                    div().w(px(180.0)).child(
-                        MoonSelect::new(st)
-                            .trigger_size(MoonButtonSize::Action)
-                            // One width for the trigger and the menu: written out separately they
-                            // drift and the menu no longer lines up with the control that opened it.
-                            .menu_width(design::font_w(cx, 180.0))
-                            .menu_size(MoonMenuSize::Compact),
-                    ),
-                ),
-        )
 }
 
 /// Bind an `f32` slider to the live Settings draft.

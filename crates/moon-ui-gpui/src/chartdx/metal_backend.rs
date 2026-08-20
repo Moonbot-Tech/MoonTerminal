@@ -187,7 +187,7 @@ struct ComboTexture {
     /// Trade-volume opacity the texture was baked with.
     ///
     /// Part of the cache key because the bars are baked INTO the texture. It was a
-    /// compile-time constant until the theme gained `trade_volume_alpha`, which is why the
+    /// compile-time constant until `ChartGraphicsCfg` gained `trade_volume_alpha`, which is why the
     /// other four fields were once a complete key and no longer are.
     last_volume_alpha: f32,
     valid: bool,

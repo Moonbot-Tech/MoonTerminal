@@ -6,22 +6,30 @@ use moon_chart::view::{ChartView, Rect};
 
 use super::types::ChartViewGpu;
 
-/// The theme-driven part of the shared chart uniform.
+/// The chart-graphics part of the shared chart uniform.
 ///
 /// `ChartViewGpu` is bound by every layer in all three backends, so the two fields the appearance
 /// settings reach through it are gathered here rather than passed as loose floats: a caller that
 /// forgets one gets a compile error instead of a silently stock-looking chart.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewStyle {
-    /// `ChartTheme::marker_scale` — a multiplier on the trade-cross size, on top of the device
-    /// pixel ratio.
+    /// `ChartGraphicsCfg::marker_scale` — a multiplier on the trade-cross size, on top of the
+    /// device pixel ratio.
     pub marker_scale: f32,
-    /// `ChartTheme::trade_volume_alpha` — opacity of the per-trade volume bars.
+    /// `ChartGraphicsCfg::trade_volume_alpha` — opacity of the per-trade volume bars.
     pub volume_alpha: f32,
 }
 
 impl Default for ViewStyle {
-    /// The values that reproduce the appearance before either became configurable.
+    /// The NEUTRAL identity of the struct, not the product default.
+    ///
+    /// `marker_scale` stays at 1.0 even though the configured default is now 0.70
+    /// (`moon_core::config::layout::def_marker_scale`), and that is deliberate: this struct is
+    /// overwritten from the config by the per-frame sync before anything draws, so the value here
+    /// is only ever seen on a path that failed to supply one. 1.0 is the neutral element of a
+    /// multiplier, so such a path renders at unity — visibly wrong-but-normal rather than quietly
+    /// shrunk. Copying 0.70 here would give one user-facing default two homes that can silently
+    /// drift apart, which is the bug this comment exists to prevent.
     fn default() -> Self {
         Self {
             marker_scale: 1.0,
@@ -32,14 +40,25 @@ impl Default for ViewStyle {
 
 /// Marker half-size in physical pixels: the logical base, the device scale, and the user's scale.
 ///
-/// `theme_scale` is floored well above zero so a hand-edited `theme.toml` cannot make markers
-/// vanish, which would read as trades not arriving rather than as a bad setting.
-pub fn marker_half_physical_px(view: &ChartView, marker_scale: f32, theme_scale: f32) -> f32 {
-    view.marker_half_px * marker_scale.max(0.1) * theme_scale.max(0.2)
+/// The two multipliers were once named the other way round, which read as though the configured
+/// size were the device ratio: `device_scale` is the pixel ratio the caller passes as `last_ppp`,
+/// and `cfg_marker_scale` is the user's own `ChartGraphicsCfg::marker_scale`.
+///
+/// `cfg_marker_scale` is floored well above zero so a hand-edited `layout.toml` or `charts.json`
+/// cannot make markers vanish, which would read as trades not arriving rather than as a bad
+/// setting. That floor is the same 0.2 `moon_chart::trade_marks::MARKER_SCALE_MIN` normalizes to,
+/// and the two must stay equal or a stored value would draw differently from the one the config
+/// keeps.
+pub fn marker_half_physical_px(view: &ChartView, device_scale: f32, cfg_marker_scale: f32) -> f32 {
+    view.marker_half_px * device_scale.max(0.1) * cfg_marker_scale.max(0.2)
 }
 
-pub fn cross_cull_margin_physical_px(view: &ChartView, marker_scale: f32, theme_scale: f32) -> f32 {
-    marker_half_physical_px(view, marker_scale, theme_scale).max(7.0) + 1.0
+pub fn cross_cull_margin_physical_px(
+    view: &ChartView,
+    device_scale: f32,
+    cfg_marker_scale: f32,
+) -> f32 {
+    marker_half_physical_px(view, device_scale, cfg_marker_scale).max(7.0) + 1.0
 }
 
 #[cfg(test)]

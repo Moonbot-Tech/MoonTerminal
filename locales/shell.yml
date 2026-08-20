@@ -485,6 +485,50 @@ chart.graphics.hide_closed_sell_hint:
   ru: "Живые ордера всегда показывают свою линию продажи"
   en: "Live orders always keep their sell line"
   es: "Las órdenes activas siempre conservan su línea de venta"
+chart.graphics.frame_trade_marks:
+  ru: "Метки сделок"
+  en: "Trade marks"
+  es: "Marcas de operaciones"
+chart.graphics.marker_scale:
+  ru: "Размер метки сделки"
+  en: "Trade marker size"
+  es: "Tamaño de la marca de operación"
+chart.graphics.trade_volume_alpha:
+  ru: "Непрозрачность объёмов сделок"
+  en: "Trade volume opacity"
+  es: "Opacidad del volumen de operaciones"
+chart.graphics.frame_bottom_volumes:
+  ru: "Объёмы снизу"
+  en: "Bottom volumes"
+  es: "Volúmenes inferiores"
+chart.graphics.volume_style:
+  ru: "Стиль отображения"
+  en: "Display style"
+  es: "Estilo de visualización"
+chart.graphics.volume_style_hills:
+  ru: "Холмы"
+  en: "Hills"
+  es: "Colinas"
+chart.graphics.volume_style_bars:
+  ru: "Столбики"
+  en: "Bars"
+  es: "Barras"
+chart.graphics.volume_style_off:
+  ru: "Выключены"
+  en: "Off"
+  es: "Desactivados"
+chart.graphics.candle_volume_height:
+  ru: "Высота полосы объёмов"
+  en: "Volume band height"
+  es: "Altura de la banda de volumen"
+chart.graphics.candle_volume_alpha:
+  ru: "Непрозрачность объёмов"
+  en: "Volume opacity"
+  es: "Opacidad del volumen"
+chart.graphics.candle_volume_scale:
+  ru: "Цвет шкалы объёмов"
+  en: "Volume scale colour"
+  es: "Color de la escala de volumen"
 chart.apply_all_tabs_windows:
   ru: "Применить ко всем вкладкам и окнам"
   en: "Apply to all tabs and windows"

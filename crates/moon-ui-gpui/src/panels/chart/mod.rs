@@ -157,8 +157,9 @@ pub struct ChartPanel {
     /// `layout.candle_view` default; the effective value is applied during rendering.
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Per-window/tab chart-drawing settings: trade-arrow size, connector thickness, which closed
-    /// trades are drawn, and the closed order's sell line. `None` follows the global
-    /// `layout.chart_graphics` default; the effective value is applied during rendering.
+    /// trades are drawn, the closed order's sell line, the trade-mark size and the bottom volume
+    /// band. `None` follows the global `layout.chart_graphics` default; the effective value is
+    /// applied during rendering.
     chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Per-window/tab chart captions: which figures print beside the plot, where and how. `None`
     /// follows the global `layout.chart_labels` default; the effective value is applied during

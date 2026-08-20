@@ -211,10 +211,14 @@ pub struct ChartTabSpec {
     #[serde(default)]
     pub candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Per-window/tab chart-drawing settings from the palette popup: trade-arrow size, connector
-    /// thickness, which closed trades are drawn, and the closed order's sell line. None inherits the
-    /// global `layout.chart_graphics` default, which is what every file written before this field
-    /// existed does.
+    /// thickness, closed-trade visibility, the closed order's sell line, trade-mark size, and the
+    /// bottom-volume band. None inherits the global `layout.chart_graphics` default, which is what
+    /// every file written before this field existed does.
     #[serde(default)]
+    ///
+    /// A `Some` written before the trade-mark and bottom-volume settings moved onto this struct
+    /// carried only the original five values; `startup::graphics_migration` back-filled the other
+    /// six once, from the user's old `theme.toml`.
     pub chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Per-window/tab chart captions from the labels popup: which figures the chart prints beside
     /// its plot, in which corner and style. None inherits the global `layout.chart_labels` default,
@@ -375,7 +379,18 @@ pub fn load_all() -> Vec<ChartTabSpec> {
 }
 
 /// Saves specifications to `charts.json`; failures are logged but nonfatal.
-pub fn save_all(list: &[ChartTabSpec]) {
+///
+/// Returns whether the file was actually replaced. Almost every caller ignores that — a failed
+/// autosave is a warning, not a stop — but the one-shot graphics migration must NOT commit its
+/// "already migrated" marker unless these specs really reached the disk, or a failure here would
+/// permanently skip the tabs it was about to repair.
+///
+/// Args:
+///     list: The specs to write.
+///
+/// Returns:
+///     True when `charts.json` now holds `list`.
+pub fn save_all(list: &[ChartTabSpec]) -> bool {
     moon_core::detect_diag::line(&format!(
         "[save] charts.json: {} спек, detached(окна)={}",
         list.len(),
@@ -389,9 +404,15 @@ pub fn save_all(list: &[ChartTabSpec]) {
                 "charts.json",
             ) {
                 log::warn!("не записал charts.json: {e}");
+                false
+            } else {
+                true
             }
         }
-        Err(e) => log::warn!("не сериализовал charts.json: {e}"),
+        Err(e) => {
+            log::warn!("не сериализовал charts.json: {e}");
+            false
+        }
     }
 }
 

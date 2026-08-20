@@ -630,8 +630,9 @@ impl ChartEngine {
         true
     }
 
-    /// Applies the chart graphics settings — trade-history arrow size, connector thickness, and
-    /// trade-kind visibility — to every engine pane. Returns true on change.
+    /// Applies the chart graphics settings — trade-history arrow size, connector thickness,
+    /// trade-kind visibility, the trade-mark size and the bottom volume band — to every engine pane.
+    /// Returns true on change.
     ///
     /// The value is the owning panel's: its own per-tab override, or the `layout.chart_graphics`
     /// default when it has none.

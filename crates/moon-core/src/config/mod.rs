@@ -35,6 +35,7 @@ pub mod servers;
 pub mod storage;
 pub mod tab_badges;
 pub mod theme;
+pub mod theme_legacy;
 
 mod backup;
 mod migrate;
