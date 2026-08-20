@@ -454,6 +454,7 @@ impl ChartTabs {
                         Option<chart_persist::PriceAxisPos>,
                         Option<bool>,
                         Option<moon_core::config::ChartGraphicsCfg>,
+                        Option<moon_core::config::ChartLabelsCfg>,
                     )> = {
                         let specs = &this.backend.read(cx).chart_specs;
                         specs
@@ -478,6 +479,7 @@ impl ChartTabs {
                                         s.price_axis_pos,
                                         s.time_axis_visible,
                                         s.chart_graphics,
+                                        s.chart_labels,
                                     )
                                 })
                             })
@@ -495,6 +497,7 @@ impl ChartTabs {
                         axis_pos,
                         time_axis,
                         chart_graphics,
+                        chart_labels,
                     )) = custom
                     {
                         panel.update(cx, |s, c| {
@@ -525,6 +528,9 @@ impl ChartTabs {
                             // whose result is then hidden.
                             if chart_graphics.is_some() {
                                 s.set_chart_graphics(chart_graphics, c);
+                            }
+                            if chart_labels.is_some() {
+                                s.set_chart_labels(chart_labels, c);
                             }
                             for (core, market) in &coins {
                                 s.add_coin(*core, market, coin_search::MANUAL_COIN_TTL_MS, c);

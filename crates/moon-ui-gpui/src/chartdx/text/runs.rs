@@ -55,33 +55,6 @@ impl RenderState {
         measure_text_run(&mut self.text_runs, self.text_run_cursor, ctx, text)
     }
 
-    /// Draws text with a custom font size for the large anchor delta in broom mode.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn draw_sized_text(
-        &mut self,
-        ctx: &mut GpuCanvasTextContext<'_>,
-        text: &str,
-        size: f32,
-        x: f32,
-        y: f32,
-        ax: f32,
-        ay: f32,
-        color: Hsla,
-    ) -> anyhow::Result<GpuCanvasTextMetrics> {
-        draw_sized_text_run(
-            &mut self.text_runs,
-            &mut self.text_run_cursor,
-            ctx,
-            text,
-            size,
-            x,
-            y,
-            ax,
-            ay,
-            color,
-        )
-    }
-
     /// Returns the order-line and cursor label size: `FONT_SIZE` plus the theme setting.
     ///
     /// Clamps the settings-slider adjustment to safe bounds so it cannot break layout.
