@@ -19,6 +19,8 @@ pub(crate) enum AutoWorkspaceSurface {
     ChartTabs,
     /// The group-owned report panel.
     Report,
+    /// The group-owned Assets panel, including wallets and transfers.
+    Assets,
 }
 
 impl AutoWorkspaceSurface {
@@ -30,6 +32,7 @@ impl AutoWorkspaceSurface {
         match self {
             Self::ChartTabs => "ChartTabs",
             Self::Report => "Report",
+            Self::Assets => "Assets",
         }
     }
 }

@@ -1283,6 +1283,25 @@ impl Backend {
         true
     }
 
+    /// Publish Assets so Auto can reveal the group-owned panel instead of a detached window.
+    ///
+    /// Classic is a no-op: the request is not published, so a header double-click opens the Assets
+    /// window on its own path rather than relying on this method.
+    ///
+    /// Args:
+    ///     group: Exact group whose Assets surface should become visible.
+    ///
+    /// Returns:
+    ///     `true` when a new Auto Assets transition was published and observers need notification.
+    pub(crate) fn request_assets_surface(&mut self, group: &str) -> bool {
+        if self.workspace_mode(group) != WorkspaceMode::AutoTrading {
+            return false;
+        }
+        self.auto_workspace_surface_requests
+            .request(group, crate::workspace::AutoWorkspaceSurface::Assets);
+        true
+    }
+
     /// Record group-wide activity and reset Main's inactivity-close timer.
     ///
     /// Any active group-owned window can refresh this timestamp, including the primary window,

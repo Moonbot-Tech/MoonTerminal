@@ -418,12 +418,33 @@ impl AssetsView {
                 // shown as current here cannot be one the footer total counts as stale.
                 .child(super::balances::figure(Some(agg), p, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    if let AssetsScope::Group(_) = &this.scope
-                        && this
-                            .effective_scope(this.backend.read(cx))
-                            .is_some_and(|scope| scope.is_workspace_owned())
-                    {
-                        return;
+                    if let AssetsScope::Group(_) = &this.scope {
+                        if let Some(scope) = this.effective_scope(this.backend.read(cx)) {
+                            if scope.is_auto_core() {
+                                // A selected Auto core pins the wallet host to the rail.
+                                return;
+                            }
+                            if scope.is_workspace_owned() {
+                                // Auto Overview: pick a transfer host without touching the rail or
+                                // Classic's retained `selected_core`.
+                                if this.overview_wallet_pick != Some(cid) {
+                                    this.overview_wallet_pick = Some(cid);
+                                    if let Err(error) =
+                                        this.backend.read(cx).session.refresh_transfer_assets(cid)
+                                    {
+                                        log::warn!("assets refresh failed for core {cid}: {error}");
+                                        window.push_notification(
+                                            MoonNotification::error(error.to_string()),
+                                            cx,
+                                        );
+                                    }
+                                    let backend = this.backend.clone();
+                                    this.rebuild_cache(backend.read(cx));
+                                    cx.notify();
+                                }
+                                return;
+                            }
+                        }
                     }
                     if this.selected_core != Some(cid) {
                         this.selected_core = Some(cid);
@@ -449,8 +470,20 @@ impl AssetsView {
 
         // Style the left container like the wallet columns, including the same `shell_high` header,
         // so the expanded section reads as four matching vertical containers.
+        //
+        // 420 rather than 240: core names here are the user's own free text and run long
+        // (`VLTR$18 ~ F-BN / SUB ACC No 38 L`), while the free/total pair beside them already takes
+        // roughly half the column — so at 240, and still at 300, the name truncated to a few
+        // characters plus an ellipsis. A roster you cannot read by name cannot be used to pick a
+        // transfer host, which is the column's whole purpose.
+        //
+        // The three wallet columns pay for it and that is the right trade: they are a `flex_1`
+        // remainder, so widening this one narrows them evenly, and they are routinely near-empty
+        // (a core holds a handful of currencies) while this column is never empty. It stays FIXED
+        // rather than content-sized on purpose — a roster that resized with the longest name would
+        // shift all three neighbours every time a core connected.
         let left = v_flex()
-            .w(px(240.0))
+            .w(px(420.0))
             .h_full()
             .flex_none()
             .border_r_1()
@@ -488,10 +521,16 @@ impl AssetsView {
         };
 
         // Let the expanded section share flexible height while keeping headers and a few rows visible.
+        //
+        // 240 rather than 160: at 160 the section header, the four container headers and the
+        // horizontal rule ate most of the box, leaving barely one coin row per wallet — which reads
+        // as "this core holds nothing" rather than as a squeezed list. The floor exists so the
+        // section stays USABLE when the table above claims the rest, and a floor that hides the
+        // rows is not doing that job.
         v_flex()
             .w_full()
             .flex_1()
-            .min_h(px(160.0))
+            .min_h(px(240.0))
             .child(header)
             .child(
                 h_flex()

@@ -19,8 +19,8 @@ use super::{
     RailItem, append_core_section_items, auto_classic_only_panel_names,
     auto_only_detached_panel_names, auto_workspace_activation_fallback,
     auto_workspace_tab_is_eligible, core_rail_metrics, default_auto_workspace_topology,
-    fitted_auto_rail_width, icon_workspace_summary, resolved_auto_workspace_tab,
-    workspace_status_label_visible,
+    ensure_auto_topology_contains_panel, fitted_auto_rail_width, icon_workspace_summary,
+    resolved_auto_workspace_tab, workspace_status_label_visible,
 };
 use crate::window::detached::DetachedSpec;
 
@@ -179,6 +179,116 @@ fn first_auto_workspace_adds_exactly_four_rows_to_orders() {
         sizes[1],
         Some(260.0 + 4.0 * crate::design::TABLE_ROW_H),
         "Orders must be exactly four design table rows taller than the old seed"
+    );
+}
+
+/// Removing the topology insertion in `shell/workspace.rs:ensure_auto_topology_contains_panel`
+/// must fail: an Auto reveal for Assets omitted by saved `auto_dock.json` would remain a silent
+/// no-op rather than making Assets available for activation.
+#[test]
+fn auto_surface_reveal_inserts_absent_panel_into_saved_topology() {
+    let mut topology = DockTopologyByName::tab_preset(["ChartTabs", "Report"]);
+
+    ensure_auto_topology_contains_panel(&mut topology, "Assets");
+
+    assert!(
+        topology.panel_names().iter().any(|name| name == "Assets"),
+        "the requested Auto surface must become part of the saved topology"
+    );
+}
+
+/// Returning the end of the strip from `shell/workspace.rs:auto_panel_insert_index` must fail:
+/// Assets would appear after Core Status instead of between Report and Core Status in a repaired
+/// Auto tab strip.
+#[test]
+fn auto_surface_reveal_preserves_the_shared_panel_order() {
+    let mut topology = DockTopologyByName::tab_preset(["ChartTabs", "Report", "CoreStatus", "Log"]);
+
+    ensure_auto_topology_contains_panel(&mut topology, "Assets");
+
+    assert_eq!(
+        topology.panel_names(),
+        vec![
+            "ChartTabs".to_string(),
+            "Report".to_string(),
+            "Assets".to_string(),
+            "CoreStatus".to_string(),
+            "Log".to_string(),
+        ],
+        "Assets must be inserted after Report and before Core Status"
+    );
+}
+
+/// Removing the duplicate-name guard in `shell/workspace.rs:ensure_auto_topology_contains_panel`
+/// must fail: repeated reveal notifications would create duplicate Assets tabs in the saved Auto
+/// topology.
+#[test]
+fn repeated_auto_surface_reveal_does_not_duplicate_the_panel() {
+    let mut topology = DockTopologyByName::tab_preset(["ChartTabs", "Report"]);
+
+    ensure_auto_topology_contains_panel(&mut topology, "Assets");
+    ensure_auto_topology_contains_panel(&mut topology, "Assets");
+
+    assert_eq!(
+        topology
+            .panel_names()
+            .iter()
+            .filter(|name| name.as_str() == "Assets")
+            .count(),
+        1,
+        "a second reveal must leave the repaired topology unchanged"
+    );
+}
+
+/// Skipping split children in `shell/workspace.rs:insert_auto_panel_name` must fail: an omitted
+/// Assets surface would be added beside Orders rather than to the upper operational tab strip.
+#[test]
+fn auto_surface_reveal_repairs_the_upper_tabs_before_the_orders_leaf() {
+    let mut topology = DockTopologyByName {
+        center: DockTopologyNode::Split {
+            horizontal: false,
+            items: vec![
+                DockTopologyNode::Tabs {
+                    names: ["ChartTabs", "Report", "CoreStatus", "Log"]
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                },
+                DockTopologyNode::Panel {
+                    name: "Orders".to_string(),
+                },
+            ],
+            sizes: vec![None, Some(260.0 + 4.0 * crate::design::TABLE_ROW_H)],
+        },
+        left: None,
+        right: None,
+        bottom: None,
+    };
+
+    ensure_auto_topology_contains_panel(&mut topology, "Assets");
+
+    let DockTopologyNode::Split { items, .. } = &topology.center else {
+        panic!("the repaired Auto topology must retain its vertical split");
+    };
+    let DockTopologyNode::Tabs { names } = &items[0] else {
+        panic!("Assets must be repaired into the upper tab strip");
+    };
+    assert_eq!(
+        names,
+        &[
+            "ChartTabs".to_string(),
+            "Report".to_string(),
+            "Assets".to_string(),
+            "CoreStatus".to_string(),
+            "Log".to_string(),
+        ]
+    );
+    assert_eq!(
+        items[1],
+        DockTopologyNode::Panel {
+            name: "Orders".to_string(),
+        },
+        "Orders must remain the lower leaf, not become an Assets sibling"
     );
 }
 
