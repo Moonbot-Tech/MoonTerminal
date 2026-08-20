@@ -115,6 +115,18 @@ fn sync_readout_resolution(rects: &mut [ReadoutRect], res: [f32; 2]) {
     }
 }
 
+/// Completed text passes that must have drawn the substituted caption before a shot may capture.
+///
+/// TWO, not one, and the second one is the whole point. A single pass proves only that the caption
+/// was BUILT: the fork's renderer returns from `draw` without drawing on the first frame after a
+/// DirectX device recovery and treats a `can_present` refusal the same way, while the canvas text
+/// pass still runs. Capturing on that one pass photographs the PREVIOUS frame, which still carries
+/// the user's account name.
+///
+/// A recovery raises the device generation, which resets the count, so reaching two again means two
+/// passes drawn on the current device with no recovery between them.
+const SHOT_CAPTION_MIN_FRAMES: u8 = 2;
+
 impl RenderState {
     pub(super) fn set_target_present_rate_hz(&mut self, hz: f32) {
         let hz = hz.clamp(1.0, 240.0);
@@ -256,6 +268,83 @@ impl RenderState {
     /// The stamp is all the own-pass needs: `frame` paces the flash and expires it from wall clock,
     /// so the caller neither notifies nor keeps a timer. That is the whole point — a GPUI repaint
     /// of the owning stack re-renders every chart panel in the tab.
+    /// Arm or clear the shot's caption substitution.
+    ///
+    /// Arming zeroes the drawn-frame count first, so a shot can never read a stale proof left by an
+    /// earlier press and capture a frame that was drawn before the swap.
+    ///
+    /// `until` is a wall-clock deadline rather than a duration because `frame` is what expires it,
+    /// and `frame` has no memory of when the caller armed it. Pass `None` to restore the core name
+    /// immediately; the shot does that itself on every path, and the deadline is the watchdog
+    /// behind it rather than the primary mechanism.
+    ///
+    /// Args:
+    ///     until: Instant past which the caption returns to the core name, or `None` to restore it
+    ///         now.
+    ///
+    /// Returns:
+    ///     Whether anything changed, in the house convention meaning the caller should repaint.
+    pub(super) fn arm_shot_caption(&mut self, until: Option<Instant>) -> bool {
+        if self.shot_caption_until == until {
+            return false;
+        }
+        self.shot_caption_until = until;
+        self.shot_caption_frames = 0;
+        if until.is_some() {
+            // Only an ARM opens a new shot. A disarm ends one, and bumping there would make the
+            // chain that is doing the disarming look superseded by itself.
+            self.shot_caption_gen = self.shot_caption_gen.wrapping_add(1);
+        }
+        // Both directions present: arming has to reach a frame for the shot to have anything to
+        // capture, and clearing has to reach one or the screen keeps the exchange on it.
+        self.needs_present = true;
+        true
+    }
+
+    /// Whether a shot's caption substitution is in force right now.
+    ///
+    /// Read by the label build and by the order sync, which is why it is a method rather than an
+    /// inlined `is_some()` at each site: those two must never disagree about whether a shot is on.
+    pub(super) fn shot_caption_active(&self) -> bool {
+        self.shot_caption_until.is_some()
+    }
+
+    /// Whether the substituted caption has satisfied the renderer-side pre-capture proof.
+    ///
+    /// Returns:
+    ///     `true` once enough completed `prepare_text` passes have drawn substituted captions.
+    pub(super) fn shot_caption_drawn(&self) -> bool {
+        self.shot_caption_frames >= SHOT_CAPTION_MIN_FRAMES
+    }
+
+    /// Which arming of the caption is currently in force.
+    ///
+    /// Returns:
+    ///     A counter a waiting shot compares against to notice it has been superseded.
+    pub(super) fn shot_caption_gen(&self) -> u64 {
+        self.shot_caption_gen
+    }
+
+    /// Count one completed text pass towards the shot's proof.
+    ///
+    /// Called ONLY from the end of `prepare_text`, and only once every fallible draw in that pass
+    /// has succeeded: the fork appends the canvas text frame only when `prepare_text` returns `Ok`,
+    /// so committing at a draw site would count a pass whose text frame was then discarded — which
+    /// is precisely the blind capture the proof exists to prevent.
+    ///
+    /// Args:
+    ///     device_gen: Highest device generation across the panes drawn in this pass.
+    pub(super) fn note_shot_caption_drawn(&mut self, device_gen: u64) {
+        // A device recovery invalidates everything counted before it: that frame's `draw` is
+        // skipped wholesale, so passes counted on the old generation say nothing about what is on
+        // the screen now. Start again rather than letting them add up across the boundary.
+        if self.shot_caption_device_gen != device_gen {
+            self.shot_caption_device_gen = device_gen;
+            self.shot_caption_frames = 0;
+        }
+        self.shot_caption_frames = self.shot_caption_frames.saturating_add(1);
+    }
+
     pub(super) fn set_arrival_pulse(&mut self, at: Option<Instant>, accent: [f32; 4]) -> bool {
         // Switched off: every start becomes a clear, so a run with the flash disabled cannot be
         // left with one already in flight from before the call.
@@ -520,6 +609,18 @@ impl RenderState {
         // asks for a present ten times a second forever, which reads as a mysterious idle floor and
         // no test would catch it. The final tick after expiry still rebuilds the rects, and that is
         // the frame which erases the border.
+        // Shot caption: ENDED here, from wall clock, for the same reason the arrival flash is —
+        // no timer, no notify, and nobody to trust with the clear. This is the WATCHDOG, not the
+        // normal path: the shot restores the caption itself as soon as it has its picture, and this
+        // only fires when that chain never completed. Leaving it armed would keep the EXCHANGE on
+        // the user's own screen, where the core name belongs.
+        if let Some(deadline) = self.shot_caption_until {
+            if now >= deadline {
+                self.shot_caption_until = None;
+                self.shot_caption_frames = 0;
+                wants_present = true;
+            }
+        }
         if let Some(at) = self.arrival_pulse {
             if at.elapsed() >= ARRIVAL_HIGHLIGHT {
                 self.arrival_pulse = None;

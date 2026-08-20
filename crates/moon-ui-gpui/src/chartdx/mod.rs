@@ -290,6 +290,13 @@ struct PaneRender {
     labels: text::LabelState,
     /// Venue label for the pane's core, resolved during order sync beside `core_name`.
     venue: String,
+    /// Whether [`Self::labels`] was last built with a shot's caption substitution in force.
+    ///
+    /// The shot's proof is about what a FRAME drew, and `refresh_pane_labels` runs on the sync
+    /// paths rather than the frame path, so a presented frame can still be showing captions built
+    /// before the substitution landed. This flag is what lets `prepare_text` tell those two frames
+    /// apart; without it the proof would count a frame that still names the user's own core.
+    labels_shot_substituted: bool,
     /// Strategy name of the newest open order on this market, from the same sync.
     label_strategy: String,
     /// Open-position figures per basis, from the same sync.
@@ -503,6 +510,7 @@ impl PaneRender {
             caption_plates: [[0.0; 4]; text::CAPTION_PLATES],
             labels: text::LabelState::default(),
             venue: String::new(),
+            labels_shot_substituted: false,
             label_strategy: String::new(),
             label_basis: [text::BasisStats::default(); 3],
             delta_1h: None,
@@ -711,6 +719,40 @@ struct RenderState {
     /// When the last arrival-flash frame was presented, pacing it to `ARRIVAL_PULSE_TICK`
     /// independently of the 60 Hz present cap.
     last_arrival_present_at: Option<Instant>,
+    /// Deadline until which every pane's core-name caption names the EXCHANGE instead, for a shot.
+    ///
+    /// Named for what it HOLDS — a wall-clock deadline — not for what it selects, so that
+    /// `shot_caption_until = None` reads as "stop substituting" rather than as clearing a string.
+    ///
+    /// ONE flag for the whole engine rather than one per pane: a picture that named the exchange in
+    /// one pane and the account in another would be worse than either.
+    ///
+    /// It carries a DEADLINE rather than a plain `bool` because the value is a privacy control. The
+    /// screen must not be left naming the exchange if the shot's callback chain never completes — a
+    /// closed window, a panel re-parented between windows, a stalled machine. `frame` expires it
+    /// from wall clock exactly as it does [`Self::arrival_pulse`], so nothing has to be trusted to
+    /// call the clear.
+    shot_caption_until: Option<Instant>,
+    /// How many completed text passes have drawn substituted captions since it was armed.
+    ///
+    /// The shot's proof, and the reason it is safe to capture at all. A COUNT rather than a flag,
+    /// with a threshold above one, because `prepare_text` having run does NOT prove the frame
+    /// reached the screen: the fork's renderer skips `draw` outright on the first frame after a
+    /// DirectX device recovery and swallows a `can_present` refusal the same way, while the canvas
+    /// text pass still runs. A single drawn pass could therefore be one the GPU discarded, and
+    /// capturing on it would put the ACCOUNT NAME on the clipboard — the one outcome this exists
+    /// to prevent.
+    shot_caption_frames: u8,
+    /// Device generation the proof has been counted against, to notice a recovery mid-shot.
+    shot_caption_device_gen: u64,
+    /// Bumped on every ARM, so a superseded shot can tell it has been replaced.
+    ///
+    /// Two presses in quick succession run two wait chains against this one engine. The second
+    /// arming zeroes the frame count the first is still waiting on, and without a generation the
+    /// first would sit out its budget and report a failure for a shot that was simply replaced. It
+    /// never affected what gets CAPTURED — the count is zeroed before any later frame is tallied —
+    /// only what gets reported.
+    shot_caption_gen: u64,
     cursor_color: [f32; 4],
     cursor_thickness: f32,
     readout_bg: [f32; 4],

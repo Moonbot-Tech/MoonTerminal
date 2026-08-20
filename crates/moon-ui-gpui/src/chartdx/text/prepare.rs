@@ -34,6 +34,15 @@ impl RenderState {
         let caption_fg = color(self.caption_label);
         let mut firetest_text_drawn = false;
         let mut readout_metrics_changed = false;
+        // A shot is in flight. Read ONCE, outside the pane loop, so every pane in a multi-pane
+        // chart makes the same choice within one frame.
+        let shot_caption = self.shot_caption_active();
+        // Held LOCAL until this pass succeeds. The fork appends the canvas text frame only when
+        // `prepare_text` returns `Ok`, and there are fallible draws all the way down to this
+        // function's own `Ok(())`. Committing the proof at the draw site would count a caption pass
+        // that then errored and had its text frame discarded — precisely the blind capture the
+        // proof exists to prevent.
+        let mut shot_caption_drawn_now = false;
 
         for idx in 0..self.panes.len() {
             let (
@@ -131,6 +140,14 @@ impl RenderState {
             };
             readout_metrics_changed |=
                 self.draw_pane_captions(ctx, idx, caption_input, caption_fg)?;
+            // This pane's captions were drawn from labels the substitution had already reached.
+            // `refresh_pane_labels` runs on the SYNC paths, not this one, so a presented frame can
+            // still carry captions built before the swap; the flag is what tells those apart. A
+            // pane whose captions were suppressed for want of room draws no core name either, so
+            // it does not hold the proof back.
+            if shot_caption && self.panes[idx].labels_shot_substituted {
+                shot_caption_drawn_now = true;
+            }
 
             // Axes, cursor, and grid below apply only to a normal, non-collapsed chart.
             if plot_w < 60.0 || plot_h < 60.0 || view.price_to_px <= 0.0 {
@@ -820,6 +837,20 @@ impl RenderState {
                     last_right = right;
                 }
             }
+        }
+
+        // Commit the shot's proof HERE and nowhere earlier: every fallible draw above has now
+        // succeeded, so this pass will return `Ok` and its text frame will be accepted. Latched
+        // rather than assigned, so a later caption-less frame cannot retract a proof the shot has
+        // already been told about.
+        if shot_caption_drawn_now {
+            let device_gen = self
+                .panes
+                .iter()
+                .map(|pane| pane.layers.device_gen())
+                .max()
+                .unwrap_or(0);
+            self.note_shot_caption_drawn(device_gen);
         }
 
         if readout_metrics_changed {
