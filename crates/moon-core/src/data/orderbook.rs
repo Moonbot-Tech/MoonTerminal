@@ -173,6 +173,45 @@ impl OrderBookModel {
         };
         (bid.is_finite() && ask.is_finite() && bid > 0.0 && ask > 0.0).then_some((bid, ask))
     }
+
+    /// Sums the notional of one side's levels lying between the spread and `price`: the glass an
+    /// order resting at `price` would have to clear on that side. `asks` selects ask levels
+    /// strictly below `price`, its opposite bid levels strictly above.
+    ///
+    /// `None` means that side of the book is not known — an empty book, or a one-sided snapshot
+    /// carrying only the other side. That is NOT the same answer as `Some(0.0)`, which says the
+    /// side is known and holds no glass between the spread and `price`; a caller drawing the two
+    /// the same way would report an empty market as "nothing in the way".
+    ///
+    /// Deliberately reads the WHOLE book rather than a visible slice: the answer describes the
+    /// market, so panning or zooming a chart must not change it. The caller-side loop this
+    /// replaced ran over `collect_visible_depth` output and therefore reported only the part of
+    /// the glass that happened to be on screen. "Whole" is the depth the feed actually delivers,
+    /// so a truncated book under-reports — a limit of the source, not of the camera.
+    ///
+    /// Sums the individual notionals instead of reading the `cum_notional` of the last matching
+    /// level, which would be O(log n) over the sorted sides: one non-finite level poisons every
+    /// cumulative above it, while skipping it here costs only that level. The scan is O(levels)
+    /// per label, and a chart dragging an order line asks for it once a frame, so the depth a
+    /// feed delivers (tens of levels, a handful of sell lines) is what keeps the linear form
+    /// affordable — not the book's own revision rate.
+    pub fn side_notional_toward(&self, price: f32, asks: bool) -> Option<f32> {
+        let mut sum = 0.0_f32;
+        let mut side_known = false;
+        for r in &self.raw {
+            if r.is_ask != asks {
+                continue;
+            }
+            side_known = true;
+            if !r.notional.is_finite() {
+                continue;
+            }
+            if (asks && r.price < price) || (!asks && r.price > price) {
+                sum += r.notional;
+            }
+        }
+        side_known.then_some(sum)
+    }
 }
 
 fn level_overlaps(r: &RawLevel, lo: f32, hi: f32) -> bool {
@@ -235,3 +274,6 @@ fn push_side(out: &mut Vec<RawLevel>, levels: &[crate::feed::Level], is_ask: boo
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

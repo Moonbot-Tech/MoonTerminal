@@ -204,10 +204,11 @@ impl RenderState {
     /// Draws compare-mode ghost-crosshair labels for a pane without a real cursor.
     ///
     /// At `ghost_price`, draws only order-book volume at the level (above the line) and the
-    /// percentage from current price (below it), without duplicating time, axis price, or order
-    /// size. Also works in a collapsed broom chart by mapping price to Y through the order-book
-    /// view, whose height and price window match the collapsed chart. The backend cursor layer
-    /// draws the line; see `sync_cursor_params`, which places the ghost's X outside the bounds.
+    /// percentage from the same book reference the real cursor uses (below it), without
+    /// duplicating time, axis price, or order size. Also works in a collapsed broom chart by
+    /// mapping price to Y through the order-book view, whose height and price window match the
+    /// collapsed chart. The backend cursor layer draws the line; see `sync_cursor_params`, which
+    /// places the ghost's X outside the bounds.
     pub(super) fn draw_ghost_cursor_labels(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
@@ -221,7 +222,7 @@ impl RenderState {
         if !self.cursor_labels || self.cursor.is_some_and(|c| c.pane == idx) {
             return Ok(());
         }
-        let (view, orderbook_view, pane_bounds, orderbook_enabled, cached_last_price) = {
+        let (view, orderbook_view, pane_bounds, orderbook_enabled, cached_last_price, book_best) = {
             let pr = &self.panes[idx];
             (
                 pr.view,
@@ -229,6 +230,7 @@ impl RenderState {
                 pr.pane_bounds,
                 pr.orderbook_enabled,
                 pr.cached_last_price,
+                pr.book_best,
             )
         };
         // Use the same "normal" chart threshold as the main cursor block (plot_w >= 60).
@@ -265,9 +267,13 @@ impl RenderState {
         let right_x = zone_left + READOUT_PAD_X;
         // Keep the label badge from cutting through the horizontal line; see cursor_label_gap.
         let gap = cursor_label_gap(self.cursor_thickness, sf);
-        let cur_col = cached_last_price
+        // Same reference as the real cursor: the nearest side of the book, so one price reads the
+        // same percentage whether the pointer is on this chart or ghosted from its compare peer.
+        let ghost_ref = cached_last_price
             .filter(|l| *l > 0.0)
-            .map(|last| pct_hsla(last - price, self.label_positive, self.label_negative))
+            .map(|last| cursor_ref_price(book_best, last, price));
+        let cur_col = ghost_ref
+            .map(|r| pct_hsla(r - price, self.label_positive, self.label_negative))
             .unwrap_or(color(self.readout_label));
         // Draw order-book volume at the ghost level above the line.
         if orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty() {
@@ -295,22 +301,22 @@ impl RenderState {
                 });
             }
         }
-        // Draw the ghost's percentage deviation from this chart's CURRENT price below the line.
-        if let Some(last) = cached_last_price {
-            if last > 0.0 {
-                let pct = (price - last) / last * 100.0;
-                let m =
-                    self.draw_label_text(ctx, &fmt_pct(pct), right_x, cy + gap, 0.0, 0.0, cur_col)?;
-                placed.push(PlacedLabel {
-                    x: right_x,
-                    y: cy + gap,
-                    ax: 0.0,
-                    ay: 0.0,
-                    w: m.width.as_f32(),
-                    h: m.line_height.as_f32(),
-                    solid: true,
-                });
-            }
+        // Draw the ghost's percentage deviation from this chart's book reference below the line.
+        // `ghost_ref` is Some only for a positive last price, and the book side it may return in
+        // its place is positive too, so the division needs no further guard.
+        if let Some(r) = ghost_ref {
+            let pct = (price - r) / r * 100.0;
+            let m =
+                self.draw_label_text(ctx, &fmt_pct(pct), right_x, cy + gap, 0.0, 0.0, cur_col)?;
+            placed.push(PlacedLabel {
+                x: right_x,
+                y: cy + gap,
+                ax: 0.0,
+                ay: 0.0,
+                w: m.width.as_f32(),
+                h: m.line_height.as_f32(),
+                solid: true,
+            });
         }
         Ok(())
     }
