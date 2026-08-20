@@ -358,7 +358,17 @@ impl ChartDataState {
             } else {
                 let hide_open = moon_core::market::candles::bucket_open_ms(now, candle_tf_ms)
                     - (candle_cfg.hide_candles as f64 - 1.0) * candle_tf_ms as f64;
-                (hide_open - pane.view.epoch_ms) as f32
+                let hide_rel = (hide_open - pane.view.epoch_ms) as f32;
+                // Never blank a bucket that has no trades to show instead. The setting means "draw
+                // ticks here rather than candles", so where there are no ticks it has to mean
+                // nothing at all — otherwise a freshly opened market, whose trade ring the core has
+                // not streamed yet, renders the whole zone as empty space. NaN means no crosses are
+                // resident at all, which suppresses the zone entirely rather than clamping it.
+                if pr.combo_left_rel.is_nan() {
+                    f32::MAX
+                } else {
+                    hide_rel.max(pr.combo_left_rel)
+                }
             };
             // Diagnose X geometry for gaps between the plot and order book after zooming out. Once
             // per second per panel, log the window, anchor, and latest data to distinguish a camera
@@ -519,6 +529,15 @@ impl ChartDataState {
                     // left boundary makes a fresh live chart reset every frame while the
                     // 60s window extends into empty pre-connect history.
                     pr.resident_left_rel = history_from;
+                    // Where the trade crosses ACTUALLY begin, as opposed to where the read asked
+                    // them to. A freshly connected market has no trade history at all until the
+                    // core streams some, and the hide-candles zone below refuses to blank a bucket
+                    // that has no crosses to replace it. Stamped only on a full range read, since
+                    // an incremental drain returns just the live edge.
+                    pr.combo_left_rel = history
+                        .combo_left_rel_ms
+                        .map(|v| v as f32)
+                        .unwrap_or(f32::NAN);
                     // Restart the pan budget from the reset that ACTUALLY happened, whatever raised
                     // it. Stamping back where the decision was made would also credit a frame whose
                     // read returned nothing, and would miss the capacity-driven re-read that resets
