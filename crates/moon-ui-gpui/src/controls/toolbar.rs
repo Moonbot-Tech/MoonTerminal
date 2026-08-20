@@ -770,7 +770,7 @@ pub fn toolbar(
                 .child(open_window_button(
                     "toolbar-profit-monitor",
                     t!("toolbar.profit_monitor").to_string(),
-                    "icons/chart-candlestick.svg",
+                    "icons/trending-up.svg",
                     None,
                     None,
                     backend.clone(),
