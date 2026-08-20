@@ -20,8 +20,8 @@ use crate::chartdx::input;
 /// two differ by at most a third of a millisecond.
 const DRAG_NOTIFY_MIN_INTERVAL: Duration = Duration::from_millis(33);
 
-use super::trade::TradeMouseButton;
 use super::ChartPanel;
+use super::trade::TradeMouseButton;
 
 /// Count one press against the series this panel itself saw, for the trading gestures to match.
 ///
@@ -83,9 +83,8 @@ fn grab_order_line(
     pos: (f32, f32),
     cx: &mut Context<ChartPanel>,
 ) -> bool {
-    let grabbed = clicks.is_some_and(|count| {
-        this.try_start_order_drag(button, e.modifiers, count, e.click_count <= 1, pos, cx)
-    });
+    let grabbed = clicks
+        .is_some_and(|count| this.try_start_order_drag(button, count, e.click_count <= 1, pos, cx));
     if grabbed {
         this.sync_native_cursor();
         cx.notify();
@@ -284,6 +283,18 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
+    // Moonbot's Move Open / Move TP: a click that moves a side of the book onto its price. Placed
+    // beside placement above because it is the same kind of gesture — the press names a price, not
+    // a line — and before the cancel and drag paths, which are about the line under the pointer.
+    if within
+        && !sells_zone_mode
+        && clicks.is_some_and(|count| {
+            this.try_move_orders_click(TradeMouseButton::Left, e.modifiers, count, pos, cx)
+        })
+    {
+        cx.stop_propagation();
+        return;
+    }
     // Clicking the start cross of an unfilled entry cancels it before drag handling, so dragging
     // never starts from that cross.
     if within
@@ -296,10 +307,12 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
-    // Not gated on `click_count <= 1` like the branches above: a move gesture may be bound to a
-    // double click (`CTRL_Dbl` and friends). The native gate is not dropped, it is passed along —
-    // the built-in plain-left grab still requires it, and only double-click gestures pass it.
-    if within && !sells_zone_mode && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx)
+    // The built-in grab: the plain single left press, whatever modifiers ride along with it. Its
+    // own gate lives in `try_start_order_drag`, which is why the native click count is passed on
+    // rather than checked here.
+    if within
+        && !sells_zone_mode
+        && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx)
     {
         return;
     }
@@ -424,13 +437,18 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
-    // A move gesture bound to the right button grabs the line BEFORE the order menu, which would
-    // otherwise swallow every right press over a line. Nothing is bound to the right button by
-    // default, so the menu keeps the plain right click. A right DOUBLE-click move gesture stays out
-    // of reach over a line: press one opens the menu, whose overlay consumes press two — the menu
-    // is the older contract and a gesture nobody has bound is not worth deferring it for.
-    if within && grab_order_line(this, TradeMouseButton::Right, e, clicks, pos, cx) {
+    // A move gesture bound to the right button acts BEFORE the order menu, which would otherwise
+    // swallow every right press over a line. Nothing is bound to the right button by default, so
+    // the menu keeps the plain right click. A right DOUBLE-click gesture stays out of reach over a
+    // line: press one opens the menu, whose overlay consumes press two — the menu is the older
+    // contract and a gesture nobody has bound is not worth deferring it for.
+    if within
+        && clicks.is_some_and(|count| {
+            this.try_move_orders_click(TradeMouseButton::Right, e.modifiers, count, pos, cx)
+        })
+    {
         this.suppress_rmb_up = true;
+        cx.stop_propagation();
         return;
     }
     // Right-clicking a Buy or Sell order line opens its side-specific menu before placement or
@@ -478,15 +496,6 @@ pub(super) fn mouse_up_right(
     // A right-button drag zooms Y and is paced like any other, but `mouse_button(Right, false, ..)`
     // always reports unchanged, so this release would otherwise never settle what the pacer owed.
     settle_paced_drag(this, cx);
-    // A right-button move gesture ends on this release, so finishing comes BEFORE the suppression
-    // check below — that branch returns early for exactly the press that started this drag. It
-    // clears the flag itself, because the release it was armed for is this one. A drag owned by
-    // another button is left alone: `finish_order_drag` reports `false` and this release keeps its
-    // ordinary behavior.
-    if release_order_drag(this, TradeMouseButton::Right, cx) {
-        this.suppress_rmb_up = false;
-        return;
-    }
     // When right-button down opened a figure/order menu or handled a trading gesture, consume its
     // paired release instead of letting a parent exit the Main stack's fullscreen mode.
     if this.suppress_rmb_up {
@@ -549,7 +558,12 @@ pub(super) fn mouse_down_middle(
     }
     // A move gesture bound to the middle button, before the X-scale synchronization below claims
     // Shift+middle for itself.
-    if within && grab_order_line(this, TradeMouseButton::Middle, e, clicks, pos, cx) {
+    if within
+        && clicks.is_some_and(|count| {
+            this.try_move_orders_click(TradeMouseButton::Middle, e.modifiers, count, pos, cx)
+        })
+    {
+        cx.stop_propagation();
         return;
     }
     // Shift+middle-click on the graph synchronizes the time X scale across charts in THIS window,
@@ -557,22 +571,6 @@ pub(super) fn mouse_down_middle(
     if within && e.modifiers.shift && this.sync_x_scale_window(window, cx) {
         cx.stop_propagation();
     }
-}
-
-/// Finishes a middle-button order drag.
-///
-/// The middle button has no other release behavior, and without this handler a drag started by a
-/// middle-button move gesture would reach no release path at all: the next pointer move with no
-/// button held DROPS the drag silently, so the moved line would spring back and no `move_order`
-/// would ever be sent.
-pub(super) fn mouse_up_middle(
-    this: &mut ChartPanel,
-    _e: &MouseUpEvent,
-    _window: &mut Window,
-    cx: &mut Context<ChartPanel>,
-) {
-    settle_paced_drag(this, cx);
-    release_order_drag(this, TradeMouseButton::Middle, cx);
 }
 
 /// Routes pointer motion through retained cursor/hover updates and active drags.
@@ -695,10 +693,7 @@ pub(super) fn mouse_move(
     // record that the figure layer accepted the one being held — because a press the layer REFUSED
     // (the order-book strip, a double-click) drags an order line or pans the chart, and this would
     // otherwise paint a preview following that same pointer.
-    if this
-        .fig_draft
-        .as_ref()
-        .is_some_and(|d| d.down.is_some())
+    if this.fig_draft.as_ref().is_some_and(|d| d.down.is_some())
         && e.pressed_button == Some(MouseButton::Left)
     {
         this.update_fig_pointer(pos, within, true, cx);

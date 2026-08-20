@@ -59,15 +59,16 @@ pub use groups::{
     GroupConfig, GroupExitSettings, GroupTradeSettings, TakeProfitMode, DEFAULT_ORDER_SIZES_USD,
 };
 pub use hotkeys::{
-    HotkeysConfig, MouseGestureBinding, MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
-    SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
+    HotkeysConfig, MouseGestureBinding, MoveGestureCommand, MoveKind, MoveSide,
+    MANUAL_STRATEGY_KEYS, ORDER_SIZE_KEYS, SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS,
+    SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
 pub use lang::Language;
 pub use layout::{
     clamp_auto_workspace_rail_width, ChartGraphicsCfg, DetachedLayout, GeomRect, GroupLayout,
-    ReportFilterPrefs,
-    TableSortPreference, WindowLayout, WorkspaceMode, AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT,
-    AUTO_WORKSPACE_RAIL_WIDTH_MAX, AUTO_WORKSPACE_RAIL_WIDTH_MIN,
+    ReportFilterPrefs, TableSortPreference, WindowLayout, WorkspaceMode,
+    AUTO_WORKSPACE_RAIL_WIDTH_DEFAULT, AUTO_WORKSPACE_RAIL_WIDTH_MAX,
+    AUTO_WORKSPACE_RAIL_WIDTH_MIN,
 };
 pub use news_tags::NewsTagSettings;
 pub use orders::{LineStyle, OrdersStyle, OrdersStyleSet};

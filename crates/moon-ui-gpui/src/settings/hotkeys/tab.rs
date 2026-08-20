@@ -5,8 +5,8 @@
 
 use gpui::*;
 use moon_core::config::{
-    HotkeysConfig, MANUAL_STRATEGY_KEYS, MouseGestureBinding, ORDER_SIZE_KEYS, SELL_PRESET_KEYS,
-    SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
+    HotkeysConfig, MANUAL_STRATEGY_KEYS, MouseGestureBinding, MoveKind, ORDER_SIZE_KEYS,
+    SELL_PRESET_KEYS, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
 };
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
@@ -16,8 +16,9 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::{
-    HotkeyGroup, HotkeySlot, MouseSlot, mouse_slot_id, mouse_slot_value, mouse_slot_wip,
-    parse_hotkey, set_mouse_slot_value, set_slot_value, slot_id, slot_value,
+    HotkeyGroup, HotkeySlot, MouseSlot, MoveKindSlot, mouse_slot_id, mouse_slot_value,
+    mouse_slot_wip, move_kind_slot_id, move_kind_slot_value, parse_hotkey, set_mouse_slot_value,
+    set_move_kind_slot_value, set_slot_value, slot_id, slot_value,
 };
 use crate::design;
 use crate::settings::SettingsView;
@@ -337,6 +338,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.buy_set").to_string(),
                     t!("hotkeys.mouse.buy_set_hint").to_string(),
                     MouseSlot::BuySet,
+                    None,
                     &hotkeys,
                     false,
                     cx,
@@ -345,6 +347,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.short_set").to_string(),
                     t!("hotkeys.mouse.short_set_hint").to_string(),
                     MouseSlot::ShortSet,
+                    None,
                     &hotkeys,
                     false,
                     cx,
@@ -353,6 +356,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.pending_long").to_string(),
                     t!("hotkeys.mouse.pending_long_hint").to_string(),
                     MouseSlot::PendingLong,
+                    None,
                     &hotkeys,
                     false,
                     cx,
@@ -361,6 +365,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.pending_short").to_string(),
                     t!("hotkeys.mouse.pending_short_hint").to_string(),
                     MouseSlot::PendingShort,
+                    None,
                     &hotkeys,
                     false,
                     cx,
@@ -369,6 +374,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.buy_move").to_string(),
                     t!("hotkeys.mouse.buy_move_hint").to_string(),
                     MouseSlot::BuyMove,
+                    Some(MoveKindSlot::BuyMove),
                     &hotkeys,
                     false,
                     cx,
@@ -377,6 +383,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.sell_move").to_string(),
                     t!("hotkeys.mouse.sell_move_hint").to_string(),
                     MouseSlot::SellMove,
+                    Some(MoveKindSlot::SellMove),
                     &hotkeys,
                     false,
                     cx,
@@ -385,6 +392,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.buy_move2").to_string(),
                     t!("hotkeys.mouse.buy_move2_hint").to_string(),
                     MouseSlot::BuyMove2,
+                    Some(MoveKindSlot::BuyMove2),
                     &hotkeys,
                     false,
                     cx,
@@ -393,6 +401,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.sell_move2").to_string(),
                     t!("hotkeys.mouse.sell_move2_hint").to_string(),
                     MouseSlot::SellMove2,
+                    Some(MoveKindSlot::SellMove2),
                     &hotkeys,
                     false,
                     cx,
@@ -402,6 +411,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.short_buy_move").to_string(),
                     t!("hotkeys.mouse.short_buy_move_hint").to_string(),
                     MouseSlot::ShortBuyMove,
+                    None,
                     &hotkeys,
                     hotkeys.same_hotkeys_for_move,
                     cx,
@@ -410,6 +420,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.short_sell_move").to_string(),
                     t!("hotkeys.mouse.short_sell_move_hint").to_string(),
                     MouseSlot::ShortSellMove,
+                    None,
                     &hotkeys,
                     hotkeys.same_hotkeys_for_move,
                     cx,
@@ -418,6 +429,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.short_buy_move2").to_string(),
                     t!("hotkeys.mouse.short_buy_move2_hint").to_string(),
                     MouseSlot::ShortBuyMove2,
+                    None,
                     &hotkeys,
                     hotkeys.same_hotkeys_for_move,
                     cx,
@@ -426,6 +438,7 @@ impl SettingsView {
                     t!("hotkeys.mouse.short_sell_move2").to_string(),
                     t!("hotkeys.mouse.short_sell_move2_hint").to_string(),
                     MouseSlot::ShortSellMove2,
+                    None,
                     &hotkeys,
                     hotkeys.same_hotkeys_for_move,
                     cx,
@@ -539,11 +552,28 @@ impl SettingsView {
             .into_any_element()
     }
 
+    /// One mouse-gesture row: the binding, and for a move row the "Move kind" beside it.
+    ///
+    /// Args:
+    ///     title: Row label.
+    ///     desc: Row description.
+    ///     slot: Gesture slot the first dropdown edits.
+    ///     kind_slot: Move-kind slot for a move row, or `None` for a row that has no kind — the
+    ///         placement rows, and the short rows, which share the long row's kind exactly as
+    ///         Moonbot's single kind column does.
+    ///     hotkeys: Configuration being edited.
+    ///     disabled: Whether the row is inert because the mirror flag owns it.
+    ///     cx: Settings context.
+    ///
+    /// Returns:
+    ///     The rendered row.
+    #[allow(clippy::too_many_arguments)]
     fn mouse_row(
         &self,
         title: impl Into<String>,
         desc: impl Into<String>,
         slot: MouseSlot,
+        kind_slot: Option<MoveKindSlot>,
         hotkeys: &HotkeysConfig,
         disabled: bool,
         cx: &Context<Self>,
@@ -575,7 +605,7 @@ impl SettingsView {
         if wip {
             row = row.child(self.wip_tag(&p, cx));
         }
-        row.child(
+        row = row.child(
             Self::row_dropdown(id, current.label())
                 .trigger_variant(if current == MouseGestureBinding::None {
                     MoonButtonVariant::Neutral
@@ -585,8 +615,67 @@ impl SettingsView {
                 .menu_width_scaled(228.0)
                 .disabled(disabled)
                 .items(items),
+        );
+        if let Some(kind_slot) = kind_slot {
+            row = row.child(self.move_kind_dropdown(kind_slot, hotkeys, disabled));
+        }
+        row.into_any_element()
+    }
+
+    /// The "Move kind" selector of one move row — Moonbot's column of the same name.
+    ///
+    /// The gesture says WHERE (the clicked price); this says which orders go there and how the core
+    /// arranges them. `None` leaves the gesture recognised and inert, which is Moonbot's own way of
+    /// switching one off without clearing the binding.
+    fn move_kind_dropdown(
+        &self,
+        slot: MoveKindSlot,
+        hotkeys: &HotkeysConfig,
+        disabled: bool,
+    ) -> impl IntoElement {
+        let current = move_kind_slot_value(hotkeys, slot);
+        let backend = self.backend.clone();
+        let items = MoveKind::ALL.into_iter().map(move |kind| {
+            let backend = backend.clone();
+            let label_key = format!("hotkeys.move_kind.{}", kind.id());
+            MoonMenuItem::with_key(kind.id(), t!(&label_key).to_string())
+                .checked(kind == current)
+                .on_click(move |_, _, cx| {
+                    backend.update(cx, |b, bcx| {
+                        if let Some(p) = b.preview.as_mut()
+                            && set_move_kind_slot_value(&mut p.hotkeys, slot, kind)
+                        {
+                            bcx.notify();
+                        }
+                    });
+                })
+        });
+        let current_key = format!("hotkeys.move_kind.{}", current.id());
+        Self::row_dropdown(
+            format!("move-kind-{}", move_kind_slot_id(slot)),
+            t!(&current_key).to_string(),
         )
-        .into_any_element()
+        // The trigger shows the chosen kind, so the menu carries the name of the setting — the
+        // "Move kind" column heading Moonbot puts above the same list.
+        .header(18.0, |_, cx| {
+            let p = MoonPalette::active(cx);
+            MoonText::new(t!("hotkeys.move_kind.title").to_string())
+                .uppercase(false)
+                .mono(true)
+                .font_size(9.0)
+                .line_height(12.0)
+                .color(p.text_muted)
+                .render()
+                .into_any_element()
+        })
+        .trigger_variant(if current == MoveKind::None {
+            MoonButtonVariant::Neutral
+        } else {
+            MoonButtonVariant::Blue
+        })
+        .menu_width_scaled(228.0)
+        .disabled(disabled)
+        .items(items)
     }
 
     /// Builds the shared leading half of an editor row: title, then the wrapping description.

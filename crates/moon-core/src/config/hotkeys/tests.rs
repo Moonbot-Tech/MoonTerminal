@@ -139,3 +139,160 @@ fn split_n_parts_stays_inside_its_range() {
     assert_eq!(clamp(4), 4);
     assert_eq!(clamp(200), i32::from(SPLIT_PARTS_MAX));
 }
+
+/// Pins which command a recognised move gesture becomes.
+///
+/// Plausible breakage: reading the slot's twin — the entry kind for an exit gesture, the primary
+/// kind for the secondary slot. Both send a live bulk move built from the wrong half of the
+/// settings page, and the orders that come back are not the ones the user was looking at.
+#[test]
+fn a_move_gesture_resolves_to_its_own_side_and_kind() {
+    let hk = HotkeysConfig {
+        buy_move_click: MouseGestureBinding::LeftShift,
+        sell_move_click: MouseGestureBinding::LeftCtrl,
+        buy_move_click2: MouseGestureBinding::MiddleShift,
+        sell_move_click2: MouseGestureBinding::MiddleCtrl,
+        buy_move_kind: MoveKind::AllToOnePrice,
+        sell_move_kind: MoveKind::ParallelShift,
+        buy_move_kind2: MoveKind::TopVolume,
+        sell_move_kind2: MoveKind::LastMoved,
+        same_hotkeys_for_move: false,
+        short_buy_move_click: MouseGestureBinding::None,
+        short_sell_move_click: MouseGestureBinding::None,
+        short_buy_move_click2: MouseGestureBinding::None,
+        short_sell_move_click2: MouseGestureBinding::None,
+        ..HotkeysConfig::default()
+    };
+    let resolve = |pressed: MouseGestureBinding| hk.resolve_move_gesture(|b| b == pressed);
+
+    assert_eq!(
+        resolve(MouseGestureBinding::LeftShift),
+        Some(MoveGestureCommand {
+            sell: false,
+            kind: MoveKind::AllToOnePrice,
+            side: MoveSide::Long,
+        })
+    );
+    assert_eq!(
+        resolve(MouseGestureBinding::LeftCtrl),
+        Some(MoveGestureCommand {
+            sell: true,
+            kind: MoveKind::ParallelShift,
+            side: MoveSide::Long,
+        })
+    );
+    assert_eq!(
+        resolve(MouseGestureBinding::MiddleShift),
+        Some(MoveGestureCommand {
+            sell: false,
+            kind: MoveKind::TopVolume,
+            side: MoveSide::Long,
+        })
+    );
+    assert_eq!(
+        resolve(MouseGestureBinding::MiddleCtrl),
+        Some(MoveGestureCommand {
+            sell: true,
+            kind: MoveKind::LastMoved,
+            side: MoveSide::Long,
+        })
+    );
+    assert_eq!(resolve(MouseGestureBinding::LeftAlt), None);
+}
+
+/// Pins the side a press addresses, which is what the mirror flag decides.
+///
+/// Plausible breakage: sending `Long` for a gesture the user shares between both sides. On a hedged
+/// market that moves one side's orders and silently leaves the other where it was, which reads as
+/// "half the command worked".
+#[test]
+fn a_shared_gesture_addresses_both_sides() {
+    let mirrored = HotkeysConfig {
+        sell_move_click: MouseGestureBinding::LeftCtrl,
+        same_hotkeys_for_move: true,
+        ..HotkeysConfig::default()
+    };
+    assert_eq!(
+        mirrored
+            .resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl)
+            .map(|c| c.side),
+        Some(MoveSide::Both),
+        "the mirror makes one press mean both sides"
+    );
+
+    let split = HotkeysConfig {
+        sell_move_click: MouseGestureBinding::LeftCtrl,
+        short_sell_move_click: MouseGestureBinding::LeftAlt,
+        same_hotkeys_for_move: false,
+        ..HotkeysConfig::default()
+    };
+    assert_eq!(
+        split
+            .resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl)
+            .map(|c| c.side),
+        Some(MoveSide::Long)
+    );
+    assert_eq!(
+        split
+            .resolve_move_gesture(|b| b == MouseGestureBinding::LeftAlt)
+            .map(|c| c.side),
+        Some(MoveSide::Short)
+    );
+}
+
+/// Pins that a bound gesture with no kind sends nothing.
+///
+/// Plausible breakage: treating `MoveKind::None` as a kind and putting it on the wire. Moonbot uses
+/// it to switch a gesture off without clearing the binding, and the core has no arrangement to
+/// apply — so what a "none" move actually did to live orders would be anyone's guess.
+#[test]
+fn a_gesture_without_a_kind_is_inert() {
+    let hk = HotkeysConfig {
+        sell_move_click: MouseGestureBinding::LeftCtrl,
+        sell_move_kind: MoveKind::None,
+        same_hotkeys_for_move: true,
+        ..HotkeysConfig::default()
+    };
+    assert_eq!(
+        hk.resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl),
+        None
+    );
+
+    // And an inert slot must not shadow a later one holding the same binding: the row the user
+    // switched off would silence the row they are still using.
+    let shared = HotkeysConfig {
+        sell_move_click: MouseGestureBinding::LeftCtrl,
+        sell_move_kind: MoveKind::None,
+        sell_move_click2: MouseGestureBinding::LeftCtrl,
+        sell_move_kind2: MoveKind::AllToOnePrice,
+        same_hotkeys_for_move: true,
+        ..HotkeysConfig::default()
+    };
+    assert_eq!(
+        shared
+            .resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl)
+            .map(|c| c.kind),
+        Some(MoveKind::AllToOnePrice)
+    );
+}
+
+/// Pins the shipped kind, which is what a fresh install and every old `hotkeys.toml` get.
+///
+/// Plausible breakage: leaving the derived `None` as the default. Every move gesture would be
+/// recognised and do nothing, which is indistinguishable from the gesture being broken.
+#[test]
+fn the_shipped_move_kind_is_moonbots_parallel_shift() {
+    let shipped = HotkeysConfig::default();
+    for kind in [
+        shipped.buy_move_kind,
+        shipped.sell_move_kind,
+        shipped.buy_move_kind2,
+        shipped.sell_move_kind2,
+    ] {
+        assert_eq!(kind, MoveKind::ParallelShift);
+    }
+    // A file written before this field existed loads with the same value rather than an inert one.
+    let old: HotkeysConfig = toml::from_str("schema = 2\n").expect("an old file still loads");
+    assert_eq!(old.sell_move_kind, MoveKind::ParallelShift);
+    assert_eq!(old.buy_move_kind2, MoveKind::ParallelShift);
+}

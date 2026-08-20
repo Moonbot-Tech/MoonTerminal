@@ -12,7 +12,7 @@ use super::market_role::MarketRoleState;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
 use crate::feed::strategies::{fv_from_str, strat_kind_name};
-use crate::feed::{CoreCmd, LatestMarketRole, MarketRoleAssignment, order_edit, trade};
+use crate::feed::{order_edit, trade, CoreCmd, LatestMarketRole, MarketRoleAssignment};
 use crate::util::now_unix_ms as now_ms;
 
 #[cfg(test)]
@@ -831,6 +831,15 @@ pub(super) fn drain_commands(
                 percent,
             }) => {
                 trade::shift_orders_percent(client, server.id, market, sell, percent);
+            }
+            Ok(CoreCmd::MoveOrdersToPrice {
+                market,
+                sell,
+                kind,
+                price,
+                side,
+            }) => {
+                trade::move_orders_to_price(client, server.id, market, sell, kind, price, side);
             }
             Ok(CoreCmd::SellsToZone {
                 market,

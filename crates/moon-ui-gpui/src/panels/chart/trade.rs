@@ -6,7 +6,7 @@
 use gpui::*;
 use std::time::{Duration, Instant};
 
-use moon_core::config::MouseGestureBinding;
+use moon_core::config::{MouseGestureBinding, MoveSide};
 use moon_core::feed::OrderLinePriceKind;
 use moon_core::session::CoreId;
 use moon_core::session::order_lines::LineKind;
@@ -198,6 +198,107 @@ impl ChartPanel {
             return false;
         };
         self.place_order_at_pos(pos, short, cx)
+    }
+
+    /// Send Moonbot's Move Open / Move TP for a press that matches one of the four move gestures.
+    ///
+    /// In Moonbot these gestures are a CLICK, not a drag: the press names a destination price and
+    /// the core moves the addressed orders onto it, laid out by the slot's "Move kind" — parallel
+    /// to the nearest line, all onto one price, top volume first, and so on. Nothing is computed
+    /// here and no line has to be under the pointer, which is the whole difference from the plain
+    /// left drag that grabs one line and keeps working exactly as before.
+    ///
+    /// The price and the market come from the pane under the pointer, exactly as a placement click
+    /// takes them, so separate-zone mode restricts this to the order book on the same terms.
+    ///
+    /// Args:
+    ///     button: Physical button of the press.
+    ///     modifiers: Modifier state of the press.
+    ///     click_count: This panel's own click count, never the window's.
+    ///     pos: Chart-local pointer position.
+    ///     cx: Panel context, used to read the bindings and to send the command.
+    ///
+    /// Returns:
+    ///     Whether a gesture claimed the press. A claimed press sends nothing further, including
+    ///     when the market or the price could not be resolved: the user asked for a bulk move, and
+    ///     falling through to pan or zoom would answer a trading gesture with a chart movement.
+    pub(super) fn try_move_orders_click(
+        &mut self,
+        button: TradeMouseButton,
+        modifiers: Modifiers,
+        click_count: usize,
+        pos: (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let command = {
+            let b = self.backend.read(cx);
+            let cfg = b.preview.as_ref().unwrap_or(&b.config);
+            cfg.hotkeys.resolve_move_gesture(|binding| {
+                Self::gesture_matches(binding, button, modifiers, click_count)
+            })
+        };
+        let Some(command) = command else {
+            return false;
+        };
+        // In separate-zone mode the book is the trading surface, as it is for placement.
+        let pane = if self.separate_zones(cx) {
+            self.glass_pane_at(pos)
+        } else {
+            self.input.pane_at(pos.0, pos.1)
+        };
+        let Some(pane) = pane else {
+            return false;
+        };
+        let Some(price) = self.price_at_pane_y(pane, pos.1) else {
+            return true;
+        };
+        let Some((core, market)) = self
+            .chart
+            .with_container(|container| container.target(pane))
+        else {
+            return true;
+        };
+        let workspace_group = self.workspace_group.clone();
+        self.backend.update(cx, |b, _| {
+            // Logged rather than dropped, like every other refusal on a path that moves live money:
+            // a window that may not trade this core looks exactly like a gesture that missed.
+            if !b.workspace_action_allows_core(workspace_group.as_deref(), core) {
+                log::warn!(
+                    "move orders to price: core={} market={market} is outside this window's                      workspace, nothing sent",
+                    moon_core::feed::core_label(core)
+                );
+                return;
+            }
+            // A press that claimed both sides says nothing about which one was meant — the shipped
+            // `same_hotkeys_for_move` puts one gesture on both. Narrow it to the side actually open
+            // on this market, exactly as the sells-to-zone command does, or a hedged market would
+            // have the other position's orders repriced by a click aimed at this one.
+            let side = match command.side {
+                MoveSide::Both if b.market_position_short(core, &market) => MoveSide::Short,
+                MoveSide::Both => MoveSide::Long,
+                side => side,
+            };
+            match b.session.move_orders_to_price(
+                core,
+                market.clone(),
+                command.sell,
+                command.kind,
+                price,
+                side,
+            ) {
+                Ok(()) => log::info!(
+                    "move orders to price: core={} market={market} {} -> {price:.8} kind={:?} side={side:?}",
+                    moon_core::feed::core_label(core),
+                    if command.sell { "sells" } else { "buys" },
+                    command.kind,
+                ),
+                Err(error) => log::warn!(
+                    "move orders to price failed: core={} market={market} {error}",
+                    moon_core::feed::core_label(core)
+                ),
+            }
+        });
+        true
     }
 
     /// Return the core and market under this panel's cursor for non-price hotkeys.
@@ -808,7 +909,6 @@ impl ChartPanel {
     pub(super) fn try_start_order_drag(
         &mut self,
         button: TradeMouseButton,
-        modifiers: Modifiers,
         click_count: usize,
         native_single: bool,
         pos: (f32, f32),
@@ -820,24 +920,11 @@ impl ChartPanel {
         if self.order_drag.is_some() {
             return false;
         }
-        // The built-in grab needs no configuration at all, so it never reads one: the copy below is
-        // taken only for a press that has to be matched against the gestures, which is every press
-        // EXCEPT the ordinary left click this path exists to keep cheap.
-        let plain_left = button == TradeMouseButton::Left && click_count <= 1 && native_single;
-        let hotkeys = (!plain_left).then(|| {
-            let b = self.backend.read(cx);
-            b.preview.as_ref().unwrap_or(&b.config).hotkeys.clone()
-        });
-        // Answer the cheap question first: unless this press can grab SOMETHING, the hit test below
-        // is wasted. It runs on every press over the chart, and with the shipped defaults no gesture
-        // names the middle or right button at all, so a plain right-drag zoom would otherwise pay
-        // for a scan of the market's orders on every press.
-        if let Some(hotkeys) = &hotkeys
-            && !hotkeys
-                .all_move_gestures()
-                .into_iter()
-                .any(|g| Self::gesture_matches(g, button, modifiers, click_count))
-        {
+        // Dragging is the plain single left press and nothing else. The configured gestures are
+        // Moonbot's bulk move-to-price (`try_move_orders_click`) and are answered before this: one
+        // press that grabbed a line when it landed on one and moved the whole side when it did not
+        // would be two different trades behind the same hand movement.
+        if button != TradeMouseButton::Left || click_count > 1 || !native_single {
             return false;
         }
         // Separate-zone mode permits order-line dragging only inside the order book.
@@ -850,18 +937,6 @@ impl ChartPanel {
         // The start cross is handled as click-to-cancel before dragging in `mouse_down_left`. Never
         // start a drag there, or a timing miss could move the order instead of cancelling it.
         if hit.on_start_cross {
-            return false;
-        }
-        // Now that the line is known, narrow a GESTURE-driven grab to the pair that owns its side: a
-        // TP gesture must not move the entry, and a long gesture must not move a short's line. The
-        // built-in left grab is deliberately not narrowed — it is the "any line, as before" route
-        // and has no side of its own.
-        if let Some(hotkeys) = &hotkeys
-            && !hotkeys
-                .move_gestures(hit.kind == LineKind::Buy, hit.short)
-                .into_iter()
-                .any(|g| Self::gesture_matches(g, button, modifiers, click_count))
-        {
             return false;
         }
         if !self.workspace_action_allowed(&self.backend.read(cx), hit.core) {

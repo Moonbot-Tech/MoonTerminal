@@ -40,6 +40,92 @@ pub const SHIFT_PERCENT: f64 = 1.0;
 pub const SPLIT_PARTS_MIN: u8 = 2;
 pub const SPLIT_PARTS_MAX: u8 = 10;
 
+/// Moonbot's "Move kind": WHICH orders a move gesture addresses, and how the core lays them out.
+///
+/// The gesture names a destination price; this names the set and the arrangement. Both halves go on
+/// the wire in one command and the CORE does the work — the terminal computes no layout of its own,
+/// which is why these variants are a transcription of Moonbot's dropdown rather than a design.
+///
+/// Delphi calls the four settings behind it `ReplaceBuyKind`, `ReplaceSellKind` and their `2`
+/// twins; moonproto calls the wire enum `BulkMoveKind`. The lists match value for value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MoveKind {
+    /// Moonbot: `None` — the gesture is recognised and sends nothing.
+    None,
+    /// Moonbot: "Parallel Shift to cursor". The line nearest the click lands on it and the rest
+    /// keep their spacing. Moonbot's own default, and the arrangement the desk trades with.
+    #[default]
+    ParallelShift,
+    /// Moonbot: "Top Vol first".
+    TopVolume,
+    /// Moonbot: "Low Vol first".
+    LowVolume,
+    /// Moonbot: "Top Profit first".
+    TopProfit,
+    /// Moonbot: "All to 1 price" — every addressed order onto the clicked price.
+    AllToOnePrice,
+    /// Moonbot: "Last Set".
+    LastSet,
+    /// Moonbot: "Last Moved".
+    LastMoved,
+}
+
+impl MoveKind {
+    /// Every kind in Moonbot's own dropdown order, for the settings selector.
+    pub const ALL: [Self; 8] = [
+        Self::None,
+        Self::ParallelShift,
+        Self::TopVolume,
+        Self::LowVolume,
+        Self::TopProfit,
+        Self::AllToOnePrice,
+        Self::LastSet,
+        Self::LastMoved,
+    ];
+
+    /// Stable identifier for locale keys and for the settings selector's element ids.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ParallelShift => "parallel-shift",
+            Self::TopVolume => "top-volume",
+            Self::LowVolume => "low-volume",
+            Self::TopProfit => "top-profit",
+            Self::AllToOnePrice => "all-to-one-price",
+            Self::LastSet => "last-set",
+            Self::LastMoved => "last-moved",
+        }
+    }
+}
+
+/// What a recognised move gesture sends: Moonbot's `MoveAllBuys` / `MoveAllSells` in three fields.
+///
+/// The destination price is not here — it comes from where the pointer was, which the config layer
+/// knows nothing about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MoveGestureCommand {
+    /// Whether the sell side is addressed (`MoveAllSells`) rather than the buy side.
+    pub sell: bool,
+    /// Which orders to take and how to lay them out.
+    pub kind: MoveKind,
+    /// Which position side the orders belong to.
+    pub side: MoveSide,
+}
+
+/// Which side's orders a bulk move addresses — Moonbot's Long and Short gesture columns.
+///
+/// `Both` means the press claimed both slots and says nothing about the side by itself, which is
+/// the shipped case: `same_hotkeys_for_move` copies the long gestures onto the short ones. A caller
+/// that can see the market narrows it to the side actually open there before sending — on a hedged
+/// market `Both` would reprice the other position's orders too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MoveSide {
+    Long,
+    Short,
+    Both,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MouseGestureBinding {
@@ -307,6 +393,18 @@ pub struct HotkeysConfig {
     /// Live Moonbot MultiOrders path: secondary gesture for moving a TP/sell long.
     #[serde(default)]
     pub sell_move_click2: MouseGestureBinding,
+    /// Delphi `ReplaceBuyKind`: how the primary Move Open gesture lays out what it moves.
+    #[serde(default)]
+    pub buy_move_kind: MoveKind,
+    /// Delphi `ReplaceSellKind`: the same for the primary Move TP gesture.
+    #[serde(default)]
+    pub sell_move_kind: MoveKind,
+    /// Delphi `ReplaceBuyKind2`: the secondary Move Open gesture's kind.
+    #[serde(default)]
+    pub buy_move_kind2: MoveKind,
+    /// Delphi `ReplaceSellKind2`: the secondary Move TP gesture's kind.
+    #[serde(default)]
+    pub sell_move_kind2: MoveKind,
     /// Delphi `SameHotkeysForMove`: short-move gestures mirror long-move gestures.
     #[serde(default = "default_same_hotkeys_for_move")]
     pub same_hotkeys_for_move: bool,
@@ -361,6 +459,10 @@ impl Default for HotkeysConfig {
             sell_move_click: default_left_ctrl(),
             buy_move_click2: MouseGestureBinding::None,
             sell_move_click2: MouseGestureBinding::None,
+            buy_move_kind: MoveKind::default(),
+            sell_move_kind: MoveKind::default(),
+            buy_move_kind2: MoveKind::default(),
+            sell_move_kind2: MoveKind::default(),
             same_hotkeys_for_move: default_same_hotkeys_for_move(),
             short_buy_move_click: default_left_shift(),
             short_sell_move_click: default_left_ctrl(),
@@ -387,21 +489,56 @@ impl HotkeysConfig {
         }
     }
 
-    /// Return every move gesture, for the cheap "is this press worth a hit test at all" question.
+    /// What one recognised move gesture has to send.
     ///
-    /// A press arriving over the chart is answered by comparing Copy enums; resolving WHICH line it
-    /// may grab costs a scan of the market's orders and is worth doing only after this says yes.
-    pub fn all_move_gestures(&self) -> [MouseGestureBinding; 8] {
-        [
-            self.buy_move_click,
-            self.buy_move_click2,
-            self.sell_move_click,
-            self.sell_move_click2,
-            self.short_buy_move_click,
-            self.short_buy_move_click2,
-            self.short_sell_move_click,
-            self.short_sell_move_click2,
-        ]
+    /// Args:
+    ///     matches: Whether a press being examined satisfies one binding. The caller owns the
+    ///         platform's modifier type, so the comparison stays in the UI and only the ANSWER
+    ///         comes back here.
+    ///
+    /// Returns:
+    ///     The side of the book to move, the layout to move it into and the position side it
+    ///     addresses, or `None` when no slot claims the press — including a slot whose kind is
+    ///     `None`, which is Moonbot's way of leaving a bound gesture inert. Slots are examined in
+    ///     the order the settings page lists them, so a gesture the user put on two of them
+    ///     resolves the same way twice rather than by whichever branch happened to run first.
+    pub fn resolve_move_gesture(
+        &self,
+        matches: impl Fn(MouseGestureBinding) -> bool,
+    ) -> Option<MoveGestureCommand> {
+        for (entry, second, kind) in [
+            (true, false, self.buy_move_kind),
+            (false, false, self.sell_move_kind),
+            (true, true, self.buy_move_kind2),
+            (false, true, self.sell_move_kind2),
+        ] {
+            // Both sides come from `move_gestures`, which is the one place that reads
+            // `same_hotkeys_for_move`: with the mirror on it hands back the long gesture for the
+            // short side too, so one press claims both and the core is told `Both`.
+            let ix = usize::from(second);
+            let long = self.move_gestures(entry, false)[ix];
+            let short = self.move_gestures(entry, true)[ix];
+            let hit_long = long != MouseGestureBinding::None && matches(long);
+            let hit_short = short != MouseGestureBinding::None && matches(short);
+            let side = match (hit_long, hit_short) {
+                (true, true) => MoveSide::Both,
+                (true, false) => MoveSide::Long,
+                (false, true) => MoveSide::Short,
+                (false, false) => continue,
+            };
+            // Moonbot's way of switching one gesture off without clearing its binding. `continue`
+            // rather than `return`: another slot may hold the same binding WITH a kind, and giving
+            // up here would let a disabled row silence a working one.
+            if kind == MoveKind::None {
+                continue;
+            }
+            return Some(MoveGestureCommand {
+                sell: !entry,
+                kind,
+                side,
+            });
+        }
+        None
     }
 
     /// Part count for the `Split N` action, clamped to [`SPLIT_PARTS_MIN`]..=[`SPLIT_PARTS_MAX`].

@@ -272,9 +272,9 @@ hotkeys.group.mouse:
   en: "Order book mouse"
   es: "Ratón en libro"
 hotkeys.group.mouse_hint:
-  ru: "Живой Moonbot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Move-жесты тянут линию своей стороны (вход/выход, long/short) и добавляются к обычному перетаскиванию ЛКМ за линию, которое работает всегда. Средняя и правая кнопки и дабл-клики доступны только через жесты."
-  en: "Live Moonbot ChartFrameUnit path: place orders by clicking inside the book area. Move gestures drag the line of their own side (entry/exit, long/short) and are added on top of the plain left-button drag, which always works. The middle and right buttons and double clicks are available through gestures only."
-  es: "Ruta viva de Moonbot ChartFrameUnit: crear órdenes con clics en el libro. Los gestos Move arrastran la línea de su lado (entrada/salida, long/short) y se suman al arrastre normal con el botón izquierdo, que siempre funciona. Los botones central y derecho y los dobles clics solo están disponibles mediante gestos."
+  ru: "Живой Moonbot-путь из ChartFrameUnit: постановка ордеров кликами в зоне стакана. Move-жест — это КЛИК по цене, а не протяжка: ядро переносит на неё ордера своей стороны так, как задано в «Виде переноса» рядом. Линию под курсором по-прежнему можно просто тащить левой кнопкой — это сверх Moonbot и работает всегда. Средняя и правая кнопки и дабл-клики доступны только через жесты."
+  en: "Live Moonbot ChartFrameUnit path: place orders by clicking inside the book area. A move gesture is a CLICK on a price, not a drag: the core moves that side's orders onto it, arranged by the Move kind beside the gesture. Dragging a line under the pointer with the plain left button still works — that is on top of Moonbot and always available. The middle and right buttons and double clicks are available through gestures only."
+  es: "Ruta viva de Moonbot ChartFrameUnit: crear órdenes con clics en el libro. Un gesto Move es un CLIC sobre un precio, no un arrastre: el core mueve las órdenes de ese lado hacia él, dispuestas según el «Tipo de traslado» contiguo. Arrastrar una línea con el botón izquierdo sigue funcionando — eso es adicional a Moonbot y está siempre disponible. Los botones central y derecho y los dobles clics solo están disponibles mediante gestos."
 hotkeys.mouse.buy_set:
   ru: "Поставить Long"
   en: "Place Long"
@@ -312,17 +312,17 @@ hotkeys.mouse.buy_move:
   en: "Move Open Long"
   es: "Mover Open Long"
 hotkeys.mouse.buy_move_hint:
-  ru: "MultiOrders.BuyMoveClick. Moonbot-дефолт: Shift_Click."
-  en: "MultiOrders.BuyMoveClick. Moonbot default: Shift_Click."
-  es: "MultiOrders.BuyMoveClick. Valor por defecto: Shift_Click."
+  ru: "MultiOrders.BuyMoveClick. Клик переносит ордера входа на цену под курсором. Moonbot-дефолт: Shift_Click."
+  en: "MultiOrders.BuyMoveClick. The click moves the entry orders onto the price under the pointer. Moonbot default: Shift_Click."
+  es: "MultiOrders.BuyMoveClick. El clic mueve las órdenes de entrada al precio bajo el cursor. Valor por defecto: Shift_Click."
 hotkeys.mouse.sell_move:
   ru: "Move TP Long"
   en: "Move TP Long"
   es: "Mover TP Long"
 hotkeys.mouse.sell_move_hint:
-  ru: "MultiOrders.SellMoveClick. Тянет линии выхода: TP, стоп и трейлинг. Moonbot-дефолт: CTRL_Click."
-  en: "MultiOrders.SellMoveClick. Drags the exit lines: TP, stop and trailing. Moonbot default: CTRL_Click."
-  es: "MultiOrders.SellMoveClick. Arrastra las líneas de salida: TP, stop y trailing. Valor por defecto: CTRL_Click."
+  ru: "MultiOrders.SellMoveClick. Клик переносит ордера выхода — TP, стоп и трейлинг — на цену под курсором. Moonbot-дефолт: CTRL_Click."
+  en: "MultiOrders.SellMoveClick. The click moves the exit orders — TP, stop and trailing — onto the price under the pointer. Moonbot default: CTRL_Click."
+  es: "MultiOrders.SellMoveClick. El clic mueve las órdenes de salida — TP, stop y trailing — al precio bajo el cursor. Valor por defecto: CTRL_Click."
 hotkeys.mouse.buy_move2:
   ru: "Move Open Long #2"
   en: "Move Open Long #2"
@@ -339,6 +339,42 @@ hotkeys.mouse.sell_move2_hint:
   ru: "MultiOrders.SellMoveClick2. Moonbot-дефолт: None_Click."
   en: "MultiOrders.SellMoveClick2. Moonbot default: None_Click."
   es: "MultiOrders.SellMoveClick2. Valor por defecto: None_Click."
+hotkeys.move_kind.title:
+  ru: "Вид переноса"
+  en: "Move kind"
+  es: "Tipo de traslado"
+hotkeys.move_kind.none:
+  ru: "Нет"
+  en: "None"
+  es: "Ninguno"
+hotkeys.move_kind.parallel-shift:
+  ru: "Параллельный сдвиг к курсору"
+  en: "Parallel Shift to cursor"
+  es: "Desplazamiento paralelo al cursor"
+hotkeys.move_kind.top-volume:
+  ru: "Сначала крупный объём"
+  en: "Top Vol first"
+  es: "Primero mayor volumen"
+hotkeys.move_kind.low-volume:
+  ru: "Сначала малый объём"
+  en: "Low Vol first"
+  es: "Primero menor volumen"
+hotkeys.move_kind.top-profit:
+  ru: "Сначала самый прибыльный"
+  en: "Top Profit first"
+  es: "Primero mayor beneficio"
+hotkeys.move_kind.all-to-one-price:
+  ru: "Все в одну цену"
+  en: "All to 1 price"
+  es: "Todo a un precio"
+hotkeys.move_kind.last-set:
+  ru: "Последний выставленный"
+  en: "Last Set"
+  es: "Último colocado"
+hotkeys.move_kind.last-moved:
+  ru: "Последний перенесённый"
+  en: "Last Moved"
+  es: "Último movido"
 hotkeys.mouse.same_move:
   ru: "Short move использует те же жесты, что Long move"
   en: "Short move uses the same gestures as Long move"
