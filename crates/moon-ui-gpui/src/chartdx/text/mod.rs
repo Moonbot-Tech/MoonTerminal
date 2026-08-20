@@ -84,6 +84,31 @@ pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
 }
 
+/// Returns the price a cursor's percentage and color are measured against.
+///
+/// Moonbot measures from the NEAREST side of the book — best bid below the current price, best
+/// ask above it — so the spread shifts the percentage and a long's reference differs from a
+/// short's. `book_best` comes from the WHOLE book (`OrderBookModel::best_bid_ask`), never from
+/// the pane's visible slice: a reference picked out of whatever levels happen to be on screen
+/// travels with the camera, which made the percentage change while the chart was merely panned.
+/// Falls back to `last` when the pane holds no book — none for the market yet, or the order book
+/// switched off for the window, which clears the field rather than letting it freeze.
+///
+/// A one-sided book deliberately measures both directions against its single side:
+/// `best_bid_ask` reports that side in both positions, and it is a live execution price where
+/// `last` may be minutes old. No positivity check here — the producer already rejects a
+/// non-finite or non-positive side.
+///
+/// Shared by the real cursor (`prepare`) and the compare-mode ghost (`runs`) so the same price
+/// reads the same percentage on either chart.
+pub(in crate::chartdx) fn cursor_ref_price(
+    book_best: Option<(f32, f32)>,
+    last: f32,
+    price: f32,
+) -> f32 {
+    book_best.map_or(last, |(bid, ask)| if price >= last { ask } else { bid })
+}
+
 /// Rough width of a label before it is shaped, in logical pixels.
 ///
 /// Used only to decide whether the real measurement is worth taking: a label nowhere near the
@@ -304,6 +329,9 @@ fn nearest_orderbook_notional(
 mod caption;
 mod prepare;
 mod runs;
+
+#[cfg(test)]
+mod tests;
 
 use caption::{CaptionBox, book_zone_left, caption_geom, caption_layout, column};
 

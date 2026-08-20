@@ -637,8 +637,10 @@ impl RenderState {
             // This is NOT order text, but cumulative book notional up to the close price: asks
             // below sell for a long, bids above sell for a short. Draw it in the order-book zone;
             // the cursor readout below covers it when the user points at the same location.
-            if orderbook_enabled && self.line_labels && !self.panes[idx].orderbook_levels.is_empty()
-            {
+            // Visibility follows the FIGURE, not the camera: the label is drawn wherever it was
+            // measured. Gating it on visible book levels, as it once was, hid a valid figure the
+            // moment the glass around price panned off screen.
+            if orderbook_enabled && self.line_labels {
                 let right_x = zone_left + READOUT_PAD_X;
                 let label_line_h = self.label_font_px() + 4.0;
                 for label in &self.panes[idx].orderbook_labels {
@@ -646,7 +648,11 @@ impl RenderState {
                     if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
                         continue;
                     }
-                    let q = label.notional;
+                    // Never measured against a book: draw nothing rather than a green "0", which
+                    // would read as "no glass to clear" at a line nobody has measured.
+                    let Some(q) = label.notional else {
+                        continue;
+                    };
                     let text = fmt_amount(q);
                     let col = if q <= 1e-6 {
                         color(self.label_positive)
@@ -798,28 +804,12 @@ impl RenderState {
                     // Percent and cursor color use the NEAREST side of the book, not last price, as
                     // in Moonbot: best bid when the cursor is below price, best ask when above it.
                     // Distance is measured from the execution price on the matching side, so long
-                    // and short references differ because the spread shifts the percentage. Fall
-                    // back to last price when the book or its price is unavailable.
-                    let cursor_ref = cached_last_price.filter(|l| *l > 0.0).map(|last| {
-                        let levels = &self.panes[idx].orderbook_levels;
-                        let best_bid = levels
-                            .iter()
-                            .filter(|l| !l.is_ask)
-                            .map(|l| l.price)
-                            .fold(f32::NEG_INFINITY, f32::max);
-                        let best_ask = levels
-                            .iter()
-                            .filter(|l| l.is_ask)
-                            .map(|l| l.price)
-                            .fold(f32::INFINITY, f32::min);
-                        if cursor_price >= last {
-                            if best_ask.is_finite() { best_ask } else { last }
-                        } else if best_bid.is_finite() {
-                            best_bid
-                        } else {
-                            last
-                        }
-                    });
+                    // and short references differ because the spread shifts the percentage. See
+                    // `cursor_ref_price` for why the reference comes from the whole book.
+                    let book_best = self.panes[idx].book_best;
+                    let cursor_ref = cached_last_price
+                        .filter(|l| *l > 0.0)
+                        .map(|last| cursor_ref_price(book_best, last, cursor_price));
                     let cur_col = cursor_ref
                         .map(|r| {
                             pct_hsla(r - cursor_price, self.label_positive, self.label_negative)

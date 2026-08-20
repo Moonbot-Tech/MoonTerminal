@@ -246,9 +246,11 @@ pub(super) struct OrderBookLabel {
     /// Sell-line price; the label is drawn in the orderbook zone at this Y.
     pub price: f32,
     pub short: bool,
-    /// Cached notional for this sell-line depth label. Recomputed when order labels or
-    /// the orderbook CPU snapshot changes; text frames only format and draw it.
-    pub notional: f32,
+    /// Cached whole-book notional for this sell-line depth label, recomputed when the order
+    /// labels or the book revision change; text frames only format and draw it. `None` means the
+    /// figure was never measured — no book for this market yet, or the book is switched off — and
+    /// the label is not drawn at all, because a drawn `0` claims "no glass to clear".
+    pub notional: Option<f32>,
 }
 
 /// GPU state for one panel's `gpu_canvas` callbacks, separate from `Container` logic and
@@ -358,6 +360,12 @@ struct PaneRender {
     last_book_rev: u64,
     last_book_lo: f32,
     last_book_hi: f32,
+    /// Book revision the sell-line depth labels were measured against; `u64::MAX` means
+    /// unmeasured, which is also how `sync_orders_from_session` asks for a re-measure after
+    /// rebuilding them. Separate from `last_book_rev` because that one also tracks the visible
+    /// window: the labels' figure spans price to the line and does not depend on the camera, so
+    /// panning must not re-sum the book.
+    last_label_book_rev: u64,
     /// Last order revision uploaded into the userdata buffer.
     last_order_lines_rev: u64,
     /// Last order-zone signature. Zones live in the base cache, drawn over the grid and under the
@@ -513,6 +521,7 @@ impl PaneRender {
             pan_reset_cam_px: i64::MIN,
             last_device_gen: 0,
             last_book_rev: u64::MAX,
+            last_label_book_rev: u64::MAX,
             last_book_lo: f32::NAN,
             last_book_hi: f32::NAN,
             last_order_lines_rev: u64::MAX,
@@ -555,6 +564,23 @@ impl PaneRender {
             time_axis_visible: true,
             gpu_prepare_dirty: true,
         }
+    }
+
+    /// Drops everything derived from a book this pane no longer has: the order book was switched
+    /// off for the window, or the market view went away with its core.
+    ///
+    /// Both are figures about a live book, so neither may outlive it — a frozen bid/ask would keep
+    /// answering the cursor's percentage, and a stale sell-line volume would keep describing glass
+    /// that is no longer drawn. `u64::MAX` also asks the book path to re-measure once one returns.
+    fn forget_book_figures(&mut self) {
+        if self.book_best.is_none() && self.last_label_book_rev == u64::MAX {
+            return;
+        }
+        self.book_best = None;
+        self.last_label_book_rev = u64::MAX;
+        crate::chartdx::data_state::orders::clear_orderbook_label_notionals(
+            &mut self.orderbook_labels,
+        );
     }
 
     fn finish_order_gpu_prepare(&mut self, now_ms: f64) {

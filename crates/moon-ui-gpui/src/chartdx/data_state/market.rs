@@ -62,6 +62,9 @@ impl ChartDataState {
         let mut st = self.render.borrow_mut();
         let mut container = self.container.borrow_mut();
         let mut pixels_changed = false;
+        // Sell-line depth labels live in the TEXT layer, so a re-measure needs a present but not
+        // the base re-bake `pixels_changed` promotes to.
+        let mut text_changed = false;
         // Read the two theme-driven uniform fields once for the whole sync: `view_gpu` is called
         // for the plot AND the order-book glass, and the cull margin has to be computed from the
         // same marker scale the shader will use, or trades disappear a frame before their glyph
@@ -894,6 +897,7 @@ impl ChartDataState {
                     pixels_changed = true;
                 }
                 pr.orderbook_levels.clear();
+                pr.forget_book_figures();
             } else {
                 source.with_orderbook_view(pane.core, &pane.market, |data| {
                     if let Some((book, book_rev)) = data {
@@ -913,18 +917,29 @@ impl ChartDataState {
                             book.build_instances(lo, hi, &mut levels);
                             diag_levels_len = Some(levels.len());
                             pr.layers.set_orderbook(levels);
-                            // Keep a CPU copy of the visible book for cursor-volume labels and the
-                            // Moonbot-style sell-line depth label.
+                            // Keep a CPU copy of the visible book for cursor-volume labels, whose
+                            // level always sits at the cursor and is therefore on screen anyway.
                             book.collect_visible_depth(lo, hi, &mut pr.orderbook_levels);
-                            refresh_orderbook_label_notionals(
-                                &mut pr.orderbook_labels,
-                                &pr.orderbook_levels,
-                            );
                             pr.last_book_rev = book_rev;
                             pr.last_book_lo = lo;
                             pr.last_book_hi = hi;
                             pr.gpu_prepare_dirty = true;
                             pixels_changed = true;
+                        }
+                        // The sell-line depth label reads the WHOLE book, so its figure spans
+                        // price to the line and must not shrink when part of that span leaves the
+                        // viewport. That also means panning cannot change it: gate the re-sum on
+                        // the book revision alone. The order path asks for a re-measure of labels
+                        // it rebuilt by resetting the revision to `u64::MAX`.
+                        //
+                        // Measuring an empty book is safe: `side_notional_toward` answers `None`
+                        // for a side it does not carry, so the labels stay unmeasured instead of
+                        // claiming zero glass. `MarketStore::reset` installs an empty view the
+                        // moment a market opens, so `Some(book)` alone does not mean data arrived.
+                        if !pr.orderbook_labels.is_empty() && pr.last_label_book_rev != book_rev {
+                            refresh_orderbook_label_notionals(&mut pr.orderbook_labels, book);
+                            pr.last_label_book_rev = book_rev;
+                            text_changed = true;
                         }
                         if chart_market_diag_enabled()
                             && chart_market_diag_due(format!(
@@ -947,7 +962,7 @@ impl ChartDataState {
                             ));
                         }
                     } else {
-                        pr.book_best = None;
+                        pr.forget_book_figures();
                         if pr.last_book_rev != u64::MAX {
                             pr.layers.set_orderbook(Vec::new());
                             pr.orderbook_levels.clear();
@@ -962,7 +977,9 @@ impl ChartDataState {
             }
             // Build the order-book style after reading the book so it carries live bid/ask boundaries
             // for the three-color background above ask, inside the spread, and below bid.
-            let book_edges = pr.book_best.filter(|_| orderbook_on);
+            // No `orderbook_on` filter: `forget_book_figures` clears `book_best` when the book
+            // goes away, so the field never outlives the book it came from.
+            let book_edges = pr.book_best;
             let next_book_style = BookStyle {
                 book_bg: rgb4(self.theme.book_bg),
                 bid: rgb4(self.theme.book_bid),
@@ -1005,7 +1022,7 @@ impl ChartDataState {
         if pixels_changed {
             st.base_dirty = true;
         }
-        if pixels_changed || cursor_changed {
+        if pixels_changed || cursor_changed || text_changed {
             st.needs_present = true;
         }
         drop(container);

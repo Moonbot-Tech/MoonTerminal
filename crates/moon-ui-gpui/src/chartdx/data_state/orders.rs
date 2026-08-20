@@ -188,10 +188,15 @@ impl ChartDataState {
                         highlight_uid,
                     );
                     rebuild_order_label_order(&mut pr.order_label_order, &pr.order_labels);
-                    refresh_orderbook_label_notionals(
-                        &mut pr.orderbook_labels,
-                        &pr.orderbook_levels,
-                    );
+                    // The rebuilt labels carry no volume yet. Measuring it here would take the
+                    // market-source lock on a path that deliberately avoids it (`quote_usd_rate`),
+                    // so ask the book path for it with the `u64::MAX` sentinel and wake that path
+                    // — gated on `view_dirty`, it would never run on a quiet market. Only worth
+                    // either when the pane actually has sell lines.
+                    if !pr.orderbook_labels.is_empty() {
+                        pr.last_label_book_rev = u64::MAX;
+                        self.view_dirty = true;
+                    }
                     pr.last_order_lines_rev = core_st.order_lines_rev;
                     pr.last_order_lines_sync_ms = now;
                     pr.pending_order_gpu_rev = Some(core_st.order_lines_rev);
@@ -369,7 +374,7 @@ fn build_order_labels(
                 book_out.push(OrderBookLabel {
                     price: sp,
                     short,
-                    notional: 0.0,
+                    notional: None,
                 });
             }
             if let Some(bp) = buy {
@@ -475,36 +480,40 @@ fn fmt_amount(v: f32) -> String {
     fmt_size_2dp(v as f64)
 }
 
-fn sell_book_notional(levels: &[moon_core::data::BookDepthPoint], price: f32, short: bool) -> f32 {
-    let mut sum = 0.0_f32;
-    for level in levels {
-        if short {
-            // Moonbot: short sell-line volume uses buy glass above sell price.
-            if !level.is_ask && level.price > price {
-                sum += level.notional;
-            }
-        } else {
-            // Moonbot: long sell-line volume uses sell glass below sell price.
-            if level.is_ask && level.price < price {
-                sum += level.notional;
-            }
-        }
-    }
-    sum
-}
-
 fn rebuild_order_label_order(order: &mut Vec<usize>, labels: &[OrderLabel]) {
     order.clear();
     order.extend(0..labels.len());
     order.sort_by_key(|&ix| labels[ix].priority);
 }
 
+/// Marks every sell-line depth label unmeasured, for a pane with no book to measure against: the
+/// market view went away with the core, or the order book was switched off.
+///
+/// The label's visibility follows the figure, so leaving the last measurement standing would keep
+/// a number on screen describing glass that is no longer drawn or received.
+pub(in crate::chartdx) fn clear_orderbook_label_notionals(labels: &mut [OrderBookLabel]) {
+    for label in labels.iter_mut() {
+        label.notional = None;
+    }
+}
+
+/// Measures each sell line's order-book volume against the LIVE book, matching Moonbot.
+///
+/// Reads the whole book rather than the pane's visible slice (`orderbook_levels`): the label
+/// answers how much glass sits between price and the line, which is a property of the market, and
+/// the visible slice made that figure change as the user panned.
+///
+/// A side the book does not carry stays `None` and draws nothing. An empty view is installed the
+/// moment a market opens, so measuring it would put a green `0` — "no glass to clear" — under
+/// every sell line before any data arrives.
 pub(super) fn refresh_orderbook_label_notionals(
     labels: &mut [OrderBookLabel],
-    levels: &[moon_core::data::BookDepthPoint],
+    book: &moon_core::data::OrderBookModel,
 ) {
     for label in labels.iter_mut() {
-        label.notional = sell_book_notional(levels, label.price, label.short);
+        // A long's sell line clears the asks below it; a short's clears the bids above it.
+        let asks = !label.short;
+        label.notional = book.side_notional_toward(label.price, asks);
     }
 }
 
