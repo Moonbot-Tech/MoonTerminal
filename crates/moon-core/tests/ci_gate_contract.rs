@@ -148,6 +148,32 @@ fn shell_code(text: &str) -> String {
         .join("\n")
 }
 
+/// Every job key in the `jobs:` section, in file order.
+///
+/// Enumerated rather than listed by hand: a rule that must hold for "every release job" has to
+/// find a job added after the rule was written, which a hardcoded list cannot do.
+fn job_names(text: &str) -> Vec<&str> {
+    let after_jobs = text
+        .split_once(
+            "
+jobs:
+",
+        )
+        .map(|(_, rest)| rest)
+        .expect("the workflow must declare a top-level `jobs:` section");
+
+    after_jobs
+        .lines()
+        .filter(|line| {
+            line.starts_with("  ")
+                && !line.starts_with("   ")
+                && line.trim_end().ends_with(':')
+                && !line.trim_start().starts_with('#')
+        })
+        .map(|line| line.trim().trim_end_matches(':'))
+        .collect()
+}
+
 /// Body lines of the named job, comments stripped.
 ///
 /// A job key is the only thing indented exactly two spaces inside the `jobs:` section, so the
@@ -156,7 +182,7 @@ fn job_body<'a>(text: &'a str, want: &str) -> Option<Vec<&'a str>> {
     let after_jobs = text
         .split_once("\njobs:\n")
         .map(|(_, rest)| rest)
-        .expect("build.yml must declare a top-level `jobs:` section");
+        .expect("the workflow must declare a top-level `jobs:` section");
 
     let is_comment = |line: &str| line.trim_start().starts_with('#');
     let is_job_key = |line: &str| {
@@ -540,15 +566,47 @@ fn releases_build_the_exact_canonical_tag() {
             && validator.contains("echo \"[FAIL] release tag must use canonical form"),
         "release.yml must reject non-canonical and prerelease tag forms"
     );
+    // Over every job the file declares, rather than a count: the building side is split by
+    // architecture, and a job added later must satisfy this rule instead of breaking the number
+    // that expressed it.
+    let jobs = job_names(&text);
     assert!(
-        text.contains("ref: ${{ inputs.tag || github.ref_name }}")
-            && text
-                .matches("ref: ${{ needs.validate.outputs.commit }}")
-                .count()
-                == 3
-            && text.matches("fetch-depth: 0").count() == 4,
-        "validation must resolve the tag and every release job must checkout the immutable commit with full tag history"
+        jobs.contains(&"validate") && jobs.len() >= 4,
+        "release.yml must keep a validate job and the jobs it gates, found {jobs:?}"
     );
+    for job in jobs {
+        let body =
+            job_body(&text, job).unwrap_or_else(|| panic!("release.yml must keep the `{job}` job"));
+        let refs: Vec<&str> = body
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| line.starts_with("ref:"))
+            .collect();
+        // Counted apart from the `ref:` lines: a bare `uses: actions/checkout` carries no `with:`
+        // block at all, so it would leave `refs` looking right while checking out `github.ref`.
+        let checkouts = body
+            .iter()
+            .filter(|line| line.trim().starts_with("- uses: actions/checkout"))
+            .count();
+        assert_eq!(
+            checkouts, 1,
+            "job `{job}` must check out exactly once: none leaves it building the default ref, two make the second win"
+        );
+        // `validate` RESOLVES the tag, so it is the only job allowed to check out by name.
+        let want_ref = if job == "validate" {
+            "ref: ${{ inputs.tag || github.ref_name }}"
+        } else {
+            "ref: ${{ needs.validate.outputs.commit }}"
+        };
+        assert!(
+            refs == [want_ref],
+            "job `{job}` must check out `{want_ref}`, found {refs:?}: a floating ref builds something other than what validation approved"
+        );
+        assert!(
+            body.iter().any(|line| line.trim() == "fetch-depth: 0"),
+            "job `{job}` needs full tag history: validation walks tags and `origin/main`, and publishing re-resolves the tag"
+        );
+    }
     assert!(
         text.contains("group: release-${{ inputs.tag || github.ref_name }}")
             && text.contains("cancel-in-progress: false"),
@@ -574,6 +632,87 @@ fn releases_build_the_exact_canonical_tag() {
             && validator.contains("if [[ \"$release_tag\" != \"$latest_tag\" ]]")
             && validator.contains("echo \"[FAIL] only the greatest canonical stable tag"),
         "release validation must bind a real tag to HEAD on main and reject historical versions"
+    );
+}
+
+fn make_dmg_text() -> String {
+    std::fs::read_to_string(
+        release_workflow_path()
+            .parent()
+            .expect("release workflow has a parent")
+            .parent()
+            .expect("workflows directory has a parent")
+            .join("scripts/make-dmg.sh"),
+    )
+    .expect("read make-dmg.sh")
+}
+
+/// The deployment floor lives in two files: the compiler flag in the slice job and the
+/// `LSMinimumSystemVersion` the packaging script stamps into Info.plist. Raised on one side only,
+/// the .dmg claims a floor it was not built for — it installs on that macOS and dies on launch,
+/// which no build gate can see.
+#[test]
+fn the_macos_deployment_floor_matches_the_bundle_it_ships() {
+    let text = release_workflow_text();
+    let slice = job_body(&text, "macos-slice").expect("release.yml must keep the slice job");
+    let floor = slice
+        .iter()
+        .map(|line| line.trim())
+        .find_map(|line| line.strip_prefix("MACOSX_DEPLOYMENT_TARGET:"))
+        // Either quoting style, since YAML treats them the same and a reformat must not redden
+        // a gate about macOS versions.
+        .map(|value| value.trim().trim_matches(['"', '\'']).to_string())
+        .expect("the slice job must pin MACOSX_DEPLOYMENT_TARGET");
+
+    assert!(
+        make_dmg_text().contains(&format!(
+            "<key>LSMinimumSystemVersion</key><string>{floor}</string>"
+        )),
+        "make-dmg.sh must stamp the bundle with the floor the slices were compiled against ({floor})"
+    );
+}
+
+/// The macOS slices travel between jobs as artifacts, so three places must agree: what the matrix
+/// calls each architecture, the artifact name the packaging job asks for, and the file names
+/// `make-dmg.sh` joins. Nothing else catches a rename — the workflow stays valid YAML and the
+/// break appears only on a tagged release, at `lipo`, with the tag already public.
+#[test]
+fn the_macos_slices_reach_the_packaging_job_under_the_names_it_reads() {
+    let text = release_workflow_text();
+    let script = make_dmg_text();
+    let slice = job_body(&text, "macos-slice").expect("release.yml must keep the slice job");
+    let packaging = job_body(&text, "macos").expect("release.yml must keep the packaging job");
+
+    for arch in ["arm64", "x86_64"] {
+        assert!(
+            slice
+                .iter()
+                .any(|line| line.trim().trim_start_matches("- ") == format!("arch: {arch}")),
+            "the matrix must build a `{arch}` slice"
+        );
+        assert!(
+            script.contains(&format!("stage/moonterminal-{arch}")),
+            "make-dmg.sh must read the `{arch}` slice from `stage/`"
+        );
+    }
+    assert!(
+        slice
+            .iter()
+            .any(|line| line.trim() == "name: macos-slice-${{ matrix.arch }}")
+            && slice
+                .iter()
+                .any(|line| line.trim() == "path: stage/moonterminal-${{ matrix.arch }}"),
+        "each slice must upload the file make-dmg.sh reads, under a per-arch artifact name"
+    );
+    assert!(
+        packaging
+            .iter()
+            .any(|line| line.trim() == "pattern: macos-slice-*")
+            && packaging
+                .iter()
+                .any(|line| line.trim() == "merge-multiple: true")
+            && packaging.iter().any(|line| line.trim() == "path: stage"),
+        "the packaging job must download every slice into the `stage/` layout make-dmg.sh expects"
     );
 }
 

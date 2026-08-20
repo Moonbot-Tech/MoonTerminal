@@ -33,10 +33,10 @@ name: release
 # job only fills the shared 10 GB quota. Nothing is lost by not writing it.
 #
 # What restores: the cache key includes the job id, so the `windows` job below shares a
-# key with build.yml's `windows` and warm-starts from what `main` wrote. The `macos` job
-# does not — build.yml's macOS job is `macos-probe` — so a macOS release compiles cold,
-# and now twice over: one cold compile per architecture of the universal binary.
-# It always did compile cold; only the pointless write is gone.
+# key with build.yml's `windows` and warm-starts from what `main` wrote. The `macos-slice`
+# legs do not — build.yml's macOS job is `macos-probe` — so each architecture of the
+# universal binary compiles cold. They always did; only the pointless write is gone, and
+# since the split the two colds run in parallel rather than back to back.
 on:
   push:
     tags: ["v*"]
@@ -104,60 +104,109 @@ jobs:
           name: windows
           path: dist/MoonTerminal.exe
           if-no-files-found: error
+          # A re-run must be able to replace its own upload; artifacts are otherwise immutable.
+          overwrite: true
 
-  macos:
-    name: macOS .dmg (universal)
+  macos-slice:
+    name: macOS slice (${{ matrix.arch }})
     needs: validate
     runs-on: macos-14
-    # Ships ONE universal binary covering both Macs, not two downloads: the two slices are
-    # built here and `lipo`-joined by make-dmg.sh into a single MoonTerminal.app.
+    # One slice per job, so neither ever holds two `--release` trees and each starts on a fresh
+    # 14 GB disk. They used to be built in sequence in the packaging job, which had to delete the
+    # first target dir mid-flight to make room for the second and still ran out at `hdiutil`.
     #
-    # Both slices are cross-built on this arm64 runner. The macOS SDK carries both
-    # architectures, so `--target x86_64-apple-darwin` links natively — no Intel runner
-    # involved, which also keeps the release off the ageing `macos-13` image.
+    # Both slices are cross-built on this arm64 runner. The macOS SDK carries both architectures,
+    # so `--target x86_64-apple-darwin` links natively — no Intel runner involved, which also keeps
+    # the release off the ageing `macos-13` image.
     #
-    # What that costs: the Intel slice is compiled but never EXECUTED here (an arm64 runner
-    # has no Rosetta by default), so CI proves it links, not that it runs. Intel acceptance
-    # is a live machine.
+    # What that costs: the Intel slice is compiled but never EXECUTED here (an arm64 runner has no
+    # Rosetta by default), so CI proves it links, not that it runs. Intel acceptance is a live
+    # machine. Splitting the job does not change that, and it does not change WHAT is compiled —
+    # only where. The two jobs now compile in parallel, so the wall clock is the slower slice
+    # rather than their sum.
+    strategy:
+      # A red arch must not cancel its sibling: the release is lost either way, and knowing whether
+      # the break is Intel-only or common to both is what the next attempt is planned from. The
+      # sibling's compile is already paid for by the time the first one fails.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
     env:
-      # Both slices, and the LSMinimumSystemVersion make-dmg.sh writes, name the same floor.
-      # Left at the default the Intel slice would claim 10.12 while the bundle says 11.0.
+      # Both slices name the same floor as the LSMinimumSystemVersion `make-dmg.sh` hardcodes in
+      # the packaging job. Left at the default the Intel slice would claim 10.12 while the bundle
+      # says 11.0 — the two halves of that pair now live in different jobs, so changing one means
+      # changing the other by hand.
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
+      # Before the toolchain, so the compiler and the registry land on a disk that already has
+      # room. See the script for what it removes and what it deliberately keeps.
+      - name: Reclaim runner disk
+        run: bash .github/scripts/free-macos-disk.sh
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
-      # Two steps rather than one multi-target invocation: a red job then names the arch
-      # that broke in its own step, instead of burying it in a combined log.
-      - name: Build release binary (Apple Silicon)
-        run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target aarch64-apple-darwin
-      # The slice moves out and its target dir goes with it: this runner has 14 GB of disk, and
-      # two whole `--release` trees plus the cargo registry do not both fit. Only the per-triple
-      # dir is removed — host build-script and proc-macro artifacts live in `target/release`
-      # and are reused by the second build.
-      - name: Stage the Apple Silicon slice and free its target dir
+          # rust-cache keys on the job id, which both legs share. Naming the target keeps them
+          # apart, so turning saving on later cannot make one arch restore the other's tree.
+          key: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target ${{ matrix.target }}
+      - name: Stage the slice
         run: |
           mkdir -p stage
-          mv target/aarch64-apple-darwin/release/moonterminal stage/moonterminal-arm64
-          rm -rf target/aarch64-apple-darwin
-      - name: Build release binary (Intel)
-        run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-apple-darwin
-      - name: Stage the Intel slice
-        run: mv target/x86_64-apple-darwin/release/moonterminal stage/moonterminal-x86_64
-      # Both slices are out of `target/` and nothing downstream reads it: the packaging step works
-      # from `stage/` and publishes `dist/`, and the cache action runs with `save-if: false`, so it
-      # has nothing to store either. Dropping the whole build tree here is what leaves `hdiutil`
-      # room to image the bundle — it has failed with "No space left on device" on this 14 GB
-      # runner while the compiled tree was still sitting there unused.
-      - name: Free the build tree before imaging
-        run: rm -rf target
+          mv target/${{ matrix.target }}/release/moonterminal stage/moonterminal-${{ matrix.arch }}
+      # The name make-dmg.sh reads, so the packaging job can download both slices into `stage/`
+      # unchanged. Upload strips the executable bit; `make-dmg.sh` chmods the joined binary, which
+      # is the one that ships.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-slice-${{ matrix.arch }}
+          path: stage/moonterminal-${{ matrix.arch }}
+          if-no-files-found: error
+          # Artifacts are immutable, so a re-run of a leg that already uploaded would 409 without
+          # this. Deliberately NO shortened retention: re-running just the packaging job is the
+          # cheap recovery from a flaked `hdiutil`, and an expired slice would take it away.
+          overwrite: true
+
+  macos:
+    name: macOS .dmg (universal)
+    needs: [validate, macos-slice]
+    runs-on: macos-14
+    # Ships ONE universal binary covering both Macs, not two downloads: the slices built above are
+    # `lipo`-joined by make-dmg.sh into a single MoonTerminal.app.
+    #
+    # This job compiles nothing, so `hdiutil` images the bundle on a disk holding two binaries and
+    # a checkout instead of one that just finished two Rust builds.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
+      # `merge-multiple` puts both slices side by side in `stage/`, which is exactly the layout
+      # make-dmg.sh expects (`stage/moonterminal-arm64`, `stage/moonterminal-x86_64`).
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: macos-slice-*
+          merge-multiple: true
+          path: stage
+      # `download-artifact` treats "no artifact matched the pattern" as a warning, and the next
+      # thing to notice would be `lipo` complaining about a missing file. Name the real problem.
+      - name: Check both slices arrived
+        run: |
+          for arch in arm64 x86_64; do
+            test -f "stage/moonterminal-$arch" ||
+              { echo "the macos-slice-$arch artifact is missing" >&2; exit 1; }
+          done
       - name: Package .app + .dmg
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
@@ -167,6 +216,7 @@ jobs:
           name: macos
           path: dist/MoonTerminal.dmg
           if-no-files-found: error
+          overwrite: true
 
   publish:
     name: Publish GitHub Release
@@ -177,9 +227,18 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
+      # By name, not "everything": a bare download would also pull the two intermediate macOS
+      # slices onto this runner. They could never have been PUBLISHED — `files:` below is an
+      # explicit list — but downloading them is pure transfer, and naming what this job consumes
+      # keeps the release's inputs readable.
       - uses: actions/download-artifact@v8
         with:
-          path: dist
+          name: windows
+          path: dist/windows
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos
+          path: dist/macos
       - name: Upload a draft release
         uses: softprops/action-gh-release@v3
         with:

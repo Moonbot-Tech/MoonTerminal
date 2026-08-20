@@ -88,7 +88,10 @@ ad-hoc подпись по умолчанию и `codesign --verify --deep --str
 Это **локальный dev-бандл, а не то, что уезжает в Releases**: он собирается под архитектуру самой
 машины, с bundle id `pro.moonbot.terminal` и `LSMinimumSystemVersion 13.0`. Дистрибутив делает CI —
 `.github/scripts/make-dmg.sh` в джобе `macOS .dmg (universal)`: universal binary (`arm64` +
-`x86_64`, склейка через `lipo`), bundle id `com.moonbot.moonterminal`, минимум macOS 11. Каталог
+`x86_64`, склейка через `lipo`), bundle id `com.moonbot.moonterminal`, минимум macOS 11. Сами
+слайсы компилируются раньше, в матричном джобе `macOS slice (arm64|x86_64)`, и приезжают в
+упаковку артефактами: на раннере ~14 ГБ диска, и две `--release` сборки в одном джобе однажды
+не оставили места самому `hdiutil`. Каталог
 данных при этом ОДИН на оба бандла: `paths.rs` держит `APP_ID` зашитой константой
 `com.moonbot.moonterminal` и `CFBundleIdentifier` не читает — расходится только идентичность
 самого бандла, которую видят Keychain и Launch Services. Universal-сборку локально никто не
