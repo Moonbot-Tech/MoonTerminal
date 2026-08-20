@@ -771,6 +771,23 @@ pub(super) fn run(
                             e.error_msg
                         );
                     }
+                    // A hedge-mode switch reports its outcome HERE and nowhere else: the account
+                    // snapshot is not republished by the write, and `HedgeModeUpdated` — the one
+                    // event that feeds `CoreData::hedge_mode` — is only ever answered to a
+                    // `refresh_hedge_mode` request. Without this re-read the toolbar checkbox kept
+                    // the pre-switch value until the next connect, while the toast already said
+                    // the mode was on. Ask the core rather than trusting the echoed flag, so the
+                    // stored value stays something the core confirmed.
+                    if e.success
+                        && matches!(e.kind, moonproto::EngineActionKind::SetHedgeMode { .. })
+                    {
+                        if let Err(error) = client.account().refresh_hedge_mode() {
+                            log::warn!(
+                                "core {} re-read hedge mode after switch failed: {error}",
+                                crate::feed::core_label(server.id)
+                            );
+                        }
+                    }
                     engine_actions.push(convert::engine_action_result(e));
                 }
                 Event::CandlesSnapshot(moonproto::state::CandlesSnapshotEvent::Ready {
