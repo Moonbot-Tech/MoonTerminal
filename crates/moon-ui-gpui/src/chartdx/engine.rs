@@ -109,6 +109,8 @@ impl ChartEngine {
             last_gpu_prepare_generation: 0,
             text_runs: Vec::new(),
             text_run_cursor: 0,
+            caption_runs: Vec::new(),
+            chart_labels: moon_core::config::ChartLabelsCfg::default(),
             firetest_text_labels: Vec::new(),
             firetest_text_runs: Vec::new(),
             firetest_text_layer: GpuCanvasRetainedTextLayer::default(),
@@ -647,6 +649,32 @@ impl ChartEngine {
             return false;
         }
         data.chart_graphics = cfg;
+        data.last_order_sig = u64::MAX;
+        data.mark_view_dirty();
+        true
+    }
+
+    /// Applies the chart caption configuration — which figures print beside the plot, where and in
+    /// which style — to every engine pane. Returns true on change.
+    ///
+    /// The value is the owning panel's: its own per-tab override, or the `layout.chart_labels`
+    /// default when it has none, already sanitized by the caller.
+    ///
+    /// Unlike the graphics settings beside it, nothing baked into a GPU layer depends on this: the
+    /// captions are drawn by the text pass from resolved strings, so a change only has to make the
+    /// panes re-resolve and repaint. `mark_view_dirty` does both.
+    pub fn set_chart_labels(&mut self, cfg: moon_core::config::ChartLabelsCfg) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.chart_labels == cfg {
+            return false;
+        }
+        data.chart_labels = cfg;
+        // Mirrored into the text pass, which reads it every frame and must not borrow the data
+        // state to do so.
+        data.render.borrow_mut().chart_labels = cfg;
+        // The captions are re-resolved by the SYNC paths, and those short-circuit on an unchanged
+        // signature. Invalidating it here is what makes a configuration change reach a chart whose
+        // market and orders have not moved — the same reason `set_chart_graphics` resets it.
         data.last_order_sig = u64::MAX;
         data.mark_view_dirty();
         true

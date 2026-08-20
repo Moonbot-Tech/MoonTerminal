@@ -305,6 +305,44 @@ impl super::graphics_popup::GraphicsPopupHost for ChartTabs {
     }
 }
 
+/// Host for the "Chart labels" popup targeting the ACTIVE tab, like ⚙ and the candle popup.
+///
+/// Application and persistence use `apply_tab_setting(StackSetting::Labels)`.
+impl super::labels_popup::LabelsPopupHost for ChartTabs {
+    fn labels_popup_open(&self) -> bool {
+        self.labels_popup_open
+    }
+    fn set_labels_popup_open(&mut self, open: bool) {
+        self.labels_popup_open = open;
+    }
+    fn labels_style_open(&self) -> Option<usize> {
+        self.labels_style_open
+    }
+    fn set_labels_style_open(&mut self, ix: Option<usize>) {
+        self.labels_style_open = ix;
+    }
+    fn labels_override(&self, cx: &App) -> Option<moon_core::config::ChartLabelsCfg> {
+        match &self.active {
+            Tab::Main => self.main.read(cx).chart_labels(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .and_then(|p| p.read(cx).chart_labels()),
+        }
+    }
+    fn apply_labels_all(&mut self, cfg: moon_core::config::ChartLabelsCfg, cx: &mut Context<Self>) {
+        // Main receives a copy only when its own popup is open, matching ⚙ and the other popups.
+        let include_main = matches!(self.active, Tab::Main);
+        self.apply_all(
+            ApplyAll {
+                values: vec![StackSetting::Labels(cfg)],
+                x_ppm: None,
+            },
+            include_main,
+            cx,
+        );
+    }
+}
+
 /// Host for the "Candles and Trades" candlestick popup targeting the ACTIVE tab, like ⚙.
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::CandleView)`.
