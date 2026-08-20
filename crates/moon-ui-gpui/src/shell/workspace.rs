@@ -1,6 +1,7 @@
 //! Independent Classic/shared-Auto dock layouts, all-core navigation rail, and chart reveal.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
@@ -12,7 +13,7 @@ use moon_core::feed::ConnStatus;
 use moon_core::venue::CoreVenue;
 use moon_ui::{
     DockTopologyByName, DockTopologyNode, MoonBackgroundPolicy, MoonPalette,
-    MoonScrollbarVisibility, MoonTooltipView, MoonVirtualList, h_flex, moon_h_resizable,
+    MoonScrollbarVisibility, MoonTooltipView, MoonVirtualList, PanelView, h_flex, moon_h_resizable,
     moon_resizable_panel, v_flex,
 };
 use rust_i18n::t;
@@ -118,6 +119,81 @@ pub(super) fn auto_workspace_tab_to_persist<'a>(
 ///     `true` only for a user-driven Auto layout mutation.
 pub(super) fn auto_workspace_topology_is_persistable(auto: bool, applying_topology: bool) -> bool {
     auto && !applying_topology
+}
+
+/// Return the insertion index that keeps `panel_name` in [`AUTO_PANEL_ORDER`] among `names`.
+///
+/// Names absent from the first-run order stay where they are; the requested panel is placed
+/// before the first present successor, or at the end when none remains.
+fn auto_panel_insert_index(names: &[String], panel_name: &str) -> usize {
+    let Some(desired) = AUTO_PANEL_ORDER.iter().position(|name| *name == panel_name) else {
+        return names.len();
+    };
+    names
+        .iter()
+        .position(|existing| {
+            AUTO_PANEL_ORDER
+                .iter()
+                .position(|name| *name == existing.as_str())
+                .is_some_and(|position| position > desired)
+        })
+        .unwrap_or(names.len())
+}
+
+/// Insert `panel_name` into the first non-empty Auto strip so a reveal can activate it.
+///
+/// Split children are walked in order so the upper operational tabs win over the Orders leaf.
+/// Empty nodes are skipped so a leftover split slot is not turned into a singleton panel.
+fn insert_auto_panel_name(node: &mut DockTopologyNode, panel_name: &str) -> bool {
+    match node {
+        DockTopologyNode::Empty => false,
+        DockTopologyNode::Panel { name } => {
+            let existing = name.clone();
+            let mut names = vec![existing];
+            let at = auto_panel_insert_index(&names, panel_name);
+            names.insert(at, panel_name.to_string());
+            *node = DockTopologyNode::Tabs { names };
+            true
+        }
+        DockTopologyNode::Tabs { names } => {
+            let at = auto_panel_insert_index(names, panel_name);
+            names.insert(at, panel_name.to_string());
+            true
+        }
+        DockTopologyNode::Tiles { .. } => false,
+        DockTopologyNode::Split { items, .. } => items
+            .iter_mut()
+            .any(|item| insert_auto_panel_name(item, panel_name)),
+    }
+}
+
+/// Name `panel_name` in a saved Auto topology that omitted it.
+///
+/// `apply_topology_by_name` discards unknown names, so a reveal still has to supply a live
+/// instance separately. This only makes the requested name present, once, in first-run order.
+fn ensure_auto_topology_contains_panel(topology: &mut DockTopologyByName, panel_name: &str) {
+    if topology.panel_names().iter().any(|name| name == panel_name) {
+        return;
+    }
+    if insert_auto_panel_name(&mut topology.center, panel_name) {
+        return;
+    }
+    let existing = std::mem::replace(&mut topology.center, DockTopologyNode::Empty);
+    topology.center = match existing {
+        DockTopologyNode::Empty => DockTopologyNode::Panel {
+            name: panel_name.to_string(),
+        },
+        other => DockTopologyNode::Split {
+            horizontal: false,
+            items: vec![
+                other,
+                DockTopologyNode::Panel {
+                    name: panel_name.to_string(),
+                },
+            ],
+            sizes: vec![None, None],
+        },
+    };
 }
 
 /// Build the first-run Auto topology before a shared `auto_dock.json` exists.
@@ -418,7 +494,7 @@ impl Shell {
             surface_request,
         );
         self.apply_workspace_mode(mode, window, cx);
-        self.sync_auto_dock_topology(window, cx);
+        self.sync_auto_dock_topology(surface.map(|s| s.panel_name()), window, cx);
         self.sync_auto_rail_width(window, cx);
 
         if let Some(surface) = surface {
@@ -498,7 +574,7 @@ impl Shell {
                     &classic_panel_names,
                     &self.backend.read(cx).detached,
                 );
-                let auto_only_panels = detached_names
+                let mut auto_only_panels = detached_names
                     .iter()
                     .filter_map(|name| {
                         crate::window::detached::build_panel(
@@ -516,6 +592,12 @@ impl Shell {
                     .auto_dock_topology()
                     .cloned()
                     .unwrap_or_else(default_auto_workspace_topology);
+                self.push_missing_auto_topology_panels(
+                    &topology,
+                    &mut auto_only_panels,
+                    window,
+                    cx,
+                );
                 let active_panel = {
                     let backend = self.backend.read(cx);
                     resolved_auto_workspace_tab(backend.auto_workspace_tab(&self.group)).to_string()
@@ -588,29 +670,77 @@ impl Shell {
     /// Apply the latest shared Auto topology to this Shell's local panel instances.
     ///
     /// Args:
+    ///     reveal: Unseen Auto surface to make present before the caller activates it.
     ///     window: Owning group window required by DockArea synchronization.
     ///     cx: Shell context used to read the authority and update the dock.
     ///
     /// Returns:
-    ///     Nothing; Classic Shells ignore Auto-layout broadcasts.
-    fn sync_auto_dock_topology(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    ///     Nothing; Classic Shells ignore Auto-layout broadcasts. A reveal that names a panel
+    ///     missing from the saved topology inserts that name once and builds a live instance when
+    ///     the dock does not already own one, so activation is not a discarded no-op.
+    fn sync_auto_dock_topology(
+        &mut self,
+        reveal: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.applied_workspace_mode != WorkspaceMode::AutoTrading {
             return;
         }
-        let Some(topology) = self.backend.read(cx).auto_dock_topology().cloned() else {
+        let Some(original) = self.backend.read(cx).auto_dock_topology().cloned() else {
             return;
         };
+        let mut topology = original.clone();
+        let mut extra = self.auto_only_panels.clone();
+        if let Some(panel_name) = reveal {
+            ensure_auto_topology_contains_panel(&mut topology, panel_name);
+        }
+        self.push_missing_auto_topology_panels(&topology, &mut extra, window, cx);
         let guard_generation = self.begin_auto_topology_application();
         self.dock.update(cx, |dock, dock_cx| {
-            dock.apply_topology_by_name(&topology, self.auto_only_panels.clone(), window, dock_cx);
+            dock.apply_topology_by_name(&topology, extra, window, dock_cx);
         });
         let repaired = self.dock.read(cx).topology_by_name(cx);
-        if repaired != topology {
+        if repaired != original {
             self.backend.update(cx, |backend, backend_cx| {
                 backend.reconcile_auto_dock_topology(repaired, backend_cx);
             });
         }
         self.finish_auto_topology_application(guard_generation, cx);
+    }
+
+    /// Build Auto-eligible panels named by `topology` but missing from this dock.
+    ///
+    /// MoonUI discards unknown topology names, so a saved or just-injected Assets surface cannot
+    /// activate until a live identity exists. Only [`AUTO_PANEL_ORDER`] names are created; Classic-only
+    /// surfaces stay suspended.
+    fn push_missing_auto_topology_panels(
+        &self,
+        topology: &DockTopologyByName,
+        extra: &mut Vec<Rc<dyn PanelView>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let live = self.dock.read(cx).topology_by_name(cx).panel_names();
+        for name in topology.panel_names() {
+            if !AUTO_PANEL_ORDER.contains(&name.as_str()) {
+                continue;
+            }
+            if live.iter().any(|existing| existing == &name) {
+                continue;
+            }
+            if extra
+                .iter()
+                .any(|panel| panel.panel_name(cx).as_ref() == name)
+            {
+                continue;
+            }
+            if let Some(panel) =
+                crate::window::detached::build_panel(&name, &self.group, &self.backend, window, cx)
+            {
+                extra.push(panel);
+            }
+        }
     }
 
     /// Render the current workspace body: unchanged Classic dock or Auto rail plus the same dock.

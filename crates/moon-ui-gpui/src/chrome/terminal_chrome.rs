@@ -134,7 +134,13 @@ pub fn header(
                 }),
         )
         .child(design::chrome_divider(cx, p))
-        .child(balance_label(balance, p, cx))
+        .child(balance_label(
+            group.to_string(),
+            backend.clone(),
+            balance,
+            p,
+            cx,
+        ))
         // Shrinkable: the strategy summary inside truncates, so a long one yields space to the
         // right-hand readouts instead of pushing them off the window.
         .children(manual.map(|ms| {
@@ -689,17 +695,50 @@ pub(crate) fn header_gear_popover(
 /// no core, no snapshot, or no valid valuation and renders as a dash. A `Stale` figure is shown
 /// muted and tagged so a retained pre-outage number is not presented as current. Usable figures
 /// render in `free / total USDT` order with the shared grouped amount format.
+///
+/// Double-click reveals Assets: Auto requests the existing group-owned surface, Classic opens the
+/// singleton window. A dash is still clickable so a first-time user with no snapshot yet can reach
+/// the same panel.
 fn balance_label(
+    group: String,
+    backend: Entity<Backend>,
     balance: Option<(BalanceState, f64, f64)>,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
     let row = h_flex()
+        .id("header-balance")
         .flex_none()
         .gap(px(0.0))
         .font_family(design::mono())
         .text_size(design::t_body(cx))
         .text_color(rgb(p.text_soft))
+        .cursor_pointer()
+        .tooltip(crate::panels::common::text_tooltip(
+            t!("header.balance_tip").to_string(),
+        ))
+        .on_click(move |ev: &ClickEvent, window, cx| {
+            if ev.click_count() < 2 {
+                return;
+            }
+            let auto = backend.update(cx, |b, bcx| {
+                if b.request_assets_surface(&group) {
+                    bcx.notify();
+                    true
+                } else {
+                    false
+                }
+            });
+            if !auto {
+                let owner_display = crate::window::windowing::window_display_id(window, cx);
+                crate::panels::open_assets_window(
+                    backend.clone(),
+                    Some(window.window_handle()),
+                    owner_display,
+                    cx,
+                );
+            }
+        })
         .child("Balance: ");
     let Some((state, free, total)) = balance else {
         return row.child(div().text_color(rgb(p.text_muted)).child("—"));

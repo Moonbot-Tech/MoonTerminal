@@ -40,6 +40,11 @@ header.no_cores:
   ru: "нет ядер"
   en: "no cores"
   es: "sin núcleos"
+# Header balance double-click: Auto reveals the group Assets surface; Classic opens the window.
+header.balance_tip:
+  ru: "Двойной клик — открыть Активы"
+  en: "Double-click opens Assets"
+  es: "Doble clic abre Activos"
 # Price ticker in the header, on the right beside the clock.
 header.ticker_tip:
   ru: "Курс и дельты за 1ч / 24ч. Клик — открыть график, двойной — выбрать монету и ядро"

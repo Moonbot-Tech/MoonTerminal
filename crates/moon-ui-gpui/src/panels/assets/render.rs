@@ -42,40 +42,51 @@ impl Panel for AssetsView {
         self.dock = Some(dock_area);
     }
     /// Builds the toolbar action that opens the singleton global Assets window for all cores. Unlike
-    /// Orders detachment, this is not scoped to the current group.
+    /// Orders detachment, this is not scoped to the current group. Auto hides it: navigation stays
+    /// inside the group window, and the docked tab already shows the window-form wallets.
     fn toolbar_buttons(
         &mut self,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
-        let backend = self.backend.clone();
-        Some(vec![
-            crate::persistence::table_persist::reset_button(
-                "assets-reset-widths",
-                &self.table_state,
-            ),
-            MoonButton::new("assets-open-global")
-                .ghost()
-                .size(MoonButtonSize::Action)
-                .label("⧉")
-                .tooltip(t!("assets.open_global_hint").to_string())
-                .on_click(move |_, window, app| {
-                    let owner_display = window.display(app).map(|d| d.id());
-                    open(
-                        backend.clone(),
-                        Some(window.window_handle()),
-                        owner_display,
-                        app,
-                    );
-                })
-                .render()
-                .into_any_element(),
-        ])
+        let mut buttons = vec![crate::persistence::table_persist::reset_button(
+            "assets-reset-widths",
+            &self.table_state,
+        )];
+        let auto = match &self.scope {
+            AssetsScope::Group(group) => {
+                self.backend.read(cx).workspace_mode(group)
+                    == moon_core::config::WorkspaceMode::AutoTrading
+            }
+            AssetsScope::All => false,
+        };
+        if !auto {
+            let backend = self.backend.clone();
+            buttons.push(
+                MoonButton::new("assets-open-global")
+                    .ghost()
+                    .size(MoonButtonSize::Action)
+                    .label("⧉")
+                    .tooltip(t!("assets.open_global_hint").to_string())
+                    .on_click(move |_, window, app| {
+                        let owner_display = window.display(app).map(|d| d.id());
+                        open(
+                            backend.clone(),
+                            Some(window.window_handle()),
+                            owner_display,
+                            app,
+                        );
+                    })
+                    .render()
+                    .into_any_element(),
+            );
+        }
+        Some(buttons)
     }
 }
 
 impl Render for AssetsView {
-    /// Render the always-present table and footer plus the optional window-only Wallets section.
+    /// Render the always-present table and footer plus the optional Wallets section.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ASSETS_RENDER);
         // Keep the shared Assets-view activity marker fresh. While any view renders at least once
@@ -86,6 +97,7 @@ impl Render for AssetsView {
         let entries = self.cached_entries.clone();
         let p = MoonPalette::active(cx);
         let windowed = self.windowed;
+        let show_wallets = self.wallets_visible(cx);
 
         let count = entries.len();
         // Natural table height is its header plus rows, or zero when empty. This lets the table grow
@@ -96,18 +108,16 @@ impl Render for AssetsView {
             design::table_head_h(cx) + count as f32 * design::table_row_h(cx)
         };
 
-        // The table and the footer are always present. Separate windows additionally render the
-        // collapsible Wallets section, whose core list breaks the same balances down per core.
+        // The table and the footer are always present. Separate windows and Auto dock tabs also
+        // render the collapsible Wallets section, whose core list breaks the same balances down
+        // per core. Classic dock tabs leave it out and give the asset table the full area.
         let aggs = self.cached_aggs.clone();
         // The top bar owns filtering; the footer owns every summary figure the panel produces.
         let core_bar = self.core_bar(&cores, cx);
         let footer = self.footer(cx);
-        // Standalone global and detached windows show the core list and transfer wallets. A dock tab
-        // leaves them out and gives the asset table the full area.
         let wallets = self.cached_wallets.clone();
-        let tree_section = self
-            .show_wallets
-            .then(|| self.bottom(&aggs, &wallets, cx).into_any_element());
+        let tree_section =
+            show_wallets.then(|| self.bottom(&aggs, &wallets, cx).into_any_element());
         // Built only when it will actually be shown — a non-empty table is the common case, and
         // the message is pure dead work there. Use the position-specific copy only for a fully
         // loaded futures-only scope while the dust threshold is active; every other state keeps
@@ -155,7 +165,7 @@ impl Render for AssetsView {
             .min_h(px(0.0))
             .overflow_hidden()
             .child(table);
-        root = root.child(if self.show_wallets {
+        root = root.child(if show_wallets {
             table_wrap.h(px(table_natural_h))
         } else {
             table_wrap.flex_1()

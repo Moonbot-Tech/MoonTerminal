@@ -1,12 +1,15 @@
 //! Assets panel/window. Top: core selector and dust threshold; then the positions/balances table
 //! across every in-scope core (values and totals in USDT); then a footer carrying both summaries
 //! — visible-row count and Σ on the left, the scope's account equity on the right.
-//! Bottom (separate global or detached window only): the core list on the left (free/total) and
-//! three wallet containers (Spot/Futures/Quarterly) on the right — dragging a coin between them
-//! opens a quantity dialog (defaulting to the whole free amount) and performs the transfer.
+//! Bottom (global window, detached Classic window, and Auto dock tab): the core list on the left
+//! (free/total) and three wallet containers (Spot/Futures/Quarterly) on the right — dragging a
+//! coin between them opens a quantity dialog (defaulting to the whole free amount) and performs
+//! the transfer. Classic dock tabs omit this section; Auto cannot detach, so the docked tab is
+//! the window form.
 //!
 //! The same `AssetsView` lives in two shapes:
-//! - as a dock panel inside a group window (`AssetsScope::Group`) — that group's cores;
+//! - as a dock panel inside a group window (`AssetsScope::Group`) — that group's cores. Classic
+//!   dock tabs are table-only; Auto dock tabs show wallets because Auto cannot detach;
 //! - as a global singleton window (`AssetsScope::All`, opened via the "⧉" button) — ALL
 //!   connected cores. Window dedup lives in `Backend.assets_window` (like "Strategies").
 //!
@@ -80,9 +83,12 @@ pub struct AssetsView {
     /// Whether this view draws its own OS-window frame and persists its geometry. This is true for
     /// the global window; `DetachedWindow` frames detached views, and dock tabs need no frame.
     windowed: bool,
-    /// Whether to show the lower transfer area: the core list and Spot, Futures, and Quarterly
-    /// wallets. Every standalone window enables it; a dock tab does not.
+    /// Whether this host always shows the lower transfer area (global and detached windows).
+    /// Auto dock tabs compute the same visibility from workspace mode so Classic tabs stay compact.
     show_wallets: bool,
+    /// Auto Overview local wallet host. Independent of Classic [`Self::selected_core`] so a
+    /// mode switch cannot leak a Classic click into Overview transfer.
+    overview_wallet_pick: Option<CoreId>,
     /// Core selected for the lower wallet containers.
     pub(super) selected_core: Option<CoreId>,
     /// Hide asset rows worth less than this USDT threshold while retaining open positions whose
@@ -267,6 +273,7 @@ impl AssetsView {
             scope,
             windowed,
             show_wallets,
+            overview_wallet_pick: None,
             selected_core: None,
             min_value_usd,
             min_value_slider,
@@ -326,7 +333,9 @@ impl AssetsView {
         this
     }
 
-    /// Restores a group-scoped dock tab from `docks.json`, without wallet containers.
+    /// Restores a group-scoped dock tab from `docks.json`.
+    ///
+    /// Classic keeps this table-only. Auto shows wallets at render time because it cannot detach.
     pub fn restored_group(
         backend: Entity<Backend>,
         group: String,
@@ -394,11 +403,16 @@ impl AssetsView {
 
     /// Return the wallet-detail core visible under the effective workspace scope.
     ///
+    /// Auto Overview still needs a concrete transfer host so the window-form wallets stay usable.
+    /// That host is the Overview list pick when it remains in scope, otherwise the first in-scope
+    /// core. Classic retained `selected_core` is never consulted here: `resolve_workspace_wallet_core`
+    /// keeps Overview as absence so a mode switch cannot leak a Classic click.
+    ///
     /// Args:
     ///     b: Backend snapshot containing workspace authority.
     ///
     /// Returns:
-    ///     Auto's selected core, `None` for Auto Overview, otherwise the retained Classic core.
+    ///     Auto's selected core, Auto Overview's local host, or the retained Classic core.
     pub(super) fn effective_wallet_core(&self, b: &Backend) -> Option<CoreId> {
         let scope = self.effective_scope(b);
         let workspace_owned = scope
@@ -410,7 +424,44 @@ impl AssetsView {
             | crate::workspace::EffectiveScopeLabel::Selection(_)
             | crate::workspace::EffectiveScopeLabel::Overview => None,
         });
-        resolve_workspace_wallet_core(workspace_owned, workspace_core, self.selected_core)
+        if let Some(core) =
+            resolve_workspace_wallet_core(workspace_owned, workspace_core, self.selected_core)
+        {
+            return Some(core);
+        }
+        if workspace_owned {
+            if let Some(scope) = scope.as_ref() {
+                let ids = scope.ids();
+                return self
+                    .overview_wallet_pick
+                    .filter(|core| ids.contains(core))
+                    .or_else(|| ids.first().copied());
+            }
+        }
+        None
+    }
+
+    /// Return whether this view should render the core list and transfer wallets.
+    ///
+    /// Global and detached hosts always show them. An Auto group dock tab shows them too, because
+    /// Auto refuses detached windows; a Classic dock tab stays table-only.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the group's workspace mode.
+    ///
+    /// Returns:
+    ///     `true` when the lower transfer section belongs on this host.
+    pub(super) fn wallets_visible(&self, cx: &App) -> bool {
+        if self.show_wallets {
+            return true;
+        }
+        match &self.scope {
+            AssetsScope::Group(group) => {
+                self.backend.read(cx).workspace_mode(group)
+                    == moon_core::config::WorkspaceMode::AutoTrading
+            }
+            AssetsScope::All => true,
+        }
     }
 
     /// Toggles the multi-core filter. `None` represents All and clears the explicit selection back
