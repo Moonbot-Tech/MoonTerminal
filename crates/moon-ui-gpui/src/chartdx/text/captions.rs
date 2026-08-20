@@ -516,9 +516,22 @@ impl RenderState {
             .zip(pr.cached_last_price)
             .filter(|(r, l)| *r > 0.0 && *l > 0.0)
             .map(|(r, l)| (l - r) / r * 100.0);
+        // A shot is in flight: this pane's core-name caption names the EXCHANGE instead. The
+        // substitution happens HERE, at the one place the caption's inputs are assembled, so that
+        // nothing below — the slot resolution, the truncation, the measuring, the plate geometry —
+        // learns that a shot is happening. Only which string arrives changes.
+        //
+        // The core name is the user's own free text, an account label such as `SUB ACC No 38`, and
+        // these pictures get shared publicly. `venue` is never empty while a shot is armed: the
+        // order sync resolves it through the shared label helper, which answers with the "not
+        // identified" wording for a core that cannot be named.
+        let shot = self.shot_caption_active();
         let inputs = super::LabelInputs {
             ticker: pr.ticker.clone(),
-            core_name: pr.core_name.clone(),
+            core_name: match shot {
+                true => pr.venue.clone(),
+                false => pr.core_name.clone(),
+            },
             venue: pr.venue.clone(),
             strategy: pr.label_strategy.clone(),
             last_price: pr.cached_last_price,
@@ -529,6 +542,10 @@ impl RenderState {
             basis: pr.label_basis,
         };
         let changed = self.panes[idx].labels.update(&cfg, inputs);
+        // Recorded whether or not the texts changed: `update` is a cache and answers "nothing
+        // moved" when the substitution happens to produce the same string, but the shot's proof
+        // asks what the CURRENT labels were built from, not whether they differ from last time.
+        self.panes[idx].labels_shot_substituted = shot;
         if changed {
             crate::diag::bump(&crate::diag::CHART_CAPTION_REBUILD);
         }

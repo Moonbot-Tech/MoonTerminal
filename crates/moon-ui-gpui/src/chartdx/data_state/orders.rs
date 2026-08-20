@@ -48,6 +48,11 @@ impl ChartDataState {
             .resize_with(container.pane_count(), PaneRender::new);
 
         let labels_cfg = st.chart_labels;
+        // A shot needs the venue whether or not the user asked for a venue caption: it is drawn in
+        // the CORE NAME's place, so the substitution has nothing to put there without it. Read once
+        // here, beside the configuration it overrides, because both answers must hold for the whole
+        // sync — a shot arming halfway through would otherwise caption some panes and not others.
+        let shot = st.shot_caption_active();
         for (idx, _) in &layout {
             let Some(pane) = container.pane_mut(*idx) else {
                 continue;
@@ -80,13 +85,20 @@ impl ChartDataState {
             // place so the caption, the Orders picker and the detect card cannot disagree.
             // Gated on the configuration: a caption nobody asked for must not cost a venue lookup
             // or a walk over the core's whole order array on every order revision.
-            let wants_venue = labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
+            let wants_venue = shot || labels_cfg.any_drawn(|f| f == ChartLabelField::Venue);
+            // Two spellings on purpose. A shot takes the SECTION label, which is never empty: it
+            // answers with the shared "not identified" wording for a core that has not finished
+            // `BaseCheck`, and an empty string there would drop the caption altogether and leave a
+            // picture with no attribution at all. A configured venue caption keeps `venue_label`,
+            // which resolves to nothing when the venue cannot be named, because a caption the user
+            // asked for should stay absent rather than print a placeholder on every frame.
             let venue = wants_venue
                 .then(|| {
-                    session
-                        .core_venues()
-                        .get(&pane.core)
-                        .map(crate::controls::venue_label)
+                    let venue = session.core_venues().get(&pane.core);
+                    match shot {
+                        true => Some(crate::controls::venue_section_label(venue)),
+                        false => venue.map(crate::controls::venue_label),
+                    }
                 })
                 .flatten()
                 .unwrap_or_default();
