@@ -158,12 +158,14 @@ fn fixture() -> Connection {
 
 /// Build the historical per-trade strategy-name expression used by the SQL reference below.
 fn strategy_name_expr(has_names: bool) -> String {
-    name_expr(
-        has_names,
-        "o.core_uid",
-        "o.strategyid",
-        "CAST(o.strategyid AS TEXT)",
-    )
+    if has_names {
+        "COALESCE((SELECT st.name FROM strat.strategies st
+                   WHERE st.core_uid = o.core_uid AND st.strategy_id = o.strategyid),
+                  CAST(o.strategyid AS TEXT))"
+            .to_string()
+    } else {
+        "CAST(o.strategyid AS TEXT)".to_string()
+    }
 }
 
 /// Reference statement with every enrichment lookup wrapped in `MAX(...)` inside the aggregate.
@@ -258,7 +260,45 @@ fn reference_sql(src: &str, has_names: bool, by_strategy: bool) -> String {
     )
 }
 
-/// Run an arbitrary group statement through the SAME decoder production uses.
+/// Decode one historical reference row without reusing production's changed aggregate layout.
+///
+/// The old correlated statement carries its labels and metadata inline, whereas the production
+/// decoder now returns an unenriched group plus a strategy/core pair. Keeping this decoder here
+/// makes the SQL reference independent while returning the same pair-shaped result the runner
+/// maps to a visible group.
+fn reference_group_from_row(
+    row: &rusqlite::Row,
+) -> rusqlite::Result<(GroupStat, Option<(i64, i64)>)> {
+    let wsum: f64 = row.get(9)?;
+    let lsum: f64 = row.get(10)?;
+    let quote = group_quote_scope(row.get(18)?, row.get(19)?, row.get(20)?, row.get(21)?);
+    let comparable = matches!(quote, QuoteScope::Single(_));
+    Ok((
+        GroupStat {
+            key: row.get(0)?,
+            name: row.get(1)?,
+            kind: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            core: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            cores_n: row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+            alive: row.get(5)?,
+            n: row.get(6)?,
+            profit: row.get(7)?,
+            wins: row.get(8)?,
+            pf: profit_factor(wsum, lsum),
+            best: row.get(11)?,
+            worst: row.get(12)?,
+            lastedit: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+            bl: count_list(row.get::<_, Option<String>>(14)?),
+            wl: count_list(row.get::<_, Option<String>>(15)?),
+            raw_profit: if comparable { row.get(16)? } else { f64::NAN },
+            avg_order: if comparable { row.get(17)? } else { f64::NAN },
+            quote,
+        },
+        None,
+    ))
+}
+
+/// Run an arbitrary historical group statement through the reference decoder.
 fn run(conn: &Connection, sql: &str, q: &Query) -> Vec<GroupStat> {
     try_run(conn, sql, q).unwrap_or_else(|e| panic!("generated SQL must be valid: {e}\n{sql}"))
 }
@@ -338,7 +378,9 @@ fn lifting_enrichment_out_of_the_aggregate_preserves_every_group() {
 /// Run a group statement without unwrapping, for the paths that are expected to fail.
 fn try_run(conn: &Connection, sql: &str, q: &Query) -> rusqlite::Result<Vec<GroupStat>> {
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(rusqlite::params![q.from, q.to], group_from_row)?;
+    let rows = stmt.query_map(rusqlite::params![q.from, q.to], |row| {
+        reference_group_from_row(row).map(|(group, _)| group)
+    })?;
     rows.collect()
 }
 
@@ -553,6 +595,28 @@ fn a_strategy_missing_from_the_head_table_falls_back_to_its_id() {
     assert_eq!(ten.alive, Some(0));
     assert_eq!(ten.kind, "Orphan", "the version is readable without a head");
     assert_eq!((ten.bl, ten.wl), (0, 0), "no live head, no lists");
+}
+
+/// `analytics::groups::enrich` must retain `Some(0)` when no strategy metadata exists at all.
+///
+/// Replacing `Some(details.map_or(0, |item| item.alive))` with `details.map(...)` makes manual
+/// or otherwise unknown strategy rows look like their status is unavailable, so the Strategies
+/// list loses its explicit inactive marker instead of showing the bare id with a stable status.
+#[test]
+fn a_strategy_without_any_metadata_keeps_an_inactive_status() {
+    let c = fixture();
+    let q = q();
+    let src = unified_from(&c, &q).expect("source").expect("replica");
+    let out = groups(&c, &src, None, &q, true, true).expect("groups");
+    let zero = out.iter().find(|g| g.key == "0@1").expect("manual order");
+    assert_eq!(zero.name, "0", "unknown strategies retain the bare id");
+    assert_eq!(
+        zero.alive,
+        Some(0),
+        "unknown strategies are explicitly inactive"
+    );
+    assert_eq!(zero.kind, "", "no version means no type");
+    assert_eq!((zero.bl, zero.wl), (0, 0), "no head means no lists");
 }
 
 /// The distinct-coin count folds spellings, so a repeated coin is counted once.

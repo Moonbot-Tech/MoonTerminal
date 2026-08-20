@@ -1,10 +1,15 @@
 //! Report file export as semicolon-delimited CSV with a UTF-8 BOM or as a real Excel workbook
 //! produced by `rust_xlsxwriter`. Export runs its own SQLite query using the panel's CURRENT filter
 //! (period preset or manual From/To dates, cores, exact strategy keys, strategy-name mask, coin,
-//! side, emulator, and the deleted-trades checkbox) and current sort. It does
+//! side, emulator, the deleted-trades checkbox, and the open-positions switch) and current sort.
+//! It does
 //! not use the table's `MAX_REPORT_ROWS` cap: the panel shows the top 500 rows, while export writes
 //! every matching row up to [`EXPORT_MAX_ROWS`]. Whatever the grid is showing, the file shows —
-//! including the leading block of still-running positions when the period reaches the present, so
+//! including the leading block of still-running positions, which appears only when ALL THREE of
+//! the row-scope authorities admit it: the host is not forcing closed rows, the open-positions
+//! switch is on, and the period reaches the present (`report::row_scope_for`, where the host's
+//! `closed_only` wins outright over the other two). The file and the grid resolve that block from
+//! ONE filter, so
 //! the two cannot disagree about what the filter matched. Those rows carry an empty `closedate`,
 //! and a spreadsheet summing the profit column will therefore mix unrealized money into realized:
 //! the one place this export cannot enforce the closed-only rule the panel's own footer states.

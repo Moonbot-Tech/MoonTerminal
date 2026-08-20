@@ -623,6 +623,55 @@ fn totals_valuation_coverage_and_usdt_total_cover_the_closed_row_only() {
     std::fs::remove_dir_all(dir).expect("remove coverage-scope fixture directory");
 }
 
+/// `report_read.rs::query_totals_attempt` -- making the open pass unconditional makes a closed-only
+/// Report footer name an active position the grid excludes; `query_reports_attempt` must preserve
+/// the same closed, open, and combined partition for the table and CSV export.
+///
+/// The independent fixture has one durable closed trade and one still-running position. Its row
+/// counts and separate open tally are compared under every `RowScope`, so neither query can widen
+/// the user-visible universe without disagreeing with those fixed fixture facts.
+#[test]
+fn report_row_scope_keeps_rows_and_open_totals_in_the_same_partition() {
+    let conn = Connection::open_in_memory().expect("open Report row-scope fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, closedate INTEGER,
+             basecurrency INTEGER, profitbtc REAL, coin TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 1, 1_700_000_000, 1, 10.0, 'CLOSED'),
+             (1, 2, 0, 1, 99.0, 'OPEN');",
+    )
+    .expect("seed Report row-scope fixture");
+
+    let summary = |rows| {
+        let filter = ReportFilter {
+            rows,
+            ..ReportFilter::default()
+        };
+        let table = query_reports(&conn, &filter, "closedate", false, 100)
+            .expect("query Report rows for scope");
+        let totals = query_totals(&conn, &filter).expect("query Report totals for scope");
+        (table.rows.len(), totals.open.orders)
+    };
+
+    assert_eq!(
+        summary(RowScope::Closed),
+        (1, 0),
+        "closed-only rows must suppress the separate open-position footer tally"
+    );
+    assert_eq!(
+        summary(RowScope::Open),
+        (1, 1),
+        "the open scope must show and total the one active fixture position"
+    );
+    assert_eq!(
+        summary(RowScope::ClosedAndOpen),
+        (2, 1),
+        "the combined scope must contain both fixture rows but only one active position"
+    );
+}
+
 /// An inverse-denominated row, an explicit liquidation, a missing reason and a source without the
 /// reason column must all stay OUT of the summed money while still being counted, so the published
 /// subtotal is dimensionally sound and its shortfall is recoverable. Widening the summed predicate

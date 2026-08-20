@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh, core_metadata_wait,
+    BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh, core_metadata_wait,
     report_result_is_stale, strategy_base_allows_axis, visible_refresh,
 };
 use crate::analytics::Tab;
@@ -125,7 +125,11 @@ fn first_change_after_idle_still_waits_for_quiet() {
 fn transient_failure_rearms_a_quiet_retry() {
     let start = Instant::now();
     let mut gate = RefreshGate::new(1, start);
-    gate.request_refresh(start + Duration::from_secs(2), false);
+    gate.request_refresh(
+        start + Duration::from_secs(2),
+        false,
+        RefreshUrgency::Writer,
+    );
 
     assert_eq!(
         gate.plan(start + Duration::from_secs(2), false),
@@ -137,6 +141,87 @@ fn transient_failure_rearms_a_quiet_retry() {
         RefreshPlan::Now {
             show_overlay: false
         }
+    );
+}
+
+/// `analytics/refresh.rs:RefreshGate::request_refresh` must retain User urgency and let it
+/// override an armed Writer timer; clearing `pending_user` or restoring the timer interlock makes
+/// a person wait behind report commits and leaves the visible Analytics surface stale after a click.
+#[test]
+fn user_requests_run_immediately_and_clear_when_the_refresh_starts() {
+    let start = Instant::now();
+    let mut gate = RefreshGate::new(0, start);
+
+    gate.request_refresh(start, false, RefreshUrgency::User);
+    assert_eq!(
+        gate.plan(start, false),
+        RefreshPlan::Now {
+            show_overlay: false
+        },
+        "a User request with no elapsed time must not enter the quiet period"
+    );
+    assert_eq!(
+        gate.plan(start, true),
+        RefreshPlan::Idle,
+        "active database work remains an interlock even for a User request"
+    );
+    gate.refresh_started(0, start);
+    assert_eq!(
+        gate.plan(start, false),
+        RefreshPlan::Idle,
+        "starting the User refresh must clear its urgency"
+    );
+
+    gate.request_refresh(start, false, RefreshUrgency::Writer);
+    assert_eq!(
+        gate.plan(start, false),
+        RefreshPlan::After(Duration::from_secs(1)),
+        "a Writer request must arm the quiet timer"
+    );
+    gate.request_refresh(
+        start + Duration::from_millis(1),
+        false,
+        RefreshUrgency::User,
+    );
+    assert_eq!(
+        gate.plan(start + Duration::from_millis(1), false),
+        RefreshPlan::Now {
+            show_overlay: false
+        },
+        "a User request must override an already armed Writer timer"
+    );
+}
+
+/// `analytics/refresh.rs:RefreshGate::plan` must debounce Writer requests and enforce their
+/// maximum interval; making every due time `now` turns a report commit stream into a full-period
+/// scan storm on a live account.
+#[test]
+fn writer_requests_keep_the_quiet_period_and_maximum_deadline() {
+    let start = Instant::now();
+    let mut gate = RefreshGate::new(0, start);
+
+    gate.request_refresh(
+        start + Duration::from_millis(100),
+        false,
+        RefreshUrgency::Writer,
+    );
+    assert_eq!(
+        gate.plan(start + Duration::from_millis(100), false),
+        RefreshPlan::After(Duration::from_secs(1)),
+        "a Writer request must retain the quiet period"
+    );
+    gate.timer_fired();
+    gate.request_refresh(
+        start + Duration::from_millis(9500),
+        false,
+        RefreshUrgency::Writer,
+    );
+    assert_eq!(
+        gate.plan(start + Duration::from_millis(10100), false),
+        RefreshPlan::Now {
+            show_overlay: false
+        },
+        "continuous Writer requests must reach the original maximum deadline"
     );
 }
 
@@ -183,8 +268,12 @@ fn manual_overlay_intent_survives_coalesced_writer_generations() {
     let start = Instant::now();
     let mut gate = RefreshGate::new(0, start);
 
-    gate.request_refresh(start, true);
-    gate.request_refresh(start + Duration::from_millis(250), false);
+    gate.request_refresh(start, true, RefreshUrgency::Writer);
+    gate.request_refresh(
+        start + Duration::from_millis(250),
+        false,
+        RefreshUrgency::Writer,
+    );
     assert!(gate.observe_generation(1, start + Duration::from_millis(500)));
     assert_eq!(
         gate.plan(start + Duration::from_millis(1500), false),

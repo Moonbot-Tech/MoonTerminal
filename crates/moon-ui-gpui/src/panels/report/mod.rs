@@ -1,10 +1,12 @@
 //! Report panel ported from egui's `src/dock/report_view.rs`.
 //!
 //! It displays trades from the local SQLite database — closed ones within the selected period,
-//! plus the still-running positions whenever that period reaches the present ([`RowScope`], whose
-//! money the footer states apart from the realized total) — with core, coin, exact-strategy,
+//! plus still-running positions only when the host does not force closed rows, that period reaches
+//! the present, AND the scope field's open-positions switch admits them ([`RowScope`], whose money
+//! the footer states apart from the realized total) — with core, coin, exact-strategy,
 //! Auto strategy-name, and date filters, one merged scope field (side, order kind, deleted trades,
-//! comment pane) plus column selection above the table, the current row's comment and exact period
+//! open positions, comment pane) plus column selection above the table, the current row's comment
+//! and exact period
 //! totals below it. The
 //! generic table supports every displayable database column and header-click sorting. A writer
 //! generation counter in `Backend.reports` triggers throttled automatic refreshes.
@@ -236,25 +238,39 @@ pub(super) enum ReportPeriodBucket {
 
 /// Resolve which trades the panel's current controls ask the database for.
 ///
-/// Two authorities meet here and their precedence is fixed rather than incidental. `closed_only`
-/// is a QUERY predicate the caller set deliberately — today only the Analytics-owned scoped
-/// window, tomorrow possibly a control on an ordinary Report — so it wins outright: someone who
-/// asked for closed trades gets closed trades whatever period is showing. Only when nobody asked
-/// does the period decide, and it decides on its upper bound alone
+/// THREE authorities meet here and their precedence is fixed rather than incidental.
+///
+/// `closed_only` is a QUERY predicate the HOST set — today only the Analytics-owned scoped window
+/// — so it wins outright: someone who asked for closed trades gets closed trades whatever else is
+/// showing. `show_open` is the USER's own toolbar switch and comes next: with it off, the panel
+/// excludes still-running positions however far into the present the period reaches. Only when
+/// neither has excluded them does the PERIOD decide, and it decides on its upper bound alone
 /// ([`db::open_rows_for_bound`]).
 ///
-/// Written as one named function rather than a field threaded through, so the two facts compose
-/// in exactly one place instead of at every construction site.
+/// The first two are written as ONE disjunction rather than a nesting because both roads lead to
+/// the same answer, and spelling it that way keeps "the period only decides when nobody asked"
+/// visible at a glance.
+///
+/// Written as one named function rather than a field threaded through, so the three facts compose
+/// in exactly one place instead of at every construction site. That single place is what makes the
+/// rows, the totals and the export agree by construction: they share ONE [`db::ReportFilter`], so
+/// there is no second path on which a footer could total trades the table is not showing.
 ///
 /// Args:
-///     closed_only: Whether this panel deliberately excludes still-running positions.
+///     closed_only: Whether the HOST deliberately excludes still-running positions.
+///     show_open: Whether the USER's toolbar switch admits still-running positions.
 ///     date_to: Inclusive upper bound the filter ended up with, preset or manual.
 ///     now: Current Unix timestamp in seconds, read once for the whole filter.
 ///
 /// Returns:
 ///     The row scope the database filter carries.
-pub(super) fn row_scope_for(closed_only: bool, date_to: Option<i64>, now: i64) -> db::RowScope {
-    if closed_only {
+pub(super) fn row_scope_for(
+    closed_only: bool,
+    show_open: bool,
+    date_to: Option<i64>,
+    now: i64,
+) -> db::RowScope {
+    if closed_only || !show_open {
         db::RowScope::Closed
     } else {
         db::open_rows_for_bound(date_to, now)
@@ -306,10 +322,9 @@ pub(super) fn apply_period_from_prefs(
 ///     existing: Current host entry, retained so the inactive period bucket survives.
 ///     bucket: Live period bucket receiving an explicit pick.
 ///     picked_period: Explicit menu pick, or `None` to preserve both stored period values.
-///     side: Live direction filter.
-///     kind: Live order-kind filter.
-///     deleted_only: Live deleted-only filter.
-///     strategy_name_mask: Live Auto strategy-name mask.
+///     live: The panel's live toolbar filters. Its `period` member is deliberately NOT read —
+///         the period slot is chosen by `bucket` and written only from `picked_period`, because
+///         a displayed period is not always an explicit menu pick.
 ///
 /// Returns:
 ///     A complete host entry with shared filters refreshed and only the selected period slot
@@ -318,16 +333,14 @@ pub(super) fn next_prefs_for_period_pick(
     existing: Option<&moon_core::config::ReportFilterPrefs>,
     bucket: ReportPeriodBucket,
     picked_period: Option<Period>,
-    side: SideFilter,
-    kind: ReportKind,
-    deleted_only: bool,
-    strategy_name_mask: &str,
+    live: &state::ReportFilterSet,
 ) -> moon_core::config::ReportFilterPrefs {
     let mut prefs = existing.cloned().unwrap_or_default();
-    prefs.side = Some(side_id(side).to_string());
-    prefs.kind = Some(kind.id().to_string());
-    prefs.deleted_only = Some(deleted_only);
-    prefs.strategy_name_mask = Some(strategy_name_mask.to_string());
+    prefs.side = Some(side_id(live.side).to_string());
+    prefs.kind = Some(live.kind.id().to_string());
+    prefs.deleted_only = Some(live.deleted_only);
+    prefs.show_open = Some(live.show_open);
+    prefs.strategy_name_mask = Some(live.strategy_name_mask.clone());
     if let Some(period) = picked_period {
         let key = Some(period.menu_key().to_string());
         match bucket {
@@ -613,6 +626,14 @@ pub struct ReportPanel {
     /// Show ONLY soft-deleted trades when set; hide them when clear (the default). Persisted beside
     /// [`Self::side`].
     pub(super) deleted_only: bool,
+    /// Show still-running positions alongside closed trades. ON by default, which is what the
+    /// panel has always done. Persisted beside [`Self::side`].
+    ///
+    /// A DIFFERENT axis from [`Self::kind`] — that one is a trade's ORIGIN (real or emulated),
+    /// this one is its LIFECYCLE — which is why the two are independently selectable rather than
+    /// rows of one list. [`Self::closed_only`] still wins outright over it; the precedence is
+    /// spelled once, in [`row_scope_for`].
+    pub(super) show_open: bool,
     /// Whether Analytics owns this panel's filters.
     ///
     /// A scoped standalone window is handed its side, kind and dates by Analytics and forces

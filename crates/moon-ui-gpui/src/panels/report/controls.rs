@@ -123,6 +123,22 @@ impl ReportScopeControl {
         };
         owner.update(cx, |panel, cx| panel.toggle_comment_pane(cx));
     }
+
+    /// Toggle still-running positions through the live owner.
+    ///
+    /// Args:
+    ///     owner: Weak Report owner captured by a menu item.
+    ///     cx: Application context used to read and update the owner.
+    ///
+    /// Returns:
+    ///     Nothing; a live owner receives exactly one filter mutation.
+    fn toggle_open(owner: &WeakEntity<ReportPanel>, cx: &mut App) {
+        let Some(owner) = owner.upgrade() else {
+            return;
+        };
+        let show_open = !owner.read(cx).show_open;
+        owner.update(cx, |panel, cx| panel.set_show_open(show_open, cx));
+    }
 }
 
 impl Render for ReportScopeControl {
@@ -133,7 +149,10 @@ impl Render for ReportScopeControl {
     ///     cx: Child render context that owns popup-only invalidation.
     ///
     /// Returns:
-    ///     The existing direction, kind, deleted-only, and comment menu semantics.
+    ///     The existing direction, kind, deleted-only, and comment menu semantics, plus the
+    ///     open-positions lifecycle row. Direction and kind stay radio groups; deleted-only,
+    ///     open-positions and the comment pane are each their own checkable section, because they
+    ///     answer independent questions rather than alternatives of one.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(owner) = self.owner.upgrade() else {
             return div().into_any_element();
@@ -143,6 +162,12 @@ impl Render for ReportScopeControl {
         let kind = panel.kind;
         let deleted_only = panel.deleted_only;
         let show_comment = panel.show_comment;
+        // An Analytics-scoped Report forces `RowScope::Closed` at the composition point, so the
+        // switch cannot affect its query. Render it disabled and UNCHECKED rather than enabled and
+        // on: an interactive row whose value the query ignores is a control that lies. This mirrors
+        // how the comment row below already degrades when the panel carries no comment column.
+        let lifecycle_forced_closed = panel.closed_only;
+        let show_open = panel.show_open && !lifecycle_forced_closed;
         let no_comment_column =
             !panel.cols.is_empty() && !panel.cols.iter().any(|column| column == "comment");
 
@@ -212,6 +237,17 @@ impl Render for ReportScopeControl {
             MoonMenuItem::with_key("rd-deleted", t!("report.filter.deleted").to_string())
                 .checked(deleted_only)
                 .on_click(move |_, _, app| Self::toggle_deleted(&deleted_owner, app)),
+        );
+        items.push(MoonMenuItem::separator());
+        // Its own section rather than sharing the deleted row's: `deleted_only` is EXCLUSIVE
+        // ("show ONLY these") while this is INCLUSIVE ("show these TOO"), and two opposite
+        // polarities inside one block read as a matched pair when they are nothing of the sort.
+        let open_owner = self.owner.clone();
+        items.push(
+            MoonMenuItem::with_key("rd-open", t!("report.filter.open_rows").to_string())
+                .checked(show_open)
+                .disabled(lifecycle_forced_closed)
+                .on_click(move |_, _, app| Self::toggle_open(&open_owner, app)),
         );
         items.push(MoonMenuItem::separator());
         let comment_owner = self.owner.clone();

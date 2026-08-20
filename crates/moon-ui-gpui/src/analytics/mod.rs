@@ -57,7 +57,9 @@ use moon_core::db::{
 };
 
 use crate::load_state::{LoadState, Note, note_el};
-use refresh::{BusyRetryBudget, RefreshGate, RefreshPlan, VisibleRefresh, visible_refresh};
+use refresh::{
+    BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh, visible_refresh,
+};
 
 const ANALYTICS_HEADER_H: f32 = 32.0;
 
@@ -414,6 +416,13 @@ pub struct AnalyticsView {
     strategy_data_period: Period,
     /// Whether the compact Strategies base predates the latest report generation.
     strategy_dirty: bool,
+    /// Whether the tuner base may still be warmed in the background for the current scope.
+    ///
+    /// One prefetch per user-visible scope, and no more. The prefetch's own completion re-plans
+    /// the refresh gate, so re-arming it on every writer generation would let Summary and the
+    /// strategy base alternate forever under continuous ingestion — twice the background
+    /// database work for a tab nobody has opened.
+    strategy_prefetch_armed: bool,
     /// Closed trades the core never dated, under the CURRENT filters.
     ///
     /// `None` while unknown. Failures are tracked separately so the banner never claims that
@@ -827,6 +836,7 @@ impl AnalyticsView {
             strategy_data: ProfitLoadState::default(),
             strategy_data_period: saved_strat_period.unwrap_or(Period::CurMonth),
             strategy_dirty: true,
+            strategy_prefetch_armed: true,
             undated: None,
             undated_error: None,
             undated_expanded: session.undated_expanded,
@@ -1019,19 +1029,30 @@ impl AnalyticsView {
             log::warn!("analytics: automatic database retry budget exhausted");
             return;
         }
-        self.report_refresh
-            .request_refresh(std::time::Instant::now(), false);
+        // WRITER urgency on purpose: a bounded Busy retry that fired immediately would hammer a
+        // database already under contention, which is the one thing the quiet period is for.
+        self.report_refresh.request_refresh(
+            std::time::Instant::now(),
+            false,
+            RefreshUrgency::Writer,
+        );
         self.schedule_report_refresh(cx);
     }
 
     /// Queue a visible catch-up behind any Analytics database work already in flight.
     ///
     /// Args:
+    ///     urgency: Who asked; a user's request skips the writer's quiet period.
     ///     show_overlay: Whether a user action requires blocking progress feedback.
     ///     cx: GPUI context used to arm the shared refresh gate.
-    pub(super) fn request_report_refresh(&mut self, show_overlay: bool, cx: &mut Context<Self>) {
+    pub(super) fn request_report_refresh(
+        &mut self,
+        urgency: RefreshUrgency,
+        show_overlay: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.report_refresh
-            .request_refresh(std::time::Instant::now(), show_overlay);
+            .request_refresh(std::time::Instant::now(), show_overlay, urgency);
         self.schedule_report_refresh(cx);
     }
 
@@ -1076,7 +1097,18 @@ impl AnalyticsView {
     fn refresh_visible_report_data(&mut self, show_overlay: bool, cx: &mut Context<Self>) {
         self.acknowledge_report_refresh();
         let base_dirty = match self.tab {
-            Tab::Strategies => self.strategy_dirty || self.core_refresh_needed,
+            // Ask whether a core scan is DUE, never whether one is OWED.
+            // `core_metadata_due` sets `core_refresh_needed` on EVERY call and clears it only
+            // when cores were actually read, while cores are due once a minute — so the owed
+            // flag is true for ~59 seconds out of every 60, and reading it here made every
+            // report commit and every tab entry re-run the whole base scan over an already
+            // current list. Nothing goes stale: `schedule_core_metadata_refresh` arms its own
+            // timer and asks for the refresh the moment the 60-second cadence elapses.
+            Tab::Strategies => {
+                self.strategy_dirty
+                    || refresh::core_metadata_wait(self.last_cores_at, std::time::Instant::now())
+                        .is_zero()
+            }
             _ => self.data_dirty,
         };
         match visible_refresh(self.tab, base_dirty) {
@@ -1144,7 +1176,8 @@ impl AnalyticsView {
                     let remaining =
                         refresh::core_metadata_wait(this.last_cores_at, std::time::Instant::now());
                     if remaining.is_zero() {
-                        this.request_report_refresh(false, cx);
+                        // A background cadence, not a person: it keeps the quiet period.
+                        this.request_report_refresh(RefreshUrgency::Writer, false, cx);
                     } else {
                         this.schedule_core_metadata_refresh(remaining, cx);
                     }
@@ -1157,7 +1190,24 @@ impl AnalyticsView {
     /// Current filters in the structure shared by Summary and Tuning, using the active tab's
     /// period (`active_period`).
     fn query(&self) -> Query {
-        let period = self.active_period();
+        self.query_for(self.active_period())
+    }
+
+    /// Current filters over one EXPLICIT time window.
+    ///
+    /// Split out from [`Self::query`] because the strategy base must read `strat_period`
+    /// whatever tab is on screen: it already records `strategy_data_period = self.strat_period`,
+    /// and taking the window from the ACTIVE tab instead was safe only for as long as that read
+    /// could not start from Summary. The background warm-up does exactly that, and the two
+    /// sources disagreeing would put another period's numbers under the tuner's own period
+    /// label, with nothing marking them stale.
+    ///
+    /// Args:
+    ///     period: Window the caller is building a result for.
+    ///
+    /// Returns:
+    ///     Shared filters over that window.
+    fn query_for(&self, period: Period) -> Query {
         let (from, to) = period.range(self.display_zone);
         Query {
             time_zone: self.display_zone,
@@ -1301,6 +1351,11 @@ impl AnalyticsView {
     ///     cx: GPUI context used to start all required background reads.
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.cancel_latest_reads();
+        // Retire every request this scope change invalidates, including ones no branch below
+        // restarts. On the Calendar tab neither `reload_summary` nor `reload_strategy_base` runs,
+        // so without this bump a cancelled background read's completion would pass its own
+        // `seq != req` guard and publish an interrupt as a real result under the new scope.
+        self.seq = self.seq.wrapping_add(1);
         self.report_busy_retries.reset();
         self.acknowledge_report_refresh();
         // The tuner uses the same filters: invalidate it and recompute immediately in the active
@@ -1330,6 +1385,8 @@ impl AnalyticsView {
         }
         self.data_dirty = true;
         self.strategy_dirty = true;
+        // A new scope needs a new warm base.
+        self.strategy_prefetch_armed = true;
         self.undated = None;
         self.undated_error = None;
         match self.tab {
@@ -1420,9 +1477,46 @@ impl AnalyticsView {
                 );
                 this.apply_undated_result(undated, after_report);
                 this.settle_report_refresh_retry(retry_error.as_ref(), cx);
+                // The Summary is on screen and the user is reading it; warm the tuner base now
+                // rather than after they click.
+                //
+                // Not while ANYTHING in this compound read failed, though — and `data_error`
+                // alone is not that test. `summary_data` classifies its main data, its
+                // undated-close read and its optional core scan independently, so the main data
+                // can land fine while `undated` or `cores` came back Busy. `retry_error` is
+                // exactly that classification, and the line above has just queued a
+                // quiet-period retry for it. Starting a second full-period scan into a database
+                // that is already reporting contention would walk straight past that delay and
+                // make the contention worse. `strategy_prefetch_armed` is untouched when we skip,
+                // so the retry's own completion warms the base instead.
+                if data_error.is_none() && retry_error.is_none() {
+                    this.prefetch_strategy_base(cx);
+                }
                 cx.notify();
             },
         );
+    }
+
+    /// Warm the tuner's strategy base in the background while the Summary is on screen.
+    ///
+    /// The measured complaint this exists for: at 200 cores over half a million report rows the
+    /// strategy base is its own full-period read, and the user paid for all of it AFTER clicking
+    /// the tuner tab. Running it while they read the Summary costs the same database work at a
+    /// moment nobody is waiting.
+    ///
+    /// Deliberately the EXISTING read, with its existing arguments — no second cache, no second
+    /// lane, no second thread. `after_report` keeps any visible snapshot; the axis is not chained
+    /// because no tuning axis may start from a tab that is not showing one; and the overlay stays
+    /// down because the window must not dim under work the user did not ask for.
+    ///
+    /// Args:
+    ///     cx: GPUI context used to run and publish the background read.
+    fn prefetch_strategy_base(&mut self, cx: &mut Context<Self>) {
+        if !self.strategy_prefetch_armed || self.tab != Tab::Summary || !self.strategy_dirty {
+            return;
+        }
+        self.strategy_prefetch_armed = false;
+        self.reload_strategy_base(true, false, false, cx);
     }
 
     /// Reload the compact Strategies base and optionally continue with its visible axis.
@@ -1450,7 +1544,7 @@ impl AnalyticsView {
         let req = self.seq;
         let report_req = self.current_report_generation();
         self.strategy_data_period = self.strat_period;
-        let q = self.query();
+        let q = self.query_for(self.strat_period);
         let read_cores = self.core_metadata_due(cx);
         self.spawn_latest_db(
             &[bg::ReadLane::StrategyBase],
@@ -1492,7 +1586,20 @@ impl AnalyticsView {
                 // A same-scope automatic failure must leave the last ready snapshot visible while
                 // the retry gate settles. Manual scope changes have already retired the old data,
                 // so they publish the classified failure instead of showing stale values.
-                if !after_report || data_error.is_none() {
+                //
+                // "Keep what is visible" needs something visible to keep. The background
+                // warm-up is the first caller to reach here over a NEVER-SETTLED state, and there
+                // the rule would leave the tuner reading "Loading" forever with nothing in flight
+                // — a pending state that was really a classified failure, which is the one thing
+                // this window must never show.
+                //
+                // The test is `Loading`, deliberately NOT "has scalar data": `Split` carries a
+                // real per-quote breakdown the toolbar renders, and `NotReady` / `Failed` are
+                // settled answers too. All three stay preserved exactly as before, so no path
+                // that existed before this change behaves differently.
+                let preserve_snapshot =
+                    after_report && !matches!(this.strategy_data, ProfitLoadState::Loading);
+                if !preserve_snapshot || data_error.is_none() {
                     this.strategy_data.apply(data);
                     this.strat_core_w = None;
                     // Both caches describe the group set that was just replaced. The memo's key

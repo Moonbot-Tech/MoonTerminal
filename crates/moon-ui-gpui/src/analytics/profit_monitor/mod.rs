@@ -38,7 +38,9 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::refresh::{report_result_is_stale, BusyRetryBudget, RefreshGate, RefreshPlan};
+use super::refresh::{
+    report_result_is_stale, BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency,
+};
 use super::ProfitLoadState;
 use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
@@ -1001,8 +1003,11 @@ impl ProfitMonitorView {
                 self.invalidate_content(cx);
                 cx.notify();
             }
+            // WRITER throughout: this window's timing is not what the urgency split was added
+            // for, and it keeps exactly the behaviour it had before the gate learned to tell a
+            // person from a commit stream.
             self.refresh
-                .request_refresh(std::time::Instant::now(), false);
+                .request_refresh(std::time::Instant::now(), false, RefreshUrgency::Writer);
             self.schedule_refresh(cx);
             return;
         }
@@ -1044,8 +1049,11 @@ impl ProfitMonitorView {
                             false,
                         );
                         if newer_generation {
-                            this.refresh
-                                .request_refresh(std::time::Instant::now(), false);
+                            this.refresh.request_refresh(
+                                std::time::Instant::now(),
+                                false,
+                                RefreshUrgency::Writer,
+                            );
                         }
                         this.settle_busy_retry(error.as_ref(), cx);
                     }
@@ -1108,8 +1116,10 @@ impl ProfitMonitorView {
             return;
         }
         if self.busy_retries.claim() {
+            // A bounded Busy retry keeps the quiet period: retrying at once would hammer a
+            // database already under contention.
             self.refresh
-                .request_refresh(std::time::Instant::now(), false);
+                .request_refresh(std::time::Instant::now(), false, RefreshUrgency::Writer);
             self.schedule_refresh(cx);
         } else {
             log::warn!("profit monitor: automatic database retry budget exhausted");

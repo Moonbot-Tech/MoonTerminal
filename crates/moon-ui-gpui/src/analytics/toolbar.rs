@@ -12,6 +12,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::refresh::RefreshUrgency;
 use super::{AnalyticsView, Period, ProfitLoadState, Tab};
 use crate::design;
 use crate::design::moon;
@@ -390,7 +391,7 @@ impl AnalyticsView {
                                 // A hidden base view can lag a generation while Calendar alone
                                 // refreshes. Catch it up on entry without destructive scope
                                 // invalidation, which would erase tuner drafts.
-                                this.request_report_refresh(true, cx);
+                                this.request_report_refresh(RefreshUrgency::User, true, cx);
                             } else {
                                 // Tab-entry catch-up uses the report gate so it cannot overlap
                                 // an automatic full-period scan already in flight.
@@ -400,7 +401,7 @@ impl AnalyticsView {
                                 if t == Tab::Calendar
                                     && (this.cal_days.data().is_none() || this.cal_dirty)
                                 {
-                                    this.request_report_refresh(true, cx);
+                                    this.request_report_refresh(RefreshUrgency::User, true, cx);
                                 }
                             }
                             cx.notify();
