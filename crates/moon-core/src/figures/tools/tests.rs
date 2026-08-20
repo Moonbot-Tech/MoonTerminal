@@ -181,6 +181,58 @@ fn every_tool_previews_before_its_last_click() {
     }
 }
 
+/// A gesture-completed tool completes itself EXACTLY: press, release, and the nodes it derives add
+/// up to its click count, no more and no fewer.
+///
+/// Both directions are defects the panel cannot recover from. Too few nodes leave a draft that the
+/// gesture cannot finish and no further click was expected to; too many spill past the figure and
+/// open a second draft on the release.
+#[test]
+fn a_drag_completed_tool_fills_its_clicks_exactly() {
+    // Every shape of gesture the panel can hand a tool, INCLUDING the degenerate ones: the count is
+    // the tool's own contract and may not depend on which way the hand moved. A single sample pair
+    // would pass for a tool that returns nothing for, say, a vertical drag.
+    let ends = [
+        ((0.0, 0.0), (40.0, 30.0)),
+        ((40.0, 30.0), (0.0, 0.0)),
+        ((0.0, 0.0), (40.0, 0.0)),
+        ((0.0, 0.0), (0.0, 40.0)),
+        ((7.0, 7.0), (7.0, 7.0)),
+    ];
+    for def in REGISTRY {
+        let Some(rest) = def.drag_rest else { continue };
+        for (from, to) in ends {
+            let derived = rest(from, to);
+            assert_eq!(
+                derived.len() + 2,
+                def.clicks as usize,
+                "{} derives {} node(s) from the drag {from:?}->{to:?} but needs {} click(s)",
+                def.key,
+                derived.len(),
+                def.clicks
+            );
+        }
+    }
+}
+
+/// A price BAND is never completed from a drag.
+///
+/// Sells-to-zone spreads live sell orders across the band it was handed, so both of its prices must
+/// be ones a hand pointed at. A band tool that grew a `drag_rest` would put a DERIVED price into
+/// that command; the panel refuses one at run time too, and this is the half that fails loudly, at
+/// the moment the registry row is written rather than the moment someone drags one.
+#[test]
+fn no_price_band_is_completed_from_a_drag() {
+    for def in REGISTRY {
+        let is_band = proto(def.tool).is_some_and(|kind| kind.price_band().is_some());
+        assert!(
+            !(is_band && def.drag_rest.is_some()),
+            "{} is a price band and must not derive nodes from a drag",
+            def.key
+        );
+    }
+}
+
 #[test]
 fn tool_cycle_visits_every_tool_once() {
     let first = REGISTRY[0].tool;

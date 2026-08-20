@@ -33,6 +33,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.fib_retracement",
     glyph: "≣",
     clicks: 2,
+    drag_rest: None,
     scale_swatch: Some(super::super::levels::scale_swatch),
     fills: true,
     // The core HAS a Fibo type and we now read and write it — as `MbFib`, which is a different

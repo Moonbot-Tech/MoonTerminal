@@ -123,18 +123,29 @@ impl ChartPanel {
             return false;
         }
         let node = map.node_at(pos);
-        self.fig_draw_click(pane, tool, node, armed, cx);
-        // Retain the placed-node position for the drag-release gesture in `try_fig_release`.
-        self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
+        self.fig_draw_click(pane, tool, node, &[], armed, cx);
+        // Retain the press for the drag-release gesture in `try_fig_release`. On the draft itself,
+        // so a figure finished by this very click leaves no press behind at all.
+        if let Some(d) = self.fig_draft.as_mut() {
+            d.down = Some(pos);
+        }
         true
     }
 
-    /// Place a node in drawing mode, completing the figure once the tool has all its clicks.
+    /// Place one or more nodes in drawing mode, completing the figure once the tool has all its
+    /// clicks.
+    ///
+    /// `node` is the click's own; `derived` is whatever the tool built from a press-drag-release
+    /// gesture, empty for an ordinary click. They go in as ONE placement on purpose: the draft is
+    /// resolved once, the visual is published once, and no half-built shape reaches the screen or a
+    /// second draft between them. Nodes past the one that finishes the figure are dropped rather
+    /// than starting another.
     fn fig_draw_click(
         &mut self,
         pane: usize,
         tool: FigureTool,
         node: FigNode,
+        derived: &[FigNode],
         armed: bool,
         cx: &mut Context<Self>,
     ) {
@@ -151,6 +162,11 @@ impl ChartPanel {
         {
             self.fig_draft = None;
         }
+        // Derived nodes describe the draft that was alive when the gesture's press happened. If the
+        // reset above just took that draft — the pane's coin changed under it, or the tool did — a
+        // fresh one starts from this node alone: a derived vertex in it would be a point the user
+        // never aimed at.
+        let derived = if self.fig_draft.is_some() { derived } else { &[] };
         let draft = match self.fig_draft.as_mut() {
             Some(d) => d,
             None => {
@@ -171,7 +187,18 @@ impl ChartPanel {
         // has ever been for a finished figure.
         let style = draft.style;
         let sells_zone = draft.sells_zone;
-        let finished = draft.place(node);
+        // All of them against THIS draft, rather than re-entering and being tested against a draft
+        // the first node may already have finished. The break is a guard, not a live branch: the
+        // registry contract test pins `2 + derived == clicks`, so only the last node can complete
+        // the figure — but a tool that ever broke that must drop its surplus, not spill it into a
+        // second draft.
+        let mut finished = draft.place(node);
+        for &extra in derived {
+            if finished.is_some() {
+                break;
+            }
+            finished = draft.place(extra);
+        }
         if let Some(kind) = finished {
             self.fig_draft = None;
             // A Sells-to-zone band ends HERE and goes no further: the prices go to the core and
@@ -219,9 +246,8 @@ impl ChartPanel {
     /// continues. Returns whether the release advanced the draft.
     ///
     /// `draw_mod` reports whether the secondary modifier is still held, and a Sells-to-zone band
-    /// requires it: its finishing "click" sends a live bulk move, while
-    /// `fig_draw_down` survives from the band's own first click, so an ordinary unmodified
-    /// left-drag of the chart would otherwise be measured against that press and complete the band.
+    /// requires it: its finishing "click" sends a live bulk move, so a modifier dropped part way
+    /// through the drag must leave the band unsent rather than complete it on the way up.
     pub(super) fn try_fig_release(
         &mut self,
         pos: (f32, f32),
@@ -237,23 +263,121 @@ impl ChartPanel {
         if d.needs_modifier() && !draw_mod {
             return false;
         }
-        let Some(down) = self.fig_draw_down else {
+        let Some(down) = d.down else {
             return false;
         };
-        let dist = pt_dist(pos, down);
-        // Require more than the hit threshold so click jitter cannot complete a figure.
-        let threshold = 2.0 * HIT_PX * self.last_ppp.max(1.0);
-        if dist < threshold {
+        if pt_dist(pos, down) < self.fig_gesture_threshold() {
             return false;
         }
         let (pane, tool) = (d.pane, d.tool);
+        // The release belongs to the pane the draft is being drawn on. A stack shows a different
+        // market on its own time and price scale in the pane next door, and the preview stops
+        // following the cursor the moment it leaves this one — so finishing there would land a
+        // figure built from a projection the user was never shown. The glass/order-book strip is
+        // part of its pane and still finishes, which is deliberate and older than this gesture.
+        if self.input.pane_at(pos.0, pos.1) != Some(pane) {
+            return false;
+        }
         let Some(map) = self.pane_map(pane) else {
             return false;
         };
         let node = map.node_at(pos);
-        self.fig_draw_click(pane, tool, node, armed, cx);
-        self.fig_draw_down = self.fig_draft.is_some().then_some(pos);
+        // Read BEFORE the release node is placed: what a tool derives from a gesture is defined
+        // against a draft holding the press alone, and placing first would make that test fail.
+        // The release node and the derived ones then go in together, so a tool drawn by dragging
+        // PART of itself finishes here rather than waiting for the clicks it is still short of.
+        let rest = self.fig_gesture_rest(pos, node, &map);
+        self.fig_draw_click(pane, tool, node, &rest, armed, cx);
+        // The button is up, so this draft holds no press any more. Carrying the release point
+        // forward would say a press is held with no button down at all, and the preview reads that
+        // to decide a held pointer is this draft's.
+        if let Some(d) = self.fig_draft.as_mut() {
+            d.down = None;
+        }
         true
+    }
+
+    /// Distance a press must travel before its release counts as the next click rather than as
+    /// click jitter.
+    ///
+    /// One statement of the rule, read by the release that applies it and by the preview that has
+    /// to agree with it: a gesture previewing a figure the release would not build is worse than
+    /// no preview at all.
+    fn fig_gesture_threshold(&self) -> f32 {
+        2.0 * HIT_PX * self.last_ppp.max(1.0)
+    }
+
+    /// The draft's own pane, when the pointer is on it.
+    ///
+    /// A pane of a stack shows another market on its own time and price scale, so a draft has
+    /// nothing to say about a pointer that has wandered into one.
+    fn fig_draft_pane(&self, pos: (f32, f32)) -> Option<usize> {
+        self.fig_draft
+            .as_ref()
+            .map(|d| d.pane)
+            .filter(|dp| self.input.pane_at(pos.0, pos.1) == Some(*dp))
+    }
+
+    /// Whether a press-drag-release gesture is live for the pointer at `pos`.
+    ///
+    /// The single answer to "could this pointer still be drawing", and deliberately CHEAP: a held
+    /// button, on the chart, on the draft's own pane. It is asked on every raw mouse move, ahead of
+    /// the movement threshold, because the answer turning false is what retires a stale preview —
+    /// and a preview may not wait for the next accepted move to stop showing a figure nothing will
+    /// build. What the gesture has actually derived costs a projection and is computed only for a
+    /// move the threshold accepted.
+    fn fig_gesture_live(&self, pos: (f32, f32), within: bool, pressed_left: bool) -> bool {
+        within && pressed_left && self.fig_draft_pane(pos).is_some()
+    }
+
+    /// The nodes the draft's tool derives from the gesture ending at `at`, empty when it derives
+    /// none.
+    ///
+    /// Answered for the pointer position the caller is previewing or placing — never a fresher
+    /// one: the derived geometry and the node it is measured against have to describe the same
+    /// instant, or the preview shows a figure built from two different pointer positions.
+    fn fig_gesture_rest(&self, pos: (f32, f32), at: FigNode, map: &PaneMap) -> Vec<FigNode> {
+        let Some(d) = self.fig_draft.as_ref() else {
+            return Vec::new();
+        };
+        let Some(down) = d.down else {
+            return Vec::new();
+        };
+        // Still inside the jitter box: this press is a click so far, and the release would place a
+        // single node. Previewing the whole figure here would show one that never lands.
+        if pt_dist(pos, down) < self.fig_gesture_threshold() {
+            return Vec::new();
+        }
+        let Some(rest) = d.drag_rest_rule() else {
+            return Vec::new();
+        };
+        // Both ends are read back from NODES rather than from raw pixels. The start, because the
+        // chart moves under a live gesture — it follows the live edge and autofits Y — so the press
+        // pixel and the node placed there drift apart, and geometry raised off the pixel would
+        // stand on a base that is no longer under it. The far end, because the pointer projection
+        // clamps to the visible price: a pointer below the plot — the time-axis strip belongs to
+        // the pane too — lands a base end at the bottom price while the raw pixel says otherwise.
+        let (from, to) = (map.px_of(d.nodes[0]), map.px_of(at));
+        let derived: Vec<FigNode> = rest(from, to)
+            .into_iter()
+            // Unclamped: a derived point is meant to be able to leave the visible range, and the
+            // pointer-clamping projection would flatten it onto the view's edge price.
+            .map(|p| map.node_at_unclamped(p))
+            .collect();
+        // A derived price must be one a chart can carry. Unclamped, it may run off the top of a
+        // wide view and come out at or below zero — a price no market has, which would reach
+        // `figures.json` and, for an armed triangle, the core's chart-object blob. The gesture then
+        // derives NOTHING and the release places its own node alone: the figure is finished by the
+        // clicks it is short of, which is the behaviour before this feature and not a silent
+        // half-figure. Same bounds the tools that compute prices already apply to their own
+        // (`mb_fib::is_price`, `fib_retracement`'s level skip).
+        if derived
+            .iter()
+            .any(|n| !(n.price.is_finite() && n.price > 0.0 && n.price <= f32::MAX as f64))
+        {
+            return Vec::new();
+        }
+        derived
     }
 
     /// Grab a figure on modifier-left-click, preferring the selected figure's handles over the
@@ -340,7 +464,7 @@ impl ChartPanel {
     /// active drag or a later preview/hover change; cancelling a draft after drawing mode is disabled
     /// synchronizes visuals but can still return `false`, especially when outside the chart.
     ///
-    /// It is NOT a "repaint the GPUI tree" request, and both callers discard it: everything this
+    /// It is NOT a "repaint the GPUI tree" request, and every caller discards it: everything this
     /// updates reaches the screen through the chart's own pass. A caller that ever does need the
     /// tree repainted has to decide that for itself.
     pub(super) fn update_fig_pointer(
@@ -357,12 +481,32 @@ impl ChartPanel {
             self.fig_draft = None;
             self.sync_fig_visual(cx);
         }
+        // Retiring the gesture's derived nodes happens HERE, in one place, before any early return
+        // can skip it. They are what the preview shows INSTEAD of the tool's partial shape, so a
+        // set left behind by a gesture that has ended keeps a finished figure painted on a chart
+        // that will not build it — and every way a gesture ends (the button up, the pointer off the
+        // chart or off the draft's own pane, a release that reached no handler at all) is the same
+        // fact, said once. Ungated by the movement threshold on purpose: a preview must stop the
+        // moment its gesture does, not on the next accepted move. UPDATING the set is the other
+        // half and costs a projection, so it waits for the threshold, below.
+        let mut changed = false;
+        if !self.fig_gesture_live(pos, within, pressed_left) {
+            if let Some(d) = self.fig_draft.as_mut() {
+                changed |= d.set_drag_rest(Vec::new());
+            }
+            // Retire the movement probe with the gesture, exactly as leaving the chart does. The
+            // threshold measures from the last ACCEPTED position, so a pointer that steps into the
+            // next pane and back within a pixel would otherwise keep showing the partial shape
+            // until it moved far enough for a move to be accepted again.
+            self.fig_draft_probe = None;
+        }
         if !within {
             // The pointer left the chart: the hover goes with it, since the readout follows the
             // hover and would otherwise keep being drawn for a figure the pointer is nowhere near.
             // A DRAG keeps its hover: the figure under the cursor is still the one being moved,
             // and the pointer is expected to leave the pane mid-drag.
-            if self.fig_drag.is_none() && self.fig_hover.take().is_some() {
+            changed |= self.fig_drag.is_none() && self.fig_hover.take().is_some();
+            if changed {
                 self.sync_fig_visual(cx);
                 return true;
             }
@@ -371,6 +515,12 @@ impl ChartPanel {
         // Edit an actively dragged figure in place and force the same immediate rebuild as an
         // order drag; otherwise the line would update only on data ticks and visibly lag.
         if pressed_left {
+            if self.fig_drag.is_some() && changed {
+                // A draft and a figure drag can only coexist after a stranded drag, but the clear
+                // above has already changed what the preview holds, and this branch returns without
+                // reaching the publish at the end of the function.
+                self.sync_fig_visual(cx);
+            }
             if let Some(drag) = &self.fig_drag {
                 // The map of the pane the drag STARTED on, never the one under the cursor. The
                 // cursor may cross into a neighbouring pane of the stack, which shows another
@@ -416,16 +566,16 @@ impl ChartPanel {
                 self.sync_native_cursor();
                 return true;
             }
-            return false;
+            // No figure drag under the held button, but a draft may be mid-gesture: press, drag,
+            // release is how Moonbot draws, and its preview has to follow the cursor exactly as it
+            // does between two clicks. Everything below the draft block is hover work — which
+            // figure a click would grab — and a button already down is past deciding that.
+            if self.fig_draft.is_none() {
+                return false;
+            }
         }
         // Move the draft's preview endpoint with the cursor while it remains on the draft pane.
-        let mut changed = false;
-        let draft_pane = self
-            .fig_draft
-            .as_ref()
-            .map(|d| d.pane)
-            .filter(|dp| self.input.pane_at(pos.0, pos.1) == Some(*dp));
-        let draft_pane = draft_pane.filter(|_| {
+        let draft_pane = self.fig_draft_pane(pos).filter(|_| {
             // Same Delphi threshold the hover hit-test uses (INPUT_HOTPATH_NORMS §1): raw
             // MouseMove arrives far more often than the cursor moves, and each accepted move
             // rebuilds this pane's whole figure geometry.
@@ -437,19 +587,29 @@ impl ChartPanel {
         });
         if let Some(map) = draft_pane.and_then(|dp| self.pane_map(dp)) {
             let node = map.node_at(pos);
-            match &mut self.fig_draft {
-                Some(d) if d.cursor != node => {
+            // From the same accepted position as the cursor node above, so the previewed figure is
+            // the one `make` would build from the nodes being shown rather than a blend of two
+            // pointer positions a fraction of a pixel apart.
+            let rest = if pressed_left {
+                self.fig_gesture_rest(pos, node, &map)
+            } else {
+                Vec::new()
+            };
+            if let Some(d) = self.fig_draft.as_mut() {
+                if d.cursor != node {
                     d.cursor = node;
                     changed = true;
                 }
-                _ => {}
+                changed |= d.set_drag_rest(rest);
             }
         }
         // Drawing-mode hover previews which figure a modifier-click would select or drag. Gated by
         // the same cursor-movement threshold as order lines (docs-internal/INPUT_HOTPATH_NORMS.md
         // §1): raw MouseMove arrives far more often than the cursor actually moves, and this walks
         // every visible figure.
-        if super::trade::hover_probe_due(self.fig_hover_probe, pos) {
+        // Reached with a held button only for a draft mid-gesture (everything else returned above),
+        // and a gesture in progress has nothing to decide about the next click's target.
+        if !pressed_left && super::trade::hover_probe_due(self.fig_hover_probe, pos) {
             self.fig_hover_probe = Some(pos);
             let hover = self.fig_hit_at(pos, cx);
             if hover != self.fig_hover {
@@ -743,10 +903,6 @@ impl ChartPanel {
             .is_some_and(|d| d.tool != tool || !drawing || d.sells_zone != sells_zone)
         {
             self.fig_draft = None;
-            // The press the drag-release gesture measures against belongs to the draft that just
-            // died. Cleared with it, so a release cannot finish a band against a point placed for
-            // something else — a press this panel never saw refused would otherwise leave it.
-            self.fig_draw_down = None;
         }
         // The badge riding the crosshair. Published from here rather than from the render path
         // because this runs on the backend observer: the mode becomes visible on the keypress

@@ -27,6 +27,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.ray",
     glyph: "↗",
     clicks: 2,
+    drag_rest: None,
     scale_swatch: None,
     fills: false,
     // The core has no chart-object type for a ray: types 1..5 are hline, segment, fibo, triangle

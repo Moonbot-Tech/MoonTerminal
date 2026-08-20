@@ -242,15 +242,16 @@ pub(super) fn mouse_down_left(
         cx.stop_propagation();
         return;
     }
-    // The press was not the figure layer's. Two things follow from that while a band is half drawn.
-    //
-    // First, the drag-release gesture must not measure against a press that belongs to some other
-    // gesture: `fig_draw_down` is written only by an ACCEPTED figure press, so leaving a stale one
-    // behind would let a press refused here — over the order book, or outside the pane — release
-    // into the plot and finish the band, sending a live bulk move.
-    //
-    if sells_zone_mode {
-        this.fig_draw_down = None;
+    // The press was not the figure layer's, so the drag-release gesture must not be measured
+    // against it: a draft's `down` says "the figure layer accepted this press and still holds it",
+    // and it is written only by an accepted press. Leaving a stale one behind would let a press
+    // refused here — over the order book, outside a pane, or a double-click, which skips the figure
+    // layer entirely — release into the plot and finish a figure. For a Sells-to-zone band that
+    // release sends a live bulk move; for a gesture-completed tool it invents the vertices the drag
+    // was never asked for; and the press that WAS accepted meanwhile pans the chart or drags an
+    // order line, which is the pointer the preview would otherwise follow.
+    if let Some(d) = this.fig_draft.as_mut() {
+        d.down = None;
     }
     // The click was not the figure layer's — but a click that landed on no figure still ends the
     // selection, which is what every editor does and what the handles left on screen otherwise
@@ -601,6 +602,14 @@ pub(super) fn mouse_move(
         if within && this.fig_drag.is_some() {
             this.finish_fig_drag(cx);
         }
+        // No button held means no press held either, including one whose mouse-up never reached a
+        // handler — released outside the slot, or stolen with the capture. A draft's `down` is the
+        // figure layer's record of an accepted, still-held press, so it recovers here the same way
+        // `sync_pressed` recovers the chart's own drag state, rather than staying true until the
+        // next press happens to overwrite it.
+        if let Some(d) = this.fig_draft.as_mut() {
+            d.down = None;
+        }
         crate::diag::bump(&crate::diag::CHART_MOUSE_MOVE_FAST);
         // A move with no button held normally means the drag is over — including one whose release
         // landed outside this slot and so reached no handler at all, both being hitbox-gated. Only
@@ -675,6 +684,24 @@ pub(super) fn mouse_move(
         this.update_fig_pointer(pos, within, true, cx);
         cx.stop_propagation();
         return;
+    }
+    // A draft under a held LEFT button is a press-drag-release gesture, and without this its
+    // preview froze at the press: the fast path above runs only for a move with no button down,
+    // and the branch just above only for a drag of an EXISTING figure. Deliberately without an
+    // early return of its own — the crosshair, the native cursor and the chart's own navigation are
+    // the common path's below, and a draft, unlike a figure drag, does not own the pointer.
+    // Gated on the left button specifically: a draft outlives its clicks, and the right button
+    // meanwhile zooms price, which is not this gesture. And on the draft holding a press — its own
+    // record that the figure layer accepted the one being held — because a press the layer REFUSED
+    // (the order-book strip, a double-click) drags an order line or pans the chart, and this would
+    // otherwise paint a preview following that same pointer.
+    if this
+        .fig_draft
+        .as_ref()
+        .is_some_and(|d| d.down.is_some())
+        && e.pressed_button == Some(MouseButton::Left)
+    {
+        this.update_fig_pointer(pos, within, true, cx);
     }
     if this.order_drag.is_some() {
         this.update_order_drag(pos, cx);
