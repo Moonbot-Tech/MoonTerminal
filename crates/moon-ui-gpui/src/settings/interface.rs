@@ -2,15 +2,18 @@
 //!
 //! It exposes chart, crosshair, order-book, panel, and candle colors plus numeric controls. Edits
 //! update the draft for live preview; Save writes `theme.toml`. [`Iface`] owns editor controls.
+//!
+//! The trade-mark sizes and the bottom-volume band are NOT here. They describe a chart tab rather
+//! than a colour scheme, so they live on `ChartGraphicsCfg` and are edited from the chart's palette
+//! popup (`crate::chart_tabs::graphics_popup`).
 
 use gpui::*;
-use moon_ui::{MoonColorPickerState, MoonPalette, MoonSelectState, MoonSliderState, v_flex};
+use moon_ui::{MoonColorPickerState, MoonPalette, MoonSliderState, v_flex};
 use rust_i18n::t;
 
-use super::{SettingsView, color_row, draft_select, section, select_row, separator, slider_row};
+use super::{SettingsView, color_row, section, separator, slider_row};
 use crate::Backend;
 use moon_core::config::{ChartTheme, UiThemeMode};
-use moon_core::market::candles::{VOLUME_STYLE_BARS, VOLUME_STYLE_HILLS, VOLUME_STYLE_OFF};
 
 /// Theme editor state with one retained control entity per field.
 pub(super) struct Iface {
@@ -30,12 +33,6 @@ pub(super) struct Iface {
     mark_line: Entity<MoonColorPickerState>,
     mark_line_alpha: Entity<MoonSliderState>,
     price_line_px: Entity<MoonSliderState>,
-    marker_scale: Entity<MoonSliderState>,
-    trade_volume_alpha: Entity<MoonSliderState>,
-    candle_volume_style: Entity<MoonSelectState<u8>>,
-    candle_volume_height: Entity<MoonSliderState>,
-    candle_volume_alpha: Entity<MoonSliderState>,
-    candle_volume_scale: Entity<MoonColorPickerState>,
     book_bg: Entity<MoonColorPickerState>,
     book_bg_ask: Entity<MoonColorPickerState>,
     book_bg_bid: Entity<MoonColorPickerState>,
@@ -92,42 +89,6 @@ fn num_field(
         let is_light = p.ui_theme_mode == UiThemeMode::Light;
         if get(p.theme.get(is_light)) != f {
             set(p.theme.get_mut(is_light), f);
-            true
-        } else {
-            false
-        }
-    })
-}
-
-/// Bind the bottom-volume style dropdown to the selected UI-mode theme.
-///
-/// The value is a `u8` for the reasons given on `VOLUME_STYLE_OFF`; this menu is what turns it
-/// back into words, so the number never reaches the user.
-fn style_field(
-    backend: &Entity<Backend>,
-    window: &mut Window,
-    cx: &mut Context<SettingsView>,
-) -> Entity<MoonSelectState<u8>> {
-    let cur = {
-        let b = backend.read(cx);
-        let is_light = b.preview.as_ref().unwrap_or(&b.config).ui_theme_mode == UiThemeMode::Light;
-        b.preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .theme
-            .get(is_light)
-            .candle_volume_style
-    };
-    let items = vec![
-        (VOLUME_STYLE_HILLS, t!("iface.volume_style_hills").into()),
-        (VOLUME_STYLE_BARS, t!("iface.volume_style_bars").into()),
-        (VOLUME_STYLE_OFF, t!("iface.volume_style_off").into()),
-    ];
-    draft_select(window, cx, items, &cur, move |p, v| {
-        let is_light = p.ui_theme_mode == UiThemeMode::Light;
-        let t = p.theme.get_mut(is_light);
-        if t.candle_volume_style != *v {
-            t.candle_volume_style = *v;
             true
         } else {
             false
@@ -243,50 +204,6 @@ pub(super) fn build(
             6.0,
             0.1,
         ),
-        marker_scale: num_field(
-            backend,
-            cx,
-            |t| t.marker_scale,
-            |t, v| t.marker_scale = v,
-            0.5,
-            3.0,
-            0.1,
-        ),
-        trade_volume_alpha: num_field(
-            backend,
-            cx,
-            |t| t.trade_volume_alpha,
-            |t, v| t.trade_volume_alpha = v,
-            0.0,
-            1.0,
-            0.01,
-        ),
-        candle_volume_style: style_field(backend, window, cx),
-        candle_volume_height: num_field(
-            backend,
-            cx,
-            |t| t.candle_volume_height,
-            |t, v| t.candle_volume_height = v,
-            0.05,
-            0.45,
-            0.01,
-        ),
-        candle_volume_alpha: num_field(
-            backend,
-            cx,
-            |t| t.candle_volume_alpha,
-            |t, v| t.candle_volume_alpha = v,
-            0.0,
-            1.0,
-            0.01,
-        ),
-        candle_volume_scale: color_field(
-            backend,
-            window,
-            cx,
-            |t| t.candle_volume_scale,
-            |t, v| t.candle_volume_scale = v,
-        ),
         book_bg: color_field(backend, window, cx, |t| t.book_bg, |t, v| t.book_bg = v),
         book_bg_ask: color_field(
             backend,
@@ -384,39 +301,8 @@ impl SettingsView {
             ))
             .child(slider_row(&t!("iface.price_line_px"), &i.price_line_px, cx))
             .child(separator(p, cx))
-            // Trade/tick marks and the per-TRADE volume bars along the plot bottom edge.
-            .child(section(&t!("iface.sec_trades"), p, cx))
-            .child(slider_row(&t!("iface.marker_scale"), &i.marker_scale, cx))
-            .child(slider_row(
-                &t!("iface.trade_volume_alpha"),
-                &i.trade_volume_alpha,
-                cx,
-            ))
-            .child(separator(p, cx))
-            // Bottom volumes: the per-CANDLE band drawn beneath the trade bars above.
-            .child(section(&t!("iface.sec_volumes"), p, cx))
-            .child(select_row(
-                &t!("iface.candle_volume_style"),
-                &i.candle_volume_style,
-                cx,
-            ))
-            .child(slider_row(
-                &t!("iface.candle_volume_height"),
-                &i.candle_volume_height,
-                cx,
-            ))
-            .child(slider_row(
-                &t!("iface.candle_volume_alpha"),
-                &i.candle_volume_alpha,
-                cx,
-            ))
-            .child(color_row(
-                &t!("iface.candle_volume_scale"),
-                &i.candle_volume_scale,
-                p,
-                cx,
-            ))
-            .child(separator(p, cx))
+            // The trade-mark and bottom-volume groups that used to sit here are now per chart TAB,
+            // in the chart's palette popup (`chart_tabs::graphics_popup`).
             // Order book.
             .child(section(&t!("iface.sec_book"), p, cx))
             .child(color_row(&t!("iface.book_bg"), &i.book_bg, p, cx))

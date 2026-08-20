@@ -55,6 +55,7 @@ fn a_spec_without_chart_graphics_loads_as_inheriting_the_global_default() {
             show_real_trades: true,
             show_emulator_trades: false,
             hide_closed_sell_line: false,
+            ..moon_core::config::ChartGraphicsCfg::default()
         }),
         ..ChartTabSpec::new("main".to_string(), 2, ChartBucket::Shared)
     };

@@ -65,20 +65,21 @@ impl ChartDataState {
         // Sell-line depth labels live in the TEXT layer, so a re-measure needs a present but not
         // the base re-bake `pixels_changed` promotes to.
         let mut text_changed = false;
-        // Read the two theme-driven uniform fields once for the whole sync: `view_gpu` is called
-        // for the plot AND the order-book glass, and the cull margin has to be computed from the
-        // same marker scale the shader will use, or trades disappear a frame before their glyph
-        // reaches the edge.
-        let theme_marker_scale = self.theme.marker_scale;
+        // Read the two per-tab uniform fields once for the whole sync: `view_gpu` is called for the
+        // plot AND the order-book glass, and the cull margin has to be computed from the same
+        // marker scale the shader will use, or trades disappear a frame before their glyph reaches
+        // the edge. They come from `chart_graphics` rather than the theme because they are per chart
+        // TAB; `set_chart_graphics` has already normalized them.
+        let marker_scale = self.chart_graphics.marker_scale;
         let view_style = view::ViewStyle {
-            marker_scale: theme_marker_scale,
-            volume_alpha: self.theme.trade_volume_alpha,
+            marker_scale,
+            volume_alpha: self.chart_graphics.trade_volume_alpha,
         };
         // Price-line colours and thickness. `price_line_px` is LOGICAL, and the shaders offset by
         // a HALF width either side of the centre line, so the device scale and the halving both
         // happen exactly once, here. Hoisted out of the per-pane loop below for the same reason
-        // `view_style` is: every input is theme- or DPI-derived, so a multi-pane chart would
-        // otherwise rebuild an identical struct once per pane per sync.
+        // `view_style` is: all their inputs come from persisted appearance configuration or DPI,
+        // so a multi-pane chart would otherwise rebuild identical structs once per pane per sync.
         let next_price_style = PriceStyleGpu {
             last: rgba3(self.theme.price_line, self.theme.price_line_alpha),
             mark: rgba3(self.theme.mark_line, self.theme.mark_line_alpha),
@@ -89,10 +90,12 @@ impl ChartDataState {
                 0.0,
             ],
         };
-        // Likewise theme-only: the band's style id is clamped once, not per pane. The band's
-        // remaining fields stay in the loop because they fold in per-pane `volume_stats`.
+        // Likewise per-tab-only: the band's style id is clamped once, not per pane. The band's
+        // remaining fields stay in the loop because they fold in per-pane `volume_stats`. The
+        // `.min` stays even though `set_chart_graphics` normalizes on store: this is the drawing
+        // path's own idempotent clamp, which `normalize_chart_graphics` explicitly keeps.
         let volume_style_id = self
-            .theme
+            .chart_graphics
             .candle_volume_style
             .min(moon_core::market::candles::VOLUME_STYLE_MAX);
         #[cfg(windows)]
@@ -208,7 +211,7 @@ impl ChartDataState {
                 * pane.view.px_per_ms.max(1e-9) as f64)
                 .round() as i64;
             let marker_margin =
-                view::cross_cull_margin_physical_px(&pane.view, self.last_ppp, theme_marker_scale)
+                view::cross_cull_margin_physical_px(&pane.view, self.last_ppp, marker_scale)
                     / pane.view.px_per_ms.max(moon_chart::view::MIN_PX_PER_MS);
             let history_prefetch = (window_ms * 0.20).max(marker_margin);
             // The LEFT edge gets a floor; the right edge and the prefetch itself do not. Widening
@@ -859,17 +862,25 @@ impl ChartDataState {
                 // Nothing visible, or every visible bucket empty: draw no band rather than
                 // normalise against a zero maximum.
                 None => VolumeStyleGpu::default(),
+                // The candle BODY colours stay on the theme; only the opacity, the scale colour and
+                // the band height are per tab.
                 Some(stats) => VolumeStyleGpu {
-                    up: rgba3(self.theme.candle_up, self.theme.candle_volume_alpha),
-                    down: rgba3(self.theme.candle_down, self.theme.candle_volume_alpha),
+                    up: rgba3(
+                        self.theme.candle_up,
+                        self.chart_graphics.candle_volume_alpha,
+                    ),
+                    down: rgba3(
+                        self.theme.candle_down,
+                        self.chart_graphics.candle_volume_alpha,
+                    ),
                     scale: rgba3(
-                        self.theme.candle_volume_scale,
-                        self.theme.candle_volume_alpha,
+                        self.chart_graphics.candle_volume_scale,
+                        self.chart_graphics.candle_volume_alpha,
                     ),
                     m: [
                         volume_style_id as f32,
                         moon_chart::volume_bars::clamp_band_fraction(
-                            self.theme.candle_volume_height,
+                            self.chart_graphics.candle_volume_height,
                         ),
                         // BOTH quantized, and both for the same reason: the live-edge bucket's
                         // volume grows with every print, so exact values here differ on every

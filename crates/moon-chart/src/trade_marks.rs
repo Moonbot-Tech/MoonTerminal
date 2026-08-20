@@ -68,6 +68,56 @@ pub const CONNECTOR_THICKNESS_MIN: f32 = 0.5;
 /// Largest accepted connector thickness, in logical px.
 pub const CONNECTOR_THICKNESS_MAX: f32 = 8.0;
 
+/// Smallest accepted trade-marker size multiplier.
+///
+/// It is 0.2 because that is ALREADY the floor the drawing path applies — `marker_half_physical_px`
+/// in `chartdx::view` multiplies by `cfg_marker_scale.max(0.2)`. Normalizing to anything higher would
+/// silently rewrite a valid stored value that renders correctly today, which is the exact failure
+/// this crate's one-clamp-one-authority rule exists to prevent.
+pub const MARKER_SCALE_MIN: f32 = 0.2;
+/// Largest accepted trade-marker size multiplier. Shares [`ARROW_SCALE_MAX`]'s ceiling: past it a
+/// dense cluster of trades swallows the pane, and the two multipliers COMPOUND.
+pub const MARKER_SCALE_MAX: f32 = 3.0;
+
+/// Clamp a configured trade-marker size multiplier into the drawable range.
+///
+/// Distinct from [`clamp_arrow_scale`] on purpose: that one sizes the closed-trade HISTORY arrows,
+/// this one the live trade crosses, and the two MULTIPLY rather than substitute.
+///
+/// Args:
+///     scale: Configured multiplier; a non-finite value means an unusable config.
+///
+/// Returns:
+///     The multiplier within `[MARKER_SCALE_MIN, MARKER_SCALE_MAX]`, or the shipped default when it
+///     is not finite.
+pub fn clamp_marker_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(MARKER_SCALE_MIN, MARKER_SCALE_MAX)
+    } else {
+        ChartGraphicsCfg::default().marker_scale
+    }
+}
+
+/// Clamp a configured opacity into `0..=1`.
+///
+/// One helper for both volume opacities, because an opacity has no range of its own to argue about.
+/// The fallback is passed in rather than assumed: the per-trade bars and the per-candle band ship
+/// with different defaults.
+///
+/// Args:
+///     alpha: Configured opacity; a non-finite value means an unusable config.
+///     fallback: The value to use when `alpha` is not finite.
+///
+/// Returns:
+///     `alpha` within `0..=1`, or `fallback`.
+pub fn clamp_volume_alpha(alpha: f32, fallback: f32) -> f32 {
+    if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
+    } else {
+        fallback
+    }
+}
+
 /// Clamp a configured arrow-size multiplier into the drawable range.
 ///
 /// The ONE definition, called from BOTH the drawing path and the hit test: the setting comes from
@@ -96,15 +146,28 @@ pub fn clamp_arrow_scale(scale: f32) -> f32 {
 /// on every single frame, forever. Call this wherever the value is STORED or COMPARED; the drawing
 /// and hit-test paths still clamp their own inputs, which is idempotent and therefore free.
 ///
+/// The trade-mark and bottom-volume fields that moved here from `ChartTheme` are covered too, and
+/// they raise the stakes: four of them feed the `VolumeStyleGpu` the renderer diffs every frame to
+/// decide whether to rebake its CACHED base texture. One NaN there does not merely mark the chart
+/// dirty — it rebakes that texture forever, at frame rate.
+///
 /// Args:
 ///     cfg: Settings as they were read from the configuration.
 ///
 /// Returns:
-///     The same settings with both numeric fields finite and in range.
+///     The same settings with every numeric field finite and in range.
 pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
+    let def = ChartGraphicsCfg::default();
     ChartGraphicsCfg {
         trade_arrow_scale: clamp_arrow_scale(cfg.trade_arrow_scale),
         connector_thickness_px: clamp_connector_thickness(cfg.connector_thickness_px),
+        marker_scale: clamp_marker_scale(cfg.marker_scale),
+        trade_volume_alpha: clamp_volume_alpha(cfg.trade_volume_alpha, def.trade_volume_alpha),
+        // The bottom band's two clamps belong to `volume_bars`, which owns that band and its
+        // range constants; this normalizer only gathers them.
+        candle_volume_style: crate::volume_bars::clamp_volume_style(cfg.candle_volume_style),
+        candle_volume_height: crate::volume_bars::clamp_band_fraction(cfg.candle_volume_height),
+        candle_volume_alpha: clamp_volume_alpha(cfg.candle_volume_alpha, def.candle_volume_alpha),
         ..cfg
     }
 }

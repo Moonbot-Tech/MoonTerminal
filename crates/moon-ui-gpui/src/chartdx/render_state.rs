@@ -65,6 +65,18 @@ fn clamp_anchor(value: f32, min: f32, max: f32) -> f32 {
 /// change exists to remove.
 const ARRIVAL_HIGHLIGHT: Duration = Duration::from_millis(2600);
 
+/// Completed text passes that must have drawn the substituted caption before a shot may capture.
+///
+/// TWO, not one, and the second one is the whole point. A single pass proves only that the caption
+/// was BUILT: the fork's renderer returns from `draw` without drawing on the first frame after a
+/// DirectX device recovery (`moon-gpui-windows/src/directx_renderer.rs:638-642`) and treats a
+/// `can_present` refusal the same way, while the canvas text pass still runs. Capturing on that one
+/// pass photographs the PREVIOUS frame, which still carries the user's account name.
+///
+/// A recovery raises the device generation, which resets the count, so reaching two again means two
+/// passes drawn on the current device with no recovery between them.
+const SHOT_CAPTION_MIN_FRAMES: u8 = 2;
+
 /// Present interval while the arrival flash runs.
 ///
 /// Ten per second is not ten cheap frames: the fork ORs every canvas's present request together, so
@@ -266,6 +278,55 @@ impl RenderState {
         self.sync_readout_params();
         self.needs_present = true;
         true
+    }
+
+    /// Arm or clear the shot's caption substitution.
+    ///
+    /// Arming zeroes the drawn-frame count first, so the shot can never read a stale proof
+    /// left by an earlier press and capture a frame that was drawn before the swap.
+    ///
+    /// `until` is a wall-clock deadline rather than a duration because `frame` is what expires it,
+    /// and `frame` has no memory of when the caller armed it. Pass `None` to restore the core name
+    /// immediately; the shot does that itself on every path, and the deadline is the watchdog
+    /// behind it rather than the primary mechanism.
+    ///
+    /// Args:
+    ///     until: Instant past which the caption returns to the core name, or `None` to restore it
+    ///         now.
+    ///
+    /// Returns:
+    ///     Whether anything changed, in the house convention meaning the caller should repaint.
+    pub(super) fn arm_shot_caption(&mut self, until: Option<Instant>) -> bool {
+        if self.shot_caption_until == until {
+            return false;
+        }
+        self.shot_caption_until = until;
+        self.shot_caption_frames = 0;
+        if until.is_some() {
+            // Only an ARM opens a new shot. A disarm ends one, and bumping there would make the
+            // chain that is doing the disarming look superseded by itself.
+            self.shot_caption_gen = self.shot_caption_gen.wrapping_add(1);
+        }
+        // Both directions present: arming has to reach a frame for the shot to have anything to
+        // capture, and clearing has to reach one or the screen keeps the exchange on it.
+        self.needs_present = true;
+        true
+    }
+
+    /// Whether the substituted caption has satisfied the renderer-side pre-capture proof.
+    ///
+    /// Returns:
+    ///     `true` once enough completed `prepare_text` passes have drawn a caption run while armed.
+    pub(super) fn shot_caption_drawn(&self) -> bool {
+        self.shot_caption_frames >= SHOT_CAPTION_MIN_FRAMES
+    }
+
+    /// Which arming of the caption is currently in force.
+    ///
+    /// Returns:
+    ///     A counter a waiting shot compares against to notice it has been superseded.
+    pub(super) fn shot_caption_gen(&self) -> u64 {
+        self.shot_caption_gen
     }
 
     pub(super) fn set_firetest_force_present(&mut self, enabled: bool) -> bool {
@@ -507,6 +568,24 @@ impl RenderState {
         let mut wants_present = std::mem::take(&mut self.needs_present);
         if self.firetest_force_present {
             wants_present = true;
+        }
+        // Shot caption: ENDED here, from wall clock, for the same reason the arrival flash is —
+        // no timer, no notify, and nobody to trust with the clear. This is the watchdog, not the
+        // normal path: the shot restores the caption itself as soon as it has its picture, and
+        // this only fires when that chain never completed. Leaving it armed would keep the
+        // EXCHANGE on the user's own screen where the core name belongs.
+        //
+        // It sits after the `presentable` guard on purpose. A pane that is not presentable returns
+        // above without reaching this, so the flag can outlive its deadline while the chart is
+        // hidden — harmless, because nothing is drawn either. The first presentable frame runs
+        // this block BEFORE `prepare_text`, so the caption is already restored by the time
+        // anything is drawn again.
+        if let Some(deadline) = self.shot_caption_until {
+            if now >= deadline {
+                self.shot_caption_until = None;
+                self.shot_caption_frames = 0;
+                wants_present = true;
+            }
         }
         // Arrival flash: paced and ENDED here, from wall clock, with no timer and no notify.
         //

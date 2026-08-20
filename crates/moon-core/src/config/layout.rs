@@ -635,6 +635,24 @@ pub struct WindowLayout {
     /// GLOBAL DEFAULT (tabs can override it in their charts.json specification).
     #[serde(default, deserialize_with = "de_lenient_graphics")]
     pub chart_graphics: ChartGraphicsCfg,
+    /// One-shot marker: the trade-mark and bottom-volume values have been carried across from the
+    /// old `theme.toml` home into [`Self::chart_graphics`] and into every chart tab that held an
+    /// override.
+    ///
+    /// NEVER reset it. Re-running that migration would overwrite whatever the user has since chosen
+    /// in the chart-graphics popup with the stale values it reads out of the old theme file.
+    ///
+    /// The migration does not rewrite `theme.toml`, but that is NOT a recovery copy and must not be
+    /// described as one: `AppConfig::save_impl` calls `ChartThemeSet::save` on every settings write,
+    /// and once the six fields left `ChartTheme` that write drops the now-unknown keys. The
+    /// durable copy is the `.bak` the migration takes before it touches anything.
+    ///
+    /// It lives here rather than in `theme.toml` because that file is portable — users copy it
+    /// between machines — and a marker travelling with it would suppress the migration on a second
+    /// machine that still needs it. `charts.json` was not an option either: the migration must run
+    /// even when no tab spec exists yet.
+    #[serde(default)]
+    pub chart_graphics_from_theme_migrated: bool,
     // The former `detect_view_by_group` moved to a separate `detects_view.toml`
     // (see `detect_view::DetectViewFile`); the old layout.toml key is simply ignored.
     /// Chart X time scale (pixels per millisecond) BY GROUP WINDOW: [Shift+middle click] on a chart
@@ -771,25 +789,75 @@ fn def_connector_thickness_px() -> f32 {
     2.0
 }
 
+/// Default multiplier on the trade-cross marker size.
+///
+/// This is the ONE home of that default. It shipped as `1.0` while the value lived on `ChartTheme`,
+/// which reproduced the historical 7x7 "Normal Trade X" exactly; `0.70` is the deliberate product
+/// change that came with the move into the per-tab popup, because a chart dense with closed trades
+/// reads better with smaller crosses. `0.7` and `1.0` are both selectable steps in the popup, so
+/// the old size is one click away.
+///
+/// Note that `chartdx::view::ViewStyle::default()` carries its own `1.0`. That is NOT a second copy
+/// of this default: it is the neutral element of a multiplier on a struct the per-frame sync
+/// overwrites before any draw. See the comment there.
+fn def_marker_scale() -> f32 {
+    0.70
+}
+
+/// Default opacity of the per-TRADE volume bars. Was the compile-time `DEFAULT_VOLUME_ALPHA` in
+/// `chartdx` before it became configurable.
+fn def_trade_volume_alpha() -> f32 {
+    0.34
+}
+
+/// Default bottom-volume display style.
+fn def_candle_volume_style() -> u8 {
+    crate::market::candles::VOLUME_STYLE_HILLS
+}
+
+/// Default bottom-volume band height, as a fraction of the plot height.
+///
+/// The same fraction the per-trade band has always used, so the two bands line up.
+fn def_candle_volume_height() -> f32 {
+    0.18
+}
+
+/// Default bottom-volume opacity.
+fn def_candle_volume_alpha() -> f32 {
+    0.30
+}
+
+/// Default colour of the volume scale's max and average reference lines, sRGB.
+fn def_candle_volume_scale() -> [u8; 3] {
+    [110, 110, 110]
+}
+
 /// Chart drawing settings edited from the toolbar's palette popup.
 ///
 /// Stored here as the GLOBAL DEFAULT: each chart tab may hold its own set in `charts.json`, and a
 /// tab without one draws with this.
 ///
 /// Deliberately separate from `OrdersStyle` in `orders.toml`: that file describes how each ORDER
-/// LINE is painted (colour, dash, marker sizes), while these five values decide how big the
-/// closed-trade history is drawn and which closed TRADES appear at all. Mixing them would make two
-/// unrelated surfaces move together, which is the same reason `trade_marks.rs` refused to read
-/// `orders.toml`.
+/// LINE is painted (colour, dash, marker sizes), while these values decide how the closed-trade
+/// history, the trade marks and the bottom volume band are drawn, and which closed TRADES appear at
+/// all. Mixing them would make two unrelated surfaces move together, which is the same reason
+/// `trade_marks.rs` refused to read `orders.toml`.
 ///
-/// The two numeric fields are NOT clamped here, because `layout.toml` is hand-editable and the
-/// drawing path and the hit-test path must clamp IDENTICALLY or the glyph and the region that
-/// responds to it drift apart. Both clamps, and the `normalize_chart_graphics` that every storing
-/// or comparing site applies, therefore live together in `moon_chart::trade_marks`.
+/// The last six fields moved here from `ChartTheme` (`theme.toml`). They belong to a CHART TAB, not
+/// to a colour scheme: two tabs on one theme routinely want different marker sizes and a different
+/// volume band. One consequence is deliberate and worth knowing — `ChartTheme::apply_light_defaults`
+/// used to give the light theme its own `candle_volume_alpha` and `candle_volume_scale`, and a
+/// per-tab value cannot vary by theme mode, so that pair no longer switches with the mode.
+/// `moon_ui_gpui::startup::graphics_migration` carries every existing user's values across.
+///
+/// The numeric fields are NOT clamped here, because `layout.toml` is hand-editable and the drawing
+/// path and the hit-test path must clamp IDENTICALLY or the glyph and the region that responds to
+/// it drift apart. Every clamp, and the `normalize_chart_graphics` that each storing or comparing
+/// site applies, therefore live together in `moon_chart::trade_marks`.
 ///
 /// Every field decodes LENIENTLY and independently, because the whole document is one
 /// deserialization (see [`WindowLayout`]): a hand-typed `show_real_trades = "yes"` falls back to
-/// that one field's default instead of resetting the other four — or the file.
+/// that one field's default instead of resetting the others — or the file.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ChartGraphicsCfg {
     /// Multiplier on the trade-history arrow's half-extents. One is the size the layer shipped with.
@@ -817,6 +885,50 @@ pub struct ChartGraphicsCfg {
     /// `closed_alpha` and reads as a live price the terminal is still tracking.
     #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
     pub hide_closed_sell_line: bool,
+
+    // --- Trade marks. Moved here from `ChartTheme` so they are per TAB rather than per theme. ---
+    /// Multiplier on the trade-cross marker size. The device pixel ratio is applied separately and
+    /// is not part of this number.
+    ///
+    /// It MULTIPLIES with [`Self::trade_arrow_scale`] and is a different knob: that one sizes the
+    /// closed-trade HISTORY arrows, this one the live trade crosses.
+    #[serde(default = "def_marker_scale", deserialize_with = "de_marker_scale")]
+    pub marker_scale: f32,
+    /// Opacity of the per-TRADE volume bars along the plot's bottom edge, 0..1. Distinct from
+    /// [`Self::candle_volume_alpha`], which is the per-CANDLE band drawn beneath them.
+    #[serde(
+        default = "def_trade_volume_alpha",
+        deserialize_with = "de_trade_volume_alpha"
+    )]
+    pub trade_volume_alpha: f32,
+
+    // --- Bottom candle volumes, likewise moved off `ChartTheme`. ---
+    /// Display style: `crate::market::candles::VOLUME_STYLE_OFF` / `_BARS` / `_HILLS`.
+    #[serde(
+        default = "def_candle_volume_style",
+        deserialize_with = "de_candle_volume_style"
+    )]
+    pub candle_volume_style: u8,
+    /// Band height as a fraction of the plot height, 0..1. Capped in physical pixels by the
+    /// geometry module so the band cannot swallow a tall chart.
+    #[serde(
+        default = "def_candle_volume_height",
+        deserialize_with = "de_candle_volume_height"
+    )]
+    pub candle_volume_height: f32,
+    /// Bottom-volume opacity, 0..1. The band's colours come from the candle colours, which stay on
+    /// the theme — only the opacity is per tab.
+    #[serde(
+        default = "def_candle_volume_alpha",
+        deserialize_with = "de_candle_volume_alpha"
+    )]
+    pub candle_volume_alpha: f32,
+    /// Colour of the volume scale's max and average reference lines, sRGB.
+    #[serde(
+        default = "def_candle_volume_scale",
+        deserialize_with = "de_candle_volume_scale"
+    )]
+    pub candle_volume_scale: [u8; 3],
 }
 
 impl Default for ChartGraphicsCfg {
@@ -828,6 +940,12 @@ impl Default for ChartGraphicsCfg {
             show_real_trades: true,
             show_emulator_trades: true,
             hide_closed_sell_line: true,
+            marker_scale: def_marker_scale(),
+            trade_volume_alpha: def_trade_volume_alpha(),
+            candle_volume_style: def_candle_volume_style(),
+            candle_volume_height: def_candle_volume_height(),
+            candle_volume_alpha: def_candle_volume_alpha(),
+            candle_volume_scale: def_candle_volume_scale(),
         }
     }
 }
@@ -1128,6 +1246,54 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_connector_thickness_px))
+}
+
+/// Read the trade-marker size multiplier leniently, defaulting an unusable value.
+fn de_marker_scale<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_marker_scale))
+}
+
+/// Read the per-trade volume opacity leniently, defaulting an unusable value.
+fn de_trade_volume_alpha<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_trade_volume_alpha))
+}
+
+/// Read the bottom-volume style id leniently, defaulting an unusable value.
+fn de_candle_volume_style<'de, D>(d: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, u8>(d)?.unwrap_or_else(def_candle_volume_style))
+}
+
+/// Read the bottom-volume band height leniently, defaulting an unusable value.
+fn de_candle_volume_height<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_candle_volume_height))
+}
+
+/// Read the bottom-volume opacity leniently, defaulting an unusable value.
+fn de_candle_volume_alpha<'de, D>(d: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, f32>(d)?.unwrap_or_else(def_candle_volume_alpha))
+}
+
+/// Read the volume-scale colour leniently, defaulting an unusable value.
+fn de_candle_volume_scale<'de, D>(d: D) -> Result<[u8; 3], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, [u8; 3]>(d)?.unwrap_or_else(def_candle_volume_scale))
 }
 
 /// Read [`ChartGraphicsCfg`] leniently, falling back to the defaults for an unusable table.

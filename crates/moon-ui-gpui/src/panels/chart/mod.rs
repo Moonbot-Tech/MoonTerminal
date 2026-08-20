@@ -145,8 +145,9 @@ pub struct ChartPanel {
     /// `layout.candle_view` default; the effective value is applied during rendering.
     candle_view: Option<moon_core::market::CandleViewCfg>,
     /// Per-window/tab chart-drawing settings: trade-arrow size, connector thickness, which closed
-    /// trades are drawn, and the closed order's sell line. `None` follows the global
-    /// `layout.chart_graphics` default; the effective value is applied during rendering.
+    /// trades are drawn, the closed order's sell line, the trade-mark size and the bottom volume
+    /// band. `None` follows the global `layout.chart_graphics` default; the effective value is
+    /// applied during rendering.
     chart_graphics: Option<moon_core::config::ChartGraphicsCfg>,
     /// Whether to dim-fill the reserved control zone when zones are separate and the order book is
     /// hidden. This is per window/tab, applied during rendering, and enabled by default.
@@ -710,6 +711,68 @@ impl ChartPanel {
     ///     Logical bounds, the window scale, and the engine's physical slot size after a paint.
     pub(crate) fn shot_geometry(&self) -> Option<(Bounds<Pixels>, f32, (u32, u32))> {
         self.chart.slot_geometry()
+    }
+
+    /// Arm or clear the corner caption's shot substitution: the EXCHANGE in place of the core name.
+    ///
+    /// Here for the same reason [`Self::shot_geometry`] is - `self.chart` is private to this module
+    /// tree and `shot` is the one caller from outside it. The screen keeps the core name at every
+    /// other moment: it is what lets the user tell his own charts apart, and it is also his own
+    /// account label, which is why the picture he shares must not carry it.
+    ///
+    /// `until` is a deadline rather than a duration because the renderer expires it from wall clock
+    /// with no timer of its own. The shot clears it explicitly on every path; the deadline is the
+    /// watchdog behind that, for a chain that never completes.
+    ///
+    /// Must not be called from inside a `ChartPanel` update - it needs its own `update` on the
+    /// panel entity, and gpui refuses the re-entrant borrow. Both current `ChartShot` call sites
+    /// dispatch from other entities, which is what makes this safe today.
+    ///
+    /// Arming FORCES an order sync first, and that is load-bearing rather than tidy.
+    /// `sync_orders_if_visible` normally returns early unless `order_signature` moved, and that
+    /// signature is built only from the target core's `order_lines_rev`
+    /// (`chartdx/data_state/state.rs:65-72`). A venue arrives on `FeedMsg::Identity`, which never
+    /// touches that revision - so without the force, a core identified after the last order change
+    /// would be captured as the shared "not identified" wording instead of its exchange.
+    ///
+    /// Args:
+    ///     until: Deadline past which the caption restores itself, or `None` to restore it now.
+    ///     cx: Panel context, used to re-read the session when arming.
+    ///
+    /// Returns:
+    ///     Whether anything changed, meaning a repaint was requested.
+    pub(crate) fn arm_shot_caption(
+        &mut self,
+        until: Option<Instant>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if until.is_some() {
+            self.sync_orders_if_visible(cx, true);
+        }
+        self.chart.arm_shot_caption(until)
+    }
+
+    /// Whether the substituted caption has satisfied the renderer-side pre-capture proof.
+    ///
+    /// The shot's capture gate. `false` means the renderer-side proof is incomplete, so the caller
+    /// must wait or give up rather than read the desktop.
+    ///
+    /// Returns:
+    ///     `true` once enough completed text passes have drawn the exchange caption.
+    pub(crate) fn shot_caption_drawn(&self) -> bool {
+        self.chart.shot_caption_drawn()
+    }
+
+    /// Which arming of the shot caption is currently in force.
+    ///
+    /// A shot compares this against the value it saw when it armed. A newer one means a second
+    /// press replaced this shot, and the older chain should stand down quietly rather than report
+    /// a failure for a picture somebody else is now taking.
+    ///
+    /// Returns:
+    ///     The current arming generation.
+    pub(crate) fn shot_caption_gen(&self) -> u64 {
+        self.chart.shot_caption_gen()
     }
 
     /// Mark whether this panel is part of the currently rendered GPUI scene. This only gates

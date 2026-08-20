@@ -26,6 +26,8 @@
 mod rect;
 
 #[cfg(windows)]
+mod caption;
+#[cfg(windows)]
 mod clipboard_win;
 #[cfg(windows)]
 mod win;
@@ -97,7 +99,12 @@ pub(crate) fn copy_active_chart(
     // always reported "no HWND". The working precedent is `panels/chart/render.rs`, which reads it
     // straight off the `&Window` the frame already holds.
     let native = crate::window::windowing::window_hwnd(window);
-    let outcome = run(backend, handle, native, cx);
+    // `None` means the Windows arm took the shot over: it has to substitute the caption, wait for
+    // that to reach the screen and only then photograph it, so it reports its own outcome when the
+    // picture exists rather than here, several frames too early.
+    let Some(outcome) = run(backend, handle, native, window, cx) else {
+        return true;
+    };
     if let ShotOutcome::Failed | ShotOutcome::NoChart = outcome {
         log::info!("chart shot: {outcome:?}");
     }
@@ -107,44 +114,58 @@ pub(crate) fn copy_active_chart(
     true
 }
 
-/// Resolve the chart, read its geometry, and hand the rectangle to the platform arm.
+/// Resolve the chart and dispatch the capture to the platform arm.
 ///
 /// Args:
 ///     backend: Application backend holding the per-window hover trail.
 ///     window: OS window whose chart slot is captured.
 ///     native: That window's native handle, resolved by the caller while it still holds the
 ///         `&mut Window` — see `copy_active_chart` for why it cannot be resolved here.
+///     gpui_window: The live window, which the Windows arm needs to schedule the frame callbacks
+///         it waits on before capturing.
 ///     cx: Application context used to read the chosen chart.
 ///
 /// Returns:
-///     The platform capture outcome, or [`ShotOutcome::NoChart`] when no painted slot is available.
+///     The outcome to announce now, or `None` when the Windows arm took over and will announce its
+///     own once it has a picture.
 fn run(
     backend: &Entity<Backend>,
     window: AnyWindowHandle,
     native: Option<isize>,
+    gpui_window: &mut gpui::Window,
     cx: &mut App,
-) -> ShotOutcome {
+) -> Option<ShotOutcome> {
     let Some(panel) = resolve(backend, window, cx) else {
-        return ShotOutcome::NoChart;
-    };
-    let Some((bounds, scale, device_size)) = panel.read(cx).shot_geometry() else {
-        // Painted geometry is published per frame, so a chart in a tab that has never been shown
-        // has none. Reported as "no chart" rather than a failure: nothing went wrong.
-        return ShotOutcome::NoChart;
-    };
-    let Some(rect) = rect::slot_capture_rect(bounds, scale, device_size) else {
-        return ShotOutcome::NoChart;
+        return Some(ShotOutcome::NoChart);
     };
 
     #[cfg(windows)]
     {
-        let _ = window;
-        capture_windows(native, rect)
+        let Some(native) = native else {
+            log::warn!("chart shot: no HWND for the chart's window");
+            return Some(ShotOutcome::Failed);
+        };
+        // Geometry is deliberately NOT read here. The caption has to be swapped and drawn first,
+        // and by the time that frame exists this one would be several frames stale, so the Windows
+        // arm reads it again next to the capture itself.
+        caption::begin(backend.clone(), panel, window, native, gpui_window, cx);
+        None
     }
     #[cfg(not(windows))]
     {
-        let _ = native;
-        unsupported::capture_to_clipboard(window, rect, cx)
+        // No capture path on this platform, so nothing would ever photograph a substituted
+        // caption. Answer immediately instead of swapping a caption and waiting for a frame that
+        // will only be thrown away.
+        let _ = (native, gpui_window);
+        let Some((bounds, scale, device_size)) = panel.read(cx).shot_geometry() else {
+            // Painted geometry is published per frame, so a chart in a tab that has never been
+            // shown has none. Reported as "no chart" rather than a failure: nothing went wrong.
+            return Some(ShotOutcome::NoChart);
+        };
+        let Some(rect) = rect::slot_capture_rect(bounds, scale, device_size) else {
+            return Some(ShotOutcome::NoChart);
+        };
+        Some(unsupported::capture_to_clipboard(window, rect, cx))
     }
 }
 
@@ -192,20 +213,18 @@ fn resolve(
 /// Args:
 ///     native: Native handle of the window the chart is DRAWN in — not whichever window has focus,
 ///         so a detached chart is captured against its own client area. Resolved by
-///         `copy_active_chart` before this window's update begins.
+///         `copy_active_chart` before this window's update begins, and already checked for absence
+///         by `run`: the caption wait would have nothing to arm without it, so the missing-handle
+///         refusal happens there rather than being carried down here as an `Option`.
 ///     rect: Physical client-area rectangle occupied by the chart slot.
 ///
 /// Returns:
 ///     Whether capture and clipboard publication succeeded.
 #[cfg(windows)]
-fn capture_windows(native: Option<isize>, rect: rect::ShotRect) -> ShotOutcome {
+fn capture_windows(native: isize, rect: rect::ShotRect) -> ShotOutcome {
     use windows::Win32::Foundation::HWND;
 
-    let Some(hwnd) = native else {
-        log::warn!("chart shot: no HWND for the chart's window");
-        return ShotOutcome::Failed;
-    };
-    let hwnd = HWND(hwnd as *mut std::ffi::c_void);
+    let hwnd = HWND(native as *mut std::ffi::c_void);
 
     let image = match win::capture_client_rect(hwnd, rect) {
         Ok(image) => image,

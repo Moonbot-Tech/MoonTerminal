@@ -109,8 +109,9 @@ pub(crate) enum StackSetting {
     CursorLabels(bool),
     /// Candle/trade display settings (the candlestick popup).
     CandleView(moon_core::market::CandleViewCfg),
-    /// Chart-drawing settings: trade-arrow size, connector thickness, which closed trades are drawn
-    /// and whether a closed order keeps its sell line (the palette popup).
+    /// Chart-drawing settings: trade-arrow size, connector thickness, which closed trades are drawn,
+    /// whether a closed order keeps its sell line, the trade-mark size and the bottom volume band
+    /// (the palette popup).
     Graphics(moon_core::config::ChartGraphicsCfg),
     /// Price scale, where `None` means Auto. Copied by the ⚙ popup's ⧉ along with the layout.
     Scale(Option<f32>),

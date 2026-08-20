@@ -59,24 +59,10 @@ pub struct ChartTheme {
     /// the uniform is built.
     pub price_line_px: f32,
 
-    // --- Trade / tick marks ---
-    /// Multiplier on the trade-cross marker size. 1.0 keeps the historical 7x7 "Normal Trade X";
-    /// the device pixel ratio is applied separately and is not part of this number.
-    pub marker_scale: f32,
-    /// Opacity of the per-TRADE volume bars along the plot's bottom edge, 0..1. Distinct from
-    /// [`Self::candle_volume_alpha`], which is the per-CANDLE band drawn beneath them.
-    pub trade_volume_alpha: f32,
-
-    // --- Bottom candle volumes ---
-    /// Display style: `moon_core::market::candles::VOLUME_STYLE_OFF` / `_BARS` / `_HILLS`.
-    pub candle_volume_style: u8,
-    /// Band height as a fraction of the plot height, 0..1. Capped in physical pixels by the
-    /// geometry module so the band cannot swallow a tall chart.
-    pub candle_volume_height: f32,
-    /// Bottom-volume opacity, 0..1. The band's colours come from the candle colours.
-    pub candle_volume_alpha: f32,
-    /// Colour of the volume scale's max and average reference lines, sRGB.
-    pub candle_volume_scale: [u8; 3],
+    // The trade-mark sizes and the bottom-volume band moved to
+    // `super::layout::ChartGraphicsCfg`, edited from the chart's palette popup. They describe a
+    // chart TAB rather than a colour scheme, so two tabs on one theme can now differ.
+    // `super::theme_legacy` carries an existing user's values across.
 
     // --- Order book ---
     /// Order-book background BETWEEN the best bid/ask (spread gap), sRGB.
@@ -152,15 +138,6 @@ impl Default for ChartTheme {
             mark_line: [107, 184, 255],
             mark_line_alpha: 0.78,
             price_line_px: 1.7,
-            marker_scale: 1.0,
-            // Was the compile-time DEFAULT_VOLUME_ALPHA in chartdx.
-            trade_volume_alpha: 0.34,
-            candle_volume_style: crate::market::candles::VOLUME_STYLE_HILLS,
-            // 0.18 is the fraction the per-trade band has always used; the two bands share it so
-            // they line up.
-            candle_volume_height: 0.18,
-            candle_volume_alpha: 0.30,
-            candle_volume_scale: [110, 110, 110],
             book_bg: [30, 30, 30],
             // The two halves of the order book are lightly tinted by side; the spread gap
             // between the best bid/ask remains the neutral book_bg.
@@ -208,14 +185,18 @@ impl ChartTheme {
         // Only the colours are overridden: the dark tan and light blue both wash out on white.
         // The sizes and opacities read the same in either mode, so they are deliberately absent.
         //
+        // The bottom-volume opacity and scale colour USED to be overridden here as well. They live
+        // on `ChartGraphicsCfg` now, which is per chart TAB and therefore has no notion of a theme
+        // mode, so that pair no longer switches with the mode. A light-mode user who never tuned
+        // them lands on the dark numbers once and can set them back from the chart's palette popup;
+        // `theme_legacy` carries the values of anyone who DID tune them.
+        //
         // Caveat, and it predates these fields: this runs only from `default_light`, so a user
         // whose `theme.toml` already has a `[light]` table gets the DARK value for any key that
         // table does not mention (serde fills a missing key from `ChartTheme::default`). Deleting
         // `theme.toml` or the `[light]` table restores these.
         self.price_line = [166, 110, 46];
         self.mark_line = [26, 115, 190];
-        self.candle_volume_alpha = 0.22;
-        self.candle_volume_scale = [170, 170, 170];
         self.book_bg = [255, 255, 255];
         self.book_bg_ask = [255, 244, 242];
         self.book_bg_bid = [243, 250, 242];

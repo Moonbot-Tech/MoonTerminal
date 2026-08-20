@@ -34,6 +34,17 @@ impl RenderState {
         let caption_fg = color(self.caption_label);
         let mut firetest_text_drawn = false;
         let mut readout_metrics_changed = false;
+        // A shot is in flight: this pass captions every pane with its EXCHANGE instead of the
+        // user's own core name. Read once, outside the loop, so every pane in a multi-pane chart
+        // makes the same choice within one frame — a picture that named the exchange in one pane
+        // and the account in another would be worse than either.
+        let shot_caption = self.shot_caption_until.is_some();
+        // Held LOCAL until this pass succeeds. The fork appends the canvas text frame only when
+        // `prepare_text` returns `Ok` (`moon-gpui/src/window.rs:2711-2724`), and there are fallible
+        // draws all the way down to this function's own `Ok(())`. Committing the proof at the draw
+        // site would count a caption pass that then errored and had its text frame discarded -
+        // which is precisely the blind capture the proof exists to prevent.
+        let mut shot_caption_drawn_now = false;
 
         for idx in 0..self.panes.len() {
             let (
@@ -53,7 +64,14 @@ impl RenderState {
                     pr.pane_bounds,
                     pr.view,
                     pr.epoch_ms,
-                    pr.core_name.clone(),
+                    // Bound to the SAME name in both cases on purpose: the split/unsplit layout,
+                    // the `fit_text` clamp, the measured `core_w` and the scale badge that hangs
+                    // off it all read this one binding below, and they must not learn that a shot
+                    // is happening. Only which string arrives here changes.
+                    match shot_caption {
+                        true => pr.venue_name.clone(),
+                        false => pr.core_name.clone(),
+                    },
                     pr.ticker.clone(),
                     pr.orderbook_enabled,
                     pr.price_axis_pos,
@@ -192,6 +210,12 @@ impl RenderState {
                         measure_run_width(ctx, s, FONT_SIZE)
                     });
                     self.draw_text(ctx, &text, lay.core_x, core_y, lay.core_ax, 0.0, caption_fg)?;
+                    // The shot's proof that the substituted caption made it into a frame. Recorded
+                    // locally and committed only if this whole pass returns `Ok`; see the
+                    // declaration of `shot_caption_drawn_now`.
+                    if shot_caption {
+                        shot_caption_drawn_now = true;
+                    }
                     core_w = w;
                     column(lay.split, &mut coin_box, &mut core_box).add(
                         lay.core_x - w * lay.core_ax,
@@ -993,6 +1017,26 @@ impl RenderState {
             for run in &mut self.text_runs[self.text_run_cursor..] {
                 run.clear();
             }
+        }
+        // Commit the shot's proof HERE and nowhere earlier: every fallible draw above has now
+        // succeeded, so this pass will return `Ok` and its text frame will be accepted. Latched
+        // rather than assigned, so a later pane-less or caption-less frame cannot retract a proof
+        // the shot has already been told about.
+        if shot_caption_drawn_now {
+            // A device recovery invalidates everything counted before it: that frame's `draw` is
+            // skipped wholesale, so passes counted on the old generation say nothing about what is
+            // on the screen now. Start again rather than letting them add up across the boundary.
+            let device_gen = self
+                .panes
+                .iter()
+                .map(|pane| pane.layers.device_gen())
+                .max()
+                .unwrap_or(0);
+            if self.shot_caption_device_gen != device_gen {
+                self.shot_caption_device_gen = device_gen;
+                self.shot_caption_frames = 0;
+            }
+            self.shot_caption_frames = self.shot_caption_frames.saturating_add(1);
         }
         Ok(())
     }

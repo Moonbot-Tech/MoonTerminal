@@ -260,6 +260,17 @@ struct PaneRender {
     market: String,
     /// Core name for the chart corner label, resolved from `SessionManager` during order sync.
     core_name: String,
+    /// Exchange caption for that same corner label, resolved beside [`Self::core_name`] from the
+    /// same session and drawn IN ITS PLACE while a shot is being taken.
+    ///
+    /// The core name is the user's own free text — an account label such as `SUB ACC No 38` — and
+    /// these pictures get shared publicly, so the captured frame names the venue instead. It is
+    /// resolved eagerly here for the same reason the core name is: `prepare_text` runs on the
+    /// present tick and must not reach for a session lock or a dictionary there.
+    ///
+    /// Never empty: `controls::venue_section_label` answers with the shared "not identified"
+    /// wording for a core that has not finished `BaseCheck` and for a venue nothing can name.
+    venue_name: String,
     /// Ticker for that same caption (`BEAT-USDT`), resolved from the core's catalog in
     /// `sync_from_market_source` and cached here.
     ///
@@ -485,6 +496,7 @@ impl PaneRender {
             core: None,
             market: String::new(),
             core_name: String::new(),
+            venue_name: String::new(),
             ticker: String::new(),
             ticker_catalog_key: 0,
             ticker_resolved: false,
@@ -658,6 +670,45 @@ struct RenderState {
     firetest_text_layer: GpuCanvasRetainedTextLayer,
     firetest_text_revision: u64,
     firetest_force_present: bool,
+    /// Deadline until which the corner caption names the EXCHANGE instead of the core, for a shot.
+    ///
+    /// Named for what it HOLDS - a wall-clock deadline - not for what it selects, so that
+    /// `shot_caption_until = None` reads as "stop substituting" rather than as clearing a string.
+    ///
+    /// ONE flag for the whole engine rather than one per pane: every pane reads it in the same
+    /// `prepare_text` pass, so a multi-pane chart is covered by construction and there is no
+    /// per-pane restore to get wrong.
+    ///
+    /// It carries a DEADLINE rather than a plain `bool` because the value is a privacy control: the
+    /// screen must not be left naming the exchange if the shot's callback chain never completes —
+    /// a closed window, a panel re-parented between windows, a stalled machine. `frame` expires it
+    /// from wall clock, exactly as it does [`Self::arrival_pulse`], so nothing has to be trusted to
+    /// call the clear.
+    shot_caption_until: Option<Instant>,
+    /// How many completed text passes have drawn the substituted caption since it was armed.
+    ///
+    /// The shot's proof, and the reason it is safe to capture at all. A COUNT rather than a flag,
+    /// and the threshold is [`SHOT_CAPTION_MIN_FRAMES`] rather than one, because `prepare_text`
+    /// having run does NOT prove the frame reached the screen: the fork's renderer skips `draw`
+    /// outright on the first frame after a DirectX device recovery
+    /// (`moon-gpui-windows/src/directx_renderer.rs:638-642`) and swallows a `can_present` refusal
+    /// the same way, while the canvas text pass still runs. A single drawn pass could therefore be
+    /// one the GPU discarded, and capturing on it would put the ACCOUNT NAME on the clipboard -
+    /// the one outcome this whole change exists to prevent.
+    ///
+    /// Reset to zero on arming, by the watchdog, and whenever the device generation moves, so a
+    /// recovery can never leave a count standing that was earned before it.
+    shot_caption_frames: u8,
+    /// Device generation the caption proof has been counted against, to notice a recovery mid-shot.
+    shot_caption_device_gen: u64,
+    /// Bumped every time the caption is ARMED, so an older shot can tell it has been superseded.
+    ///
+    /// Two presses of the hotkey in quick succession run two wait chains against this one engine.
+    /// The second arming zeroes the frame count the first chain is still waiting on, and without a
+    /// generation the first chain would sit out its budget and report a failure for a shot that was
+    /// simply replaced. It never affected what gets CAPTURED - the count is zeroed before any later
+    /// frame is tallied, so a stale caption can never be photographed - only what gets reported.
+    shot_caption_gen: u64,
     ui_palette: moon_ui::MoonPalette,
     /// Top-left chart-slot origin in the backbuffer. UI cursor coordinates are local slot device
     /// pixels, while own-pass renders in window coordinates.

@@ -43,8 +43,7 @@ use moon_core::market::MarketDataMode;
 
 use badges::BadgesEd;
 use common::{
-    collapse_block, color_row, draft_color, draft_select, draft_slider, section, select_row,
-    separator, slider_row,
+    collapse_block, color_row, draft_color, draft_slider, section, separator, slider_row,
 };
 use connections::ConnRow;
 use interface::Iface;

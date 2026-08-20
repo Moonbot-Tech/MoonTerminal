@@ -114,6 +114,10 @@ impl ChartEngine {
             firetest_text_layer: GpuCanvasRetainedTextLayer::default(),
             firetest_text_revision: 0,
             firetest_force_present: false,
+            shot_caption_until: None,
+            shot_caption_frames: 0,
+            shot_caption_device_gen: 0,
+            shot_caption_gen: 0,
             ui_palette: initial_palette_from_theme(&theme),
             slot_origin: [0.0, 0.0],
             cursor: None,
@@ -628,8 +632,9 @@ impl ChartEngine {
         true
     }
 
-    /// Applies the chart graphics settings — trade-history arrow size, connector thickness, and
-    /// trade-kind visibility — to every engine pane. Returns true on change.
+    /// Applies the chart graphics settings — trade-history arrow size, connector thickness,
+    /// trade-kind visibility, the trade-mark size and the bottom volume band — to every engine pane.
+    /// Returns true on change.
     ///
     /// The value is the owning panel's: its own per-tab override, or the `layout.chart_graphics`
     /// default when it has none.
@@ -717,6 +722,34 @@ impl ChartEngine {
         st.line_labels = show;
         st.needs_present = true;
         true
+    }
+
+    /// Arms or clears the shot's exchange caption. Returns true on change.
+    ///
+    /// Args:
+    ///     until: Deadline past which the caption returns to the core name by itself, or `None` to
+    ///         restore it now.
+    ///
+    /// Returns:
+    ///     Whether anything changed.
+    pub(crate) fn arm_shot_caption(&mut self, until: Option<Instant>) -> bool {
+        self.state.borrow_mut().arm_shot_caption(until)
+    }
+
+    /// Whether the armed exchange caption has satisfied the renderer-side pre-capture proof.
+    ///
+    /// Returns:
+    ///     `true` once enough completed text passes have drawn the substituted caption since arming.
+    pub(crate) fn shot_caption_drawn(&self) -> bool {
+        self.state.borrow().shot_caption_drawn()
+    }
+
+    /// Which arming of the shot caption is in force.
+    ///
+    /// Returns:
+    ///     The current arming generation.
+    pub(crate) fn shot_caption_gen(&self) -> u64 {
+        self.state.borrow().shot_caption_gen()
     }
 
     /// Toggles crosshair cursor readout labels. Returns true on change.

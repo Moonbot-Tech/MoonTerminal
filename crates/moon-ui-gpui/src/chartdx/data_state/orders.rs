@@ -70,6 +70,17 @@ impl ChartDataState {
                 pr.core_name = core_name;
                 pixels_changed = true;
             }
+            // The venue that qualifies the same pane, resolved from the same session and cached
+            // beside the core name because the SHOT draws it in the core name's place. Built
+            // through `venue_section_label`, the one caption for a venue anywhere in the terminal,
+            // so the chart cannot spell an exchange differently from the pickers and the rail —
+            // and so an unidentified core gets the shared wording rather than an empty caption.
+            let venue_name =
+                crate::controls::venue_section_label(session.core_venues().get(&pane.core));
+            if pr.venue_name != venue_name {
+                pr.venue_name = venue_name;
+                pixels_changed = true;
+            }
             let device_gen = pr.layers.device_gen();
             let device_lost = pr.last_device_gen != device_gen;
             if device_lost {

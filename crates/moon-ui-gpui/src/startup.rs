@@ -426,8 +426,71 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // Read the core-keyed stores BEFORE the config: `AppConfig::load` assigns uids to entries
     // that carry none and persists them, so the floor has to be known by then. These loads are
     // config-independent and their values are reused below rather than read twice.
-    let layout = WindowLayout::load();
-    let saved_chart_specs = chart_persist::load_all();
+    let mut layout = WindowLayout::load();
+    let mut saved_chart_specs = chart_persist::load_all();
+
+    // Carry the trade-mark and bottom-volume settings out of `theme.toml` into the per-tab chart
+    // graphics config. This has to happen HERE, before `unlock::start` below leads to
+    // `AppConfig::load` -> `ChartThemeSet::load`, whose legacy-flat branch re-saves the file at
+    // once and whose deserialize no longer knows those keys. After that point the values are gone.
+    //
+    // The write order is load-bearing and is the reverse of the read order: `charts.json` first and
+    // only then the marker, because the marker says "the tabs have been repaired". Committing it
+    // before a `charts.json` write that then fails would skip those tabs on every future launch,
+    // permanently. Repeating the pass costs nothing by comparison — `theme.toml` is untouched, so a
+    // second run resolves the same values.
+    if graphics_migration::migrate_chart_graphics_from_theme(&mut layout, &mut saved_chart_specs) {
+        // An EMPTY spec list is ambiguous: `chart_persist::load_all` maps a parse failure to an
+        // empty vec, so it means EITHER "no saved tabs" OR "charts.json is malformed". The two need
+        // opposite handling and the list alone cannot tell them apart, so ask the file.
+        //
+        // Genuinely empty -> nothing to stamp, so skip the write (writing `[]` over a
+        // malformed-but-recoverable file would destroy every saved tab) and commit the marker.
+        // Malformed -> defer everything, marker included: those tabs DO have `chart_graphics`
+        // overrides that never got stamped, and a marker claiming otherwise would deny them the
+        // migration forever if the file is later recovered.
+        let charts_file_has_content = std::fs::metadata(moon_core::config::paths::charts_path())
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
+        // ...but never defer without a source for the retry to read. `unlock::start` below reaches
+        // `ChartThemeSet::load`, which strips the six keys from `theme.toml` in this same launch, so
+        // a deferral is only recoverable while the pre-migration copy exists. With no copy, taking
+        // the partial migration beats losing the values outright.
+        let can_retry = moon_core::config::theme_legacy::backup_path().exists();
+        let specs_ok = if saved_chart_specs.is_empty() {
+            if charts_file_has_content && can_retry {
+                log::warn!(
+                    "перенос настроек графики чарта отложен: charts.json не разобран, \
+                     вкладки не обновлены; повторю при следующем запуске"
+                );
+                false
+            } else {
+                true
+            }
+        } else {
+            chart_persist::save_all(&saved_chart_specs)
+        };
+        if specs_ok {
+            layout.chart_graphics_from_theme_migrated = true;
+            if !layout.save() {
+                // The values are in `charts.json` but the marker is not durable, so the next launch
+                // migrates again. That is safe rather than merely tolerable: the reader falls back
+                // to the `.bak` copy, so a retry resolves the same values even after `theme.toml`
+                // has been rewritten without the legacy keys.
+                log::warn!(
+                    "перенос настроек графики чарта записан в charts.json, но метка в layout.toml \
+                     не сохранена; повторю при следующем запуске"
+                );
+            }
+        } else {
+            log::warn!(
+                "перенос настроек графики чарта не зафиксирован: charts.json не записан, \
+                 повторю при следующем запуске"
+            );
+        }
+    }
+    let layout = layout;
+    let saved_chart_specs = saved_chart_specs;
     let figures = moon_core::figures::FigureStore::load();
     let uid_floor = observed_uid_floor(&layout, &saved_chart_specs, &figures);
 
@@ -475,6 +538,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
 
 mod boot;
 mod fixture;
+mod graphics_migration;
 mod unlock;
 
 #[cfg(test)]

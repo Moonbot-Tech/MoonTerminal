@@ -30,19 +30,19 @@ pub const CANDLE_MODE_OUTLINE_IN_ZONE: u8 = 2;
 /// Disables candles completely, leaving a pure tick chart across the full window.
 pub const CANDLE_MODE_OFF: u8 = 3;
 
-/// Bottom candle-volume styles used by `ChartTheme::candle_volume_style`.
+/// Bottom candle-volume styles used by `crate::config::ChartGraphicsCfg::candle_volume_style`.
 ///
 /// A `u8` rather than an enum for the same reason [`CANDLE_MODE_FILLED`] is one: the value travels
 /// into a shader uniform as a float and is clamped at the edge, so an open integer keeps the whole
-/// path — `theme.toml`, the settings slider, `VolumeStyleGpu.m.x` — free of per-representation
-/// conversions. `theme.toml` is a portable file users copy between machines; a bare enum string in
-/// it would be a new value shape there.
+/// path — `layout.toml`, `charts.json`, the chart popup's style row, `VolumeStyleGpu.m.x` — free of
+/// per-representation conversions. Both files are hand-editable; a bare enum string in them would be
+/// a new value shape to parse.
 pub const VOLUME_STYLE_OFF: u8 = 0;
 /// Thin per-candle bars, one bar per bucket.
 pub const VOLUME_STYLE_BARS: u8 = 1;
 /// Moonbot-style "hills": a filled area whose top edge joins neighbouring buckets.
 pub const VOLUME_STYLE_HILLS: u8 = 2;
-/// Highest valid style id, for clamping a hand-edited `theme.toml`.
+/// Highest valid style id, for clamping a hand-edited chart configuration.
 pub const VOLUME_STYLE_MAX: u8 = VOLUME_STYLE_HILLS;
 
 /// Candle/trade chart display settings controlled by the candle button in the tab strip.
