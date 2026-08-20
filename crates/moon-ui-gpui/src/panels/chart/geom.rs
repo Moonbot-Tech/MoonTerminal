@@ -3,7 +3,8 @@
 //! and Custom panels share these paths. Split from `chart.rs`.
 
 use gpui::*;
-use moon_core::figures::Proj;
+use moon_core::figures::proj::PxPoint;
+use moon_core::figures::{FigNode, Proj};
 
 use super::ChartPanel;
 
@@ -34,12 +35,40 @@ impl Proj for PaneMap {
         self.plot.x + (rel - self.left_rel) / self.window_ms.max(1e-3) * self.plot.w
     }
     fn price_at_y(&self, y: f32) -> f64 {
-        let rel_y = ((y - self.plot.y) / self.plot.h.max(1.0)).clamp(0.0, 1.0);
-        (self.center + (0.5 - rel_y) * self.range) as f64
+        // Clamped, because this answers for a POINTER: a click cannot mean a price outside the
+        // plot the user is looking at. The arithmetic itself lives once, in `price_at_rel`.
+        self.price_at_rel(self.rel_y(y).clamp(0.0, 1.0))
     }
     fn y_of_price(&self, price: f64) -> f32 {
         let rel_y = 0.5 - (price as f32 - self.center) / self.range.max(1e-9);
         self.plot.y + rel_y * self.plot.h
+    }
+}
+
+impl PaneMap {
+    /// Where a pixel sits down the plot: 0 at its top edge, 1 at its bottom, outside that beyond
+    /// them.
+    fn rel_y(&self, y: f32) -> f32 {
+        (y - self.plot.y) / self.plot.h.max(1.0)
+    }
+
+    /// The price at a relative position down the plot. The ONE statement of the Y mapping; both
+    /// readings below are this function with and without a clamp on its argument.
+    fn price_at_rel(&self, rel_y: f32) -> f64 {
+        (self.center + (0.5 - rel_y) * self.range) as f64
+    }
+
+    /// Node under a pixel WITHOUT clamping the price to the visible range.
+    ///
+    /// [`Proj::price_at_y`] clamps, which is right for a pointer. It is wrong for a point a tool
+    /// DERIVES — a triangle's apex is raised as far from its base as the base is long, so any base
+    /// wider than the plot is tall puts it off screen, and clamping would stick the vertex to the
+    /// top of the view and make the stored figure depend on the Y zoom it was drawn at.
+    pub(super) fn node_at_unclamped(&self, p: PxPoint) -> FigNode {
+        FigNode {
+            time_ms: self.time_at_x(p.0),
+            price: self.price_at_rel(self.rel_y(p.1)),
+        }
     }
 }
 

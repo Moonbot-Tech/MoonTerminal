@@ -253,9 +253,6 @@ pub struct ChartPanel {
     trade_hover: trade_history_hover::TradeHoverState,
     /// Figure-drawing state for this panel: draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
-    /// Screen point where the latest draft node was placed. Releasing sufficiently far away
-    /// distinguishes a drag-release gesture from a click and completes the figure.
-    fig_draw_down: Option<(f32, f32)>,
     fig_hover: Option<u64>,
     fig_drag: Option<figures::FigDrag>,
     /// Per-figure settings panel: the figure it edits and the point it was opened at, or `None`
@@ -493,7 +490,6 @@ impl ChartPanel {
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,
-            fig_draw_down: None,
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,
@@ -658,7 +654,6 @@ impl ChartPanel {
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,
-            fig_draw_down: None,
             fig_hover: None,
             fig_drag: None,
             suppress_rmb_up: false,

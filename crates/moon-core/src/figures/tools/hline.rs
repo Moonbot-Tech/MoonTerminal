@@ -20,6 +20,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.hline",
     glyph: "─",
     clicks: 1,
+    drag_rest: None,
     scale_swatch: None,
     fills: false,
     alertable: true,

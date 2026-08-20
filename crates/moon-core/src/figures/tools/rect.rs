@@ -25,6 +25,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.rect",
     glyph: "▭",
     clicks: 2,
+    drag_rest: None,
     scale_swatch: None,
     fills: true,
     // The core's chart-object blob has no rectangle type.

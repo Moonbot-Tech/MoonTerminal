@@ -4,6 +4,7 @@
 //! the last one are read from its registry row (`ToolDef::clicks` / `make` / `preview`), so a new
 //! tool draws here without a line of code.
 
+use moon_core::figures::proj::PxPoint;
 use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind, FigureTool, ToolSettings};
 use moon_core::session::CoreId;
 
@@ -25,6 +26,26 @@ pub(crate) struct FigDraft {
     pub nodes: Vec<FigNode>,
     /// Current cursor position in data coordinates.
     pub cursor: FigNode,
+    /// Pixel of the press the figure layer accepted and the pointer is still holding, if any.
+    ///
+    /// The press-drag-release gesture measures its travel from here, and the preview trusts it to
+    /// decide that a pointer under a held button belongs to THIS draft rather than to a chart pan
+    /// or an order-line drag that took the press instead. It lives on the draft so that dropping
+    /// the draft drops the press with it: a press outliving what it was placed for is what lets an
+    /// unrelated release be measured as a gesture, and every path that abandons a draft would
+    /// otherwise have to remember to clear it by hand.
+    ///
+    /// Pixels, not `(time, price)`: it answers "how far has the hand moved", which is a question
+    /// about the screen and must not change because the chart scrolled underneath.
+    pub down: Option<PxPoint>,
+    /// Nodes the tool derives from a live press-drag gesture (`ToolDef::drag_rest`), already
+    /// projected back to `(time, price)`.
+    ///
+    /// Empty for every tool but the ones drawn by dragging a part of themselves, and empty for
+    /// those too until a press actually travels. While it is not empty the preview is the FINISHED
+    /// figure rather than the piece under the cursor — a dragged triangle previews the triangle the
+    /// release will leave behind, not the base edge — so what is dragged is what lands.
+    drag_rest: Vec<FigNode>,
     /// Whether this draft was started with the Sells-to-zone mode armed, snapshotted for the same
     /// reason the style is.
     ///
@@ -57,8 +78,41 @@ impl FigDraft {
             switches,
             nodes: Vec::new(),
             cursor,
+            down: None,
+            drag_rest: Vec::new(),
             sells_zone: false,
         }
+    }
+
+    /// The tool's rule for deriving the rest of itself from a drag, when THIS draft is eligible to
+    /// use it.
+    ///
+    /// Eligibility is a property of the draft, so it is stated here beside the draft's other rules
+    /// rather than in the panel: only a draft holding exactly the press node derives anything — a
+    /// gesture continuing a draft that already has nodes would add the derived ones on top of the
+    /// clicked ones and overshoot the figure — and a Sells-to-zone band never does, because its
+    /// finishing node sends a live bulk move and no price the hand did not point at may be one of
+    /// the two it is spread over. The band arms a tool with no rule of its own today; this guards
+    /// the day one of them grows one.
+    pub(super) fn drag_rest_rule(&self) -> Option<fn(PxPoint, PxPoint) -> Vec<PxPoint>> {
+        if self.sells_zone || self.nodes.len() != 1 {
+            return None;
+        }
+        self.tool.def().drag_rest
+    }
+
+    /// Replaces the gesture-derived nodes, reporting whether they changed.
+    ///
+    /// Called on every accepted pointer move, with an empty set whenever the gesture is not live —
+    /// the button came up, the press has not travelled far enough to be a drag, or the tool derives
+    /// nothing. That keeps a stale apex from outliving the drag that produced it and reaching the
+    /// preview between two ordinary clicks.
+    pub(super) fn set_drag_rest(&mut self, rest: Vec<FigNode>) -> bool {
+        if self.drag_rest == rest {
+            return false;
+        }
+        self.drag_rest = rest;
+        true
     }
 
     /// Marks the draft as a Sells-to-zone band, taken at the moment it starts.
@@ -103,6 +157,9 @@ impl FigDraft {
     pub(super) fn place(&mut self, node: FigNode) -> Option<FigureKind> {
         self.nodes.push(node);
         self.cursor = node;
+        // The gesture's derived nodes are placed by the caller as ordinary nodes; keeping them here
+        // as well would preview them a second time on top of the ones already placed.
+        self.drag_rest.clear();
         let def = self.tool.def();
         if self.nodes.len() < def.clicks as usize {
             return None;
@@ -113,9 +170,25 @@ impl FigDraft {
     }
 
     /// Transient preview figure drawn under the cursor.
+    ///
+    /// A live gesture previews through `make` rather than through `preview`: it already knows every
+    /// node the figure will have, so showing the tool's partial shape would draw one thing and
+    /// leave another behind.
     pub(super) fn preview(&self) -> Option<Figure> {
-        let mut kind = (self.tool.def().preview)(&self.nodes, self.cursor)?;
+        let def = self.tool.def();
+        let mut kind = if self.drag_rest.is_empty() {
+            (def.preview)(&self.nodes, self.cursor)?
+        } else {
+            let mut all = Vec::with_capacity(self.nodes.len() + 1 + self.drag_rest.len());
+            all.extend_from_slice(&self.nodes);
+            all.push(self.cursor);
+            all.extend_from_slice(&self.drag_rest);
+            (def.make)(&all)?
+        };
         moon_core::figures::apply_settings(&mut kind, &self.switches);
         Some(Figure::new(kind, self.style, 0.0))
     }
 }
+
+#[cfg(test)]
+mod tests;

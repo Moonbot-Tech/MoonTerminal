@@ -189,6 +189,22 @@ pub struct ToolDef {
     pub glyph: &'static str,
     /// Clicks needed to finish a figure.
     pub clicks: u8,
+    /// Nodes this tool derives from a press-drag-release gesture, beyond the two the gesture
+    /// places itself, given the press and the release point.
+    ///
+    /// `None` — the gesture is two clicks and nothing more, which already finishes every two-click
+    /// tool. `Some` — the drag draws only PART of the figure and the tool completes it: Moonbot's
+    /// triangle is dragged by its base, with the apex derived from that base, and the release
+    /// finishes it instead of leaving two vertices waiting for a third click.
+    ///
+    /// Pixels rather than `(time, price)`, and the caller projects the result back itself: an apex
+    /// placed a price away from its base would be a needle on one Y scale and a slab on the next,
+    /// so the shape has to be fixed on screen at the moment it is drawn.
+    ///
+    /// The count completes [`Self::clicks`] exactly — `2 + len == clicks` — which the registry
+    /// contract test pins: too few would leave a draft no click can finish, too many would spill
+    /// into a second figure.
+    pub drag_rest: Option<fn(PxPoint, PxPoint) -> Vec<PxPoint>>,
     /// Whether the core's `TChartObject` blob can carry this figure, i.e. whether it can be armed
     /// as an alert. A tool the core does not know is drawn locally only.
     pub alertable: bool,

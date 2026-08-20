@@ -17,12 +17,29 @@ pub struct Triangle {
     pub c: FigNode,
 }
 
+/// The apex Moonbot derives when a triangle is dragged rather than clicked: the perpendicular
+/// raised from the middle of the dragged BASE, as long as the base itself.
+///
+/// The perpendicular's sign is fixed instead of "always upwards". Dragging right to left flips the
+/// base vector, so the apex flips with it and the triangle points down — which is what Moonbot
+/// does, and what a hand-written "up" rule would have to special-case.
+fn drag_apex(a: PxPoint, b: PxPoint) -> PxPoint {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let mid = ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5);
+    // Rotation by -90° in screen space, where y grows downward: a left-to-right base lifts its
+    // apex above itself. Rotating the base vector also carries its LENGTH, so the height follows
+    // the base without a second constant.
+    (mid.0 + dy, mid.1 - dx)
+}
+
 pub(super) const DEF: ToolDef = ToolDef {
     tool: FigureTool::Triangle,
     key: "triangle",
     locale_key: "alerts.fig.triangle",
     glyph: "△",
     clicks: 3,
+    // Dragged, a triangle is its base and nothing else; the third vertex comes from the two.
+    drag_rest: Some(|a, b| vec![drag_apex(a, b)]),
     scale_swatch: None,
     fills: false,
     alertable: true,

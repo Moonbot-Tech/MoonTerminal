@@ -80,6 +80,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.mb_fib",
     glyph: "▤",
     clicks: 2,
+    drag_rest: None,
     // Coloured by the scale, and filled between its levels, exactly as our own Fibonacci is: the
     // blob carries one line colour and no fill at all — every sampled length is accounted for by
     // the header and the geometry — so the bands Moonbot draws are its own level palette, and ours

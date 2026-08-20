@@ -76,6 +76,7 @@ pub(super) const DEF: ToolDef = ToolDef {
     locale_key: "alerts.fig.position",
     glyph: "⇅",
     clicks: 2,
+    drag_rest: None,
     // The two zones stand for profit and loss, so their colours are the tool's and not the style's;
     // the swatch the settings panel offers is the profit green.
     scale_swatch: Some(|| PROFIT_RGB),
