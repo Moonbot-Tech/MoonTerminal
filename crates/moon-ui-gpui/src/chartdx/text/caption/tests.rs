@@ -1,6 +1,6 @@
 //! Regression coverage for the shared corner-caption zone and its degenerate-layout guards.
 
-use crate::chartdx::text::caption::{CaptionBox, caption_geom, caption_layout};
+use crate::chartdx::text::caption::{CaptionBox, caption_geom};
 
 /// Pane 1000 wide, plot 760 wide, a 220-wide book occupying the right side.
 fn with_book() -> Option<crate::chartdx::text::caption::CaptionGeom> {
@@ -16,7 +16,6 @@ fn the_caption_zone_is_the_books_own_rectangle() {
     assert_eq!(g.zone_left, 780.0);
     assert_eq!(g.right_x, 970.0);
     assert_eq!(g.max_w, 190.0);
-    assert!(g.over_book);
 }
 
 /// Catches ignoring the narrowed live book rectangle on cramped panes, which would let the core
@@ -38,7 +37,6 @@ fn a_narrowed_book_narrows_the_caption_with_it() {
 fn without_a_book_the_zone_is_carved_off_the_plot_not_the_pane() {
     let g = caption_geom(0.0, 1000.0, 0.0, 800.0, 50.0, false, f32::NAN, 30.0, 4.0)
         .expect("a plot-only pane still captions");
-    assert!(!g.over_book);
     // Anchored at the PLOT's right edge, not the pane's.
     assert_eq!(g.right_x, 770.0);
     // And bounded by a book-sized budget rather than running across the whole chart.
@@ -93,105 +91,6 @@ fn a_stale_book_rectangle_is_clamped_into_the_pane() {
     let g = caption_geom(0.0, 1000.0, 0.0, 780.0, 50.0, true, -400.0, 30.0, 4.0).expect("clamped");
     assert_eq!(g.zone_left, 0.0);
     assert!(g.max_w <= 1000.0);
-}
-
-/// `caption.rs:caption_layout` must hang the core name off the book's LEFT edge and centre the
-/// coin on the book itself.
-///
-/// Breakage this pins: returning both lines to one shared anchor. Stacking at the book's left edge
-/// makes the core name read as part of the order book and lets a long name spill across candles;
-/// centring both lines over the chart leaves the coin unrelated to the book beneath it.
-#[test]
-fn over_a_book_the_core_name_hangs_left_of_it_and_the_coin_centres_on_it() {
-    let g = with_book().expect("a laid-out pane has a caption zone");
-    let lay = caption_layout(&g, 0.0);
-
-    assert!(lay.split, "a wide pane has room to split the two lines");
-    assert_eq!(
-        lay.coin_x,
-        (g.zone_left + g.right_x) * 0.5,
-        "the coin centres on the book's own span"
-    );
-    assert_eq!(lay.coin_ax, 0.5, "and is anchored by its centre");
-    assert_eq!(
-        lay.core_ax, 1.0,
-        "the core name is anchored by its right edge"
-    );
-    assert!(
-        lay.core_x < g.zone_left,
-        "which sits left of the book: core_x={} zone_left={}",
-        lay.core_x,
-        g.zone_left
-    );
-    assert!(
-        lay.core_max_w > 0.0 && lay.core_x - lay.core_max_w >= 0.0,
-        "the name's budget must stay inside the plot: x={} w={}",
-        lay.core_x,
-        lay.core_max_w
-    );
-}
-
-/// `caption.rs:caption_layout` must budget the core name from the PLOT's left edge, never from the
-/// pane's.
-///
-/// Breakage this pins: measuring the available width from `pane_left`. The gap between the pane
-/// and the plot is the price-axis gutter — the name would be handed a budget that includes it and
-/// would then be drawn over the axis labels.
-#[test]
-fn the_core_name_never_crosses_the_plots_left_edge() {
-    for plot_left in [0.0_f32, 40.0, 120.0, 300.0] {
-        let g = caption_geom(0.0, 1000.0, plot_left, 780.0, 50.0, true, 780.0, 30.0, 4.0)
-            .expect("a laid-out pane has a caption zone");
-        let lay = caption_layout(&g, plot_left);
-        if !lay.split {
-            continue;
-        }
-        assert!(
-            lay.core_x - lay.core_max_w >= plot_left,
-            "plot_left={plot_left}: the name's left bound {} crossed the plot edge",
-            lay.core_x - lay.core_max_w
-        );
-    }
-}
-
-/// `caption.rs:caption_layout` must fall back to the stacked caption when there is no chart left
-/// of the book to hang a name over.
-///
-/// Breakage this pins: splitting unconditionally. In book-only broom mode the book takes the whole
-/// pane, so the "left of the book" column is off-screen entirely — the core name would be drawn at
-/// a negative x and simply disappear, and the same happens on any pane narrow enough that the book
-/// reaches the plot's edge.
-#[test]
-fn a_pane_with_no_room_left_of_the_book_keeps_the_old_stacked_caption() {
-    // The book starts essentially at the plot's left edge: broom mode, or a very cramped tile.
-    let g = caption_geom(0.0, 1000.0, 0.0, 1000.0, 50.0, true, 8.0, 30.0, 4.0)
-        .expect("a book-only pane still captions");
-    let lay = caption_layout(&g, 0.0);
-
-    assert!(
-        !lay.split,
-        "there is nothing to the book's left to split into"
-    );
-    assert_eq!(lay.coin_ax, 0.0);
-    assert_eq!(lay.core_ax, 0.0);
-    assert_eq!(lay.coin_x, g.zone_left);
-    assert_eq!(lay.core_x, g.zone_left);
-}
-
-/// `caption.rs:caption_layout` must leave the no-book caption right-anchored.
-///
-/// Breakage this pins: splitting wherever the caption draws. Without an order book there is no
-/// zone to centre on — only candles — so a centred coin and a name hung off a
-/// notional edge would both sit in the middle of the chart with nothing to relate to.
-#[test]
-fn without_a_book_both_lines_stay_right_anchored() {
-    let g = caption_geom(0.0, 1000.0, 0.0, 800.0, 50.0, false, f32::NAN, 30.0, 4.0)
-        .expect("a plot-only pane still captions");
-    let lay = caption_layout(&g, 0.0);
-
-    assert!(!lay.split);
-    assert_eq!((lay.coin_ax, lay.core_ax), (1.0, 1.0));
-    assert_eq!((lay.coin_x, lay.core_x), (g.right_x, g.right_x));
 }
 
 /// `caption.rs:CaptionBox` must measure the plate from the runs actually drawn.

@@ -18,10 +18,6 @@ pub(super) struct CaptionGeom {
     pub(super) top_y: f32,
     /// Horizontal budget for one caption line: text wider than this is truncated to fit.
     pub(super) max_w: f32,
-    /// Whether an order book is present, and therefore whether there is a zone to align the core
-    /// name to on the LEFT. Without one, both lines stay right-anchored — there is nothing to the
-    /// left but chart.
-    pub(super) over_book: bool,
 }
 
 /// Where the order book's zone starts, in LOGICAL pixels.
@@ -127,92 +123,7 @@ pub(super) fn caption_geom(
         right_x,
         top_y: plot_top + pad_y,
         max_w,
-        over_book: orderbook_enabled,
     })
-}
-
-/// Gap between the core name's right edge and the order book's left edge.
-const CAPTION_SPLIT_GAP: f32 = 6.0;
-
-/// Least width worth handing the core name once it hangs left of the book.
-///
-/// Below roughly four monospaced glyphs plus an ellipsis the truncated name says nothing, and the
-/// caption is better off stacked inside the book's own zone than split into an unreadable sliver.
-const CAPTION_MIN_CORE_W: f32 = 40.0;
-
-/// Where each of the caption's two lines anchors, in LOGICAL pixels.
-///
-/// The lines are placed independently because they answer different questions: the coin belongs to
-/// the order book it labels and reads best centred on it, while the core name qualifies the whole
-/// pane and has chart to its left to hang over. `ax` is the horizontal alignment fraction the text
-/// pass takes — 0.0 anchors the run's left edge at `x`, 0.5 its centre, 1.0 its right edge.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct CaptionLayout {
-    /// Horizontal anchor for the coin run.
-    pub(super) coin_x: f32,
-    /// Horizontal alignment fraction applied at [`Self::coin_x`].
-    pub(super) coin_ax: f32,
-    /// Maximum width available to the coin run.
-    pub(super) coin_max_w: f32,
-    /// Horizontal anchor for the core-name run.
-    pub(super) core_x: f32,
-    /// Horizontal alignment fraction applied at [`Self::core_x`].
-    pub(super) core_ax: f32,
-    /// Maximum width available to the core-name run.
-    pub(super) core_max_w: f32,
-    /// Whether the two lines sit in separate columns. When false they share one column and one
-    /// backing-plate geometry.
-    pub(super) split: bool,
-}
-
-/// Place the caption's two lines within an already-resolved zone.
-///
-/// Args:
-///     g: The caption's zone for this pane.
-///     plot_left: Left edge of the plot area — the boundary the core name must not cross, since
-///         beyond it lies the price-axis gutter rather than chart.
-///
-/// Returns:
-///     Where each line anchors and whether they were split into two columns.
-pub(super) fn caption_layout(g: &CaptionGeom, plot_left: f32) -> CaptionLayout {
-    // No book: there is nothing but chart to the left, so there is no zone to centre on and no
-    // edge to hang from. Both lines stay right-anchored.
-    if !g.over_book {
-        return CaptionLayout {
-            coin_x: g.right_x,
-            coin_ax: 1.0,
-            coin_max_w: g.max_w,
-            core_x: g.right_x,
-            core_ax: 1.0,
-            core_max_w: g.max_w,
-            split: false,
-        };
-    }
-    let left_avail = g.zone_left - CAPTION_SPLIT_GAP - plot_left;
-    if left_avail >= CAPTION_MIN_CORE_W {
-        return CaptionLayout {
-            // Centred on the book's own span. The right end of that span is already inset clear of
-            // the pane's close button, so a wide coin cannot grow out from under it.
-            coin_x: (g.zone_left + g.right_x) * 0.5,
-            coin_ax: 0.5,
-            coin_max_w: g.max_w,
-            core_x: g.zone_left - CAPTION_SPLIT_GAP,
-            core_ax: 1.0,
-            core_max_w: left_avail,
-            split: true,
-        };
-    }
-    // Too little chart left of the book to hang a legible name over — a narrow pane, or broom mode
-    // where the book has taken the whole width. Stack both lines inside the zone instead.
-    CaptionLayout {
-        coin_x: g.zone_left,
-        coin_ax: 0.0,
-        coin_max_w: g.max_w,
-        core_x: g.zone_left,
-        core_ax: 0.0,
-        core_max_w: g.max_w,
-        split: false,
-    }
 }
 
 /// Bounding box of the runs actually drawn in one caption column, in LOGICAL pixels.

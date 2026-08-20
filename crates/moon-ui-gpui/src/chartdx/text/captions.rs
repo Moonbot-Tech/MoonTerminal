@@ -11,36 +11,35 @@
 //! whether or not an order book is drawn — [`super::caption::book_zone_left`] falls back to a
 //! book-sized strip — which is why the chart still captions there with the book switched off.
 //!
-//! `ZoneTop` carries the adaptive behaviour the hard-coded caption always had: over a book with
-//! chart to its left it SPLITS into two columns — the first row's HEAD centres on the zone, while
-//! the second row and the first row's inline tail hang off the zone's left edge. That is a property
-//! of the ZONE, not a setting. The two columns get separate plates on purpose: one plate spanning
-//! both would darken the whole run of candles between them.
+//! Everything a zone holds is drawn INSIDE that zone. The control strip centres its rows on its
+//! own width; the plot's corners anchor to the plot's edges. The old caption hung its second line
+//! off the strip's left edge, out over the candles — that is gone: WHICH caption ended up out there
+//! depended on its position in the list, so "I chose the strip and it drew on the chart" was the
+//! honest reading of it.
 
 use gpui::{Hsla, point, px};
 use moon_core::config::{
-    CHART_LABEL_SLOTS, ChartLabelsCfg, LabelColor, LabelZone, ResolvedLabelStyle,
+    CHART_LABEL_SLOTS, ChartLabelsCfg, LabelAlign, LabelColor, LabelZone, ResolvedLabelStyle,
 };
 use moon_core::util::fmt::DeltaSign;
 
-use super::caption::{CaptionBox, CaptionGeom, CaptionLayout, caption_geom, caption_layout};
+use super::caption::{CaptionBox, CaptionGeom, caption_geom};
 use super::labels::LabelText;
 use super::{CAPTION_PAD_X, CAPTION_PAD_Y};
 use crate::chartdx::RenderState;
 
 /// Horizontal gap between two captions sharing a row.
 const INLINE_GAP: f32 = 8.0;
-/// Gap between the split corner's two columns.
-const SPLIT_GAP: f32 = 8.0;
 /// Inset of a non-`TopRight` zone from the plot's edges.
 const ZONE_PAD: f32 = 6.0;
 /// Smallest width a caption is truncated to before it is dropped instead.
 const MIN_LEGIBLE_W: f32 = 12.0;
-/// Number of backing plates a pane publishes: one per zone, plus the split column that `TopRight`
-/// grows when it shares the corner with an order book.
-pub(in crate::chartdx) const CAPTION_PLATES: usize = LabelZone::ALL.len() + 1;
-/// Index of the plate belonging to `TopRight`'s split column.
-const SPLIT_PLATE: usize = LabelZone::ALL.len();
+/// Number of backing plates a pane publishes: one per band and alignment.
+///
+/// Rows that share a band but not an alignment are independent stacks — left, centre and right do
+/// not overlap horizontally, so each starts at the band's own edge — and each needs its own plate,
+/// or one plate would span the gap between two of them and darken the candles in between.
+pub(in crate::chartdx) const CAPTION_PLATES: usize = LabelZone::ALL.len() * LabelAlign::ALL.len();
 
 /// The pane rectangles a caption pass needs, in LOGICAL pixels.
 #[derive(Clone, Copy)]
@@ -169,57 +168,45 @@ impl RenderState {
         let Some(corner) = corner else {
             return Ok(());
         };
-        for zone in LabelZone::ALL {
-            let rows = self.collect_rows(cfg, texts, zone);
-            if rows.is_empty() {
-                continue;
-            }
-            // Only the zone's TOP splits: that is the spot the caption has always occupied, and
-            // the split exists to put the coin over the book with its qualifier beside it.
-            let split = matches!(zone, LabelZone::ZoneTop)
-                .then(|| caption_layout(&corner, geom.plot_left))
-                .filter(|lay| lay.split);
-            let zone_ix = LabelZone::ALL
-                .iter()
-                .position(|z| *z == zone)
-                .unwrap_or_default();
-            let (main_box, split_box) = match split {
-                Some(lay) => {
-                    self.draw_split_corner(ctx, idx, texts, &rows, &corner, &lay, caption_fg)?
+        for (zone_ix, zone) in LabelZone::ALL.into_iter().enumerate() {
+            for (align_ix, align) in LabelAlign::ALL.into_iter().enumerate() {
+                let rows = self.collect_rows(cfg, texts, zone, align);
+                if rows.is_empty() {
+                    continue;
                 }
-                None => {
-                    let column = zone_column(zone, &geom, &corner);
-                    let start_y = zone_start_y(zone, &geom, &corner);
-                    let boxed = self.draw_stack(
-                        ctx,
-                        idx,
-                        texts,
-                        &rows,
-                        column,
-                        start_y,
-                        zone.is_top(),
-                        caption_fg,
-                    )?;
-                    (boxed, CaptionBox::default())
-                }
-            };
-            plates[zone_ix] = main_box.plate(geom.scale_factor);
-            if split.is_some() {
-                plates[SPLIT_PLATE] = split_box.plate(geom.scale_factor);
+                let column = zone_column(zone, align, &geom, &corner);
+                let start_y = zone_start_y(zone, &geom, &corner);
+                let plate = self.draw_stack(
+                    ctx,
+                    idx,
+                    texts,
+                    &rows,
+                    column,
+                    start_y,
+                    zone.is_top(),
+                    caption_fg,
+                )?;
+                plates[zone_ix * LabelAlign::ALL.len() + align_ix] = plate.plate(geom.scale_factor);
             }
         }
         Ok(())
     }
 
     /// Group one zone's resolved captions into rows, honouring the inline flag.
-    fn collect_rows(&self, cfg: &ChartLabelsCfg, texts: &[LabelText], zone: LabelZone) -> Vec<Row> {
+    fn collect_rows(
+        &self,
+        cfg: &ChartLabelsCfg,
+        texts: &[LabelText],
+        zone: LabelZone,
+        align: LabelAlign,
+    ) -> Vec<Row> {
         let base = self.label_font_px();
         let mut rows: Vec<Row> = Vec::new();
         for (pos, text) in texts.iter().enumerate() {
             let Some(slot) = cfg.slots.get(text.slot) else {
                 continue;
             };
-            if slot.zone != zone {
+            if slot.zone != zone || slot.align != align {
                 continue;
             }
             let style = slot.resolved_style();
@@ -268,81 +255,6 @@ impl RenderState {
             y += if downward { row_h } else { -row_h };
         }
         Ok(plate)
-    }
-
-    /// Draw `TopRight` the way it has always drawn over an order book.
-    ///
-    /// Returns the two plates: the column over the book, and the one hanging off its left edge.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_split_corner(
-        &mut self,
-        ctx: &mut gpui::GpuCanvasTextContext<'_>,
-        idx: usize,
-        texts: &[LabelText],
-        rows: &[Row],
-        corner: &CaptionGeom,
-        lay: &CaptionLayout,
-        caption_fg: Hsla,
-    ) -> anyhow::Result<(CaptionBox, CaptionBox)> {
-        let mut main = CaptionBox::default();
-        let mut left = CaptionBox::default();
-        let cap_y = corner.top_y;
-        let head_row = &rows[0];
-        let head_h = head_row.height();
-        let over_book = Column {
-            x: lay.coin_x,
-            align: lay.coin_ax,
-            max_w: lay.coin_max_w,
-        };
-        // The row's HEAD centres over the book; anything else on that row belongs to the left
-        // column, which is where the scale badge has always been drawn in this layout.
-        let split_at = 1.min(head_row.items.len());
-        let (head, tail) = head_row.items.split_at(split_at);
-        self.draw_row(
-            ctx, idx, texts, head, over_book, cap_y, caption_fg, &mut main,
-        )?;
-        // The second row hangs off the book's left edge, vertically centred against the taller head
-        // row: aligned by their tops, the smaller one reads as having slipped downward.
-        let mut left_edge = lay.core_x;
-        if let Some(second) = rows.get(1) {
-            let column = Column {
-                x: lay.core_x,
-                align: 1.0,
-                max_w: lay.core_max_w,
-            };
-            let top = cap_y + ((head_h - second.height()) * 0.5).max(0.0);
-            let drawn = self.draw_row(
-                ctx,
-                idx,
-                texts,
-                &second.items,
-                column,
-                top,
-                caption_fg,
-                &mut left,
-            )?;
-            left_edge = left_edge.min(drawn);
-        }
-        // The head row's tail sits further left still, on the head's own top edge — it is usually
-        // the scale badge, the tallest run in the caption.
-        if !tail.is_empty() {
-            let x = left_edge - SPLIT_GAP;
-            let column = Column {
-                x,
-                align: 1.0,
-                max_w: (x - corner.zone_left).max(0.0),
-            };
-            self.draw_row(ctx, idx, texts, tail, column, cap_y, caption_fg, &mut left)?;
-        }
-        // Rows below the first follow the head's column, stacked under it.
-        let mut y = cap_y + head_h;
-        for row in rows.iter().skip(2) {
-            self.draw_row(
-                ctx, idx, texts, &row.items, over_book, y, caption_fg, &mut main,
-            )?;
-            y += row.height();
-        }
-        Ok((main, left))
     }
 
     /// Draw one row of captions, returning the row's LEFT edge.
@@ -570,47 +482,37 @@ fn fit_caption(
     })
 }
 
-/// Anchor and width budget for an ordinary zone.
-fn zone_column(zone: LabelZone, geom: &CaptionGeomInput, corner: &CaptionGeom) -> Column {
+/// Anchor and width budget for one band at one alignment.
+fn zone_column(
+    zone: LabelZone,
+    align: LabelAlign,
+    geom: &CaptionGeomInput,
+    corner: &CaptionGeom,
+) -> Column {
     let plot_w = (geom.plot_right - geom.plot_left - 2.0 * ZONE_PAD).max(0.0);
     // The control strip's own width, which is what its two zones are measured against — never the
     // plot's, or a caption there would run out over the candles.
     let zone_w = (corner.right_x - corner.zone_left).max(0.0);
-    match zone {
-        // The plot's own right edge, left of the control strip. This is what "right" means to a
-        // reader looking at the candles.
-        LabelZone::TopRight | LabelZone::BottomRight => Column {
-            x: geom.plot_right - ZONE_PAD,
-            align: 1.0,
-            max_w: plot_w,
-        },
-        // The control strip. `caption_layout` is deferred to even when it does NOT split: on a
-        // narrow pane, or in book-only broom mode, it LEFT-anchors inside the strip rather than
-        // right-anchoring at the pane edge, and re-deriving that here is how the block ended up on
-        // the opposite side of such panes.
-        LabelZone::ZoneTop => {
-            let lay = caption_layout(corner, geom.plot_left);
-            Column {
-                x: lay.coin_x,
-                align: lay.coin_ax,
-                max_w: lay.coin_max_w,
-            }
-        }
-        LabelZone::ZoneBottom => Column {
-            x: corner.right_x,
-            align: 1.0,
-            max_w: zone_w,
-        },
-        LabelZone::TopLeft | LabelZone::BottomLeft => Column {
-            x: geom.plot_left + ZONE_PAD,
-            align: 0.0,
-            max_w: plot_w,
-        },
-        LabelZone::TopCenter | LabelZone::BottomCenter => Column {
-            x: (geom.plot_left + geom.plot_right) * 0.5,
-            align: 0.5,
-            max_w: plot_w,
-        },
+    // Each band knows its own edges; the alignment picks which of them the row anchors to. The
+    // strip's right edge is already inset clear of the pane's close button by `caption_geom`.
+    let (left, right, max_w) = if zone.is_control_zone() {
+        (corner.zone_left, corner.right_x, zone_w)
+    } else {
+        (
+            geom.plot_left + ZONE_PAD,
+            geom.plot_right - ZONE_PAD,
+            plot_w,
+        )
+    };
+    let x = match align {
+        LabelAlign::Left => left,
+        LabelAlign::Center => (left + right) * 0.5,
+        LabelAlign::Right => right,
+    };
+    Column {
+        x,
+        align: align.fraction(),
+        max_w,
     }
 }
 

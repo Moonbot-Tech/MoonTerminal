@@ -65,13 +65,19 @@ pub enum ChartLabelField {
     OpenOrders,
     /// Open position size in the base coin.
     PosSize,
+    /// Current notional of what is open, in the market's quote currency: position size times the
+    /// mark price.
+    ///
+    /// Counted over a WIDER set than the PnL figures: an order whose entry price has not arrived
+    /// still has a size and a mark, and withholding it would understate what is actually at risk.
+    Exposure,
     /// User-assigned name of the strategy that owns the newest open order on this market.
     OrderStrategy,
 }
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 13] = [
+    pub const ALL: [ChartLabelField; 14] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -84,6 +90,7 @@ impl ChartLabelField {
         ChartLabelField::OpenPnlMoney,
         ChartLabelField::OpenOrders,
         ChartLabelField::PosSize,
+        ChartLabelField::Exposure,
         ChartLabelField::OrderStrategy,
     ];
 
@@ -102,7 +109,8 @@ impl ChartLabelField {
             ChartLabelField::OpenPnlPct
             | ChartLabelField::OpenPnlMoney
             | ChartLabelField::OpenOrders
-            | ChartLabelField::PosSize => ChartLabelGroup::Position,
+            | ChartLabelField::PosSize
+            | ChartLabelField::Exposure => ChartLabelGroup::Position,
             ChartLabelField::OrderStrategy => ChartLabelGroup::Strategy,
         }
     }
@@ -123,6 +131,7 @@ impl ChartLabelField {
             ChartLabelField::OpenPnlMoney => "chart_labels.field.open_pnl_money",
             ChartLabelField::OpenOrders => "chart_labels.field.open_orders",
             ChartLabelField::PosSize => "chart_labels.field.pos_size",
+            ChartLabelField::Exposure => "chart_labels.field.exposure",
             ChartLabelField::OrderStrategy => "chart_labels.field.order_strategy",
         }
     }
@@ -141,6 +150,7 @@ impl ChartLabelField {
             }
             ChartLabelField::OpenOrders => Some("chart_labels.short.orders"),
             ChartLabelField::PosSize => Some("chart_labels.short.position"),
+            ChartLabelField::Exposure => Some("chart_labels.short.exposure"),
             _ => None,
         }
     }
@@ -156,6 +166,7 @@ impl ChartLabelField {
                 | ChartLabelField::OpenPnlMoney
                 | ChartLabelField::OpenOrders
                 | ChartLabelField::PosSize
+                | ChartLabelField::Exposure
         )
     }
 
@@ -196,6 +207,15 @@ impl ChartLabelField {
                 plate: true,
                 caption: true,
             },
+            // Counts and sizes carry their caption too: a bare "2" over the candles names nothing.
+            ChartLabelField::OpenOrders | ChartLabelField::PosSize | ChartLabelField::Exposure => {
+                ResolvedLabelStyle {
+                    color: LabelColor::Theme,
+                    size_mult: 1.0,
+                    plate: true,
+                    caption: true,
+                }
+            }
             _ => ResolvedLabelStyle {
                 color: LabelColor::Theme,
                 size_mult: 1.0,
@@ -234,86 +254,105 @@ impl ChartLabelGroup {
     }
 }
 
-/// Where a slot's row lives.
+/// Which band of the pane a slot's row lives in.
 ///
-/// Two families, because a chart pane is two columns and a caption belongs to one of them: the six
-/// `Top*`/`Bottom*` zones are corners of the PLOT — the candles — while [`LabelZone::ZoneTop`] and
-/// [`LabelZone::ZoneBottom`] belong to the ORDER BOOK's column beside it. `TopRight` therefore
-/// means the plot's own right edge, not the book: keeping one zone for both is what made "right"
-/// ambiguous on a pane that has a book.
+/// A chart pane is two columns, and a caption belongs to one of them: `Chart*` bands lie over the
+/// PLOT — the candles — while `Zone*` bands lie in the CONTROL STRIP down the right side. The strip
+/// is reserved whether or not an order book is drawn, which is why a caption keeps its place there
+/// with the book switched off.
 ///
-/// The zone also decides the direction rows fill: a `*Left` zone lays its row out from the left
-/// edge rightwards, a `*Right` zone from the right edge leftwards. That is why the FIRST slot of a
-/// row is the outermost one in both — "first" would otherwise mean opposite things on opposite
-/// sides of the same chart.
+/// WHERE in the band a row sits is [`LabelAlign`], a separate axis. Folding the two together is
+/// what made "right" mean the plot's edge on one pane and the strip's on another.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LabelZone {
-    TopLeft,
-    TopCenter,
-    /// The plot's own top-right corner, left of the order book.
-    TopRight,
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-    /// Top of the CONTROL ZONE — the strip down the pane's right side — and the default.
+    /// Along the plot's top edge.
     ///
-    /// The zone is not the order book: it is reserved whether or not a book is drawn (see
-    /// `text::caption::book_zone_left`), which is why the chart keeps a caption there with the book
-    /// switched off. It also carries the adaptive behaviour that spot has always had: over a book
-    /// with chart to its left, the first row centres on the zone and everything else on that row
-    /// hangs off its left edge.
+    /// The three legacy `top_*` spellings map here: they used to carry the alignment, which is now
+    /// [`ChartLabelSlot::align`]'s job.
+    #[serde(alias = "top_left", alias = "top_center", alias = "top_right")]
+    ChartTop,
+    /// Along the plot's bottom edge, filling upward.
+    #[serde(alias = "bottom_left", alias = "bottom_center", alias = "bottom_right")]
+    ChartBottom,
+    /// Top of the control strip: the chart's traditional caption spot, and the default.
     #[default]
+    #[serde(alias = "zone_top")]
     ZoneTop,
     /// Bottom of that same strip, filling upward.
+    #[serde(alias = "zone_bottom")]
     ZoneBottom,
 }
 
 impl LabelZone {
-    /// Every zone, in popup order: the plot's own corners first, then the book's column.
-    pub const ALL: [LabelZone; 8] = [
-        LabelZone::TopLeft,
-        LabelZone::TopCenter,
-        LabelZone::TopRight,
-        LabelZone::BottomLeft,
-        LabelZone::BottomCenter,
-        LabelZone::BottomRight,
+    /// Every band, in popup order: the plot's, then the strip's.
+    pub const ALL: [LabelZone; 4] = [
+        LabelZone::ChartTop,
+        LabelZone::ChartBottom,
         LabelZone::ZoneTop,
         LabelZone::ZoneBottom,
     ];
 
-    /// Whether rows in this zone stack DOWNWARD from their top edge.
+    /// Whether rows in this band stack DOWNWARD from its top edge.
     pub fn is_top(self) -> bool {
-        matches!(
-            self,
-            LabelZone::TopLeft | LabelZone::TopCenter | LabelZone::TopRight | LabelZone::ZoneTop
-        )
+        matches!(self, LabelZone::ChartTop | LabelZone::ZoneTop)
     }
 
-    /// Whether this zone lives in the control strip on the right rather than over the plot.
+    /// Whether this band lives in the control strip rather than over the plot.
     pub fn is_control_zone(self) -> bool {
         matches!(self, LabelZone::ZoneTop | LabelZone::ZoneBottom)
     }
 
-    /// Horizontal alignment fraction: 0 anchors the row's left edge, 1 its right, 0.5 its centre.
-    pub fn align_x(self) -> f32 {
+    pub fn locale_key(self) -> &'static str {
         match self {
-            LabelZone::TopLeft | LabelZone::BottomLeft => 0.0,
-            LabelZone::TopCenter | LabelZone::BottomCenter => 0.5,
-            _ => 1.0,
+            LabelZone::ChartTop => "chart_labels.zone.chart_top",
+            LabelZone::ChartBottom => "chart_labels.zone.chart_bottom",
+            LabelZone::ZoneTop => "chart_labels.zone.zone_top",
+            LabelZone::ZoneBottom => "chart_labels.zone.zone_bottom",
+        }
+    }
+}
+
+/// Where in its band a row sits.
+///
+/// Its own axis rather than part of the band, so "push it off the close button" is one control and
+/// not a different zone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+impl LabelAlign {
+    pub const ALL: [LabelAlign; 3] = [LabelAlign::Left, LabelAlign::Center, LabelAlign::Right];
+
+    /// Alignment fraction the text pass takes: 0 anchors a row's left edge, 1 its right, 0.5 its
+    /// centre.
+    pub fn fraction(self) -> f32 {
+        match self {
+            LabelAlign::Left => 0.0,
+            LabelAlign::Center => 0.5,
+            LabelAlign::Right => 1.0,
+        }
+    }
+
+    /// Glyph for the popup's three-state control.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            LabelAlign::Left => "⇤",
+            LabelAlign::Center => "≡",
+            LabelAlign::Right => "⇥",
         }
     }
 
     pub fn locale_key(self) -> &'static str {
         match self {
-            LabelZone::TopLeft => "chart_labels.zone.top_left",
-            LabelZone::TopCenter => "chart_labels.zone.top_center",
-            LabelZone::TopRight => "chart_labels.zone.top_right",
-            LabelZone::BottomLeft => "chart_labels.zone.bottom_left",
-            LabelZone::BottomCenter => "chart_labels.zone.bottom_center",
-            LabelZone::BottomRight => "chart_labels.zone.bottom_right",
-            LabelZone::ZoneTop => "chart_labels.zone.zone_top",
-            LabelZone::ZoneBottom => "chart_labels.zone.zone_bottom",
+            LabelAlign::Left => "chart_labels.align.left",
+            LabelAlign::Center => "chart_labels.align.center",
+            LabelAlign::Right => "chart_labels.align.right",
         }
     }
 }
@@ -399,9 +438,12 @@ pub struct ResolvedLabelStyle {
 #[serde(default)]
 pub struct ChartLabelSlot {
     pub field: ChartLabelField,
-    /// Corner this slot's row lives in. Ignored while [`Self::inline`] is set: an inline slot joins
-    /// the row of the slot before it and cannot be in a different corner from it.
+    /// Band this slot's row lives in. Ignored while [`Self::inline`] is set: an inline slot joins
+    /// the row of the slot before it and cannot be in a different band from it.
     pub zone: LabelZone,
+    /// Where in that band the row sits. Like the band, an inline slot inherits it from the row it
+    /// joins — a row has ONE alignment, or it is not a row.
+    pub align: LabelAlign,
     /// Whether this slot shares the previous VISIBLE slot's row instead of opening a new one.
     ///
     /// The first slot of a zone can never be inline — there is no row to join — and
@@ -426,6 +468,7 @@ impl ChartLabelSlot {
         Self {
             field,
             zone,
+            align: LabelAlign::Center,
             inline: false,
             visible: true,
             style: LabelStyle {
@@ -474,33 +517,57 @@ pub struct ChartLabelsCfg {
 }
 
 impl Default for ChartLabelsCfg {
-    /// The caption the chart drew before it was configurable, slot for slot.
+    /// The working set the terminal ships with.
     ///
-    /// The scale badge is INLINE with the coin because that is where it has always been drawn: on
-    /// the coin's own line, hanging off the block's left edge. The comparison delta follows on its
-    /// own row under the coin, and both it and the badge disappear on their own when the pane has
-    /// nothing to report — an absent value costs no row.
+    /// Not a designer's guess: this is the layout the developer arrived at by hand and asked to
+    /// become the default (2026-08-20), transcribed from the Main tab's own `charts.json` entry.
+    /// The corner block sits in the control strip pushed right, the Y-scale badge rides the plot's
+    /// top-right, and the open-order figures run as one row along the plot's top edge on the left —
+    /// where the badge overlay they replaced used to draw them.
+    ///
+    /// Every optional figure disappears on its own when it has nothing to report, so a chart with
+    /// no position shows the coin and the core name and nothing else.
     fn default() -> Self {
         const EMPTY: ChartLabelSlot =
             ChartLabelSlot::new(ChartLabelField::None, LabelZone::ZoneTop);
         let mut slots = [EMPTY; CHART_LABEL_SLOTS];
         slots[0] = ChartLabelSlot::new(ChartLabelField::Coin, LabelZone::ZoneTop);
-        slots[1] = ChartLabelSlot::inline(ChartLabelField::ScaleBadge, LabelZone::ZoneTop);
+        slots[0].align = LabelAlign::Right;
+        slots[1] = ChartLabelSlot::new(ChartLabelField::ScaleBadge, LabelZone::ChartTop);
+        slots[1].align = LabelAlign::Right;
         slots[2] = ChartLabelSlot::new(ChartLabelField::Core, LabelZone::ZoneTop);
-        slots[3] = ChartLabelSlot::new(ChartLabelField::CompareDelta, LabelZone::ZoneTop);
+        slots[2].align = LabelAlign::Right;
+        // The open-order row. Muted grey on the count so the money beside it leads the eye.
+        slots[3] = ChartLabelSlot::new(ChartLabelField::OpenOrders, LabelZone::ChartTop);
+        slots[3].align = LabelAlign::Left;
+        slots[3].style.color = Some(LabelColor::Fixed(0x8d99ae));
+        slots[4] = ChartLabelSlot::inline(ChartLabelField::Exposure, LabelZone::ChartTop);
+        slots[4].align = LabelAlign::Left;
+        slots[5] = ChartLabelSlot::inline(ChartLabelField::OpenPnlMoney, LabelZone::ChartTop);
+        slots[5].align = LabelAlign::Left;
+        slots[6] = ChartLabelSlot::inline(ChartLabelField::OpenPnlPct, LabelZone::ChartTop);
+        slots[6].align = LabelAlign::Left;
         Self { slots }
     }
 }
 
 impl ChartLabelsCfg {
-    /// Repair anything a hand-edited file could state that the drawing pass cannot honour.
+    /// Repair anything a hand-edited file — or the popup — could state that the layout cannot
+    /// honour.
     ///
-    /// `layout.toml` and `charts.json` are both editable by hand, and this configuration is
+    /// Two invariants, and the second one is load-bearing:
+    ///
+    /// 1. The FIRST drawn slot cannot be inline. There is no row before it to join, and the layout
+    ///    pass would have to invent one.
+    /// 2. An inline slot takes the BAND and the ALIGNMENT of the row it joins. A caption cannot be
+    ///    in one band and on another band's row at the same time, and letting it keep a stale band
+    ///    is what made a caption disappear from where the user put it: it drifted to the band its
+    ///    own value named, became the first slot there, and lost the inline flag on arrival.
+    ///
+    /// `layout.toml` and `charts.json` are both hand-editable and this configuration is
     /// materialized into specs by ⧉, so an unrepaired value would outlive the file it came from.
     pub fn sanitize(&mut self) {
-        // A slot that opens no row cannot be inline: with nothing before it in its zone there is no
-        // row to join, and the layout pass would have to invent one.
-        let mut zone_started = [false; LabelZone::ALL.len()];
+        let mut row_style: Option<(LabelZone, LabelAlign)> = None;
         for slot in &mut self.slots {
             if let Some(mult) = slot.style.size_mult {
                 slot.style.size_mult = Some(mult.clamp(LABEL_SIZE_MULT_MIN, LABEL_SIZE_MULT_MAX));
@@ -508,14 +575,14 @@ impl ChartLabelsCfg {
             if !slot.is_drawn() {
                 continue;
             }
-            let zone_ix = LabelZone::ALL
-                .iter()
-                .position(|z| *z == slot.zone)
-                .unwrap_or(0);
-            if !zone_started[zone_ix] {
-                slot.inline = false;
-                zone_started[zone_ix] = true;
+            match row_style {
+                Some((zone, align)) if slot.inline => {
+                    slot.zone = zone;
+                    slot.align = align;
+                }
+                _ => slot.inline = false,
             }
+            row_style = Some((slot.zone, slot.align));
         }
     }
 

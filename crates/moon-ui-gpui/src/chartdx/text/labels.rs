@@ -57,6 +57,14 @@ pub(in crate::chartdx) struct BasisStats {
     pub spent: f64,
     /// Unrealized result in the market's quote money.
     pub pnl_quote: f64,
+    /// Current notional of what is open: position size times mark, in the quote currency.
+    ///
+    /// Counted over a WIDER set than [`Self::pnl_quote`], deliberately: a row whose entry price has
+    /// not arrived still has a size and a mark, and withholding it would understate what is at
+    /// risk. This is the rule the chart overlay used before these captions replaced it.
+    pub exposure: f64,
+    /// Whether anything contributed to [`Self::exposure`].
+    pub has_exposure: bool,
     /// Whether any order contributed a result at all. Distinguishes "flat" from "nothing open",
     /// which a bare zero cannot.
     pub has_position: bool,
@@ -223,6 +231,12 @@ fn resolve(slot: &ChartLabelSlot, inputs: &LabelInputs) -> Option<(String, Optio
                 None,
             )
         }),
+        ChartLabelField::Exposure => stats.has_exposure.then(|| {
+            (
+                with_caption(slot, caption, &fmt::compact_si(stats.exposure)),
+                None,
+            )
+        }),
         ChartLabelField::PosSize => (stats.pos_size != 0.0).then(|| {
             let sign = if stats.pos_size >= 0.0 {
                 DeltaSign::Positive
@@ -258,7 +272,7 @@ fn non_empty(s: &str) -> Option<String> {
 /// the lot.
 fn with_caption(slot: &ChartLabelSlot, on: bool, value: &str) -> String {
     match slot.field.caption_key().filter(|_| on) {
-        Some(key) => format!("{} {value}", t!(key)),
+        Some(key) => format!("{}: {value}", t!(key)),
         None => value.to_string(),
     }
 }
@@ -295,8 +309,19 @@ pub(in crate::chartdx) fn collect_open_stats(
                 out[basis_index(basis)].open_orders += 1;
             }
         }
-        // The rest needs a position and a usable pair of prices. A row that has neither degrades on
-        // its own without dragging the count above down with it.
+        // Exposure asks less than the PnL does: a size and a mark, no entry price. Each figure
+        // degrades on its own inputs rather than dragging the others down with it — the rule the
+        // chart overlay these captions replaced was careful about.
+        let mark = f64::from(row.price);
+        if let Some(qty) = position_qty(row).filter(|_| mark.is_finite() && mark > 0.0) {
+            for basis in PnlBasis::ALL {
+                if basis.accepts(row.emulator) {
+                    let s = &mut out[basis_index(basis)];
+                    s.exposure += qty * mark;
+                    s.has_exposure = true;
+                }
+            }
+        }
         let (Some(qty), Some(pnl)) = (position_qty(row), order_pnl(row)) else {
             continue;
         };

@@ -17,7 +17,6 @@ mod click_series;
 mod figures;
 mod geom;
 mod news;
-mod order_stats;
 mod refs;
 mod render;
 mod render_input;
@@ -404,7 +403,12 @@ impl ChartPanel {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
-                    chart_settings_sig(&b, this.chart_graphics, this.candle_view, this.chart_labels),
+                    chart_settings_sig(
+                        &b,
+                        this.chart_graphics,
+                        this.candle_view,
+                        this.chart_labels,
+                    ),
                 )
             };
             if settings_sig != this.settings_sig {
@@ -576,7 +580,12 @@ impl ChartPanel {
                 let b = backend.read(cx);
                 (
                     this.chart.notify_signature(&b.session),
-                    chart_settings_sig(&b, this.chart_graphics, this.candle_view, this.chart_labels),
+                    chart_settings_sig(
+                        &b,
+                        this.chart_graphics,
+                        this.candle_view,
+                        this.chart_labels,
+                    ),
                 )
             };
             if settings_sig != this.settings_sig {

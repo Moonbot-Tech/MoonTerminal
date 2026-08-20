@@ -50,8 +50,8 @@ mod tests;
 
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use chart_labels::{
-    ChartLabelField, ChartLabelGroup, ChartLabelSlot, ChartLabelsCfg, LabelColor, LabelStyle,
-    LabelZone, PnlBasis, ResolvedLabelStyle, CHART_LABEL_SLOTS, LABEL_SIZE_MULT_MAX,
+    ChartLabelField, ChartLabelGroup, ChartLabelSlot, ChartLabelsCfg, LabelAlign, LabelColor,
+    LabelStyle, LabelZone, PnlBasis, ResolvedLabelStyle, CHART_LABEL_SLOTS, LABEL_SIZE_MULT_MAX,
     LABEL_SIZE_MULT_MIN,
 };
 pub use core_groups::{

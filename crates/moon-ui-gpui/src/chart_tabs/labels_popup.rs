@@ -18,7 +18,7 @@
 use gpui::*;
 use moon_core::config::{
     ChartLabelField, ChartLabelGroup, ChartLabelsCfg, LABEL_SIZE_MULT_MAX, LABEL_SIZE_MULT_MIN,
-    LabelColor, LabelZone, PnlBasis,
+    LabelAlign, LabelColor, LabelZone, PnlBasis,
 };
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonCheckboxSize, MoonDropdown,
@@ -46,12 +46,36 @@ const FIXED_COLORS: [u32; 8] = [
     0xffffff, 0xffd166, 0xef476f, 0x06d6a0, 0x4cc9f0, 0xb388ff, 0xff9f1c, 0x8d99ae,
 ];
 
-/// Popup CONTENT width in rendered pixels.
+/// Width of one micro glyph button (↑ ↓ 👁 ⇢ ⋯ ×).
+const MICRO_W: f32 = 20.0;
+/// Number of those buttons on a slot row: ↑ ↓ 👁, three alignment states, ⇢ ⋯ ×.
+const MICRO_COUNT: f32 = 9.0;
+/// Width of the field dropdown's trigger.
+const FIELD_W: f32 = 104.0;
+/// Width of the band dropdown's trigger. Sized on the longest localized band name.
+const ZONE_W: f32 = 104.0;
+/// Gap between two controls on a slot row.
+const ROW_GAP: f32 = 2.0;
+
+/// Slack over the computed row width.
 ///
-/// Sized on the slot row, which is the widest thing here: three micro buttons, a 104-unit field
-/// dropdown, an 88-unit zone dropdown and three more micro buttons, plus their gaps.
+/// A `MoonDropdown` trigger takes `max(scaled width, minimum readable width)`, so its real width
+/// can exceed what was asked for on a long localized label. This is the margin that keeps the
+/// trailing buttons inside the box when it does.
+const ROW_SLACK: f32 = 10.0;
+
+/// Popup CONTENT width, DERIVED from the slot row rather than guessed.
+///
+/// The row is the widest thing in this popup and is built from the constants right above. Writing
+/// the width as its own literal is exactly how the ⋯ and × buttons ended up outside the box the
+/// first time a dropdown got wider: two numbers that have to agree, and only one of them changed.
+///
+/// Font-scaled, because the row is: dropdown triggers scale themselves, and the micro buttons are
+/// scaled through [`design::font_w`] at their call site. An unscaled box would push the buttons out
+/// again as soon as the Settings font slider moved.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    px(8.0 * 42.0 + popup_group_inset_px(cx))
+    let row = MICRO_COUNT * MICRO_W + FIELD_W + ZONE_W + (MICRO_COUNT + 1.0) * ROW_GAP + ROW_SLACK;
+    px(design::font_w(cx, row) + popup_group_inset_px(cx))
 }
 
 /// Edit the target's configuration: load, mutate, sanitize, apply.
@@ -106,14 +130,37 @@ fn micro_button(
     tip: String,
     variant: MoonButtonVariant,
     selected: bool,
+    width: f32,
     on_click: impl Fn(&mut App) + 'static,
 ) -> impl IntoElement {
+    micro_button_state(id, glyph, tip, variant, selected, false, width, on_click)
+}
+
+/// The same button with an explicit enabled/disabled state.
+///
+/// A control that DISAPPEARS when it does not apply makes the rows jump and leaves the reader
+/// guessing why one row has a button and the next does not. A disabled one keeps the column
+/// straight and says why in its tooltip.
+#[allow(clippy::too_many_arguments)]
+fn micro_button_state(
+    id: String,
+    glyph: &'static str,
+    tip: String,
+    variant: MoonButtonVariant,
+    selected: bool,
+    disabled: bool,
+    width: f32,
+    on_click: impl Fn(&mut App) + 'static,
+) -> impl IntoElement {
+    // `MoonButton::width` applies a raw `px`, so the caller hands it an already font-scaled value —
+    // see the note on `design::font_w`, which names this builder explicitly.
     MoonButton::new(SharedString::from(id))
         .label(glyph)
         .size(MoonButtonSize::Micro)
-        .width(20.0)
+        .width(width)
         .variant(variant)
         .selected(selected)
+        .disabled(disabled)
         .tooltip(tip)
         .on_click(move |_, _w, app: &mut App| on_click(app))
         .render()
@@ -175,6 +222,9 @@ fn slot_row<T: LabelsPopupHost>(
     cx: &App,
 ) -> AnyElement {
     let slot = cfg.slots[ix];
+    // Resolved once for the row: the buttons apply raw pixels, the dropdowns scale themselves, and
+    // `content_width` sizes the box from the same numbers.
+    let micro_w = design::font_w(cx, MICRO_W);
     let up = {
         let entity = entity.clone();
         micro_button(
@@ -183,6 +233,7 @@ fn slot_row<T: LabelsPopupHost>(
             t!("chart_labels.move_up").to_string(),
             MoonButtonVariant::Ghost,
             false,
+            micro_w,
             move |app| {
                 move_slot_keeping_style(&entity, app, ix, true);
             },
@@ -196,6 +247,7 @@ fn slot_row<T: LabelsPopupHost>(
             t!("chart_labels.move_down").to_string(),
             MoonButtonVariant::Ghost,
             false,
+            micro_w,
             move |app| {
                 move_slot_keeping_style(&entity, app, ix, false);
             },
@@ -215,6 +267,7 @@ fn slot_row<T: LabelsPopupHost>(
             .to_string(),
             toggle_variant(on),
             on,
+            micro_w,
             move |app| {
                 write_cfg(&entity, app, |c| c.slots[ix].visible = !on);
             },
@@ -241,64 +294,122 @@ fn slot_row<T: LabelsPopupHost>(
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width_scaled(104.0)
+            .trigger_width_scaled(FIELD_W)
             .menu_width_scaled(150.0)
             .menu_size(MoonMenuSize::Compact)
             .items(items)
     };
-    // An inline caption takes its corner from the row it joins, so naming a second one would be a
-    // setting with no effect. The dropdown states that instead of offering it.
+    // An inline caption takes its band from the row it joins, so naming a second one would be a
+    // setting with no effect. The dropdown shows the INHERITED band rather than a placeholder: the
+    // caption really is in that band now, and hiding which one left the user unable to tell where a
+    // joined caption went.
     let zone_dd = {
-        let entity = entity.clone();
-        let items = crate::panels::radio_items(
-            LabelZone::ALL.iter().map(|z| {
-                (
-                    *z,
-                    SharedString::from(format!("cl-z-{ix}-{z:?}")),
-                    SharedString::from(t!(z.locale_key()).to_string()),
-                )
-            }),
+        // Two families, separated: the plot's bands, then the control strip's.
+        let plot_bands = crate::panels::radio_items(
+            LabelZone::ALL
+                .iter()
+                .filter(|z| !z.is_control_zone())
+                .map(|z| {
+                    (
+                        *z,
+                        SharedString::from(format!("cl-z-{ix}-{z:?}")),
+                        SharedString::from(t!(z.locale_key()).to_string()),
+                    )
+                }),
             slot.zone,
             crate::panels::RadioMark::Check,
-            move |app, z: LabelZone| {
-                write_cfg(&entity, app, |c| c.slots[ix].zone = z);
+            {
+                let entity = entity.clone();
+                move |app, z: LabelZone| {
+                    write_cfg(&entity, app, |c| c.slots[ix].zone = z);
+                }
             },
         );
+        let strip_bands = crate::panels::radio_items(
+            LabelZone::ALL
+                .iter()
+                .filter(|z| z.is_control_zone())
+                .map(|z| {
+                    (
+                        *z,
+                        SharedString::from(format!("cl-z-{ix}-{z:?}")),
+                        SharedString::from(t!(z.locale_key()).to_string()),
+                    )
+                }),
+            slot.zone,
+            crate::panels::RadioMark::Check,
+            {
+                let entity = entity.clone();
+                move |app, z: LabelZone| {
+                    write_cfg(&entity, app, |c| c.slots[ix].zone = z);
+                }
+            },
+        );
+        let mut items = plot_bands;
+        items.push(MoonMenuItem::separator());
+        items.extend(strip_bands);
         MoonDropdown::new(SharedString::from(format!("cl-zone-{ix}")))
-            .label(if slot.inline {
-                t!("chart_labels.zone_inherited").to_string()
-            } else {
-                t!(slot.zone.locale_key()).to_string()
-            })
+            .label(t!(slot.zone.locale_key()).to_string())
             .trigger_caret(!slot.inline)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::Micro)
-            .trigger_width_scaled(88.0)
-            .menu_width_scaled(130.0)
+            .trigger_width_scaled(ZONE_W)
+            .menu_width_scaled(168.0)
             .menu_size(MoonMenuSize::Compact)
             .disabled(slot.inline)
             .items(items)
     };
-    // The first caption of a CORNER has no row to join — not merely the first of the list — and
-    // `sanitize` clears the flag there, so offering the toggle would write a value that silently
-    // reverts.
-    let can_inline = cfg.slots[..ix]
-        .iter()
-        .any(|s| s.is_drawn() && s.zone == slot.zone);
+    // Where in the band the row sits. Three visible states rather than one cycling button: the
+    // current alignment has to be readable at a glance, and a cycler answers "what is it now" only
+    // from memory.
+    let align_group = {
+        let mut group = h_flex().gap(px(ROW_GAP));
+        for align in LabelAlign::ALL {
+            let entity = entity.clone();
+            let selected = slot.align == align;
+            group = group.child(micro_button_state(
+                format!("cl-al-{ix}-{align:?}"),
+                align.glyph(),
+                t!(align.locale_key()).to_string(),
+                toggle_variant(selected),
+                selected,
+                // An inline caption follows its row's alignment; its own would be written and
+                // immediately taken back by `sanitize`.
+                slot.inline,
+                micro_w,
+                move |app| {
+                    write_cfg(&entity, app, |c| c.slots[ix].align = align);
+                },
+            ));
+        }
+        group
+    };
+    // Anything after the FIRST drawn caption can join the row before it — and joining moves it into
+    // that row's band and alignment, which is what `sanitize` guarantees. The first one has no row
+    // to join, so its toggle stays in place but disabled: a control that comes and goes makes the
+    // rows jump and reads as a bug.
+    let can_inline = cfg.slots[..ix].iter().any(|s| s.is_drawn());
     let inline_tg = {
         let entity = entity.clone();
         let on = slot.inline;
-        micro_button(
-            format!("cl-inline-{ix}"),
-            "⇢",
+        let tip = if can_inline {
             t!(if on {
                 "chart_labels.inline_on"
             } else {
                 "chart_labels.inline_off"
             })
-            .to_string(),
+            .to_string()
+        } else {
+            t!("chart_labels.inline_first").to_string()
+        };
+        micro_button_state(
+            format!("cl-inline-{ix}"),
+            "⇢",
+            tip,
             toggle_variant(on),
             on,
+            !can_inline,
+            micro_w,
             move |app| {
                 write_cfg(&entity, app, |c| c.slots[ix].inline = !on);
             },
@@ -312,6 +423,7 @@ fn slot_row<T: LabelsPopupHost>(
             t!("chart_labels.style").to_string(),
             toggle_variant(style_open),
             style_open,
+            micro_w,
             move |app| {
                 entity.update(app, |this, cx| {
                     let next = (!style_open).then_some(ix);
@@ -329,6 +441,7 @@ fn slot_row<T: LabelsPopupHost>(
             t!("chart_labels.remove").to_string(),
             MoonButtonVariant::Danger,
             false,
+            micro_w,
             move |app| {
                 entity.update(app, |this, cx| {
                     // Removing renumbers every slot after this one, so an expanded panel below the
@@ -348,15 +461,14 @@ fn slot_row<T: LabelsPopupHost>(
     let mut row = h_flex()
         .w_full()
         .items_center()
-        .gap(px(2.0))
+        .gap(px(ROW_GAP))
         .child(up)
         .child(down)
         .child(eye)
         .child(field_dd)
-        .child(zone_dd);
-    if can_inline {
-        row = row.child(inline_tg);
-    }
+        .child(zone_dd)
+        .child(align_group);
+    row = row.child(inline_tg);
     row = row.child(style_tg).child(remove);
     let mut col = v_flex().w_full().gap(design::ui_px(cx, 2.0)).child(row);
     if style_open {

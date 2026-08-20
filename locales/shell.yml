@@ -444,22 +444,6 @@ chart.trade_history.hover.more:
 # active-language characters consume the overlay width budget on a narrow chart. The P/L wording
 # deliberately matches `chart.trade_history.hover.pnl`; two names for the same quantity on one chart
 # would imply a distinction that does not exist.
-chart.order_stats.count:
-  ru: "Ордера: %{n}"
-  en: "Orders: %{n}"
-  es: "Órdenes: %{n}"
-chart.order_stats.sum:
-  ru: "Сумма: %{v} USDT"
-  en: "Size: %{v} USDT"
-  es: "Tamaño: %{v} USDT"
-chart.order_stats.pnl:
-  ru: "П/У: %{v} USDT"
-  en: "P&L: %{v} USDT"
-  es: "P/G: %{v} USDT"
-chart.order_stats.pnl_pct:
-  ru: "%{v}"
-  en: "%{v}"
-  es: "%{v}"
 coin_menu.compare:
   ru: "Сравнить"
   en: "Compare"
@@ -1253,10 +1237,6 @@ chart_labels.inline_off:
   ru: "Поставить в строку с предыдущей"
   en: "Put on the previous label's row"
   es: "Poner en la fila de la etiqueta anterior"
-chart_labels.zone_inherited:
-  ru: "в строке"
-  en: "in row"
-  es: "en fila"
 chart_labels.style:
   ru: "Стиль"
   en: "Style"
@@ -1381,42 +1361,46 @@ chart_labels.field.pos_size:
   ru: "Размер позиции"
   en: "Position size"
   es: "Tamaño de posición"
+chart_labels.field.exposure:
+  ru: "Экспозиция"
+  en: "Exposure"
+  es: "Exposición"
 chart_labels.field.order_strategy:
   ru: "Стратегия ордера"
   en: "Order strategy"
   es: "Estrategia de la orden"
-chart_labels.zone.top_left:
-  ru: "Чарт: слева вверху"
-  en: "Chart: top left"
-  es: "Chart: arriba izq."
-chart_labels.zone.top_center:
-  ru: "Чарт: по центру вверху"
-  en: "Chart: top center"
-  es: "Chart: arriba centro"
-chart_labels.zone.top_right:
-  ru: "Чарт: справа вверху"
-  en: "Chart: top right"
-  es: "Chart: arriba der."
-chart_labels.zone.bottom_left:
-  ru: "Чарт: слева внизу"
-  en: "Chart: bottom left"
-  es: "Chart: abajo izq."
-chart_labels.zone.bottom_center:
-  ru: "Чарт: по центру внизу"
-  en: "Chart: bottom center"
-  es: "Chart: abajo centro"
-chart_labels.zone.bottom_right:
-  ru: "Чарт: справа внизу"
-  en: "Chart: bottom right"
-  es: "Chart: abajo der."
+chart_labels.zone.chart_top:
+  ru: "Чарт верх"
+  en: "Chart top"
+  es: "Chart arriba"
+chart_labels.zone.chart_bottom:
+  ru: "Чарт низ"
+  en: "Chart bottom"
+  es: "Chart abajo"
 chart_labels.zone.zone_top:
-  ru: "Зона: вверху"
-  en: "Zone: top"
-  es: "Zona: arriba"
+  ru: "Стакан верх"
+  en: "Book top"
+  es: "Book arriba"
 chart_labels.zone.zone_bottom:
-  ru: "Зона: внизу"
-  en: "Zone: bottom"
-  es: "Zona: abajo"
+  ru: "Стакан низ"
+  en: "Book bottom"
+  es: "Book abajo"
+chart_labels.align.left:
+  ru: "Прижать влево"
+  en: "Align left"
+  es: "Alinear izq."
+chart_labels.align.center:
+  ru: "По центру"
+  en: "Align center"
+  es: "Centrar"
+chart_labels.align.right:
+  ru: "Прижать вправо"
+  en: "Align right"
+  es: "Alinear der."
+chart_labels.inline_first:
+  ru: "Первая подпись — приклеивать не к чему"
+  en: "First label — nothing to join"
+  es: "Primera etiqueta — nada a lo que unirse"
 chart_labels.short.delta_1h:
   ru: "Δ1ч"
   en: "Δ1h"
@@ -1437,3 +1421,7 @@ chart_labels.short.position:
   ru: "Позиция"
   en: "Position"
   es: "Posición"
+chart_labels.short.exposure:
+  ru: "Сумма"
+  en: "Size"
+  es: "Tamaño"
