@@ -66,12 +66,22 @@ report.filter.date_ph:
   ru: "дата и время"
   en: "date and time"
   es: "fecha y hora"
-# Last row of the merged scope field. Off (default) hides trades soft-deleted in the core's
+# Deleted row of the merged scope field. Off (default) hides trades soft-deleted in the core's
 # report; on shows ONLY them. Export follows the same filter.
 report.filter.deleted:
   ru: "Только удалённые"
   en: "Deleted only"
   es: "Solo eliminadas"
+# Lifecycle row of the merged scope field, an axis independent of the real/emulator group above:
+# that one is a trade's ORIGIN, this one is whether it has closed. On (default) shows still-running
+# positions alongside closed trades, in the table AND in the totals; off removes them from both,
+# and the export follows the same filter. Disabled on an Analytics-scoped Report, which forces
+# closed rows regardless. Wording matches `report.open_positions_tip` so the switch and the footer
+# figure it governs use one vocabulary.
+report.filter.open_rows:
+  ru: "Открытые позиции"
+  en: "Open positions"
+  es: "Posiciones abiertas"
 # Full-width comment pane between the table and the totals: `show` is its row in the scope field.
 # The pane carries no caption and no placeholder — the comment uses the panel's whole width, and
 # with no row selected the strip is simply empty.
@@ -85,12 +95,13 @@ report.comment.empty:
   ru: "без комментария"
   en: "no comment"
   es: "sin comentario"
-# Tooltip of the merged scope field. It states the deleted switch's exclusive semantics, which the
-# row label alone cannot: off hides soft-deleted trades, on shows ONLY them.
+# Tooltip of the merged scope field. It states the two switch semantics the row labels alone
+# cannot: the deleted one is EXCLUSIVE (on shows only those), the open-positions one is INCLUSIVE
+# (off removes them from the table and the totals alike).
 report.filter.scope_tip:
-  ru: "Сторона, тип сделок, удалённые и показ комментария. «Только удалённые» выкл — удалённые скрыты, вкл — показаны только они."
-  en: "Direction, trade kind, deleted trades and the comment pane. “Deleted only” off — deleted trades are hidden; on — only they are shown."
-  es: "Lado, tipo de operaciones, eliminadas y el panel de comentarios. «Solo eliminadas» desactivado: se ocultan; activado: solo se muestran ellas."
+  ru: "Сторона, тип сделок, удалённые, открытые позиции и показ комментария. «Только удалённые» выкл — удалённые скрыты, вкл — показаны только они. «Открытые позиции» выкл — в таблице и в итогах только закрытые сделки."
+  en: "Direction, trade kind, deleted trades, open positions and the comment pane. “Deleted only” off — deleted trades are hidden; on — only they are shown. “Open positions” off — the table and the totals show closed trades only."
+  es: "Lado, tipo de operaciones, eliminadas, posiciones abiertas y el panel de comentarios. «Solo eliminadas» desactivado: se ocultan; activado: solo se muestran ellas. «Posiciones abiertas» desactivado: la tabla y los totales muestran solo operaciones cerradas."
 # Abbreviation appended to the scope trigger while the row above is on.
 report.filter.deleted_short:
   ru: "удал."

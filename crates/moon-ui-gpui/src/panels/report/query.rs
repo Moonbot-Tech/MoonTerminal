@@ -131,8 +131,10 @@ pub(super) struct ReportData {
     pub(super) totals: db::QuoteBreakdown,
     /// Still-running positions under the same filter, counted apart from `totals`.
     ///
-    /// Empty whenever the period does not reach the present, which is the same condition that
-    /// keeps those rows out of the grid — so the footer can never name positions the table above
+    /// Empty whenever the resolved [`db::RowScope`] excludes open rows — the period not reaching
+    /// the present, the scope field's open-positions switch being off, or an Analytics-scoped
+    /// host. Every one of those is the same condition that keeps those rows out of the grid,
+    /// because both come from one filter — so the footer can never name positions the table above
     /// it is not showing.
     pub(super) open: db::OpenPositions,
     /// The conversion these figures were computed under.
@@ -323,7 +325,7 @@ impl ReportPanel {
             side: self.side,
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,
-            rows: super::row_scope_for(self.closed_only, date_to, now),
+            rows: super::row_scope_for(self.closed_only, self.show_open, date_to, now),
             strategies: normalized_strategy_filter_keys(self.selected_strategies.as_ref()),
             strategy_name_mask,
             // Read from the backend at build time rather than mirrored into the panel: the rows,

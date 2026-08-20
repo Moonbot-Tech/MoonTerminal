@@ -879,7 +879,8 @@ fn strategy_rows_open_scoped_reports_and_live_strategy_editor() {
     }
     let filter = braced_body(&report_query, "pub(super) fn filter(");
     assert!(
-        filter.contains("rows: super::row_scope_for(self.closed_only, date_to, now)")
+        filter
+            .contains("rows: super::row_scope_for(self.closed_only, self.show_open, date_to, now)")
             && filter.contains("strategies: normalized_strategy_filter_keys(")
             && filter.contains("self.selected_strategies.as_ref()"),
         "rows, totals, and export must share the stale-safe exact multi-strategy filter"
@@ -993,14 +994,16 @@ fn auto_report_mask_and_grouped_toolbar_stay_scope_safe() {
     let persist = braced_body(&actions, "pub(super) fn persist_filters(");
     assert!(
         persist.contains("next_prefs_for_period_pick(")
-            && persist.contains("&self.strategy_name_mask"),
-        "every Report filter write must still pass the Auto strategy-name mask"
+            && persist.contains("&super::state::ReportFilterSet {")
+            && persist.contains("show_open: self.show_open,"),
+        "every Report filter write must pass the complete named filter set, including active positions"
     );
     let report_mod = read_src("panels/report/mod.rs");
     let persist_helper = braced_body(&report_mod, "pub(super) fn next_prefs_for_period_pick(");
     assert!(
-        persist_helper.contains("prefs.strategy_name_mask = Some(strategy_name_mask.to_string())"),
-        "the persistence composer must still write the Auto strategy-name mask"
+        persist_helper.contains("prefs.strategy_name_mask = Some(live.strategy_name_mask.clone())")
+            && persist_helper.contains("prefs.show_open = Some(live.show_open);"),
+        "the persistence composer must write both the Auto strategy-name mask and active-positions switch"
     );
 }
 
@@ -1375,8 +1378,7 @@ fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
         manual.contains("self.reload_strategy_base(false, true, true, cx)"),
         "manual scope refresh must retire values from the previous scope"
     );
-    let preserve_snapshot = "let preserve_snapshot =
-                    after_report && !matches!(this.strategy_data, ProfitLoadState::Loading);";
+    let preserve_snapshot = "let preserve_snapshot =\n                    after_report && !matches!(this.strategy_data, ProfitLoadState::Loading);";
     assert!(
         reload.contains(preserve_snapshot),
         "only a settled strategy snapshot may survive an automatic report refresh"
@@ -2377,7 +2379,7 @@ fn profit_monitor_display_preferences_and_open_state_stay_wired() {
     );
 }
 
-/// Every one of the four Report toolbar filter mutators must route its change through
+/// Every one of the five Report toolbar filter mutators must route its change through
 /// `persist_filters`, or that member appears to work until the panel or window is reopened and
 /// the edit is silently gone.
 ///
@@ -2395,6 +2397,7 @@ fn every_report_filter_mutator_persists_its_change() {
         "pub(super) fn set_period(&mut self, p: Period, cx: &mut Context<Self>) {",
         "pub(super) fn set_kind(&mut self, k: ReportKind, cx: &mut Context<Self>) {",
         "pub(super) fn set_deleted_only(&mut self, on: bool, cx: &mut Context<Self>) {",
+        "pub(super) fn set_show_open(&mut self, on: bool, cx: &mut Context<Self>) {",
     ] {
         let body = code_only(braced_body(&actions, signature));
         assert!(

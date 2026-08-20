@@ -23,8 +23,37 @@ fn upsert_strategy_choice(
     }
 }
 
-/// One host context's five live toolbar filters, in the order they are decoded and assigned.
-pub(super) type ReportFilterSet = (SideFilter, ReportKind, bool, Period, String);
+/// One host context's six live toolbar filters.
+///
+/// NAMED rather than positional: `deleted_only` and `show_open` are adjacent booleans on a surface
+/// whose numbers are money, and a tuple lets a construction or destructuring site swap them with no
+/// type error at all. Shaped after `strategies::settings::StrategiesPrefs`, this repository's
+/// settled form for several boolean preferences travelling together.
+///
+/// `PartialEq` alone, which is exactly what the tuple carried — so the single `applied != current`
+/// comparison the restore path is built around survives the change untouched. `Debug` is
+/// deliberately absent: it would demand the same from `ReportKind` and `Period`, and nothing here
+/// prints this set.
+///
+/// Visible to `crate::panels` rather than to this module alone, because
+/// [`super::next_prefs_for_period_pick`] takes it and carries that same visibility; a narrower
+/// type there is a private-interface warning, and this repository does not silence warnings.
+#[derive(Clone, PartialEq)]
+pub(in crate::panels) struct ReportFilterSet {
+    /// Direction filter.
+    pub(super) side: SideFilter,
+    /// Order-kind filter — a trade's ORIGIN.
+    pub(super) kind: ReportKind,
+    /// Show ONLY soft-deleted trades when set; hide them when clear.
+    pub(super) deleted_only: bool,
+    /// Show still-running positions alongside closed trades — a trade's LIFECYCLE, an axis
+    /// independent of [`Self::kind`].
+    pub(super) show_open: bool,
+    /// Period preset.
+    pub(super) period: Period,
+    /// Auto strategy-name mask.
+    pub(super) strategy_name_mask: String,
+}
 
 /// Decode one stored filter set over the values a panel is currently showing.
 ///
@@ -50,25 +79,25 @@ pub(super) fn applied_filters(
     period_bucket: ReportPeriodBucket,
     current: ReportFilterSet,
 ) -> ReportFilterSet {
-    let (side, kind, deleted_only, period, strategy_name_mask) = current;
-    (
-        stored
+    ReportFilterSet {
+        side: stored
             .side
             .as_deref()
             .and_then(side_from_id)
-            .unwrap_or(side),
-        stored
+            .unwrap_or(current.side),
+        kind: stored
             .kind
             .as_deref()
             .and_then(ReportKind::from_id)
-            .unwrap_or(kind),
-        stored.deleted_only.unwrap_or(deleted_only),
-        apply_period_from_prefs(stored, period_bucket, period),
-        stored
+            .unwrap_or(current.kind),
+        deleted_only: stored.deleted_only.unwrap_or(current.deleted_only),
+        show_open: stored.show_open.unwrap_or(current.show_open),
+        period: apply_period_from_prefs(stored, period_bucket, current.period),
+        strategy_name_mask: stored
             .strategy_name_mask
             .clone()
-            .unwrap_or(strategy_name_mask),
-    )
+            .unwrap_or(current.strategy_name_mask),
+    }
 }
 
 /// Highest one-shot Report column migration this build knows how to apply.
@@ -839,6 +868,10 @@ impl ReportPanel {
                 .map(|scope| ReportKind::from_filter(scope.emulator))
                 .unwrap_or(ReportKind::Real),
             deleted_only: false,
+            // On unconditionally, including for a scoped panel where `closed_only` below makes the
+            // value dormant: one default everywhere beats a field whose seed depends on a host
+            // class it does not describe.
+            show_open: true,
             scoped: scope.is_some(),
             show_comment,
             comment_metadata_loaded: false,
@@ -902,6 +935,10 @@ impl ReportPanel {
         self.period = Period::All;
         self.deleted_only = false;
         self.scoped = true;
+        // `show_open` is deliberately NOT written here: `closed_only` below already forces
+        // `RowScope::Closed` for this window at the one composition point, so writing it too would
+        // be a second enforcement of one rule — and the user's dormant toolbar value must survive
+        // the scope handover, since this window is a singleton reused across scopes.
         self.closed_only = true;
         self.selection.clear();
         self.coin_query.clear();
@@ -1147,24 +1184,24 @@ impl ReportPanel {
         ) else {
             return false;
         };
-        let current = (
-            self.side,
-            self.kind,
-            self.deleted_only,
-            self.period,
-            self.strategy_name_mask.clone(),
-        );
+        let current = ReportFilterSet {
+            side: self.side,
+            kind: self.kind,
+            deleted_only: self.deleted_only,
+            show_open: self.show_open,
+            period: self.period,
+            strategy_name_mask: self.strategy_name_mask.clone(),
+        };
         let applied = applied_filters(stored, period_bucket, current.clone());
-        // One tuple compare rather than five clauses, so another filter added to the tuple cannot
-        // be forgotten here and silently suppress the host-change requery.
+        // One whole-struct compare rather than six clauses, so another filter added to the set
+        // cannot be forgotten here and silently suppress the host-change requery.
         let changed = applied != current;
-        (
-            self.side,
-            self.kind,
-            self.deleted_only,
-            self.period,
-            self.strategy_name_mask,
-        ) = applied;
+        self.side = applied.side;
+        self.kind = applied.kind;
+        self.deleted_only = applied.deleted_only;
+        self.show_open = applied.show_open;
+        self.period = applied.period;
+        self.strategy_name_mask = applied.strategy_name_mask;
         let mask = self.strategy_name_mask.clone();
         self.strategy_name_mask_input
             .update(cx, |input, input_cx| input.sync_value(mask, input_cx));

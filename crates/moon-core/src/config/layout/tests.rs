@@ -917,7 +917,7 @@ hold = 3
 /// take the rest of the schema-less layout document down with it.
 ///
 /// Breakage this pins: replacing `deserialize_with = "de_lenient"` on any `ReportFilterPrefs`
-/// field (`side`/`kind`/`deleted_only`/`period`/`period_overview`/`strategy_name_mask`) with plain
+/// field (`side`/`kind`/`deleted_only`/`show_open`/`period`/`period_overview`/`strategy_name_mask`) with plain
 /// deserialization.
 /// Because
 /// `report_filters` itself is ALSO read leniently as a whole map, a plain field does not fail this
@@ -928,32 +928,36 @@ hold = 3
 #[test]
 fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() {
     let entry_id = "report-filters:dock";
-    // One member malformed per case; the other five stay well-typed and non-default so their
+    // One member malformed per case; the other six stay well-typed and non-default so their
     // survival is a real assertion, not a comparison against a value that defaults the same way.
-    let cases: [(&str, &str); 6] = [
+    let cases: [(&str, &str); 7] = [
         (
             "side",
-            "side = 5\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
+            "side = 5\nkind = \"real\"\ndeleted_only = true\nshow_open = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "kind",
-            "side = \"long\"\nkind = [\"real\"]\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
+            "side = \"long\"\nkind = [\"real\"]\ndeleted_only = true\nshow_open = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "deleted_only",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = \"not-a-bool\"\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = \"not-a-bool\"\nshow_open = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
+        ),
+        (
+            "show_open",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nshow_open = \"not-a-bool\"\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "period",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = 42\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nshow_open = true\nperiod = 42\nperiod_overview = \"rp-today\"\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "period_overview",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = 42\nstrategy_name_mask = \"EMA_\"\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nshow_open = true\nperiod = \"rp-cur-month\"\nperiod_overview = 42\nstrategy_name_mask = \"EMA_\"\n",
         ),
         (
             "strategy_name_mask",
-            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = [\"EMA_\"]\n",
+            "side = \"long\"\nkind = \"real\"\ndeleted_only = true\nshow_open = true\nperiod = \"rp-cur-month\"\nperiod_overview = \"rp-today\"\nstrategy_name_mask = [\"EMA_\"]\n",
         ),
     ];
 
@@ -1031,6 +1035,22 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
                     "a well-typed neighbour must survive"
                 );
             }
+            "show_open" => {
+                assert_eq!(
+                    prefs.show_open, None,
+                    "malformed show_open must default to None"
+                );
+                assert_eq!(
+                    prefs.deleted_only,
+                    Some(true),
+                    "a well-typed neighbour must survive"
+                );
+                assert_eq!(
+                    prefs.period.as_deref(),
+                    Some("rp-cur-month"),
+                    "a well-typed neighbour must survive"
+                );
+            }
             "period" => {
                 assert_eq!(
                     prefs.side.as_deref(),
@@ -1091,6 +1111,18 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
                 "a well-typed overview period must survive its malformed neighbour"
             );
         }
+        if bad_field == "show_open" {
+            assert_eq!(
+                prefs.show_open, None,
+                "a malformed open switch must default alone"
+            );
+        } else {
+            assert_eq!(
+                prefs.show_open,
+                Some(true),
+                "a well-typed open switch must survive its malformed neighbour"
+            );
+        }
         if bad_field == "strategy_name_mask" {
             assert_eq!(
                 prefs.strategy_name_mask, None,
@@ -1109,6 +1141,7 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
         side: Some("short".to_string()),
         kind: Some("emu".to_string()),
         deleted_only: Some(true),
+        show_open: Some(false),
         period: Some("rp-cur-week".to_string()),
         period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_%\\".to_string()),
@@ -1124,6 +1157,10 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
     .expect("deserialize legacy Report filters");
     assert_eq!(legacy.period.as_deref(), Some("rp-cur-year"));
     assert_eq!(legacy.period_overview, None);
+    assert_eq!(
+        legacy.show_open, None,
+        "a file written before the active-positions preference must leave the panel default standing"
+    );
 
     // One level up, the salvage is coarser by design: an entry that is not a table at all takes
     // the whole `report_filters` map down to empty, never the rest of the layout document.

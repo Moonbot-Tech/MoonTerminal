@@ -277,9 +277,10 @@ pub struct DetachedLayout {
 
 /// One Report toolbar filter set, persisted per host context.
 ///
-/// Holds six stored members: the five shared Report toolbar filters that decide WHICH TRADES the
-/// panel reads — direction, order kind, the deleted-only switch, the single-server period preset,
-/// and the Auto strategy-name mask — plus the Auto Overview period preset. The comment pane is a
+/// Holds seven stored members: the six shared Report toolbar filters that decide WHICH TRADES the
+/// panel reads — direction, order kind, the deleted-only switch, the open-positions switch, the
+/// single-server period preset, and the Auto strategy-name mask — plus the Auto Overview period
+/// preset. The comment pane is a
 /// display choice and stays in `app_meta` beside the other view preferences; the split is
 /// deliberate, so do not "unify" the two stores. These filters belong here because they must
 /// survive a quit that a detached preference write would not: the whole layout rides the quit
@@ -305,6 +306,14 @@ pub struct ReportFilterPrefs {
     /// Whether the panel showed only soft-deleted trades.
     #[serde(default, deserialize_with = "de_lenient")]
     pub deleted_only: Option<bool>,
+    /// Whether the panel admits still-running positions alongside closed trades when its host does
+    /// not force closed rows.
+    ///
+    /// A LIFECYCLE axis, independent of [`Self::kind`], which is about a trade's ORIGIN. Absent
+    /// means "no instruction", and the Report decoder then keeps its own default of ON — which is
+    /// exactly what every file written before this field existed must continue to mean.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub show_open: Option<bool>,
     /// Classic and Auto single-server period preset id — the panel's menu key, opaque here for
     /// the same reason as [`Self::side`].
     ///

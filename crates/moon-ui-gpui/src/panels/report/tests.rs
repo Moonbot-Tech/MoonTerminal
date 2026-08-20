@@ -4,11 +4,49 @@ use super::controls::selected_auto_core_name;
 use super::state::{ReportFilterSet, applied_filters};
 use super::{
     Period, ReportKind, ReportPeriodBucket, SideFilter, apply_period_from_prefs,
-    next_prefs_for_period_pick, period_bucket_for_scope, side_id,
+    next_prefs_for_period_pick, period_bucket_for_scope, row_scope_for, side_id,
 };
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
 use moon_core::config::WorkspaceMode;
+use moon_core::db::RowScope;
+
+/// `mod.rs::row_scope_for` -- replacing its `closed_only || !show_open` guard with `&&`, dropping
+/// the `!`, or swapping its branch arms makes the Report table, totals, and CSV include active
+/// positions when a host or user explicitly excluded them.
+///
+/// The expected scopes come from the independent host/user precedence contract and the public
+/// period-bound rule: only an unexcluded period ending before `now` omits active rows.
+#[test]
+fn row_scope_precedence_excludes_active_positions_before_consulting_the_period() {
+    const NOW: i64 = 1_000;
+
+    assert_eq!(
+        row_scope_for(true, true, None, NOW),
+        RowScope::Closed,
+        "a host-owned closed-only scope must win even for an unbounded period"
+    );
+    assert_eq!(
+        row_scope_for(false, false, Some(NOW), NOW),
+        RowScope::Closed,
+        "turning off active positions must win even when the period reaches now"
+    );
+    assert_eq!(
+        row_scope_for(false, true, None, NOW),
+        RowScope::ClosedAndOpen,
+        "an unbounded period must include active positions after both exclusions are clear"
+    );
+    assert_eq!(
+        row_scope_for(false, true, Some(NOW), NOW),
+        RowScope::ClosedAndOpen,
+        "a bound at now still reaches the present"
+    );
+    assert_eq!(
+        row_scope_for(false, true, Some(NOW - 1), NOW),
+        RowScope::Closed,
+        "a completed period delegates to the closed-history scope"
+    );
+}
 
 /// `controls::selected_auto_core_name` must prefer the live group-session name over historical
 /// report metadata, while retaining that metadata as the offline fallback.
@@ -405,7 +443,7 @@ fn filter_ids_are_pinned_exact_strings() {
 ///
 /// Pins: each stored field winning when present and valid; each field falling back to CURRENT
 /// when its stored counterpart is absent, when the id is unknown to this build, and when the
-/// entry supplies only SOME of the five fields (the rest must still resolve independently, not as
+/// entry supplies only SOME of the six fields (the rest must still resolve independently, not as
 /// an all-or-nothing unit).
 ///
 /// Mutations:
@@ -419,13 +457,16 @@ fn filter_ids_are_pinned_exact_strings() {
 /// `current` would otherwise pass unnoticed.
 #[test]
 fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
-    let current: ReportFilterSet = (
-        SideFilter::Long,
-        ReportKind::Real,
-        false,
-        Period::Today,
-        "CURRENT".to_string(),
-    );
+    let current = ReportFilterSet {
+        side: SideFilter::Long,
+        kind: ReportKind::Real,
+        deleted_only: false,
+        // The panel default is ON, so this is both the upgrade fallback and a value a hard-coded
+        // false fallback cannot silently match.
+        show_open: true,
+        period: Period::Today,
+        strategy_name_mask: "CURRENT".to_string(),
+    };
 
     // Every field stored, valid, and DIFFERENT from `current` on every position: every one must
     // win, and a fallback-to-current or cross-wired mutation both produce a visibly wrong value.
@@ -433,12 +474,20 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         side: Some("short".to_string()),
         kind: Some("emu".to_string()),
         deleted_only: Some(true),
+        show_open: Some(false),
         period: Some("rp-cur-week".to_string()),
         period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_".to_string()),
     };
-    let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&full, ReportPeriodBucket::Single, current.clone());
+    let ReportFilterSet {
+        side,
+        kind,
+        deleted_only,
+        show_open,
+        period,
+        strategy_name_mask,
+        ..
+    } = applied_filters(&full, ReportPeriodBucket::Single, current.clone());
     assert_eq!(
         side,
         SideFilter::Short,
@@ -453,12 +502,16 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         "a valid stored deleted_only must win over current"
     );
     assert!(
+        !show_open,
+        "a stored OFF value must win over the panel default of showing open positions"
+    );
+    assert!(
         period == Period::CurWeek,
         "a valid stored period must win over current"
     );
     let overview_applied = applied_filters(&full, ReportPeriodBucket::Overview, current.clone());
     assert!(
-        overview_applied.3 == Period::Today,
+        overview_applied.period == Period::Today,
         "applied_filters must forward the live Overview bucket to the period decoder"
     );
     assert_eq!(strategy_name_mask, "EMA_", "a valid stored mask must win");
@@ -475,26 +528,37 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
     // Nothing stored at all: every field must fall back to current — asserted per field, so a
     // swapped pair in the returned tuple cannot hide behind one combined comparison.
     let empty = moon_core::config::ReportFilterPrefs::default();
-    let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&empty, ReportPeriodBucket::Single, current.clone());
+    let ReportFilterSet {
+        side,
+        kind,
+        deleted_only,
+        show_open,
+        period,
+        strategy_name_mask,
+        ..
+    } = applied_filters(&empty, ReportPeriodBucket::Single, current.clone());
     assert_eq!(
-        side, current.0,
+        side, current.side,
         "an absent side must keep the current value"
     );
     assert!(
-        kind == current.1,
+        kind == current.kind,
         "an absent kind must keep the current value"
     );
     assert_eq!(
-        deleted_only, current.2,
+        deleted_only, current.deleted_only,
         "an absent deleted_only must keep the current value"
     );
+    assert_eq!(
+        show_open, current.show_open,
+        "an absent open-positions setting must keep the panel default"
+    );
     assert!(
-        period == current.3,
+        period == current.period,
         "an absent period must keep the current value"
     );
     assert_eq!(
-        strategy_name_mask, current.4,
+        strategy_name_mask, current.strategy_name_mask,
         "an absent mask must keep current"
     );
 
@@ -503,26 +567,35 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         side: Some("diagonal".to_string()),
         kind: Some("bogus".to_string()),
         deleted_only: None,
+        show_open: None,
         period: Some("rp-nonexistent".to_string()),
         period_overview: Some("rp-overview-nonexistent".to_string()),
         strategy_name_mask: None,
     };
-    let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&unknown, ReportPeriodBucket::Overview, current.clone());
+    let ReportFilterSet {
+        side,
+        kind,
+        deleted_only,
+        show_open,
+        period,
+        strategy_name_mask,
+        ..
+    } = applied_filters(&unknown, ReportPeriodBucket::Overview, current.clone());
     assert_eq!(
-        side, current.0,
+        side, current.side,
         "an unknown side id must keep the current value"
     );
     assert!(
-        kind == current.1,
+        kind == current.kind,
         "an unknown kind id must keep the current value"
     );
-    assert_eq!(deleted_only, current.2);
+    assert_eq!(deleted_only, current.deleted_only);
+    assert_eq!(show_open, current.show_open);
     assert!(
-        period == current.3,
+        period == current.period,
         "an unknown period id must keep the current value"
     );
-    assert_eq!(strategy_name_mask, current.4);
+    assert_eq!(strategy_name_mask, current.strategy_name_mask);
 
     // A PARTIAL entry — only side and deleted_only stored, both DIFFERENT from current — must
     // resolve each field on its own: the fields that DID win must not drag the absent ones along.
@@ -530,20 +603,32 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         side: Some("all".to_string()),
         kind: None,
         deleted_only: Some(true),
+        show_open: None,
         period: None,
         period_overview: None,
         strategy_name_mask: Some(String::new()),
     };
-    let (side, kind, deleted_only, period, strategy_name_mask) =
-        applied_filters(&partial, ReportPeriodBucket::Overview, current.clone());
+    let ReportFilterSet {
+        side,
+        kind,
+        deleted_only,
+        show_open,
+        period,
+        strategy_name_mask,
+        ..
+    } = applied_filters(&partial, ReportPeriodBucket::Overview, current.clone());
     assert_eq!(side, SideFilter::All, "the stored side must win");
     assert!(
-        kind == current.1,
+        kind == current.kind,
         "an absent kind must keep the current value even though side won"
     );
     assert!(deleted_only, "the stored deleted_only must win");
+    assert_eq!(
+        show_open, current.show_open,
+        "an absent open-positions setting must keep the current value even though side won"
+    );
     assert!(
-        period == current.3,
+        period == current.period,
         "an absent period must keep the current value even though side won"
     );
     assert_eq!(
@@ -630,10 +715,14 @@ fn period_bucket_pick_writes_only_the_live_bucket() {
         Some(&existing),
         ReportPeriodBucket::Overview,
         Some(Period::Today),
-        SideFilter::Long,
-        ReportKind::Real,
-        false,
-        "EMA_",
+        &ReportFilterSet {
+            side: SideFilter::Long,
+            kind: ReportKind::Real,
+            deleted_only: false,
+            show_open: true,
+            period: Period::Today,
+            strategy_name_mask: "EMA_".to_string(),
+        },
     );
     assert_eq!(overview.period.as_deref(), Some("rp-cur-year"));
     assert_eq!(overview.period_overview.as_deref(), Some("rp-today"));
@@ -647,26 +736,35 @@ fn period_bucket_pick_writes_only_the_live_bucket() {
         Some(&before_single),
         ReportPeriodBucket::Single,
         Some(Period::CurYear),
-        SideFilter::Short,
-        ReportKind::Emu,
-        true,
-        "SINGLE",
+        &ReportFilterSet {
+            side: SideFilter::Short,
+            kind: ReportKind::Emu,
+            deleted_only: true,
+            show_open: false,
+            period: Period::CurYear,
+            strategy_name_mask: "SINGLE".to_string(),
+        },
     );
     assert_eq!(single.period.as_deref(), Some("rp-cur-year"));
     assert_eq!(single.period_overview.as_deref(), Some("rp-today"));
     assert_eq!(single.side.as_deref(), Some("short"));
     assert_eq!(single.kind.as_deref(), Some("emu"));
     assert_eq!(single.deleted_only, Some(true));
+    assert_eq!(single.show_open, Some(false));
     assert_eq!(single.strategy_name_mask.as_deref(), Some("SINGLE"));
 
     let shared_only = next_prefs_for_period_pick(
         Some(&single),
         ReportPeriodBucket::Overview,
         None,
-        SideFilter::All,
-        ReportKind::Real,
-        false,
-        "SHARED",
+        &ReportFilterSet {
+            side: SideFilter::All,
+            kind: ReportKind::Real,
+            deleted_only: false,
+            show_open: true,
+            period: Period::All,
+            strategy_name_mask: "SHARED".to_string(),
+        },
     );
     assert_eq!(shared_only.period, single.period);
     assert_eq!(shared_only.period_overview, single.period_overview);
@@ -885,10 +983,11 @@ fn workspace_observer_applies_period_bucket_before_requery() {
 }
 
 /// `restore_persisted_filters`'s `changed` result must be exactly `applied != current` — a full
-/// FIVE-field tuple compare, not a narrowed one and not a literal — because `changed` is what
+/// six-field named-struct compare, not a narrowed one and not a literal — because `changed` is what
 /// `mark_table_detached` gates its requery on: a caller that always sees `true` requeries on every
 /// host-context switch even when nothing restored actually differs, and a caller narrowed to only
-/// `side` silently skips the requery when a restored kind, deleted_only, period, or mask is the
+/// `side` silently skips the requery when a restored kind, deleted_only, open-positions switch,
+/// period, or mask is the
 /// only thing that changed, showing rows for a filter the toolbar no longer displays.
 ///
 /// `ReportPanel` cannot be built in a unit test (needs a live GPUI window), and the comparison
@@ -898,7 +997,7 @@ fn workspace_observer_applies_period_bucket_before_requery() {
 ///
 /// Mutations:
 /// - Replacing the comparison with a literal `true`.
-/// - Narrowing it to compare only one field (e.g. `applied.0 != current.0`).
+/// - Narrowing it to compare only one field (e.g. `applied.0 != current.side`).
 #[test]
 fn restore_persisted_filters_changed_is_exactly_the_full_tuple_compare() {
     let state = code_only(include_str!("state.rs"));

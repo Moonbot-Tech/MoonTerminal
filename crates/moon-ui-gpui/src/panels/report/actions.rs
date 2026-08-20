@@ -233,9 +233,9 @@ impl ReportPanel {
         cx.notify();
     }
 
-    /// Store this host context's five toolbar filters.
+    /// Store this host context's six toolbar filters.
     ///
-    /// Replaces one complete map entry per mutation because the five values form one filter set. The
+    /// Replaces one complete map entry per mutation because the six values form one filter set. The
     /// replacement still merges one value deliberately: unless this call represents an explicit
     /// period-menu pick, it carries the already-stored period forward. An Analytics-scoped panel
     /// writes nothing — see [`ReportPanel::scoped`].
@@ -269,10 +269,14 @@ impl ReportPanel {
                 crate::persistence::table_persist::report_filters(&backend, &id),
                 period_bucket,
                 picked_period,
-                self.side,
-                self.kind,
-                self.deleted_only,
-                &self.strategy_name_mask,
+                &super::state::ReportFilterSet {
+                    side: self.side,
+                    kind: self.kind,
+                    deleted_only: self.deleted_only,
+                    show_open: self.show_open,
+                    period: self.period,
+                    strategy_name_mask: self.strategy_name_mask.clone(),
+                },
             )
         };
         crate::persistence::table_persist::set_report_filters(&self.backend, &id, prefs, cx);
@@ -376,6 +380,33 @@ impl ReportPanel {
         if self.deleted_only != on {
             self.deleted_only = on;
             self.selection.clear();
+            self.persist_filters(None, cx);
+            self.request_requery(cx);
+        }
+    }
+
+    /// Include or exclude still-running positions in the rows, the totals, and the export.
+    ///
+    /// One switch reaches all three because they share ONE `ReportFilter` — see
+    /// [`ReportPanel::filter`] — so a footer that totals trades the table is not showing is not
+    /// merely avoided here but unrepresentable. `closed_only` still wins over this value; the
+    /// precedence lives in [`super::row_scope_for`].
+    ///
+    /// Unlike [`Self::set_deleted_only`] this does NOT clear the selection. That one clears
+    /// because the totals-row command flips between Delete and Restore and would otherwise act on
+    /// rows from the opposite universe; nothing analogous exists on the lifecycle axis, and
+    /// `retain_visible` already drops the vanished open rows when the next result publishes.
+    /// Clearing here would discard a user's selection of CLOSED rows for nothing.
+    ///
+    /// Args:
+    ///     on: Whether the next query includes still-running positions.
+    ///     cx: Panel context used to persist and request the query.
+    ///
+    /// Returns:
+    ///     Nothing; re-selecting the current value is a no-op.
+    pub(super) fn set_show_open(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.show_open != on {
+            self.show_open = on;
             self.persist_filters(None, cx);
             self.request_requery(cx);
         }
