@@ -21,7 +21,17 @@ yanked = "deny"
 unmaintained = "workspace"
 # Each entry needs an advisory id, a date, and a sentence on why it is tolerated. An ignore with
 # no reason becomes permanent by accident.
-ignore = []
+ignore = [
+    # 2026-08-20 — `arrayref` 0.3.9 (via tiny-skia) was yanked hours after 0.3.10 appeared, and
+    # 0.3.10 is the compromised release: it adds a normal dependency on `proc-macro1`, a crate
+    # published the same morning by `dtolney` (a typosquat of `dtolnay`) that copies proc-macro2's
+    # description, claims a repository that does not exist, and pulls `ureq` + `rustls` — an HTTP
+    # client in a build-time dependency of every GPUI build. Taking the upgrade cargo-deny suggests
+    # is the attack. 0.3.9 has been compiled here for two years and is the LAST known-good release,
+    # so it stays pinned and its yank is ignored until upstream publishes a clean version — then
+    # drop this entry rather than widening it.
+    { crate = "arrayref@0.3.9", reason = "yanked to force an upgrade to the compromised 0.3.10; see the note above" },
+]
 
 [bans]
 # A large GPUI/wgpu graph legitimately carries duplicate versions; this is information, not a gate.
