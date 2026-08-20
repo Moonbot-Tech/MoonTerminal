@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Reclaim disk on a GitHub-hosted macOS runner before a release build.
 #
-# The image ships several Xcode versions, every simulator runtime and an Android SDK, which is why
-# a `macos-14` runner offers only ~14 GB free. Tagging v0.28.1 died at packaging with
-# "hdiutil: create failed - No space left on device" AFTER both slices had compiled — the job spent
-# its whole budget and shipped nothing.
+# The image ships eleven spare Xcode versions, every simulator runtime and an Android SDK. Tagging
+# v0.28.1 died at packaging with "hdiutil: create failed - No space left on device" AFTER both
+# slices had compiled — the job spent its whole budget and shipped nothing.
+#
+# Measured on the macos-14 image on 2026-08-20: 40 GiB free before this script, 140 GiB after, so
+# it reclaims about 100 GiB. Two `--release` trees plus the cargo registry is what ate the 40.
 #
 # Only things a Rust build cannot use are removed, and the SELECTED Xcode is kept: the linker
 # resolves the macOS SDK through it. Removals are best-effort, because image contents move between

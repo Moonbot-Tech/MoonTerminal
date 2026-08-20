@@ -10,7 +10,8 @@
 # device" back when one job compiled both slices and then imaged them. The bundle is still
 # assembled directly inside the DMG staging root (never built beside it and copied, which held two
 # universal binaries at once) and every input is still deleted once consumed — cheap habits worth
-# keeping on a 14 GB runner, even though this job now starts without a build tree.
+# keeping on a runner whose disk a release build can still exhaust, even though this job now starts
+# without a build tree.
 set -euo pipefail
 
 BIN_ARM64="stage/moonterminal-arm64"

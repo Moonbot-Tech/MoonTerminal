@@ -112,8 +112,9 @@ jobs:
     needs: validate
     runs-on: macos-14
     # One slice per job, so neither ever holds two `--release` trees and each starts on a fresh
-    # 14 GB disk. They used to be built in sequence in the packaging job, which had to delete the
-    # first target dir mid-flight to make room for the second and still ran out at `hdiutil`.
+    # disk. They used to be built in sequence in the packaging job, which had to delete the first
+    # target dir mid-flight to make room for the second and still ran out at `hdiutil`: the image
+    # arrives with 40 GiB free, and two release trees plus the registry do not fit in that.
     #
     # Both slices are cross-built on this arm64 runner. The macOS SDK carries both architectures,
     # so `--target x86_64-apple-darwin` links natively — no Intel runner involved, which also keeps
