@@ -70,7 +70,7 @@ fn inputs_with(rows: &[OrderRow]) -> LabelInputs {
 }
 
 fn slot(field: ChartLabelField) -> ChartLabelSlot {
-    ChartLabelSlot::new(field, LabelZone::TopRight)
+    ChartLabelSlot::new(field, LabelZone::ChartTop)
 }
 
 fn texts_of(cfg: &ChartLabelsCfg, inputs: LabelInputs) -> Vec<String> {
@@ -324,7 +324,7 @@ fn the_pnl_percentage_is_weighted_by_what_each_order_spent() {
     );
     assert_eq!(
         text.as_deref(),
-        Some("PnL +10.00%"),
+        Some("PnL: +10.00%"),
         "the PnL default carries its caption"
     );
 }
@@ -347,7 +347,7 @@ fn two_slots_can_read_different_bases() {
     let texts = texts_of(&cfg, inputs);
     assert_eq!(
         texts,
-        vec!["PnL +10.00%".to_string(), "PnL +30.00%".to_string()]
+        vec!["PnL: +10.00%".to_string(), "PnL: +30.00%".to_string()]
     );
 }
 
