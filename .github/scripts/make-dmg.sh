@@ -2,14 +2,16 @@
 # Package the macOS release binaries into a UNIVERSAL MoonTerminal.app and a distributable .dmg.
 # Runs on the macos-14 runner (native tools: sips, iconutil, codesign, hdiutil, lipo).
 #
-# Expects BOTH slices to be staged already: release.yml builds them in two steps and moves each
-# out of its target dir, because the runner cannot hold two `--release` trees at once. They are
-# joined here so Apple Silicon and Intel Macs share one download.
+# Expects BOTH slices to be staged already: release.yml compiles them in a per-architecture matrix
+# job and this job downloads the two artifacts into `stage/`. They are joined here so Apple Silicon
+# and Intel Macs share one download.
 #
-# Disk is the scarce resource on this runner, not time — `hdiutil` has failed with "No space left
-# on device" on a tree that merely LOOKED finished. So the bundle is assembled directly inside the
-# DMG staging root (never built beside it and copied, which held two universal binaries at once),
-# and every input is deleted the moment it has been consumed.
+# Disk was the scarce resource that shaped this script: `hdiutil` failed with "No space left on
+# device" back when one job compiled both slices and then imaged them. The bundle is still
+# assembled directly inside the DMG staging root (never built beside it and copied, which held two
+# universal binaries at once) and every input is still deleted once consumed — cheap habits worth
+# keeping on a runner whose disk a release build can still exhaust, even though this job now starts
+# without a build tree.
 set -euo pipefail
 
 BIN_ARM64="stage/moonterminal-arm64"
